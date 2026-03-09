@@ -1,0 +1,6 @@
+framework module LiMaoBase {
+  umbrella header "LiMaoBase-umbrella.h"
+
+  export *
+  module * { export * }
+}

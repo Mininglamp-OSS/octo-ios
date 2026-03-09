@@ -1,0 +1,6 @@
+framework module Pods_LiMaoContacts_Example {
+  umbrella header "Pods-LiMaoContacts_Example-umbrella.h"
+
+  export *
+  module * { export * }
+}

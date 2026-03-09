@@ -1,0 +1,46 @@
+{
+  "name": "LiMaoBase",
+  "version": "0.1.0",
+  "summary": "A short description of LiMaoBase.",
+  "description": "TODO: Add long description of the pod here.",
+  "homepage": "https://github.com/tangtaoit/LiMaoBase",
+  "license": {
+    "type": "MIT",
+    "file": "LICENSE"
+  },
+  "authors": {
+    "tangtaoit": "tt@limao.ai"
+  },
+  "source": {
+    "git": "https://github.com/tangtaoit/LiMaoBase.git",
+    "tag": "0.1.0"
+  },
+  "platforms": {
+    "ios": "12.0"
+  },
+  "resource_bundles": {
+    "LiMaoBase_images": [
+      "LiMaoBase/Assets/Images.xcassets"
+    ],
+    "LiMaoBase_resources": [
+      "LiMaoBase/Assets/DB",
+      "LiMaoBase/Assets/emoji",
+      "LiMaoBase/Assets/Other"
+    ]
+  },
+  "resources": [
+    "LiMaoBase/Assets/Lang"
+  ],
+  "private_header_files": "LiMaoBase/Classes/Vendor/**/*",
+  "source_files": "LiMaoBase/Classes/**/*",
+  "vendored_frameworks": "LiMaoBase/Bugly.framework",
+  "libraries": [
+    "c++",
+    "stdc++"
+  ],
+  "frameworks": [
+    "UIKit",
+    "MapKit",
+    "AVFoundation"
+  ]
+}

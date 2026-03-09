@@ -1,0 +1,168 @@
+//
+//  UIView+NIM.m
+//  NIMKit
+//
+//  Created by chris.
+//  Copyright (c) 2015年 NetEase. All rights reserved.
+//
+
+#import "UIView+WK.h"
+
+@implementation UIView (WK)
+
+
+- (CGFloat)lim_left {
+    return self.frame.origin.x;
+}
+
+- (void)setLim_centerX_parent:(UIView *)parent {
+    self.lim_left = parent.lim_width/2.0f - self.lim_width/2.0f;
+}
+
+- (void)setLim_centerY_parent:(UIView *)parent {
+    self.lim_top = parent.lim_height/2.0f - self.lim_height/2.0f;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (void)setLim_left:(CGFloat)x {
+    CGRect frame = self.frame;
+    frame.origin.x = x;
+    self.frame = frame;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (CGFloat)lim_top {
+    return self.frame.origin.y;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (void)setLim_top:(CGFloat)y {
+    CGRect frame = self.frame;
+    frame.origin.y = y;
+    self.frame = frame;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (CGFloat)lim_right {
+    return self.frame.origin.x + self.frame.size.width;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (void)setLim_right:(CGFloat)right {
+    CGRect frame = self.frame;
+    frame.origin.x = right - frame.size.width;
+    self.frame = frame;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (CGFloat)lim_bottom {
+    return self.frame.origin.y + self.frame.size.height;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (void)setLim_bottom:(CGFloat)bottom {
+    CGRect frame = self.frame;
+    frame.origin.y = bottom - frame.size.height;
+    self.frame = frame;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (CGFloat)lim_centerX {
+    return self.center.x;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (void)setLim_centerX:(CGFloat)centerX {
+    self.center = CGPointMake(centerX, self.center.y);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (CGFloat)lim_centerY {
+    return self.center.y;
+}
+
+-(CGFloat) lim_centerY:(UIView*)subView {
+    return self.lim_height/2.0f - subView.lim_height/2.0f;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (void)setLim_centerY:(CGFloat)centerY {
+    self.center = CGPointMake(self.center.x, centerY);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (CGFloat)lim_width {
+    return self.frame.size.width;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (void)setLim_width:(CGFloat)width {
+    CGRect frame = self.frame;
+    frame.size.width = width;
+    self.frame = frame;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (CGFloat)lim_height {
+    return self.frame.size.height;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (void)setLim_height:(CGFloat)height {
+    CGRect frame = self.frame;
+    frame.size.height = height;
+    self.frame = frame;
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (CGPoint)lim_origin {
+    return self.frame.origin;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (void)setLim_origin:(CGPoint)origin {
+    CGRect frame = self.frame;
+    frame.origin = origin;
+    self.frame = frame;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (CGSize)lim_size {
+    return self.frame.size;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+- (void)setLim_size:(CGSize)size {
+    CGRect frame = self.frame;
+    frame.size = size;
+    self.frame = frame;
+}
+
+
+- (UIViewController *)lim_viewController{
+    for (UIView* next = self; next; next = next.superview) {
+        UIResponder* nextResponder = [next nextResponder];
+        if ([nextResponder isKindOfClass:[UIViewController class]]) {
+            return (UIViewController*)nextResponder;
+        }
+    }
+    return nil;
+}
+
+@end

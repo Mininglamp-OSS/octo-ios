@@ -1,0 +1,13 @@
+use_frameworks!
+
+platform :ios, '8.0'
+
+target 'LiMaoDataSource_Example' do
+  pod 'LiMaoDataSource', :path => '../'
+
+  target 'LiMaoDataSource_Tests' do
+    inherit! :search_paths
+
+    pod 'FBSnapshotTestCase'
+  end
+end

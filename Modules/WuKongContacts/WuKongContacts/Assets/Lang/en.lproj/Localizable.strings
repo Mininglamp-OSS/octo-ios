@@ -1,0 +1,53 @@
+
+"联系人"="Contacts";
+"新的朋友"="New Friends";
+"保存的群聊"="Groups";
+
+"确认"="Confirm";
+"已确认"="Confirmed";
+
+"取消"="Cancel";
+
+"%ld个朋友"="%ld friends";
+
+
+// WKContactsAddMyShortCell
+
+"我的%@号：%@"="%@ ID: %@";
+
+// WKContactsAddVC
+
+"添加朋友"="Add Contacts";
+"搜索"="Search";
+"刚刚"="Just";
+"%0.0f分钟"="%0.0f Min";
+
+// WKContactsInfoVC
+
+"用户详情"="Details";
+"添加好友"="Add Contacts";
+"你需要发送验证码申请，等对方通过"="You need to send a verification code application and wait for the other party to pass";
+"我是%@"="I'm %@";
+
+// WKContactsSearchVC
+
+"用户不存在！"="User does not exist!";
+
+
+// WKContactsVM
+
+"扫一扫"="Scan";
+"扫描二维码名片"="Scan QR code business card";
+
+// WKMyGroupListVC
+
+"保存的群聊"="Saved Group";
+
+
+// WKContactsSync
+
+"同步联系人"="Sync Contacts";
+
+"手机联系人"="Address book";
+"添加通讯录中的朋友"="Add friends from address book";
+"新建群聊"="New group";

@@ -1,0 +1,27 @@
+PODS:
+  - FBSnapshotTestCase (2.1.4):
+    - FBSnapshotTestCase/SwiftSupport (= 2.1.4)
+  - FBSnapshotTestCase/Core (2.1.4)
+  - FBSnapshotTestCase/SwiftSupport (2.1.4):
+    - FBSnapshotTestCase/Core
+  - LiMaoDataSource (0.1.0)
+
+DEPENDENCIES:
+  - FBSnapshotTestCase
+  - LiMaoDataSource (from `../`)
+
+SPEC REPOS:
+  https://github.com/cocoapods/specs.git:
+    - FBSnapshotTestCase
+
+EXTERNAL SOURCES:
+  LiMaoDataSource:
+    :path: "../"
+
+SPEC CHECKSUMS:
+  FBSnapshotTestCase: 094f9f314decbabe373b87cc339bea235a63e07a
+  LiMaoDataSource: 20dc5d75441264b96729992356c9385c137dabf8
+
+PODFILE CHECKSUM: d898bb8635b1477375f0d2b571a893b932283dfd
+
+COCOAPODS: 1.7.5

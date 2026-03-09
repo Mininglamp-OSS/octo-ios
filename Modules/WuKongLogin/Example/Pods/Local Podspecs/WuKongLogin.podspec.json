@@ -1,0 +1,22 @@
+{
+  "name": "LiMaoLogin",
+  "version": "0.1.0",
+  "summary": "A short description of LiMaoLogin.",
+  "description": "TODO: Add long description of the pod here.",
+  "homepage": "https://github.com/tangtaoit/LiMaoLogin",
+  "license": {
+    "type": "MIT",
+    "file": "LICENSE"
+  },
+  "authors": {
+    "tangtaoit": "tt@qihyunxin.com"
+  },
+  "source": {
+    "git": "https://github.com/tangtaoit/LiMaoLogin.git",
+    "tag": "0.1.0"
+  },
+  "platforms": {
+    "ios": "8.0"
+  },
+  "source_files": "LiMaoLogin/Classes/**/*"
+}

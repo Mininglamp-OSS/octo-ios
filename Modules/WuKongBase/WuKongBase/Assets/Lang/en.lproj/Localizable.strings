@@ -1,0 +1,578 @@
+"通用"="General";
+"多语言"="Language";
+"确认"="Confirm";
+
+"新消息通知"="Messages Notifications";
+"安全与隐私"="Security Privacy";
+"收藏"="Favorites";
+
+"系统通知"="System Notification";
+"文件传输助手"="File Transfer";
+
+"注销账号"="Cancel Account";
+"群主"="Owner";
+"管理员"="Manager";
+"复制成功"="Copied";
+"个人收藏"="FAVOURITES";
+"更多APP"="MORE APPS";
+"消息已发出，但被对方拒收了。"="The message is successfully sent but rejected by the receiver.";
+"添加单个表情"="Add a single emoticon";
+"整理"="Tidy";
+"移到最前"="Front";
+"删除的表情无法恢复"="Deleted emoticons cannot be recovered";
+"群成员"="Group Members";
+"聊天记录备份"="Chat Backup";
+"聊天记录恢复"="Chat Recovery";
+"用户协议"="User Agreement";
+"隐私政策"="Privacy Policy";
+
+
+
+
+"为了迁移您的本地聊天记录，需要把您的聊天记录上传到服务器以支持新设备下载；"="In order to migrate your local chat records, you need to upload your chat records to the server to support new device download;";
+"聊天记录会以不记名加密的方式存储在服务器；"="Chat records will be stored on the server in the form of anonymous encryption;";
+"为了防止信息泄露，服务器将会于每天的00:00删除当天所有用户上传的聊天记录；"="In order to prevent information disclosure, the server will delete the chat records uploaded by all users at 00:00 every day;";
+"每点击一次备份，将会覆盖前一次备份的聊天记录，请谨慎操作；"="Each click of backup will overwrite the chat record of the previous backup. Please operate carefully;";
+"建议用户确认聊天记录迁移完毕后再删除原设备上的聊天记录；"="It is recommended that users delete the chat record on the original device after confirming that the chat record has been migrated;";
+"由此功能造成任何的不良后果由用户自行承担；"="Any adverse consequences caused by this function shall be borne by the user;";
+"功能模块"="Modules";
+
+// 常用
+
+"好的"="Ok";
+"提示"="Prompt";
+"确定"="Done";
+"发送"="Send";
+"搜索"="Search";
+"完成"="Done";
+"清空聊天记录"="Clear Chat History";
+"投诉"="Report";
+"发送成功"="Sent Successfully";
+"删除"="Delete";
+"取消"="Cancel";
+"上午"="AM";
+"下午"="PM";
+"今天"="Today";
+"昨天"="Yesterday";
+"表情"="Expression";
+"语音"="Voice";
+"更多"="More";
+"编辑"="Edit";
+"保存到相册"="Save to album";
+"识别图中二维码"="QR code in the picture";
+"在浏览器中打开"="Open in Browser";
+"----- 仅群主和管理员可编辑 -----"="- Only group owner and admin can edit -";
+"%ld个成员"="%ld Members";
+
+// WKApp
+
+"发起群聊"="New Chat";
+"添加朋友"="Contacts";
+"扫一扫"="Scan";
+"名片"="Card";
+"名片发送中"="Sending business card";
+"图片"="Image";
+"多选"="Multiple Choice";
+"回复"="Reply";
+"转发"="Foward";
+"选择一个聊天"="Choose a chat";
+"撤回"="Recall";
+"复制"="Copy";
+"搞笑"="Fun";
+"卖萌"="Cute";
+"热图"="Hot";
+"联系人选择"="Contact selection";
+"发送%@的名片到当前聊天"="Send %@ business card to the current chat";
+
+"添加表情"="Add Emoji";
+
+
+// WKBaseTableVC
+
+"暂无数据"="No data";
+"数据加载中"="Loading";
+
+// WKLocalNotificationManager
+
+"聊天"="Chat";
+"[图片]"="[Image]";
+"[GIF]"="[GIF]";
+"[语音]"="[Voice]";
+
+// WKSystemMessageHandler
+
+
+"账号已在其他设备上登录！"="The account is already logged in on another device!";
+"[%d条进群申请]"="[%d entry application]";
+"[1条进群申请]"="[1 entry application]";
+
+// WKMediaPickerController
+
+"相册权限受限"="Album permissions are restricted";
+"检测不到相机设备"="Camera device not detected";
+
+// ZCTradeInputView
+
+"请输入密码"="Please enter password";
+"忘记密码"="Forget password";
+
+// WKUserInfoVC
+
+"昵称"="Nickname";
+"群昵称"="Group nickname";
+"%@号：%@"="%@ ID： %@";
+"用户备注昵称"="User notes nickname";
+"发消息"="Send Message";
+"视频通话"="Video Call";
+"添加好友"="Add Contacts";
+"已添加至黑名单，你将不再收到对方的消息"="This user has been blocked. You will not receive any messages from them.";
+"你需要发送验证码申请，等对方通过"="You need to send a verification code application and wait for the other party to pass";
+"发送成功！"="Sent successfully!";
+"我是%@"="I'm %@";
+"修改备注"="Edit notes";
+"将联系人“%@”删除，同时删除与该联系人的聊天记录"="Delete the contact “%@”, and delete the chat history with the contact";
+"删除联系人"="Delete contact";
+"加入黑名单，你将不再收到对方的消息。"="Join the blacklist, you will no longer receive messages from each other.";
+"设置备注"="Set notes";
+"解除好友关系"="Unfriend";
+"拉出黑名单"="Pull out the blacklist";
+"拉入黑名单"="Pull into the blacklist";
+"来源"="Source";
+"我通过了你的朋友验证请求，现在我们可以开始聊天了"="I passed your friend verification request, and now we can start chatting";
+"进群方式"="Join group way";
+"群内禁言"="Banned in the group";
+
+// WKConversationGroupSettingVC
+
+"聊天信息(%lu)"="Group(%lu)";
+"%@在群黑名单中"="%@ in the group blacklist";
+"群主或管理员已启用\"群聊邀请确认\"，邀请朋友进群可向群主或群管理员描述原因。"="The group owner or administrator has enabled \"group chat invitation confirmation\". Invite friends to the group can describe the reason to the group owner or group administrator.";
+"说明邀请理由"="Explain the reason for the invitation";
+"已发送"="Has been sent";
+"删除群成员"="Delete group members";
+"只有群主或管理员才能修改"="Only the owner or manager can modify";
+"修改群名称"="Modify group name";
+"群名称"="Group name";
+"修改群公告"="Modify group introduction";
+"群公告"="Group Introduction";
+"退出后不会通知群聊中其他成员，且不会再接收此群聊消息"="After logging out, other members in the group chat will not be notified, and will no longer receive this group chat message";
+"我在本群的昵称"="My nickname in this group";
+"在这里可以设置你在这个群里的昵称。这个昵称只会在此群内显示。"="Here you can set your nickname in this group. This nickname will only be displayed in this group.";
+
+"查看更多群成员"="View More Members";
+
+// WKConversationNotifySettingVC
+
+"消息通知设置" = "Message Notification Settings";
+
+// WKConversationNotifySettingVM
+"在对话中的截屏，各方均会收到通知"= "Take screenshots in the conversation and all parties will be notified";
+"截屏通知"="Screenshot Notification";
+"在对话中的消息撤回，各方均会收到通知"="Messages in the conversation are withdrawn, all parties will be notified";
+"撤回通知"="Withdrawal Notice";
+"关闭后，成员进群将不会响铃/震动"="After closing, members will not ring/vibrate when entering the group";
+"成员进群提醒"="Group Reminder";
+
+// WKConversationPersonSettingVC
+
+"聊天详情"="Chat Details";
+
+// WKConversationSettingVM
+
+"群聊名称"="Group Name";
+"群二维码"="Group QR Code";
+"未设置"="Not Set";
+"群管理"="Group Management";
+"消息免打扰"="Mute Notifications";
+"置顶聊天"="Sticky on Top";
+"保存到通讯录"="Save to Contacts";
+"聊天密码"="Chat Password";
+"我在本群的昵称"="My Alias in Group";
+"显示群成员昵称"="On-Screen Names";
+"消息通知设置"="Message Notification";
+"删除并退出"="Delete and Exit";
+"消息回执"="Receipt";
+"开启后，发送的聊天信息会提示已读未读情况"="After turned on, the chat message sent will prompt read and unread status";
+
+// WKConversationVC
+
+"换行"="Wrap";
+"%ld条新消息"="%ld New Messages";
+"发送给 %@"="Send to %@";
+"在线"="Online";
+"刚刚在线"="Just online";
+"%0.0f分钟前在线"="Online %0.0f minute ago";
+"全员禁言中"="All members are mute";
+"禁言中"="muted";
+"[草稿]"="[Draft]";
+"@所有人"="@All";
+"选择一个聊天"="Choose a Chat";
+"选择提醒的人"="Choose who to remind";
+
+
+// WKConversationInputPanel
+
+"按住 说话"="Hold to Talk";
+"请在iPhone的“设置-隐私”选项中，允许访问你的麦克风"="Please allow access to your microphone in the \"Settings-Privacy\" option of your iPhone";
+"说话时间太短"="Talking is too short";
+"发送的内容太长！"="The content sent is too long!";
+
+// WKCardCell
+
+"个人名片"="Contact Card";
+
+// WKCardContent
+
+"[名片]"="[Card]";
+
+// WKGIFContent
+
+"[表情]"="[Expression]";
+
+// WKHistorySplitTipCell
+
+"以上为历史消息"="The above is historical news";
+
+// WKMergeForwardCell
+
+"聊天记录"="Chat History";
+
+// WKMergeForwardContent
+
+"群的聊天记录"="Group Chat History";
+"[聊天记录]"="[Chat History]";
+"%@的聊天记录"="%@'s Chat History";
+"%@和%@的聊天记录"="Chat history of %@ and %@";
+
+// WKMessageRevokeCell
+
+"你"="You";
+"%@撤回了一条消息"="%@ recall a message";
+
+// WKScreenshotContent
+"%@在聊天中截屏了"="%@ took a screenshot in the chat";
+
+// WKSystemMessageCell
+
+"去确认"="To confirm";
+"数据错误！"="Data Error";
+
+// WKTextMessageCell
+
+"%@可能是一个电话号码，你可以"="%@ May be a phone number, you can";
+"呼叫"="Call";
+"手机格式不正确！"="The phone format is incorrect!";
+"复制号码"="Copy number";
+"添加到手机通讯录"="Add to phone address book";
+"创建新联系人"="Create new contact";
+"添加到现有联系人"="Add to existing contact";
+
+// WKMultiplePanel
+
+"逐条转发"="Forward one by one";
+"合并转发"="Merge forward";
+
+// WKMoreItemClickEvent
+
+"权限提醒"="Permission reminder";
+"请在设置里打开图片读取权限！"="Please turn on the image reading permission in the settings!";
+
+// WKConversationListCell
+
+"群聊"="Group Chat";
+"无"="Nothing";
+"刚刚"="Just";
+"%0.0f分钟"="%0.0f min";
+"正在输入"="Typing";
+"%@ 正在输入"="%@ Typing";
+
+
+// WKConversationListSelectVM
+
+"创建新的聊天"="Create new chat";
+"最近聊天"="Recent chat";
+
+// WKConversationListVC
+
+"连接中"="Connecting";
+"收取中"="Receiving";
+"已断开"="Disconnected";
+"当前网络不可用，请检查网络设置"="The current network is unavailable, please check the network settings";
+"还连续%ld次输入错误，将会清空该聊天记录！\n如果您忘记聊天密码，您可以重置聊天密码"="If you enter incorrectly for %ld consecutive times, the chat history will be cleared! \nIf you forget the chat password, you can reset the chat password";
+"错误密码"="Wrong password";
+"确认删除"="Confirm deletion";
+"标为已读"="Mark as read";
+"标为未读"="Mark as unread";
+"关闭通知"="Mute";
+"打开通知"="Unmute";
+"置顶"="Sticky to Top";
+"取消置顶"="Remove from Top";
+
+// WKChannelMessageSearchVM
+
+"%lu条与“%@”相关记录"="%lu record related to %@";
+
+// WKGlobalSearchVM
+
+"联系人"="Contacts";
+"更多联系人"="More contacts";
+"更多群聊"="More group chats";
+"更多聊天记录"="More chat history";
+
+// WKSearchContactsCell
+
+"包含:"="Contain:";
+
+// WKSearchMessageCell
+
+"%d 条相关聊天记录"="%d related chat";
+
+// WKGroupBlacklistVC
+
+"群黑名单"="Group Blacklist";
+"把“%@”拉出群黑名单？"="Pull \"%@\" out of the group blacklist?";
+
+// WKGroupBlacklistVM
+
+"添加黑名单成员"="Add blacklist members";
+"选择成员"="Select member";
+
+
+
+// WKGroupQRCodeVC
+
+"该二维码%ld天内(%@)前有效，重新进入将更新"="valid within %ld day, it will be updated after re-entering";
+"保存图片"="Save Image";
+"保存图片失败！请检查是否开启权限!"="Failed to save image! Please check if permission is enabled!";
+"保存成功！"="Saved successfully!";
+"该群已开启进群验证"="The group has been turned on for group verification";
+"只可通过邀请进群"="Can only join the group by invitation";
+"群二维码名片"="Group QR Code";
+
+// WKBlacklistVC
+
+"黑名单"="Blacklist";
+
+// WKCommonSettingVC
+
+"退出后不会删除任何历史数据，下次登录依然可以使用本账号。"="Logout will not delete any data. You can still log in with this account.";
+"退出登录"="Logout";
+"将删除所有个人和群的聊天记录。"="All chat history of individuals and groups will be deleted.";
+"是否清除所有图片缓存。"="Whether to clear all image cache.";
+"清空图片缓存"="Clear Image Cache";
+"清空图片/视频缓存"="Clear image/video cache";
+"是否清除缓存"="Whether to clear the cache";
+"清空缓存"="Empty the cache";
+
+// WKCommonSettingVM
+
+"深色模式"="Dark Mode";
+"跟随系统"="Automatic";
+"打开"="Enabled";
+"关闭"="Disabled";
+"版本信息"="Version";
+"调试"="Debug";
+
+// WKDarkModeVM
+
+"开启后，将跟随系统打开或关闭深色模式"="Once turned on, the dark mode will be turned on or off following the system";
+"普通模式"="Normal Mode";
+
+// WKMeAvatarVC
+
+"个人头像"="Profile Picture";
+"拍照"="Take Photo";
+"从手机相册选择"="Choose from  Album";
+"保存图片"="Save Photo";
+"保存失败！"="Save failed!";
+"保存成功！"="Saved successfully!";
+"上传中"="Uploading";
+"上传失败"="Upload failed";
+"上传成功"="Upload successfully";
+
+// WKMeInfoVC
+
+"个人信息"="Personal information";
+"修改名字"="Change Name";
+"修改%@号"="Modify %@ ID";
+"%@号只允许修改一次"="%@ ID Only allowed to modify once";
+"男"="Male";
+"女"="Female";
+"头像"="Avatar";
+"名字"="Name";
+"我的二维码"="My QR code";
+"性别"="Sex";
+
+// WKMeInfoVM
+
+"%@号"="%@ ID";
+
+// WKMePushSettingVC
+
+"新消息通知"="Message Notifications";
+
+// WKMePushSettingVM
+
+"通知显示消息详情"="Show Preview Text";
+"在%@运行时，您可以设置是否需要声音或震动"="When %@ is running, you can set whether to require sound or vibration";
+"声音"="Sound";
+"震动"="Vibrate";
+"关闭后，手机将不再收到新消息通知"="After closing, the phone will no longer receive new message notifications";
+
+// WKMeQRCodeVC
+
+"扫一扫上面的二维码图案，加我%@"="Scan the QR code to add me on %@";
+
+
+// WKConversationPasswordVM
+
+"验证您的登录密码"="Verify your login password";
+"请确认您的登录密码后，再设定6位数字的聊天密码"="Please confirm your login password, and then set a 6-digit chat password";
+"请输入%@登录密码"="Please enter %@ login password";
+"请输入6位数字聊天密码"="Please enter 6-digit chat password";
+"登录密码不能为空！"="The login password cannot be empty!";
+"聊天密码不能为空！"="The chat password cannot be empty!";
+"两次密码输入不一致！"="The two password entries are not consistent!";
+
+// WKDeviceManagerVC
+
+"登录设备管理"="Device Management";
+"最后登录时间: %@"="Last login time";
+"删除设备"="Delete Device";
+
+// WKDeviceManagerVM
+
+"开启登录保护后，在陌生设备登录%@需要进行安全验证。推荐开启，保障你的账号安全"="After the login protection is enabled, security verification is required to log in to %@ on an unfamiliar device. It is recommended to open to protect your account security";
+"登录保护"="Login Protection";
+"通过安全验证的设备"="Safety-verified equipment";
+"你可以查看列表中设备的“最后登录时间”，或删除设备。删除后在该设备登录%@需要重新进行安全验证。"="You can view the \"last login time\" of the devices in the list, or delete the device. After deleting, log in to %@ on this device and you need to perform security verification again.";
+
+// WKResetLoginPasswordVC
+
+"登录密码"="Login Password";
+"验证您的电话号码"="Verify your phone number";
+"%@会发送短信验证手机号码，请输入您的验证码"="%@ will send a text message to verify the mobile number, please enter your verification code";
+"请输入手机号"="Please enter phone number";
+"短信验证码"="SMS verification code";
+"获取验证码"="Send";
+"请输入登录密码"="Please enter your password";
+"发送验证码过于频繁，请在%d秒后重试"="The verification code is sent too frequently, please try again in %d seconds";
+"手机号已注册,去登录？"="The phone number has been registered, go to login?";
+"去登录"="Go to login";
+"获取中"="Acquiring";
+"重新发送(%li)"="Resend(%li)";
+"手机号不能为空！"="Phone number cannot be empty!";
+"验证码不能为空！"="Verification code must be filled!";
+"密码不能为空！"="Password can not be blank!";
+
+// WKSecuritySettingVC
+
+"安全与隐私"="Security Privacy";
+
+// WKSecuritySettingVM
+
+"可以通过以下方式搜索好友"="You can search for friends in the following ways";
+"关闭后，其他用户将不能通过上述信息搜索好友"="After closing, other users will not be able to search for friends through the above information";
+"允许手机号搜索"="Mobile Number";
+"允许%@号搜索"="%@ ID";
+"查看并管理设备，开启登录保护，保障账号安全。"="View and manage devices, enable login protection, and ensure account security.";
+"登录设备管理"="Device Management";
+"已开启"="Enabled";
+"已关闭"="Closed";
+"屏幕保护"="Screen Protector";
+"锁屏密码"="Lock Screen Password";
+"断网屏保"="Disconnected Screen Protector";
+"设置解锁密码"="Set Unlock Password";
+
+// WKScanVC
+
+"扫描失败！"="Scan failed!";
+"知道了"="Understood";
+"没有相册权限，是否前往设置"="No album permission, Go to settings";
+"没有相机权限，是否前往设置"="No camera permission, Go to settings";
+"设置"="Setting";
+"相册"="Album";
+"开灯"="Light up";
+"关灯"="Light down";
+"二维码"="QR Code";
+
+
+// WKTimeTool
+
+"昨天%@"="yesterday %@";
+"前天%@"="Two days %@";
+"星期日"="Sunday";
+"星期一"="Monday";
+"星期二"="Tuesday";
+"星期三"="Wednesday";
+"星期四"="Thursday";
+"星期五"="Friday";
+"星期六"="Saturday";
+
+// CWVoiceView
+
+"对讲"="Intercom";
+"录音"="Record";
+
+// CWRecordStateView
+
+"按住说话"="Hold to speak";
+"点击录音"="Click to record";
+"按住变声"="按住变声";
+"松手试听"="Let Go";
+"松手取消发送"="松手取消发送";
+"准备中"="Preparing";
+
+// ATShowAlertView
+
+"权限设置"="Permission settings";
+"前往设置"="Go to settings";
+"下次再说"="Talk about it next time";
+"请在iPhone的“设置-隐私”选项中，允许访问你的相册"="Please allow access to your album in the \"Settings-Privacy\" option of your iPhone";
+"请在iPhone的“设置-隐私”选项中，允许访问你的麦克风"="Please allow access to your microphone in the \"Settings-Privacy\" option of your iPhone";
+
+// JCVideoRecordView
+
+"长按拍摄"="Long press to shoot";
+
+
+
+
+// WKWebClientInfoVC
+
+"网页端"="Web IM";
+"%@网页端"="%@ Web IM";
+"web端网址"="Web IM";
+"二维码扫描登录"="QR code scan login";
+"请使用浏览器访问%@,然后扫描二维码登录。为了您更好的体验，建议使用谷歌，火狐浏览器。"="Please use your browser to visit %@ and scan the QR code to log in. For your better experience, it is recommended to use Google and Firefox browsers.";
+
+// WKDeleteAccount
+
+"注销账号："="Cancel Account:";
+"账号注销是不可恢复的操作，请您仔细考虑，谨慎操作，操作前务必审慎阅读，充分理解以下内容。如您有任何疑问、意见和建议，可联系客服咨询，%@客服将给予您必要的协助。" = "Account cancellation is an irreversible operation, please consider carefully, operate with caution, read carefully before operation, and fully understand the following contents. If you have any questions, comments and suggestions, you can contact customer service for consultation, %@ customer service will give you the necessary assistance.";
+"注销须知："="Cancellation notice:";
+"账号处于安全状态：\r您的账号未被他人盗取，账号不存在被封禁等风险。"="Account is in a safe state:\rYour account has not been stolen by others, and there is no risk of account being banned.";
+"全部财产均已结清：\n账号内不存在已充值的相关财产。"="All property has been settled:\nThere is no related property that has been recharged in the account.";
+"绑定目前可用的安全手机：\n用于确认当前账号的身份归属情况。"="Bind the currently available secure mobile phone:\nUsed to confirm the identity of the current account.";
+"特别说明："="Special Note:";
+"账号注销申请时即放弃该账号在%@聊天软件所有涉及相关数据，包括但不限于该账号的资产，权益，记录等一切内容，将视为你自愿放弃。"="When you apply for account cancellation, you will give up all relevant data related to the account in the %@chat software, including but not limited to the account's assets, rights, records and other content, which will be regarded as your voluntary abandonment.";
+"账号成功注销后，你将无法登录"="After your account is successfully logged out, you will not be able to log in";
+"已成功注销的账号无法进行找回。"="Accounts that have been successfully cancelled cannot be retrieved.";
+"轻按下方\"注销账号\"按钮，即表示你已阅读同意[《用户使用协议》]"="Tap the \"Cancel Account\" button below, it means that you have read and agreed to the [User Agreement]";
+"再想想"="Think again";
+
+
+// WKMyInviteCodeVC
+
+"我的邀请码"="Invitation code";
+"复制"="Copy";
+"禁用"="Disable";
+"启用"="Enable";
+"复制成功"="Copy success";
+
+// search
+"查找聊天内容"="Search Chat Content";
+"群组"="Group";
+"文件"="File";
+"图片/视频"="Images/Videos";
+"[系统消息]" = "[System Message]";

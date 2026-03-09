@@ -1,0 +1,6 @@
+framework module LiMaoContacts {
+  umbrella header "LiMaoContacts-umbrella.h"
+
+  export *
+  module * { export * }
+}

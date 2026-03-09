@@ -1,0 +1,6 @@
+framework module LiMaoDataSource {
+  umbrella header "LiMaoDataSource-umbrella.h"
+
+  export *
+  module * { export * }
+}

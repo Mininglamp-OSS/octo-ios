@@ -1,0 +1,13 @@
+use_frameworks!
+
+platform :ios, '8.0'
+
+target 'LiMaoContacts_Example' do
+  pod 'LiMaoContacts', :path => '../'
+
+  target 'LiMaoContacts_Tests' do
+    inherit! :search_paths
+
+    pod 'FBSnapshotTestCase'
+  end
+end
