@@ -45,9 +45,15 @@
 @implementation WKLoginVM
 
 -(AnyPromise*) login:(NSString*) username password:(NSString*)password {
-    
-    return  [[WKAPIClient sharedClient] POST:@"user/login" parameters:@{@"username":username,@"password":password,@"device":@{@"device_id":[UIDevice getUUID],@"device_name":[UIDevice getDeviceName],@"device_model":[UIDevice getDeviceModel]}} model:WKLoginResp.class];
-   
+    // flag: 0=app(旧版), 1=pc/web, 2=Android, 3=iOS
+    return  [[WKAPIClient sharedClient] POST:@"user/login" parameters:@{@"username":username,@"password":password,@"flag":@(3),@"device":@{@"device_id":[UIDevice getUUID],@"device_name":[UIDevice getDeviceName],@"device_model":[UIDevice getDeviceModel]}} model:WKLoginResp.class];
+
+}
+
+-(AnyPromise*) emailLogin:(NSString*)email password:(NSString*)password {
+    // flag: 0=app(旧版), 1=pc/web, 2=Android, 3=iOS
+    return [[WKAPIClient sharedClient] POST:@"user/emaillogin" parameters:@{@"email":email,@"password":password,@"flag":@(3),@"device":@{@"device_id":[UIDevice getUUID],@"device_name":[UIDevice getDeviceName],@"device_model":[UIDevice getDeviceModel]}} model:WKLoginResp.class];
+
 }
 
 +(void) handleLoginData:(WKLoginResp*)resp isSave:(BOOL)isSave{

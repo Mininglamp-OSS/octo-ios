@@ -10,7 +10,9 @@
 #import "WKApp.h"
 #import "WKConstant.h"
 #import "WKSync.h"
-@implementation WKSyncService
+@implementation WKSyncService {
+    BOOL _isSyncing;
+}
 
 static WKSyncService *_instance = nil;
 +(instancetype)allocWithZone:(struct _NSZone *)zone{
@@ -33,9 +35,19 @@ static WKSyncService *_instance = nil;
 }
 
 - (void)sync:(void (^)(NSError *))callback {
+    // 防止多次同时同步
+    if(_isSyncing) {
+        NSLog(@"同步已在进行中，跳过此次同步请求");
+        if(callback) {
+            callback(nil);
+        }
+        return;
+    }
+    _isSyncing = YES;
+
     MBProgressHUD *hub = [[self rootViewController].view showHUDWithDim];
        hub.hidden = YES;
-    
+
     // 创建一个 dispatch_group
        dispatch_group_t group = dispatch_group_create();
     
@@ -74,12 +86,14 @@ static WKSyncService *_instance = nil;
                // 在所有同步任务完成后执行隐藏 HUD 和回调
                dispatch_group_notify(group, dispatch_get_main_queue(), ^{
                    [hub hideAnimated:YES];
+                   _isSyncing = NO;
                    if(callback) {
                        callback(nil);
                    }
                });
                
            }else {
+               _isSyncing = NO;
                if(callback) {
                    callback(nil);
                }

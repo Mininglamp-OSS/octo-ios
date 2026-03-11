@@ -27,8 +27,8 @@
 -(instancetype) init {
     self = [super init];
     if(self) {
-        self.appName = @"唐僧叨叨";
-        self.shortName = @"WuKong ID";
+        self.appName = @"DMWork";
+        self.shortName = @"DMWork ID";
         self.appID = @""; // appstore的id
         self.appSchemaPrefix = @"wukong";
         self.clusterOn = YES;

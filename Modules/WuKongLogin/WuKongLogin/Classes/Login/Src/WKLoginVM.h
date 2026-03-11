@@ -14,14 +14,21 @@ NS_ASSUME_NONNULL_BEGIN
 
 /**
  登录
- 
+
  @param username 用户名
  @param password 密码
  @return 返回
  */
 -(AnyPromise*) login:(NSString*) username password:(NSString*)password;
 
+/**
+ 邮箱登录
 
+ @param email 邮箱
+ @param password 密码
+ @return 返回
+ */
+-(AnyPromise*) emailLogin:(NSString*)email password:(NSString*)password;
 
 /// 处理登录返回数据
 /// @param resp 登录返回数据

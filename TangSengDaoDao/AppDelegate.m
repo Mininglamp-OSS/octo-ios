@@ -20,7 +20,7 @@
 #define HTTPS_ON true // https开关
 
 
-#define BASE_URL [NSString stringWithFormat:@"%@://%@/v1/",HTTPS_ON?@"https":@"http",SERVER_IP]
+#define BASE_URL [NSString stringWithFormat:@"%@://%@/api/v1/",HTTPS_ON?@"https":@"http",SERVER_IP]
 #define WEB_URL [NSString stringWithFormat:@"%@://%@/web/",HTTPS_ON?@"https":@"http",SERVER_IP]
 // api基地址
 #define API_BASE_URL  BASE_URL

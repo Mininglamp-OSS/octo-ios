@@ -13,8 +13,19 @@
     return [[WKAPIClient sharedClient] POST:@"user/sms/registercode" parameters:@{@"zone":zone?:@"",@"phone":phone}];
 }
 
+- (AnyPromise *)emailSendCode:(NSString*)email codeType:(NSInteger)codeType {
+    return [[WKAPIClient sharedClient] POST:@"user/email/sendcode" parameters:@{@"email":email?:@"",@"code_type":@(codeType)}];
+}
+
 - (AnyPromise *)registerByPhone:(NSString *)zone phone:(NSString *)phone code:(NSString *)code inviteCode:(NSString*)inviteCode password:(NSString *)password {
-    return [[WKAPIClient sharedClient] POST:@"user/register" parameters:@{@"zone":zone?:@"",@"phone":phone?:@"",@"code":code?:@"",@"invite_code":inviteCode?:@"",@"password":password?:@"",@"device":@{@"device_id":[UIDevice getUUID],@"device_name":[UIDevice getDeviceName],@"device_model":[UIDevice getDeviceModel]}} model:WKLoginResp.class];
+    // flag: 0=app(旧版), 1=pc/web, 2=Android, 3=iOS
+    return [[WKAPIClient sharedClient] POST:@"user/register" parameters:@{@"zone":zone?:@"",@"phone":phone?:@"",@"code":code?:@"",@"invite_code":inviteCode?:@"",@"password":password?:@"",@"flag":@(3),@"device":@{@"device_id":[UIDevice getUUID],@"device_name":[UIDevice getDeviceName],@"device_model":[UIDevice getDeviceModel]}} model:WKLoginResp.class];
+}
+
+- (AnyPromise *)emailRegister:(NSString *)email code:(NSString *)code name:(NSString *)name password:(NSString *)password inviteCode:(NSString *)inviteCode {
+    // 移除验证码验证，code参数传空字符串
+    // flag: 0=app(旧版), 1=pc/web, 2=Android, 3=iOS
+    return [[WKAPIClient sharedClient] POST:@"user/emailregister" parameters:@{@"email":email?:@"",@"code":@"",@"name":name?:@"",@"password":password?:@"",@"invite_code":inviteCode?:@"",@"flag":@(3),@"device":@{@"device_id":[UIDevice getUUID],@"device_name":[UIDevice getDeviceName],@"device_model":[UIDevice getDeviceModel]}} model:WKLoginResp.class];
 }
 
 -(AnyPromise*) updateName:(NSString*)name {

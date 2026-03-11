@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(pod install)",
+      "Bash(xcodebuild:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

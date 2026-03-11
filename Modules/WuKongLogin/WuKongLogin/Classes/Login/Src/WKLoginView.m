@@ -55,10 +55,14 @@
     [self addSubview:self.welcomeTitleLbl];
     
     [self addSubview:self.mobileBoxView];
+    // 区号选择器默认隐藏，输入纯数字时才显示
     [self.mobileBoxView addSubview:self.countryBtn];
+    self.countryBtn.hidden = YES;
     [self updateCountryBtnTitle];
     [self.mobileBoxView addSubview:self.downArrowView];
+    self.downArrowView.hidden = YES;
     [self.mobileBoxView addSubview:self.countrySpliteLineView];
+    self.countrySpliteLineView.hidden = YES;
     [self.mobileBoxView addSubview:self.mobileTextField];
     [self.mobileBoxView addSubview:self.mobileBottomLineView];
     
@@ -141,12 +145,14 @@
 
 -(UITextField*) mobileTextField {
     if(!_mobileTextField) {
-        CGFloat left =self.countrySpliteLineView.lim_right+20.0f;
+        CGFloat left = 20.0f;  // 默认从左边距开始，不保留区号空间
         _mobileTextField = [[UITextField alloc] initWithFrame:CGRectMake(left, self.mobileBoxView.lim_height/2.0f - 20.0f, WKScreenWidth - left - 20.0f, 40.0f)];
-        _mobileTextField.placeholder = LLang(@"请输入手机号");
-        _mobileTextField.keyboardType = UIKeyboardTypePhonePad;
+        _mobileTextField.placeholder = LLang(@"邮箱 / 用户名");
+        _mobileTextField.keyboardType = UIKeyboardTypeDefault; // 改为支持字母和数字
         _mobileTextField.returnKeyType = UIReturnKeyNext;
         _mobileTextField.delegate = self;
+        // 监听文本变化
+        [_mobileTextField addTarget:self action:@selector(mobileTextFieldDidChange:) forControlEvents:UIControlEventEditingChanged];
     }
     return _mobileTextField;
 }
@@ -311,8 +317,41 @@
 // 登录按钮点击
 -(void) loginBtnPressed{
     if(self.onLogin) {
-        self.onLogin(self.mobileTextField.text,self.passwordTextField.text,[NSString stringWithFormat:@"00%@",_country]);
+        NSString *inputText = self.mobileTextField.text;
+        // 判断是否为纯数字（手机号）
+        BOOL isPhoneNumber = [self isPhoneNumber:inputText];
+        NSString *country = isPhoneNumber ? [NSString stringWithFormat:@"00%@",_country] : @"";
+        self.onLogin(inputText, self.passwordTextField.text, country);
     }
+}
+
+// 判断是否为纯数字
+- (BOOL)isPhoneNumber:(NSString *)text {
+    if (!text || text.length == 0) {
+        return NO;
+    }
+    NSCharacterSet *nonDigits = [[NSCharacterSet decimalDigitCharacterSet] invertedSet];
+    return [text rangeOfCharacterFromSet:nonDigits].location == NSNotFound;
+}
+
+// 监听输入框变化
+- (void)mobileTextFieldDidChange:(UITextField *)textField {
+    NSString *text = textField.text;
+    BOOL isPhoneNumber = [self isPhoneNumber:text];
+
+    // 根据输入类型显示/隐藏区号选择器
+    self.countryBtn.hidden = !isPhoneNumber;
+    self.downArrowView.hidden = !isPhoneNumber;
+    self.countrySpliteLineView.hidden = !isPhoneNumber;
+
+    // 调整输入框位置
+    CGFloat left = isPhoneNumber ? (self.countrySpliteLineView.lim_right + 20.0f) : 20.0f;
+    [self.mobileTextField mas_remakeConstraints:^(MASConstraintMaker *make) {
+        make.left.mas_equalTo(left);
+        make.right.mas_equalTo(self.mobileBoxView).offset(-20.0f);
+        make.height.mas_equalTo(40.0f);
+        make.centerY.mas_equalTo(self.mobileBoxView);
+    }];
 }
 
 -(void) giteeLoginPressed {
@@ -349,13 +388,17 @@
 
 #pragma mark -- 委托
 - (BOOL)textField:(UITextField *)textField shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString *)string{
-    
+
     if(textField == self.mobileTextField) {
-        NSInteger strLength = textField.text.length - range.length + string.length;
-        if([_country isEqualToString:@"86"]) {
+        NSString *newText = [textField.text stringByReplacingCharactersInRange:range withString:string];
+        // 判断新文本是否为纯数字
+        BOOL isPhoneNumber = [self isPhoneNumber:newText];
+
+        // 如果是纯数字且是中国区号，限制11位
+        if(isPhoneNumber && [_country isEqualToString:@"86"]) {
+            NSInteger strLength = textField.text.length - range.length + string.length;
             return (strLength <= 11); // 大陆电话号码为11位
         }
-        
     }
     return true;
 }

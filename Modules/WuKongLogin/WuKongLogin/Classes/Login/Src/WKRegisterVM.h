@@ -18,7 +18,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// @param phone 手机号
 -(AnyPromise*) sendCode:(NSString*)zone phone:(NSString*)phone;
 
-
+/// 发送邮箱验证码
+/// @param email 邮箱
+/// @param codeType 验证码类型 0-注册 2-忘记密码
+-(AnyPromise*) emailSendCode:(NSString*)email codeType:(NSInteger)codeType;
 
 /// 通过手机号注册
 /// @param zone 区号
@@ -28,6 +31,13 @@ NS_ASSUME_NONNULL_BEGIN
 /// @param password 密码
 -(AnyPromise*) registerByPhone:(NSString*)zone phone:(NSString*)phone code:(NSString*)code inviteCode:(NSString*)inviteCode password:(NSString*)password;
 
+/// 通过邮箱注册
+/// @param email 邮箱
+/// @param code 邮箱验证码
+/// @param name 昵称
+/// @param password 密码
+/// @param inviteCode 邀请码
+-(AnyPromise*) emailRegister:(NSString*)email code:(NSString*)code name:(NSString*)name password:(NSString*)password inviteCode:(NSString*)inviteCode;
 
 /// 更新用户的名字
 /// @param name <#name description#>

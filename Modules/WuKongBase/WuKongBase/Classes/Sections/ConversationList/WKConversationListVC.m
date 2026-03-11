@@ -24,6 +24,8 @@
 #import "WKConversationListHeaderView.h"
 #import "WKOnlineStatusManager.h"
 #import "WKMD5Util.h"
+#import "WKSpaceModel.h"
+#import "WKSpacePopupView.h"
 @interface WKConversationListVC ()<UITableViewDelegate,UITableViewDataSource,UISearchControllerDelegate,WKConnectionManagerDelegate,WKChannelManagerDelegate,WKConversationManagerDelegate,WKNetworkListenerDelegate,WKChatManagerDelegate,WKTypingManagerDelegate,SwipeTableViewCellDelegate,WKOnlineStatusManagerDelegate>
 @property(nonatomic,copy) NSString *_title;
 @property(nonatomic,strong)  WKConversationListTableView *tableView;
@@ -48,6 +50,18 @@
 
 @property(nonatomic,strong) NSTimer *refreshTimer; // 定时刷新table的定时器
 
+// 网络信号监控
+@property(nonatomic,assign) NSTimeInterval connectedAtTime; // 连接成功的时间
+@property(nonatomic,assign) NSInteger currentLatencyMs; // 当前延迟（毫秒）
+@property(nonatomic,strong) NSTimer *pingTimer; // ping定时器
+@property(nonatomic,strong) UIView *signalContainerView; // 信号显示容器
+@property(nonatomic,strong) UIImageView *signalImageView; // 信号图标
+@property(nonatomic,strong) UILabel *latencyLabel; // 延迟标签
+
+// Space 切换
+@property(nonatomic,copy) NSString *currentSpaceName; // 当前 Space 名称
+@property(nonatomic,copy) NSString *currentSpaceId; // 当前 Space ID
+
 @end
 
 @implementation WKConversationListVC
@@ -64,16 +78,24 @@
     self._title = [WKApp shared].config.appName;
     _conversationListVM = [WKConversationListVM shared];
     [_conversationListVM reset];
+
+    // 初始化网络监控相关属性
+    self.connectedAtTime = 0;
+    self.currentLatencyMs = -1;
+
     return self;
 }
 - (void)viewDidLoad {
     [super viewDidLoad];
-    
+
     [self.view addSubview:self.tableView];
     self.connectLock = [[NSLock alloc] init];
     self.conversationLock = [[NSRecursiveLock alloc] init];
     [self addDelegates];
-    
+
+    // 加载当前 Space 信息
+    [self loadCurrentSpace];
+
     // 加载最近会话列表数据
     __weak __typeof(self) weakSelf  = self;
     [_conversationListVM loadConversationList:^{
@@ -86,12 +108,43 @@
         [weakSelf refreshBadge];
 
     }];
-    
+
 //    self.refreshTimer = [NSTimer scheduledTimerWithTimeInterval:30 target:self selector:@selector(timerRefreshTable) userInfo:nil repeats:YES];
 //
     self.tableHeader.pcDeviceFlag = [WKOnlineStatusManager shared].pcDeviceFlag;
     self.tableHeader.showPCOnline = [WKOnlineStatusManager shared].pcOnline;
-    
+
+    // 给导航栏标题添加点击手势以切换 Space
+    [self setupTitleTapGesture];
+
+}
+
+// 给标题添加点击手势
+- (void)setupTitleTapGesture {
+    // 给 titleLabel 添加点击手势
+    self.navigationBar.titleLabel.userInteractionEnabled = YES;
+    UITapGestureRecognizer *tapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(spaceButtonTapped)];
+    [self.navigationBar.titleLabel addGestureRecognizer:tapGesture];
+}
+
+// 加载当前 Space 信息
+- (void)loadCurrentSpace {
+    // 从本地获取当前 Space ID
+    self.currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+
+    if (self.currentSpaceId && self.currentSpaceId.length > 0) {
+        // 从缓存或网络获取 Space 列表
+        __weak typeof(self) weakSelf = self;
+        [[WKSpaceModel shared] getMySpaces].then(^(NSArray<WKSpaceEntity *> *spaces){
+            for (WKSpaceEntity *space in spaces) {
+                if ([space.space_id isEqualToString:weakSelf.currentSpaceId]) {
+                    weakSelf.currentSpaceName = space.name;
+                    [weakSelf refreshTitle];
+                    break;
+                }
+            }
+        });
+    }
 }
 
 -(void) timerRefreshTable {
@@ -123,9 +176,17 @@
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
-   
+
     if(!self.refreshTimer) {
         self.refreshTimer = [NSTimer scheduledTimerWithTimeInterval:30 target:self selector:@selector(timerRefreshTable) userInfo:nil repeats:YES];
+    }
+
+    // 如果已连接，启动 ping 监控
+    if ([WKSDK shared].connectionManager.connectStatus == WKConnected) {
+        if (self.connectedAtTime == 0) {
+            self.connectedAtTime = [[NSDate date] timeIntervalSince1970];
+        }
+        [self startPingMonitoring];
     }
 }
 
@@ -135,7 +196,10 @@
         [self.refreshTimer invalidate];
         self.refreshTimer = nil;
     }
-    
+
+    // 停止 ping 监控
+    [self stopPingMonitoring];
+
     [self hiddenRightItem:YES];
 }
 
@@ -176,17 +240,41 @@
 
 -(UIView*) rightAddItem {
     if (!_rightAddItem) {
+        // 创建容器视图，宽度增加以容纳信号显示
+        _rightAddItem = [[UIView alloc] initWithFrame:CGRectMake(0.0f , 0.0f, 120.0f, 32.0f)];
+
+        // 添加信号显示容器（初始隐藏）
+        self.signalContainerView = [[UIView alloc] initWithFrame:CGRectMake(0.0f, 5.0f, 68.0f, 22.0f)];
+        self.signalContainerView.hidden = YES;
+
+        // 创建点击手势
+        UITapGestureRecognizer *tapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(signalTapped)];
+        [self.signalContainerView addGestureRecognizer:tapGesture];
+        self.signalContainerView.userInteractionEnabled = YES;
+
+        // 信号图标
+        self.signalImageView = [[UIImageView alloc] initWithFrame:CGRectMake(0.0f, 4.0f, 16.0f, 14.0f)];
+        self.signalImageView.image = [self createSignalBarsImage];
+        [self.signalContainerView addSubview:self.signalImageView];
+
+        // 延迟标签
+        self.latencyLabel = [[UILabel alloc] initWithFrame:CGRectMake(20.0f, 0.0f, 48.0f, 22.0f)];
+        self.latencyLabel.font = [UIFont systemFontOfSize:11.0f];
+        self.latencyLabel.textAlignment = NSTextAlignmentLeft;
+        [self.signalContainerView addSubview:self.latencyLabel];
+
+        [_rightAddItem addSubview:self.signalContainerView];
+
+        // 添加按钮（调整位置以在信号显示右侧）
         UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
         [button addTarget:self action:@selector(rightAddPressed) forControlEvents:UIControlEventTouchUpInside];
-        button.frame = CGRectMake(0.0f , 5.0f, 32.0f, 32.0f);
+        button.frame = CGRectMake(88.0f , 5.0f, 32.0f, 32.0f);
         UIImage *img = [self imageName:@"ConversationList/Index/Add"];
         img = [img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
         [button setImage:img forState:UIControlStateNormal];
         [button setBackgroundColor:[UIColor clearColor]];
         [button setTintColor:WKApp.shared.config.navBarButtonColor];
-        _rightAddItem = [[UIView alloc] initWithFrame:CGRectMake(0.0f , 0.0f, 32.0f, 32.0f)];
         [_rightAddItem addSubview:button];
-//        [button setBackgroundColor:[UIColor redColor]];
     }
     return _rightAddItem;
 }
@@ -232,7 +320,12 @@
             self._title = LLang(@"收取中");
             break;
         case WKConnected:
-            self._title = [WKApp shared].config.appName;
+            // 已连接状态下显示 Space 名称（如果有的话）
+            if (self.currentSpaceName && self.currentSpaceName.length > 0) {
+                self._title = self.currentSpaceName;
+            } else {
+                self._title = [WKApp shared].config.appName;
+            }
             break;
         case WKDisconnected:
             self._title = LLang(@"已断开");
@@ -240,12 +333,36 @@
         default:
             break;
     }
-//    if(self.tabBarController) {
-//        self.tabBarController.title = self._title;
-//    }
-//    self.title = self._title;
     [self setCustomTitle:self._title];
     [self.connectLock unlock];
+}
+
+// 标题点击事件 - 通过导航栏左侧按钮触发
+- (void)spaceButtonTapped {
+    WKSpacePopupView *popupView = [[WKSpacePopupView alloc] init];
+    popupView.currentSpaceId = self.currentSpaceId;
+
+    __weak typeof(self) weakSelf = self;
+    popupView.onSpaceSelected = ^(WKSpaceEntity *space) {
+        weakSelf.currentSpaceName = space.name;
+        weakSelf.currentSpaceId = space.space_id;
+
+        // 保存当前 Space ID
+        [[NSUserDefaults standardUserDefaults] setObject:space.space_id forKey:@"currentSpaceId"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+
+        // 更新标题
+        [weakSelf refreshTitle];
+
+        // 清空并重新加载会话列表
+        [weakSelf.conversationListVM reset];
+        [weakSelf.conversationListVM loadConversationList:^{
+            [weakSelf.tableView reloadData];
+            [weakSelf refreshBadge];
+        }];
+    };
+
+    [popupView showFromView:self.view];
 }
 
 - (WKConversationListTableView *)tableView{
@@ -411,6 +528,16 @@
  */
 -(void) onConnectStatus:(WKConnectStatus)status reasonCode:(WKReason)reasonCode {
     [self refreshTitle];
+
+    // 处理网络信号监控
+    if (status == WKConnected) {
+        // 连接成功，记录时间并开始 ping 监控
+        self.connectedAtTime = [[NSDate date] timeIntervalSince1970];
+        [self startPingMonitoring];
+    } else if (status == WKConnecting || status == WKDisconnected) {
+        // 连接中或已断开，停止监控并隐藏信号显示
+        [self stopPingMonitoring];
+    }
 }
 
 #pragma mark - WKConversationManagerDelegate
@@ -855,9 +982,224 @@
 -(UIImage*) imageName:(NSString*)name {
     return [WKApp.shared loadImage:name moduleID:@"WuKongBase"];
 }
+
+#pragma mark - 网络信号监控
+
+// 创建信号条图标
+- (UIImage *)createSignalBarsImage {
+    CGSize size = CGSizeMake(16, 14);
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+    CGContextRef context = UIGraphicsGetCurrentContext();
+
+    // 设置信号条颜色（默认灰色）
+    [[UIColor colorWithRed:103/255.0 green:106/255.0 blue:111/255.0 alpha:1.0] setFill];
+
+    // 绘制4个信号条
+    // 第1条（最低）
+    CGContextFillRect(context, CGRectMake(0, 11, 3, 3));
+    // 第2条
+    CGContextFillRect(context, CGRectMake(4.5, 7.5, 3, 6.5));
+    // 第3条
+    CGContextFillRect(context, CGRectMake(9, 4, 3, 10));
+    // 第4条（最高）
+    CGContextFillRect(context, CGRectMake(13.5, 0, 2.5, 14));
+
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+
+    return image;
+}
+
+// 开始 ping 监控
+- (void)startPingMonitoring {
+    [self stopPingMonitoring];
+
+    // 立即执行第一次 ping
+    [self performPing];
+
+    // 每30秒执行一次
+    self.pingTimer = [NSTimer scheduledTimerWithTimeInterval:30.0 target:self selector:@selector(performPing) userInfo:nil repeats:YES];
+}
+
+// 停止 ping 监控
+- (void)stopPingMonitoring {
+    if (self.pingTimer) {
+        [self.pingTimer invalidate];
+        self.pingTimer = nil;
+    }
+
+    // 隐藏信号显示
+    self.signalContainerView.hidden = YES;
+}
+
+// 执行 ping 操作
+- (void)performPing {
+    NSString *baseURL = [WKApp shared].config.apiBaseUrl;
+    if (!baseURL || baseURL.length == 0) {
+        return;
+    }
+
+    NSURL *url = [NSURL URLWithString:baseURL];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.HTTPMethod = @"HEAD";
+    request.timeoutInterval = 5.0;
+
+    NSDate *startTime = [NSDate date];
+
+    __weak typeof(self) weakSelf = self;
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+        if (!error) {
+            NSTimeInterval latency = [[NSDate date] timeIntervalSinceDate:startTime] * 1000; // 转换为毫秒
+            weakSelf.currentLatencyMs = (NSInteger)latency;
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf updateSignalView];
+            });
+        } else {
+            // ping 失败，重新调度下一次
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf scheduleNextPing];
+            });
+        }
+    }];
+    [task resume];
+}
+
+// 调度下一次 ping
+- (void)scheduleNextPing {
+    // ping 定时器已经在运行，无需额外调度
+}
+
+// 更新信号显示
+- (void)updateSignalView {
+    if (!self.signalContainerView) {
+        return;
+    }
+
+    // 显示信号容器
+    self.signalContainerView.hidden = NO;
+
+    // 更新延迟文本
+    self.latencyLabel.text = [NSString stringWithFormat:@"%ldms", (long)self.currentLatencyMs];
+
+    // 根据延迟设置颜色
+    UIColor *color;
+    if (self.currentLatencyMs < 100) {
+        // 绿色：网速好
+        color = [UIColor colorWithRed:76/255.0 green:175/255.0 blue:80/255.0 alpha:1.0];
+    } else if (self.currentLatencyMs < 300) {
+        // 橙色：一般
+        color = [UIColor colorWithRed:255/255.0 green:152/255.0 blue:0/255.0 alpha:1.0];
+    } else {
+        // 红色：较差
+        color = [UIColor colorWithRed:244/255.0 green:67/255.0 blue:54/255.0 alpha:1.0];
+    }
+
+    // 更新图标颜色
+    self.signalImageView.image = [self.signalImageView.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    self.signalImageView.tintColor = color;
+
+    // 更新文字颜色
+    self.latencyLabel.textColor = color;
+}
+
+// 点击信号显示区域
+- (void)signalTapped {
+    // 计算已连接时长
+    NSTimeInterval connectedDuration = [[NSDate date] timeIntervalSinceDate:[NSDate dateWithTimeIntervalSince1970:self.connectedAtTime]];
+    NSInteger seconds = (NSInteger)connectedDuration;
+    NSString *durationText;
+    if (seconds < 60) {
+        durationText = [NSString stringWithFormat:LLang(@"已连接: %ld秒"), (long)seconds];
+    } else {
+        durationText = [NSString stringWithFormat:LLang(@"已连接: %ld分钟"), (long)(seconds / 60)];
+    }
+
+    // 创建详情视图
+    UIView *tooltipView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, 90)];
+    tooltipView.backgroundColor = [UIColor colorWithRed:60/255.0 green:60/255.0 blue:60/255.0 alpha:0.95];
+    tooltipView.layer.cornerRadius = 8;
+
+    // 状态标签
+    UILabel *statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 10, 180, 20)];
+    statusLabel.text = LLang(@"状态: 已连接");
+    statusLabel.textColor = [UIColor whiteColor];
+    statusLabel.font = [UIFont systemFontOfSize:13];
+    [tooltipView addSubview:statusLabel];
+
+    // 延迟标签
+    UILabel *latencyInfoLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 34, 180, 20)];
+    latencyInfoLabel.text = [NSString stringWithFormat:LLang(@"延迟: %ldms"), (long)self.currentLatencyMs];
+    latencyInfoLabel.textColor = [UIColor whiteColor];
+    latencyInfoLabel.font = [UIFont systemFontOfSize:13];
+    [tooltipView addSubview:latencyInfoLabel];
+
+    // 时长标签
+    UILabel *durationLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 58, 180, 20)];
+    durationLabel.text = durationText;
+    durationLabel.textColor = [UIColor whiteColor];
+    durationLabel.font = [UIFont systemFontOfSize:13];
+    [tooltipView addSubview:durationLabel];
+
+    // 显示弹窗
+    [self showTooltip:tooltipView atView:self.signalContainerView];
+}
+
+// 显示提示弹窗
+- (void)showTooltip:(UIView *)tooltipView atView:(UIView *)sourceView {
+    // 添加到主窗口
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    if (!window) {
+        window = [[UIApplication sharedApplication].windows firstObject];
+    }
+
+    [window addSubview:tooltipView];
+
+    // 计算位置（在源视图下方）
+    CGRect sourceFrame = [sourceView convertRect:sourceView.bounds toView:window];
+    CGFloat x = sourceFrame.origin.x + sourceFrame.size.width / 2 - tooltipView.frame.size.width / 2;
+    CGFloat y = sourceFrame.origin.y + sourceFrame.size.height + 4;
+
+    // 确保不超出屏幕
+    if (x < 10) x = 10;
+    if (x + tooltipView.frame.size.width > window.frame.size.width - 10) {
+        x = window.frame.size.width - tooltipView.frame.size.width - 10;
+    }
+
+    tooltipView.frame = CGRectMake(x, y, tooltipView.frame.size.width, tooltipView.frame.size.height);
+
+    // 添加点击关闭手势
+    UITapGestureRecognizer *tapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissTooltip:)];
+    [tooltipView addGestureRecognizer:tapGesture];
+
+    // 添加透明度动画
+    tooltipView.alpha = 0;
+    [UIView animateWithDuration:0.2 animations:^{
+        tooltipView.alpha = 1;
+    }];
+
+    // 3秒后自动消失
+    [self performSelector:@selector(dismissTooltip:) withObject:tooltipView afterDelay:3.0];
+}
+
+// 关闭提示弹窗
+- (void)dismissTooltip:(id)sender {
+    UIView *tooltipView = sender;
+    if ([tooltipView isKindOfClass:[UITapGestureRecognizer class]]) {
+        tooltipView = [(UITapGestureRecognizer *)sender view];
+    }
+
+    [UIView animateWithDuration:0.2 animations:^{
+        tooltipView.alpha = 0;
+    } completion:^(BOOL finished) {
+        [tooltipView removeFromSuperview];
+    }];
+}
+
 -(void) dealloc {
     NSLog(@"WKConversationListVC dealloc ....");
     [self removeDelegates];
+    [self stopPingMonitoring];
 }
 
 @end

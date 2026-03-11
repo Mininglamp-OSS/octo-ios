@@ -17,7 +17,6 @@
     NSString *friendMaxVersion = [[NSUserDefaults standardUserDefaults] stringForKey:cacheKey];
     NSInteger limit = 200;
     __weak typeof(self) weakSelf = self;
-    __strong typeof(weakSelf) strongSelf = weakSelf;
     [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"friend/sync"] parameters:@{@"version":friendMaxVersion?:@"",@"api_version":@"1",@"limit":@(limit)}].then(^(NSArray<NSDictionary*>* contacts){
         if(contacts && contacts.count>0) {
             NSMutableArray *channelInfos = [NSMutableArray array];
@@ -32,31 +31,35 @@
                 }else{
                     [channelInfos addObject:[WKChannelUtil toChannelInfo:dict]];
                 }
-                // 下面代码还不能注释 需要修改完联系人选择等功能后才能注释掉
-//                NSInteger count = [[WKDBContacts shared] queryCountWithUID:cont.uid];
-//                if(count>0) {
-//                    [[WKDBContacts shared] updateWithModel:cont];
-//                }else {
-//                    [[WKDBContacts shared] insert:cont];
-//                }
             }
             long long version = [contacts.lastObject[@"version"] longLongValue];
             [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%lld",version] forKey:cacheKey];
             [[NSUserDefaults standardUserDefaults] synchronize];
-             [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
-            
-            if(contacts.count>=limit) {
-                [strongSelf sync:callback];
-                return;
+            [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
+
+            // 如果返回的数量等于限制数量，说明可能还有更多数据，延迟后继续同步
+            if(contacts.count >= limit) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    if(weakSelf) {
+                        [weakSelf sync:callback];
+                    } else {
+                        // 如果对象已释放，调用callback避免dispatch_group永久等待
+                        if(callback) {
+                            callback(nil);
+                        }
+                    }
+                });
+                return; // 不调用callback，等待递归完成
             }
         }
-        // 通知联系人更新
+        // 没有更多数据了，通知联系人更新并结束同步
         [[NSNotificationCenter defaultCenter] postNotificationName:WK_NOTIFY_CONTACTS_UPDATE object:nil];
         if(callback) {
             callback(nil);
         }
-       
+
     }).catch(^(NSError *error){
+        // 发生错误时也要调用callback，否则弹窗会一直显示
         if(callback) {
             callback(error);
         }
