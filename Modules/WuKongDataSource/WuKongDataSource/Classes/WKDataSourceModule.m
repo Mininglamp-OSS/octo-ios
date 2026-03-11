@@ -166,7 +166,16 @@
 // 设置最近会话提供者
 -(void) setSyncConversationProvider {
     [[WKSDK shared].conversationManager setSyncConversationProviderAndAck:^(long long version, NSString * _Nonnull lastMsgSeqs, WKSyncConversationCallback  _Nonnull callback) {
-        [[WKAPIClient sharedClient] POST:@"conversation/sync" parameters:@{
+        // 获取当前 Space ID（参考 Web 端实现）
+        NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+        NSString *syncPath = @"conversation/sync";
+        if (currentSpaceId && currentSpaceId.length > 0) {
+            // URL 编码 space_id 参数
+            NSString *encodedSpaceId = [currentSpaceId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
+            syncPath = [NSString stringWithFormat:@"conversation/sync?space_id=%@", encodedSpaceId];
+        }
+
+        [[WKAPIClient sharedClient] POST:syncPath parameters:@{
             @"version": @(version),
             @"device_uuid": [WKApp shared].loginInfo.deviceUUID,
             @"last_msg_seqs": lastMsgSeqs?:@"",

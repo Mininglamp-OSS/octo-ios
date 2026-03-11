@@ -13,6 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface WKSpacePopupView : UIView
 
 @property(nonatomic,copy) void(^onSpaceSelected)(WKSpaceEntity *space);
+@property(nonatomic,copy) void(^onDismiss)(void);
 @property(nonatomic,copy) NSString *currentSpaceId;
 
 - (void)showFromView:(UIView *)anchorView;

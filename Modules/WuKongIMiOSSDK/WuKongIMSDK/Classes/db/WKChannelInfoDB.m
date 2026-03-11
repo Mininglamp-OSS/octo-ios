@@ -281,6 +281,12 @@ static WKChannelInfoDB *_instance;
 
 
 
+-(void) resetAllPersonChannelFollow {
+    [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
+        [db executeUpdate:@"update channel set follow=0 where channel_type=1 and follow=1"];
+    }];
+}
+
 -(BOOL) existChannelInfo:(WKChannel*)channel db:(FMDatabase*) db {
     __block BOOL exist =false;
     FMResultSet *result = [db executeQuery:@"select count(*) cn from channel where channel_id=? and channel_type=?",channel.channelId?:@"",@(channel.channelType)];

@@ -26,6 +26,7 @@
 #import "WKMD5Util.h"
 #import "WKSpaceModel.h"
 #import "WKSpacePopupView.h"
+#import "WKSyncService.h"
 @interface WKConversationListVC ()<UITableViewDelegate,UITableViewDataSource,UISearchControllerDelegate,WKConnectionManagerDelegate,WKChannelManagerDelegate,WKConversationManagerDelegate,WKNetworkListenerDelegate,WKChatManagerDelegate,WKTypingManagerDelegate,SwipeTableViewCellDelegate,WKOnlineStatusManagerDelegate>
 @property(nonatomic,copy) NSString *_title;
 @property(nonatomic,strong)  WKConversationListTableView *tableView;
@@ -61,6 +62,9 @@
 // Space 切换
 @property(nonatomic,copy) NSString *currentSpaceName; // 当前 Space 名称
 @property(nonatomic,copy) NSString *currentSpaceId; // 当前 Space ID
+@property(nonatomic,assign) BOOL spaceListLoaded; // Space列表是否已加载
+@property(nonatomic,assign) NSInteger spaceCount; // Space总数
+@property(nonatomic,strong) UIImageView *spaceArrowView; // Space标题右侧折叠箭头
 
 @end
 
@@ -117,6 +121,8 @@
     // 给导航栏标题添加点击手势以切换 Space
     [self setupTitleTapGesture];
 
+    // 初始化标题（即使异步加载未完成也先显示默认标题）
+    [self refreshTitle];
 }
 
 // 给标题添加点击手势
@@ -125,6 +131,17 @@
     self.navigationBar.titleLabel.userInteractionEnabled = YES;
     UITapGestureRecognizer *tapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(spaceButtonTapped)];
     [self.navigationBar.titleLabel addGestureRecognizer:tapGesture];
+
+    // 在导航栏上添加折叠箭头（标题右侧，默认向右，展开时向下）
+    UIImage *arrowImg = [[WKApp shared] loadImage:@"arrow_right" moduleID:@"WuKongLogin"];
+    _spaceArrowView = [[UIImageView alloc] initWithImage:arrowImg];
+    _spaceArrowView.contentMode = UIViewContentModeScaleAspectFit;
+    _spaceArrowView.frame = CGRectMake(0, 0, 12, 12);
+    _spaceArrowView.hidden = YES; // 默认隐藏，space > 2 时显示
+    _spaceArrowView.userInteractionEnabled = YES;
+    UITapGestureRecognizer *arrowTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(spaceButtonTapped)];
+    [_spaceArrowView addGestureRecognizer:arrowTap];
+    [self.navigationBar addSubview:_spaceArrowView];
 }
 
 // 加载当前 Space 信息
@@ -136,13 +153,19 @@
         // 从缓存或网络获取 Space 列表
         __weak typeof(self) weakSelf = self;
         [[WKSpaceModel shared] getMySpaces].then(^(NSArray<WKSpaceEntity *> *spaces){
+            weakSelf.spaceListLoaded = YES;  // 标记已加载
+            weakSelf.spaceCount = spaces.count;
             for (WKSpaceEntity *space in spaces) {
                 if ([space.space_id isEqualToString:weakSelf.currentSpaceId]) {
                     weakSelf.currentSpaceName = space.name;
+                    // 立即更新标题（不需要等待IM连接）
                     [weakSelf refreshTitle];
                     break;
                 }
             }
+        }).catch(^(NSError *error){
+            NSLog(@"加载 Space 失败: %@", error);
+            weakSelf.spaceListLoaded = NO;  // 加载失败
         });
     }
 }
@@ -243,9 +266,9 @@
         // 创建容器视图，宽度增加以容纳信号显示
         _rightAddItem = [[UIView alloc] initWithFrame:CGRectMake(0.0f , 0.0f, 120.0f, 32.0f)];
 
-        // 添加信号显示容器（初始隐藏）
+        // 添加信号显示容器（参考 Web 端：始终显示）
         self.signalContainerView = [[UIView alloc] initWithFrame:CGRectMake(0.0f, 5.0f, 68.0f, 22.0f)];
-        self.signalContainerView.hidden = YES;
+        self.signalContainerView.hidden = NO; // 始终显示，不隐藏
 
         // 创建点击手势
         UITapGestureRecognizer *tapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(signalTapped)];
@@ -275,6 +298,9 @@
         [button setBackgroundColor:[UIColor clearColor]];
         [button setTintColor:WKApp.shared.config.navBarButtonColor];
         [_rightAddItem addSubview:button];
+
+        // 初始化时立即更新信号显示
+        [self updateSignalViewForStatus:[WKSDK shared].connectionManager.connectStatus];
     }
     return _rightAddItem;
 }
@@ -312,57 +338,155 @@
 -(void) refreshTitle{
     WKConnectStatus status = [WKSDK shared].connectionManager.connectStatus;
     [self.connectLock lock];
-    switch (status) {
-        case WKConnecting:
-            self._title = LLang(@"连接中");
-            break;
-        case WKPullingOffline:
-            self._title = LLang(@"收取中");
-            break;
-        case WKConnected:
-            // 已连接状态下显示 Space 名称（如果有的话）
-            if (self.currentSpaceName && self.currentSpaceName.length > 0) {
-                self._title = self.currentSpaceName;
-            } else {
-                self._title = [WKApp shared].config.appName;
-            }
-            break;
-        case WKDisconnected:
-            self._title = LLang(@"已断开");
-            break;
-        default:
-            break;
+
+    // 参考 Web 端：优先显示 Space 名称，状态通过右侧信号图标展示
+    if (self.currentSpaceName && self.currentSpaceName.length > 0) {
+        self._title = self.currentSpaceName;
+    } else {
+        self._title = [WKApp shared].config.appName;
     }
+
     [self setCustomTitle:self._title];
+
+    // 更新折叠箭头：Space数量 > 2 时显示
+    if (self.spaceArrowView) {
+        BOOL shouldShow = self.spaceCount > 2;
+        self.spaceArrowView.hidden = !shouldShow;
+        if (shouldShow) {
+            UILabel *titleLabel = self.navigationBar.titleLabel;
+            CGFloat arrowX = titleLabel.lim_left + titleLabel.lim_width + 4;
+            CGFloat arrowY = titleLabel.lim_top + (titleLabel.lim_height - 12) / 2.0;
+            self.spaceArrowView.frame = CGRectMake(arrowX, arrowY, 12, 12);
+        }
+    }
+
     [self.connectLock unlock];
 }
 
-// 标题点击事件 - 通过导航栏左侧按钮触发
+// 切换箭头方向（展开=向下，收起=向右）
+- (void)setSpaceArrowExpanded:(BOOL)expanded {
+    if (!self.spaceArrowView || self.spaceArrowView.hidden) return;
+    NSString *imgName = expanded ? @"ArrowDown" : @"arrow_right";
+    UIImage *img = [[WKApp shared] loadImage:imgName moduleID:@"WuKongLogin"];
+    [UIView transitionWithView:self.spaceArrowView duration:0.2 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
+        self.spaceArrowView.image = img;
+    } completion:nil];
+}
+
+// 标题点击事件 - 通过导航栏标题触发
 - (void)spaceButtonTapped {
+    NSLog(@"🔘 Space标题被点击");
+
+    // 检查Space列表是否已加载
+    if (!self.spaceListLoaded) {
+        NSLog(@"⚠️ Space列表未加载，禁止点击");
+        UIWindow *window = [UIApplication sharedApplication].keyWindow;
+        if (window) {
+            [window showMsg:@"正在加载空间列表..."];
+        }
+        return;
+    }
+
+    // 只有在已连接状态才允许切换 Space
+    WKConnectStatus status = [WKSDK shared].connectionManager.connectStatus;
+    if (status != WKConnected) {
+        NSLog(@"⚠️ 当前未连接，无法切换 Space (status=%ld)", (long)status);
+        // 显示提示
+        UIWindow *window = [UIApplication sharedApplication].keyWindow;
+        if (window) {
+            [window showMsg:@"请等待连接成功后再切换空间"];
+        }
+        return;
+    }
+
+    NSLog(@"✅ 准备显示Space选择器");
     WKSpacePopupView *popupView = [[WKSpacePopupView alloc] init];
     popupView.currentSpaceId = self.currentSpaceId;
 
+    // 箭头切换为向下（展开状态）
+    [self setSpaceArrowExpanded:YES];
+
     __weak typeof(self) weakSelf = self;
+
+    // 弹窗关闭时箭头切换回向右
+    popupView.onDismiss = ^{
+        [weakSelf setSpaceArrowExpanded:NO];
+    };
+
     popupView.onSpaceSelected = ^(WKSpaceEntity *space) {
+        NSLog(@"✅ Space选中: %@", space.name);
+        if (!space || !space.space_id || space.space_id.length == 0) {
+            return;
+        }
+
+        // 检查是否是当前Space
+        if ([space.space_id isEqualToString:weakSelf.currentSpaceId]) {
+            NSLog(@"ℹ️ 选中的是当前Space，无需切换");
+            return;
+        }
+
         weakSelf.currentSpaceName = space.name;
         weakSelf.currentSpaceId = space.space_id;
 
-        // 保存当前 Space ID
+        // 先保存新的 Space ID（conversation/sync 会从 NSUserDefaults 读取）
         [[NSUserDefaults standardUserDefaults] setObject:space.space_id forKey:@"currentSpaceId"];
         [[NSUserDefaults standardUserDefaults] synchronize];
 
         // 更新标题
         [weakSelf refreshTitle];
 
-        // 清空并重新加载会话列表
+        // 参考 Web/Android 端：清空本地会话数据后重新从服务器同步
+        // 1. 清空 VM 数据和本地会话数据库
         [weakSelf.conversationListVM reset];
-        [weakSelf.conversationListVM loadConversationList:^{
-            [weakSelf.tableView reloadData];
-            [weakSelf refreshBadge];
+        [[WKConversationDB shared] deleteAllConversation];
+
+        // 2. 先刷新 UI 显示空列表
+        [weakSelf.tableView reloadData];
+
+        // 3. 通过 syncConversationProvider 重新同步会话（会带上新的 space_id）
+        WKSyncConversationProvider provider = [WKSDK shared].conversationManager.syncConversationProvider;
+        WKSyncConversationAck ack = [WKSDK shared].conversationManager.syncConversationAck;
+        if (provider) {
+            long long version = [[WKConversationDB shared] getConversationMaxVersion];
+            NSString *syncKey = [[WKConversationDB shared] getConversationSyncKey];
+            provider(version, syncKey, ^(WKSyncConversationWrapModel * _Nullable model, NSError * _Nullable error) {
+                if (error) {
+                    NSLog(@"❌ Space会话同步失败: %@", error);
+                    return;
+                }
+                // 保存到本地数据库并触发回调
+                if (model) {
+                    [[WKSDK shared].conversationManager handleSyncConversation:model];
+                }
+                // 回执
+                if (ack) {
+                    ack(0, ^(NSError * _Nullable ackError) {
+                        if (ackError) {
+                            NSLog(@"❌ 会话同步回执失败: %@", ackError);
+                        }
+                    });
+                }
+                NSLog(@"✅ Space会话同步成功");
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [weakSelf.conversationListVM loadConversationList:^{
+                        [weakSelf.tableView reloadData];
+                        [weakSelf refreshBadge];
+                    }];
+                });
+            });
+        }
+
+        // 4. 触发联系人重新同步
+        [[WKSyncService shared] syncContacts:^(NSError * _Nullable error) {
+            if (error) {
+                NSLog(@"❌ 联系人同步失败: %@", error);
+            } else {
+                NSLog(@"✅ 联系人同步成功");
+            }
         }];
     };
 
-    [popupView showFromView:self.view];
+    [popupView showFromView:self.navigationBar.titleLabel];
 }
 
 - (WKConversationListTableView *)tableView{
@@ -527,15 +651,22 @@
  连接状态改变
  */
 -(void) onConnectStatus:(WKConnectStatus)status reasonCode:(WKReason)reasonCode {
+    // 更新标题
     [self refreshTitle];
+
+    // 更新网络信号显示（参考 Web 端：根据状态更新）
+    [self updateSignalViewForStatus:status];
 
     // 处理网络信号监控
     if (status == WKConnected) {
-        // 连接成功，记录时间并开始 ping 监控
+        // 连接成功，重新加载 Space 信息
+        [self loadCurrentSpace];
+
+        // 记录时间并开始 ping 监控
         self.connectedAtTime = [[NSDate date] timeIntervalSince1970];
         [self startPingMonitoring];
-    } else if (status == WKConnecting || status == WKDisconnected) {
-        // 连接中或已断开，停止监控并隐藏信号显示
+    } else {
+        // 连接中或已断开，停止 ping 监控
         [self stopPingMonitoring];
     }
 }
@@ -1028,18 +1159,37 @@
         self.pingTimer = nil;
     }
 
-    // 隐藏信号显示
-    self.signalContainerView.hidden = YES;
+    // 参考 Web 端：只停止定时器，不隐藏信号显示
+    // 信号显示应该始终可见，通过 updateSignalViewForStatus 方法控制显示内容
 }
 
 // 执行 ping 操作
 - (void)performPing {
-    NSString *baseURL = [WKApp shared].config.apiBaseUrl;
-    if (!baseURL || baseURL.length == 0) {
+    NSString *apiBaseUrl = [WKApp shared].config.apiBaseUrl;
+    if (!apiBaseUrl || apiBaseUrl.length == 0) {
+        // 没有 API URL，使用默认延迟值
+        self.currentLatencyMs = 50;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self updateSignalView];
+        });
         return;
     }
 
+    // 从 apiBaseUrl 提取服务器根路径（去掉 /api/v1/ 部分）
+    // 例如：https://api-test.example.com/api/v1/ -> https://api-test.example.com/
+    NSURL *apiURL = [NSURL URLWithString:apiBaseUrl];
+    NSString *baseURL = [NSString stringWithFormat:@"%@://%@/", apiURL.scheme, apiURL.host];
+
     NSURL *url = [NSURL URLWithString:baseURL];
+    if (!url) {
+        // URL 无效，使用默认延迟值
+        self.currentLatencyMs = 50;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self updateSignalView];
+        });
+        return;
+    }
+
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     request.HTTPMethod = @"HEAD";
     request.timeoutInterval = 5.0;
@@ -1051,16 +1201,15 @@
         if (!error) {
             NSTimeInterval latency = [[NSDate date] timeIntervalSinceDate:startTime] * 1000; // 转换为毫秒
             weakSelf.currentLatencyMs = (NSInteger)latency;
-
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [weakSelf updateSignalView];
-            });
         } else {
-            // ping 失败，重新调度下一次
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [weakSelf scheduleNextPing];
-            });
+            // ping 失败，使用较高的延迟值表示网络不佳
+            weakSelf.currentLatencyMs = 500;
+            NSLog(@"Ping 失败: %@", error.localizedDescription);
         }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf updateSignalView];
+        });
     }];
     [task resume];
 }
@@ -1068,6 +1217,54 @@
 // 调度下一次 ping
 - (void)scheduleNextPing {
     // ping 定时器已经在运行，无需额外调度
+}
+
+// 根据连接状态更新信号显示（参考 Web 端 ConnectionStatus 组件）
+- (void)updateSignalViewForStatus:(WKConnectStatus)status {
+    if (!self.signalContainerView) {
+        return;
+    }
+
+    UIColor *color;
+    NSString *statusText;
+
+    switch (status) {
+        case WKConnecting:
+            // 黄色：连接中
+            color = [UIColor colorWithRed:234/255.0 green:179/255.0 blue:8/255.0 alpha:1.0];
+            statusText = LLang(@"连接中...");
+            break;
+
+        case WKConnected:
+            // 已连接：使用延迟数据更新（如果有的话）
+            if (self.currentLatencyMs > 0) {
+                [self updateSignalView]; // 使用现有的延迟更新逻辑
+                return;
+            }
+            // 刚连接还没有延迟数据时显示绿色
+            color = [UIColor colorWithRed:34/255.0 green:197/255.0 blue:94/255.0 alpha:1.0];
+            statusText = @"--ms";
+            break;
+
+        case WKDisconnected:
+        case WKPullingOffline:
+            // 红色：已断开
+            color = [UIColor colorWithRed:239/255.0 green:68/255.0 blue:68/255.0 alpha:1.0];
+            statusText = LLang(@"已断开");
+            break;
+
+        default:
+            return;
+    }
+
+    // 更新图标和文字颜色
+    self.signalImageView.image = [self.signalImageView.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    self.signalImageView.tintColor = color;
+    self.latencyLabel.textColor = color;
+    self.latencyLabel.text = statusText;
+
+    // 确保显示
+    self.signalContainerView.hidden = NO;
 }
 
 // 更新信号显示

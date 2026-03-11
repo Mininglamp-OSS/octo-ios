@@ -125,6 +125,9 @@ typedef void (^WKUpdateConversationExtraProvider)(WKConversationExtra *extra,WKU
 @property(nonatomic,copy,readonly) WKSyncConversationProvider syncConversationProvider;
 @property(nonatomic,copy,readonly) WKSyncConversationAck syncConversationAck;
 
+/// 处理同步会话数据（保存到本地数据库并触发更新回调）
+-(void) handleSyncConversation:(WKSyncConversationWrapModel*)model;
+
 // 同步扩展提供者
 @property(nonatomic,copy) WKSyncConversationExtraProvider syncConversationExtraProvider;
 // 更新扩展提供者

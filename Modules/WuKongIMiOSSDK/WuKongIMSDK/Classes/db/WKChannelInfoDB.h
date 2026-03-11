@@ -130,6 +130,9 @@ typedef enum : NSUInteger {
  查询最近会话的频道
  */
 -(NSArray<WKChannelInfo*>*) queryAllConversationChannelInfos;
+
+/// 将所有个人频道(channel_type=1)的 follow 重置为未关注，用于 Space 切换时清除旧联系人
+-(void) resetAllPersonChannelFollow;
 @end
 
 NS_ASSUME_NONNULL_END

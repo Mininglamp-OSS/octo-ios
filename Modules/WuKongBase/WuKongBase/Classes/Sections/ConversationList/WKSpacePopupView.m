@@ -64,21 +64,21 @@
         _linkButton.translatesAutoresizingMaskIntoConstraints = NO;
 
         [NSLayoutConstraint activateConstraints:@[
-            [_avatarLabel.leftAnchor constraintEqualToAnchor:self.contentView.leftAnchor constant:4],
+            [_avatarLabel.leftAnchor constraintEqualToAnchor:self.contentView.leftAnchor constant:8],
             [_avatarLabel.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
             [_avatarLabel.widthAnchor constraintEqualToConstant:32],
             [_avatarLabel.heightAnchor constraintEqualToConstant:32],
 
-            [_nameLabel.leftAnchor constraintEqualToAnchor:_avatarLabel.rightAnchor constant:10],
+            [_nameLabel.leftAnchor constraintEqualToAnchor:_avatarLabel.rightAnchor constant:12],
             [_nameLabel.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
-            [_nameLabel.rightAnchor constraintEqualToAnchor:_checkLabel.leftAnchor constant:-6],
+            [_nameLabel.rightAnchor constraintEqualToAnchor:_checkLabel.leftAnchor constant:-8],
 
-            [_checkLabel.rightAnchor constraintEqualToAnchor:_linkButton.leftAnchor constant:-6],
+            [_checkLabel.rightAnchor constraintEqualToAnchor:_linkButton.leftAnchor constant:-8],
             [_checkLabel.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
             [_checkLabel.widthAnchor constraintEqualToConstant:18],
             [_checkLabel.heightAnchor constraintEqualToConstant:18],
 
-            [_linkButton.rightAnchor constraintEqualToAnchor:self.contentView.rightAnchor constant:-4],
+            [_linkButton.rightAnchor constraintEqualToAnchor:self.contentView.rightAnchor constant:-8],
             [_linkButton.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
             [_linkButton.widthAnchor constraintEqualToConstant:24],
             [_linkButton.heightAnchor constraintEqualToConstant:24]
@@ -88,23 +88,19 @@
 }
 
 - (UIImage *)createLinkIcon {
-    CGSize size = CGSizeMake(20, 20);
+    // 使用文本渲染🔗符号作为图标
+    CGSize size = CGSizeMake(24, 24);
     UIGraphicsBeginImageContextWithOptions(size, NO, 0);
-    CGContextRef context = UIGraphicsGetCurrentContext();
 
-    // 绘制链接图标 (简化版)
-    UIBezierPath *path = [UIBezierPath bezierPath];
-    [path moveToPoint:CGPointMake(7, 13)];
-    [path addLineToPoint:CGPointMake(7, 17)];
-    [path addLineToPoint:CGPointMake(13, 17)];
+    NSString *linkEmoji = @"🔗";
+    NSDictionary *attributes = @{
+        NSFontAttributeName: [UIFont systemFontOfSize:16],
+        NSForegroundColorAttributeName: [UIColor colorWithRed:103/255.0 green:106/255.0 blue:111/255.0 alpha:1.0]
+    };
 
-    [path moveToPoint:CGPointMake(13, 7)];
-    [path addLineToPoint:CGPointMake(13, 3)];
-    [path addLineToPoint:CGPointMake(7, 3)];
-
-    [[UIColor colorWithRed:103/255.0 green:106/255.0 blue:111/255.0 alpha:1.0] setStroke];
-    path.lineWidth = 2;
-    [path stroke];
+    CGSize textSize = [linkEmoji sizeWithAttributes:attributes];
+    CGPoint textPoint = CGPointMake((size.width - textSize.width) / 2, (size.height - textSize.height) / 2);
+    [linkEmoji drawAtPoint:textPoint withAttributes:attributes];
 
     UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
@@ -120,6 +116,7 @@
 @property(nonatomic,strong) UITableView *tableView;
 @property(nonatomic,strong) UIView *footerView;
 @property(nonatomic,strong) NSArray<WKSpaceEntity *> *spaces;
+@property(nonatomic,strong) NSLayoutConstraint *tableViewHeightConstraint;
 
 @end
 
@@ -128,6 +125,9 @@
 - (instancetype)init {
     self = [super initWithFrame:[UIScreen mainScreen].bounds];
     if (self) {
+        NSLog(@"🔧 WKSpacePopupView 初始化");
+        // 初始化空数组，防止nil访问
+        self.spaces = @[];
         [self setupUI];
     }
     return self;
@@ -153,7 +153,7 @@
 
     // 标题
     UILabel *titleLabel = [[UILabel alloc] init];
-    titleLabel.text = LLang(@"空间");
+    titleLabel.text = @"Space";
     titleLabel.font = [UIFont boldSystemFontOfSize:16];
     titleLabel.textColor = [WKApp shared].config.defaultTextColor;
     [_containerView addSubview:titleLabel];
@@ -179,49 +179,58 @@
 
     [self createFooterButtons];
 
-    // 布局 - 使用 AutoLayout
+    // 布局 - 使用 AutoLayout，添加内边距
     titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
     _tableView.translatesAutoresizingMaskIntoConstraints = NO;
     divider.translatesAutoresizingMaskIntoConstraints = NO;
     _footerView.translatesAutoresizingMaskIntoConstraints = NO;
 
+    // 保存tableView高度约束以便动态更新
+    self.tableViewHeightConstraint = [_tableView.heightAnchor constraintEqualToConstant:0];
+
     [NSLayoutConstraint activateConstraints:@[
-        [titleLabel.topAnchor constraintEqualToAnchor:_containerView.topAnchor constant:12],
-        [titleLabel.leftAnchor constraintEqualToAnchor:_containerView.leftAnchor constant:12],
+        [titleLabel.topAnchor constraintEqualToAnchor:_containerView.topAnchor constant:16],
+        [titleLabel.leftAnchor constraintEqualToAnchor:_containerView.leftAnchor constant:16],
 
-        [_tableView.topAnchor constraintEqualToAnchor:titleLabel.bottomAnchor constant:8],
-        [_tableView.leftAnchor constraintEqualToAnchor:_containerView.leftAnchor],
-        [_tableView.rightAnchor constraintEqualToAnchor:_containerView.rightAnchor],
-        [_tableView.heightAnchor constraintLessThanOrEqualToConstant:300],
+        [_tableView.topAnchor constraintEqualToAnchor:titleLabel.bottomAnchor constant:12],
+        [_tableView.leftAnchor constraintEqualToAnchor:_containerView.leftAnchor constant:12],
+        [_tableView.rightAnchor constraintEqualToAnchor:_containerView.rightAnchor constant:-12],
+        self.tableViewHeightConstraint,
 
-        [divider.topAnchor constraintEqualToAnchor:_tableView.bottomAnchor constant:8],
-        [divider.leftAnchor constraintEqualToAnchor:_containerView.leftAnchor],
-        [divider.rightAnchor constraintEqualToAnchor:_containerView.rightAnchor],
+        [divider.topAnchor constraintEqualToAnchor:_tableView.bottomAnchor constant:12],
+        [divider.leftAnchor constraintEqualToAnchor:_containerView.leftAnchor constant:12],
+        [divider.rightAnchor constraintEqualToAnchor:_containerView.rightAnchor constant:-12],
         [divider.heightAnchor constraintEqualToConstant:0.5],
 
         [_footerView.topAnchor constraintEqualToAnchor:divider.bottomAnchor constant:8],
         [_footerView.leftAnchor constraintEqualToAnchor:_containerView.leftAnchor],
         [_footerView.rightAnchor constraintEqualToAnchor:_containerView.rightAnchor],
-        [_footerView.bottomAnchor constraintEqualToAnchor:_containerView.bottomAnchor]
+        [_footerView.bottomAnchor constraintEqualToAnchor:_containerView.bottomAnchor constant:-8]
     ]];
 }
 
 - (void)createFooterButtons {
     NSArray *items = @[
-        @{@"title": LLang(@"创建空间"), @"action": @"createSpace"},
-        @{@"title": LLang(@"加入空间"), @"action": @"joinSpace"},
-        @{@"title": LLang(@"显示全部"), @"action": @"showAll"}
+        @{@"title": LLang(@"创建Space"), @"action": @"createSpace", @"icon": @"➕"},
+        @{@"title": LLang(@"加入Space"), @"action": @"joinSpace", @"icon": @"🔍"},
+        @{@"title": LLang(@"显示全部"), @"action": @"showAll", @"icon": @""}
     ];
 
     UIView *lastView = nil;
     for (int i = 0; i < items.count; i++) {
         NSDictionary *item = items[i];
         UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-        [button setTitle:item[@"title"] forState:UIControlStateNormal];
+
+        // 创建带图标的标题
+        NSString *icon = item[@"icon"];
+        NSString *title = item[@"title"];
+        NSString *fullTitle = icon.length > 0 ? [NSString stringWithFormat:@"%@  %@", icon, title] : title;
+
+        [button setTitle:fullTitle forState:UIControlStateNormal];
         [button setTitleColor:i == 2 ? [UIColor grayColor] : [WKApp shared].config.defaultTextColor forState:UIControlStateNormal];
         button.titleLabel.font = [UIFont systemFontOfSize:i == 2 ? 14 : 15];
         button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
-        button.contentEdgeInsets = UIEdgeInsetsMake(0, 36, 0, 0);
+        button.contentEdgeInsets = UIEdgeInsetsMake(0, 16, 0, 0);  // 减少左边距从36到16
         button.tag = i;
         [button addTarget:self action:@selector(footerButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
         [_footerView addSubview:button];
@@ -301,33 +310,53 @@
         self.containerView.transform = CGAffineTransformMakeScale(0.8, 0.8);
     } completion:^(BOOL finished) {
         [self removeFromSuperview];
+        if (self.onDismiss) {
+            self.onDismiss();
+        }
     }];
 }
 
 - (void)loadSpaces {
+    NSLog(@"📡 开始加载Space列表");
     __weak typeof(self) weakSelf = self;
     [[WKSpaceModel shared] getMySpaces].then(^(NSArray *spaces){
-        weakSelf.spaces = spaces;
-        [weakSelf.tableView reloadData];
+        NSLog(@"✅ Space列表加载成功，数量: %lu", (unsigned long)spaces.count);
+        // 确保在主线程更新UI
+        dispatch_async(dispatch_get_main_queue(), ^{
+            weakSelf.spaces = spaces ?: @[];  // 防止nil
+
+            // 更新tableView高度：每行48，最大300
+            CGFloat height = MIN(weakSelf.spaces.count * 48, 300);
+            NSLog(@"📐 更新tableView高度: %.0f (共%lu个Space)", height, (unsigned long)weakSelf.spaces.count);
+            weakSelf.tableViewHeightConstraint.constant = height;
+
+            [weakSelf.tableView reloadData];
+            [weakSelf layoutIfNeeded];  // 立即更新布局
+        });
     }).catch(^(NSError *error){
+        NSLog(@"❌ Space列表加载失败: %@", error);
         // 加载失败，显示错误提示
-        UIWindow *window = [UIApplication sharedApplication].keyWindow;
-        if (!window) {
-            window = [[UIApplication sharedApplication].windows firstObject];
-        }
-        [window showToast:LLang(@"加载失败")];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIWindow *window = [UIApplication sharedApplication].keyWindow;
+            if (!window) {
+                window = [[UIApplication sharedApplication].windows firstObject];
+            }
+            if (window) {
+                [window showMsg:LLang(@"加载失败")];
+            }
+        });
     });
 }
 
 - (void)showCreateSpaceDialog {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"创建空间") message:nil preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"创建Space") message:nil preferredStyle:UIAlertControllerStyleAlert];
 
     [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-        textField.placeholder = LLang(@"空间名称");
+        textField.placeholder = LLang(@"Space名称");
     }];
 
     [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-        textField.placeholder = LLang(@"描述（可选）");
+        textField.placeholder = LLang(@"描述(可选)");
     }];
 
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
@@ -342,7 +371,7 @@
             if (!window) {
                 window = [[UIApplication sharedApplication].windows firstObject];
             }
-            [window showToast:LLang(@"请输入空间名称")];
+            [window showMsg:LLang(@"请输入Space名称")];
             return;
         }
 
@@ -353,11 +382,11 @@
         [window showHUD:LLang(@"创建中...")];
         [[WKSpaceModel shared] createSpaceWithName:name description:desc].then(^(WKSpaceEntity *space){
             [window hideHud];
-            [window showToast:LLang(@"创建成功")];
+            [window showMsg:LLang(@"创建成功")];
             [weakSelf loadSpaces];
         }).catch(^(NSError *error){
             [window hideHud];
-            [window showToast:error.localizedDescription];
+            [window showMsg:error.localizedDescription];
         });
     }]];
 
@@ -366,7 +395,7 @@
 }
 
 - (void)showJoinSpaceDialog {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"加入空间") message:nil preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"加入Space") message:nil preferredStyle:UIAlertControllerStyleAlert];
 
     [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
         textField.placeholder = LLang(@"请输入邀请码");
@@ -383,7 +412,7 @@
             if (!window) {
                 window = [[UIApplication sharedApplication].windows firstObject];
             }
-            [window showToast:LLang(@"请输入邀请码")];
+            [window showMsg:LLang(@"请输入邀请码")];
             return;
         }
 
@@ -394,11 +423,11 @@
         [window showHUD:LLang(@"加入中...")];
         [[WKSpaceModel shared] joinSpace:inviteCode].then(^(id result){
             [window hideHud];
-            [window showToast:LLang(@"加入成功")];
+            [window showMsg:LLang(@"加入成功")];
             [weakSelf loadSpaces];
         }).catch(^(NSError *error){
             [window hideHud];
-            [window showToast:error.localizedDescription];
+            [window showMsg:error.localizedDescription];
         });
     }]];
 
@@ -423,14 +452,24 @@
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     WKSpaceListCell *cell = [tableView dequeueReusableCellWithIdentifier:@"SpaceCell" forIndexPath:indexPath];
 
+    // 边界检查
+    if (indexPath.row >= self.spaces.count) {
+        NSLog(@"⚠️ indexPath.row (%ld) 超出spaces数组范围 (%lu)", (long)indexPath.row, (unsigned long)self.spaces.count);
+        return cell;
+    }
+
     WKSpaceEntity *space = self.spaces[indexPath.row];
+    if (!space) {
+        NSLog(@"⚠️ space对象为nil at index %ld", (long)indexPath.row);
+        return cell;
+    }
 
     // 设置头像首字母
     NSString *initial = space.name.length > 0 ? [[space.name substringToIndex:1] uppercaseString] : @"S";
     cell.avatarLabel.text = initial;
 
     // 设置名称
-    cell.nameLabel.text = space.name;
+    cell.nameLabel.text = space.name ?: @"";
 
     // 设置选中状态
     BOOL isSelected = [space.space_id isEqualToString:self.currentSpaceId];
@@ -446,7 +485,17 @@
 }
 
 - (void)linkButtonTapped:(UIButton *)sender {
+    // 边界检查
+    if (sender.tag >= self.spaces.count) {
+        NSLog(@"⚠️ linkButton tag (%ld) 超出spaces数组范围 (%lu)", (long)sender.tag, (unsigned long)self.spaces.count);
+        return;
+    }
+
     WKSpaceEntity *space = self.spaces[sender.tag];
+    if (!space) {
+        NSLog(@"⚠️ space对象为nil at tag %ld", (long)sender.tag);
+        return;
+    }
 
     UIWindow *window = [UIApplication sharedApplication].keyWindow;
     if (!window) {
@@ -455,24 +504,67 @@
 
     [window showHUD:LLang(@"获取中...")];
     __weak typeof(self) weakSelf = self;
-    [[WKSpaceModel shared] createInvite:space.space_id].then(^(NSString *inviteCode){
-        [window hideHud];
+    [[WKSpaceModel shared] createInvite:space.space_id].then(^(id result){
+        // 确保在主线程更新UI
+        dispatch_async(dispatch_get_main_queue(), ^{
+            // 在异步block内部重新获取window，避免使用外部变量
+            UIWindow *win = [UIApplication sharedApplication].keyWindow;
+            if (!win) {
+                win = [[UIApplication sharedApplication].windows firstObject];
+            }
+            [win hideHud];
 
-        // 复制到剪贴板
-        UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
-        pasteboard.string = inviteCode;
+            // 检查返回值类型
+            if ([result isKindOfClass:[NSString class]]) {
+                NSString *inviteCode = (NSString *)result;
+                // 复制到剪贴板
+                UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
+                pasteboard.string = inviteCode;
+                [win showMsg:LLang(@"邀请码已复制")];
+            } else {
+                // 返回值不是字符串，可能是错误
+                [win showMsg:LLang(@"获取邀请码失败")];
+            }
+        });
+    }).catch(^(id error){
+        // 确保在主线程更新UI
+        dispatch_async(dispatch_get_main_queue(), ^{
+            // 在异步block内部重新获取window，避免使用外部变量
+            UIWindow *win = [UIApplication sharedApplication].keyWindow;
+            if (!win) {
+                win = [[UIApplication sharedApplication].windows firstObject];
+            }
+            [win hideHud];
 
-        [window showToast:LLang(@"邀请码已复制")];
-    }).catch(^(NSError *error){
-        [window hideHud];
-        [window showToast:error.localizedDescription];
+            // 安全地获取错误信息
+            NSString *errorMsg = LLang(@"获取邀请码失败");
+            if ([error isKindOfClass:[NSError class]]) {
+                NSError *err = (NSError *)error;
+                errorMsg = err.localizedDescription ?: errorMsg;
+            } else if ([error isKindOfClass:[NSString class]]) {
+                errorMsg = (NSString *)error;
+            }
+            [win showMsg:errorMsg];
+        });
     });
 }
 
 #pragma mark - UITableViewDelegate
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    NSLog(@"📍 选中Space at index: %ld", (long)indexPath.row);
+
+    // 边界检查
+    if (indexPath.row >= self.spaces.count) {
+        NSLog(@"⚠️ didSelect indexPath.row (%ld) 超出spaces数组范围 (%lu)", (long)indexPath.row, (unsigned long)self.spaces.count);
+        return;
+    }
+
     WKSpaceEntity *space = self.spaces[indexPath.row];
+    if (!space) {
+        NSLog(@"⚠️ 选中的space对象为nil at index %ld", (long)indexPath.row);
+        return;
+    }
 
     [self dismiss];
 

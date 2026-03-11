@@ -7,7 +7,8 @@
 
 #import "WKSpaceModel.h"
 #import "WKApp.h"
-#import "AFNetworking.h"
+#import "WKAPIClient.h"
+#import <PromiseKit/PromiseKit.h>
 
 @interface WKSpaceModel()
 
@@ -31,84 +32,59 @@
 }
 
 - (AnyPromise *)getMySpaces {
-    return [AnyPromise promiseWithResolverBlock:^(PMKResolver resolve) {
-        // 如果有缓存，先返回缓存
-        if (self.cachedSpaces) {
-            resolve(self.cachedSpaces);
-        }
+    // 如果有缓存，先返回缓存
+    if (self.cachedSpaces) {
+        return [AnyPromise promiseWithValue:self.cachedSpaces];
+    }
 
-        // 发起网络请求
-        NSString *url = [NSString stringWithFormat:@"%@/space/my", [WKApp shared].config.apiBaseUrl];
-        AFHTTPSessionManager *manager = [AFHTTPSessionManager manager];
-        manager.requestSerializer = [AFJSONRequestSerializer serializer];
-        manager.responseSerializer = [AFJSONResponseSerializer serializer];
-
-        // 设置token
-        NSString *token = [[NSUserDefaults standardUserDefaults] objectForKey:@"token"];
-        if (token) {
-            [manager.requestSerializer setValue:token forHTTPHeaderField:@"token"];
-        }
-
-        [manager GET:url parameters:nil headers:nil progress:nil success:^(NSURLSessionDataTask * _Nonnull task, id  _Nullable responseObject) {
-            if ([responseObject isKindOfClass:[NSArray class]]) {
-                NSMutableArray *spaces = [NSMutableArray array];
-                for (NSDictionary *dict in responseObject) {
+    // 使用WKAPIClient统一接口（参考Web端实现）
+    return [[WKAPIClient sharedClient] GET:@"space/my" parameters:nil].then(^id(id responseObject) {
+        if ([responseObject isKindOfClass:[NSArray class]]) {
+            NSMutableArray *spaces = [NSMutableArray array];
+            for (NSDictionary *dict in responseObject) {
+                if ([dict isKindOfClass:[NSDictionary class]]) {
                     WKSpaceEntity *space = (WKSpaceEntity *)[WKSpaceEntity fromMap:dict type:ModelMapTypeAPI];
-                    [spaces addObject:space];
-                }
-                self.cachedSpaces = [spaces copy];
-                resolve(self.cachedSpaces);
-            } else {
-                // 如果没有缓存，返回空数组
-                if (!self.cachedSpaces) {
-                    resolve(@[]);
+                    if (space) {  // ⚠️ 重要：检查space是否为nil
+                        [spaces addObject:space];
+                    } else {
+                        NSLog(@"⚠️ 解析Space失败，跳过: %@", dict);
+                    }
                 }
             }
-        } failure:^(NSURLSessionDataTask * _Nullable task, NSError * _Nonnull error) {
-            // 如果有缓存，失败时不报错，静默降级
-            if (!self.cachedSpaces) {
-                resolve(error);
-            }
-        }];
-    }];
+            self.cachedSpaces = [spaces copy];
+            NSLog(@"✅ 成功解析%lu个Space", (unsigned long)spaces.count);
+            return (id)self.cachedSpaces;
+        } else {
+            // 返回空数组
+            return (id)@[];
+        }
+    }).catch(^id(NSError *error) {
+        NSLog(@"❌ getMySpaces失败: %@", error);
+        // 失败时返回空数组
+        if (self.cachedSpaces) {
+            return (id)self.cachedSpaces;
+        }
+        // 抛出错误
+        @throw error;
+    });
 }
 
 - (AnyPromise *)createSpaceWithName:(NSString *)name description:(NSString *)desc {
-    return [AnyPromise promiseWithResolverBlock:^(PMKResolver resolve) {
-        NSString *url = [NSString stringWithFormat:@"%@/space/create", [WKApp shared].config.apiBaseUrl];
-        AFHTTPSessionManager *manager = [AFHTTPSessionManager manager];
-        manager.requestSerializer = [AFJSONRequestSerializer serializer];
-        manager.responseSerializer = [AFJSONResponseSerializer serializer];
+    return [[WKAPIClient sharedClient] POST:@"space/create" parameters:@{
+        @"name": name ?: @"",
+        @"description": desc ?: @""
+    }].then(^(id responseObject) {
+        WKSpaceEntity *space = (WKSpaceEntity *)[WKSpaceEntity fromMap:responseObject type:ModelMapTypeAPI];
 
-        NSString *token = [[NSUserDefaults standardUserDefaults] objectForKey:@"token"];
-        if (token) {
-            [manager.requestSerializer setValue:token forHTTPHeaderField:@"token"];
+        // 直接追加到缓存，无需重新请求
+        if (self.cachedSpaces) {
+            NSMutableArray *newSpaces = [self.cachedSpaces mutableCopy];
+            [newSpaces addObject:space];
+            self.cachedSpaces = [newSpaces copy];
         }
 
-        NSDictionary *params = @{
-            @"name": name ?: @"",
-            @"description": desc ?: @""
-        };
-
-        [manager POST:url parameters:params headers:nil progress:nil success:^(NSURLSessionDataTask * _Nonnull task, id  _Nullable responseObject) {
-            if ([responseObject isKindOfClass:[NSDictionary class]]) {
-                WKSpaceEntity *space = (WKSpaceEntity *)[WKSpaceEntity fromMap:responseObject type:ModelMapTypeAPI];
-
-                // 直接追加到缓存，无需重新请求
-                if (self.cachedSpaces) {
-                    NSMutableArray *newSpaces = [self.cachedSpaces mutableCopy];
-                    [newSpaces addObject:space];
-                    self.cachedSpaces = [newSpaces copy];
-                }
-
-                resolve(space);
-            } else {
-                resolve([NSError errorWithDomain:@"WKSpace" code:-1 userInfo:@{NSLocalizedDescriptionKey: @"Invalid response"}]);
-            }
-        } failure:^(NSURLSessionDataTask * _Nullable task, NSError * _Nonnull error) {
-            resolve(error);
-        }];
-    }];
+        return space;
+    });
 }
 
 - (AnyPromise *)getSpaceDetail:(NSString *)spaceId {
@@ -166,51 +142,21 @@
 }
 
 - (AnyPromise *)createInvite:(NSString *)spaceId {
-    return [AnyPromise promiseWithResolverBlock:^(PMKResolver resolve) {
-        NSString *url = [NSString stringWithFormat:@"%@/space/%@/invite", [WKApp shared].config.apiBaseUrl, spaceId];
-        AFHTTPSessionManager *manager = [AFHTTPSessionManager manager];
-        manager.requestSerializer = [AFJSONRequestSerializer serializer];
-        manager.responseSerializer = [AFJSONResponseSerializer serializer];
-
-        NSString *token = [[NSUserDefaults standardUserDefaults] objectForKey:@"token"];
-        if (token) {
-            [manager.requestSerializer setValue:token forHTTPHeaderField:@"token"];
+    NSString *path = [NSString stringWithFormat:@"space/%@/invite", spaceId];
+    return [[WKAPIClient sharedClient] POST:path parameters:nil].then(^id(id responseObject) {
+        if ([responseObject isKindOfClass:[NSDictionary class]]) {
+            NSString *inviteCode = responseObject[@"invite_code"];
+            return inviteCode ?: @"";
         }
-
-        [manager POST:url parameters:@{} headers:nil progress:nil success:^(NSURLSessionDataTask * _Nonnull task, id  _Nullable responseObject) {
-            if ([responseObject isKindOfClass:[NSDictionary class]]) {
-                NSString *inviteCode = responseObject[@"invite_code"];
-                resolve(inviteCode ?: @"");
-            } else {
-                resolve([NSError errorWithDomain:@"WKSpace" code:-1 userInfo:@{NSLocalizedDescriptionKey: @"Invalid response"}]);
-            }
-        } failure:^(NSURLSessionDataTask * _Nullable task, NSError * _Nonnull error) {
-            resolve(error);
-        }];
-    }];
+        return @"";
+    });
 }
 
 - (AnyPromise *)joinSpace:(NSString *)inviteCode {
-    return [AnyPromise promiseWithResolverBlock:^(PMKResolver resolve) {
-        NSString *url = [NSString stringWithFormat:@"%@/space/join", [WKApp shared].config.apiBaseUrl];
-        AFHTTPSessionManager *manager = [AFHTTPSessionManager manager];
-        manager.requestSerializer = [AFJSONRequestSerializer serializer];
-        manager.responseSerializer = [AFJSONResponseSerializer serializer];
-
-        NSString *token = [[NSUserDefaults standardUserDefaults] objectForKey:@"token"];
-        if (token) {
-            [manager.requestSerializer setValue:token forHTTPHeaderField:@"token"];
-        }
-
-        NSDictionary *params = @{@"invite_code": inviteCode};
-
-        [manager POST:url parameters:params headers:nil progress:nil success:^(NSURLSessionDataTask * _Nonnull task, id  _Nullable responseObject) {
-            [self invalidateCache]; // 加入后清除缓存
-            resolve(responseObject);
-        } failure:^(NSURLSessionDataTask * _Nullable task, NSError * _Nonnull error) {
-            resolve(error);
-        }];
-    }];
+    return [[WKAPIClient sharedClient] POST:@"space/join" parameters:@{@"invite_code": inviteCode}].then(^(id result) {
+        [self invalidateCache]; // 加入后清除缓存
+        return result;
+    });
 }
 
 - (AnyPromise *)leaveSpace:(NSString *)spaceId {
