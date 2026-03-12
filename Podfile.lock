@@ -1,6 +1,6 @@
 PODS:
   - 25519 (2.0.2)
-  - ActionSheetPicker-3.0 (2.7.1)
+  - ActionSheetPicker-3.0 (2.7.4)
   - AFNetworking (4.0.1):
     - AFNetworking/NSURLSession (= 4.0.1)
     - AFNetworking/Reachability (= 4.0.1)
@@ -19,14 +19,16 @@ PODS:
   - Aspects (1.4.1)
   - AsyncDisplayKit (1.0.0)
   - CocoaAsyncSocket (7.6.5)
-  - CocoaLumberjack (3.8.0):
-    - CocoaLumberjack/Core (= 3.8.0)
-  - CocoaLumberjack/Core (3.8.0)
+  - CocoaLumberjack (3.9.0):
+    - CocoaLumberjack/Core (= 3.9.0)
+  - CocoaLumberjack/Core (3.9.0)
   - DGActivityIndicatorView (2.1.1)
-  - FMDB/SQLCipher (2.7.5):
-    - SQLCipher
+  - FMDB/Core (2.7.12)
+  - FMDB/SQLCipher (2.7.12):
+    - FMDB/Core
+    - SQLCipher (~> 4.6)
   - FPSCounter (4.1.0)
-  - GZIP (1.3.0)
+  - GZIP (1.3.2)
   - LBXScan/LBXNative (2.5.1):
     - LBXScan/Types (~> 2.2)
   - LBXScan/LBXZXing (2.5.1):
@@ -35,20 +37,23 @@ PODS:
   - LBXScan/UI (2.5.1):
     - LBXScan/Types (~> 2.2)
   - librlottie (0.1.7)
-  - libwebp (1.2.4):
-    - libwebp/demux (= 1.2.4)
-    - libwebp/mux (= 1.2.4)
-    - libwebp/webp (= 1.2.4)
-  - libwebp/demux (1.2.4):
+  - libwebp (1.5.0):
+    - libwebp/demux (= 1.5.0)
+    - libwebp/mux (= 1.5.0)
+    - libwebp/sharpyuv (= 1.5.0)
+    - libwebp/webp (= 1.5.0)
+  - libwebp/demux (1.5.0):
     - libwebp/webp
-  - libwebp/mux (1.2.4):
+  - libwebp/mux (1.5.0):
     - libwebp/demux
-  - libwebp/webp (1.2.4)
+  - libwebp/sharpyuv (1.5.0)
+  - libwebp/webp (1.5.0):
+    - libwebp/sharpyuv
   - lottie-ios (2.5.3)
   - M80AttributedLabel (1.9.9)
   - Masonry (1.1.0)
   - MBProgressHUD (1.1.0)
-  - MJRefresh (3.7.5)
+  - MJRefresh (3.7.9)
   - PromiseKit/CorePromise (6.18.1)
   - ReactiveObjC (3.1.1)
   - SDWebImage (5.9.5):
@@ -60,17 +65,17 @@ PODS:
   - SDWebImageWebPCoder (0.6.1):
     - libwebp (~> 1.0)
     - SDWebImage/Core (~> 5.7)
-  - Socket.IO-Client-Swift (15.2.0):
-    - Starscream (~> 3.1)
-  - SocketRocket (0.6.0)
-  - SQLCipher (4.5.4):
-    - SQLCipher/standard (= 4.5.4)
-  - SQLCipher/common (4.5.4)
-  - SQLCipher/standard (4.5.4):
+  - Socket.IO-Client-Swift (16.1.1):
+    - Starscream (~> 4.0.8)
+  - SocketRocket (0.7.1)
+  - SQLCipher (4.10.0):
+    - SQLCipher/standard (= 4.10.0)
+  - SQLCipher/common (4.10.0)
+  - SQLCipher/standard (4.10.0):
     - SQLCipher/common
   - SSZipArchive (2.2.3)
-  - Starscream (3.1.1)
-  - Toast (4.0.0)
+  - Starscream (4.0.8)
+  - Toast (4.1.1)
   - TOCropViewController (2.5.5)
   - TZImagePickerController (3.6.9)
   - WuKongBase (0.1.0):
@@ -101,8 +106,8 @@ PODS:
     - WuKongIMSDK
     - YBImageBrowser/NOSD (~> 3.0)
     - YYImage/WebP (~> 1.0.4)
-    - ZLImageEditor (~> 1.1.1)
-    - ZLPhotoBrowser (~> 4.5)
+    - ZLImageEditor (= 1.1.7)
+    - ZLPhotoBrowser (= 4.5.5)
   - WuKongContacts (0.1.0):
     - FMDB/SQLCipher (~> 2.7.5)
     - Masonry
@@ -214,7 +219,7 @@ CHECKOUT OPTIONS:
     :commit: bed3cfe62cdb77d728adfe76893ff51b69c05e08
     :git: https://github.com/tangtaoit/librlottie.git
   YBImageBrowser:
-    :commit: 0663a468dea897acf7dc66e7128b71e3af48aea4
+    :commit: 9e888bf25f8774f9b084ba3d26d5794cb68aeb0c
     :git: https://github.com/tangtaoit/YBImageBrowser.git
   YYImage:
     :commit: be7dc29bbd79153ea03c5018ee2ab2512a16f3fd
@@ -222,38 +227,38 @@ CHECKOUT OPTIONS:
 
 SPEC CHECKSUMS:
   '25519': dc4bad7e2dbcbf1efa121068a705a44cd98c80fc
-  ActionSheetPicker-3.0: 36da254b97a09ff89679ecb8b8510bd3e5bdc773
+  ActionSheetPicker-3.0: a380d57270b6b2d321c4add024ba5c466a7f5cfd
   AFNetworking: 3bd23d814e976cd148d7d44c3ab78017b744cd58
   Aspects: 7595ba96a6727a58ebcbfc954497fc5d2fdde546
   AsyncDisplayKit: 8f2440c10169b416e3f5d9e191b7766579b7d990
   CocoaAsyncSocket: 065fd1e645c7abab64f7a6a2007a48038fdc6a99
-  CocoaLumberjack: 78abfb691154e2a9df8ded4350d504ee19d90732
+  CocoaLumberjack: 5644158777912b7de7469fa881f8a3f259c2512a
   DGActivityIndicatorView: ff2c76073d79692f724863c8dd38685866a03cb6
-  FMDB: 2ce00b547f966261cd18927a3ddb07cb6f3db82a
+  FMDB: 728731dd336af3936ce00f91d9d8495f5718a0e6
   FPSCounter: 884afec377de66637808c4f52ecc3b85a404732b
-  GZIP: 416858efbe66b41b206895ac6dfd5493200d95b3
+  GZIP: 3c0abf794bfce8c7cb34ea05a1837752416c8868
   LBXScan: 90ca10d0c38fb4a5a6980d7782354f3f69f50093
   librlottie: b1439ecf2d19dc5db01b9fe94975548863c56cc7
-  libwebp: f62cb61d0a484ba548448a4bd52aabf150ff6eef
+  libwebp: 02b23773aedb6ff1fd38cec7a77b81414c6842a8
   lottie-ios: a50d5c0160425cd4b01b852bb9578963e6d92d31
   M80AttributedLabel: 77fedfe63804c989a6de0fa4d400ea8cad3ab441
   Masonry: 678fab65091a9290e40e2832a55e7ab731aad201
   MBProgressHUD: e7baa36a220447d8aeb12769bf0585582f3866d9
-  MJRefresh: fdf5e979eb406a0341468932d1dfc8b7f9fce961
+  MJRefresh: ff9e531227924c84ce459338414550a05d2aea78
   PromiseKit: 49d70c53d5d20e346beaea4b276b5dd2ab446bb4
   ReactiveObjC: 011caa393aa0383245f2dcf9bf02e86b80b36040
   SDWebImage: 0b2ba0d56479bf6a45ecddbfd5558bea93150d25
   SDWebImageLottieCoder: a63b40820ea10d36835d8994531baea838593099
   SDWebImageWebPCoder: d0dac55073088d24b2ac1b191a71a8f8d0adac21
-  Socket.IO-Client-Swift: 1e3e3a1f09f3312a167f0d781eb2f383d477357c
-  SocketRocket: fccef3f9c5cedea1353a9ef6ada904fde10d6608
-  SQLCipher: 905b145f65f349f26da9e60a19901ad24adcd381
+  Socket.IO-Client-Swift: 3614bea82ba005df1c2ff01154f4004993e05ad7
+  SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
+  SQLCipher: eb79c64049cb002b4e9fcb30edb7979bf4706dfc
   SSZipArchive: 62d4947b08730e4cda640473b0066d209ff033c9
-  Starscream: 4bb2f9942274833f7b4d296a55504dcfc7edb7b0
-  Toast: 91b396c56ee72a5790816f40d3a94dd357abc196
+  Starscream: 19b5533ddb925208db698f0ac508a100b884a1b9
+  Toast: 1f5ea13423a1e6674c4abdac5be53587ae481c4e
   TOCropViewController: da59f531f8ac8a94ef6d6c0fc34009350f9e8bfe
   TZImagePickerController: 2cad3db94ba70eb947d26c10ff5c66c9a93798c8
-  WuKongBase: c0f055a22823b599f49655a79cbfaa142ba6b954
+  WuKongBase: 47bcccaf4b87d46a30b0289a1b4c40eb89820148
   WuKongContacts: 9a7748952bd1760ba84fe7f595200d4c19d52d8b
   WuKongDataSource: 239cffd62c1d6d14b137102de5ec59b6c1f16cf7
   WuKongIMSDK: 9c93f5e5e5038e0f11618cb1f87c85c09edcca79
@@ -263,6 +268,6 @@ SPEC CHECKSUMS:
   ZLImageEditor: ee86f044fb7c5dec6b5de49eb7bb6fd42286f2ae
   ZLPhotoBrowser: 6fb0eff03c8269001e29ef233e7bdab0691e05fe
 
-PODFILE CHECKSUM: ef67c97ab86504aee9b732ddab79baa3715f109f
+PODFILE CHECKSUM: 2435573315942d7dfc7b37a82c647c0bcc8337b4
 
 COCOAPODS: 1.16.2

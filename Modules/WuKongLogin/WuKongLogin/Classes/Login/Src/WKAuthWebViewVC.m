@@ -7,6 +7,8 @@
 
 #import "WKAuthWebViewVC.h"
 #import "WKLoginVM.h"
+#import "WKSpaceGateVC.h"
+#import "WKSpaceGateVM.h"
 @interface WKAuthWebViewVC ()
 
 @property(nonatomic,strong) NSTimer *timer;
@@ -46,7 +48,30 @@
 -(void) login:(NSDictionary*)dataDict {
     WKLoginResp *resp = (WKLoginResp*)[WKLoginResp fromMap:dataDict type:ModelMapTypeAPI];
     [WKLoginVM handleLoginData:resp isSave:YES];
-    [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
+
+    NSString *cachedSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    if (cachedSpaceId && ![cachedSpaceId isEqualToString:@""]) {
+        [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
+        return;
+    }
+    WKSpaceGateVM *spaceVM = [WKSpaceGateVM new];
+    [spaceVM getMySpaces].then(^(NSArray *spaces){
+        if (spaces && spaces.count > 0) {
+            NSDictionary *firstSpace = spaces[0];
+            NSString *spaceId = firstSpace[@"space_id"];
+            if (spaceId && ![spaceId isEqualToString:@""]) {
+                [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+                [[NSUserDefaults standardUserDefaults] synchronize];
+            }
+            [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
+        } else {
+            WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];
+            [[WKNavigationManager shared] pushViewController:spaceGateVC animated:YES];
+        }
+    }).catch(^(NSError *error){
+        WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];
+        [[WKNavigationManager shared] pushViewController:spaceGateVC animated:YES];
+    });
 }
 
 

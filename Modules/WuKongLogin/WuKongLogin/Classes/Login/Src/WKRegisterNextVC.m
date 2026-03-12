@@ -8,6 +8,8 @@
 #import "WKRegisterNextVC.h"
 #import "WKActionSheetView2.h"
 #import "TOCropViewController.h"
+#import "WKSpaceGateVC.h"
+#import "WKSpaceGateVM.h"
 @interface WKRegisterNextVC ()<TOCropViewControllerDelegate>
 
 @property(nonatomic,strong) UILabel *tipLbl; // 提醒文字
@@ -145,9 +147,30 @@
         [weakSelf.view hideHud];
         [WKApp shared].loginInfo.extra[@"name"] =name;
         [[WKApp shared].loginInfo save];
-        
-        [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
-    
+
+        // 新注册用户：检查是否有空间，没有则显示 SpaceGate 引导页
+        WKSpaceGateVM *spaceVM = [WKSpaceGateVM new];
+        [spaceVM getMySpaces].then(^(NSArray *spaces){
+            if (spaces && spaces.count > 0) {
+                // 已有空间，选择第一个并进入
+                NSDictionary *firstSpace = spaces[0];
+                NSString *spaceId = firstSpace[@"space_id"];
+                if (spaceId && ![spaceId isEqualToString:@""]) {
+                    [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+                    [[NSUserDefaults standardUserDefaults] synchronize];
+                }
+                [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
+            } else {
+                // 没有空间，显示 SpaceGate 引导页
+                WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];
+                [[WKNavigationManager shared] pushViewController:spaceGateVC animated:YES];
+            }
+        }).catch(^(NSError *error){
+            // 出错也显示 SpaceGate 引导页
+            WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];
+            [[WKNavigationManager shared] pushViewController:spaceGateVC animated:YES];
+        });
+
     }).catch(^(NSError *error){
         [weakSelf.view switchHUDError:error.domain];
     });

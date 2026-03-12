@@ -63,9 +63,6 @@
     // 添加主按钮
     [self.containerView addSubview:self.showInviteInputBtn];
     [self.containerView addSubview:self.createSpaceBtn];
-
-    // 检查是否有缓存的空间ID
-    [self checkSpaces];
 }
 
 - (void)setupGradientBackground {

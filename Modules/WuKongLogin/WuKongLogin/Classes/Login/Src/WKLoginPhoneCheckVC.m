@@ -8,6 +8,8 @@
 #import "WKLoginPhoneCheckVC.h"
 #import "WKLoginVM.h"
 #import "WKRegisterNextVC.h"
+#import "WKSpaceGateVC.h"
+#import "WKSpaceGateVM.h"
 @interface WKLoginPhoneCheckVC ()<WKLoginPhoneCheckVMDelegate>
 
 @property(nonatomic,strong) NSTimer *codeTimer;
@@ -120,7 +122,30 @@ static NSInteger countdown; // 倒计时
             [[WKNavigationManager shared] pushViewController:vc animated:YES];
         }else {
             [WKLoginVM handleLoginData:resp isSave:YES];
-            [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
+            // 检查空间后再进入
+            NSString *cachedSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+            if (cachedSpaceId && ![cachedSpaceId isEqualToString:@""]) {
+                [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
+            } else {
+                WKSpaceGateVM *spaceVM = [WKSpaceGateVM new];
+                [spaceVM getMySpaces].then(^(NSArray *spaces){
+                    if (spaces && spaces.count > 0) {
+                        NSDictionary *firstSpace = spaces[0];
+                        NSString *spaceId = firstSpace[@"space_id"];
+                        if (spaceId && ![spaceId isEqualToString:@""]) {
+                            [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+                            [[NSUserDefaults standardUserDefaults] synchronize];
+                        }
+                        [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
+                    } else {
+                        WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];
+                        [[WKNavigationManager shared] pushViewController:spaceGateVC animated:YES];
+                    }
+                }).catch(^(NSError *error){
+                    WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];
+                    [[WKNavigationManager shared] pushViewController:spaceGateVC animated:YES];
+                });
+            }
         }
         
     }).catch(^(NSError *error){

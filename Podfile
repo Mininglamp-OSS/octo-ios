@@ -13,7 +13,7 @@ post_install do |installer|
             end
         end
     end
-    
+
     # Fix bundle targets' 'Signing Certificate' to 'Sign to Run Locally'
     installer.pods_project.targets.each do |target|
         target.build_configurations.each do |config|
@@ -24,8 +24,84 @@ post_install do |installer|
             config.build_settings['ENABLE_BITCODE'] = 'NO'
             config.build_settings["EXCLUDED_ARCHS[sdk=iphonesimulator*]"] = "arm64"
         end
-        
+
     end
+
+    # ============================================================
+    # 为缺少隐私清单的第三方 SDK 注入 PrivacyInfo.xcprivacy
+    # Apple 要求: https://developer.apple.com/support/third-party-SDK-requirements/
+    # ============================================================
+    pods_needing_privacy_manifest = [
+        'AFNetworking',
+        'FMDB',
+        'MBProgressHUD',
+        'SDWebImage',
+        'Starscream',
+        'Toast',
+    ]
+
+    privacy_manifest_content = <<-PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>35F9.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>
+    PLIST
+
+    installer.pods_project.targets.each do |target|
+        if pods_needing_privacy_manifest.include?(target.name)
+            pod_dir = installer.sandbox.pod_dir(target.name)
+            privacy_file = pod_dir + "PrivacyInfo.xcprivacy"
+            unless privacy_file.exist?
+                File.write(privacy_file, privacy_manifest_content)
+                puts "✅ Injected PrivacyInfo.xcprivacy into #{target.name}"
+            end
+            # 将 PrivacyInfo.xcprivacy 添加到 target 的资源构建阶段
+            resources_phase = target.build_phases.find { |phase| phase.is_a?(Xcodeproj::Project::Object::PBXResourcesBuildPhase) }
+            if resources_phase.nil?
+                resources_phase = target.new_resources_build_phase
+            end
+            file_ref = installer.pods_project.new_file(privacy_file.to_s)
+            unless resources_phase.files_references.include?(file_ref)
+                resources_phase.add_file_reference(file_ref)
+            end
+        end
+    end
+    installer.pods_project.save
 end
 
 

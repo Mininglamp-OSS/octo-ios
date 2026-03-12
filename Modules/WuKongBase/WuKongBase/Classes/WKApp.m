@@ -36,6 +36,7 @@
 #import "WKGIFContent.h"
 #import "WKConversationListSelectVC.h"
 #import "WKSyncService.h"
+#import "WKSpaceModel.h"
 #import "WKNavigationManager.h"
 #import "WKPanelDefaultFuncItem.h"
 #import "WKScanVC.h"
@@ -349,14 +350,15 @@ static WKApp *_instance;
     [self setMethod:WKPOINT_LOGIN_SUCCESS handler:^id _Nullable(id  _Nonnull param) {
         // 切换数据库
         [[WKKitDB shared] switchDB:[WKApp shared].loginInfo.uid];
-        
+
         // 重新加载最近会话保持的位置
         [[WKConversationPositionManager shared] reload];
-        
+
         // 显示首页
         if(weakSelf.getHomeViewController) {
             [[WKNavigationManager shared] resetRootViewController:weakSelf.getHomeViewController()];
         }
+
         // 同步联系人
         [[WKSyncService shared] sync:^(NSError * _Nonnull error) {
             // 更新频道在线状态，如果需要
@@ -384,12 +386,18 @@ static WKApp *_instance;
     [[WKApp shared] setMethod:WKPOINT_LOGIN_LOGOUT handler:^id _Nullable(id  _Nonnull param) {
         // 断开IM连接
         [[WKSDK shared].connectionManager logout];
+
+        // 清除 Space 相关数据
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"currentSpaceId"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        [[WKSpaceModel shared] invalidateCache];
+
         // 显示登录页面
         [[WKApp shared] invoke:WKPOINT_LOGIN_SHOW param:nil];
-        
+
         weakSelf.isShowScreenProtect = false;
         weakSelf.isShowLockScreenProtect = false;
-        
+
         // 调用登出的委托
         [self callAppLogoutDelegate];
         return nil;

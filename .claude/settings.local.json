@@ -9,7 +9,10 @@
       "Bash(git add:*)",
       "Bash(git commit -m \"$\\(cat <<''EOF''\nfeat: iOS Space 切换器 + 网络信号指示器\n\n## 新增功能\n\n### 1. Space 团队空间管理\n- **WKSpaceEntity**: Space 数据模型（空间ID、名称、描述、成员数等）\n- **WKSpaceMember**: Space 成员数据模型（uid、名称、角色）\n- **WKSpaceModel**: Space API 服务层\n  - 获取我的所有 Space\n  - 创建 Space\n  - 加入 Space（通过邀请码）\n  - 离开/解散 Space\n  - 获取成员列表\n  - 生成邀请码\n  - 缓存机制优化\n\n### 2. Space 切换弹窗 \\(WKSpacePopupView\\)\n- Space 列表展示（显示当前选中状态）\n- 点击切换 Space\n- 创建新 Space（输入名称和描述）\n- 加入 Space（输入邀请码）\n- 生成并复制邀请码（点击链接图标）\n- 显示全部 Space\n\n### 3. 会话列表集成\n- 标题显示当前 Space 名称（已连接状态）\n- 点击标题打开 Space 切换弹窗\n- 切换 Space 后自动刷新会话列表\n- 本地缓存当前 Space ID\n\n### 4. 网络信号监控\n- 导航栏右侧显示信号图标和延迟\n- 颜色编码：\n  - 绿色（< 100ms）：网速好\n  - 橙色（100-300ms）：一般\n  - 红色（> 300ms）：较差\n- 每 30 秒自动 ping 服务器\n- 点击显示详情弹窗（状态、延迟、已连接时长）\n- 连接断开时自动隐藏\n\n### 5. SpaceGate 引导页\n- 首次登录检查是否有 Space\n- 无 Space 时显示欢迎引导页\n- 支持创建/加入 Space\n\n## 技术实现\n- 使用 AFNetworking 进行网络请求\n- 使用 PromiseKit 处理异步操作\n- 使用 AutoLayout 进行界面布局\n- 网络信号监控使用 NSTimer 定时器\n- Space 数据使用内存缓存优化性能\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
       "Bash(curl:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "WebSearch",
+      "Bash(pod search:*)",
+      "Bash(xcrun simctl:*)"
     ]
   }
 }
