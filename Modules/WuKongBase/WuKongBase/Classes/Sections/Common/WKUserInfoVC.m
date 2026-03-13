@@ -91,7 +91,17 @@
     
     __weak typeof(self) weakSelf = self;
     [self.viewModel loadPersonChannelInfo:self.uid completion:^{
-        [weakSelf refreshData];
+        // 检查是否在 Space 模式下，如果是则需要通过 API 检查实际好友关系
+        NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+        if (currentSpaceId && currentSpaceId.length > 0) {
+            [weakSelf.viewModel checkFriendRelation:weakSelf.uid completion:^(BOOL isFriend) {
+                [weakSelf refreshData];
+            }];
+        } else {
+            // 非 Space 模式，follow 状态即为实际好友状态
+            weakSelf.viewModel.isActualFriend = weakSelf.viewModel.channelInfo.follow == WKChannelInfoFollowFriend;
+            [weakSelf refreshData];
+        }
     }];
     
     [[WKSDK shared].channelManager addDelegate:self];
@@ -182,13 +192,31 @@
         [self.sexImgView setImage:[self imageName:@"Common/Index/SexMan"]];
     }
     self.sendBtn.hidden = NO;
+    self.addFriendBtn.hidden = YES;
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    BOOL isSpaceMode = currentSpaceId && currentSpaceId.length > 0;
+
     if([self isSelf]) {
         self.footerHeader.hidden = YES;
-    }else if([self isFriend]) {
+    } else if (isSpaceMode) {
+        // Space 模式：根据实际好友关系决定按钮显示
+        if (self.viewModel.isActualFriend) {
+            // 实际好友 → 显示"发消息"
+            self.sendBtn.hidden = NO;
+            self.addFriendBtn.hidden = YES;
+            self.footerHeader.hidden = NO;
+        } else {
+            // 非好友 Space 成员 → 显示"添加好友"（无需 vercode）
+            self.sendBtn.hidden = YES;
+            self.addFriendBtn.hidden = NO;
+            self.footerHeader.hidden = NO;
+        }
+    } else if([self isFriend]) {
         self.sendBtn.hidden = NO;
         self.addFriendBtn.hidden = YES;
     }else if(self.viewModel.channelInfo.follow == WKChannelInfoFollowStrange){
         self.sendBtn.hidden = YES;
+        self.addFriendBtn.hidden = NO;
         self.footerHeader.hidden = ![self hasVercode];
         if(self.viewModel.memberOfMy && (self.viewModel.memberOfMy.role==WKMemberRoleCreator || self.viewModel.memberOfMy.role==WKMemberRoleManager  )) {
             self.footerHeader.hidden = NO;
@@ -197,8 +225,7 @@
         self.footerHeader.hidden = YES;
     }
 
-    
-    if(self.viewModel.fromChannelInfo && ![self isFriend] && [self forbiddenAddFriend] && ![self isGroupManager]) {
+    if(!isSpaceMode && self.viewModel.fromChannelInfo && ![self isFriend] && [self forbiddenAddFriend] && ![self isGroupManager]) {
         self.footerHeader.hidden = YES;
     }
     
@@ -515,22 +542,23 @@
 // 添加好友
 -(void) addFriendPressed {
     UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"" message:LLang(@"你需要发送验证码申请，等对方通过") preferredStyle:UIAlertControllerStyleAlert];
-    //增加确定按钮；
     __weak typeof(self) weakSelf = self;
-    //增加取消按钮；
     [alertController addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleDefault handler:nil]];
-    
+
     [alertController addAction:[UIAlertAction actionWithTitle:LLang(@"确定") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
         UITextField *remarkFD = alertController.textFields.firstObject;
-        [weakSelf.viewModel applyFriend:weakSelf.uid remark:remarkFD.text vercode:self.vercode].then(^{
+        // Space 模式下无需 vercode，传空字符串即可
+        NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+        BOOL isSpaceMode = currentSpaceId && currentSpaceId.length > 0;
+        NSString *vercode = isSpaceMode ? @"" : (weakSelf.vercode ?: @"");
+        [weakSelf.viewModel applyFriend:weakSelf.uid remark:remarkFD.text vercode:vercode].then(^{
             [weakSelf.view showHUDWithHide:LLang(@"发送成功！")];
         }).catch(^(NSError *err){
             [weakSelf.view showHUDWithHide:err.domain];
         });
-        
+
     }]];
-   
-    //定义第一个输入框；
+
     [alertController addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
         textField.text = [NSString stringWithFormat:LLang(@"我是%@"),[WKApp shared].loginInfo.extra[@"name"]];
     }];

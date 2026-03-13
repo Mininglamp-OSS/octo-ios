@@ -32,7 +32,12 @@
     if(self.voiceData) {
         [self.voiceData writeToFile:self.localPath atomically:YES];
         // 转码amr
-        [VoiceConverter EncodeWavToAmr:self.localPath amrSavePath:self.thumbPath sampleRateType:Sample_Rate_8000];
+        int frames = [VoiceConverter EncodeWavToAmr:self.localPath amrSavePath:self.thumbPath sampleRateType:Sample_Rate_8000];
+        if (frames <= 0) {
+            NSLog(@"[WKVoiceContent] WAV->AMR conversion failed! localPath=%@, thumbPath=%@, voiceData.length=%lu", self.localPath, self.thumbPath, (unsigned long)self.voiceData.length);
+        } else {
+            NSLog(@"[WKVoiceContent] WAV->AMR conversion success, frames=%d, amrFileSize=%llu", frames, [[[NSFileManager defaultManager] attributesOfItemAtPath:self.thumbPath error:nil] fileSize]);
+        }
     }
 }
 

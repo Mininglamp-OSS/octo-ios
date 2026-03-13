@@ -318,6 +318,7 @@
             }
         }
         int64_t maxVersion = [[WKReminderDB shared] getMaxVersion];
+        NSString *currentUID = [WKSDK shared].options.connectInfo.uid;
         [[WKAPIClient sharedClient] POST:@"message/reminder/sync" parameters:@{
             @"version":@(maxVersion),
             @"limit": @(1000),
@@ -326,6 +327,11 @@
             if(results && results.count>0) {
                 NSMutableArray<WKReminder*> *reminders = [NSMutableArray array];
                 for (NSDictionary *result in results) {
+                    // 过滤非当前用户的提醒项，只保留目标为自己的 reminder
+                    NSString *uid = result[@"uid"];
+                    if(uid && currentUID && ![uid isEqualToString:currentUID]) {
+                        continue;
+                    }
                     [reminders addObject:[weakSelf toReminder:result]];
                 }
                 callback(reminders,nil);

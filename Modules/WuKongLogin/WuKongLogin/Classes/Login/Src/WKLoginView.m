@@ -14,6 +14,7 @@
 #import "WKRegisterVC.h"
 #import "WKForgetPasswordVC.h"
 #import "WKAuthWebViewVC.h"
+#import <WuKongBase/WKServerSettingHelper.h>
 @interface WKLoginView() <UITextFieldDelegate> {
 }
 
@@ -53,7 +54,11 @@
     
     [self addSubview:self.bgImgView];
     [self addSubview:self.welcomeTitleLbl];
-    
+    self.welcomeTitleLbl.userInteractionEnabled = YES;
+    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(serverSettingLongPressed:)];
+    longPress.minimumPressDuration = 1.5;
+    [self.welcomeTitleLbl addGestureRecognizer:longPress];
+
     [self addSubview:self.mobileBoxView];
     // 区号选择器默认隐藏，输入纯数字时才显示
     [self.mobileBoxView addSubview:self.countryBtn];
@@ -274,6 +279,17 @@
     return _registerBtn;
 }
 
+
+#pragma mark -- 服务器设置
+
+- (void)serverSettingLongPressed:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        UIViewController *vc = [WKNavigationManager shared].topViewController;
+        if (vc) {
+            [WKServerSettingHelper showServerSettingAlertInViewController:vc];
+        }
+    }
+}
 
 #pragma mark -- 公用方法
 

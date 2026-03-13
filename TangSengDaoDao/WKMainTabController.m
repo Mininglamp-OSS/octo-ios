@@ -53,7 +53,6 @@
     [self addChildViewController:vcInstall];
 }
 
-
 -(void) dealloc {
     WKLogDebug(@"WKMainTabController dealloc");
 }

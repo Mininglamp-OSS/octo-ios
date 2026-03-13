@@ -12,7 +12,12 @@
       "Bash(python3:*)",
       "WebSearch",
       "Bash(pod search:*)",
-      "Bash(xcrun simctl:*)"
+      "Bash(xcrun simctl:*)",
+      "Bash(find /Users/wanglitao/Documents/octo-ios/Modules -type f \\\\\\( -name \"*.swift\" -o -name \"*.m\" -o -name \"*.h\" \\\\\\) 2>/dev/null | head -100)",
+      "Bash(find /Users/wanglitao/Documents/octo-ios -path \"*/Pods\" -prune -o -path \"*/.git\" -prune -o -type f \\\\\\( -name \"*.swift\" -o -name \"*.h\" -o -name \"*.m\" \\\\\\) -print 2>/dev/null | head -50)",
+      "Bash(find /Users/wanglitao/Documents/octo-ios -type f \\\\\\( -name \"*voice*\" -o -name \"*audio*\" -o -name \"*record*\" \\\\\\) 2>/dev/null | grep -v Pods | head -20)",
+      "Bash(find /Users/wanglitao/Documents/dmwork-android -type f -name \"UserUtils.java\" | head -1 | xargs cat | head -150)",
+      "Bash(find /Users/wanglitao/Documents/dmwork-android -type f -name \"*.java\" -not -path \"*/build/*\" -exec grep -l \"space\\\\|Space\" {} \\\\; 2>/dev/null | wc -l)"
     ]
   }
 }

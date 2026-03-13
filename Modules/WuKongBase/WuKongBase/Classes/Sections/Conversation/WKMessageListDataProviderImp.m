@@ -54,7 +54,14 @@
     if(position) {
         __weak typeof(self) weakSelf = self;
         [[WKSDK shared].chatManager pullAround:self.channel orderSeq:position.orderSeq maxMessageSeq:maxMessageSeq limit:[WKApp shared].config.eachPageMsgLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
-            [weakSelf.messageList clearMessages]; // 现清除原来的数据
+            if(error || !messages || messages.count == 0) {
+                // 加载历史消息失败或为空时，不清除现有消息，避免空屏
+                if(complete) {
+                    complete(false);
+                }
+                return;
+            }
+            [weakSelf.messageList clearMessages]; // 先清除原来的数据
             [weakSelf handleMessages:[weakSelf messagesToMessageModels:messages] insertFirst:false complete:complete];
         }];
     }else {

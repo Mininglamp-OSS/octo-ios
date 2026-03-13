@@ -472,7 +472,7 @@ static NSMutableDictionary *flameNodeCacheDict;
     
     self.avatarImgView.hidden = NO;
     
-    if(bubblePosition == WKBubblePostionMiddle || bubblePosition == WKBubblePostionFirst) {
+    if(bubblePosition == WKBubblePostionMiddle || bubblePosition == WKBubblePostionLast) {
         self.avatarImgView.hidden = YES;
     }
     if([self.messageModel isSend] || self.messageModel.isPersonChannel) {
@@ -764,7 +764,7 @@ static NSMutableDictionary *flameNodeCacheDict;
 //    self.readedProgressView.hidden = YES;
     self.bubbleBackgroundView.lim_top = bubbleInsets.top;
     
-    self.avatarImgView.lim_top = self.bubbleBackgroundView.lim_bottom - self.avatarImgView.lim_height;
+    self.avatarImgView.lim_top = self.bubbleBackgroundView.lim_top;
     if(self.messageModel.isSend) { // 发送消息
         
         self.bubbleBackgroundView.lim_left = self.lim_width - self.bubbleBackgroundView.lim_width - bubbleInsets.right;
@@ -905,7 +905,7 @@ static NSMutableDictionary *flameNodeCacheDict;
 -(void) layoutName {
     WKBubblePostion position = [[self class] bubblePosition:self.messageModel];
     if(!self.nameLbl.hidden) {
-        if(position == WKBubblePostionLast || position == WKBubblePostionSingle) {
+        if(position == WKBubblePostionFirst || position == WKBubblePostionSingle) {
             self.nameLbl.lim_left = WKLastBubbleOffsetSpace;
         }else{
             self.nameLbl.lim_left = 0.0f;

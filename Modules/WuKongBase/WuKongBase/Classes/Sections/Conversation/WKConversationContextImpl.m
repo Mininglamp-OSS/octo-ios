@@ -600,7 +600,7 @@
 
     __weak typeof(self) weakSelf = self;
     
-    [[WKGroupManager shared] searchMembers:self.channel keyword:keyword limit:20 complete:^(WKChannelMemberCacheType cacheType, NSArray<WKChannelMember *> * _Nonnull members) {
+    [[WKGroupManager shared] searchMembers:self.channel keyword:keyword limit:10000 complete:^(WKChannelMemberCacheType cacheType, NSArray<WKChannelMember *> * _Nonnull members) {
         WKMemberRole role =  weakSelf.conversationVM.memberRole;
         
         NSArray<WKMentionUserCellModel*>*users = [weakSelf membersToMentionUsers:members role:role keyword:keyword];

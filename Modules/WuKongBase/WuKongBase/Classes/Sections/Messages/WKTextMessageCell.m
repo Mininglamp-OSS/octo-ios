@@ -16,6 +16,7 @@
 #import <WuKongIMSDK/WuKongIMSDK.h>
 #import "WKTipLabel.h"
 #import "WKSecurityTipManager.h"
+#import "WKRichTextParseService.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 
 #define replyNameFontSize 13.0f
@@ -196,14 +197,36 @@
             }
         }
     }
-    
-    NSArray<id<WKMatchToken>> *tokens = [self getTokens:message text:content];
-    
+
+    NSArray<id<WKMatchToken>> *entityTokens = [self getTokens:message text:content];
+
+    // 自动检测 URL 链接（补充 entity 中未包含的链接）
+    NSArray<id<WKMatchToken>> *linkTokens = [[WKRichTextParseService shared] parseLink:content];
+    NSMutableArray<id<WKMatchToken>> *tokens = [NSMutableArray arrayWithArray:entityTokens];
+    for (id<WKMatchToken> linkToken in linkTokens) {
+        if(linkToken.type != WKatchTokenTypeLink) {
+            continue;
+        }
+        // 检查该链接是否与已有 entity token 重叠，避免重复
+        BOOL overlaps = NO;
+        for (id<WKMatchToken> entityToken in entityTokens) {
+            NSRange lr = linkToken.range;
+            NSRange er = entityToken.range;
+            if(lr.location < er.location + er.length && er.location < lr.location + lr.length) {
+                overlaps = YES;
+                break;
+            }
+        }
+        if(!overlaps) {
+            [tokens addObject:linkToken];
+        }
+    }
+
     NSMutableAttributedString *attrStr = [[NSMutableAttributedString alloc] init];
     attrStr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
-    
+
     [attrStr lim_render:content tokens:tokens];
-    
+
     return attrStr;
 }
 
@@ -342,7 +365,7 @@
 
     if(model.isSend) {
         attrStr.textColor =  [WKApp shared].config.messageSendTextColor;
-        attrStr.linkColor = [UIColor whiteColor];
+        attrStr.linkColor = [UIColor blueColor];
     }else {
         attrStr.textColor = [WKApp shared].config.messageRecvTextColor;
         attrStr.linkColor = [UIColor blueColor];
@@ -471,7 +494,7 @@
 -(void) layoutName {
     WKBubblePostion position = [[self class] bubblePosition:self.messageModel];
     if(!self.nameLbl.hidden) {
-        if(position == WKBubblePostionLast || position == WKBubblePostionSingle) {
+        if(position == WKBubblePostionFirst || position == WKBubblePostionSingle) {
             self.nameLbl.lim_left =  WK_CONTENT_INSETS.left+WKLastBubbleOffsetSpace;
         }else{
             self.nameLbl.lim_left =  WK_CONTENT_INSETS.left;

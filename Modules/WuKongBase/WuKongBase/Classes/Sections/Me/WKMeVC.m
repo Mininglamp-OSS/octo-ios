@@ -7,6 +7,7 @@
 
 #import "WKMeVC.h"
 #import "WKMeInfoVC.h"
+#import "WKServerSettingHelper.h"
 @interface WKMeVC ()<WKChannelManagerDelegate>
 @property(nonatomic,strong) WKeHeader *meHeader;
 @end
@@ -163,6 +164,9 @@
         _avatarImgView.lim_centerY_parent = self.avatarBox;
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(meInfoPressed)];
         [_avatarImgView addGestureRecognizer:tap];
+        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(serverSettingLongPressed:)];
+        longPress.minimumPressDuration = 1.5;
+        [_avatarImgView addGestureRecognizer:longPress];
     }
     return _avatarImgView;
 }
@@ -194,6 +198,15 @@
 }
 
 #pragma mark - 事件
+
+- (void)serverSettingLongPressed:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        UIViewController *vc = [WKNavigationManager shared].topViewController;
+        if (vc) {
+            [WKServerSettingHelper showServerSettingAlertInViewController:vc];
+        }
+    }
+}
 
 -(void) meInfoPressed{
     [[WKNavigationManager shared] pushViewController:[WKMeInfoVC new] animated:YES];

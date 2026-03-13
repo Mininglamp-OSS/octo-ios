@@ -188,7 +188,14 @@
     [self resetPublicHeader];
     return  [_sessionManager POST:[self pathURLEncode:requestPath] parameters:nil headers:nil constructingBodyWithBlock:^(id<AFMultipartFormData>  _Nonnull formData) {
         NSError *fileError;
-        [formData appendPartWithFileURL:[NSURL URLWithString:fileUrl] name:@"file" error:&fileError];
+        NSURL *localFileURL;
+        if ([fileUrl hasPrefix:@"file://"]) {
+            NSString *filePath = [fileUrl substringFromIndex:[@"file://" length]];
+            localFileURL = [NSURL fileURLWithPath:filePath];
+        } else {
+            localFileURL = [NSURL URLWithString:fileUrl];
+        }
+        [formData appendPartWithFileURL:localFileURL name:@"file" error:&fileError];
       if(fileError) {
           WKLogError(@"fileError-> %@",fileError);
       }
@@ -250,7 +257,14 @@
     NSError *serializationError = nil;
     NSMutableURLRequest *request = [_sessionManager.requestSerializer multipartFormRequestWithMethod:@"POST" URLString:[[NSURL URLWithString:[self pathURLEncode:requestPath] relativeToURL:_sessionManager.baseURL] absoluteString] parameters:nil constructingBodyWithBlock:^(id<AFMultipartFormData>  _Nonnull formData) {
         NSError *fileError;
-        [formData appendPartWithFileURL:[NSURL URLWithString:[fileUrl stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding]] name:@"file" error:&fileError];
+        NSURL *localFileURL;
+        if ([fileUrl hasPrefix:@"file://"]) {
+            NSString *filePath = [fileUrl substringFromIndex:[@"file://" length]];
+            localFileURL = [NSURL fileURLWithPath:filePath];
+        } else {
+            localFileURL = [NSURL URLWithString:[fileUrl stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding]];
+        }
+        [formData appendPartWithFileURL:localFileURL name:@"file" error:&fileError];
         if(fileError) {
             WKLogError(@"file: %@ fileError-> %@",fileUrl,fileError);
             if (completeCallback) {

@@ -12,27 +12,25 @@ int amrEncodeMode[] = {4750, 5150, 5900, 6700, 7400, 7950, 10200, 12200}; // amr
 void SkipToPCMAudioData(FILE* fpwave)
 {
     RIFFHEADER riff;
-    FMTBLOCK fmt;
     XCHUNKHEADER chunk;
     WAVEFORMATX wfx;
     int bDataBlock = 0;
-    
+
     // 1. 读RIFF头
     fread(&riff, 1, sizeof(RIFFHEADER), fpwave);
-    
-    // 2. 读FMT块 - 如果 fmt.nFmtSize>16 说明需要还有一个附属大小没有读
+
+    // 2. 读FMT块
     fread(&chunk, 1, sizeof(XCHUNKHEADER), fpwave);
-    if ( chunk.nChunkSize>16 )
-    {
-        fread(&wfx, 1, sizeof(WAVEFORMATX), fpwave);
+    // 读取 fmt 数据：取 nChunkSize 和 sizeof(WAVEFORMATX) 的较小值
+    int fmtReadSize = chunk.nChunkSize < (int)sizeof(WAVEFORMATX) ? chunk.nChunkSize : (int)sizeof(WAVEFORMATX);
+    memset(&wfx, 0, sizeof(WAVEFORMATX));
+    fread(&wfx, 1, fmtReadSize, fpwave);
+    // 跳过 fmt 块中未读取的剩余字节
+    int fmtRemaining = chunk.nChunkSize - fmtReadSize;
+    if (fmtRemaining > 0) {
+        fseek(fpwave, fmtRemaining, SEEK_CUR);
     }
-    else
-    {
-        memcpy(fmt.chFmtID, chunk.chChunkID, 4);
-        fmt.nFmtSize = chunk.nChunkSize;
-        fread(&fmt.wf, 1, sizeof(WAVEFORMAT), fpwave);
-    }
-    
+
     // 3.转到data块 - 有些还有fact块等。
     while(!bDataBlock)
     {

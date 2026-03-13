@@ -29,7 +29,7 @@ singtonImplement(CWRecorder);
     [[AVAudioSession sharedInstance] setActive:YES error:nil];
     
     // 1. 确定录音存放的位置
-    NSURL *url = [NSURL URLWithString:self.recordPath];
+    NSURL *url = [NSURL fileURLWithPath:self.recordPath];
     
     // 2. 设置录音参数
     NSMutableDictionary *recordSettings = [[NSMutableDictionary alloc] init];

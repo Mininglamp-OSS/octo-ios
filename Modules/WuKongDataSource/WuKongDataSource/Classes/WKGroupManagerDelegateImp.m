@@ -12,7 +12,7 @@
 
 // 创建群聊
 - (void)groupManager:(nonnull WKGroupManager *)manager createGroup:(nonnull NSArray<NSString *> *)members object:(id _Nullable)object complete:(void (^ _Nullable)(NSString * groupNo,NSError *error))complete {
-    
+
     NSMutableArray *names = [NSMutableArray array];
     __weak typeof(self) weakSelf = self;
     [[WKAPIClient sharedClient] POST:@"group/create" parameters:@{@"members":members?:@[],@"member_names":names} model:WKGroupModel.class].then(^(WKGroupModel *groupModel){

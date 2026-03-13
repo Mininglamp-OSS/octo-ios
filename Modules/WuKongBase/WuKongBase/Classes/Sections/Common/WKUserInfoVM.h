@@ -53,6 +53,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,strong) WKChannelMember *memberOfMy; // 我在频道内的成员对象（ 如果是从某个频道过来的，则有可能有此值）
 
 @property(nonatomic,assign,readonly) BOOL isBlacklist; // 是黑名单那用户
+@property(nonatomic,assign) BOOL isActualFriend; // 服务器实际好友关系（通过 friend/relation API 检查）
 
 @property(nonatomic,weak) id<WKUserInfoVMDelegate> delegate;
 
@@ -83,6 +84,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// 删除黑名单
 -(AnyPromise*) deleteBlacklist;
+
+/// 检查与指定用户的实际好友关系（通过 friend/relation API）
+-(void) checkFriendRelation:(NSString*)uid completion:(void(^)(BOOL isFriend))completion;
 
 -(void) initData;
 

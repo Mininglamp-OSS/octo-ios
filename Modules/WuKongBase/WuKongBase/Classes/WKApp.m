@@ -810,26 +810,53 @@ static  UIBackgroundTaskIdentifier _bgTaskToken;
     return [self resourceBundle:moduleName];
 }
 
+// 从 apiBaseUrl 推导出服务器 origin（不含 /api/v1/ 路径）
+-(NSString*) serverOrigin {
+    NSString *baseUrl = [WKApp shared].config.apiBaseUrl;
+    NSRange apiRange = [baseUrl rangeOfString:@"/api/"];
+    if (apiRange.location != NSNotFound) {
+        return [baseUrl substringToIndex:apiRange.location];
+    }
+    // fallback: 去掉末尾路径
+    NSURL *url = [NSURL URLWithString:baseUrl];
+    if (url) {
+        return [NSString stringWithFormat:@"%@://%@", url.scheme, url.host];
+    }
+    return baseUrl;
+}
+
 -(NSURL*) getImageFullUrl:(NSString*)path{
+    if (!path || path.length == 0) return nil;
+    if([path hasPrefix:@"http"]) {
+        return [NSURL URLWithString:path];
+    }
+    // file/preview/ 路径使用服务器公共文件地址（与 web 端一致）
+    if ([path hasPrefix:@"file/preview/"]) {
+        NSString *filePath = [path stringByReplacingCharactersInRange:NSMakeRange(0, [@"file/preview/" length]) withString:@"file/"];
+        NSString *urlStr = [NSString stringWithFormat:@"%@/%@", [self serverOrigin], filePath];
+        return [NSURL URLWithString:[urlStr stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
+    }
     NSString *encodePath = [path stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
     if(encodePath) {
-        if([encodePath hasPrefix:@"http"]) {
-            return [NSURL URLWithString:path];
-        }else {
-            NSString *newPath = [encodePath copy];
-            if([newPath hasPrefix:@"/"]) {
-                newPath = [newPath substringFromIndex:1];
-            }
-            NSString *urlStr =[NSString stringWithFormat:@"%@%@",[WKApp shared].config.imageBrowseUrl,newPath];
-          
-            return [NSURL URLWithString:urlStr];
+        NSString *newPath = [encodePath copy];
+        if([newPath hasPrefix:@"/"]) {
+            newPath = [newPath substringFromIndex:1];
         }
+        NSString *urlStr =[NSString stringWithFormat:@"%@%@",[WKApp shared].config.imageBrowseUrl,newPath];
+        return [NSURL URLWithString:urlStr];
     }
     return nil;
 }
 -(NSURL*) getFileFullUrl:(NSString*)path{
+    if (!path || path.length == 0) return nil;
     if([path hasPrefix:@"http"]) {
         return [NSURL URLWithString:path];
+    }
+    // file/preview/ 路径使用服务器公共文件地址（与 web 端一致）
+    if ([path hasPrefix:@"file/preview/"]) {
+        NSString *filePath = [path stringByReplacingCharactersInRange:NSMakeRange(0, [@"file/preview/" length]) withString:@"file/"];
+        NSString *urlStr = [NSString stringWithFormat:@"%@/%@", [self serverOrigin], filePath];
+        return [NSURL URLWithString:[urlStr stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
     }
     NSString *encodePath = [path stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
     if(encodePath) {

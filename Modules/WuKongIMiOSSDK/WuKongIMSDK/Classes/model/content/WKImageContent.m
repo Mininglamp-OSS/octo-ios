@@ -71,7 +71,27 @@
 }
 
 - (NSString *)extension {
-    return @"";
+    // 检测实际图片格式，返回对应扩展名
+    if (self.data) {
+        if (self.data.length >= 2) {
+            uint8_t header[2];
+            [self.data getBytes:&header length:2];
+            if (header[0] == 0xFF && header[1] == 0xD8) {
+                return @".jpg";
+            }
+        }
+        if (self.data.length >= 4) {
+            uint8_t header[4];
+            [self.data getBytes:&header length:4];
+            if (header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47) {
+                return @".png";
+            }
+            if (header[0] == 0x47 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x38) {
+                return @".gif";
+            }
+        }
+    }
+    return @".png";
 }
 
 - (void) writeDataToLocalPath {

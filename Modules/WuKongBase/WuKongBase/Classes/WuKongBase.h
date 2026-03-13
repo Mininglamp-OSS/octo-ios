@@ -101,6 +101,8 @@
 
 #import "WKNetworkListener.h"
 #import "WKPhotoService.h"
+#import "WKServerConfig.h"
+#import "WKServerSettingHelper.h"
 
 #import "WKModelConvert.h"
 

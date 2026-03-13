@@ -16,8 +16,8 @@
 #import "SELUpdateAlert.h"
 
 
-#define SERVER_IP @"api-test.example.com" // xxx.xxx.xx.xx:8090
-#define HTTPS_ON true // https开关
+#define SERVER_IP [WKServerConfig serverIP]
+#define HTTPS_ON [WKServerConfig httpsOn]
 
 
 #define BASE_URL [NSString stringWithFormat:@"%@://%@/api/v1/",HTTPS_ON?@"https":@"http",SERVER_IP]

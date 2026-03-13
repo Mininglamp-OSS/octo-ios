@@ -451,6 +451,28 @@
     return  self.channelInfo && self.channelInfo.status == WKChannelStatusBlacklist;
 }
 
+-(void) checkFriendRelation:(NSString*)uid completion:(void(^)(BOOL isFriend))completion {
+    [[WKAPIClient sharedClient] GET:@"friend/relation" parameters:@{@"uid":uid?:@""} ].then(^(NSDictionary *result){
+        BOOL isFriend = NO;
+        if (result[@"is_friend"]) {
+            isFriend = [result[@"is_friend"] boolValue];
+        } else if (result[@"follow"]) {
+            isFriend = [result[@"follow"] integerValue] == 1;
+        }
+        self.isActualFriend = isFriend;
+        if (completion) {
+            completion(isFriend);
+        }
+    }).catch(^(NSError *error){
+        WKLogError(@"检查好友关系出错:%@", error);
+        // 出错时回退到本地 follow 状态
+        self.isActualFriend = self.channelInfo.follow == WKChannelInfoFollowFriend;
+        if (completion) {
+            completion(self.isActualFriend);
+        }
+    });
+}
+
 -(AnyPromise*) requestUserDetail:(NSString*)uid {
     NSString *groupNo = @"";
     if(self.fromChannel.channelType == WK_GROUP) {
