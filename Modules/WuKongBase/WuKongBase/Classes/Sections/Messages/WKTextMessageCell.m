@@ -499,10 +499,18 @@
         }else{
             self.nameLbl.lim_left =  WK_CONTENT_INSETS.left;
         }
-        
+
         self.nameLbl.lim_top =  WK_CONTENT_INSETS.top;
+        // 收缩nameLbl宽度为文字实际宽度
+        CGSize fitSize = [self.nameLbl sizeThatFits:CGSizeMake(self.messageContentView.lim_width, WK_NICKNAME_HEIGHT)];
+        self.nameLbl.lim_width = MIN(fitSize.width, self.messageContentView.lim_width);
+    } else {
+        self.nameLbl.lim_width = self.messageContentView.lim_width;
     }
-    self.nameLbl.lim_width = self.messageContentView.lim_width;
+
+    // Bot标识布局：紧跟nameLbl右侧，垂直居中对齐
+    self.botBadgeLbl.lim_left = self.nameLbl.lim_left + self.nameLbl.lim_width + 6.0f;
+    self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
 }
 
 +(UIEdgeInsets) contentEdgeInsets:(WKMessageModel*)model {

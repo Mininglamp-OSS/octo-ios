@@ -55,6 +55,8 @@ typedef enum :NSUInteger {
 
 // 名字
 @property(nonatomic,strong) UILabel *nameLbl;
+// Bot标识
+@property(nonatomic,strong) UILabel *botBadgeLbl;
 // 气泡背景
 
 

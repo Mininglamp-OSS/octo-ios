@@ -222,7 +222,19 @@ static NSMutableDictionary *flameNodeCacheDict;
    
     [self.nameLbl setTextColor:[UIColor grayColor]];
     [self.bubbleBackgroundView addSubview:self.nameLbl];
-    
+
+    // Bot标识
+    self.botBadgeLbl = [[UILabel alloc] init];
+    self.botBadgeLbl.text = @"Bot";
+    self.botBadgeLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
+    self.botBadgeLbl.textColor = [UIColor whiteColor];
+    self.botBadgeLbl.backgroundColor = [UIColor colorWithRed:136.0f/255.0f green:84.0f/255.0f blue:208.0f/255.0f alpha:1.0f];
+    self.botBadgeLbl.textAlignment = NSTextAlignmentCenter;
+    self.botBadgeLbl.layer.cornerRadius = 4.0f;
+    self.botBadgeLbl.layer.masksToBounds = YES;
+    self.botBadgeLbl.hidden = YES;
+    [self.bubbleBackgroundView addSubview:self.botBadgeLbl];
+
     // 回应
     self.reactionView = [[WKApp shared] invoke:WKPOINT_MESSAGEEXTEND_REACTIONVIEW param:nil];
     if(!self.reactionView) {
@@ -445,7 +457,28 @@ static NSMutableDictionary *flameNodeCacheDict;
     }else {
         self.nameLbl.hidden = YES;
     }
-    
+
+    // Bot标识
+    BOOL isBot = NO;
+    if (!self.nameLbl.hidden) {
+        if (model.memberOfFrom.robot) {
+            isBot = YES;
+        } else {
+            WKChannelInfo *fromChannelInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:model.fromUid channelType:WK_PERSON]];
+            if (fromChannelInfo.robot) {
+                isBot = YES;
+            }
+        }
+    }
+    self.botBadgeLbl.hidden = !isBot || self.nameLbl.hidden;
+    if (!self.botBadgeLbl.hidden) {
+        [self.botBadgeLbl sizeToFit];
+        CGRect badgeFrame = self.botBadgeLbl.frame;
+        badgeFrame.size.width += 8.0f;
+        badgeFrame.size.height += 4.0f;
+        self.botBadgeLbl.frame = badgeFrame;
+    }
+
     if(model.isSend) {
         self.avatarImgView.url = [WKApp shared].loginInfo.extra[@"avatar"];
     }else {
@@ -818,7 +851,8 @@ static NSMutableDictionary *flameNodeCacheDict;
     } else {
         self.navigateToMessageBtn.lim_left = self.bubbleBackgroundView.lim_right + 8.0f;
     }
-   
+
+
 }
 
 -(void) layoutMainContextSourceNode {
@@ -912,7 +946,14 @@ static NSMutableDictionary *flameNodeCacheDict;
         }
         
         self.nameLbl.lim_top =  -self.nameLbl.lim_height - 4.0f;
+        // 收缩nameLbl宽度为文字实际宽度
+        CGSize fitSize = [self.nameLbl sizeThatFits:CGSizeMake(WK_NICKNAME_MAX_WIDTH, WK_NICKNAME_HEIGHT)];
+        self.nameLbl.lim_width = MIN(fitSize.width, WK_NICKNAME_MAX_WIDTH);
     }
+
+    // Bot标识布局：始终定位（不判断hidden，确保layoutSubviews后位置正确）
+    self.botBadgeLbl.lim_left = self.nameLbl.lim_left + self.nameLbl.lim_width + 6.0f;
+    self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
 }
 
 
