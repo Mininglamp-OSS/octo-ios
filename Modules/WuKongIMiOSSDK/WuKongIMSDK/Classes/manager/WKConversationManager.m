@@ -242,6 +242,26 @@
             }
         }
         [[WKConversationDB shared] replaceConversations:conversations];
+
+        // 将同步的 stick/mute 状态写入 channel 表，解决 Web 端置顶/免打扰不同步到 iOS 的问题
+        for (WKSyncConversationModel *syncModel in syncConversations) {
+            WKChannelInfo *channelInfo = [[WKSDK shared].channelManager getChannelInfo:syncModel.channel];
+            if (channelInfo) {
+                BOOL needUpdate = NO;
+                if (channelInfo.stick != syncModel.stick) {
+                    channelInfo.stick = syncModel.stick;
+                    needUpdate = YES;
+                }
+                if (channelInfo.mute != syncModel.mute) {
+                    channelInfo.mute = syncModel.mute;
+                    needUpdate = YES;
+                }
+                if (needUpdate) {
+                    [[WKSDK shared].channelManager updateChannelInfo:channelInfo];
+                }
+            }
+        }
+
         [self callOnConversationUpdateDelegates:conversations];
     }
     
