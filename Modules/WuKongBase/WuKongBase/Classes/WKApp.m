@@ -75,6 +75,8 @@
 #import <WuKongIMSDK/WKSignalErrorContent.h>
 #import "WKEmojiStickerCell.h"
 #import "WKEmojiStickerContent.h"
+#import "WKFileMessageCell.h"
+#import <WuKongIMSDK/WKFileContent.h>
 #import "WKSDImageLottieCoder.h"
 #import "WKSecurityTipManager.h"
 #import "WKConversationListVM.h"
@@ -230,6 +232,7 @@ static WKApp *_instance;
     [self.messageRegitry registerCellClass:WKScreenshotCell.class forMessageContentClass:WKScreenshotContent.class]; // 截屏通知
     [self.messageRegitry registerCellClass:WKLottieStickerCell.class forMessageContentClass:WKLottieStickerContent.class]; // lottie格式的贴图
     [self.messageRegitry registerCellClass:WKEmojiStickerCell.class forMessageContentClass:WKEmojiStickerContent.class];
+    [self.messageRegitry registerCellClass:[WKFileMessageCell class] forMessageContentClass:[WKFileContent class]]; // 文件消息
 }
 
 -(void) traceConfig {
@@ -406,31 +409,54 @@ static WKApp *_instance;
     if([WKApp shared].isLogined) {
         // 切换数据库
         [[WKKitDB shared] switchDB:[WKApp shared].loginInfo.uid];
-        if(weakSelf.getHomeViewController) {
-            [[WKNavigationManager shared] resetRootViewController:weakSelf.getHomeViewController()];
+
+        // 检查是否有已加入的空间
+        NSString *cachedSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+        if(cachedSpaceId && cachedSpaceId.length > 0) {
+            // 有空间，正常进入主页并连接 IM
+            if(weakSelf.getHomeViewController) {
+                [[WKNavigationManager shared] resetRootViewController:weakSelf.getHomeViewController()];
+            }
+            [[WKSyncService shared] sync];
+            [self enterApp];
+            [self registerForNotification];
+            [[[WKSDK shared] connectionManager] connect];
+            [[WKSecurityTipManager shared] syncIfNeed];
+        } else {
+            // 没有缓存的空间ID，先同步设置空间引导页为 rootVC（防止启动时无 rootVC 崩溃）
+            [[WKApp shared] invoke:WKPOINT_SPACEGATE_SHOW param:nil];
+
+            // 再异步向服务器确认是否有空间
+            [WKAPIClient.sharedClient GET:@"space/my" parameters:nil].then(^(NSArray *spaces) {
+                if(spaces && spaces.count > 0) {
+                    // 服务器有空间，保存并切换到主页
+                    NSDictionary *firstSpace = spaces[0];
+                    NSString *spaceId = firstSpace[@"space_id"];
+                    if(spaceId && spaceId.length > 0) {
+                        [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+                        [[NSUserDefaults standardUserDefaults] synchronize];
+                    }
+                    if(weakSelf.getHomeViewController) {
+                        [[WKNavigationManager shared] resetRootViewController:weakSelf.getHomeViewController()];
+                    }
+                    [[WKSyncService shared] sync];
+                    [weakSelf enterApp];
+                    [weakSelf registerForNotification];
+                    [[[WKSDK shared] connectionManager] connect];
+                    [[WKSecurityTipManager shared] syncIfNeed];
+                }
+                // 没有空间则保持 SpaceGate 页面
+            }).catch(^(NSError *error) {
+                // 网络错误保持 SpaceGate 页面
+            });
         }
-//        // 同步联系人
-        [[WKSyncService shared] sync];
-        
-        [self enterApp];
     }else {
         [[WKApp shared] invoke:WKPOINT_LOGIN_SHOW param:nil];
     }
-    
+
     // 模块启动...
     [[WKSwiftModuleManager shared] didFinishLaunching];
     WKLogDebug(@"=====> 程序启动！<=====");
-    
-    // 如果已登录 则连接IM
-    if([WKApp shared].isLogined){
-        // 注册远程通知
-        [self registerForNotification];
-        [[[WKSDK shared] connectionManager] connect];
-        
-        // 同步安全提醒敏感词
-        [[WKSecurityTipManager shared] syncIfNeed];
-        
-    }
     if(![AFNetworkReachabilityManager sharedManager].reachable) {
         [self showScreenProtectIfNeed]; // 显示断网屏幕保护
     }
@@ -1143,9 +1169,14 @@ static  UIBackgroundTaskIdentifier _bgTaskToken;
         item.sort = 5000;
         return item;
     } category:WKPOINT_CATEGORY_PANELFUNCITEM];
-    
 
-    
+    // file
+    [self setMethod:WKPOINT_CATEGORY_PANELFUNCITEM_FILE handler:^id _Nullable(id  _Nonnull param) {
+        WKPanelFileFuncItem *item = [[WKPanelFileFuncItem alloc] init];
+        item.sort = 5500;
+        return item;
+    } category:WKPOINT_CATEGORY_PANELFUNCITEM];
+
     // more
     [self setMethod:WKPOINT_CATEGORY_PANELFUNCITEM_MORE handler:^id _Nullable(id  _Nonnull param) {
         return [[WKPanelMoreFuncItem alloc] init];

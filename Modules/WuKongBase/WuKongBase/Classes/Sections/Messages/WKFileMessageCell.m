@@ -1,0 +1,214 @@
+//
+//  WKFileMessageCell.m
+//  WuKongBase
+//
+//  文件消息Cell
+
+#import "WKFileMessageCell.h"
+#import "WKMessageModel.h"
+#import "WKResource.h"
+#import "WKLoadProgressView.h"
+#import <WuKongIMSDK/WKFileContent.h>
+#import <WuKongBase/WuKongBase-Swift.h>
+#import "WKNavigationManager.h"
+
+#define WKFileCellWidth 250.0f
+#define WKFileCellHeight 72.0f
+#define WKFileIconSize 40.0f
+
+@interface WKFileMessageCell () <UIDocumentInteractionControllerDelegate>
+
+@property(nonatomic,strong) UIImageView *fileIconView;
+@property(nonatomic,strong) UILabel *fileNameLbl;
+@property(nonatomic,strong) UILabel *fileSizeLbl;
+@property(nonatomic,strong) WKLoadProgressView *progressView;
+@property(nonatomic,strong) WKMessageFileUploadTask *uploadTask;
+@property(nonatomic,strong) UIDocumentInteractionController *documentController;
+
+@end
+
+@implementation WKFileMessageCell
+
++ (CGSize)contentSizeForMessage:(WKMessageModel *)model {
+    return CGSizeMake(WKFileCellWidth, WKFileCellHeight);
+}
+
+- (void)prepareForReuse {
+    [super prepareForReuse];
+    if (self.uploadTask) {
+        [self.uploadTask removeListener:self];
+    }
+}
+
+- (void)initUI {
+    [super initUI];
+
+    self.messageContentView.layer.masksToBounds = YES;
+    self.messageContentView.layer.cornerRadius = 4.0f;
+
+    self.fileIconView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, WKFileIconSize, WKFileIconSize)];
+    self.fileIconView.contentMode = UIViewContentModeScaleAspectFit;
+    self.fileIconView.tintColor = [UIColor systemBlueColor];
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:30 weight:UIImageSymbolWeightRegular];
+        self.fileIconView.image = [UIImage systemImageNamed:@"doc.fill" withConfiguration:config];
+    }
+    [self.messageContentView addSubview:self.fileIconView];
+
+    self.fileNameLbl = [[UILabel alloc] init];
+    self.fileNameLbl.font = [[WKApp shared].config appFontOfSize:15.0f];
+    self.fileNameLbl.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    self.fileNameLbl.numberOfLines = 1;
+    [self.messageContentView addSubview:self.fileNameLbl];
+
+    self.fileSizeLbl = [[UILabel alloc] init];
+    self.fileSizeLbl.font = [UIFont systemFontOfSize:12.0f];
+    self.fileSizeLbl.textColor = [UIColor grayColor];
+    [self.messageContentView addSubview:self.fileSizeLbl];
+
+    self.progressView = [[WKLoadProgressView alloc] initWithFrame:CGRectMake(0, 0, WKFileCellWidth, WKFileCellHeight)];
+    self.progressView.maxProgress = 1.0f;
+    self.progressView.backgroundColor = [UIColor colorWithRed:0.6 green:0.6 blue:0.6 alpha:0.7];
+    self.progressView.layer.masksToBounds = YES;
+    self.progressView.layer.cornerRadius = 4.0f;
+    [self.messageContentView addSubview:self.progressView];
+}
+
+- (void)refresh:(WKMessageModel *)model {
+    [super refresh:model];
+    if ([WKApp shared].config.style != WKSystemStyleDark) {
+        self.trailingView.timeLbl.textColor = [WKApp shared].config.tipColor;
+        self.trailingView.statusImgView.tintColor = [WKApp shared].config.tipColor;
+    }
+
+    WKFileContent *fileContent = (WKFileContent *)model.content;
+    self.fileNameLbl.text = fileContent.name ?: @"";
+    self.fileSizeLbl.text = [self formatFileSize:fileContent.fileSize];
+    self.fileNameLbl.textColor = [WKApp shared].config.messageRecvTextColor;
+
+    [self.messageContentView setBackgroundColor:[WKApp shared].config.cellBackgroundColor];
+
+    [self updateProgress];
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+
+    CGFloat padding = 12.0f;
+    CGFloat iconRight = 10.0f;
+
+    self.fileIconView.lim_left = padding;
+    self.fileIconView.lim_top = (self.messageContentView.lim_height - WKFileIconSize) / 2.0f;
+
+    CGFloat textLeft = self.fileIconView.lim_right + iconRight;
+    CGFloat textMaxWidth = self.messageContentView.lim_width - textLeft - padding;
+
+    self.fileNameLbl.lim_left = textLeft;
+    self.fileNameLbl.lim_top = padding;
+    self.fileNameLbl.lim_width = textMaxWidth;
+    self.fileNameLbl.lim_height = 20.0f;
+
+    self.fileSizeLbl.lim_left = textLeft;
+    self.fileSizeLbl.lim_top = self.fileNameLbl.lim_bottom + 4.0f;
+    self.fileSizeLbl.lim_width = textMaxWidth;
+    self.fileSizeLbl.lim_height = 16.0f;
+
+    self.progressView.frame = self.messageContentView.bounds;
+}
+
+- (void)updateProgress {
+    __weak typeof(self) weakSelf = self;
+    self.uploadTask = [[WKSDK shared] getMessageFileUploadTask:self.messageModel.message];
+    if (self.uploadTask) {
+        [self.uploadTask addListener:^{
+            dispatch_block_t uiUpdate;
+            if (weakSelf.uploadTask.status == WKTaskStatusProgressing) {
+                uiUpdate = ^{
+                    weakSelf.progressView.hidden = NO;
+                    [weakSelf.progressView setProgress:weakSelf.uploadTask.progress];
+                };
+            } else {
+                uiUpdate = ^{
+                    weakSelf.progressView.hidden = YES;
+                    [weakSelf.progressView setProgress:0];
+                };
+            }
+            if ([NSThread isMainThread]) {
+                uiUpdate();
+            } else {
+                dispatch_async(dispatch_get_main_queue(), uiUpdate);
+            }
+        } target:self];
+    } else {
+        self.progressView.hidden = YES;
+        [self.progressView setProgress:0];
+    }
+}
+
+- (BOOL)respondContentSingleTap {
+    return true;
+}
+
+- (void)onTap {
+    [super onTap];
+    if (!self.messageModel) {
+        return;
+    }
+    WKFileContent *fileContent = (WKFileContent *)self.messageModel.content;
+
+    // 检查本地文件是否存在
+    NSString *localPath = fileContent.localPath;
+    if (localPath && [[NSFileManager defaultManager] fileExistsAtPath:localPath]) {
+        [self previewFileAtPath:localPath];
+        return;
+    }
+
+    // 需要下载
+    if (fileContent.remoteUrl && fileContent.remoteUrl.length > 0) {
+        __weak typeof(self) weakSelf = self;
+        [[WKSDK shared].mediaManager download:self.messageModel.message callback:^(WKMediaDownloadState state, CGFloat progress, NSError *error) {
+            if (state == WKMediaDownloadStateSuccess) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    NSString *downloadedPath = fileContent.localPath;
+                    if (downloadedPath && [[NSFileManager defaultManager] fileExistsAtPath:downloadedPath]) {
+                        [weakSelf previewFileAtPath:downloadedPath];
+                    }
+                });
+            }
+        }];
+    }
+}
+
+- (void)previewFileAtPath:(NSString *)path {
+    NSURL *fileURL = [NSURL fileURLWithPath:path];
+    self.documentController = [UIDocumentInteractionController interactionControllerWithURL:fileURL];
+    self.documentController.delegate = self;
+    UIViewController *topVC = [WKNavigationManager shared].topViewController;
+    if (![self.documentController presentPreviewAnimated:YES]) {
+        [self.documentController presentOptionsMenuFromRect:topVC.view.bounds inView:topVC.view animated:YES];
+    }
+}
+
+#pragma mark - UIDocumentInteractionControllerDelegate
+
+- (UIViewController *)documentInteractionControllerViewControllerForPreview:(UIDocumentInteractionController *)controller {
+    return [WKNavigationManager shared].topViewController;
+}
+
++ (BOOL)hiddenBubble {
+    return YES;
+}
+
+- (NSString *)formatFileSize:(long long)size {
+    if (size < 1024) {
+        return [NSString stringWithFormat:@"%lld B", size];
+    } else if (size < 1024 * 1024) {
+        return [NSString stringWithFormat:@"%.1f KB", size / 1024.0];
+    } else if (size < 1024 * 1024 * 1024) {
+        return [NSString stringWithFormat:@"%.1f MB", size / (1024.0 * 1024.0)];
+    } else {
+        return [NSString stringWithFormat:@"%.1f GB", size / (1024.0 * 1024.0 * 1024.0)];
+    }
+}
+
+@end

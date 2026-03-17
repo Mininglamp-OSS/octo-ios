@@ -7,11 +7,111 @@
 
 #import "WKServerSettingHelper.h"
 #import "WKServerConfig.h"
+#import "WKLoginInfo.h"
+#import "WKSpaceModel.h"
 #import <MBProgressHUD/MBProgressHUD.h>
 
 @implementation WKServerSettingHelper
 
 + (void)showServerSettingAlertInViewController:(UIViewController *)vc {
+    NSArray<NSDictionary *> *history = [WKServerConfig serverHistory];
+    if (history.count > 0) {
+        // 有历史记录，显示历史列表 + 输入新地址入口
+        [self showHistorySheetInViewController:vc history:history];
+    } else {
+        // 无历史记录，直接显示输入弹窗
+        [self showInputAlertInViewController:vc];
+    }
+}
+
+#pragma mark - 历史服务器列表
+
++ (void)showHistorySheetInViewController:(UIViewController *)vc history:(NSArray<NSDictionary *> *)history {
+    NSString *currentIP = [WKServerConfig serverIP];
+
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"服务器设置"
+                                                                  message:@"选择历史服务器或输入新地址"
+                                                           preferredStyle:UIAlertControllerStyleActionSheet];
+
+    for (NSDictionary *entry in history) {
+        NSString *ip = entry[@"ip"];
+        BOOL httpsOn = [entry[@"https"] boolValue];
+        NSString *scheme = httpsOn ? @"https" : @"http";
+        NSString *displayAddr = [NSString stringWithFormat:@"%@://%@", scheme, ip];
+
+        // 当前正在使用的服务器加标记
+        BOOL isCurrent = [ip isEqualToString:currentIP];
+        NSString *title = isCurrent ? [NSString stringWithFormat:@"✓ %@", displayAddr] : displayAddr;
+
+        UIAlertAction *action = [UIAlertAction actionWithTitle:title
+                                                        style:UIAlertActionStyleDefault
+                                                      handler:^(UIAlertAction *act) {
+            if (isCurrent) {
+                // 已经是当前服务器，不需要切换
+                return;
+            }
+            [self switchToServerIP:ip httpsOn:httpsOn inViewController:vc];
+        }];
+        [sheet addAction:action];
+    }
+
+    // 输入新地址
+    UIAlertAction *newAction = [UIAlertAction actionWithTitle:@"输入新地址"
+                                                       style:UIAlertActionStyleDefault
+                                                     handler:^(UIAlertAction *action) {
+        [self showInputAlertInViewController:vc];
+    }];
+    [sheet addAction:newAction];
+
+    // 管理历史记录（删除）
+    if (history.count > 1) {
+        UIAlertAction *manageAction = [UIAlertAction actionWithTitle:@"清除历史记录"
+                                                              style:UIAlertActionStyleDestructive
+                                                            handler:^(UIAlertAction *action) {
+            [self showClearHistoryConfirmInViewController:vc];
+        }];
+        [sheet addAction:manageAction];
+    }
+
+    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"取消"
+                                                          style:UIAlertActionStyleCancel
+                                                        handler:nil];
+    [sheet addAction:cancelAction];
+
+    // iPad 兼容
+    if (sheet.popoverPresentationController) {
+        sheet.popoverPresentationController.sourceView = vc.view;
+        sheet.popoverPresentationController.sourceRect = CGRectMake(vc.view.bounds.size.width / 2, vc.view.bounds.size.height / 2, 0, 0);
+    }
+
+    [vc presentViewController:sheet animated:YES completion:nil];
+}
+
++ (void)showClearHistoryConfirmInViewController:(UIViewController *)vc {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"清除历史记录"
+                                                                  message:@"确定要清除所有历史服务器记录吗？当前服务器设置不受影响。"
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"清除"
+                                              style:UIAlertActionStyleDestructive
+                                            handler:^(UIAlertAction *action) {
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"WKServerHistory"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    [vc presentViewController:alert animated:YES completion:nil];
+}
+
+#pragma mark - 切换到历史服务器
+
++ (void)switchToServerIP:(NSString *)ip httpsOn:(BOOL)httpsOn inViewController:(UIViewController *)vc {
+    [self testServerIP:ip httpsOn:httpsOn inViewController:vc];
+}
+
+#pragma mark - 手动输入新地址
+
++ (void)showInputAlertInViewController:(UIViewController *)vc {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"服务器设置"
                                                                   message:@"输入服务器地址，修改后需重启App生效"
                                                            preferredStyle:UIAlertControllerStyleAlert];
@@ -52,17 +152,12 @@
     return [NSString stringWithFormat:@"%@://%@", scheme, ip];
 }
 
-/// 解析用户输入，支持多种格式：
-/// - 完整URL: http://192.168.1.100:3000
-/// - 带端口IP: 192.168.1.100:3000
-/// - 纯域名: api-test.example.com
-/// - 纯IP: 192.168.1.100
+/// 解析用户输入，支持多种格式
 + (void)parseAndTestInput:(NSString *)input inViewController:(UIViewController *)vc {
     NSString *ip;
     BOOL httpsOn;
 
     if ([input.lowercaseString hasPrefix:@"http://"] || [input.lowercaseString hasPrefix:@"https://"]) {
-        // 用户输入了完整 URL，解析协议和地址
         NSURL *parsedURL = [NSURL URLWithString:input];
         if (!parsedURL || !parsedURL.host) {
             [self showFailAlertInViewController:vc input:input message:@"地址格式不正确，请检查输入"];
@@ -75,13 +170,15 @@
             ip = parsedURL.host;
         }
     } else {
-        // 用户只输入了 IP/域名（可能带端口），默认 HTTP
+        // 用户只输入了 IP/域名（可能带端口），默认 HTTPS
         ip = input;
-        httpsOn = NO;
+        httpsOn = YES;
     }
 
     [self testServerIP:ip httpsOn:httpsOn inViewController:vc];
 }
+
+#pragma mark - 测试连接
 
 + (void)testServerIP:(NSString *)ip httpsOn:(BOOL)httpsOn inViewController:(UIViewController *)vc {
     MBProgressHUD *hud = [MBProgressHUD showHUDAddedTo:vc.view animated:YES];
@@ -109,7 +206,12 @@
 
             NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
             if (error == nil && httpResponse && httpResponse.statusCode < 500) {
-                // 连接成功，保存并重启
+                // 连接成功，清除旧服务器的登录数据后保存并重启
+                [[WKLoginInfo shared] clear];
+                [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"currentSpaceId"];
+                [[NSUserDefaults standardUserDefaults] synchronize];
+                [[WKSpaceModel shared] invalidateCache];
+
                 [WKServerConfig saveServerIP:ip httpsOn:httpsOn];
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                     exit(0);

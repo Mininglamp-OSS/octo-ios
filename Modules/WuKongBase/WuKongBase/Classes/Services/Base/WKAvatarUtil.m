@@ -31,4 +31,11 @@
      return [[NSURL URLWithString:[NSString stringWithFormat:@"groups/%@/avatar",groupNo] relativeToURL:[NSURL URLWithString:[WKApp shared].config.apiBaseUrl]] absoluteString];
 }
 
++(NSString*) getGroupAvatar:(NSString*)groupNo cacheKey:(NSString*)cacheKey {
+    NSString *url = [self getGroupAvatar:groupNo];
+    NSString *key = (cacheKey && cacheKey.length > 0) ? cacheKey : @"0";
+    url = [NSString stringWithFormat:@"%@?v=%@", url, key];
+    return url;
+}
+
 @end

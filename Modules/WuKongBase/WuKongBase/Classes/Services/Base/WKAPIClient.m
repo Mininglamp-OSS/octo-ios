@@ -248,14 +248,13 @@
 }
 
 -(NSURLSessionDataTask*) createFileUploadTask:(NSString*)path fileURL:(NSString*)fileUrl  progress:(void (^)(NSProgress *uploadProgress)) uploadProgressBlock completeCallback:(void(^)(id responseObj,NSError *error)) completeCallback{
-    
+
     NSString *requestPath = path;
     if(_config.requestPathReplace) {
         requestPath = _config.requestPathReplace(path);
     }
-    
-    NSError *serializationError = nil;
-    NSMutableURLRequest *request = [_sessionManager.requestSerializer multipartFormRequestWithMethod:@"POST" URLString:[[NSURL URLWithString:[self pathURLEncode:requestPath] relativeToURL:_sessionManager.baseURL] absoluteString] parameters:nil constructingBodyWithBlock:^(id<AFMultipartFormData>  _Nonnull formData) {
+    [self resetPublicHeader];
+    return [_sessionManager POST:[self pathURLEncode:requestPath] parameters:nil headers:nil constructingBodyWithBlock:^(id<AFMultipartFormData>  _Nonnull formData) {
         NSError *fileError;
         NSURL *localFileURL;
         if ([fileUrl hasPrefix:@"file://"]) {
@@ -267,34 +266,20 @@
         [formData appendPartWithFileURL:localFileURL name:@"file" error:&fileError];
         if(fileError) {
             WKLogError(@"file: %@ fileError-> %@",fileUrl,fileError);
-            if (completeCallback) {
-                completeCallback(nil, fileError);
-            }
-            
         }
-    } error:&serializationError];
-    if (serializationError) {
-        if (completeCallback) {
-            dispatch_async(_sessionManager.completionQueue ?: dispatch_get_main_queue(), ^{
-                completeCallback(nil,serializationError);
-            });
+    } progress:^(NSProgress * _Nonnull uploadProgress) {
+        if(uploadProgressBlock) {
+            uploadProgressBlock(uploadProgress);
         }
-        
-        return nil;
-    }
-    __block NSURLSessionDataTask *task = [_sessionManager uploadTaskWithStreamedRequest:request progress:uploadProgressBlock completionHandler:^(NSURLResponse * __unused response, id responseObject, NSError *error) {
-        if (error) {
-            if (completeCallback) {
-                completeCallback(nil, error);
-            }
-        } else {
-            if (completeCallback) {
-                completeCallback(responseObject, nil);
-            }
+    } success:^(NSURLSessionDataTask * _Nonnull task, id  _Nullable responseObject) {
+        if(completeCallback) {
+            completeCallback(responseObject, nil);
+        }
+    } failure:^(NSURLSessionDataTask * _Nullable task, NSError * _Nonnull error) {
+        if(completeCallback) {
+            completeCallback(nil, error);
         }
     }];
-    
-    return task;
 }
 
 -(AnyPromise*) POST:(NSString*)path parameters:(nullable id)parameters{

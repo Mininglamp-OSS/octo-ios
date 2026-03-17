@@ -133,6 +133,9 @@ typedef enum : NSUInteger {
 
 /// 将所有个人频道(channel_type=1)的 follow 重置为未关注，用于 Space 切换时清除旧联系人
 -(void) resetAllPersonChannelFollow;
+
+/// 单独更新头像缓存key（迁移未执行时静默失败不影响主流程）
+-(void) updateAvatarCacheKey:(WKChannelInfo*)channelInfo;
 @end
 
 NS_ASSUME_NONNULL_END

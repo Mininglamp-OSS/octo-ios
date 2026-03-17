@@ -257,3 +257,30 @@
 
 @end
 
+
+@implementation WKPanelFileFuncItem
+
+- (NSString *)sid {
+    return @"apm.wukong.file";
+}
+
+- (UIImage *)itemIcon {
+    UIImage *img = [self getImageNameForBase:@"Conversation/Toolbar/FileNormal"];
+    if (img) return img;
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightRegular];
+        return [UIImage systemImageNamed:@"doc" withConfiguration:config];
+    }
+    return nil;
+}
+
+- (void)onPressed:(UIButton *)btn {
+    [[WKMoreItemClickEvent shared] onFileItemPressed:self.inputPanel.conversationContext];
+}
+
+- (NSString *)title {
+    return LLang(@"文件");
+}
+
+@end
+

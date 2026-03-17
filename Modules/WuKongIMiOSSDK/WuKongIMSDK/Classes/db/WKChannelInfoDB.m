@@ -12,6 +12,8 @@
 #define SQL_CHANNEL_SAVE @"insert into channel(channel_id,channel_type,parent_channel_id,parent_channel_type,follow,name,notice,logo,remark,stick,mute,show_nick,save,forbidden,invite,extra,status,online,receipt,robot,last_offline,device_flag,category,be_deleted,be_blacklist,flame,flame_second) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 // 更新频道信息
 #define SQL_CHANNEL_UPDATE @"update channel set  parent_channel_id=?,parent_channel_type=?,name=?,follow=?,notice=?,logo=?,remark=?,stick=?,mute=?,show_nick=?,save=?,forbidden=?,invite=?, extra=?,status=?,online=?,receipt=?,robot=?,last_offline=?,device_flag=?,category=?,be_deleted=?,be_blacklist=?,flame=?,flame_second=? where channel_id=? and channel_type=?"
+// 单独更新头像缓存key（兼容迁移未执行的情况，失败不影响主流程）
+#define SQL_CHANNEL_UPDATE_AVATAR_CACHE_KEY @"update channel set avatar_cache_key=? where channel_id=? and channel_type=?"
 
 // 更新频道在线信息
 #define SQL_CHANNEL_ONLINESTATUS_UPDATE @"update channel set online=?,last_offline=?,device_flag=? where channel_id=? and channel_type=?"
@@ -71,6 +73,8 @@ static WKChannelInfoDB *_instance;
         NSString *parentChannelID = channelInfo.parentChannel?channelInfo.parentChannel.channelId:@"";
         NSInteger parentChannelType = channelInfo.parentChannel?channelInfo.parentChannel.channelType:0;
         [db executeUpdate:SQL_CHANNEL_SAVE,channelInfo.channel.channelId?:@"",@(channelInfo.channel.channelType),parentChannelID,@(parentChannelType),@(channelInfo.follow),channelInfo.name?:@"",channelInfo.notice?:@"",channelInfo.logo?:@"",channelInfo.remark?:@"",@(channelInfo.stick),@(channelInfo.mute),@(channelInfo.showNick),@(channelInfo.save),@(channelInfo.forbidden),@(channelInfo.invite),[self extraToStr:channelInfo.extra],@(channelInfo.status),@(channelInfo.online),@(channelInfo.receipt),@(channelInfo.robot),@(channelInfo.lastOffline),@(channelInfo.deviceFlag),channelInfo.category?:@"",@(channelInfo.beDeleted),@(channelInfo.beBlacklist),@(channelInfo.flame),@(channelInfo.flameSecond)];
+        // 单独更新 avatar_cache_key，迁移未执行时静默失败不影响主流程
+        [db executeUpdate:SQL_CHANNEL_UPDATE_AVATAR_CACHE_KEY,channelInfo.avatarCacheKey?:@"",channelInfo.channel.channelId?:@"",@(channelInfo.channel.channelType)];
     }];
     return true;
 }
@@ -84,6 +88,8 @@ static WKChannelInfoDB *_instance;
     NSString *parentChannelID = channelInfo.parentChannel?channelInfo.parentChannel.channelId:@"";
     NSInteger parentChannelType = channelInfo.parentChannel?channelInfo.parentChannel.channelType:0;
     [db executeUpdate:SQL_CHANNEL_SAVE,channelInfo.channel.channelId?:@"",@(channelInfo.channel.channelType),parentChannelID,@(parentChannelType),@(channelInfo.follow),channelInfo.name?:@"",channelInfo.notice?:@"",channelInfo.logo?:@"",channelInfo.remark?:@"",@(channelInfo.stick),@(channelInfo.mute),@(channelInfo.showNick),@(channelInfo.save),@(channelInfo.forbidden),@(channelInfo.invite),[self extraToStr:channelInfo.extra],@(channelInfo.status),@(channelInfo.online),@(channelInfo.receipt),@(channelInfo.robot),@(channelInfo.lastOffline),@(channelInfo.deviceFlag),channelInfo.category?:@"",@(channelInfo.beDeleted),@(channelInfo.beBlacklist),@(channelInfo.flame),@(channelInfo.flameSecond)];
+    // 单独更新 avatar_cache_key
+    [db executeUpdate:SQL_CHANNEL_UPDATE_AVATAR_CACHE_KEY,channelInfo.avatarCacheKey?:@"",channelInfo.channel.channelId?:@"",@(channelInfo.channel.channelType)];
     return true;
 }
 
@@ -93,6 +99,8 @@ static WKChannelInfoDB *_instance;
         NSString *parentChannelID = channelInfo.parentChannel?channelInfo.parentChannel.channelId:@"";
         NSInteger parentChannelType = channelInfo.parentChannel?channelInfo.parentChannel.channelType:0;
         [db executeUpdate:SQL_CHANNEL_UPDATE,parentChannelID,@(parentChannelType),channelInfo.name?:@"",@(channelInfo.follow),channelInfo.notice?:@"",channelInfo.logo?:@"",channelInfo.remark?:@"",@(channelInfo.stick),@(channelInfo.mute),@(channelInfo.showNick),@(channelInfo.save),@(channelInfo.forbidden),@(channelInfo.invite),[self extraToStr:channelInfo.extra],@(channelInfo.status),@(channelInfo.online),@(channelInfo.receipt),@(channelInfo.robot),@(channelInfo.lastOffline),@(channelInfo.deviceFlag),channelInfo.category?:@"",@(channelInfo.beDeleted),@(channelInfo.beBlacklist),@(channelInfo.flame),@(channelInfo.flameSecond),channelInfo.channel.channelId?:@"",@(channelInfo.channel.channelType)];
+        // 单独更新 avatar_cache_key
+        [db executeUpdate:SQL_CHANNEL_UPDATE_AVATAR_CACHE_KEY,channelInfo.avatarCacheKey?:@"",channelInfo.channel.channelId?:@"",@(channelInfo.channel.channelType)];
     }];
 }
 
@@ -122,6 +130,8 @@ static WKChannelInfoDB *_instance;
     NSString *parentChannelID = channelInfo.parentChannel?channelInfo.parentChannel.channelId:@"";
     NSInteger parentChannelType = channelInfo.parentChannel?channelInfo.parentChannel.channelType:0;
     [db executeUpdate:SQL_CHANNEL_UPDATE,parentChannelID,@(parentChannelType),channelInfo.name?:@"",@(channelInfo.follow),channelInfo.notice?:@"",channelInfo.logo?:@"",channelInfo.remark?:@"",@(channelInfo.stick),@(channelInfo.mute),@(channelInfo.showNick),@(channelInfo.save),@(channelInfo.forbidden),@(channelInfo.invite),[self extraToStr:channelInfo.extra],@(channelInfo.status),@(channelInfo.online),@(channelInfo.receipt),@(channelInfo.robot),@(channelInfo.lastOffline),@(channelInfo.deviceFlag),channelInfo.category?:@"",@(channelInfo.beDeleted),@(channelInfo.beBlacklist),@(channelInfo.flame),@(channelInfo.flameSecond),channelInfo.channel.channelId?:@"",@(channelInfo.channel.channelType)];
+    // 单独更新 avatar_cache_key
+    [db executeUpdate:SQL_CHANNEL_UPDATE_AVATAR_CACHE_KEY,channelInfo.avatarCacheKey?:@"",channelInfo.channel.channelId?:@"",@(channelInfo.channel.channelType)];
 }
 
 -(WKChannelInfo*) queryChannelInfo:(WKChannel*)channel {
@@ -361,7 +371,9 @@ static WKChannelInfoDB *_instance;
     
     channelInfo.flame = [dict[@"flame"] boolValue];
     channelInfo.flameSecond = [dict[@"flame_second"] integerValue];
-    
+
+    channelInfo.avatarCacheKey = dict[@"avatar_cache_key"];
+
     NSString *extraStr = dict[@"extra"];
     __autoreleasing NSError *error = nil;
     NSDictionary *extraDictionary = [NSJSONSerialization JSONObjectWithData:[extraStr dataUsingEncoding:NSUTF8StringEncoding] options:kNilOptions error:&error];
@@ -369,5 +381,11 @@ static WKChannelInfoDB *_instance;
         channelInfo.extra = [NSMutableDictionary dictionaryWithDictionary:extraDictionary];
     }
     return channelInfo;
+}
+
+-(void) updateAvatarCacheKey:(WKChannelInfo*)channelInfo {
+    [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
+        [db executeUpdate:SQL_CHANNEL_UPDATE_AVATAR_CACHE_KEY,channelInfo.avatarCacheKey?:@"",channelInfo.channel.channelId?:@"",@(channelInfo.channel.channelType)];
+    }];
 }
 @end

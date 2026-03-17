@@ -36,6 +36,8 @@
         [self.tabBar setBackgroundColor:[UIColor whiteColor]];
     }
    
+    self.tabBar.tintColor = [WKApp shared].config.themeColor;
+
     [self setupChildVC:WKConversationListVC.class title:@"" andImage:@"HomeTab" andSelectImage:@"HomeTabSelected"];
     [self setupChildVC:WKContactsVC.class title:@"" andImage:@"ContactsTab" andSelectImage:@"ContactsTabSelected"];
     [self setupChildVC:WKMeVC.class title:@"" andImage:@"MeTab" andSelectImage:@"MeTabSelected"];
@@ -43,12 +45,22 @@
 }
 
 - (void)setupChildVC:(Class)vc title:(NSString *)title andImage:(NSString * )image andSelectImage:(NSString *)selectImage{
-    
+
     UIViewController * vcInstall = [[vc alloc] init];
-    //VC.view.backgroundColor = UIColor.whiteColor;
     vcInstall.tabBarItem.title = title;
-    vcInstall.tabBarItem.image = [[UIImage imageNamed:image]imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
-    vcInstall.tabBarItem.selectedImage = [[UIImage imageNamed:selectImage]imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+
+    // 未选中：淡紫色
+    UIColor *unselectedColor = [[WKApp shared].config.themeColor colorWithAlphaComponent:0.4];
+    // 选中：主题紫色
+    UIColor *selectedColor = [WKApp shared].config.themeColor;
+
+    if (@available(iOS 13.0, *)) {
+        vcInstall.tabBarItem.image = [[UIImage imageNamed:image] imageWithTintColor:unselectedColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+        vcInstall.tabBarItem.selectedImage = [[UIImage imageNamed:selectImage] imageWithTintColor:selectedColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+    } else {
+        vcInstall.tabBarItem.image = [[UIImage imageNamed:image] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+        vcInstall.tabBarItem.selectedImage = [[UIImage imageNamed:selectImage] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+    }
     vcInstall.tabBarItem.imageInsets = UIEdgeInsetsMake(6, 0, -6, 0);
     [self addChildViewController:vcInstall];
 }

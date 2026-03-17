@@ -16,6 +16,12 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)saveServerIP:(NSString *)ip httpsOn:(BOOL)on;
 + (BOOL)hasCustomServer;
 
+/// 获取历史服务器列表，每项为 @{@"ip": ip, @"https": @(YES/NO)}
++ (NSArray<NSDictionary *> *)serverHistory;
+
+/// 从历史记录中删除指定条目
++ (void)removeServerFromHistory:(NSDictionary *)entry;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -64,6 +64,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
+@interface WKPanelFileFuncItem : WKPanelDefaultFuncItem
+
+@end
 
 
 NS_ASSUME_NONNULL_END

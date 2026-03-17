@@ -21,7 +21,9 @@
 #import "NSData+ImageFormat.h"
 #import "UIImage+Compression.h"
 #import "WKPhotoBrowser.h"
-@interface WKMoreItemClickEvent () <UIImagePickerControllerDelegate,UINavigationControllerDelegate>
+#import <WuKongIMSDK/WKFileContent.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+@interface WKMoreItemClickEvent () <UIImagePickerControllerDelegate,UINavigationControllerDelegate,UIDocumentPickerDelegate>
 @property(strong,nonatomic)UIImagePickerController *pickerC;
 @property(nonatomic,strong) WKMediaFetcher *mediaFetcher;
 @property(nonatomic,strong) id<WKConversationContext> gloabContext;
@@ -246,6 +248,72 @@ static WKMoreItemClickEvent *_instance;
     [[[WKNavigationManager shared] topViewController] dismissViewControllerAnimated:YES completion:nil];
     UIImage *img = info[UIImagePickerControllerOriginalImage];
     [self  sendImageMessage:img full:NO context:self.gloabContext];
+    self.gloabContext = nil;
+}
+
+-(void) onFileItemPressed:(id<WKConversationContext>)context {
+    self.gloabContext = context;
+    [context endEditing];
+
+    UIDocumentPickerViewController *picker;
+    if (@available(iOS 14.0, *)) {
+        picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeItem, UTTypeData, UTTypeContent]];
+    } else {
+        picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.item", @"public.data", @"public.content"] inMode:UIDocumentPickerModeImport];
+    }
+    picker.delegate = self;
+    picker.allowsMultipleSelection = NO;
+    [[WKNavigationManager shared].topViewController presentViewController:picker animated:YES completion:nil];
+}
+
+#pragma mark - UIDocumentPickerDelegate
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    if (urls.count == 0 || !self.gloabContext) {
+        self.gloabContext = nil;
+        return;
+    }
+    NSURL *fileURL = urls.firstObject;
+
+    // 获取安全访问权限
+    BOOL accessing = [fileURL startAccessingSecurityScopedResource];
+
+    NSFileCoordinator *coordinator = [[NSFileCoordinator alloc] init];
+    __block NSError *coordError = nil;
+    __weak typeof(self) weakSelf = self;
+    [coordinator coordinateReadingItemAtURL:fileURL options:0 error:&coordError byAccessor:^(NSURL *newURL) {
+        // 将文件复制到临时目录
+        NSString *tempDir = NSTemporaryDirectory();
+        NSString *fileName = newURL.lastPathComponent;
+        NSString *tempPath = [tempDir stringByAppendingPathComponent:fileName];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        if ([fm fileExistsAtPath:tempPath]) {
+            [fm removeItemAtPath:tempPath error:nil];
+        }
+        NSError *copyError = nil;
+        [fm copyItemAtURL:newURL toURL:[NSURL fileURLWithPath:tempPath] error:&copyError];
+        if (copyError) {
+            WKLogDebug(@"文件复制失败: %@", copyError);
+            return;
+        }
+
+        NSURL *localURL = [NSURL fileURLWithPath:tempPath];
+        WKFileContent *fileContent = [WKFileContent initWithFileURL:localURL];
+        id<WKConversationContext> ctx = weakSelf.gloabContext;
+        weakSelf.gloabContext = nil;
+        if (ctx) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [ctx sendMessage:fileContent];
+            });
+        }
+    }];
+
+    if (accessing) {
+        [fileURL stopAccessingSecurityScopedResource];
+    }
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
     self.gloabContext = nil;
 }
 

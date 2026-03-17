@@ -25,6 +25,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// 获取群头像
 /// @param groupNo <#groupNo description#>
 +(NSString*) getGroupAvatar:(NSString*)groupNo;
+
+/// 获取群头像（带缓存key，用于使SDWebImage缓存失效）
+/// @param groupNo 群编号
+/// @param cacheKey 缓存key（群成员变化时生成的新UUID）
++(NSString*) getGroupAvatar:(NSString*)groupNo cacheKey:(NSString*)cacheKey;
 @end
 
 NS_ASSUME_NONNULL_END

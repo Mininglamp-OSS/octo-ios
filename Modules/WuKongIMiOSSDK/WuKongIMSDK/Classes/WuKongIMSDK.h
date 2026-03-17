@@ -21,6 +21,7 @@
 #import "WKUnknownContent.h"
 #import "WKSystemContent.h"
 #import "WKImageContent.h"
+#import "WKFileContent.h"
 #import "WKMultiMediaMessageContent.h"
 #import "WKMessageFileUploadTask.h"
 #import "WKFileUtil.h"

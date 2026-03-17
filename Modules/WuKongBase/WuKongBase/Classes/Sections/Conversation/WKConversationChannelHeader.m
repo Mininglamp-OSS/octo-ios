@@ -172,9 +172,13 @@
     }else {
      
         if(channelInfo.logo && ![channelInfo.logo isEqualToString:@""]) {
-            self.avatarImgView.url = [WKAvatarUtil getFullAvatarWIthPath:channelInfo.logo];
+            NSString *avatarURL = [WKAvatarUtil getFullAvatarWIthPath:channelInfo.logo];
+            NSString *key = (channelInfo.avatarCacheKey.length > 0) ? channelInfo.avatarCacheKey : @"0";
+            NSString *separator = [avatarURL containsString:@"?"] ? @"&" : @"?";
+            avatarURL = [NSString stringWithFormat:@"%@%@v=%@", avatarURL, separator, key];
+            self.avatarImgView.url = avatarURL;
         }else{
-            self.avatarImgView.url = [WKAvatarUtil getGroupAvatar:channelInfo.channel.channelId];
+            self.avatarImgView.url = [WKAvatarUtil getGroupAvatar:channelInfo.channel.channelId cacheKey:channelInfo.avatarCacheKey];
         }
     }
     NSInteger msgAutoDelete = 0;

@@ -118,6 +118,9 @@ typedef NSString *WKChannelExtraKey NS_STRING_ENUM;
 /// 频道类别
 @property(nonatomic,copy) NSString *category;
 
+/// 头像缓存key（群成员变化时生成新UUID，用于使SDWebImage缓存失效）
+@property(nonatomic,copy) NSString *avatarCacheKey;
+
 /// 是否在线
 @property(nonatomic,assign) BOOL online;
 // 在线的主设备

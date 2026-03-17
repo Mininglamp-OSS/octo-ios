@@ -23,6 +23,8 @@
 
 @property(nonatomic,strong) WKOnlineBadgeView *onlineBadgeView; // 在线状态view
 
+@property(nonatomic,strong) UILabel *botBadgeLbl; // Bot标识
+
 @end
 @implementation WKContactsCell
 
@@ -50,7 +52,18 @@
     [self.contentView addSubview:_subtitleLbl];
     
     [self.contentView addSubview:self.onlineBadgeView];
-    
+
+    _botBadgeLbl = [[UILabel alloc] init];
+    _botBadgeLbl.text = @"Bot";
+    _botBadgeLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
+    _botBadgeLbl.textColor = [UIColor whiteColor];
+    _botBadgeLbl.backgroundColor = [UIColor colorWithRed:136.0f/255.0f green:84.0f/255.0f blue:208.0f/255.0f alpha:1.0f];
+    _botBadgeLbl.textAlignment = NSTextAlignmentCenter;
+    _botBadgeLbl.layer.cornerRadius = 4.0f;
+    _botBadgeLbl.layer.masksToBounds = YES;
+    _botBadgeLbl.hidden = YES;
+    [self.contentView addSubview:_botBadgeLbl];
+
 }
 
 - (WKOnlineBadgeView *)onlineBadgeView {
@@ -82,6 +95,15 @@
     }
   
     
+    self.botBadgeLbl.hidden = !_contactModel.robot;
+    if(_contactModel.robot) {
+        [self.botBadgeLbl sizeToFit];
+        CGRect frame = self.botBadgeLbl.frame;
+        frame.size.width += 8.0f;
+        frame.size.height += 4.0f;
+        self.botBadgeLbl.frame = frame;
+    }
+
     self.onlineBadgeView.hidden = YES;
     if(_contactModel.online) {
          self.onlineBadgeView.hidden = NO;
@@ -116,16 +138,21 @@
     
     // 名字
     self.nameLbl.lim_left = self.avatarImgView.lim_right + nameLeft;
-    
-    
+
     if(self.subtitleLbl.hidden) {
         self.nameLbl.lim_top = self.lim_height/2.0f - self.nameLbl.lim_height/2.0f;
     }else{
         CGFloat subtitleTopSpace = 4.0f;
         self.nameLbl.lim_top = self.lim_height/2.0f - (self.nameLbl.lim_height+self.subtitleLbl.lim_height+subtitleTopSpace)/2.0f;
-        
+
         self.subtitleLbl.lim_left = self.nameLbl.lim_left;
         self.subtitleLbl.lim_top = self.nameLbl.lim_bottom + subtitleTopSpace;
+    }
+
+    // Bot标识
+    if(!self.botBadgeLbl.hidden) {
+        self.botBadgeLbl.lim_left = self.nameLbl.lim_right + 6.0f;
+        self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
     }
     
     if(_contactModel.last) {

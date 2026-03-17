@@ -17,7 +17,23 @@
       "Bash(find /Users/wanglitao/Documents/octo-ios -path \"*/Pods\" -prune -o -path \"*/.git\" -prune -o -type f \\\\\\( -name \"*.swift\" -o -name \"*.h\" -o -name \"*.m\" \\\\\\) -print 2>/dev/null | head -50)",
       "Bash(find /Users/wanglitao/Documents/octo-ios -type f \\\\\\( -name \"*voice*\" -o -name \"*audio*\" -o -name \"*record*\" \\\\\\) 2>/dev/null | grep -v Pods | head -20)",
       "Bash(find /Users/wanglitao/Documents/dmwork-android -type f -name \"UserUtils.java\" | head -1 | xargs cat | head -150)",
-      "Bash(find /Users/wanglitao/Documents/dmwork-android -type f -name \"*.java\" -not -path \"*/build/*\" -exec grep -l \"space\\\\|Space\" {} \\\\; 2>/dev/null | wc -l)"
+      "Bash(find /Users/wanglitao/Documents/dmwork-android -type f -name \"*.java\" -not -path \"*/build/*\" -exec grep -l \"space\\\\|Space\" {} \\\\; 2>/dev/null | wc -l)",
+      "Bash(nc -z -w 5 api-test.example.com 5100 2>&1 && echo \"SUCCESS: xming.ai:5100 is reachable\" || echo \"FAIL: xming.ai:5100 is NOT reachable\")",
+      "Bash(nc -z -w 5 api-test.example.com 5100 2>&1 && echo \"SUCCESS: deepminer:5100 is reachable\" || echo \"FAIL: deepminer:5100 is NOT reachable\")",
+      "Bash(nc -z -w 3 api-test.example.com 5100 2>&1 && echo \"SUCCESS\" || echo \"FAIL: TCP 5100 not reachable\")",
+      "Bash(dig +short api-test.example.com 2>&1)",
+      "Bash(nc -z -w 3 43.144.246.149 5100 2>&1 && echo \"SUCCESS\" || echo \"FAIL: TCP 5100 not reachable on IP directly\")",
+      "Bash(dig +short api-test.example.com 2>&1)",
+      "Bash(find /Users/wanglitao/Documents/octo-ios -type f \\\\\\( -name \"*FileUpload*\" -o -name \"*FileDownload*\" -o -name \"*File*Task*\" \\\\\\) 2>/dev/null | grep -v Pods | head -20)",
+      "Bash(find /Users/wanglitao/Documents/octo-ios -path \"*/Pods\" -prune -o -path \"*/.git\" -prune -o -type f \\\\\\( -name \"*.m\" -o -name \"*.h\" -o -name \"*.swift\" -o -name \"*.strings\" -o -name \"*.plist\" -o -name \"*.json\" -o -name \"*.storyboard\" -o -name \"*.xib\" \\\\\\) -print | while read file; do\n  if grep -l \"DMWork\\\\|dmwork\\\\|DmWork\\\\|Dmwork\\\\|DM Work\" \"$file\" 2>/dev/null; then\n    echo \"$file\"\n  fi\ndone | grep -v Pods)",
+      "Bash(find /Users/wanglitao/Documents/octo-ios -path \"*/Pods\" -prune -o -path \"*/.git\" -prune -o -type f \\\\\\( -name \"*.strings\" -o -name \"*.plist\" \\\\\\) -print | while read file; do\n  if grep -l \"唐僧叨叨\\\\|TangSengDaoDao\" \"$file\" 2>/dev/null; then\n    echo \"$file\"\n  fi\ndone)",
+      "Bash(find /Users/wanglitao/Documents/octo-ios/Modules -path \"*/Pods\" -prune -o -type f \\\\\\( -name \"*.m\" -o -name \"*.h\" -o -name \"*.swift\" -o -name \"*.strings\" -o -name \"*.plist\" -o -name \"*.json\" \\\\\\) -print 2>/dev/null | xargs grep -l \"DMWork\\\\|dmwork\\\\|DmWork\\\\|Dmwork\\\\|DM Work\" 2>/dev/null | head -20)",
+      "Bash(find /Users/wanglitao/Documents/octo-ios -path \"*/Pods\" -prune -o -path \"*/.git\" -prune -o -type f \\\\\\( -name \"*.m\" -o -name \"*.h\" -o -name \"*.swift\" -o -name \"*.strings\" -o -name \"*.plist\" -o -name \"*.json\" -o -name \"*.storyboard\" -o -name \"*.xib\" \\\\\\) -print 2>/dev/null | xargs grep -l \"悟空\" 2>/dev/null | grep -v Pods)",
+      "Bash(file /Users/wanglitao/Documents/octo-ios/bot.png /Users/wanglitao/Documents/octo-ios/group.png /Users/wanglitao/Documents/octo-ios/ContactIcon.png && sips -g pixelWidth -g pixelHeight /Users/wanglitao/Documents/octo-ios/bot.png /Users/wanglitao/Documents/octo-ios/group.png /Users/wanglitao/Documents/octo-ios/ContactIcon.png)",
+      "Bash(sips -g pixelWidth -g pixelHeight /Users/wanglitao/Documents/octo-ios/Modules/WuKongContacts/WuKongContacts/Assets/Images.xcassets/Contacts/Index/GroupSave.imageset/GroupSave@2x.png /Users/wanglitao/Documents/octo-ios/Modules/WuKongContacts/WuKongContacts/Assets/Images.xcassets/Contacts/Index/GroupSave.imageset/GroupSave@3x.png)",
+      "Bash(ls -lh /Users/wanglitao/Documents/octo-ios/image_287774426250647_smooth.png && sips -g pixelWidth -g pixelHeight /Users/wanglitao/Documents/octo-ios/image_287774426250647_smooth.png)",
+      "Bash(DEST=\"/Users/wanglitao/Documents/octo-ios/Modules/WuKongContacts/WuKongContacts/Assets/Images.xcassets/Contacts/Index/OrgMembers.imageset\"\nSRC=\"/Users/wanglitao/Documents/octo-ios/image_287774426250647_smooth.png\"\nsips -z 80 80 \"$SRC\" --out \"$DEST/OrgMembers@2x.png\" > /dev/null && sips -z 120 120 \"$SRC\" --out \"$DEST/OrgMembers@3x.png\" > /dev/null && echo \"Done\")",
+      "Bash(DEST=\"/Users/wanglitao/Documents/octo-ios/Modules/WuKongContacts/WuKongContacts/Assets/Images.xcassets/Contacts/Index/OrgMembers.imageset\"\nSRC=\"/Users/wanglitao/Documents/octo-ios/ContactIcon2.png\"\nsips -z 80 80 \"$SRC\" --out \"$DEST/OrgMembers@2x.png\" > /dev/null && sips -z 120 120 \"$SRC\" --out \"$DEST/OrgMembers@3x.png\" > /dev/null && echo \"Done\")"
     ]
   }
 }

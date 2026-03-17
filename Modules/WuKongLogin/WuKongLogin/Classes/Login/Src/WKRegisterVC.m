@@ -468,9 +468,32 @@
         // 保存登录信息
         [WKLoginVM handleLoginData:resp isSave:YES];
 
-        // 新用户注册成功后，强制显示SpaceGate引导页面
-        WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];
-        [[WKNavigationManager shared] pushViewController:spaceGateVC animated:YES];
+        if(inviteCode && ![inviteCode isEqualToString:@""]) {
+            // 有邀请码，注册时服务端已通过邀请码加入空间，检查后直接进入
+            WKSpaceGateVM *spaceVM = [WKSpaceGateVM new];
+            [spaceVM getMySpaces].then(^(NSArray *spaces){
+                if(spaces && spaces.count > 0) {
+                    NSDictionary *firstSpace = spaces[0];
+                    NSString *spaceId = firstSpace[@"space_id"];
+                    if(spaceId && spaceId.length > 0) {
+                        [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+                        [[NSUserDefaults standardUserDefaults] synchronize];
+                    }
+                    [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
+                } else {
+                    // 邀请码未能加入空间，仍显示引导页
+                    WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];
+                    [[WKNavigationManager shared] pushViewController:spaceGateVC animated:YES];
+                }
+            }).catch(^(NSError *error){
+                WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];
+                [[WKNavigationManager shared] pushViewController:spaceGateVC animated:YES];
+            });
+        } else {
+            // 没有邀请码，显示SpaceGate引导页
+            WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];
+            [[WKNavigationManager shared] pushViewController:spaceGateVC animated:YES];
+        }
     }).catch(^(NSError *error){
         [weakSelf.view switchHUDError:error.domain];
     });

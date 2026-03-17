@@ -28,6 +28,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,strong) WKChannelInfo *channelInfo;
 
+@property(nonatomic,assign) BOOL robot; // 是否是机器人
+
 @end
 
 @interface WKContactsCell : WKCell

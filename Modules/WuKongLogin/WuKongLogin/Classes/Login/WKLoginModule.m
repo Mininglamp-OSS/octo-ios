@@ -10,6 +10,7 @@
 #import "WKGrantLoginVC.h"
 #import "WKThirdLoginVC.h"
 #import "WKLoginSettingVC.h"
+#import "WKSpaceGateVC.h"
 @WKModule(WKLoginModule)
 @implementation WKLoginModule
 
@@ -30,6 +31,13 @@
         return nil;
     }];
     
+    // 显示空间引导页
+    [self setMethod:WKPOINT_SPACEGATE_SHOW handler:^id _Nullable(id  _Nonnull param) {
+        WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];
+        [[WKNavigationManager shared] resetRootViewController:spaceGateVC];
+        return nil;
+    }];
+
     // 授权登录UI
     [self setMethod:WKPOINT_SCAN_HANDLER_GRANTLOGIN handler:^id _Nullable(id  _Nonnull param) {
            return [WKScanHandler handle:^BOOL(WKScanResult * _Nonnull result, void (^ _Nonnull reScanBlock)(void)) {

@@ -24,6 +24,11 @@ NS_ASSUME_NONNULL_BEGIN
  */
 -(void) onCameraIPressed:(id<WKConversationContext>)context;
 
+/**
+ 文件
+ */
+-(void) onFileItemPressed:(id<WKConversationContext>)context;
+
 @end
 
 NS_ASSUME_NONNULL_END

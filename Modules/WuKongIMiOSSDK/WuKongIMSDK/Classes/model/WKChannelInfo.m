@@ -80,6 +80,7 @@
     channelInfo.category = self.category;
     channelInfo.lastOffline = self.lastOffline;
     channelInfo.robot = self.robot;
+    channelInfo.avatarCacheKey = self.avatarCacheKey;
     channelInfo.extra = [self.extra mutableCopy];
     return channelInfo;
 }

@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>china</string>
 	<key>CFBundleDisplayName</key>
-	<string>DMWork</string>
+	<string>Octo</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -57,32 +57,32 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>“DMWork”需要您的同意,才能访问相机﻿﻿，用于拍照聊天和扫一扫加好友</string>
+	<string>“Octo”需要您的同意,才能访问相机﻿﻿，用于拍照聊天和扫一扫加好友</string>
 	<key>NSContactsUsageDescription</key>
-	<string>“DMWork”需要您的同意,才能访问通讯录,用于添加新的朋友聊天</string>
+	<string>“Octo”需要您的同意,才能访问通讯录,用于添加新的朋友聊天</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>“DMWork”需要您的同意,才能访问位置，用于聊天时的定位信息</string>
+	<string>“Octo”需要您的同意,才能访问位置，用于聊天时的定位信息</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>“唐僧叨叨”需要您的同意,才能访问位置，用于聊天时的定位信息</string>
+	<string>“Octo”需要您的同意,才能访问位置，用于聊天时的定位信息</string>
 	<key>NSLocationUsageDescriptionApp</key>
-	<string>“唐僧叨叨”需要您的同意,才能访问位置，用于聊天时的定位信息</string>
+	<string>“Octo”需要您的同意,才能访问位置，用于聊天时的定位信息</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>“DMWork”需要您的同意,才能访问位置，用于聊天时的定位信息</string>
+	<string>“Octo”需要您的同意,才能访问位置，用于聊天时的定位信息</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>“DMWork”想访问您的麦克风，用于聊天和视频</string>
+	<string>“Octo”想访问您的麦克风，用于聊天和视频</string>
 	<key>NSMicrophoneUsageDescriptionApp</key>
-	<string>“唐僧叨叨”需要您的同意,才能访问麦克风﻿﻿﻿，用于聊天和视频</string>
+	<string>“Octo”需要您的同意,才能访问麦克风﻿﻿﻿，用于聊天和视频</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>“唐僧叨叨”需要您的同意,才能访问相册﻿﻿，用于聊天图片的发送</string>
+	<string>“Octo”需要您的同意,才能访问相册﻿﻿，用于聊天图片的发送</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>“DMWork”需要您的同意,才能访问相册﻿﻿，用于聊天图片的发送</string>
+	<string>“Octo”需要您的同意,才能访问相册﻿﻿，用于聊天图片的发送</string>
 	<key>Privacy - Photo Library Additions Usage Description
         
         
         Privacy - Photo Library Additions Usage Description
         
     </key>
-	<string>“唐僧叨叨”需要您的同意,才能访问相册﻿﻿，用于聊天图片的发送</string>
+	<string>“Octo”需要您的同意,才能访问相册﻿﻿，用于聊天图片的发送</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>

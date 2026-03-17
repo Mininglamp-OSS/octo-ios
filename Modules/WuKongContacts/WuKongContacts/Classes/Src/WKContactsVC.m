@@ -26,6 +26,8 @@
 
 @property(nonatomic,strong) UILabel *contactsCountLbl; // 联系人数量
 
+@property(nonatomic,strong) UILabel *sectionIndexIndicator; // 右侧索引字母指示器
+
 @end
 
 @implementation WKContactsVC
@@ -146,9 +148,13 @@
     contactsCellModel.lastOffline = channelInfo.lastOffline;
     contactsCellModel.channelInfo = channelInfo;
     
+    contactsCellModel.robot = channelInfo.robot;
     if(channelInfo.logo) {
         NSString *avatarURL = [[NSURL URLWithString:[WKAvatarUtil getFullAvatarWIthPath:channelInfo.logo]] absoluteString];
         contactsCellModel.avatar =avatarURL;
+    }
+    if([channelInfo.displayName isEqualToString:@"系统通知"]) {
+        NSLog(@"[DEBUG] 系统通知 头像URL: %@, logo: %@, uid: %@", contactsCellModel.avatar, channelInfo.logo, channelInfo.channel.channelId);
     }
     return contactsCellModel;
 }
@@ -236,6 +242,23 @@
         [_contactsCountLbl setTextAlignment:NSTextAlignmentCenter];
     }
     return _contactsCountLbl;
+}
+
+-(UILabel*) sectionIndexIndicator {
+    if(!_sectionIndexIndicator) {
+        CGFloat size = 72.0f;
+        _sectionIndexIndicator = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, size, size)];
+        _sectionIndexIndicator.textAlignment = NSTextAlignmentCenter;
+        _sectionIndexIndicator.font = [UIFont systemFontOfSize:36.0f weight:UIFontWeightMedium];
+        _sectionIndexIndicator.textColor = [UIColor whiteColor];
+        _sectionIndexIndicator.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.6f];
+        _sectionIndexIndicator.layer.cornerRadius = 10.0f;
+        _sectionIndexIndicator.layer.masksToBounds = YES;
+        _sectionIndexIndicator.alpha = 0;
+        [self.view addSubview:_sectionIndexIndicator];
+        _sectionIndexIndicator.center = CGPointMake(self.view.lim_width / 2.0f, self.view.lim_height / 2.0f);
+    }
+    return _sectionIndexIndicator;
 }
 
 
@@ -331,7 +354,19 @@
 
 //点击右侧索引表项时调用 索引与section的对应关系
 - (NSInteger)tableView:(UITableView *)tableView sectionForSectionIndexTitle:(NSString *)title atIndex:(NSInteger)index {
+    // 显示字母指示器
+    self.sectionIndexIndicator.text = title;
+    self.sectionIndexIndicator.alpha = 1.0;
+    // 延迟隐藏
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(hideSectionIndexIndicator) object:nil];
+    [self performSelector:@selector(hideSectionIndexIndicator) withObject:nil afterDelay:0.5];
     return index+1;
+}
+
+-(void) hideSectionIndexIndicator {
+    [UIView animateWithDuration:0.3 animations:^{
+        self.sectionIndexIndicator.alpha = 0;
+    }];
 }
 //
 //section右侧index数组
@@ -349,8 +384,8 @@
     id model =  self.items[indexPath.section][indexPath.row];
     if([model isKindOfClass:[WKContacts class]]) {
         WKContacts *contacts = model;
-        // 显示聊天UI
-        [[WKApp shared] pushConversation:[[WKChannel alloc] initWith:contacts.uid channelType:WK_PERSON]];
+        // 显示个人名片
+        [[WKApp shared] invoke:WKPOINT_USER_INFO param:@{@"uid": contacts.uid}];
     }else if([model isKindOfClass:[WKContactsHeaderItem class]]) {
         WKContactsHeaderItem *headerItem = model;
         if(headerItem.onClick) {

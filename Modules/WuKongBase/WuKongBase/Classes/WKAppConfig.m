@@ -27,14 +27,14 @@
 -(instancetype) init {
     self = [super init];
     if(self) {
-        self.appName = @"DMWork";
-        self.shortName = @"DMWork ID";
+        self.appName = @"Octo";
+        self.shortName = @"Octo ID";
         self.appID = @""; // appstore的id
         self.appSchemaPrefix = @"wukong";
         self.clusterOn = YES;
         
          // ---------- 基础配置 ----------
-        self.themeColor = [UIColor colorWithRed:228.0f/255.0f green:99.0f/255.0f blue:66.0f/255.0f alpha:1.0]; // #2F70F5
+        self.themeColor = [UIColor colorWithRed:119.0f/255.0f green:97.0f/255.0f blue:244.0f/255.0f alpha:1.0]; // #7761F4
         self.backgroundColor = [self navBackgroudColorWithAlpha:1.0f];
         self.footerTipFontSize = 12.0f;
         self.defaultAvatar = [self imageName:@"Common/Index/DefaultAvatar"];
@@ -466,9 +466,17 @@
 @implementation WKAppRemoteConfig
 
 -(void) requestConfig:(void(^)(NSError  * __nullable error))callback {
-    
+
+    // 配置已加载成功，直接回调
+    if(self.requestSuccess) {
+        if(callback) {
+            callback(nil);
+        }
+        return;
+    }
+
     __weak typeof(self) weakSelf = self;
-    if(!self.requestSuccess && !self.startRequest) {
+    if(!self.startRequest) {
         self.startRequest = true;
         [[WKAPIClient sharedClient] GET:@"common/appconfig" parameters:@{}].then(^(NSDictionary *resultDict){
             weakSelf.webURL =  resultDict[@"web_url"]?:@"";

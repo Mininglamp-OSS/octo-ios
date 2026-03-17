@@ -23,6 +23,8 @@
 #define WKPOINT_LOGIN_CLEARLOGININFO @"login.clearLoginInfo"
 // 退出登录
 #define WKPOINT_LOGIN_LOGOUT @"login.logout"
+// 显示空间引导页
+#define WKPOINT_SPACEGATE_SHOW @"spacegate.show"
 
 // ---------- 聊天相关 ----------
 // 显示聊天界面

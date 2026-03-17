@@ -285,17 +285,31 @@
     BOOL hasChannelInfo  = model.channelInfo?true:false;
     // 头像
     self.avatarImgView.avatarImgView.image =[self imageName:@"Common/Index/DefaultAvatar"];
+    if([model.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
+        NSString *avatarURL = hasChannelInfo ? [WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo] : nil;
+        NSLog(@"[DEBUG] 系统通知(u_10000) logo: %@, avatarURL: %@, hasChannelInfo: %d", model.channelInfo.logo, avatarURL, hasChannelInfo);
+    }
     if(hasChannelInfo) {
-        if([model.channelInfo.logo hasPrefix:@"http"]) {
-            [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:model.channelInfo.logo] placeholderImage:[self imageName:@"Common/Index/DefaultAvatar"] options:0 context:@{
-                SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll),
-            }];
-        }else {
-                   
-            [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:[WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo]] placeholderImage:[self imageName:@"Common/Index/DefaultAvatar"] options:0 context:@{
-                SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll),
-            }];
+        NSString *avatarURL;
+        if(model.channel.channelType == WK_GROUP) {
+            // 群频道：始终拼接 ?v=cacheKey，避免命中旧的无参数 URL 缓存
+            if([model.channelInfo.logo hasPrefix:@"http"]) {
+                NSString *key = (model.channelInfo.avatarCacheKey.length > 0) ? model.channelInfo.avatarCacheKey : @"0";
+                NSString *separator = [model.channelInfo.logo containsString:@"?"] ? @"&" : @"?";
+                avatarURL = [NSString stringWithFormat:@"%@%@v=%@", model.channelInfo.logo, separator, key];
+            } else {
+                avatarURL = [WKAvatarUtil getGroupAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
+            }
+        } else {
+            if([model.channelInfo.logo hasPrefix:@"http"]) {
+                avatarURL = model.channelInfo.logo;
+            } else {
+                avatarURL = [WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo];
+            }
         }
+        [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL] placeholderImage:[self imageName:@"Common/Index/DefaultAvatar"] options:0 context:@{
+            SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll),
+        }];
     }
 }
 
