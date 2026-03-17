@@ -809,6 +809,8 @@
     NSInteger index = [self.conversationListVM indexAtChannel:channelInfo.channel];
     if(index!= -1) {
         WKConversationWrapModel *oldModel = [self.conversationListVM modelAtIndex:index];
+        // 更新 model 中缓存的 channelInfo，避免使用过期数据
+        oldModel.channelInfo = channelInfo;
         WKConversation *conversation = [[oldModel getConversation] copy];
         conversation.mute = channelInfo.mute;
         conversation.stick = channelInfo.stick;

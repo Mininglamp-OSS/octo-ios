@@ -52,6 +52,8 @@
 
 @property(nonatomic,strong) WKAutoDeleteView *autoDeleteView; // 自动删除
 
+@property(nonatomic,strong) UILabel *botBadgeLbl; // Bot标识
+
 @end
 
 @implementation WKConversationListCell
@@ -96,7 +98,9 @@
         [self.contextContainerView addSubview:self.officialTag];
         // 自动删除图标
         [self.contextContainerView addSubview:self.autoDeleteView];
-        
+        // Bot标识
+        [self.contextContainerView addSubview:self.botBadgeLbl];
+
     }
     return self;
 }
@@ -135,6 +139,21 @@
         _autoDeleteView = [[WKAutoDeleteView alloc] init];
     }
     return _autoDeleteView;
+}
+
+- (UILabel *)botBadgeLbl {
+    if(!_botBadgeLbl) {
+        _botBadgeLbl = [[UILabel alloc] init];
+        _botBadgeLbl.text = @"Bot";
+        _botBadgeLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
+        _botBadgeLbl.textColor = [UIColor whiteColor];
+        _botBadgeLbl.backgroundColor = [UIColor colorWithRed:136.0f/255.0f green:84.0f/255.0f blue:208.0f/255.0f alpha:1.0f];
+        _botBadgeLbl.textAlignment = NSTextAlignmentCenter;
+        _botBadgeLbl.layer.cornerRadius = 4.0f;
+        _botBadgeLbl.layer.masksToBounds = YES;
+        _botBadgeLbl.hidden = YES;
+    }
+    return _botBadgeLbl;
 }
 
 
@@ -276,9 +295,17 @@
     if(!self.titleLbl.text || [self.titleLbl.text isEqualToString:@""]) {
         self.titleLbl.text = LLang(@"无");
     }
-    
-    
-//    [self.titleLbl sizeToFit];
+
+    // Bot标识
+    BOOL isBot = hasChannelInfo && model.channelInfo.robot;
+    self.botBadgeLbl.hidden = !isBot;
+    if(isBot) {
+        [self.botBadgeLbl sizeToFit];
+        CGRect frame = self.botBadgeLbl.frame;
+        frame.size.width += 8.0f;
+        frame.size.height += 4.0f;
+        self.botBadgeLbl.frame = frame;
+    }
 }
 
 -(void) refreshAvatar:(WKConversationWrapModel*)model {
@@ -421,8 +448,14 @@
     BOOL hasChannelInfo  = model.channelInfo?true:false;
     // 官方图标
     self.officialTag.hidden = YES;
-    if(hasChannelInfo && model.channelInfo.category && ![model.channelInfo.category isEqualToString:@""]) {
-        NSString *category = model.channelInfo.category;
+
+    NSString *category = hasChannelInfo ? model.channelInfo.category : nil;
+    // 系统通知直接判断为官方
+    if ([model.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
+        category = WKChannelCategoryService;
+    }
+
+    if(category && ![category isEqualToString:@""]) {
         if([category isEqualToString:WKChannelCategoryService]) {
             self.officialTag.frame = CGRectMake(0.0f, 0.0f, 18.0f, 18.0f);
             self.officialTag.hidden = NO;
@@ -654,6 +687,16 @@
     self.officialTag.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height/2.0f - self.officialTag.lim_height/2.0f);
     if(self.model.channelInfo && [self.model.channelInfo.category isEqualToString:@"visitor"]) {
         self.officialTag.lim_top+=2;
+    }
+
+    // Bot标识
+    if(!self.botBadgeLbl.hidden) {
+        CGFloat botLeft = self.titleLbl.lim_right + 6.0f;
+        if(!self.officialTag.hidden) {
+            botLeft = self.officialTag.lim_right + 4.0f;
+        }
+        self.botBadgeLbl.lim_left = botLeft;
+        self.botBadgeLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
     }
 }
 -(UIImage*) imageName:(NSString*)name {

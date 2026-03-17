@@ -96,20 +96,29 @@
 }
 #pragma mark---相册权限
 -(void)requestAuthorizationPhotoPermissionCompletion:(void(^)(BOOL permission))permission{
-    [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus status) {
-        if (status == PHAuthorizationStatusAuthorized)
-        {
-         NSLog(@"Authorized");
+    void (^handleGranted)(BOOL) = ^(BOOL granted) {
+        if (granted) {
+            NSLog(@"Authorized");
             permission(YES);
-        }
-        else{
+        } else {
             NSLog(@"Denied or Restricted");
             permission(NO);
-            [self showPermissionSetting:LLang(@"请在iPhone的“设置-隐私”选项中，允许访问你的相册")];
-
+            [self showPermissionSetting:LLang(@"请在iPhone的”设置-隐私”选项中，允许访问你的相册")];
         }
-        
-    }];
+    };
+    if (@available(iOS 14, *)) {
+        [PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelReadWrite handler:^(PHAuthorizationStatus status) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                handleGranted(status == PHAuthorizationStatusAuthorized || status == PHAuthorizationStatusLimited);
+            });
+        }];
+    } else {
+        [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus status) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                handleGranted(status == PHAuthorizationStatusAuthorized);
+            });
+        }];
+    }
     
     
 }

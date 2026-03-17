@@ -59,9 +59,14 @@
 }
 
 -(AnyPromise*) myGroupList {
-    return [[WKAPIClient sharedClient] GET:@"group/my" parameters:@{
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    NSMutableDictionary *params = [NSMutableDictionary dictionaryWithDictionary:@{
         @"page_size": @(1000), // 应该没有人会保存1000个群
-    } model:WKMyGroupResp.class];
+    }];
+    if (spaceId && spaceId.length > 0) {
+        params[@"space_id"] = spaceId;
+    }
+    return [[WKAPIClient sharedClient] GET:@"group/my" parameters:params model:WKMyGroupResp.class];
 }
 - (void)dealloc {
     [WKSDK.shared.channelManager removeDelegate:self];

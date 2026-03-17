@@ -163,27 +163,44 @@
 - (void)setUpPhotoLibrary:(void(^)(WKMediaPickerController * _Nullable picker)) handler
 {
     __weak typeof(self) weakSelf = self;
-    [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus status){
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (status == PHAuthorizationStatusRestricted || status == PHAuthorizationStatusDenied) {
-                
-                [LBXPermissionSetting showAlertToDislayPrivacySettingWithTitle:LLangW(@"提示",weakSelf) msg:LLangW(@"没有相册权限，是否前往设置",weakSelf) cancel:LLangW(@"取消",weakSelf) setting:LLangW(@"设置",weakSelf)];
-                
-                if(handler) handler(nil);
-            }
-            if (status == PHAuthorizationStatusAuthorized) {
-                WKMediaPickerController *vc = [[WKMediaPickerController alloc] initWithMaxImagesCount:weakSelf.limit delegate:weakSelf];
-                vc.naviBgColor = [UIColor blackColor];
-                vc.naviTitleColor = [UIColor whiteColor];
-                vc.barItemTextColor = [UIColor whiteColor];
-                vc.navigationBar.barStyle = UIBarStyleDefault;
-                vc.allowTakePicture = weakSelf.allowTakePicture;
-                vc.allowPickingVideo = [weakSelf.mediaTypes containsObject:(NSString *)kUTTypeMovie];
-//                [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:vc animated:YES completion:nil];
-                if(handler) handler(vc);
-            }
-        });
-    }];
+
+    void (^showPicker)(void) = ^{
+        WKMediaPickerController *vc = [[WKMediaPickerController alloc] initWithMaxImagesCount:weakSelf.limit delegate:weakSelf];
+        vc.naviBgColor = [UIColor blackColor];
+        vc.naviTitleColor = [UIColor whiteColor];
+        vc.barItemTextColor = [UIColor whiteColor];
+        vc.navigationBar.barStyle = UIBarStyleDefault;
+        vc.allowTakePicture = weakSelf.allowTakePicture;
+        vc.allowPickingVideo = [weakSelf.mediaTypes containsObject:(NSString *)kUTTypeMovie];
+        if(handler) handler(vc);
+    };
+
+    void (^showDenied)(void) = ^{
+        [LBXPermissionSetting showAlertToDislayPrivacySettingWithTitle:LLangW(@"提示",weakSelf) msg:LLangW(@"没有相册权限，是否前往设置",weakSelf) cancel:LLangW(@"取消",weakSelf) setting:LLangW(@"设置",weakSelf)];
+        if(handler) handler(nil);
+    };
+
+    if (@available(iOS 14, *)) {
+        [PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelReadWrite handler:^(PHAuthorizationStatus status) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (status == PHAuthorizationStatusAuthorized || status == PHAuthorizationStatusLimited) {
+                    showPicker();
+                } else {
+                    showDenied();
+                }
+            });
+        }];
+    } else {
+        [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus status) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (status == PHAuthorizationStatusAuthorized) {
+                    showPicker();
+                } else {
+                    showDenied();
+                }
+            });
+        }];
+    }
 }
 
 - (void)imagePickerController:(UIImagePickerController *)picker didFinishPickingMediaWithInfo:(NSDictionary *)info

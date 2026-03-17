@@ -15,7 +15,8 @@
 
 + (BOOL)authorized
 {
-    return [self authorizationStatus] == 3;
+    NSInteger status = [self authorizationStatus];
+    return status == 3 || status == 4; // PHAuthorizationStatusAuthorized || PHAuthorizationStatusLimited
 }
 
 
@@ -27,25 +28,63 @@
  1 :Restricted
  2 :Denied
  3 :Authorized
+ 4 :Limited (iOS 14+)
  */
 + (NSInteger)authorizationStatus
 {
-    if (@available(iOS 8,*))
-    {
-        return  [PHPhotoLibrary authorizationStatus];
+    if (@available(iOS 14, *)) {
+        return [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite];
     }
-    else
-    {
-        return  [ALAssetsLibrary authorizationStatus];
-    }
+    return [PHPhotoLibrary authorizationStatus];
 }
 
 + (void)authorizeWithCompletion:(void(^)(BOOL granted,BOOL firstTime))completion
 {
-    if (@available(iOS 8.0, *)) {
+    if (@available(iOS 14, *)) {
+
+        PHAuthorizationStatus status = [PHPhotoLibrary authorizationStatusForAccessLevel:PHAccessLevelReadWrite];
+
+        switch (status) {
+            case PHAuthorizationStatusAuthorized:
+            case PHAuthorizationStatusLimited:
+            {
+                if (completion) {
+                    completion(YES,NO);
+                }
+            }
+                break;
+            case PHAuthorizationStatusRestricted:
+            case PHAuthorizationStatusDenied:
+            {
+                if (completion) {
+                    completion(NO,NO);
+                }
+            }
+                break;
+            case PHAuthorizationStatusNotDetermined:
+            {
+                [PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelReadWrite handler:^(PHAuthorizationStatus status) {
+                    if (completion) {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            completion(status == PHAuthorizationStatusAuthorized || status == PHAuthorizationStatusLimited, YES);
+                        });
+                    }
+                }];
+            }
+                break;
+            default:
+            {
+                if (completion) {
+                    completion(NO,NO);
+                }
+            }
+                break;
+        }
         
+    } else if (@available(iOS 8.0, *)) {
+
         PHAuthorizationStatus status = [PHPhotoLibrary authorizationStatus];
-        
+
         switch (status) {
             case PHAuthorizationStatusAuthorized:
             {
@@ -81,9 +120,9 @@
             }
                 break;
         }
-        
-    }else{
-        
+
+    } else {
+
         ALAuthorizationStatus status = [ALAssetsLibrary authorizationStatus];
         switch (status) {
             case ALAuthorizationStatusAuthorized:

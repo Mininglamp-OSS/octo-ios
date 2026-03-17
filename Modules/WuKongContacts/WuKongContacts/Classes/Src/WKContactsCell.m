@@ -9,6 +9,8 @@
 #import "WKContacts.h"
 #import <Masonry/Masonry.h>
 #import <WuKongBase/WKOnlineBadgeView.h>
+#import <WuKongBase/WKOfficialTag.h>
+#import <WuKongBase/WKConstant.h>
 @implementation WKContactsCellModel
 
 
@@ -24,6 +26,8 @@
 @property(nonatomic,strong) WKOnlineBadgeView *onlineBadgeView; // 在线状态view
 
 @property(nonatomic,strong) UILabel *botBadgeLbl; // Bot标识
+
+@property(nonatomic,strong) WKOfficialTag *officialTag; // 官方图标
 
 @end
 @implementation WKContactsCell
@@ -64,6 +68,10 @@
     _botBadgeLbl.hidden = YES;
     [self.contentView addSubview:_botBadgeLbl];
 
+    _officialTag = [WKOfficialTag new];
+    _officialTag.hidden = YES;
+    [self.contentView addSubview:_officialTag];
+
 }
 
 - (WKOnlineBadgeView *)onlineBadgeView {
@@ -95,6 +103,25 @@
     }
   
     
+    // 官方图标
+    self.officialTag.hidden = YES;
+    NSString *category = _contactModel.channelInfo ? _contactModel.channelInfo.category : nil;
+    // 系统通知直接判断为官方
+    if ([_contactModel.uid isEqualToString:[WKApp shared].config.systemUID]) {
+        category = WKChannelCategoryService;
+    }
+    if(category && ![category isEqualToString:@""]) {
+        if([category isEqualToString:WKChannelCategoryService]) {
+            self.officialTag.frame = CGRectMake(0.0f, 0.0f, 18.0f, 18.0f);
+            self.officialTag.hidden = NO;
+            self.officialTag.image = [WKApp.shared loadImage:@"ConversationList/Index/Official" moduleID:@"WuKongBase"];
+        } else if([category isEqualToString:WKChannelCategoryVisitor]) {
+            self.officialTag.frame = CGRectMake(0.0f, 0.0f, 35.0f, 18.0f);
+            self.officialTag.hidden = NO;
+            self.officialTag.image = [WKApp.shared loadImage:@"ConversationList/Index/Visitor" moduleID:@"WuKongBase"];
+        }
+    }
+
     self.botBadgeLbl.hidden = !_contactModel.robot;
     if(_contactModel.robot) {
         [self.botBadgeLbl sizeToFit];
@@ -149,9 +176,15 @@
         self.subtitleLbl.lim_top = self.nameLbl.lim_bottom + subtitleTopSpace;
     }
 
-    // Bot标识
+    // 官方图标 + Bot标识
+    CGFloat nextLeft = self.nameLbl.lim_right;
+    if(!self.officialTag.hidden) {
+        self.officialTag.lim_left = nextLeft + 4.0f;
+        self.officialTag.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.officialTag.lim_height) / 2.0f;
+        nextLeft = self.officialTag.lim_right;
+    }
     if(!self.botBadgeLbl.hidden) {
-        self.botBadgeLbl.lim_left = self.nameLbl.lim_right + 6.0f;
+        self.botBadgeLbl.lim_left = nextLeft + 6.0f;
         self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
     }
     

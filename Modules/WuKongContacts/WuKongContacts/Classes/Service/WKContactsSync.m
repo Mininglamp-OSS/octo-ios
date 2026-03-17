@@ -44,8 +44,13 @@
                 // 排除自己
                 if (!uid || [uid isEqualToString:[WKApp shared].loginInfo.uid]) continue;
 
-                WKChannelInfo *channelInfo = [WKChannelInfo new];
-                channelInfo.channel = [[WKChannel alloc] initWith:uid channelType:WK_PERSON];
+                WKChannel *channel = [[WKChannel alloc] initWith:uid channelType:WK_PERSON];
+                // 先查询数据库中已有的频道信息，避免全量覆盖丢失字段
+                WKChannelInfo *channelInfo = [[WKSDK shared].channelManager getChannelInfo:channel];
+                if (!channelInfo) {
+                    channelInfo = [WKChannelInfo new];
+                    channelInfo.channel = channel;
+                }
                 channelInfo.name = m[@"name"] ?: @"";
                 channelInfo.logo = m[@"avatar"] ?: @"";
                 if (!channelInfo.logo || [channelInfo.logo isEqualToString:@""]) {
@@ -54,6 +59,9 @@
                 channelInfo.follow = WKChannelInfoFollowFriend;
                 channelInfo.status = 1;
                 channelInfo.robot = m[@"robot"] ? [m[@"robot"] boolValue] : NO;
+                if (m[@"category"] && ![m[@"category"] isEqual:[NSNull null]]) {
+                    channelInfo.category = m[@"category"];
+                }
                 [channelInfos addObject:channelInfo];
             }
         }

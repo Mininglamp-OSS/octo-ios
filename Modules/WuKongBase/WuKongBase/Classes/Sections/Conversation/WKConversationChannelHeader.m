@@ -8,6 +8,8 @@
 #import "WKConversationChannelHeader.h"
 #import "WKOnlineStatusManager.h"
 #import "WKAutoDeleteView.h"
+#import "WKOfficialTag.h"
+#import "WKConstant.h"
 @interface WKConversationChannelHeader ()
 
 @property(nonatomic,strong) UIButton *infoBoxBtn;
@@ -19,8 +21,9 @@
 
 @property(nonatomic,strong) WKAutoDeleteView *autoDeleteView;
 
+@property(nonatomic,strong) UILabel *botBadgeLbl; // Bot标识
 
-
+@property(nonatomic,strong) WKOfficialTag *officialTag; // 官方图标
 
 @end
 
@@ -42,6 +45,8 @@
     [self.infoBoxBtn addSubview:self.avatarImgView];
     [self.infoBoxBtn addSubview:self.titleLbl];
     [self.infoBoxBtn addSubview:self.subtitleLbl];
+    [self.infoBoxBtn addSubview:self.botBadgeLbl];
+    [self.infoBoxBtn addSubview:self.officialTag];
     [self addSubview:self.voiceCallBtn];
     [self addSubview:self.videoCallBtn];
     [self.avatarImgView addSubview:self.autoDeleteView];
@@ -128,8 +133,31 @@
     
     self.autoDeleteView.lim_left = self.avatarImgView.lim_width - self.autoDeleteView.lim_width + 4.0f;
     self.autoDeleteView.lim_top = self.avatarImgView.lim_height - self.autoDeleteView.lim_height + 2.0f;
-    
-    
+
+    // 标题右侧标识（官方 + Bot）
+    [self.titleLbl sizeToFit];
+    CGFloat badgesWidth = 0;
+    if(!self.officialTag.hidden) {
+        badgesWidth += self.officialTag.lim_width + 4.0f;
+    }
+    if(!self.botBadgeLbl.hidden) {
+        badgesWidth += self.botBadgeLbl.lim_width + 6.0f;
+    }
+    CGFloat maxTitleWidth = self.infoBoxBtn.lim_width - self.avatarImgView.lim_right - avatarRightSpace - titleRightSpace - badgesWidth;
+    if(self.titleLbl.lim_width > maxTitleWidth) {
+        self.titleLbl.lim_width = maxTitleWidth;
+    }
+
+    CGFloat nextLeft = self.titleLbl.lim_left + self.titleLbl.lim_width;
+    if(!self.officialTag.hidden) {
+        self.officialTag.lim_left = nextLeft + 4.0f;
+        self.officialTag.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.officialTag.lim_height) / 2.0f;
+        nextLeft = self.officialTag.lim_right;
+    }
+    if(!self.botBadgeLbl.hidden) {
+        self.botBadgeLbl.lim_left = nextLeft + 6.0f;
+        self.botBadgeLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
+    }
 }
 
 - (void)setChannelInfo:(WKChannelInfo *)channelInfo {
@@ -189,6 +217,36 @@
     if(msgAutoDelete>0) {
         self.autoDeleteView.hidden = NO;
         self.autoDeleteView.second = msgAutoDelete;
+    }
+
+    // 官方图标
+    self.officialTag.hidden = YES;
+    NSString *category = channelInfo.category;
+    // 系统通知直接判断为官方
+    if ([channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
+        category = WKChannelCategoryService;
+    }
+    if(category && ![category isEqualToString:@""]) {
+        if([category isEqualToString:WKChannelCategoryService]) {
+            self.officialTag.frame = CGRectMake(0.0f, 0.0f, 18.0f, 18.0f);
+            self.officialTag.hidden = NO;
+            self.officialTag.image = [self imageName:@"ConversationList/Index/Official"];
+        } else if([category isEqualToString:WKChannelCategoryVisitor]) {
+            self.officialTag.frame = CGRectMake(0.0f, 0.0f, 35.0f, 18.0f);
+            self.officialTag.hidden = NO;
+            self.officialTag.image = [self imageName:@"ConversationList/Index/Visitor"];
+        }
+    }
+
+    // Bot标识
+    BOOL isBot = channelInfo.robot;
+    self.botBadgeLbl.hidden = !isBot;
+    if(isBot) {
+        [self.botBadgeLbl sizeToFit];
+        CGRect frame = self.botBadgeLbl.frame;
+        frame.size.width += 8.0f;
+        frame.size.height += 4.0f;
+        self.botBadgeLbl.frame = frame;
     }
 }
 
@@ -257,6 +315,28 @@
         _autoDeleteView = [[WKAutoDeleteView alloc] init];
     }
     return _autoDeleteView;
+}
+
+- (WKOfficialTag *)officialTag {
+    if(!_officialTag) {
+        _officialTag = [WKOfficialTag new];
+    }
+    return _officialTag;
+}
+
+- (UILabel *)botBadgeLbl {
+    if(!_botBadgeLbl) {
+        _botBadgeLbl = [[UILabel alloc] init];
+        _botBadgeLbl.text = @"Bot";
+        _botBadgeLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
+        _botBadgeLbl.textColor = [UIColor whiteColor];
+        _botBadgeLbl.backgroundColor = [UIColor colorWithRed:136.0f/255.0f green:84.0f/255.0f blue:208.0f/255.0f alpha:1.0f];
+        _botBadgeLbl.textAlignment = NSTextAlignmentCenter;
+        _botBadgeLbl.layer.cornerRadius = 4.0f;
+        _botBadgeLbl.layer.masksToBounds = YES;
+        _botBadgeLbl.hidden = YES;
+    }
+    return _botBadgeLbl;
 }
 
 - (UIButton *)videoCallBtn {

@@ -77,6 +77,53 @@ static WKPhotoBrowser *_instance;
 
 -(void) showWithSender:(UIViewController*)vc  selectCompressImageBlock:(void(^)(NSArray<NSData *>* _Nonnull images,NSArray<PHAsset *> * _Nonnull assets, BOOL isOriginal))selectImageBlock allowSelectVideo:(BOOL)allowSelectVideo preview:(BOOL)preview{
     [ZLPhotoConfiguration default].allowSelectVideo = allowSelectVideo;
+    [ZLPhotoConfiguration default].maxPreviewCount = 50;
+
+    // 紫色主题色 #7761F4
+    UIColor *themeColor = [UIColor colorWithRed:119.0f/255.0f green:97.0f/255.0f blue:244.0f/255.0f alpha:1.0];
+
+    ZLPhotoUIConfiguration *uiConfig = [ZLPhotoUIConfiguration default];
+    // 主题色
+    uiConfig.themeColor = themeColor;
+    uiConfig.showIndexOnSelectBtn = YES;
+    // 状态栏
+    uiConfig.statusBarStyle = UIStatusBarStyleDefault;
+    // 导航栏 - 白色风格
+    uiConfig.navBarColor = [UIColor whiteColor];
+    uiConfig.navBarColorOfPreviewVC = [UIColor whiteColor];
+    uiConfig.navTitleColor = [UIColor blackColor];
+    uiConfig.navTitleColorOfPreviewVC = [UIColor blackColor];
+    uiConfig.navEmbedTitleViewBgColor = [UIColor colorWithRed:0.95 green:0.95 blue:0.95 alpha:1.0];
+    uiConfig.navViewBlurEffectOfAlbumList = nil;
+    uiConfig.navViewBlurEffectOfPreview = nil;
+    // 相册列表 - 白色背景
+    uiConfig.albumListBgColor = [UIColor whiteColor];
+    uiConfig.albumListTitleColor = [UIColor blackColor];
+    uiConfig.albumListCountColor = [UIColor grayColor];
+    uiConfig.separatorColor = [UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0];
+    uiConfig.embedAlbumListTranslucentColor = [UIColor colorWithWhite:1.0 alpha:0.8];
+    // 缩略图背景 - 白色
+    uiConfig.thumbnailBgColor = [UIColor whiteColor];
+    // 底部工具栏 - 白色背景
+    uiConfig.bottomToolViewBgColor = [UIColor colorWithWhite:1.0 alpha:0.95];
+    uiConfig.bottomToolViewBgColorOfPreviewVC = [UIColor colorWithWhite:1.0 alpha:0.95];
+    uiConfig.bottomViewBlurEffectOfAlbumList = nil;
+    uiConfig.bottomViewBlurEffectOfPreview = nil;
+    uiConfig.bottomToolViewBtnNormalTitleColor = [UIColor blackColor];
+    uiConfig.bottomToolViewDoneBtnNormalTitleColor = [UIColor whiteColor];
+    uiConfig.bottomToolViewBtnNormalTitleColorOfPreviewVC = [UIColor blackColor];
+    uiConfig.bottomToolViewDoneBtnNormalTitleColorOfPreviewVC = [UIColor whiteColor];
+    uiConfig.bottomToolViewBtnDisableTitleColor = [UIColor lightGrayColor];
+    uiConfig.bottomToolViewDoneBtnDisableTitleColor = [UIColor lightGrayColor];
+    uiConfig.bottomToolViewBtnDisableTitleColorOfPreviewVC = [UIColor lightGrayColor];
+    uiConfig.bottomToolViewDoneBtnDisableTitleColorOfPreviewVC = [UIColor lightGrayColor];
+    uiConfig.bottomToolViewBtnDisableBgColor = [UIColor colorWithRed:0.85 green:0.85 blue:0.85 alpha:1.0];
+    uiConfig.bottomToolViewBtnDisableBgColorOfPreviewVC = [UIColor colorWithRed:0.85 green:0.85 blue:0.85 alpha:1.0];
+    // HUD 风格
+    uiConfig.hudStyle = ZLProgressHUDStyleLight;
+    // 相机单元格
+    uiConfig.cameraCellBgColor = [UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0];
+
     ZLPhotoPreviewSheet *ps = [[ZLPhotoPreviewSheet alloc] initWithSelectedAssets:@[]];
     ps.selectImageBlock = ^(NSArray<ZLResultModel *> *results, BOOL isOriginal) {
         NSMutableArray<UIImage*> *images = [NSMutableArray array];

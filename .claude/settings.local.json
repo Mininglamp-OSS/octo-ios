@@ -33,7 +33,12 @@
       "Bash(sips -g pixelWidth -g pixelHeight /Users/wanglitao/Documents/octo-ios/Modules/WuKongContacts/WuKongContacts/Assets/Images.xcassets/Contacts/Index/GroupSave.imageset/GroupSave@2x.png /Users/wanglitao/Documents/octo-ios/Modules/WuKongContacts/WuKongContacts/Assets/Images.xcassets/Contacts/Index/GroupSave.imageset/GroupSave@3x.png)",
       "Bash(ls -lh /Users/wanglitao/Documents/octo-ios/image_287774426250647_smooth.png && sips -g pixelWidth -g pixelHeight /Users/wanglitao/Documents/octo-ios/image_287774426250647_smooth.png)",
       "Bash(DEST=\"/Users/wanglitao/Documents/octo-ios/Modules/WuKongContacts/WuKongContacts/Assets/Images.xcassets/Contacts/Index/OrgMembers.imageset\"\nSRC=\"/Users/wanglitao/Documents/octo-ios/image_287774426250647_smooth.png\"\nsips -z 80 80 \"$SRC\" --out \"$DEST/OrgMembers@2x.png\" > /dev/null && sips -z 120 120 \"$SRC\" --out \"$DEST/OrgMembers@3x.png\" > /dev/null && echo \"Done\")",
-      "Bash(DEST=\"/Users/wanglitao/Documents/octo-ios/Modules/WuKongContacts/WuKongContacts/Assets/Images.xcassets/Contacts/Index/OrgMembers.imageset\"\nSRC=\"/Users/wanglitao/Documents/octo-ios/ContactIcon2.png\"\nsips -z 80 80 \"$SRC\" --out \"$DEST/OrgMembers@2x.png\" > /dev/null && sips -z 120 120 \"$SRC\" --out \"$DEST/OrgMembers@3x.png\" > /dev/null && echo \"Done\")"
+      "Bash(DEST=\"/Users/wanglitao/Documents/octo-ios/Modules/WuKongContacts/WuKongContacts/Assets/Images.xcassets/Contacts/Index/OrgMembers.imageset\"\nSRC=\"/Users/wanglitao/Documents/octo-ios/ContactIcon2.png\"\nsips -z 80 80 \"$SRC\" --out \"$DEST/OrgMembers@2x.png\" > /dev/null && sips -z 120 120 \"$SRC\" --out \"$DEST/OrgMembers@3x.png\" > /dev/null && echo \"Done\")",
+      "Bash(find /Users/wanglitao/Documents/octo-ios/TangSengDaoDao /Users/wanglitao/Documents/octo-ios/Modules -type f \\\\\\( -name \"*.swift\" -o -name \"*.m\" -o -name \"*.h\" \\\\\\) 2>/dev/null | xargs grep -l \"ZLPhotoBrowser\\\\|TZImagePickerController\\\\|WKMediaPickerController\" 2>/dev/null | head -30)",
+      "Bash(find /Users/wanglitao/Documents/octo-ios -type f -name \"*Permission*\" \\\\\\( -name \"*.m\" -o -name \"*.h\" -o -name \"*.swift\" \\\\\\) 2>/dev/null | grep -v Pods | grep -v Example)",
+      "Bash(grep -B 5 -A 15 \"requestAuthorization\\(for:\" /Users/wanglitao/Documents/octo-ios/Pods/ZLPhotoBrowser/Sources/General/*.swift 2>/dev/null)",
+      "Bash(git -C /Users/wanglitao/Documents/octo-ios ls-files --error-unmatch Pods/ZLPhotoBrowser/Sources/General/ZLPhotoPreviewSheet.swift 2>&1 | head -3)",
+      "Read(//Users/wanglitao/Library/Developer/Xcode/DerivedData/**)"
     ]
   }
 }

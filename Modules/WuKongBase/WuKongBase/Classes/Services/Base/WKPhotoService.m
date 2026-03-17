@@ -10,7 +10,8 @@
 #import "WKMediaPickerController.h"
 #import "WuKongBase.h"
 #import <MobileCoreServices/MobileCoreServices.h>
-@interface WKPhotoService ()<UIImagePickerControllerDelegate,UINavigationControllerDelegate>
+#import <PhotosUI/PhotosUI.h>
+@interface WKPhotoService ()<UIImagePickerControllerDelegate,UINavigationControllerDelegate, PHPickerViewControllerDelegate>
 
 @property(strong,nonatomic)UIImagePickerController *pickerC;
 @property(nonatomic,strong) WKMediaFetcher *mediaFetcher;
@@ -74,44 +75,54 @@ static WKPhotoService *_instance;
 
 -(void) getPhotoOneFromLibrary:(getPhotoCompleteBlock)complete {
     self.completeBlock = complete;
-    self.mediaFetcher = [[WKMediaFetcher alloc] init];
-    self.mediaFetcher.limit = 1;
-    self.mediaFetcher.mediaTypes = @[(NSString*)kUTTypeImage];
-     __weak typeof(self) weakSelf = self;
-    [self.mediaFetcher fetchPhotoFromLibrary:^(UIImage *img, NSString *path,bool isOrg, PHAssetMediaType type,NSInteger left) {
-        weakSelf.mediaFetcher = nil;
-        switch (type) {
-            case PHAssetMediaTypeImage:
-                if (path) { // path有值一般是选择了原图
-                    //iOS 11 苹果采用了新的图片格式 HEIC ，如果采用原图会导致其他设备的兼容问题，在上层做好格式的兼容转换,压成 jpeg
-                    if ([path.pathExtension isEqualToString:@"HEIC"]){
-                        if (@available(iOS 13.0, *)) {
-                            UIImage * originImage =  [[SDImageHEICCoder sharedCoder] decodedImageWithData:[[NSData alloc] initWithContentsOfFile:path] options:@{SDImageCoderEncodeCompressionQuality:@(0.9)}];
+
+    if (@available(iOS 14, *)) {
+        // iOS 14+ 使用 PHPickerViewController，无需相册权限，始终能显示全部相册
+        PHPickerConfiguration *config = [[PHPickerConfiguration alloc] init];
+        config.selectionLimit = 1;
+        config.filter = [PHPickerFilter imagesFilter];
+        PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:config];
+        picker.delegate = self;
+        [[[WKNavigationManager shared] topViewController] presentViewController:picker animated:YES completion:nil];
+    } else {
+        // iOS 14 以下使用旧的 TZImagePickerController
+        self.mediaFetcher = [[WKMediaFetcher alloc] init];
+        self.mediaFetcher.limit = 1;
+        self.mediaFetcher.mediaTypes = @[(NSString*)kUTTypeImage];
+        __weak typeof(self) weakSelf = self;
+        [self.mediaFetcher fetchPhotoFromLibrary:^(UIImage *img, NSString *path,bool isOrg, PHAssetMediaType type,NSInteger left) {
+            weakSelf.mediaFetcher = nil;
+            switch (type) {
+                case PHAssetMediaTypeImage:
+                    if (path) {
+                        if ([path.pathExtension isEqualToString:@"HEIC"]){
+                            if (@available(iOS 13.0, *)) {
+                                UIImage * originImage =  [[SDImageHEICCoder sharedCoder] decodedImageWithData:[[NSData alloc] initWithContentsOfFile:path] options:@{SDImageCoderEncodeCompressionQuality:@(0.9)}];
+                                if(weakSelf.completeBlock) {
+                                    weakSelf.completeBlock(originImage);
+                                }
+                            }
+                        }else{
+                            UIImage *image = [UIImage imageWithContentsOfFile:path];
                             if(weakSelf.completeBlock) {
-                                weakSelf.completeBlock(originImage);
-                                
+                                weakSelf.completeBlock(image);
                             }
                         }
-                    }else{
-                        UIImage *image = [UIImage imageWithContentsOfFile:path];
-                       if(weakSelf.completeBlock) {
-                            weakSelf.completeBlock(image);
+                    }else {
+                        if(weakSelf.completeBlock) {
+                            weakSelf.completeBlock(img);
                         }
                     }
-                }else {
-                    if(weakSelf.completeBlock) {
-                         weakSelf.completeBlock(img);
-                     }
-                }
-                break;
-            case PHAssetMediaTypeVideo:
-            case PHAssetMediaTypeAudio:
-            case PHAssetMediaTypeUnknown:
-                break;
-        }
-    } cancel:^{
-        weakSelf.mediaFetcher = nil;
-    }];
+                    break;
+                case PHAssetMediaTypeVideo:
+                case PHAssetMediaTypeAudio:
+                case PHAssetMediaTypeUnknown:
+                    break;
+            }
+        } cancel:^{
+            weakSelf.mediaFetcher = nil;
+        }];
+    }
 }
 
 - (void)imagePickerController:(UIImagePickerController *)picker didFinishPickingMediaWithInfo:(NSDictionary<UIImagePickerControllerInfoKey, id> *)info {
@@ -120,7 +131,25 @@ static WKPhotoService *_instance;
     if(self.completeBlock) {
         self.completeBlock(img);
     }
-    
+}
+
+#pragma mark - PHPickerViewControllerDelegate
+- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results API_AVAILABLE(ios(14)) {
+    [picker dismissViewControllerAnimated:YES completion:nil];
+    if (results.count == 0) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    PHPickerResult *result = results.firstObject;
+    if ([result.itemProvider canLoadObjectOfClass:[UIImage class]]) {
+        [result.itemProvider loadObjectOfClass:[UIImage class] completionHandler:^(__kindof id<NSItemProviderReading>  _Nullable object, NSError * _Nullable error) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (object && [object isKindOfClass:[UIImage class]] && weakSelf.completeBlock) {
+                    weakSelf.completeBlock((UIImage *)object);
+                }
+            });
+        }];
+    }
 }
 
 
