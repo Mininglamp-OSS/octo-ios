@@ -37,7 +37,13 @@
         NSString *ip = entry[@"ip"];
         BOOL httpsOn = [entry[@"https"] boolValue];
         NSString *scheme = httpsOn ? @"https" : @"http";
-        NSString *displayAddr = [NSString stringWithFormat:@"%@://%@", scheme, ip];
+        NSString *label = entry[@"label"];
+        NSString *displayAddr;
+        if (label && label.length > 0) {
+            displayAddr = [NSString stringWithFormat:@"%@ (%@://%@)", label, scheme, ip];
+        } else {
+            displayAddr = [NSString stringWithFormat:@"%@://%@", scheme, ip];
+        }
 
         // 当前正在使用的服务器加标记
         BOOL isCurrent = [ip isEqualToString:currentIP];
@@ -63,8 +69,16 @@
     }];
     [sheet addAction:newAction];
 
-    // 管理历史记录（删除）
-    if (history.count > 1) {
+    // 管理历史记录（删除用户手动添加的，预设地址保留）
+    NSArray *presetIPs = @[@"api-test.example.com", @"api-test.example.com"];
+    BOOL hasUserAdded = NO;
+    for (NSDictionary *entry in history) {
+        if (![presetIPs containsObject:entry[@"ip"]]) {
+            hasUserAdded = YES;
+            break;
+        }
+    }
+    if (hasUserAdded) {
         UIAlertAction *manageAction = [UIAlertAction actionWithTitle:@"清除历史记录"
                                                               style:UIAlertActionStyleDestructive
                                                             handler:^(UIAlertAction *action) {

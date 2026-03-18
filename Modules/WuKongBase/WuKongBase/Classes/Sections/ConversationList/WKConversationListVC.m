@@ -149,7 +149,20 @@
     // 从本地获取当前 Space ID
     self.currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
 
+    // 检测空间是否发生变化（切换服务器或切换空间后重启 App）
+    NSString *lastSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"WKLastLoadedSpaceId"];
     if (self.currentSpaceId && self.currentSpaceId.length > 0) {
+        if (!lastSpaceId || ![lastSpaceId isEqualToString:self.currentSpaceId]) {
+            // 空间变化，清空旧会话数据，等待新的同步数据
+            NSLog(@"🔄 Space 变化: %@ -> %@，清空旧会话", lastSpaceId, self.currentSpaceId);
+            [self.conversationListVM reset];
+            [[WKConversationDB shared] deleteAllConversation];
+            [self.tableView reloadData];
+            // 记录当前空间
+            [[NSUserDefaults standardUserDefaults] setObject:self.currentSpaceId forKey:@"WKLastLoadedSpaceId"];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+        }
+
         // 从缓存或网络获取 Space 列表
         __weak typeof(self) weakSelf = self;
         [[WKSpaceModel shared] getMySpaces].then(^(NSArray<WKSpaceEntity *> *spaces){
@@ -430,6 +443,7 @@
 
         // 先保存新的 Space ID（conversation/sync 会从 NSUserDefaults 读取）
         [[NSUserDefaults standardUserDefaults] setObject:space.space_id forKey:@"currentSpaceId"];
+        [[NSUserDefaults standardUserDefaults] setObject:space.space_id forKey:@"WKLastLoadedSpaceId"];
         [[NSUserDefaults standardUserDefaults] synchronize];
 
         // 更新标题

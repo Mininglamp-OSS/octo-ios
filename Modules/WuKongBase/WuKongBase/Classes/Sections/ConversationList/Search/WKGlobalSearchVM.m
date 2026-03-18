@@ -18,6 +18,7 @@
 #import "WKGlobalSearchResultController.h"
 #import "WKConversationVC.h"
 #import "WKSearchMediaCell.h"
+#import "WKConversationListVM.h"
 #define WKSearchMaxCount 4
 
 @interface WKGlobalSearchVM ()
@@ -29,7 +30,6 @@
 @property(nonatomic,assign) BOOL pullup; // 是否pullup中
 @property(nonatomic,assign) BOOL hasMore;// 是否有更多数据
 @property(nonatomic,copy) NSString *tabType;
-
 
 @end
 
@@ -49,9 +49,9 @@
     if(!self.searchResult) {
         return nil;
     }
-    
+
     NSArray *items = [self handleSearchResult:self.searchResult];
-    
+
     return  [WKTableSectionUtil toSections:items];
 }
 
@@ -111,7 +111,15 @@
 
 -(void) search:(void(^)(NSError * _Nullable))complete {
     __weak typeof(self) weakSelf = self;
-    
+
+    // 聊天 tab：从本地会话列表中按名称过滤
+    if ([self.tabType isEqualToString:@"all"] && !self.searchInChannel) {
+        [self searchLocalConversations];
+        if (complete) complete(nil);
+        [weakSelf reloadData];
+        return;
+    }
+
     NSMutableArray<NSNumber*>  *contentTypes = [NSMutableArray array];
     BOOL onlyMessage = false;
     self.limit = 20;
@@ -148,7 +156,6 @@
         param[@"channel_id"] = self.channel.channelId?:@"";
         param[@"channel_type"] = @(self.channel.channelType);
     }
-    
     [self requestSearch:param callback:^(NSError *err,NSDictionary * result) {
         if(err) {
             if(complete) {
@@ -187,6 +194,51 @@
     }];
 }
 
+/// 聊天 tab：从本地会话列表按名称过滤，构造与 API 相同格式的结果
+- (void)searchLocalConversations {
+    NSString *keyword = self.keyword;
+    if (!keyword || keyword.length == 0) {
+        self.searchResult = @{@"friends":@[], @"groups":@[], @"messages":@[]};
+        return;
+    }
+
+    NSArray<WKConversationWrapModel*> *allConversations = [[WKConversationListVM shared] conversationList];
+    NSMutableArray *matchedFriends = [NSMutableArray array];
+    NSMutableArray *matchedGroups = [NSMutableArray array];
+
+    for (WKConversationWrapModel *conv in allConversations) {
+        NSString *displayName = conv.channelInfo ? conv.channelInfo.displayName : @"";
+        if (!displayName || [displayName rangeOfString:keyword options:NSCaseInsensitiveSearch].location == NSNotFound) {
+            continue;
+        }
+        // 构造与 API 返回相同的字典格式
+        NSDictionary *item = @{
+            @"channel_id": conv.channel.channelId ?: @"",
+            @"channel_name": displayName,
+            @"channel_remark": @"",
+            @"channel_type": @(conv.channel.channelType),
+        };
+        if (conv.channel.channelType == WK_GROUP) {
+            [matchedGroups addObject:item];
+        } else {
+            [matchedFriends addObject:item];
+        }
+    }
+
+    self.searchResult = @{
+        @"friends": matchedFriends,
+        @"groups": matchedGroups,
+        @"messages": @[],
+    };
+}
+
+/// 剥离 HTML 标签（如 <mark>...</mark>），返回纯文本
+- (NSString *)stripHTMLTags:(NSString *)html {
+    if (!html || html.length == 0) return html;
+    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"<[^>]+>" options:0 error:nil];
+    return [regex stringByReplacingMatchesInString:html options:0 range:NSMakeRange(0, html.length) withTemplate:@""];
+}
+
 -(NSMutableArray<NSDictionary*>*) handleSearchResult:(NSDictionary * )result {
     NSArray<NSDictionary*> *friends = result[@"friends"];
     NSArray<NSDictionary*> *groups = result[@"groups"];
@@ -217,8 +269,10 @@
         NSMutableArray<NSDictionary*> *friendItems = [NSMutableArray array];
         for (NSInteger i=0; i<friends.count; i++) {
             NSDictionary *friend = friends[i];
-            
-            NSString *name = friend[@"channel_name"]?:@"";
+
+            NSString *remark = friend[@"channel_remark"]?:@"";
+            NSString *rawName = friend[@"channel_name"]?:@"";
+            NSString *name = (remark.length > 0) ? [self stripHTMLTags:remark] : [self stripHTMLTags:rawName];
             NSString *uid = friend[@"channel_id"]?:@"";
             [friendItems addObject:@{
                       @"class":WKSearchContactsModel.class,
@@ -250,8 +304,10 @@
         NSMutableArray<NSDictionary*> *groupsItems = [NSMutableArray array];
         for (NSInteger i=0; i<groups.count; i++) {
             NSDictionary *group = groups[i];
-            
-            NSString *name = group[@"channel_name"]?:@"";
+
+            NSString *gRemark = group[@"channel_remark"]?:@"";
+            NSString *gRawName = group[@"channel_name"]?:@"";
+            NSString *name = (gRemark.length > 0) ? [self stripHTMLTags:gRemark] : [self stripHTMLTags:gRawName];
             NSString *groupNo = group[@"channel_id"]?:@"";
             [groupsItems addObject:@{
                @"class":WKSearchContactsModel.class,
@@ -440,7 +496,15 @@
         request[@"limit"] = @(20);
     }
     
-    [WKAPIClient.sharedClient POST:@"search/global" parameters:request].then(^(NSDictionary*result){
+    // Space 模式下 space_id 作为 URL query 参数传递（与 Web 端一致）
+    NSString *searchPath = @"search/global";
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    if (spaceId && spaceId.length > 0) {
+        NSString *encoded = [spaceId stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
+        searchPath = [NSString stringWithFormat:@"search/global?space_id=%@", encoded];
+    }
+
+    [WKAPIClient.sharedClient POST:searchPath parameters:request].then(^(NSDictionary*result){
         if(callback) {
             callback(nil,result);
         }

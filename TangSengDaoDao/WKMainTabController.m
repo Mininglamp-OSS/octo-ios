@@ -9,6 +9,7 @@
 #import "WKMainTabController.h"
 #import <WuKongBase/WuKongBase.h>
 #import <Lottie/Lottie.h>
+#import <CoreImage/CoreImage.h>
 #import "WKConversationListVC.h"
 #import "WKContactsVC.h"
 #import "WKMeVC.h"
@@ -44,23 +45,43 @@
 
 }
 
+/// 色相旋转：将图片从橘色调转为紫色调，保留透明度和亮度层次
+- (UIImage *)hueRotateImage:(UIImage *)image angle:(CGFloat)angleInRadians {
+    CIImage *ciImage = [[CIImage alloc] initWithImage:image];
+    if (!ciImage) return image;
+    CIFilter *filter = [CIFilter filterWithName:@"CIHueAdjust"];
+    [filter setValue:ciImage forKey:kCIInputImageKey];
+    [filter setValue:@(angleInRadians) forKey:@"inputAngle"];
+    CIImage *output = filter.outputImage;
+    if (!output) return image;
+    CIContext *ctx = [CIContext contextWithOptions:nil];
+    CGImageRef cgImage = [ctx createCGImage:output fromRect:output.extent];
+    if (!cgImage) return image;
+    UIImage *result = [UIImage imageWithCGImage:cgImage scale:image.scale orientation:image.imageOrientation];
+    CGImageRelease(cgImage);
+    return result;
+}
+
 - (void)setupChildVC:(Class)vc title:(NSString *)title andImage:(NSString * )image andSelectImage:(NSString *)selectImage{
 
     UIViewController * vcInstall = [[vc alloc] init];
     vcInstall.tabBarItem.title = title;
 
-    // 未选中：淡紫色
-    UIColor *unselectedColor = [[WKApp shared].config.themeColor colorWithAlphaComponent:0.4];
-    // 选中：主题紫色
-    UIColor *selectedColor = [WKApp shared].config.themeColor;
+    // 橘色 ≈ 30°，紫色 ≈ 270°，色相旋转约 240° = 4.19 弧度
+    CGFloat hueShift = 240.0 * M_PI / 180.0;
 
-    if (@available(iOS 13.0, *)) {
-        vcInstall.tabBarItem.image = [[UIImage imageNamed:image] imageWithTintColor:unselectedColor renderingMode:UIImageRenderingModeAlwaysOriginal];
-        vcInstall.tabBarItem.selectedImage = [[UIImage imageNamed:selectImage] imageWithTintColor:selectedColor renderingMode:UIImageRenderingModeAlwaysOriginal];
-    } else {
-        vcInstall.tabBarItem.image = [[UIImage imageNamed:image] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
-        vcInstall.tabBarItem.selectedImage = [[UIImage imageNamed:selectImage] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
-    }
+    // 未选中：色相旋转后整体降低透明度
+    UIImage *unselectedImg = [self hueRotateImage:[UIImage imageNamed:image] angle:hueShift];
+    UIGraphicsBeginImageContextWithOptions(unselectedImg.size, NO, unselectedImg.scale);
+    [unselectedImg drawInRect:CGRectMake(0, 0, unselectedImg.size.width, unselectedImg.size.height) blendMode:kCGBlendModeNormal alpha:1.0];
+    UIImage *fadedImg = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    vcInstall.tabBarItem.image = [fadedImg imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+
+    // 选中：色相旋转，保留原图所有透明度和亮度层次
+    UIImage *selectedImg = [self hueRotateImage:[UIImage imageNamed:selectImage] angle:hueShift];
+    vcInstall.tabBarItem.selectedImage = [selectedImg imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+
     vcInstall.tabBarItem.imageInsets = UIEdgeInsetsMake(6, 0, -6, 0);
     [self addChildViewController:vcInstall];
 }

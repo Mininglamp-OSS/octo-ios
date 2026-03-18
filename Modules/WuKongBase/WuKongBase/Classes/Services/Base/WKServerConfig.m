@@ -46,9 +46,31 @@ static NSString * const kDefaultServerIP       = @"api-test.example.com";
 
 #pragma mark - 历史记录
 
++ (NSArray<NSDictionary *> *)presetServers {
+    return @[
+        @{@"ip": @"api-test.example.com", @"https": @(YES), @"label": @"国内版"},
+        @{@"ip": @"api-test.example.com",         @"https": @(YES), @"label": @"国际版"},
+    ];
+}
+
 + (NSArray<NSDictionary *> *)serverHistory {
-    NSArray *history = [[NSUserDefaults standardUserDefaults] arrayForKey:kWKServerHistoryKey];
-    return history ?: @[];
+    NSArray *saved = [[NSUserDefaults standardUserDefaults] arrayForKey:kWKServerHistoryKey];
+    NSMutableArray *result = saved ? [saved mutableCopy] : [NSMutableArray array];
+
+    // 确保预设地址始终存在
+    for (NSDictionary *preset in [self presetServers]) {
+        BOOL exists = NO;
+        for (NSDictionary *item in result) {
+            if ([item[@"ip"] isEqualToString:preset[@"ip"]]) {
+                exists = YES;
+                break;
+            }
+        }
+        if (!exists) {
+            [result addObject:preset];
+        }
+    }
+    return result;
 }
 
 + (void)addToHistory:(NSString *)ip httpsOn:(BOOL)on {
