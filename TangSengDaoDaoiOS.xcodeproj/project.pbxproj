@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		184AEBC57484611C42076CF1 /* silence.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = D8B4D131F244672EE8EEAE03 /* silence.mp3 */; };
 		7130BFC524C6817600B9E04B /* NotificationService.m in Sources */ = {isa = PBXBuildFile; fileRef = 7130BFC424C6817600B9E04B /* NotificationService.m */; };
 		7130BFC924C6817600B9E04B /* NotificationService.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 7130BFC124C6817600B9E04B /* NotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7130BFD424C6832F00B9E04B /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7130BFD324C6832F00B9E04B /* UserNotifications.framework */; };
@@ -128,6 +129,7 @@
 		71DB3FA4239B5DE700181E94 /* WKMainTabController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WKMainTabController.h; sourceTree = "<group>"; };
 		71DB3FA5239B5DE700181E94 /* WKMainTabController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMainTabController.m; sourceTree = "<group>"; };
 		71F7E3DB2A47F66900E8D20D /* QUESTION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = QUESTION.md; sourceTree = "<group>"; };
+		D8B4D131F244672EE8EEAE03 /* silence.mp3 */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = audio.mp3; path = silence.mp3; sourceTree = "<group>"; };
 		DE5455F84CCB2C45ED689AA0 /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -282,6 +284,7 @@
 				71DB3FA4239B5DE700181E94 /* WKMainTabController.h */,
 				71DB3FA5239B5DE700181E94 /* WKMainTabController.m */,
 				719FDA5F2595FBFC000C25D6 /* Localizable.strings */,
+				D8B4D131F244672EE8EEAE03 /* silence.mp3 */,
 			);
 			path = TangSengDaoDao;
 			sourceTree = "<group>";
@@ -424,6 +427,7 @@
 				71D6961023926E3700D092BA /* Assets.xcassets in Resources */,
 				7191FCB323A6139A00FFFDC1 /* README.md in Resources */,
 				71D6960E23926E3600D092BA /* Main.storyboard in Resources */,
+				184AEBC57484611C42076CF1 /* silence.mp3 in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

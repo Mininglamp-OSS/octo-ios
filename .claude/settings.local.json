@@ -38,7 +38,19 @@
       "Bash(find /Users/wanglitao/Documents/octo-ios -type f -name \"*Permission*\" \\\\\\( -name \"*.m\" -o -name \"*.h\" -o -name \"*.swift\" \\\\\\) 2>/dev/null | grep -v Pods | grep -v Example)",
       "Bash(grep -B 5 -A 15 \"requestAuthorization\\(for:\" /Users/wanglitao/Documents/octo-ios/Pods/ZLPhotoBrowser/Sources/General/*.swift 2>/dev/null)",
       "Bash(git -C /Users/wanglitao/Documents/octo-ios ls-files --error-unmatch Pods/ZLPhotoBrowser/Sources/General/ZLPhotoPreviewSheet.swift 2>&1 | head -3)",
-      "Read(//Users/wanglitao/Library/Developer/Xcode/DerivedData/**)"
+      "Read(//Users/wanglitao/Library/Developer/Xcode/DerivedData/**)",
+      "Bash(ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -t 30 -q:a 9 -y /Users/wanglitao/Documents/octo-ios/TangSengDaoDao/silence.mp3 2>&1 | tail -3)",
+      "Bash(ruby - <<'RUBY'\nrequire 'xcodeproj'\nproject = Xcodeproj::Project.open\\('/Users/wanglitao/Documents/octo-ios/TangSengDaoDaoiOS.xcodeproj'\\)\nproject.files.each do |f|\n  if f.display_name == 'silence.mp3'\n    puts \"path=#{f.path} source_tree=#{f.source_tree} real_path=#{f.real_path}\"\n  end\nend\nRUBY)",
+      "WebFetch(domain:api-test.example.com)",
+      "Bash(echo \"=== TCP 5100 ===\" && nc -z -w 3 api-test.example.com 5100 2>&1 && echo \"OK\" || echo \"FAILED\" && echo \"\" && echo \"=== WS 5200 ===\" && nc -z -w 3 api-test.example.com 5200 2>&1 && echo \"OK\" || echo \"FAILED\" && echo \"\" && echo \"=== WSS 443 ===\" && curl -s -k -o /dev/null -w \"HTTP %{http_code}\" --max-time 5 'https://api-test.example.com/ws' 2>&1 && echo \"\")",
+      "Bash(timeout 5 bash -c 'echo | nc -w 3 ws-api-test.example.com 5100' 2>&1 && echo \"PORT OPEN\" || echo \"PORT CLOSED/TIMEOUT\")",
+      "Bash(curl -s -k --connect-timeout 3 \"http://ws-api-test.example.com:5100\" 2>&1; echo \"EXIT: $?\")",
+      "Bash(networksetup -getwebproxy Wi-Fi)",
+      "Bash(networksetup -getsocksfirewallproxy Wi-Fi)",
+      "Bash(scutil --proxy)",
+      "Bash(echo \"=== DNS 解析 ===\"\necho \"ws-api-test.example.com:\"\ndig +short ws-api-test.example.com\necho \"\"\necho \"api-test.example.com:\"\ndig +short api-test.example.com)",
+      "Bash(echo \"=== 测试各种端口连通性 ===\"\necho \"1\\) xming 5100:\"\nperl -e 'use IO::Socket::INET; my $s = IO::Socket::INET->new\\(PeerAddr=>\"api-test.example.com\",PeerPort=>5100,Timeout=>3\\); print $s ? \"OPEN\\\\n\" : \"CLOSED\\\\n\";'\n\necho \"2\\) deepminer ws-im-test 443:\"\nperl -e 'use IO::Socket::INET; my $s = IO::Socket::INET->new\\(PeerAddr=>\"ws-api-test.example.com\",PeerPort=>443,Timeout=>3\\); print $s ? \"OPEN\\\\n\" : \"CLOSED\\\\n\";'\n\necho \"3\\) deepminer ws-im-test 5100:\"\nperl -e 'use IO::Socket::INET; my $s = IO::Socket::INET->new\\(PeerAddr=>\"ws-api-test.example.com\",PeerPort=>5100,Timeout=>3\\); print $s ? \"OPEN\\\\n\" : \"CLOSED\\\\n\";'\n\necho \"4\\) deepminer ws-im-test 5200:\"\nperl -e 'use IO::Socket::INET; my $s = IO::Socket::INET->new\\(PeerAddr=>\"ws-api-test.example.com\",PeerPort=>5200,Timeout=>3\\); print $s ? \"OPEN\\\\n\" : \"CLOSED\\\\n\";'\n\necho \"5\\) deepminer im-test 5100:\"\nperl -e 'use IO::Socket::INET; my $s = IO::Socket::INET->new\\(PeerAddr=>\"api-test.example.com\",PeerPort=>5100,Timeout=>3\\); print $s ? \"OPEN\\\\n\" : \"CLOSED\\\\n\";'\n\necho \"6\\) 直连 IP 43.137.72.100:5100:\"\nperl -e 'use IO::Socket::INET; my $s = IO::Socket::INET->new\\(PeerAddr=>\"43.137.72.100\",PeerPort=>5100,Timeout=>3\\); print $s ? \"OPEN\\\\n\" : \"CLOSED\\\\n\";')",
+      "Bash(perl -e '\nuse IO::Socket::INET;\n$| = 1;\nprint \"5100: \";\nmy $s1 = IO::Socket::INET->new\\(PeerAddr=>\"ws-api-test.example.com\",PeerPort=>5100,Proto=>\"tcp\",Timeout=>5\\);\nprint $s1 ? \"OPEN\\\\n\" : \"CLOSED \\($!\\)\\\\n\";\nclose\\($s1\\) if $s1;\n\nprint \"5200: \";\nmy $s2 = IO::Socket::INET->new\\(PeerAddr=>\"ws-api-test.example.com\",PeerPort=>5200,Proto=>\"tcp\",Timeout=>5\\);\nprint $s2 ? \"OPEN\\\\n\" : \"CLOSED \\($!\\)\\\\n\";\nclose\\($s2\\) if $s2;\n'\necho \"\"\necho \"本机出口IP:\"\ncurl -s --max-time 5 ifconfig.me 2>/dev/null || curl -s --max-time 5 ipinfo.io/ip 2>/dev/null)"
     ]
   }
 }

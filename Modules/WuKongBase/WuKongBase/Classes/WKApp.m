@@ -5,6 +5,7 @@
 //  Created by tt on 2019/12/1.
 //
 #import <UserNotifications/UserNotifications.h>
+#import <AVFoundation/AVFoundation.h>
 #import "WKApp.h"
 #import "WKEndpointManager.h"
 #import "WKModuleManager.h"
@@ -657,6 +658,7 @@ static WKApp *_instance;
 }
 
 static  UIBackgroundTaskIdentifier _bgTaskToken;
+static  AVAudioPlayer *_silentAudioPlayer;
 
 - (void)appDidEnterBackground:(NSNotification *)notification   {
     UIApplication *application = (UIApplication*)notification.object;
@@ -671,12 +673,15 @@ static  UIBackgroundTaskIdentifier _bgTaskToken;
     }
 //        [[[WKSDK shared] connectionManager] disconnect:YES];
     
+    // 后台静音播放，保持 App 和 IM 连接存活
+    [self startSilentAudioPlay];
+
     // 需要下面这代码回到桌面后台进程才会保持
     _bgTaskToken = [application beginBackgroundTaskWithExpirationHandler:^{
         // 取消后台任务
         [application endBackgroundTask:_bgTaskToken];
         _bgTaskToken = UIBackgroundTaskInvalid;
-        [[[WKSDK shared] connectionManager] disconnect:YES];
+        // 有静音播放保活，不再断开连接
     }];
     
     [WKApp shared].loginInfo.extra[@"enter_background_time"] = @([[NSDate date] timeIntervalSince1970]);
@@ -705,8 +710,57 @@ static  UIBackgroundTaskIdentifier _bgTaskToken;
     WKLogDebug(@"appWillTerminate---------------------------->");
 }
 
+#pragma mark - 后台静音播放保活
+
+- (void)startSilentAudioPlay {
+    if (_silentAudioPlayer && _silentAudioPlayer.isPlaying) {
+        return;
+    }
+    NSError *error = nil;
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    [session setCategory:AVAudioSessionCategoryPlayback
+             withOptions:AVAudioSessionCategoryOptionMixWithOthers
+                   error:&error];
+    if (error) {
+        NSLog(@"[BackgroundAudio] setCategory error: %@", error);
+        return;
+    }
+    [session setActive:YES error:&error];
+    if (error) {
+        NSLog(@"[BackgroundAudio] setActive error: %@", error);
+        return;
+    }
+    if (!_silentAudioPlayer) {
+        NSString *path = [[NSBundle mainBundle] pathForResource:@"silence" ofType:@"mp3"];
+        if (!path) {
+            NSLog(@"[BackgroundAudio] silence.mp3 not found");
+            return;
+        }
+        _silentAudioPlayer = [[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:path] error:&error];
+        if (error) {
+            NSLog(@"[BackgroundAudio] init player error: %@", error);
+            return;
+        }
+        _silentAudioPlayer.numberOfLoops = -1;
+        _silentAudioPlayer.volume = 0.0f;
+    }
+    [_silentAudioPlayer prepareToPlay];
+    [_silentAudioPlayer play];
+    NSLog(@"[BackgroundAudio] started");
+}
+
+- (void)stopSilentAudioPlay {
+    if (_silentAudioPlayer && _silentAudioPlayer.isPlaying) {
+        [_silentAudioPlayer stop];
+        NSLog(@"[BackgroundAudio] stopped");
+    }
+}
+
 - (void)appDidBecomeActive:(NSNotification *)notification  {
     WKLogDebug(@"appDidBecomeActive--->");
+    // 停止后台静音播放
+    [self stopSilentAudioPlay];
+
     UIApplication *application = (UIApplication*)notification.object;
     if(_bgTaskToken) {
         [application endBackgroundTask:_bgTaskToken];
