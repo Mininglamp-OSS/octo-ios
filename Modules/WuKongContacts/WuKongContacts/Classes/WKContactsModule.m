@@ -102,7 +102,7 @@
 
     // Bot item
     [self setMethod:@"contacts.header.bot" handler:^id _Nullable(id  _Nonnull param) {
-        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"bot" title:LLangW(@"Bot",weakSelf) icon:@"Contacts/Index/Bot" moduleID:[weakSelf moduleId] onClick:^{
+        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"bot" title:LLangW(@"AI",weakSelf) icon:@"Contacts/Index/Bot" moduleID:[weakSelf moduleId] onClick:^{
             [[WKNavigationManager shared] pushViewController:[WKBotListVC new] animated:YES];
         }];
         return item;

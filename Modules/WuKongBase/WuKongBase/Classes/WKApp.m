@@ -393,6 +393,7 @@ static WKApp *_instance;
 
         // 清除 Space 相关数据
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"currentSpaceId"];
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"WKSpaceGateCompleted"];
         [[NSUserDefaults standardUserDefaults] synchronize];
         [[WKSpaceModel shared] invalidateCache];
 
@@ -408,13 +409,13 @@ static WKApp *_instance;
     }];
     
     if([WKApp shared].isLogined) {
-        // 切换数据库
-        [[WKKitDB shared] switchDB:[WKApp shared].loginInfo.uid];
-
         // 检查是否有已加入的空间
         NSString *cachedSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
-        if(cachedSpaceId && cachedSpaceId.length > 0) {
-            // 有空间，正常进入主页并连接 IM
+        BOOL spaceGateCompleted = [[NSUserDefaults standardUserDefaults] boolForKey:@"WKSpaceGateCompleted"];
+
+        if(cachedSpaceId && cachedSpaceId.length > 0 && spaceGateCompleted) {
+            // 有空间且已完成引导，正常进入主页
+            [[WKKitDB shared] switchDB:[WKApp shared].loginInfo.uid];
             if(weakSelf.getHomeViewController) {
                 [[WKNavigationManager shared] resetRootViewController:weakSelf.getHomeViewController()];
             }
@@ -424,32 +425,13 @@ static WKApp *_instance;
             [[[WKSDK shared] connectionManager] connect];
             [[WKSecurityTipManager shared] syncIfNeed];
         } else {
-            // 没有缓存的空间ID，先同步设置空间引导页为 rootVC（防止启动时无 rootVC 崩溃）
-            [[WKApp shared] invoke:WKPOINT_SPACEGATE_SHOW param:nil];
-
-            // 再异步向服务器确认是否有空间
-            [WKAPIClient.sharedClient GET:@"space/my" parameters:nil].then(^(NSArray *spaces) {
-                if(spaces && spaces.count > 0) {
-                    // 服务器有空间，保存并切换到主页
-                    NSDictionary *firstSpace = spaces[0];
-                    NSString *spaceId = firstSpace[@"space_id"];
-                    if(spaceId && spaceId.length > 0) {
-                        [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
-                        [[NSUserDefaults standardUserDefaults] synchronize];
-                    }
-                    if(weakSelf.getHomeViewController) {
-                        [[WKNavigationManager shared] resetRootViewController:weakSelf.getHomeViewController()];
-                    }
-                    [[WKSyncService shared] sync];
-                    [weakSelf enterApp];
-                    [weakSelf registerForNotification];
-                    [[[WKSDK shared] connectionManager] connect];
-                    [[WKSecurityTipManager shared] syncIfNeed];
-                }
-                // 没有空间则保持 SpaceGate 页面
-            }).catch(^(NSError *error) {
-                // 网络错误保持 SpaceGate 页面
-            });
+            // 没有空间或未完成引导：清除登录信息，回到登录页
+            // 登录时会通过 space/my 判断是否需要显示空间引导
+            [[WKLoginInfo shared] clear];
+            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"currentSpaceId"];
+            [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"WKSpaceGateCompleted"];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+            [[WKApp shared] invoke:WKPOINT_LOGIN_SHOW param:nil];
         }
     }else {
         [[WKApp shared] invoke:WKPOINT_LOGIN_SHOW param:nil];

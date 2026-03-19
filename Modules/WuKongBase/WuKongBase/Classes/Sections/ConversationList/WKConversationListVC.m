@@ -137,7 +137,7 @@
     _spaceArrowView = [[UIImageView alloc] initWithImage:arrowImg];
     _spaceArrowView.contentMode = UIViewContentModeScaleAspectFit;
     _spaceArrowView.frame = CGRectMake(0, 0, 12, 12);
-    _spaceArrowView.hidden = YES; // 默认隐藏，space > 2 时显示
+    _spaceArrowView.hidden = NO;
     _spaceArrowView.userInteractionEnabled = YES;
     UITapGestureRecognizer *arrowTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(spaceButtonTapped)];
     [_spaceArrowView addGestureRecognizer:arrowTap];
@@ -361,16 +361,13 @@
 
     [self setCustomTitle:self._title];
 
-    // 更新折叠箭头：Space数量 > 2 时显示
+    // 更新折叠箭头位置（始终显示）
     if (self.spaceArrowView) {
-        BOOL shouldShow = self.spaceCount > 2;
-        self.spaceArrowView.hidden = !shouldShow;
-        if (shouldShow) {
-            UILabel *titleLabel = self.navigationBar.titleLabel;
-            CGFloat arrowX = titleLabel.lim_left + titleLabel.lim_width + 4;
-            CGFloat arrowY = titleLabel.lim_top + (titleLabel.lim_height - 12) / 2.0;
-            self.spaceArrowView.frame = CGRectMake(arrowX, arrowY, 12, 12);
-        }
+        self.spaceArrowView.hidden = NO;
+        UILabel *titleLabel = self.navigationBar.titleLabel;
+        CGFloat arrowX = titleLabel.lim_left + titleLabel.lim_width + 4;
+        CGFloat arrowY = titleLabel.lim_top + (titleLabel.lim_height - 12) / 2.0;
+        self.spaceArrowView.frame = CGRectMake(arrowX, arrowY, 12, 12);
     }
 
     [self.connectLock unlock];

@@ -45,6 +45,8 @@
 @property (nonatomic, assign) BOOL isDestroy;
 @property (nonatomic, assign) BOOL flame;
 @property (nonatomic, assign) NSInteger flameSecond;
+@property (nonatomic, copy) NSString *botDescription;
+@property (nonatomic, copy) NSString *botCreatorName;
 
 @end
 
@@ -56,6 +58,8 @@
 @property(nonatomic,strong) NSMutableDictionary *contextDict;
 
 @property(nonatomic,copy) NSString *introEndpointID;
+@property(nonatomic,copy) NSString *botDescription;
+@property(nonatomic,copy) NSString *botCreatorName;
 
 @end
 
@@ -97,7 +101,11 @@
     [self requestUserDetail:uid].then(^(UserModel *user){
         // 清空缓存的头像
         [[SDImageCache sharedImageCache] removeImageForKey:[WKAvatarUtil getAvatar:user.uid?:@""] withCompletion:nil];
-        
+
+        // 保存 Bot 信息
+        weakSelf.botDescription = user.botDescription ?: @"";
+        weakSelf.botCreatorName = user.botCreatorName ?: @"";
+
         // 重新缓存用户的channelInfo
         WKChannelInfo *channelInfo = [weakSelf channelInfoFromUser:user];
         WKChannel *channel = [[WKChannel alloc] initWith:uid channelType:WK_PERSON];
@@ -403,6 +411,51 @@
             ],
         };
     } category:WKPOINT_CATEGORY_USER_INFO_ITEM sort:900];
+
+    // Bot 简介
+    [[WKApp shared] setMethod:@"user.info.botDescription" handler:^id _Nullable(id  _Nonnull param) {
+        WKChannelInfo *channelInfo = param[@"channel_info"];
+        if (!channelInfo || !channelInfo.robot) {
+            return nil;
+        }
+        NSString *desc = weakSelf.botDescription;
+        if (!desc || [desc isEqualToString:@""]) {
+            desc = LLang(@"暂无简介");
+        }
+        return @{
+            @"height": @(10.0f),
+            @"items": @[
+                @{
+                    @"class": WKMultiLabelItemModel.class,
+                    @"mode": @(WKMultiLabelItemModeLeftRight),
+                    @"label": LLang(@"简介"),
+                    @"value": desc,
+                },
+            ],
+        };
+    } category:WKPOINT_CATEGORY_USER_INFO_ITEM sort:895];
+
+    // Bot 创建者
+    [[WKApp shared] setMethod:@"user.info.botCreator" handler:^id _Nullable(id  _Nonnull param) {
+        WKChannelInfo *channelInfo = param[@"channel_info"];
+        if (!channelInfo || !channelInfo.robot) {
+            return nil;
+        }
+        NSString *creator = weakSelf.botCreatorName;
+        if (!creator || [creator isEqualToString:@""]) {
+            return nil;
+        }
+        return @{
+            @"height": @(0.0f),
+            @"items": @[
+                @{
+                    @"class": WKLabelItemModel.class,
+                    @"label": LLang(@"创建者"),
+                    @"value": creator,
+                },
+            ],
+        };
+    } category:WKPOINT_CATEGORY_USER_INFO_ITEM sort:890];
 }
 
 
@@ -564,6 +617,8 @@
     u.isDestroy = [[dictory objectForKey:@"is_destroy"] boolValue];
     u.flame = [[dictory objectForKey:@"flame"] boolValue];
     u.flameSecond = [[dictory objectForKey:@"flame_second"] integerValue];
+    u.botDescription = [dictory objectForKey:@"bot_description"] ?: @"";
+    u.botCreatorName = [dictory objectForKey:@"bot_creator_name"] ?: @"";
     return u;
 }
 

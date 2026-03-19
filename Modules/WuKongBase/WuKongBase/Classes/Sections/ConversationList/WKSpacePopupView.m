@@ -424,7 +424,26 @@
         [[WKSpaceModel shared] joinSpace:inviteCode].then(^(id result){
             [window hideHud];
             [window showMsg:LLang(@"加入成功")];
-            [weakSelf loadSpaces];
+            // 加入成功后刷新列表，并自动切换到新加入的空间
+            [[WKSpaceModel shared] invalidateCache];
+            [[WKSpaceModel shared] getMySpaces].then(^(NSArray<WKSpaceEntity *> *spaces) {
+                weakSelf.spaces = spaces ?: @[];
+                [weakSelf.tableView reloadData];
+                // 找到新加入的空间并自动选中
+                for (WKSpaceEntity *space in spaces) {
+                    if (![space.space_id isEqualToString:weakSelf.currentSpaceId]) {
+                        // 选中非当前空间的最后一个（新加入的通常在最后）
+                    }
+                }
+                // 选中最后一个空间（新加入的）
+                WKSpaceEntity *newSpace = spaces.lastObject;
+                if (newSpace && ![newSpace.space_id isEqualToString:weakSelf.currentSpaceId]) {
+                    [weakSelf dismiss];
+                    if (weakSelf.onSpaceSelected) {
+                        weakSelf.onSpaceSelected(newSpace);
+                    }
+                }
+            });
         }).catch(^(NSError *error){
             [window hideHud];
             [window showMsg:error.localizedDescription];
@@ -503,48 +522,33 @@
     }
 
     [window showHUD:LLang(@"获取中...")];
-    __weak typeof(self) weakSelf = self;
-    [[WKSpaceModel shared] createInvite:space.space_id].then(^(id result){
-        // 确保在主线程更新UI
+    // 与 Web 端一致：通过 GET /space/{id} 获取空间详情中已有的 invite_code
+    NSString *path = [NSString stringWithFormat:@"space/%@", space.space_id];
+    [[WKAPIClient sharedClient] GET:path parameters:nil].then(^(NSDictionary *detail){
         dispatch_async(dispatch_get_main_queue(), ^{
-            // 在异步block内部重新获取window，避免使用外部变量
             UIWindow *win = [UIApplication sharedApplication].keyWindow;
             if (!win) {
                 win = [[UIApplication sharedApplication].windows firstObject];
             }
             [win hideHud];
 
-            // 检查返回值类型
-            if ([result isKindOfClass:[NSString class]]) {
-                NSString *inviteCode = (NSString *)result;
-                // 复制到剪贴板
+            NSString *inviteCode = detail[@"invite_code"];
+            if (inviteCode && inviteCode.length > 0) {
                 UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
                 pasteboard.string = inviteCode;
                 [win showMsg:LLang(@"邀请码已复制")];
             } else {
-                // 返回值不是字符串，可能是错误
-                [win showMsg:LLang(@"获取邀请码失败")];
+                [win showMsg:LLang(@"该空间暂无邀请码")];
             }
         });
-    }).catch(^(id error){
-        // 确保在主线程更新UI
+    }).catch(^(NSError *error){
         dispatch_async(dispatch_get_main_queue(), ^{
-            // 在异步block内部重新获取window，避免使用外部变量
             UIWindow *win = [UIApplication sharedApplication].keyWindow;
             if (!win) {
                 win = [[UIApplication sharedApplication].windows firstObject];
             }
             [win hideHud];
-
-            // 安全地获取错误信息
-            NSString *errorMsg = LLang(@"获取邀请码失败");
-            if ([error isKindOfClass:[NSError class]]) {
-                NSError *err = (NSError *)error;
-                errorMsg = err.localizedDescription ?: errorMsg;
-            } else if ([error isKindOfClass:[NSString class]]) {
-                errorMsg = (NSString *)error;
-            }
-            [win showMsg:errorMsg];
+            [win showMsg:error.localizedDescription ?: LLang(@"获取邀请码失败")];
         });
     });
 }

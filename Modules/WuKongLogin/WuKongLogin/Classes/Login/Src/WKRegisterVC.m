@@ -327,6 +327,8 @@
 - (UIView *)inviteCodeBoxView {
     if(!_inviteCodeBoxView) {
         _inviteCodeBoxView = [[UIView alloc] initWithFrame:CGRectMake(0, self.passwordBoxView.lim_bottom+20.0f, WKScreenWidth, self.passwordBoxView.lim_height)];
+        // 邀请码未开启时隐藏整个容器
+        _inviteCodeBoxView.hidden = !WKApp.shared.remoteConfig.registerInviteOn;
     }
     return _inviteCodeBoxView;
 }

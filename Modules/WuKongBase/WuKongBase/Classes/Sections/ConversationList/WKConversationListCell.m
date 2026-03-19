@@ -144,7 +144,7 @@
 - (UILabel *)botBadgeLbl {
     if(!_botBadgeLbl) {
         _botBadgeLbl = [[UILabel alloc] init];
-        _botBadgeLbl.text = @"Bot";
+        _botBadgeLbl.text = @"AI";
         _botBadgeLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
         _botBadgeLbl.textColor = [UIColor whiteColor];
         _botBadgeLbl.backgroundColor = [UIColor colorWithRed:136.0f/255.0f green:84.0f/255.0f blue:208.0f/255.0f alpha:1.0f];

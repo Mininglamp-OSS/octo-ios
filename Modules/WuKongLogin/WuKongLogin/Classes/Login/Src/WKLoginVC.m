@@ -128,6 +128,7 @@
             NSString *spaceId = firstSpace[@"space_id"];
             if(spaceId && ![spaceId isEqualToString:@""]) {
                 [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+                [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
                 [[NSUserDefaults standardUserDefaults] synchronize];
             }
             [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];

@@ -100,6 +100,9 @@
 }
 
 - (void)enterApp {
+    // 标记空间引导已完成
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
     [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
 }
 

@@ -152,11 +152,12 @@
         WKSpaceGateVM *spaceVM = [WKSpaceGateVM new];
         [spaceVM getMySpaces].then(^(NSArray *spaces){
             if (spaces && spaces.count > 0) {
-                // 已有空间，选择第一个并进入
+                // 已有空间（注册时带了邀请码），选择第一个并进入
                 NSDictionary *firstSpace = spaces[0];
                 NSString *spaceId = firstSpace[@"space_id"];
                 if (spaceId && ![spaceId isEqualToString:@""]) {
                     [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+                    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
                     [[NSUserDefaults standardUserDefaults] synchronize];
                 }
                 [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];

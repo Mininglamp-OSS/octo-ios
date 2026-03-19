@@ -466,12 +466,10 @@
 -(UIButton*) addFriendBtn {
     if(!_addFriendBtn) {
         _addFriendBtn = [[UIButton alloc] initWithFrame:CGRectMake(0.0f, 0.0f, self.view.lim_width - 40.0f, 40.0f)];
-        [_addFriendBtn setBackgroundColor:[WKApp shared].config.backgroundColor];
+        [_addFriendBtn setBackgroundColor:[WKApp shared].config.themeColor];
         [[_addFriendBtn titleLabel] setFont:[[WKApp shared].config appFontOfSize:16.0f]];
-        [_addFriendBtn setTitleColor:[WKApp shared].config.defaultTextColor forState:UIControlStateNormal];
+        [_addFriendBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
         [_addFriendBtn setTitle:LLang(@"添加好友") forState:UIControlStateNormal];
-        [_addFriendBtn setImage:[self imageName:@"Common/Index/AddFriend"] forState:UIControlStateNormal];
-        [_addFriendBtn setImageEdgeInsets:UIEdgeInsetsMake(2.0f, 0.0f, 0.0f, 4.0f)];
         _addFriendBtn.layer.masksToBounds = YES;
         _addFriendBtn.layer.cornerRadius = 4.0f;
         _addFriendBtn.lim_left = self.footerHeader.lim_width/2.0f - _addFriendBtn.lim_width/2.0f;

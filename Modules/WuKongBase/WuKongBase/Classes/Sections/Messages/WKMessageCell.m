@@ -225,7 +225,7 @@ static NSMutableDictionary *flameNodeCacheDict;
 
     // Bot标识
     self.botBadgeLbl = [[UILabel alloc] init];
-    self.botBadgeLbl.text = @"Bot";
+    self.botBadgeLbl.text = @"AI";
     self.botBadgeLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
     self.botBadgeLbl.textColor = [UIColor whiteColor];
     self.botBadgeLbl.backgroundColor = [UIColor colorWithRed:136.0f/255.0f green:84.0f/255.0f blue:208.0f/255.0f alpha:1.0f];
