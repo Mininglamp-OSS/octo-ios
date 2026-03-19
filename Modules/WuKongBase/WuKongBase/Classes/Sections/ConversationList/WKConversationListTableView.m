@@ -9,7 +9,7 @@
 /**
  此WKConversationListTableView主要解决如下的警告的问题
  Warning once only: UITableView was told to layout its visible cells and other contents without being in the view hierarchy....
- 
+
  */
 #import "WKConversationListTableView.h"
 #import "WuKongBase.h"
@@ -30,9 +30,9 @@
         {
             WKLogDebug(@"Got dirtied while offscreen. reload.");
             self.needsReloadWhenPutOnScreen = NO;
-            [self reloadData];
+            [super reloadData];
         }
-       
+
     }
 }
 
@@ -47,7 +47,12 @@
     }
     else
     {
-        [super performBatchUpdates:updates completion:completion];
+        @try {
+            [super performBatchUpdates:updates completion:completion];
+        } @catch (NSException *exception) {
+            NSLog(@"[WKConversationListTableView] performBatchUpdates exception: %@", exception);
+            [super reloadData];
+        }
     }
 }
 
@@ -62,8 +67,8 @@
     {
         [super beginUpdates];
     }
-    
-    
+
+
 }
 
 -(void)endUpdates
@@ -74,7 +79,12 @@
     }
     else
     {
-        [super endUpdates];
+        @try {
+            [super endUpdates];
+        } @catch (NSException *exception) {
+            NSLog(@"[WKConversationListTableView] endUpdates exception: %@", exception);
+            [super reloadData];
+        }
     }
 }
 
@@ -86,10 +96,15 @@
     }
     else
     {
-        [super insertSections:sections withRowAnimation:animation];
+        @try {
+            [super insertSections:sections withRowAnimation:animation];
+        } @catch (NSException *exception) {
+            NSLog(@"[WKConversationListTableView] insertSections exception: %@", exception);
+            [super reloadData];
+        }
     }
-    
-   
+
+
 }
 
 - (void)deleteSections:(NSIndexSet *)sections withRowAnimation:(UITableViewRowAnimation)animation
@@ -100,10 +115,15 @@
     }
     else
     {
-        [super deleteSections:sections withRowAnimation:animation];
+        @try {
+            [super deleteSections:sections withRowAnimation:animation];
+        } @catch (NSException *exception) {
+            NSLog(@"[WKConversationListTableView] deleteSections exception: %@", exception);
+            [super reloadData];
+        }
     }
-    
-   
+
+
 }
 
 -(void)reloadSections:(NSIndexSet *)sections withRowAnimation:(UITableViewRowAnimation)animation
@@ -114,10 +134,15 @@
     }
     else
     {
-         [super reloadSections:sections withRowAnimation:animation];
+        @try {
+            [super reloadSections:sections withRowAnimation:animation];
+        } @catch (NSException *exception) {
+            NSLog(@"[WKConversationListTableView] reloadSections exception: %@", exception);
+            [super reloadData];
+        }
     }
-    
-   
+
+
 }
 
 -(void)moveSection:(NSInteger)section toSection:(NSInteger)newSection
@@ -128,10 +153,15 @@
     }
     else
     {
-        [super moveSection:section toSection:newSection];
+        @try {
+            [super moveSection:section toSection:newSection];
+        } @catch (NSException *exception) {
+            NSLog(@"[WKConversationListTableView] moveSection exception: %@", exception);
+            [super reloadData];
+        }
     }
-    
-   
+
+
 }
 
 -(void)insertRowsAtIndexPaths:(NSArray *)indexPaths withRowAnimation:(UITableViewRowAnimation)animation
@@ -142,7 +172,12 @@
     }
     else
     {
-        [super insertRowsAtIndexPaths:indexPaths withRowAnimation:animation];
+        @try {
+            [super insertRowsAtIndexPaths:indexPaths withRowAnimation:animation];
+        } @catch (NSException *exception) {
+            NSLog(@"[WKConversationListTableView] insertRowsAtIndexPaths exception: %@", exception);
+            [super reloadData];
+        }
     }
 }
 
@@ -154,7 +189,12 @@
     }
     else
     {
-        [super deleteRowsAtIndexPaths:indexPaths withRowAnimation:animation];
+        @try {
+            [super deleteRowsAtIndexPaths:indexPaths withRowAnimation:animation];
+        } @catch (NSException *exception) {
+            NSLog(@"[WKConversationListTableView] deleteRowsAtIndexPaths exception: %@", exception);
+            [super reloadData];
+        }
     }
 }
 
@@ -166,7 +206,12 @@
     }
     else
     {
-        [super reloadRowsAtIndexPaths:indexPaths withRowAnimation:animation];
+        @try {
+            [super reloadRowsAtIndexPaths:indexPaths withRowAnimation:animation];
+        } @catch (NSException *exception) {
+            NSLog(@"[WKConversationListTableView] reloadRowsAtIndexPaths exception: %@", exception);
+            [super reloadData];
+        }
     }
 }
 
@@ -178,7 +223,12 @@
     }
     else
     {
-        [super moveRowAtIndexPath:indexPath toIndexPath:newIndexPath];
+        @try {
+            [super moveRowAtIndexPath:indexPath toIndexPath:newIndexPath];
+        } @catch (NSException *exception) {
+            NSLog(@"[WKConversationListTableView] moveRowAtIndexPath exception: %@", exception);
+            [super reloadData];
+        }
     }
 }
 

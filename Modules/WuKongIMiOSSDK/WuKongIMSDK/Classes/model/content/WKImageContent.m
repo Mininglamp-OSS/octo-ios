@@ -173,6 +173,19 @@
     self.remoteUrl = contentDic[@"url"];
     self.width = contentDic[@"width"]?[contentDic[@"width"] floatValue]:0;
     self.height = contentDic[@"height"]?[contentDic[@"height"] floatValue]:0;
+
+    // 服务端未返回宽高时(如Bot发送的图片)，给一个默认尺寸，避免渲染异常
+    if(self.width <= 0 || self.height <= 0) {
+        self.width = 200;
+        self.height = 200;
+    }
+
+    // [DEBUG] 打印图片消息解码详情
+    NSLog(@"[BOT-DEBUG] WKImageContent解码: url=%@, width=%.0f, height=%.0f, allKeys=%@",
+          self.remoteUrl ?: @"(nil)",
+          self.width,
+          self.height,
+          contentDic.allKeys);
 }
 
 - (NSDictionary *)encodeWithJSON {

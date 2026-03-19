@@ -525,7 +525,22 @@
 
 -(void) handleRecv:(NSArray<WKRecvPacket*>*) packets {
     NSArray<WKMessage*> *messages = [self recvPacketsToMessages:packets];
-    
+
+    // [DEBUG] 打印每条收到的消息概要
+    for (WKMessage *msg in messages) {
+        NSLog(@"[BOT-DEBUG] handleRecv消息概要: msgId=%llu, contentType=%ld, streamNo=%@, streamFlag=%ld, streamSeq=%d, fromUid=%@, status=%ld, isSend=%d, channel=%@/%d",
+              msg.messageId,
+              (long)msg.contentType,
+              msg.streamNo ?: @"(nil)",
+              (long)msg.streamFlag,
+              msg.streamSeq,
+              msg.fromUid,
+              (long)msg.status,
+              msg.isSend,
+              msg.channel.channelId,
+              msg.channel.channelType);
+    }
+
     [self handleMessages:messages];
     
     
@@ -1447,6 +1462,17 @@
         return nil;
     }
      NSNumber *actContentType = [contentDict objectForKey:@"type"];
+
+    // [DEBUG] 打印所有收到消息的原始内容，用于排查图片消息渲染问题
+    {
+        NSString *rawJSON = [[NSString alloc] initWithData:contentData encoding:NSUTF8StringEncoding];
+        NSLog(@"[BOT-DEBUG] ===== 收到消息 =====");
+        NSLog(@"[BOT-DEBUG] contentType: %@", actContentType);
+        NSLog(@"[BOT-DEBUG] contentClass: %@", [[WKSDK shared] getMessageContent:actContentType.integerValue]);
+        NSLog(@"[BOT-DEBUG] 原始JSON: %@", rawJSON);
+        NSLog(@"[BOT-DEBUG] ========================");
+    }
+
     WKMessageContent *messageContent;
     if(!contentType) {
         messageContent = [[WKUnknownContent alloc] init];
@@ -1456,7 +1482,7 @@
     }
 
     [messageContent decode:contentData];
-    
+
     *contentType = actContentType;
     return messageContent;
 }

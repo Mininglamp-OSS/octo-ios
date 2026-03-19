@@ -192,7 +192,8 @@ static WKOnlineStatusManager *_instance = nil;
     if(channelInfo.channel.channelType != WK_PERSON) {
         return nil;
     }
-    NSString *onlineDeviceName = [self deviceName:channelInfo.deviceFlag];
+    // 机器人没有设备概念，不显示设备类型
+    NSString *onlineDeviceName = channelInfo.robot ? @"" : [self deviceName:channelInfo.deviceFlag];
     if(channelInfo.online) {
         return [NSString stringWithFormat:LLang(@"%@在线"),onlineDeviceName];
     }

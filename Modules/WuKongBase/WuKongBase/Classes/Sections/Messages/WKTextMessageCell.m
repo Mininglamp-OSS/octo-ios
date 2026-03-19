@@ -519,7 +519,7 @@
     
    
     if([self isShowName:model]) {
-        return UIEdgeInsetsMake(edgeInsets.top + WK_NICKNAME_HEIGHT, edgeInsets.left, edgeInsets.bottom, edgeInsets.right);
+        return UIEdgeInsetsMake(edgeInsets.top + WK_NICKNAME_HEIGHT + 10.0f, edgeInsets.left, edgeInsets.bottom, edgeInsets.right);
     }
     return UIEdgeInsetsMake(edgeInsets.top, edgeInsets.left, edgeInsets.bottom, edgeInsets.right);
     

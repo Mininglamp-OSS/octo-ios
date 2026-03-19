@@ -16,10 +16,54 @@
 + (CGSize)contentSizeForMessage:(WKMessageModel *)model {
     NSMutableAttributedString *attrStr = [[NSMutableAttributedString alloc] init];
     attrStr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
-    [attrStr lim_parse:@"1"]; // 随便给一个字符串，这里主要目的是计算出正文高度跟文本消息的正文高度一样 这样就不会出现闪烁的感觉
+    [attrStr lim_parse:@"1"];
     CGFloat width = 44.0f;
     CGSize size = [attrStr size:width];
-    return CGSizeMake(width, size.height);
+
+    CGFloat nicknameWidth = 0.0f;
+    if([self isShowName:model]) {
+        CGSize nicknameSize = [self getNicknameSize:model];
+        nicknameWidth = nicknameSize.width;
+    }
+
+    return CGSizeMake(MAX(width, nicknameWidth), size.height);
+}
+
+// 参考 WKTextMessageCell：将昵称空间放入 contentEdgeInsets，使昵称在气泡内部
++(UIEdgeInsets) contentEdgeInsets:(WKMessageModel*)model {
+    UIEdgeInsets edgeInsets = [super contentEdgeInsets:model];
+    if([self isShowName:model]) {
+        return UIEdgeInsetsMake(edgeInsets.top + WK_NICKNAME_HEIGHT + 10.0f, edgeInsets.left, edgeInsets.bottom, edgeInsets.right);
+    }
+    return edgeInsets;
+}
+
+// 参考 WKTextMessageCell：昵称空间已在 contentEdgeInsets 中，bubbleEdgeInsets.top 设为 0
++(UIEdgeInsets) bubbleEdgeInsets:(WKMessageModel*) model contentSize:(CGSize)contentSize {
+    UIEdgeInsets bubbleInsets = [super bubbleEdgeInsets:model contentSize:contentSize];
+    return UIEdgeInsetsMake(0.0f, bubbleInsets.left, bubbleInsets.bottom, bubbleInsets.right);
+}
+
+// 参考 WKTextMessageCell：将昵称定位到气泡内部（正值 lim_top），而不是父类的负值
+-(void) layoutName {
+    WKBubblePostion position = [[self class] bubblePosition:self.messageModel];
+    if(!self.nameLbl.hidden) {
+        if(position == WKBubblePostionFirst || position == WKBubblePostionSingle) {
+            self.nameLbl.lim_left = WK_CONTENT_INSETS.left + WKLastBubbleOffsetSpace;
+        } else {
+            self.nameLbl.lim_left = WK_CONTENT_INSETS.left;
+        }
+
+        self.nameLbl.lim_top = WK_CONTENT_INSETS.top;
+        CGSize fitSize = [self.nameLbl sizeThatFits:CGSizeMake(self.messageContentView.lim_width, WK_NICKNAME_HEIGHT)];
+        self.nameLbl.lim_width = MIN(fitSize.width, self.messageContentView.lim_width);
+    } else {
+        self.nameLbl.lim_width = self.messageContentView.lim_width;
+    }
+
+    // Bot标识布局
+    self.botBadgeLbl.lim_left = self.nameLbl.lim_left + self.nameLbl.lim_width + 6.0f;
+    self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
 }
 
 - (void)initUI {
@@ -27,13 +71,11 @@
     self.typingIndicatorView = [[DGActivityIndicatorView alloc] initWithType:DGActivityIndicatorAnimationTypeThreeDots tintColor:[UIColor grayColor] size:30.0f];
     [self.messageContentView addSubview:self.typingIndicatorView];
     self.trailingView.timeLbl.hidden = YES;
-    
 }
 
 
 - (void)refresh:(WKMessageModel *)model {
     [super refresh:model];
-    self.nameLbl.hidden = YES;
     [self.typingIndicatorView startAnimating];
 }
 

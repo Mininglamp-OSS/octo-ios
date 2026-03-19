@@ -337,7 +337,7 @@
         _tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
         _tableView.backgroundColor = [UIColor clearColor];
         [_tableView setTableFooterView:[UIView new]];
-        _tableView.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
+        _tableView.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
         [_tableView registerClass:[WKTimeHeaderView class] forHeaderFooterViewReuseIdentifier:[WKTimeHeaderView reuseId]];
         _tableView.contentInset = UIEdgeInsetsMake(0.01f, 0, 0, 0); // TODO: 这里要整个0.01 要不然scrollIndicatorInsets会偏移顶部，黑人问号❓
         _tableView.scrollIndicatorInsets = _tableView.contentInset;
@@ -1098,14 +1098,11 @@
 # pragma mark -- 列表委托 UITableViewDataSource && UITableViewDelegate
 
 - (void)tableView:(UITableView *)tableView touchesTime:(NSTimeInterval)timestamp {
-    if(timestamp<0.5f) {
-        if(timestamp<0.5f) {
-            if(self.onContentViewClick) {
-                self.onContentViewClick();
-            }else {
-                [[UIApplication sharedApplication] sendAction:@selector(resignFirstResponder) to:nil from:nil forEvent:nil];
-            }
-        }
+    // 短按点击或长按都收起键盘
+    if(self.onContentViewClick) {
+        self.onContentViewClick();
+    }else {
+        [[UIApplication sharedApplication] sendAction:@selector(resignFirstResponder) to:nil from:nil forEvent:nil];
     }
 }
 
@@ -1238,6 +1235,16 @@
 
 // 收取消息 left表示剩余消息数量 TODO: 这里有优化的余地 优化到最后一条此会话的消息才刷新
 - (void)onRecvMessages:(WKMessage*)message left:(NSInteger)left {
+    // [DEBUG] 打印收到消息在UI层的处理
+    NSLog(@"[BOT-DEBUG] UI层收到消息: contentType=%ld, contentClass=%@, streamOn=%d, streamNo=%@, streamFlag=%ld, status=%ld, isSend=%d, fromUid=%@",
+          (long)message.contentType,
+          NSStringFromClass([message.content class]),
+          message.streamOn,
+          message.streamNo ?: @"(nil)",
+          (long)message.streamFlag,
+          (long)message.status,
+          message.isSend,
+          message.fromUid);
     if(![self needHandle:message]) {
         return;
     }

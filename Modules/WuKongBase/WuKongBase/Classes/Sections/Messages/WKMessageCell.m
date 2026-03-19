@@ -576,9 +576,18 @@ static NSMutableDictionary *flameNodeCacheDict;
     if([name isEqualToString:@""] && messageModel.from) {
         name = messageModel.from.name;
     }
-   NSString *deviceName = [self getDeviceName:messageModel];
-    if(deviceName && ![deviceName isEqualToString:@""]) {
-        name = [NSString stringWithFormat:@"%@/%@",name,deviceName];
+    // 机器人没有设备概念，不拼接设备名
+    BOOL isRobot = NO;
+    if(messageModel.memberOfFrom.robot) {
+        isRobot = YES;
+    } else if(fromChannelInfo && fromChannelInfo.robot) {
+        isRobot = YES;
+    }
+    if(!isRobot) {
+        NSString *deviceName = [self getDeviceName:messageModel];
+        if(deviceName && ![deviceName isEqualToString:@""]) {
+            name = [NSString stringWithFormat:@"%@/%@",name,deviceName];
+        }
     }
    
     return name;
