@@ -93,6 +93,7 @@
         
         self.systemUID = @"u_10000";
         self.fileHelperUID = @"fileHelper";
+        self.botfatherUID = @"botfather";
         
         self.contextMenu = [[WKThemeContextMenu alloc] init];
         

@@ -63,6 +63,9 @@
     // 添加主按钮
     [self.containerView addSubview:self.showInviteInputBtn];
     [self.containerView addSubview:self.createSpaceBtn];
+
+    // 检查是否有 DeepLink 暂存的邀请码
+    [self checkPendingInviteCode];
 }
 
 - (void)setupGradientBackground {
@@ -75,6 +78,40 @@
     gradient.startPoint = CGPointMake(0, 0);
     gradient.endPoint = CGPointMake(1, 1);
     [self.view.layer insertSublayer:gradient atIndex:0];
+}
+
+- (void)checkPendingInviteCode {
+    NSString *pendingCode = [[NSUserDefaults standardUserDefaults] stringForKey:@"WKPendingInviteCode"];
+    if (!pendingCode || pendingCode.length == 0) {
+        return;
+    }
+
+    // 清除暂存的邀请码
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"WKPendingInviteCode"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
+    // 自动加入空间
+    [self.view showHUD:LLang(@"正在通过邀请码加入空间...")];
+
+    __weak typeof(self) weakSelf = self;
+    [self.viewModel joinSpace:pendingCode].then(^(id result) {
+        [weakSelf.view switchHUDSuccess:LLang(@"已加入空间")];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [weakSelf checkSpaces];
+        });
+    }).catch(^(NSError *error) {
+        NSString *msg = error.domain ?: @"";
+        if ([msg containsString:@"已加入"] || [msg containsString:@"ALREADY_JOINED"] || [msg containsString:@"already"]) {
+            // 已在空间中，直接检查空间并进入
+            [weakSelf.view switchHUDSuccess:LLang(@"已在该空间中")];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [weakSelf checkSpaces];
+            });
+        } else {
+            [weakSelf.view switchHUDError:LLang(@"邀请码无效或已过期")];
+            // 显示正常引导界面，让用户手动操作
+        }
+    });
 }
 
 - (void)checkSpaces {

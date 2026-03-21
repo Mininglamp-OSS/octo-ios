@@ -80,12 +80,61 @@
     }
 }
 -(NSArray<WKMessageModel*>*) messagesToMessageModels:(NSArray<WKMessage*>*) messages {
+    // 对系统Bot（如BotFather）的消息按space_id过滤，实现会话隔离
+    NSArray<WKMessage*> *filteredMessages = [self filterSystemBotMessages:messages];
     NSMutableArray<WKMessageModel*> *messageModels = [NSMutableArray array];
-    for (WKMessage *message in messages) {
+    for (WKMessage *message in filteredMessages) {
         WKMessageModel *messageModel = [[WKMessageModel alloc] initWithMessage:message];
         [messageModels addObject:messageModel];
     }
     return messageModels;
+}
+
+/// 判断当前频道是否为系统Bot（如BotFather）
+-(BOOL) isSystemBotChannel {
+    if(self.channel.channelType != WK_PERSON) {
+        return NO;
+    }
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    return [self.channel.channelId isEqualToString:botfatherUID];
+}
+
+/// 过滤系统Bot消息：仅显示当前空间的消息（参考web端filterSystemBotMessages）
+-(NSArray<WKMessage*>*) filterSystemBotMessages:(NSArray<WKMessage*>*)messages {
+    if(![self isSystemBotChannel]) {
+        return messages; // 非系统Bot，不过滤
+    }
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(!currentSpaceId || currentSpaceId.length == 0) {
+        return messages; // 无空间上下文，不过滤
+    }
+    NSMutableArray<WKMessage*> *filtered = [NSMutableArray array];
+    for (WKMessage *message in messages) {
+        NSString *msgSpaceId = message.content.contentDict[@"space_id"];
+        if(!msgSpaceId || [msgSpaceId isKindOfClass:[NSNull class]]) {
+            [filtered addObject:message]; // 无space_id的历史消息：所有空间可见（向前兼容）
+        } else if([msgSpaceId isEqualToString:currentSpaceId]) {
+            [filtered addObject:message]; // space_id匹配当前空间
+        }
+        // 其他space_id不匹配的消息被过滤掉
+    }
+    return filtered;
+}
+
+/// 判断单条消息是否应在当前空间显示（用于实时消息过滤）
+-(BOOL) shouldShowMessageInCurrentSpace:(WKMessage*)message {
+    if(![self isSystemBotChannel]) {
+        return YES;
+    }
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(!currentSpaceId || currentSpaceId.length == 0) {
+        return YES;
+    }
+    NSString *msgSpaceId = message.content.contentDict[@"space_id"];
+    if(!msgSpaceId || [msgSpaceId isKindOfClass:[NSNull class]]) {
+        return YES; // 无space_id的历史消息，所有空间可见
+    }
+    return [msgSpaceId isEqualToString:currentSpaceId];
 }
 
 // insertFirst 是否插入到数组最前

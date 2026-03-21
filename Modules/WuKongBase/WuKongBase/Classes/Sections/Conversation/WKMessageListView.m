@@ -1013,6 +1013,25 @@
     return true;
 }
 
+// 判断消息是否应在当前空间显示（用于系统Bot如BotFather的会话隔离）
+-(BOOL) shouldShowMessageInCurrentSpace:(WKMessage*)message {
+    if(self.channel.channelType != WK_PERSON) {
+        return YES;
+    }
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    if(![self.channel.channelId isEqualToString:botfatherUID]) {
+        return YES; // 非系统Bot，不过滤
+    }
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(!currentSpaceId || currentSpaceId.length == 0) {
+        return YES; // 无空间上下文，不过滤
+    }
+    NSString *msgSpaceId = message.content.contentDict[@"space_id"];
+    if(!msgSpaceId || [msgSpaceId isKindOfClass:[NSNull class]]) {
+        return YES; // 无space_id的历史消息，所有空间可见
+    }
+    return [msgSpaceId isEqualToString:currentSpaceId];
+}
 
 -(void) handleRecvMessage:(WKMessage*) message  {
     if(message.isDeleted) { // 已删除的消息不处理
@@ -1246,6 +1265,10 @@
           message.isSend,
           message.fromUid);
     if(![self needHandle:message]) {
+        return;
+    }
+    // 系统Bot（如BotFather）消息按space_id过滤，实现会话隔离
+    if(![self shouldShowMessageInCurrentSpace:message]) {
         return;
     }
     NSIndexPath *indexPath = [self.dataProvider indexPathAtClientMsgNo:message.clientMsgNo];

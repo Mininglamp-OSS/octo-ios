@@ -503,7 +503,13 @@
 //    if(self.channel.channelType == WK_PERSON) {
 //        setting.signal = true; // 个人聊天进行signal加密
 //    }
-    
+
+    // ---------- DM消息注入space_id（用于BotFather等系统Bot的会话隔离）----------
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(currentSpaceId && currentSpaceId.length > 0 && self.channel.channelType == WK_PERSON) {
+        content.spaceId = currentSpaceId;
+    }
+
     // ---------- 阅后即焚  ----------
     WKChannelInfo *channelInfo = [self getChannelInfo];
     if(channelInfo && channelInfo.flame) {
@@ -548,11 +554,8 @@
 //    return;
     
     __weak typeof(self) weakSelf = self;
-//    if(self.conversationView.input.keyboardHeight>0) {
-//        self.conversationView.keepKeyboard = true;
-//        [self endEditing];
-//    }
-//
+    [self endEditing];
+
     WKMessageModel *contextMessage = messageCell.messageModel;
     
     NSArray<WKMessageLongMenusItem*> *toolbarMenus;

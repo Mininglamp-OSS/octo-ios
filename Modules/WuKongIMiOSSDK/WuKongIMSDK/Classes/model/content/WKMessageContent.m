@@ -104,6 +104,11 @@ NSString * const WKEntityTypeRobotCommand = @"bot_command";
         if(self.robotID && ![self.robotID isEqualToString:@""]) {
             dataDict[@"robot_id"] = self.robotID;
         }
+
+        // 编码spaceId（用于系统Bot的会话隔离）
+        if(self.spaceId && ![self.spaceId isEqualToString:@""]) {
+            dataDict[@"space_id"] = self.spaceId;
+        }
         
         // 编码正文数据
         NSDictionary *messageDict = [self encodeWithJSON];
@@ -174,6 +179,9 @@ NSString * const WKEntityTypeRobotCommand = @"bot_command";
         
         // 解码机器人ID
         self.robotID = dictionary[@"robot_id"]?:@"";
+
+        // 解码spaceId（用于系统Bot的会话隔离）
+        self.spaceId = dictionary[@"space_id"];
         
         // 解码消息数据
         [self decodeWithJSON:dictionary];

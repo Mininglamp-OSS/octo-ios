@@ -193,6 +193,8 @@ typedef NS_ENUM(NSUInteger, WKMentionedType) {
 @property(nonatomic,assign) BOOL flame;  // 是否开启阅后即焚
 @property(nonatomic,assign) NSInteger flameSecond; // 阅后即焚的秒数，如果为0 表示读后就删，如果有值表示读后多少秒后删
 
+@property(nonatomic,copy,nullable) NSString *spaceId; // 消息所属的空间ID，用于系统Bot（如BotFather）的会话隔离
+
 // 用户滑动看见消息就认为已查看 默认为true
 -(BOOL) viewedOfVisible;
 

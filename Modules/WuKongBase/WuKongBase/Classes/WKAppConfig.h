@@ -172,6 +172,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,copy) NSString *fileHelperUID; // 文件助手的uid
 @property(nonatomic,copy) NSString *systemUID; // 系统通知的uid
+@property(nonatomic,copy) NSString *botfatherUID; // BotFather的uid
 
 // 对按钮增加主题样式
 -(void) setThemeStyleButton:(UIButton*)btn;

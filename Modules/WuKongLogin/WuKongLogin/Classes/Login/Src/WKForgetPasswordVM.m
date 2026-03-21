@@ -23,6 +23,6 @@
 }
 
 - (AnyPromise *)emailForgetPwd:(NSString *)email code:(NSString *)code pwd:(NSString *)pwd {
-    return [[WKAPIClient sharedClient] POST:@"user/email/forgetpwd" parameters:@{@"email":email?:@"",@"code":code?:@"",@"pwd":pwd?:@""}];
+    return [[WKAPIClient sharedClient] POST:@"user/email/forgetpwd" parameters:@{@"email":email?:@"",@"code":code?:@"",@"new_password":pwd?:@""}];
 }
 @end

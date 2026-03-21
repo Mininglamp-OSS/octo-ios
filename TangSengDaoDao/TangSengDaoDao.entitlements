@@ -7,6 +7,7 @@
 	<key>com.apple.developer.associated-domains</key>
 	<array>
 		<string>applinks:githubim.com</string>
+		<string>applinks:api-test.example.com</string>
 	</array>
 </dict>
 </plist>
