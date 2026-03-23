@@ -112,6 +112,11 @@ static WKOnlineStatusManager *_instance = nil;
         }else {
             weakSelf.pcOnline = false;
             weakSelf.muteOfApp = false;
+            // 服务器未返回pc字段时，也需要通知UI更新为离线状态
+            WKPCOnlineResp *offlineResp = [WKPCOnlineResp new];
+            offlineResp.online = NO;
+            offlineResp.muteOfApp = NO;
+            [weakSelf callOnlineStatusChangeMyPCOnlineStatusDelegate:offlineResp];
         }
         if(allOnlineChannelInfos && allOnlineChannelInfos.count>0) {
             bool noNeedOffline = false; // 不需要离线

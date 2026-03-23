@@ -343,7 +343,10 @@ bool needRemind = false; // 是否需要提醒
             if(param[@"device_flag"]) {
                 deviceFlag = [param[@"device_flag"] integerValue];
             }
-            if(deviceFlag != WKDeviceFlagEnumAPP && deviceFlag != WKDeviceFlagEnumUnknown) {
+            // 只对Web(1)和PC(2)设备状态变化显示"已登录"banner
+            // 参考Android: device_flag == 1 才处理
+            // 修复: 之前用 != APP && != Unknown 过滤，导致device_flag=3(iOS)也被当作PC/Web设备
+            if(deviceFlag == WKDeviceFlagEnumWeb || deviceFlag == WKDeviceFlagEnumPC) {
                 WKPCOnlineResp *pcOnline = [WKPCOnlineResp new];
                 pcOnline.online = [param[@"online"] boolValue];
                 pcOnline.deviceFlag = deviceFlag;

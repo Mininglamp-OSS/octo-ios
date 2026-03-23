@@ -749,7 +749,9 @@ static  AVAudioPlayer *_silentAudioPlayer;
         _bgTaskToken = UIBackgroundTaskInvalid;
     }
     if([self isLogined]) {
-        // 更新频道在线状态，如果需要
+        // 回到前台时强制刷新在线状态（参考Android的onFront方案）
+        // 解决网页端异常断开后iOS端仍显示"网页端在线"的问题
+        [WKOnlineStatusManager shared].needUpdate = YES;
         [[WKOnlineStatusManager shared] requestUpdateChannelOnlineStatusIfNeed];
     }
     // 连接
