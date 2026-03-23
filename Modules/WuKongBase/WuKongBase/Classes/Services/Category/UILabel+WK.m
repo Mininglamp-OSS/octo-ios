@@ -31,10 +31,10 @@ static void * kTokens = &kTokens;
 
 -(void) onClick:(void(^)(id<WKMatchToken>))click {
     self.click = click;
-    
+
     self.userInteractionEnabled = YES;
     [self removeAllGestureRecognizers];
-   
+
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTap:)];
     [self addGestureRecognizer:tap];
 }
@@ -57,129 +57,99 @@ static void * kTokens = &kTokens;
     }
 }
 
+#pragma mark - 共享UITextView用于精确点击检测
 
+/// 获取共享的UITextView用于点击位置检测
+/// 参考Android的LinkMovementMethod方案：使用文本视图自身的布局引擎做命中测试，
+/// 避免UILabel内部布局与手动创建的NSLayoutManager之间的不一致问题
++(UITextView*) sharedHitTestTextView {
+    static UITextView *textView;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        textView = [[UITextView alloc] init];
+        textView.editable = NO;
+        textView.scrollEnabled = NO;
+        textView.textContainerInset = UIEdgeInsetsZero;
+        textView.textContainer.lineFragmentPadding = 0;
+    });
+    return textView;
+}
 
-
--(id<WKMatchToken>) didTapAttributedTextInLabel:(UITapGestureRecognizer *)tapGesture {
-    if(!self.tokens || self.tokens.count==0) {
-        return false;
+/// 使用UITextView的layoutManager精确查找点击位置对应的token
+-(id<WKMatchToken>) findTokenAtPoint:(CGPoint)point {
+    if(!self.tokens || self.tokens.count == 0) {
+        return nil;
     }
     UILabel *label = self;
-    
-    
-    NSParameterAssert(label != nil);
-    CGSize labelSize = label.bounds.size;
-    // create instances of NSLayoutManager, NSTextContainer and NSTextStorage
-    NSLayoutManager *layoutManager = [[NSLayoutManager alloc] init];
-    NSTextContainer *textContainer = [[NSTextContainer alloc] initWithSize:CGSizeZero];
-    NSTextStorage *textStorage = [[NSTextStorage alloc] initWithAttributedString:label.attributedText];
+    NSAttributedString *attrText = label.attributedText;
+    if(!attrText || attrText.length == 0) {
+        return nil;
+    }
 
-    // configure layoutManager and textStorage
-    [layoutManager addTextContainer:textContainer];
-    [textStorage addLayoutManager:layoutManager];
+    // 配置共享UITextView，使其布局与label一致
+    UITextView *tv = [[self class] sharedHitTestTextView];
+    tv.attributedText = attrText;
+    tv.frame = CGRectMake(0, 0, label.bounds.size.width, label.bounds.size.height);
+    tv.textContainer.maximumNumberOfLines = label.numberOfLines;
+    tv.textContainer.lineBreakMode = label.lineBreakMode;
 
-    // configure textContainer for the label
-    textContainer.lineFragmentPadding = 0.0;
-    textContainer.lineBreakMode = label.lineBreakMode;
-    textContainer.maximumNumberOfLines = label.numberOfLines;
-    textContainer.size = labelSize;
+    NSLayoutManager *layoutManager = tv.layoutManager;
+    NSTextContainer *textContainer = tv.textContainer;
 
-    // find the tapped character location and compare it to the specified range
-    CGPoint locationOfTouchInLabel = [tapGesture locationInView:label];
-    CGRect textBoundingBox = [layoutManager usedRectForTextContainer:textContainer];
-    CGPoint textContainerOffset = CGPointMake((labelSize.width - textBoundingBox.size.width) * 0.5 - textBoundingBox.origin.x,
-                                              (labelSize.height - textBoundingBox.size.height) * 0.5 - textBoundingBox.origin.y);
-    CGPoint locationOfTouchInTextContainer = CGPointMake(locationOfTouchInLabel.x - textContainerOffset.x,
-                                                         locationOfTouchInLabel.y - textContainerOffset.y);
-    NSInteger indexOfCharacter = [layoutManager characterIndexForPoint:locationOfTouchInTextContainer
-                                                            inTextContainer:textContainer
-                                   fractionOfDistanceBetweenInsertionPoints:nil];
+    // 强制完成布局
+    [layoutManager ensureLayoutForTextContainer:textContainer];
+
+    // 遍历每个可点击的token，检查点击点是否落在其glyph区域内
     for (id<WKMatchToken> token in self.tokens) {
-        if (NSLocationInRange(indexOfCharacter, token.range)) {
+        if(token.type != WKatchTokenTypeLink &&
+           token.type != WKatchTokenTypeLink2 &&
+           token.type != WKatchTokenTypeMetion) {
+            continue;
+        }
+        if(token.range.location + token.range.length > attrText.length) {
+            continue;
+        }
+
+        NSRange glyphRange = [layoutManager glyphRangeForCharacterRange:token.range actualCharacterRange:nil];
+
+        // 枚举token对应的每个行片段矩形（处理跨行的情况）
+        __block BOOL hit = NO;
+        [layoutManager enumerateEnclosingRectsForGlyphRange:glyphRange
+                                   withinSelectedGlyphRange:NSMakeRange(NSNotFound, 0)
+                                            inTextContainer:textContainer
+                                                 usingBlock:^(CGRect rect, BOOL *stop) {
+            // 扩大2pt容差，让点击更容易命中
+            CGRect expandedRect = CGRectInset(rect, -2, -2);
+            if(CGRectContainsPoint(expandedRect, point)) {
+                hit = YES;
+                *stop = YES;
+            }
+        }];
+
+        if(hit) {
             return token;
         }
     }
     return nil;
+}
+
+#pragma mark - 公开的点击检测方法
+
+-(id<WKMatchToken>) didTapAttributedTextInLabel:(UITapGestureRecognizer *)tapGesture {
+    CGPoint point = [tapGesture locationInView:self];
+    return [self findTokenAtPoint:point];
 }
 
 -( id<WKMatchToken>) matchDidTapAttributedTextInLabelWithPoint:(CGPoint)locationOfTouchInLabel {
-    
-    if(!self.tokens || self.tokens.count==0) {
-        return false;
-    }
-    UILabel *label = self;
-    
-    NSParameterAssert(label != nil);
-
-    CGSize labelSize = label.bounds.size;
-    // create instances of NSLayoutManager, NSTextContainer and NSTextStorage
-    NSLayoutManager *layoutManager = [[NSLayoutManager alloc] init];
-    NSTextContainer *textContainer = [[NSTextContainer alloc] initWithSize:CGSizeZero];
-    NSTextStorage *textStorage = [[NSTextStorage alloc] initWithAttributedString:label.attributedText];
-
-    // configure layoutManager and textStorage
-    [layoutManager addTextContainer:textContainer];
-    [textStorage addLayoutManager:layoutManager];
-
-    // configure textContainer for the label
-    textContainer.lineFragmentPadding = 0.0;
-    textContainer.lineBreakMode = label.lineBreakMode;
-    textContainer.maximumNumberOfLines = label.numberOfLines;
-    textContainer.size = labelSize;
-
-    // find the tapped character location and compare it to the specified range
-    CGRect textBoundingBox = [layoutManager usedRectForTextContainer:textContainer];
-    CGPoint textContainerOffset = CGPointMake((labelSize.width - textBoundingBox.size.width) * 0.5 - textBoundingBox.origin.x,
-                                              (labelSize.height - textBoundingBox.size.height) * 0.5 - textBoundingBox.origin.y);
-    CGPoint locationOfTouchInTextContainer = CGPointMake(locationOfTouchInLabel.x - textContainerOffset.x,
-                                                         locationOfTouchInLabel.y - textContainerOffset.y);
-    NSInteger indexOfCharacter = [layoutManager characterIndexForPoint:locationOfTouchInTextContainer
-                                                            inTextContainer:textContainer
-                                   fractionOfDistanceBetweenInsertionPoints:nil];
-    for (id<WKMatchToken> token in self.tokens) {
-        if (NSLocationInRange(indexOfCharacter, token.range)) {
-            return token;
-        }
-    }
-    return nil;
+    return [self findTokenAtPoint:locationOfTouchInLabel];
 }
 
 - (BOOL)didTapAttributedTextInLabel:(UITapGestureRecognizer *)tapGesture inRange:(NSRange)targetRange {
-    UILabel *label = (UILabel*)tapGesture.view;
-    
-    NSParameterAssert(label != nil);
-
-    CGSize labelSize = label.bounds.size;
-    // create instances of NSLayoutManager, NSTextContainer and NSTextStorage
-    NSLayoutManager *layoutManager = [[NSLayoutManager alloc] init];
-    NSTextContainer *textContainer = [[NSTextContainer alloc] initWithSize:CGSizeZero];
-    NSTextStorage *textStorage = [[NSTextStorage alloc] initWithAttributedString:label.attributedText];
-
-    // configure layoutManager and textStorage
-    [layoutManager addTextContainer:textContainer];
-    [textStorage addLayoutManager:layoutManager];
-
-    // configure textContainer for the label
-    textContainer.lineFragmentPadding = 0.0;
-    textContainer.lineBreakMode = label.lineBreakMode;
-    textContainer.maximumNumberOfLines = label.numberOfLines;
-    textContainer.size = labelSize;
-
-    // find the tapped character location and compare it to the specified range
-    CGPoint locationOfTouchInLabel = [tapGesture locationInView:label];
-    CGRect textBoundingBox = [layoutManager usedRectForTextContainer:textContainer];
-    CGPoint textContainerOffset = CGPointMake((labelSize.width - textBoundingBox.size.width) * 0.5 - textBoundingBox.origin.x,
-                                              (labelSize.height - textBoundingBox.size.height) * 0.5 - textBoundingBox.origin.y);
-    CGPoint locationOfTouchInTextContainer = CGPointMake(locationOfTouchInLabel.x - textContainerOffset.x,
-                                                         locationOfTouchInLabel.y - textContainerOffset.y);
-    NSInteger indexOfCharacter = [layoutManager characterIndexForPoint:locationOfTouchInTextContainer
-                                                            inTextContainer:textContainer
-                                   fractionOfDistanceBetweenInsertionPoints:nil];
-    if (NSLocationInRange(indexOfCharacter, targetRange)) {
+    id<WKMatchToken> token = [self didTapAttributedTextInLabel:tapGesture];
+    if(token && NSEqualRanges(token.range, targetRange)) {
         return YES;
-    } else {
-        return NO;
     }
+    return NO;
 }
 
 @end

@@ -100,10 +100,10 @@
     }
     CGFloat nicknameWidth = 0.0f;
     if([self isShowName:model]) {
-        CGSize nicknameSize =  [self getNicknameSize:model];
-        nicknameWidth = nicknameSize.width;
+        // 使用包含AI标识宽度的计算，避免气泡太窄导致AI标识被裁剪
+        nicknameWidth = [self getNicknameRowWidth:model];
     }
-    
+
     return CGSizeMake(MAX(size.width, nicknameWidth), size.height);
    
 }

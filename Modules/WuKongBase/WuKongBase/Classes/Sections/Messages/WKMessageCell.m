@@ -625,6 +625,31 @@ static NSMutableDictionary *flameNodeCacheDict;
     return nicknameSize;
 }
 
+/// 获取昵称行的总宽度（包括AI标识徽章），用于气泡宽度计算
++(CGFloat) getNicknameRowWidth:(WKMessageModel*)messageModel {
+    CGSize nicknameSize = [self getNicknameSize:messageModel];
+    CGFloat totalWidth = nicknameSize.width;
+
+    // 判断是否为机器人，需要加上AI标识的宽度
+    BOOL isBot = NO;
+    if(messageModel.memberOfFrom.robot) {
+        isBot = YES;
+    } else {
+        WKChannelInfo *fromChannelInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:messageModel.fromUid channelType:WK_PERSON]];
+        if(fromChannelInfo && fromChannelInfo.robot) {
+            isBot = YES;
+        }
+    }
+    if(isBot) {
+        // AI标识: "AI"文本(10pt字体) + 8pt内边距 + 6pt间距
+        UIFont *badgeFont = [[WKApp shared].config appFontOfSize:10.0f];
+        CGSize badgeTextSize = [@"AI" sizeWithAttributes:@{NSFontAttributeName: badgeFont}];
+        CGFloat badgeWidth = badgeTextSize.width + 8.0f; // sizeToFit + 8pt padding
+        totalWidth += 6.0f + badgeWidth; // 6pt gap + badge
+    }
+    return totalWidth;
+}
+
 
 // 气泡位置
 +(WKBubblePostion) bubblePosition:(WKMessageModel*)messageModel {

@@ -201,7 +201,7 @@ static void * kLinkColor = &kLinkColor;
         if(i == tokens.count-1 && text.length > token.range.location + token.range.length) {
             NSUInteger start = token.range.location + token.range.length;
             NSString *tokenText = [text substringFromIndex:start];
-            [newtokens addObject:[WKDefaultToken text:tokenText range:NSMakeRange(start, text.length) type:WKatchTokenTypeText]];
+            [newtokens addObject:[WKDefaultToken text:tokenText range:NSMakeRange(start, text.length - start) type:WKatchTokenTypeText]];
         }
     }
     

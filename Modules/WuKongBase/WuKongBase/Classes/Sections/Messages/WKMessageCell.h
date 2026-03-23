@@ -136,6 +136,8 @@ typedef enum :NSUInteger {
 
 // 获取昵称大小
 +(CGSize) getNicknameSize:(WKMessageModel*)messageModel;
+// 获取昵称行总宽度（包括AI标识）
++(CGFloat) getNicknameRowWidth:(WKMessageModel*)messageModel;
 
 -(void) startReminderAnimation;
 
