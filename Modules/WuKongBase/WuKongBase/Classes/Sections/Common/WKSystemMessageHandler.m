@@ -91,6 +91,9 @@ static WKSystemMessageHandler *_instance = nil;
 #pragma mark - WKChatManagerDelegate
 bool needRemind = false; // 是否需要提醒
 - (void)onRecvMessages:(WKMessage*)message left:(NSInteger)left {
+    // BotFather空间隔离：为缺少space_id的Bot回复推断当前空间
+    [self inferSpaceIdForBotMessage:message];
+
     [[WKTypingManager shared] removeTypingByChannel:message.channel newMessage:message];
     dispatch_async(self.systemMessageHandlerQueue, ^{
         switch (message.contentType) {
@@ -116,10 +119,13 @@ bool needRemind = false; // 是否需要提醒
     });
     if(message.header.showUnread) {
         if(![WKApp shared].currentChatChannel || ![[WKApp shared].currentChatChannel isEqual:message.channel]) {
-            needRemind = true;
+            // 空间隔离：不属于当前空间的消息不触发提醒（声音/振动/红点）
+            if([[WKLocalNotificationManager shared] isMessageInCurrentSpace:message]) {
+                needRemind = true;
+            }
         }
     }
-    
+
     // 按需显示本地通知
     [[WKLocalNotificationManager shared] showLocalNotificationIfNeed:message];
     
@@ -374,6 +380,34 @@ bool needRemind = false; // 是否需要提醒
         [[WKSDK shared].reminderManager sync];
     } else if([cmd isEqualToString:WKCMDSyncConversationExtra]) { // 同组最近会话扩展
         [[WKSDK shared].conversationManager syncExtra];
+    }
+}
+
+/// 为BotFather的回复消息推断space_id（Bot回复可能没有space_id）
+-(void) inferSpaceIdForBotMessage:(WKMessage*)message {
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    if(!botfatherUID || botfatherUID.length == 0) {
+        return;
+    }
+    // 只处理BotFather频道的消息
+    if(message.channel.channelType != WK_PERSON || ![message.channel.channelId isEqualToString:botfatherUID]) {
+        return;
+    }
+    // 只处理非自己发送的消息（Bot的回复）
+    if([message.fromUid isEqualToString:[WKApp shared].loginInfo.uid]) {
+        return;
+    }
+    // 已有space_id则不覆盖
+    NSString *msgSpaceId = message.content.contentDict[@"space_id"];
+    if([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0) {
+        return;
+    }
+    // 用当前活跃的space_id填充
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(currentSpaceId.length > 0 && message.content.contentDict) {
+        NSMutableDictionary *mutableDict = [message.content.contentDict mutableCopy];
+        mutableDict[@"space_id"] = currentSpaceId;
+        message.content.contentDict = [mutableDict copy];
     }
 }
 

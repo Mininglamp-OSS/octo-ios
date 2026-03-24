@@ -120,20 +120,16 @@
 }
 
 - (NSInteger)lastContentType {
-    WKMessage *msg = self.lastMessage;
-    if(msg) {
-        return msg.contentType;
+    if(self.lastChildConversation) {
+        return self.lastChildConversation.lastMessage.contentType;
+    }
+    if(self.c.lastMessage) {
+        return self.c.lastMessage.contentType;
     }
     return 0;
 }
 
 - (NSInteger)lastMsgTimestamp {
-    if([self isSystemBotChannel]) {
-        WKMessage *msg = [self spaceFilteredLastMessage];
-        if(msg) {
-            return msg.timestamp;
-        }
-    }
     if(self.lastChildConversation) {
         return self.lastChildConversation.lastMsgTimestamp;
     }
@@ -141,12 +137,13 @@
 }
 
 - (NSString *)content {
-    WKMessage *msg = self.lastMessage;
-    if(msg) {
-        if(msg.remoteExtra.contentEdit) {
-            return [msg.remoteExtra.contentEdit conversationDigest];
+    // 对BotFather等系统Bot，显示当前空间的最后一条消息内容
+    WKMessage *displayMsg = [self spaceFilteredLastMessage];
+    if(displayMsg) {
+        if(displayMsg.remoteExtra.contentEdit) {
+            return [displayMsg.remoteExtra.contentEdit conversationDigest];
         }
-        return [msg.content conversationDigest];
+        return [displayMsg.content conversationDigest];
     }
     return @"";
 }
@@ -185,7 +182,7 @@
     return botfatherUID && [self.c.channel.channelId isEqualToString:botfatherUID];
 }
 
-/// 获取当前空间对应的最后一条消息（仅系统Bot使用）
+/// 获取当前空间对应的最后一条消息（仅用于会话列表的显示内容，不影响SDK逻辑）
 -(WKMessage*) spaceFilteredLastMessage {
     WKMessage *rawLastMessage = self.lastChildConversation ? self.lastChildConversation.lastMessage : self.c.lastMessage;
     if(![self isSystemBotChannel]) {
@@ -196,38 +193,57 @@
         return rawLastMessage;
     }
 
-    // 检查原始lastMessage是否属于当前空间
+    // 检查原始lastMessage是否明确属于当前空间
     if(rawLastMessage) {
         NSString *msgSpaceId = rawLastMessage.content.contentDict[@"space_id"];
-        if(!msgSpaceId || [msgSpaceId isKindOfClass:[NSNull class]] || [msgSpaceId isEqualToString:currentSpaceId]) {
-            return rawLastMessage;
+        if([msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:currentSpaceId]) {
+            return rawLastMessage; // 明确匹配当前空间
         }
     }
 
-    // lastMessage不属于当前空间，从本地DB查找当前空间的最后一条消息
+    // lastMessage不属于当前空间（或无space_id），从本地DB查找
     if(self.cachedSpaceLastMessage && [self.cachedSpaceId isEqualToString:currentSpaceId]) {
-        return self.cachedSpaceLastMessage; // 使用缓存
+        return self.cachedSpaceLastMessage;
     }
 
-    // 查询最近的消息，从中筛选属于当前空间的
-    NSArray<WKMessage*> *messages = [[WKMessageDB shared] getMessages:self.c.channel startOrderSeq:0 endOrderSeq:0 limit:50 pullMode:WKPullModeDown];
+    // 分页迭代查询，无数量限制，从最新消息往旧查找匹配当前space_id的消息
     WKMessage *spaceLastMessage = nil;
-    for (NSInteger i = messages.count - 1; i >= 0; i--) {
-        WKMessage *msg = messages[i];
-        NSString *msgSpaceId = msg.content.contentDict[@"space_id"];
-        if(!msgSpaceId || [msgSpaceId isKindOfClass:[NSNull class]] || [msgSpaceId isEqualToString:currentSpaceId]) {
-            spaceLastMessage = msg;
+    uint32_t cursor = 0; // 0表示从最新开始
+    BOOL hasMore = YES;
+    while (hasMore) {
+        NSArray<WKMessage*> *messages = [[WKMessageDB shared] getMessages:self.c.channel startOrderSeq:cursor endOrderSeq:0 limit:200 pullMode:WKPullModeDown];
+        if(!messages || messages.count == 0) {
             break;
         }
+        // messages按DESC排序（最新在前），从index 0开始找最新的匹配消息
+        for (WKMessage *msg in messages) {
+            NSString *msgSpaceId = msg.content.contentDict[@"space_id"];
+            if([msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:currentSpaceId]) {
+                spaceLastMessage = msg;
+                break;
+            }
+        }
+        if(spaceLastMessage) {
+            break;
+        }
+        // 取本批次最后一条（最旧的）的orderSeq作为下一批的游标
+        WKMessage *oldestMsg = messages.lastObject;
+        if(oldestMsg.orderSeq == 0) {
+            break; // 已到最旧消息
+        }
+        cursor = oldestMsg.orderSeq;
+        hasMore = messages.count == 200; // 不足200条说明已无更多消息
     }
-    // 缓存结果
     self.cachedSpaceLastMessage = spaceLastMessage;
     self.cachedSpaceId = currentSpaceId;
     return spaceLastMessage;
 }
 
 - (WKMessage *)lastMessage {
-    return [self spaceFilteredLastMessage];
+    if(self.lastChildConversation) {
+        return self.lastChildConversation.lastMessage;
+    }
+    return self.c.lastMessage;
 }
 
 - (NSString *)lastClientMsgNo {

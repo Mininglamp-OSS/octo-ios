@@ -689,26 +689,88 @@
     if(!conversations || conversations.count<=0) {
         return;
     }
-//    for (WKConversation *conversation in conversations) {
-//        if([WKApp shared].currentChatChannel && [conversation.channel isEqual:[WKApp shared].currentChatChannel]) {
-//            conversation.unreadCount = 0;
-//            break;
-//        }
-//    }
-    if(conversations.count>1) { // 同时更新的会话大于1 则直接reloadData,等于1 则可以走insertRowsAtIndexPaths或moveRowAtIndexPath这样有动画效果 用户体验好
-        for (WKConversation *conversation in conversations) {
+
+    // 空间隔离：过滤掉不属于当前空间的会话更新
+    NSArray<WKConversation*> *filtered = [self filterConversationsBySpace:conversations];
+    if(filtered.count <= 0) {
+        return;
+    }
+
+    if(filtered.count>1) {
+        for (WKConversation *conversation in filtered) {
             [self onlyAddOrUpdateConversation:conversation];
         }
         [self refreshTable];
         [self refreshBadge];
         return;
     }
-   
-   WKConversation *conversation = conversations[0];
+
+   WKConversation *conversation = filtered[0];
     [self uiAddOrUpdateConversationForOne:conversation];
     [self refreshBadge];
-    
+
 }
+/// 过滤不属于当前空间的会话更新（解决跨空间消息产生红点的问题）
+-(NSArray<WKConversation*>*) filterConversationsBySpace:(NSArray<WKConversation*>*)conversations {
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(!currentSpaceId || currentSpaceId.length == 0) {
+        return conversations; // 无空间上下文，不过滤
+    }
+    NSMutableArray<WKConversation*> *filtered = [NSMutableArray array];
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    for (WKConversation *conversation in conversations) {
+        NSString *channelId = conversation.channel.channelId;
+        // 系统通知和文件助手始终通过
+        if([channelId isEqualToString:[WKApp shared].config.systemUID] ||
+           [channelId isEqualToString:[WKApp shared].config.fileHelperUID]) {
+            [filtered addObject:conversation];
+            continue;
+        }
+        // BotFather空间隔离：新消息到达时自动取消隐藏
+        if(botfatherUID && [channelId isEqualToString:botfatherUID]) {
+            if(conversation.lastMessage) {
+                NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
+                if([msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:currentSpaceId]) {
+                    // 当前空间有新消息，自动取消隐藏
+                    NSString *hiddenKey = [NSString stringWithFormat:@"WKBotFatherHidden_%@", currentSpaceId];
+                    [[NSUserDefaults standardUserDefaults] removeObjectForKey:hiddenKey];
+                    [filtered addObject:conversation];
+                    continue;
+                } else if(msgSpaceId && ![msgSpaceId isKindOfClass:[NSNull class]] && msgSpaceId.length > 0) {
+                    continue; // 消息来自其他空间，跳过
+                }
+            }
+            // 检查是否被当前空间隐藏
+            NSString *hiddenKey = [NSString stringWithFormat:@"WKBotFatherHidden_%@", currentSpaceId];
+            if([[NSUserDefaults standardUserDefaults] boolForKey:hiddenKey]) {
+                continue; // 当前空间已隐藏BotFather
+            }
+            [filtered addObject:conversation];
+            continue;
+        }
+        // 检查触发更新的lastMessage是否属于当前空间
+        if(conversation.lastMessage) {
+            NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
+            if(msgSpaceId && ![msgSpaceId isKindOfClass:[NSNull class]] && msgSpaceId.length > 0) {
+                if(![msgSpaceId isEqualToString:currentSpaceId]) {
+                    continue; // 消息来自其他空间，跳过此更新
+                }
+            }
+        }
+        // 检查该会话是否已在当前列表中（列表已按空间过滤）
+        BOOL existsInList = [self.conversationListVM indexAtChannel:conversation.channel] != -1;
+        if(existsInList) {
+            [filtered addObject:conversation];
+        } else {
+            // 新会话：检查是否属于当前空间
+            if([self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
+                [filtered addObject:conversation];
+            }
+        }
+    }
+    return filtered;
+}
+
 // 单个会话添加或更新(大量会话不要使用此方法，容易卡顿)
 -(void) uiAddOrUpdateConversationForOne:(WKConversation*)conversation {
     WKConversationWrapModel *newModel = [self.conversationListVM getRealShowConversationWrap:[[WKConversationWrapModel alloc] initWithConversation:conversation]];
@@ -753,7 +815,38 @@
 }
 
 
+/// 判断会话是否属于当前空间（用于过滤其他空间的实时消息）
+-(BOOL) isConversationInCurrentSpace:(WKConversation*)conversation spaceId:(NSString*)spaceId {
+    NSString *channelId = conversation.channel.channelId;
+
+    // 系统通知和文件助手是全局的，始终显示
+    if([channelId isEqualToString:[WKApp shared].config.systemUID] ||
+       [channelId isEqualToString:[WKApp shared].config.fileHelperUID]) {
+        return YES;
+    }
+
+    // BotFather是全局的（已有space_id消息过滤）
+    if([channelId isEqualToString:[WKApp shared].config.botfatherUID]) {
+        return YES;
+    }
+
+    // 群聊和社区频道：通过conversation/sync已过滤，实时新增的大概率是跨空间的
+    // 个人聊天：需要检查对方是否属于当前空间
+    // 简单策略：实时新增的未知会话不添加，等下次sync时自然出现
+    return NO;
+}
+
 -(void) uiAddConversation:(WKConversation*)conversation {
+    // 有活跃空间时，不自动添加不属于当前空间的新会话
+    // 该会话会在用户切换到对应空间时通过conversation/sync加载
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(currentSpaceId && currentSpaceId.length > 0) {
+        // 已在列表中的会话直接更新（在uiAddOrUpdateConversationForOne中已处理）
+        // 这里是真正的"新增"，需要验证是否属于当前空间
+        if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
+            return;
+        }
+    }
     WKConversationWrapModel *model = [[WKConversationWrapModel alloc] initWithConversation:conversation];
     NSInteger insertPlace = [self.conversationListVM insert:model];
     [self.tableView insertRowsAtIndexPaths:@[ [NSIndexPath indexPathForRow:insertPlace inSection:0] ] withRowAnimation:UITableViewRowAnimationFade];
@@ -770,12 +863,26 @@
     if(model) {
         [model setConversation:conversation];
     }else {
+        // 有活跃空间时，不自动添加不属于当前空间的新会话
+        NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+        if(currentSpaceId && currentSpaceId.length > 0) {
+            if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
+                return;
+            }
+        }
         [self.conversationListVM insert:[[WKConversationWrapModel alloc] initWithConversation:conversation] atIndex:0];
     }
 }
 // 更新最近会话未读数
 - (void)onConversationUnreadCountUpdate:(WKChannel*)channel unreadCount:(NSInteger)unreadCount {
-    
+    // BotFather等全局Bot的未读数需要空间隔离
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(currentSpaceId && currentSpaceId.length > 0 &&
+       [channel.channelId isEqualToString:[WKApp shared].config.botfatherUID]) {
+        // 不更新BotFather的未读数，由空间过滤后的会话更新负责
+        return;
+    }
+
     NSInteger index = [self.conversationListVM indexAtChannel:channel];
     if(index!=-1) {
         WKConversationListCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]];
@@ -786,7 +893,7 @@
             [cell layoutSubviews];
             [self refreshBadge];
         }
-       
+
     }
 }
 // 删除所有最近会话
@@ -1010,11 +1117,26 @@
         }]];
         [sheet addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"确认删除") onClick:^{
             WKConversationWrapModel *conversationModel = [weakSelf.conversationListVM conversationAtIndex:indexPath.row];
+            if(!conversationModel) return;
+
+            // BotFather空间隔离：不真正删除会话，只标记当前空间隐藏
+            NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+            NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+            if(botfatherUID && [conversationModel.channel.channelId isEqualToString:botfatherUID] && currentSpaceId.length > 0) {
+                // 标记当前空间隐藏
+                NSString *hiddenKey = [NSString stringWithFormat:@"WKBotFatherHidden_%@", currentSpaceId];
+                [[NSUserDefaults standardUserDefaults] setBool:YES forKey:hiddenKey];
+                // 从内存列表移除
+                [weakSelf.conversationListVM removeConversationAtIndex:indexPath.row];
+                [weakSelf.tableView deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationAutomatic];
+                // 清空当前空间的消息
+                [[WKMessageManager shared] clearMessages:conversationModel.channel];
+                return;
+            }
+
             [weakSelf.conversationListVM removeConversationAtIndex:indexPath.row];
             [weakSelf.tableView deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationAutomatic];
-            if(conversationModel) {
-                [[WKSDK shared].conversationManager deleteConversation:conversationModel.channel];
-            }
+            [[WKSDK shared].conversationManager deleteConversation:conversationModel.channel];
         }]];
         [sheet show];
     }];

@@ -10,6 +10,7 @@
 #import "WKLogs.h"
 #import "WKMySettingManager.h"
 #import "WuKongBase.h"
+#import "WKConversationListVM.h"
 @implementation WKLocalNotificationManager
 
 static WKLocalNotificationManager *_instance = nil;
@@ -32,11 +33,49 @@ static WKLocalNotificationManager *_instance = nil;
     if(message.contentType == WK_CMD || !message.header.showUnread || ![WKMySettingManager shared].newMsgNotice) {
         return;
     }
+
+    // 空间隔离：不属于当前空间的消息不显示推送通知
+    if(![self isMessageInCurrentSpace:message]) {
+        return;
+    }
+
     UIApplicationState state = [UIApplication sharedApplication].applicationState;
     if(state == UIApplicationStateActive) {
         return;
     }
     [self showLocalNotification:message];
+}
+
+/// 判断消息是否属于当前空间
+-(BOOL) isMessageInCurrentSpace:(WKMessage*)message {
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(!currentSpaceId || currentSpaceId.length == 0) {
+        return YES; // 无空间上下文，不过滤
+    }
+
+    // 系统通知和文件助手是全局的，始终通知
+    NSString *channelId = message.channel.channelId;
+    if([channelId isEqualToString:[WKApp shared].config.systemUID] ||
+       [channelId isEqualToString:[WKApp shared].config.fileHelperUID]) {
+        return YES;
+    }
+
+    // 核心判断：检查该会话是否在当前空间的会话列表中
+    // 会话列表通过 conversation/sync?space_id= 从服务端加载，已按空间过滤
+    WKConversationWrapModel *existModel = [[WKConversationListVM shared] modelAtChannel:message.channel];
+    if(!existModel) {
+        return NO; // 不在当前空间的会话列表中，不通知
+    }
+
+    // BotFather 存在于所有空间，需要额外检查消息的 space_id 做隔离
+    if([channelId isEqualToString:[WKApp shared].config.botfatherUID]) {
+        NSString *msgSpaceId = message.content.contentDict[@"space_id"];
+        if(msgSpaceId && ![msgSpaceId isKindOfClass:[NSNull class]] && msgSpaceId.length > 0) {
+            return [msgSpaceId isEqualToString:currentSpaceId];
+        }
+    }
+
+    return YES;
 }
 
 -(void) showLocalNotification:(WKMessage*)message {

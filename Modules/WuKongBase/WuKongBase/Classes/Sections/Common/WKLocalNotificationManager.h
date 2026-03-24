@@ -21,6 +21,9 @@ NS_ASSUME_NONNULL_BEGIN
 // 显示本地通知在允许的情况下
 -(void) showLocalNotificationIfNeed:(WKMessage*)message;
 
+/// 判断消息是否属于当前空间（用于空间隔离过滤）
+-(BOOL) isMessageInCurrentSpace:(WKMessage*)message;
+
 @end
 
 

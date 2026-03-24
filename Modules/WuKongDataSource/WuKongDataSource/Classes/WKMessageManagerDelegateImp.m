@@ -44,6 +44,14 @@
  @param channel 频道
  */
 -(void) messageManager:(WKMessageManager*)manager clearMessages:(WKChannel*)channel{
+    // BotFather空间隔离：只删除当前空间的消息，不影响其他空间
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(botfatherUID && [channel.channelId isEqualToString:botfatherUID] && currentSpaceId.length > 0) {
+        [self clearBotFatherMessagesForSpace:channel spaceId:currentSpaceId];
+        return;
+    }
+
     uint32_t messageSeq = [[WKMessageDB shared] getMaxMessageSeq:channel];
     [[WKAPIClient sharedClient] POST:@"message/offset" parameters:@{
         @"channel_id": channel.channelId,
@@ -54,6 +62,60 @@
     }).catch(^(NSError *error){
         WKLogError(@"删除服务器频道消息失败！-> %@",error);
     });
+}
+
+/// BotFather空间隔离版清空消息：仅删除匹配当前space_id的消息
+-(void) clearBotFatherMessagesForSpace:(WKChannel*)channel spaceId:(NSString*)spaceId {
+    NSMutableArray<WKMessage*> *messagesToDelete = [NSMutableArray array];
+    uint32_t cursor = 0;
+    BOOL hasMore = YES;
+
+    // 分页遍历所有消息，收集属于当前空间的消息
+    while (hasMore) {
+        NSArray<WKMessage*> *messages = [[WKMessageDB shared] getMessages:channel startOrderSeq:cursor endOrderSeq:0 limit:200 pullMode:WKPullModeDown];
+        if(!messages || messages.count == 0) {
+            break;
+        }
+        for (WKMessage *msg in messages) {
+            NSString *msgSpaceId = msg.content.contentDict[@"space_id"];
+            if([msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:spaceId]) {
+                [messagesToDelete addObject:msg];
+            }
+        }
+        WKMessage *oldestMsg = messages.lastObject;
+        if(oldestMsg.orderSeq == 0) {
+            break;
+        }
+        cursor = oldestMsg.orderSeq;
+        hasMore = messages.count == 200;
+    }
+
+    if(messagesToDelete.count == 0) {
+        return;
+    }
+
+    // 逐条本地软删除
+    for (WKMessage *msg in messagesToDelete) {
+        [[WKSDK shared].chatManager deleteMessage:msg];
+    }
+
+    // 批量通知服务端删除
+    NSMutableArray *params = [NSMutableArray array];
+    for (WKMessage *msg in messagesToDelete) {
+        if(msg.messageId > 0) {
+            [params addObject:@{
+                @"message_id": [NSString stringWithFormat:@"%llu", msg.messageId],
+                @"channel_id": channel.channelId,
+                @"channel_type": @(channel.channelType),
+                @"message_seq": @(msg.messageSeq),
+            }];
+        }
+    }
+    if(params.count > 0) {
+        [[WKAPIClient sharedClient] DELETE:@"message" parameters:params].catch(^(NSError *error){
+            WKLogError(@"BotFather空间隔离删除消息失败！-> %@", error);
+        });
+    }
 }
 
 /**

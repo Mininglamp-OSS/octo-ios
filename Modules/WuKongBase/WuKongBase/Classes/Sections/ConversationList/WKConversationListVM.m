@@ -53,11 +53,15 @@ static WKConversationListVM *_instance;
     NSArray<WKConversation*> *conversations = [[[WKSDK shared] conversationManager] getConversationList];
     if(conversations) {
         for (WKConversation *conversation in conversations) {
+            // 空间隔离：过滤不属于当前空间的会话
+            if(![self shouldShowConversation:conversation]) {
+                continue;
+            }
             WKConversationWrapModel *wrapModel = [[WKConversationWrapModel alloc] initWithConversation:conversation];
             if(conversation.parentChannel) {
-                
+
                 WKConversationWrapModel *parentConversationWrapModel = [self addOrCreateParentConversation:conversation.parentChannel newConversationWrapModel:wrapModel conversationWrapModels:conversationWrapModels];
-                
+
                 if(parentConversationWrapModel) {
                     [self handleProhibitwords:parentConversationWrapModel];
                     [conversationWrapModels addObject:parentConversationWrapModel];
@@ -66,15 +70,47 @@ static WKConversationListVM *_instance;
                 [self handleProhibitwords:wrapModel];
                 [conversationWrapModels addObject:wrapModel];
             }
-            
+
         }
     }
-    
+
     self.conversationWrapModels = conversationWrapModels;
     [self sortConversationList];
     if(finished) {
         finished();
     }
+}
+
+/// 判断会话是否应在当前空间显示
+-(BOOL) shouldShowConversation:(WKConversation*)conversation {
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(!currentSpaceId || currentSpaceId.length == 0) {
+        return YES; // 无空间上下文，不过滤
+    }
+    NSString *channelId = conversation.channel.channelId;
+    // 系统通知、文件助手始终显示
+    if([channelId isEqualToString:[WKApp shared].config.systemUID] ||
+       [channelId isEqualToString:[WKApp shared].config.fileHelperUID]) {
+        return YES;
+    }
+    // BotFather：检查当前空间是否已隐藏
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    if(botfatherUID && [channelId isEqualToString:botfatherUID]) {
+        NSString *hiddenKey = [NSString stringWithFormat:@"WKBotFatherHidden_%@", currentSpaceId];
+        if([[NSUserDefaults standardUserDefaults] boolForKey:hiddenKey]) {
+            return NO;
+        }
+        return YES;
+    }
+    // 检查lastMessage的space_id：如果明确属于其他空间则不显示
+    if(conversation.lastMessage) {
+        NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
+        if(msgSpaceId && ![msgSpaceId isKindOfClass:[NSNull class]] && msgSpaceId.length > 0) {
+            return [msgSpaceId isEqualToString:currentSpaceId];
+        }
+    }
+    // 无space_id的会话：保留显示（由conversation/sync决定的）
+    return YES;
 }
 
 -(void) handleProhibitwords:(WKConversationWrapModel*)model {
