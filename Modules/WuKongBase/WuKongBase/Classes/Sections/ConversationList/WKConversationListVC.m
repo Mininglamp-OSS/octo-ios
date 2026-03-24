@@ -65,6 +65,7 @@
 @property(nonatomic,assign) BOOL spaceListLoaded; // Space列表是否已加载
 @property(nonatomic,assign) NSInteger spaceCount; // Space总数
 @property(nonatomic,strong) UIImageView *spaceArrowView; // Space标题右侧折叠箭头
+@property(nonatomic,strong) NSMutableSet<NSString*> *spaceChannelKeys; // Space 会话白名单（channelId_channelType）
 
 @end
 
@@ -110,7 +111,8 @@
         }
         [weakSelf.tableView reloadData];
         [weakSelf refreshBadge];
-
+        // 初始加载后建立 Space 白名单
+        [weakSelf rebuildSpaceChannelKeys];
     }];
 
 //    self.refreshTimer = [NSTimer scheduledTimerWithTimeInterval:30 target:self selector:@selector(timerRefreshTable) userInfo:nil repeats:YES];
@@ -157,6 +159,7 @@
             NSLog(@"🔄 Space 变化: %@ -> %@，清空旧会话", lastSpaceId, self.currentSpaceId);
             [self.conversationListVM reset];
             [[WKConversationDB shared] deleteAllConversation];
+            self.spaceChannelKeys = nil; // 清空白名单，等待新 sync 重建
             [self.tableView reloadData];
             // 记录当前空间
             [[NSUserDefaults standardUserDefaults] setObject:self.currentSpaceId forKey:@"WKLastLoadedSpaceId"];
@@ -447,9 +450,10 @@
         [weakSelf refreshTitle];
 
         // 参考 Web/Android 端：清空本地会话数据后重新从服务器同步
-        // 1. 清空 VM 数据和本地会话数据库
+        // 1. 清空 VM 数据、本地会话数据库和 Space 白名单
         [weakSelf.conversationListVM reset];
         [[WKConversationDB shared] deleteAllConversation];
+        weakSelf.spaceChannelKeys = nil; // 清空白名单，sync 期间不过滤
 
         // 2. 先刷新 UI 显示空列表
         [weakSelf.tableView reloadData];
@@ -482,6 +486,8 @@
                     [weakSelf.conversationListVM loadConversationList:^{
                         [weakSelf.tableView reloadData];
                         [weakSelf refreshBadge];
+                        // Sync 完成后重建 Space 白名单
+                        [weakSelf rebuildSpaceChannelKeys];
                     }];
                 });
             });
@@ -689,14 +695,26 @@
     if(!conversations || conversations.count<=0) {
         return;
     }
-//    for (WKConversation *conversation in conversations) {
-//        if([WKApp shared].currentChatChannel && [conversation.channel isEqual:[WKApp shared].currentChatChannel]) {
-//            conversation.unreadCount = 0;
-//            break;
-//        }
-//    }
-    if(conversations.count>1) { // 同时更新的会话大于1 则直接reloadData,等于1 则可以走insertRowsAtIndexPaths或moveRowAtIndexPath这样有动画效果 用户体验好
-        for (WKConversation *conversation in conversations) {
+
+    // Space 推送过滤：当 currentSpaceId 已设置且白名单已建立时，
+    // 只处理属于当前 Space 的会话，过滤掉其他 Space 的推送
+    NSArray<WKConversation*> *filteredConversations = conversations;
+    if (self.currentSpaceId && self.currentSpaceId.length > 0 && self.spaceChannelKeys) {
+        NSMutableArray *filtered = [NSMutableArray array];
+        for (WKConversation *conv in conversations) {
+            NSString *key = [self channelKeyForChannel:conv.channel];
+            if ([self.spaceChannelKeys containsObject:key]) {
+                [filtered addObject:conv];
+            }
+        }
+        filteredConversations = filtered;
+        if (filteredConversations.count == 0) {
+            return;
+        }
+    }
+
+    if(filteredConversations.count>1) { // 同时更新的会话大于1 则直接reloadData,等于1 则可以走insertRowsAtIndexPaths或moveRowAtIndexPath这样有动画效果 用户体验好
+        for (WKConversation *conversation in filteredConversations) {
             [self onlyAddOrUpdateConversation:conversation];
         }
         [self refreshTable];
@@ -704,7 +722,7 @@
         return;
     }
    
-   WKConversation *conversation = conversations[0];
+   WKConversation *conversation = filteredConversations[0];
     [self uiAddOrUpdateConversationForOne:conversation];
     [self refreshBadge];
     
@@ -1404,6 +1422,29 @@
     } completion:^(BOOL finished) {
         [tooltipView removeFromSuperview];
     }];
+}
+
+#pragma mark - Space 推送过滤
+
+/// 生成会话的 channel key（格式：channelId_channelType）
+- (NSString *)channelKeyForChannel:(WKChannel *)channel {
+    return [NSString stringWithFormat:@"%@_%hhu", channel.channelId, channel.channelType];
+}
+
+/// 从当前 VM 会话列表重建 Space 白名单
+/// 调用时机：loadConversationList 完成后（sync 结果已入库）
+- (void)rebuildSpaceChannelKeys {
+    if (!self.currentSpaceId || self.currentSpaceId.length == 0) {
+        // 无 Space 模式，不过滤
+        self.spaceChannelKeys = nil;
+        return;
+    }
+    NSMutableSet *keys = [NSMutableSet set];
+    for (WKConversationWrapModel *model in [self.conversationListVM conversationList]) {
+        [keys addObject:[self channelKeyForChannel:model.channel]];
+    }
+    self.spaceChannelKeys = keys;
+    NSLog(@"🔑 Space 白名单重建: %lu 个会话", (unsigned long)keys.count);
 }
 
 -(void) dealloc {
