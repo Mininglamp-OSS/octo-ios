@@ -371,6 +371,7 @@
 "打开"="Enabled";
 "关闭"="Disabled";
 "版本信息"="Version";
+"关于"="About ";
 "调试"="Debug";
 
 // WKDarkModeVM

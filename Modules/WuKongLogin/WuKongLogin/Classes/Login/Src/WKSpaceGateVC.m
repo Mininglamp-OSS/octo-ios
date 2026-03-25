@@ -6,6 +6,7 @@
 //
 
 #import "WKSpaceGateVC.h"
+#import "WKSpaceModel.h"
 
 @interface WKSpaceGateVC ()<UITextFieldDelegate>
 
@@ -120,11 +121,11 @@
 
     [self.viewModel getMySpaces].then(^(NSArray *spaces){
         [weakSelf.view hideHud];
+        NSLog(@"✅ getMySpaces response: %@", spaces);
         if(spaces && spaces.count > 0) {
-            // 有空间，进入主应用
-            NSDictionary *firstSpace = spaces[0];
-            NSString *spaceId = firstSpace[@"space_id"];
-            if(spaceId && ![spaceId isEqualToString:@""]) {
+            NSDictionary *lastSpace = spaces.lastObject;
+            NSString *spaceId = [weakSelf extractSpaceId:lastSpace];
+            if(spaceId && spaceId.length > 0) {
                 [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
                 [[NSUserDefaults standardUserDefaults] synchronize];
                 [weakSelf enterApp];
@@ -132,8 +133,16 @@
         }
     }).catch(^(NSError *error){
         [weakSelf.view hideHud];
-        // 没有空间或出错，显示引导页面
     });
+}
+
+/// 从空间字典中提取 space_id（兼容多种字段名）
+- (NSString *)extractSpaceId:(NSDictionary *)dict {
+    if (![dict isKindOfClass:[NSDictionary class]]) return nil;
+    id value = dict[@"space_id"] ?: dict[@"sid"] ?: dict[@"id"] ?: dict[@"space_no"];
+    if ([value isKindOfClass:[NSString class]]) return value;
+    if ([value isKindOfClass:[NSNumber class]]) return [value stringValue];
+    return nil;
 }
 
 - (void)enterApp {
@@ -341,11 +350,40 @@
         }
 
         [weakSelf.view showHUD:LLang(@"创建中...")];
-        [weakSelf.viewModel createSpace:name description:spaceDesc].then(^(NSDictionary *result){
+        [weakSelf.viewModel createSpace:name description:spaceDesc].then(^(id response){
             [weakSelf.view switchHUDSuccess:LLang(@"Space 创建成功")];
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [weakSelf checkSpaces];
-            });
+            NSLog(@"✅ createSpace response: %@", response);
+
+            // 尝试从返回中提取新空间 ID（兼容多种字段名）
+            NSString *newSpaceId = nil;
+            if ([response isKindOfClass:[NSDictionary class]]) {
+                NSDictionary *result = (NSDictionary *)response;
+                newSpaceId = result[@"space_id"] ?: result[@"sid"] ?: result[@"id"];
+                if (![newSpaceId isKindOfClass:[NSString class]]) {
+                    // 可能是数字类型
+                    if ([newSpaceId isKindOfClass:[NSNumber class]]) {
+                        newSpaceId = [(NSNumber *)(id)newSpaceId stringValue];
+                    } else {
+                        newSpaceId = nil;
+                    }
+                }
+            }
+
+            // 清除空间缓存
+            [[WKSpaceModel shared] invalidateCache];
+
+            if (newSpaceId && newSpaceId.length > 0) {
+                [[NSUserDefaults standardUserDefaults] setObject:newSpaceId forKey:@"currentSpaceId"];
+                [[NSUserDefaults standardUserDefaults] synchronize];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    [weakSelf enterApp];
+                });
+            } else {
+                // 未从返回中取到 space_id，重新拉取列表取最后一个（最新创建的）
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    [weakSelf checkSpaces];
+                });
+            }
         }).catch(^(NSError *error){
             [weakSelf.view switchHUDError:LLang(@"创建失败，请重试")];
         });

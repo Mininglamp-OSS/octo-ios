@@ -55,7 +55,7 @@
         downloadURL = [[NSURL URLWithString:media.remoteUrl relativeToURL:[NSURL URLWithString:[WKApp shared].config.fileBaseUrl]] absoluteString];
     }
     NSString *storePath = [NSString stringWithFormat:@"%@_tmp",media.thumbPath];
-    if(self.message.contentType == WK_SMALLVIDEO) { // 小视频直接下载视频文件。
+    if(self.message.contentType == WK_SMALLVIDEO || self.message.contentType == WK_FILE) {
         storePath = [NSString stringWithFormat:@"%@_tmp",media.localPath];
     }
     __weak typeof(self) weakSelf = self;

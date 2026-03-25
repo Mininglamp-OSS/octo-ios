@@ -11,6 +11,7 @@
 #import "WKLanguageVC.h"
 #import "NSString+WKLocalized.h"
 #import "WKModuleVC.h"
+#import "WKAboutVC.h"
 
 @interface WKCommonSettingVM ()
 
@@ -177,63 +178,41 @@
         };
     } category:WKPOINT_CATEGORY_COMMONSETTING sort:70000];
     
-    // 模块
-    [[WKApp shared] setMethod:@"commonsetting.modules" handler:^id _Nullable(id  _Nonnull param) {
-    
-        return  @{
-            @"height":WKSectionHeight,
-            @"items":@[
-                    @{
-                        @"class":WKLabelItemModel.class,
-                        @"label":LLang(@"功能模块"),
-                        @"onClick":^{
-                            WKModuleVC *vc = [WKModuleVC new];
-                            [[WKNavigationManager shared] pushViewController:vc animated:YES];
-                        }
-                    },
-            ],
-        };
-    } category:WKPOINT_CATEGORY_COMMONSETTING sort:69000];
+    // 模块（已隐藏）
+//    [[WKApp shared] setMethod:@"commonsetting.modules" handler:^id _Nullable(id  _Nonnull param) {
+//
+//        return  @{
+//            @"height":WKSectionHeight,
+//            @"items":@[
+//                    @{
+//                        @"class":WKLabelItemModel.class,
+//                        @"label":LLang(@"功能模块"),
+//                        @"onClick":^{
+//                            WKModuleVC *vc = [WKModuleVC new];
+//                            [[WKNavigationManager shared] pushViewController:vc animated:YES];
+//                        }
+//                    },
+//            ],
+//        };
+//    } category:WKPOINT_CATEGORY_COMMONSETTING sort:69000];
     
     // 版本信息
     [[WKApp shared] setMethod:@"commonsetting.version" handler:^id _Nullable(id  _Nonnull param) {
         NSDictionary *infoDictionary = [[NSBundle mainBundle] infoDictionary];
         NSString *appVersion = [infoDictionary objectForKey:@"CFBundleShortVersionString"];
-        
+        NSString *buildNumber = [infoDictionary objectForKey:@"CFBundleVersion"];
+        NSString *versionDisplay = [NSString stringWithFormat:@"%@（%@）", appVersion ?: @"", buildNumber ?: @""];
+
         return @{
             @"height":WKSectionHeight,
             @"items":@[
                     @{
                         @"class":WKLabelItemModel.class,
                         @"label":LLang(@"版本信息"),
-                        @"value":appVersion?:@"",
+                        @"value":versionDisplay,
                         @"onClick":^{
-                            if (@available(iOS 10.0, *)) {
-                                if([WKApp shared].config.appID && ![[WKApp shared].config.appID isEqualToString:@""]) {
-                                    [[UIApplication sharedApplication] openURL:[NSURL URLWithString:[NSString stringWithFormat:@"http://itunes.apple.com/us/app/id/%@",[WKApp shared].config.appID]] options:@{} completionHandler:nil];
-                                }
-                               
-                            } else {
-                                // Fallback on earlier versions
-                            }
-                        }
-                    },
-                    @{
-                        @"class":WKLabelItemModel.class,
-                        @"label":LLang(@"用户协议"),
-                        @"onClick":^{
-                            WKWebViewVC *vc = [[WKWebViewVC alloc] init];
-                            vc.url = [NSURL URLWithString:WKApp.shared.config.userAgreementUrl];
-                            [WKNavigationManager.shared pushViewController:vc animated:YES];
-                        }
-                    },
-                    @{
-                        @"class":WKLabelItemModel.class,
-                        @"label":LLang(@"隐私政策"),
-                        @"onClick":^{
-                            WKWebViewVC *vc = [[WKWebViewVC alloc] init];
-                            vc.url = [NSURL URLWithString:WKApp.shared.config.privacyAgreementUrl];
-                            [WKNavigationManager.shared pushViewController:vc animated:YES];
+                            WKAboutVC *vc = [WKAboutVC new];
+                            [[WKNavigationManager shared] pushViewController:vc animated:YES];
                         }
                     },
             ],

@@ -28,6 +28,8 @@
 
 @property(nonatomic,strong) UILabel *sectionIndexIndicator; // 右侧索引字母指示器
 
+@property(nonatomic,copy) NSString *currentContactsFingerprint; // 当前显示的联系人数据指纹
+
 @end
 
 @implementation WKContactsVC
@@ -59,7 +61,8 @@
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     self.navigationBar.title = LLang(@"联系人");
-    [self.tableView reloadData]; // 视图展示时刷新table（主要是刷新离线时间）
+    // 每次切换到通讯录时重新从数据库加载最新联系人数据
+    [self requestData];
 }
 
 
@@ -114,30 +117,131 @@
     }
 }
 
-// 请求有效联系人数据
--(void) requestData{
+// 生成联系人数据指纹（uid + name 排序后拼接）
+-(NSString*) fingerprintForContactInfos:(NSArray<WKChannelInfo*>*)infos {
+    NSMutableArray<NSString*> *parts = [NSMutableArray array];
+    for (WKChannelInfo *info in infos) {
+        NSString *uid = info.channel.channelId ?: @"";
+        NSString *name = info.name ?: @"";
+        [parts addObject:[NSString stringWithFormat:@"%@:%@:%d", uid, name, info.robot]];
+    }
+    [parts sortUsingSelector:@selector(compare:)];
+    return [parts componentsJoinedByString:@","];
+}
+
+// 用联系人数组刷新列表（会对比指纹，无变化则跳过刷新）
+-(void) refreshContactsList:(NSArray<WKChannelInfo*>*)channelInfos {
+    NSString *newFingerprint = [self fingerprintForContactInfos:channelInfos];
+    if (self.currentContactsFingerprint && [self.currentContactsFingerprint isEqualToString:newFingerprint]) {
+        return; // 数据无变化，跳过刷新
+    }
+    self.currentContactsFingerprint = newFingerprint;
+
+    self.contactsCountLbl.text = [NSString stringWithFormat:LLang(@"%ld个朋友"),(long)channelInfos.count];
+    NSMutableArray *items = [NSMutableArray array];
+    for (WKChannelInfo *info in channelInfos) {
+        [items addObject:[self toContactsCellModel:info]];
+    }
+    // 重建 items（保留 header）
+    NSArray *headerItems = [[WKApp shared] invokes:WKPOINT_CATEGORY_CONTACTSITEM param:nil];
     self.items = [NSMutableArray array];
     self.sectionTitleArr = [NSMutableArray array];
-    NSArray *headerItems = [[WKApp shared] invokes:WKPOINT_CATEGORY_CONTACTSITEM param:nil];
     [self.items insertObject:[NSMutableArray arrayWithArray:headerItems] atIndex:0];
-   
-    NSArray<WKChannelInfo*> *channelInfos = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
-    if(channelInfos) {
-        self.contactsCountLbl.text = [NSString stringWithFormat:LLang(@"%ld个朋友"),(long)channelInfos.count];
+    if (items.count > 0) {
+        [self sortAndGroup:items];
+    } else {
+        [self.tableView reloadData];
     }
-    NSMutableArray *items = [NSMutableArray array];
-    if(channelInfos) {
-        for (NSInteger i=0; i<channelInfos.count; i++) {
-            WKChannelInfo *channelInfo =channelInfos[i];
-            WKContactsCellModel *contactsCellModel = [self toContactsCellModel:channelInfo];
-           
-            [items addObject:contactsCellModel];
+}
+
+// 请求有效联系人数据（从 API 拉取最新数据）
+-(void) requestData{
+    // 首次加载（无指纹）时先用本地数据快速显示
+    if (!self.currentContactsFingerprint) {
+        NSArray<WKChannelInfo*> *dbInfos = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
+        if (dbInfos && dbInfos.count > 0) {
+            [self refreshContactsList:dbInfos];
         }
     }
-    if(items.count>0) {
-        [self sortAndGroup:items];
+
+    // 从 API 拉取最新数据
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    if (currentSpaceId && currentSpaceId.length > 0) {
+        [self fetchSpaceMembers:currentSpaceId];
+    } else {
+        [self fetchFriendContacts];
     }
-    
+}
+
+// Space 模式：从 API 拉取成员列表
+-(void) fetchSpaceMembers:(NSString*)spaceId {
+    __weak typeof(self) weakSelf = self;
+    NSString *path = [NSString stringWithFormat:@"space/%@/members", spaceId];
+    [[WKAPIClient sharedClient] GET:path parameters:@{@"page":@"1", @"limit":@"10000"}].then(^(NSArray<NSDictionary*>* members){
+        NSString *nowSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+        if (![spaceId isEqualToString:nowSpaceId]) return;
+
+        NSMutableArray<WKChannelInfo*> *channelInfos = [NSMutableArray array];
+        if (members && members.count > 0) {
+            for (NSDictionary *m in members) {
+                NSString *uid = m[@"uid"];
+                if (!uid || [uid isEqualToString:[WKApp shared].loginInfo.uid]) continue;
+
+                WKChannel *channel = [[WKChannel alloc] initWith:uid channelType:WK_PERSON];
+                WKChannelInfo *channelInfo = [[WKSDK shared].channelManager getChannelInfo:channel];
+                if (!channelInfo) {
+                    channelInfo = [WKChannelInfo new];
+                    channelInfo.channel = channel;
+                }
+                channelInfo.name = m[@"name"] ?: @"";
+                channelInfo.logo = m[@"avatar"] ?: @"";
+                if (!channelInfo.logo || [channelInfo.logo isEqualToString:@""]) {
+                    channelInfo.logo = [NSString stringWithFormat:@"users/%@/avatar", uid];
+                }
+                channelInfo.follow = WKChannelInfoFollowFriend;
+                channelInfo.status = 1;
+                channelInfo.robot = m[@"robot"] ? [m[@"robot"] boolValue] : NO;
+                if (m[@"category"] && ![m[@"category"] isEqual:[NSNull null]]) {
+                    channelInfo.category = m[@"category"];
+                }
+                [channelInfos addObject:channelInfo];
+            }
+        }
+        [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
+        [weakSelf refreshContactsList:channelInfos];
+    }).catch(^(NSError *error){
+        WKLogError(@"拉取Space联系人失败:%@", error);
+    });
+}
+
+// 个人模式：从 API 拉取好友列表
+-(void) fetchFriendContacts {
+    __weak typeof(self) weakSelf = self;
+    NSString *cacheKey = [NSString stringWithFormat:@"%@_%@",[WKApp shared].loginInfo.uid,@"friend_version"];
+    NSString *friendMaxVersion = [[NSUserDefaults standardUserDefaults] stringForKey:cacheKey];
+    [[WKAPIClient sharedClient] GET:@"friend/sync" parameters:@{@"version":friendMaxVersion?:@"",@"api_version":@"1",@"limit":@(200)}].then(^(NSArray<NSDictionary*>* contacts){
+        if(contacts && contacts.count > 0) {
+            NSMutableArray *channelInfos = [NSMutableArray array];
+            for (NSDictionary *dict in contacts) {
+                BOOL isDeleted = dict[@"is_deleted"] ? [dict[@"is_deleted"] boolValue] : NO;
+                if(isDeleted) {
+                    WKChannel *channel = [[WKChannel alloc] initWith:dict[@"uid"] channelType:WK_PERSON];
+                    [[WKSDK shared].channelManager deleteChannelInfo:channel];
+                } else {
+                    [channelInfos addObject:[WKChannelUtil toChannelInfo:dict]];
+                }
+            }
+            long long version = [contacts.lastObject[@"version"] longLongValue];
+            [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%lld",version] forKey:cacheKey];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+            [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
+        }
+        // 从数据库重新加载（API 可能只返回增量数据）
+        NSArray<WKChannelInfo*> *allInfos = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
+        [weakSelf refreshContactsList:allInfos ?: @[]];
+    }).catch(^(NSError *error){
+        WKLogError(@"拉取好友联系人失败:%@", error);
+    });
 }
 
 -(WKContactsCellModel*) toContactsCellModel:(WKChannelInfo*)channelInfo {

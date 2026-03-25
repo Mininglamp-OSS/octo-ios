@@ -149,7 +149,6 @@ static WKChannelInfoDB *_instance;
 
 
 -(WKChannelInfo*) queryChannelInfo:(WKChannel*)channel db:(FMDatabase*) db {
-    NSLog(@"queryChannelInfo-db--->%@",channel.channelId);
     __block WKChannelInfo *channelInfo;
     FMResultSet *result = [db executeQuery:@"select * from channel where channel_id=? and channel_type=?",channel.channelId?:@"",@(channel.channelType)];
     if(result.next) {

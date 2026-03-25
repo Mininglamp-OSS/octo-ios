@@ -22,6 +22,15 @@ typedef enum : NSUInteger {
     WKatchTokenTypeItalic, // 斜体
     WKatchTokenTypeStrikethrough, // 中划线
     WKatchTokenTypeFont, // 字体
+    WKatchTokenTypeInlineCode, // 行内代码
+    WKatchTokenTypeHeading, // 标题
+    WKatchTokenTypeCodeBlock, // 代码块
+    WKatchTokenTypeListItem, // 列表项
+    WKatchTokenTypeBlockquote, // 引用
+    WKatchTokenTypeTable, // 表格
+    WKatchTokenTypeTaskItem, // 任务列表项
+    WKatchTokenTypeHorizontalRule, // 水平分割线
+    WKatchTokenTypeBoldItalic, // 粗斜体
 } WKatchTokenType;
 
 @protocol WKMatchToken <NSObject,NSCopying>
@@ -81,15 +90,77 @@ typedef enum : NSUInteger {
 
 @interface WKItalicToken : WKDefaultToken
 
+@property (nonatomic,copy) NSString *italicText;
+
 @end
 
 @interface WKStrikethroughToken : WKDefaultToken
+
+@property (nonatomic,copy) NSString *strikethroughText;
 
 @end
 
 @interface WKFontToken : WKDefaultToken
 
 @property(nonatomic,assign) CGFloat fontSize;
+
+@end
+
+@interface WKInlineCodeToken : WKDefaultToken
+
+@property (nonatomic,copy) NSString *codeText;
+
+@end
+
+@interface WKHeadingToken : WKDefaultToken
+
+@property (nonatomic,copy) NSString *headingText;
+@property (nonatomic,assign) NSInteger level; // 1, 2, 3
+
+@end
+
+@interface WKCodeBlockToken : WKDefaultToken
+
+@property (nonatomic,copy) NSString *codeContent;
+@property (nonatomic,copy, nullable) NSString *language;
+
+@end
+
+@interface WKListItemToken : WKDefaultToken
+
+@property (nonatomic,copy) NSString *itemText;
+@property (nonatomic,assign) BOOL ordered;
+@property (nonatomic,assign) NSInteger orderNumber;
+
+@end
+
+@interface WKBlockquoteToken : WKDefaultToken
+
+@property (nonatomic,copy) NSString *quoteText;
+
+@end
+
+@interface WKTableToken : WKDefaultToken
+
+@property (nonatomic,strong) NSArray<NSArray<NSString*>*> *rows; // 每行每列的内容
+@property (nonatomic,assign) BOOL hasHeader; // 是否有表头
+
+@end
+
+@interface WKTaskItemToken : WKDefaultToken
+
+@property (nonatomic,copy) NSString *itemText;
+@property (nonatomic,assign) BOOL checked;
+
+@end
+
+@interface WKHorizontalRuleToken : WKDefaultToken
+
+@end
+
+@interface WKBoldItalicToken : WKDefaultToken
+
+@property (nonatomic,copy) NSString *boldItalicText;
 
 @end
 

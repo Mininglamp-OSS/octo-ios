@@ -17,6 +17,7 @@
 #import "WKTipLabel.h"
 #import "WKSecurityTipManager.h"
 #import "WKRichTextParseService.h"
+#import "WKMarkdownParser.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 
 #define replyNameFontSize 13.0f
@@ -192,40 +193,77 @@
     if(message.streams && message.streams.count>0) {
         for (WKStream *stream in message.streams) {
             if([stream.content isKindOfClass:WKTextContent.class]) {
-                WKTextContent *textContent = (WKTextContent*)stream.content;
-                [content appendString:textContent.content];
+                WKTextContent *streamTextContent = (WKTextContent*)stream.content;
+                [content appendString:streamTextContent.content];
             }
-        }
-    }
-
-    NSArray<id<WKMatchToken>> *entityTokens = [self getTokens:message text:content];
-
-    // 自动检测 URL 链接（补充 entity 中未包含的链接）
-    NSArray<id<WKMatchToken>> *linkTokens = [[WKRichTextParseService shared] parseLink:content];
-    NSMutableArray<id<WKMatchToken>> *tokens = [NSMutableArray arrayWithArray:entityTokens];
-    for (id<WKMatchToken> linkToken in linkTokens) {
-        if(linkToken.type != WKatchTokenTypeLink) {
-            continue;
-        }
-        // 检查该链接是否与已有 entity token 重叠，避免重复
-        BOOL overlaps = NO;
-        for (id<WKMatchToken> entityToken in entityTokens) {
-            NSRange lr = linkToken.range;
-            NSRange er = entityToken.range;
-            if(lr.location < er.location + er.length && er.location < lr.location + lr.length) {
-                overlaps = YES;
-                break;
-            }
-        }
-        if(!overlaps) {
-            [tokens addObject:linkToken];
         }
     }
 
     NSMutableAttributedString *attrStr = [[NSMutableAttributedString alloc] init];
     attrStr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
 
-    [attrStr lim_render:content tokens:tokens];
+    // 尝试使用 Down 库进行 markdown 渲染
+    BOOL useMarkdown = NO;
+    if (![textContent.format isEqualToString:@"html"]) {
+        if ([WKMarkdownRenderer containsMarkdown:content]) {
+            UIColor *textColor = message.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
+            NSString *colorHex = [textColor toHexRGB];
+            NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+            if (mdAttr && mdAttr.length > 0) {
+                useMarkdown = YES;
+                NSMutableAttributedString *mdMutable = [[NSMutableAttributedString alloc] initWithAttributedString:mdAttr];
+                mdMutable.font = attrStr.font;
+
+                // 从 Down 渲染结果中提取链接 token，供点击处理使用
+                NSMutableArray<id<WKMatchToken>> *linkTokens = [NSMutableArray array];
+                [mdMutable enumerateAttribute:NSLinkAttributeName inRange:NSMakeRange(0, mdMutable.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
+                    if (value) {
+                        WKLinkToken *token = [WKLinkToken new];
+                        token.range = range;
+                        token.linkText = [mdMutable.string substringWithRange:range];
+                        if ([value isKindOfClass:[NSURL class]]) {
+                            token.linkContent = [(NSURL*)value absoluteString];
+                        } else if ([value isKindOfClass:[NSString class]]) {
+                            token.linkContent = (NSString*)value;
+                        }
+                        token.text = token.linkText;
+                        [linkTokens addObject:token];
+                    }
+                }];
+                mdMutable.tokens = linkTokens;
+
+                return mdMutable;
+            }
+        }
+    }
+
+    if (!useMarkdown) {
+        // 原有逻辑：entity tokens + 自动 URL 检测
+        NSArray<id<WKMatchToken>> *entityTokens = [self getTokens:message text:content];
+
+        // 自动检测 URL 链接（补充 entity 中未包含的链接）
+        NSArray<id<WKMatchToken>> *linkTokens = [[WKRichTextParseService shared] parseLink:content];
+        NSMutableArray<id<WKMatchToken>> *tokens = [NSMutableArray arrayWithArray:entityTokens];
+        for (id<WKMatchToken> linkToken in linkTokens) {
+            if(linkToken.type != WKatchTokenTypeLink) {
+                continue;
+            }
+            // 检查该链接是否与已有 entity token 重叠，避免重复
+            BOOL overlaps = NO;
+            for (id<WKMatchToken> entityToken in entityTokens) {
+                NSRange lr = linkToken.range;
+                NSRange er = entityToken.range;
+                if(lr.location < er.location + er.length && er.location < lr.location + lr.length) {
+                    overlaps = YES;
+                    break;
+                }
+            }
+            if(!overlaps) {
+                [tokens addObject:linkToken];
+            }
+        }
+        [attrStr lim_render:content tokens:tokens];
+    }
 
     return attrStr;
 }
@@ -416,7 +454,8 @@
             [self didLinkClick:token.text];
         }else if(token.type == WKatchTokenTypeLink2) {
             WKLinkToken *linToken = (WKLinkToken*)token;
-            [self didLinkClick:linToken.linkText];
+            NSString *linkTarget = linToken.linkContent ?: linToken.linkText;
+            [self didLinkClick:linkTarget];
         }
     }
     

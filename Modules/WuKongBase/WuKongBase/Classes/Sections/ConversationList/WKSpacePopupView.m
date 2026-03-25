@@ -383,7 +383,15 @@
         [[WKSpaceModel shared] createSpaceWithName:name description:desc].then(^(WKSpaceEntity *space){
             [window hideHud];
             [window showMsg:LLang(@"创建成功")];
-            [weakSelf loadSpaces];
+            // 自动切换到新创建的空间
+            if (space) {
+                [weakSelf dismiss];
+                if (weakSelf.onSpaceSelected) {
+                    weakSelf.onSpaceSelected(space);
+                }
+            } else {
+                [weakSelf loadSpaces];
+            }
         }).catch(^(NSError *error){
             [window hideHud];
             [window showMsg:error.localizedDescription];

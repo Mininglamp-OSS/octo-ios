@@ -48,11 +48,6 @@
 
     self.fileIconView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, WKFileIconSize, WKFileIconSize)];
     self.fileIconView.contentMode = UIViewContentModeScaleAspectFit;
-    self.fileIconView.tintColor = [UIColor systemBlueColor];
-    if (@available(iOS 13.0, *)) {
-        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:30 weight:UIImageSymbolWeightRegular];
-        self.fileIconView.image = [UIImage systemImageNamed:@"doc.fill" withConfiguration:config];
-    }
     [self.messageContentView addSubview:self.fileIconView];
 
     self.fileNameLbl = [[UILabel alloc] init];
@@ -85,6 +80,13 @@
     self.fileNameLbl.text = fileContent.name ?: @"";
     self.fileSizeLbl.text = [self formatFileSize:fileContent.fileSize];
     self.fileNameLbl.textColor = [WKApp shared].config.messageRecvTextColor;
+
+    // 根据文件扩展名显示对应图标（优先用 fileExtension，为空时从文件名提取）
+    NSString *ext = fileContent.fileExtension;
+    if (!ext || ext.length == 0 || [ext isEqualToString:@"."]) {
+        ext = [fileContent.name pathExtension];
+    }
+    self.fileIconView.image = [self iconForFileExtension:ext];
 
     [self.messageContentView setBackgroundColor:[WKApp shared].config.cellBackgroundColor];
 
@@ -180,7 +182,30 @@
 }
 
 - (void)previewFileAtPath:(NSString *)path {
-    NSURL *fileURL = [NSURL fileURLWithPath:path];
+    WKFileContent *fileContent = (WKFileContent *)self.messageModel.content;
+
+    // 将文件拷贝到以真实文件名命名的临时路径，解决预览标题显示16进制字符串的问题
+    NSString *realName = fileContent.name;
+    NSString *previewPath = path;
+    if (realName && realName.length > 0) {
+        NSString *tmpDir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"WKFilePreview"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:tmpDir withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *destPath = [tmpDir stringByAppendingPathComponent:realName];
+        // 先移除旧的临时文件
+        [[NSFileManager defaultManager] removeItemAtPath:destPath error:nil];
+        NSError *linkError;
+        // 使用硬链接避免复制大文件的开销
+        if ([[NSFileManager defaultManager] linkItemAtPath:path toPath:destPath error:&linkError]) {
+            previewPath = destPath;
+        } else {
+            // 硬链接失败时使用拷贝
+            if ([[NSFileManager defaultManager] copyItemAtPath:path toPath:destPath error:nil]) {
+                previewPath = destPath;
+            }
+        }
+    }
+
+    NSURL *fileURL = [NSURL fileURLWithPath:previewPath];
     self.documentController = [UIDocumentInteractionController interactionControllerWithURL:fileURL];
     self.documentController.delegate = self;
     UIViewController *topVC = [WKNavigationManager shared].topViewController;
@@ -197,6 +222,57 @@
 
 + (BOOL)hiddenBubble {
     return YES;
+}
+
+- (UIImage *)iconForFileExtension:(NSString *)ext {
+    NSString *lowExt = [ext lowercaseString];
+    // 去掉前导点号
+    if ([lowExt hasPrefix:@"."]) {
+        lowExt = [lowExt substringFromIndex:1];
+    }
+
+    NSString *imageName = nil;
+
+    // Word 系列
+    if ([@[@"doc", @"docx", @"docm", @"dot", @"dotx", @"dotm", @"rtf", @"odt", @"wps"] containsObject:lowExt]) {
+        imageName = @"FileType/FileWord";
+    }
+    // Excel 系列
+    else if ([@[@"xls", @"xlsx", @"xlsm", @"xlsb", @"xlt", @"xltx", @"xltm", @"csv", @"ods", @"et", @"ett"] containsObject:lowExt]) {
+        imageName = @"FileType/FileExcel";
+    }
+    // PDF
+    else if ([lowExt isEqualToString:@"pdf"]) {
+        imageName = @"FileType/FilePDF";
+    }
+    // PowerPoint 系列
+    else if ([@[@"ppt", @"pptx", @"pptm", @"pps", @"ppsx", @"ppsm", @"pot", @"potx", @"potm", @"odp", @"dps", @"dpt"] containsObject:lowExt]) {
+        imageName = @"FileType/FilePPT";
+    }
+    // 视频
+    else if ([@[@"mp4", @"mov", @"avi", @"mkv", @"wmv", @"flv", @"webm", @"m4v", @"mpg", @"mpeg", @"3gp", @"3gpp", @"ts", @"rmvb", @"rm"] containsObject:lowExt]) {
+        imageName = @"FileType/FileVideo";
+    }
+    // Markdown
+    else if ([@[@"md", @"markdown", @"mdown", @"mkd", @"mdwn"] containsObject:lowExt]) {
+        imageName = @"FileType/FileMarkdown";
+    }
+
+    if (imageName) {
+        UIImage *img = [[WKApp shared] loadImage:imageName moduleID:@"WuKongBase"];
+        if (img) {
+            self.fileIconView.tintColor = nil;
+            return [img imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+        }
+    }
+
+    // 默认图标（系统符号图标需要 tint 才可见）
+    self.fileIconView.tintColor = [UIColor systemBlueColor];
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:30 weight:UIImageSymbolWeightRegular];
+        return [UIImage systemImageNamed:@"doc.fill" withConfiguration:config];
+    }
+    return nil;
 }
 
 - (NSString *)formatFileSize:(long long)size {

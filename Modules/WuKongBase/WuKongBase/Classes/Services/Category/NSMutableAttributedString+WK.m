@@ -69,7 +69,7 @@ static void * kLinkColor = &kLinkColor;
     if(color) {
         return color;
     }
-    
+
     return [UIColor blueColor];
 }
 
@@ -93,10 +93,38 @@ static void * kLinkColor = &kLinkColor;
     objc_setAssociatedObject(self, kTextColorKey, textColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if(self.tokens && self.tokens.count>0) {
         for (id<WKMatchToken> token in self.tokens) {
-            if(token.type == WKatchTokenTypeText && token.range.location + token.range.length <= self.length) {
+            if(token.range.location + token.range.length > self.length) {
+                continue;
+            }
+            if(token.type == WKatchTokenTypeText) {
+                [self removeAttribute:NSForegroundColorAttributeName range:token.range];
+                [self addAttribute:NSForegroundColorAttributeName value:textColor range:token.range];
+            } else if(token.type == WKatchTokenTypeBold) {
+                [self removeAttribute:NSForegroundColorAttributeName range:token.range];
+                [self addAttribute:NSForegroundColorAttributeName value:textColor range:token.range];
+            } else if(token.type == WKatchTokenTypeItalic) {
+                [self removeAttribute:NSForegroundColorAttributeName range:token.range];
+                [self addAttribute:NSForegroundColorAttributeName value:textColor range:token.range];
+            } else if(token.type == WKatchTokenTypeStrikethrough) {
+                [self removeAttribute:NSForegroundColorAttributeName range:token.range];
+                [self addAttribute:NSForegroundColorAttributeName value:textColor range:token.range];
+            } else if(token.type == WKatchTokenTypeHeading) {
+                [self removeAttribute:NSForegroundColorAttributeName range:token.range];
+                [self addAttribute:NSForegroundColorAttributeName value:textColor range:token.range];
+            } else if(token.type == WKatchTokenTypeListItem) {
+                [self removeAttribute:NSForegroundColorAttributeName range:token.range];
+                [self addAttribute:NSForegroundColorAttributeName value:textColor range:token.range];
+            } else if(token.type == WKatchTokenTypeTaskItem) {
+                [self removeAttribute:NSForegroundColorAttributeName range:token.range];
+                [self addAttribute:NSForegroundColorAttributeName value:textColor range:token.range];
+            } else if(token.type == WKatchTokenTypeBoldItalic) {
+                [self removeAttribute:NSForegroundColorAttributeName range:token.range];
+                [self addAttribute:NSForegroundColorAttributeName value:textColor range:token.range];
+            } else if(token.type == WKatchTokenTypeTable) {
                 [self removeAttribute:NSForegroundColorAttributeName range:token.range];
                 [self addAttribute:NSForegroundColorAttributeName value:textColor range:token.range];
             }
+            // Skip code tokens (inline code, code block) and blockquote to keep their fixed colors
         }
     }
 }
@@ -126,7 +154,7 @@ static void * kLinkColor = &kLinkColor;
            return;
        }
        NSArray<id<WKMatchToken>> *tokens = [ [WKRichTextParseService shared] parse:text mentionInfo:mentionInfo options:options];
-       
+
        NSMutableArray<id<WKMatchToken>> *realTokens = [NSMutableArray array]; // 解析完后的字符串真实的token range
        for(id<WKMatchToken> token in tokens){
            NSRange range;
@@ -163,7 +191,7 @@ static void * kLinkColor = &kLinkColor;
         self.tokens = @[token];
         return;
     }
-    
+
     tokens = [tokens sortedArrayUsingComparator:^NSComparisonResult(id<WKMatchToken>  _Nonnull obj1, id<WKMatchToken>  _Nonnull obj2) {
         if(obj1.range.location>obj2.range.location) {
             return NSOrderedDescending;
@@ -186,7 +214,7 @@ static void * kLinkColor = &kLinkColor;
                     NSString *tokenText = [text substringWithRange:range];
                     [newtokens addObject:[WKDefaultToken text:tokenText range:range type:WKatchTokenTypeText]];
                 }
-               
+
             }
         }else {
             if(token.range.location > preToken.range.location + preToken.range.length) {
@@ -197,14 +225,14 @@ static void * kLinkColor = &kLinkColor;
         }
         [newtokens addObject:token];
         preToken = token;
-        
+
         if(i == tokens.count-1 && text.length > token.range.location + token.range.length) {
             NSUInteger start = token.range.location + token.range.length;
             NSString *tokenText = [text substringFromIndex:start];
             [newtokens addObject:[WKDefaultToken text:tokenText range:NSMakeRange(start, text.length - start) type:WKatchTokenTypeText]];
         }
     }
-    
+
     NSMutableArray<id<WKMatchToken>> *realTokens = [NSMutableArray array]; // 解析完后的字符串真实的token range
     for(id<WKMatchToken> token in newtokens){
         NSRange range;
@@ -229,6 +257,28 @@ static void * kLinkColor = &kLinkColor;
             range = [self appendRemoteImage:token];
         }else if(token.type == WKatchTokenTypeColor) {
             range = [self appendColor:token];
+        }else if(token.type == WKatchTokenTypeItalic) {
+            range = [self appendItalic:token];
+        }else if(token.type == WKatchTokenTypeStrikethrough) {
+            range = [self appendStrikethrough:token];
+        }else if(token.type == WKatchTokenTypeInlineCode) {
+            range = [self appendInlineCode:token];
+        }else if(token.type == WKatchTokenTypeHeading) {
+            range = [self appendHeading:token];
+        }else if(token.type == WKatchTokenTypeCodeBlock) {
+            range = [self appendCodeBlock:token];
+        }else if(token.type == WKatchTokenTypeListItem) {
+            range = [self appendListItem:token];
+        }else if(token.type == WKatchTokenTypeBlockquote) {
+            range = [self appendBlockquote:token];
+        }else if(token.type == WKatchTokenTypeTable) {
+            range = [self appendTable:token];
+        }else if(token.type == WKatchTokenTypeTaskItem) {
+            range = [self appendTaskItem:token];
+        }else if(token.type == WKatchTokenTypeHorizontalRule) {
+            range = [self appendHorizontalRule:token];
+        }else if(token.type == WKatchTokenTypeBoldItalic) {
+            range = [self appendBoldItalic:token];
         } else {
             range = [self appendText:token.text];
         }
@@ -236,7 +286,7 @@ static void * kLinkColor = &kLinkColor;
         newToken.range = range;
         [realTokens addObject:newToken];
     }
-    
+
     self.tokens = realTokens;
 }
 
@@ -287,7 +337,7 @@ static void * kLinkColor = &kLinkColor;
     }
     NSAttributedString *string = [[NSAttributedString alloc]initWithString:text attributes:attributes];
     [self appendAttributedString:string];
-    
+
     return NSMakeRange(self.length-text.length, text.length);
 }
 
@@ -296,7 +346,7 @@ static void * kLinkColor = &kLinkColor;
         return NSMakeRange(self.length,0);
     }
     NSRange range = [self appendText:token.text];
-    
+
 //    [self addAttribute:NSLinkAttributeName value:[NSURL URLWithString:[token.text stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding]] range:range];
     [self addAttribute:NSForegroundColorAttributeName value:self.linkColor range:range];
     [self addAttribute:NSUnderlineStyleAttributeName value:@1 range:range];
@@ -325,7 +375,7 @@ static void * kLinkColor = &kLinkColor;
         len = token.text.length;
         [self appendText:token.text];
     }
-    
+
     UIColor *metionColor = self.metionColor;
     if(!metionColor) {
         metionColor = [UIColor orangeColor];
@@ -355,18 +405,370 @@ static void * kLinkColor = &kLinkColor;
 -(NSRange) appendRemoteImage:(WKRemoteImageToken*)token {
     NSRange range =  [self appendText:token.text];
     WKRemoteImageAttachment *imageAttachMent = [[WKRemoteImageAttachment alloc] initWithURL:token.url displaySize:token.size];
-    
-    
+
+
     [self addAttribute:NSAttachmentAttributeName value:imageAttachMent range:range];
-    
 
 
     return range;
 }
 
+#pragma mark - Markdown rendering methods
+
+-(NSRange) appendItalic:(WKItalicToken*)token {
+    NSString *displayText = token.italicText ?: @"";
+    NSRange range = [self appendText:displayText];
+    if (self.font) {
+        UIFontDescriptor *descriptor = [self.font.fontDescriptor fontDescriptorWithMatrix:CGAffineTransformMake(1, 0, tanf(M_PI * -12.0f / 180.0f), 1, 0, 0)];
+        UIFont *italicFont = [UIFont fontWithDescriptor:descriptor size:self.font.pointSize];
+        [self addAttribute:NSFontAttributeName value:italicFont range:range];
+    }
+    return range;
+}
+
+-(NSRange) appendStrikethrough:(WKStrikethroughToken*)token {
+    NSString *displayText = token.strikethroughText ?: @"";
+    NSRange range = [self appendText:displayText];
+    [self addAttribute:NSStrikethroughStyleAttributeName value:@(NSUnderlineStyleSingle) range:range];
+    return range;
+}
+
+-(NSRange) appendInlineCode:(WKInlineCodeToken*)token {
+    NSString *displayText = token.codeText ?: @"";
+    CGFloat fontSize = self.font ? self.font.pointSize : 15.0f;
+    UIFont *codeFont = [UIFont fontWithName:@"Menlo" size:fontSize - 1.0f];
+    if (!codeFont) {
+        codeFont = [UIFont fontWithName:@"Courier" size:fontSize - 1.0f];
+    }
+
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+    if (codeFont) {
+        [attributes setObject:codeFont forKey:NSFontAttributeName];
+    }
+    [attributes setObject:[UIColor colorWithRed:0.15 green:0.15 blue:0.15 alpha:1.0] forKey:NSForegroundColorAttributeName];
+    [attributes setObject:[UIColor colorWithRed:0.93 green:0.93 blue:0.93 alpha:1.0] forKey:NSBackgroundColorAttributeName];
+
+    NSMutableParagraphStyle *style = [[NSParagraphStyle defaultParagraphStyle] mutableCopy];
+    style.lineBreakMode = NSLineBreakByWordWrapping;
+    [attributes setObject:style forKey:NSParagraphStyleAttributeName];
+
+    NSAttributedString *string = [[NSAttributedString alloc] initWithString:displayText attributes:attributes];
+    NSUInteger startLoc = self.length;
+    [self appendAttributedString:string];
+    return NSMakeRange(startLoc, displayText.length);
+}
+
+-(NSRange) appendHeading:(WKHeadingToken*)token {
+    NSString *displayText = token.headingText ?: @"";
+    CGFloat baseFontSize = self.font ? self.font.pointSize : 15.0f;
+    CGFloat scale = 1.15f;
+    if (token.level == 1) scale = 1.5f;
+    else if (token.level == 2) scale = 1.3f;
+
+    CGFloat headingSize = baseFontSize * scale;
+    UIFont *headingFont = [WKApp.shared.config appFontOfSizeMedium:headingSize];
+
+    NSMutableParagraphStyle *style = [[NSParagraphStyle defaultParagraphStyle] mutableCopy];
+    style.lineBreakMode = NSLineBreakByWordWrapping;
+    style.paragraphSpacingBefore = 4.0f;
+    style.paragraphSpacing = 4.0f;
+
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+    [attributes setObject:headingFont forKey:NSFontAttributeName];
+    [attributes setObject:style forKey:NSParagraphStyleAttributeName];
+    if (self.textColor) {
+        [attributes setObject:self.textColor forKey:NSForegroundColorAttributeName];
+    }
+
+    NSAttributedString *string = [[NSAttributedString alloc] initWithString:displayText attributes:attributes];
+    NSUInteger startLoc = self.length;
+    [self appendAttributedString:string];
+    return NSMakeRange(startLoc, displayText.length);
+}
+
+-(NSRange) appendCodeBlock:(WKCodeBlockToken*)token {
+    NSString *displayText = token.codeContent ?: @"";
+    CGFloat fontSize = self.font ? self.font.pointSize : 15.0f;
+    UIFont *codeFont = [UIFont fontWithName:@"Menlo" size:fontSize - 1.0f];
+    if (!codeFont) {
+        codeFont = [UIFont fontWithName:@"Courier" size:fontSize - 1.0f];
+    }
+
+    NSMutableParagraphStyle *style = [[NSParagraphStyle defaultParagraphStyle] mutableCopy];
+    style.lineBreakMode = NSLineBreakByCharWrapping;
+    style.firstLineHeadIndent = 8.0f;
+    style.headIndent = 8.0f;
+    style.tailIndent = -8.0f;
+
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+    if (codeFont) {
+        [attributes setObject:codeFont forKey:NSFontAttributeName];
+    }
+    [attributes setObject:[UIColor colorWithRed:0.15 green:0.15 blue:0.15 alpha:1.0] forKey:NSForegroundColorAttributeName];
+    [attributes setObject:[UIColor colorWithRed:0.93 green:0.93 blue:0.93 alpha:1.0] forKey:NSBackgroundColorAttributeName];
+    [attributes setObject:style forKey:NSParagraphStyleAttributeName];
+
+    // Add newline before code block for visual separation
+    NSUInteger startLoc = self.length;
+    if (startLoc > 0) {
+        [self appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n"]];
+        startLoc = self.length;
+    }
+
+    NSAttributedString *string = [[NSAttributedString alloc] initWithString:displayText attributes:attributes];
+    [self appendAttributedString:string];
+
+    // Add newline after code block
+    [self appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n"]];
+
+    return NSMakeRange(startLoc, displayText.length);
+}
+
+-(NSRange) appendListItem:(WKListItemToken*)token {
+    NSString *displayText = token.itemText ?: @"";
+    NSString *prefix;
+    if (token.ordered) {
+        prefix = [NSString stringWithFormat:@" %ld.  ", (long)token.orderNumber];
+    } else {
+        prefix = @" \u2022  ";
+    }
+    NSString *fullText = [NSString stringWithFormat:@"%@%@", prefix, displayText];
+
+    NSMutableParagraphStyle *style = [[NSParagraphStyle defaultParagraphStyle] mutableCopy];
+    style.lineBreakMode = NSLineBreakByWordWrapping;
+    // headIndent aligns wrapped lines with the text after the bullet/number
+    CGFloat indentWidth = 28.0f;
+    style.headIndent = indentWidth;
+    style.firstLineHeadIndent = 0.0f;
+
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+    [attributes setObject:style forKey:NSParagraphStyleAttributeName];
+    if (self.font) {
+        [attributes setObject:self.font forKey:NSFontAttributeName];
+    }
+    if (self.textColor) {
+        [attributes setObject:self.textColor forKey:NSForegroundColorAttributeName];
+    }
+
+    NSAttributedString *string = [[NSAttributedString alloc] initWithString:fullText attributes:attributes];
+    NSUInteger startLoc = self.length;
+    [self appendAttributedString:string];
+    return NSMakeRange(startLoc, fullText.length);
+}
+
+-(NSRange) appendBlockquote:(WKBlockquoteToken*)token {
+    NSString *displayText = token.quoteText ?: @"";
+
+    NSMutableParagraphStyle *style = [[NSParagraphStyle defaultParagraphStyle] mutableCopy];
+    style.lineBreakMode = NSLineBreakByWordWrapping;
+    style.firstLineHeadIndent = 12.0f;
+    style.headIndent = 12.0f;
+
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+    [attributes setObject:style forKey:NSParagraphStyleAttributeName];
+    if (self.font) {
+        [attributes setObject:self.font forKey:NSFontAttributeName];
+    }
+    [attributes setObject:[UIColor grayColor] forKey:NSForegroundColorAttributeName];
+
+    NSAttributedString *string = [[NSAttributedString alloc] initWithString:displayText attributes:attributes];
+    NSUInteger startLoc = self.length;
+    [self appendAttributedString:string];
+    return NSMakeRange(startLoc, displayText.length);
+}
+
+-(NSRange) appendTable:(WKTableToken*)token {
+    NSArray<NSArray<NSString*>*> *rows = token.rows;
+    if (!rows || rows.count == 0) {
+        return NSMakeRange(self.length, 0);
+    }
+
+    // Calculate column widths
+    NSUInteger colCount = 0;
+    for (NSArray<NSString*> *row in rows) {
+        if (row.count > colCount) colCount = row.count;
+    }
+    if (colCount == 0) return NSMakeRange(self.length, 0);
+
+    NSMutableArray<NSNumber*> *colWidths = [NSMutableArray array];
+    for (NSUInteger c = 0; c < colCount; c++) {
+        NSUInteger maxLen = 0;
+        for (NSArray<NSString*> *row in rows) {
+            if (c < row.count) {
+                NSUInteger len = row[c].length;
+                if (len > maxLen) maxLen = len;
+            }
+        }
+        // Clamp max width per column to keep table compact
+        if (maxLen > 16) maxLen = 16;
+        if (maxLen < 2) maxLen = 2;
+        [colWidths addObject:@(maxLen)];
+    }
+
+    CGFloat fontSize = self.font ? self.font.pointSize : 15.0f;
+    UIFont *tableFont = [UIFont fontWithName:@"Menlo" size:fontSize - 2.0f];
+    if (!tableFont) {
+        tableFont = [UIFont fontWithName:@"Courier" size:fontSize - 2.0f];
+    }
+
+    NSUInteger startLoc = self.length;
+    // Add newline before table if needed
+    if (startLoc > 0) {
+        [self appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n"]];
+    }
+    startLoc = self.length;
+
+    for (NSUInteger r = 0; r < rows.count; r++) {
+        NSArray<NSString*> *row = rows[r];
+        NSMutableString *rowStr = [NSMutableString string];
+
+        for (NSUInteger c = 0; c < colCount; c++) {
+            NSString *cell = (c < row.count) ? row[c] : @"";
+            NSUInteger targetLen = [colWidths[c] unsignedIntegerValue];
+            // Truncate if too long
+            if (cell.length > targetLen) {
+                cell = [[cell substringToIndex:targetLen - 1] stringByAppendingString:@"\u2026"];
+            }
+            // Pad with spaces
+            NSMutableString *padded = [cell mutableCopy];
+            while (padded.length < targetLen) {
+                [padded appendString:@" "];
+            }
+            if (c == 0) {
+                [rowStr appendString:padded];
+            } else {
+                [rowStr appendFormat:@"  %@", padded];
+            }
+        }
+
+        NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+        if (tableFont) {
+            [attributes setObject:tableFont forKey:NSFontAttributeName];
+        }
+        if (self.textColor) {
+            [attributes setObject:self.textColor forKey:NSForegroundColorAttributeName];
+        }
+
+        NSMutableParagraphStyle *style = [[NSParagraphStyle defaultParagraphStyle] mutableCopy];
+        style.lineBreakMode = NSLineBreakByClipping;
+        [attributes setObject:style forKey:NSParagraphStyleAttributeName];
+
+        // Bold header row
+        if (token.hasHeader && r == 0) {
+            UIFont *boldTableFont = [UIFont fontWithName:@"Menlo-Bold" size:fontSize - 2.0f];
+            if (boldTableFont) {
+                [attributes setObject:boldTableFont forKey:NSFontAttributeName];
+            }
+        }
+
+        NSAttributedString *rowAttrStr = [[NSAttributedString alloc] initWithString:rowStr attributes:attributes];
+        [self appendAttributedString:rowAttrStr];
+
+        // Add separator line after header
+        if (token.hasHeader && r == 0) {
+            NSMutableString *sepStr = [NSMutableString string];
+            for (NSUInteger c = 0; c < colCount; c++) {
+                NSUInteger targetLen = [colWidths[c] unsignedIntegerValue];
+                NSMutableString *dashes = [NSMutableString string];
+                for (NSUInteger d = 0; d < targetLen; d++) {
+                    [dashes appendString:@"\u2500"];
+                }
+                if (c == 0) {
+                    [sepStr appendString:dashes];
+                } else {
+                    [sepStr appendFormat:@"  %@", dashes];
+                }
+            }
+            NSMutableDictionary *sepAttrs = [NSMutableDictionary dictionary];
+            if (tableFont) [sepAttrs setObject:tableFont forKey:NSFontAttributeName];
+            [sepAttrs setObject:[UIColor grayColor] forKey:NSForegroundColorAttributeName];
+            [sepAttrs setObject:style forKey:NSParagraphStyleAttributeName];
+            [self appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n"]];
+            [self appendAttributedString:[[NSAttributedString alloc] initWithString:sepStr attributes:sepAttrs]];
+        }
+
+        // Newline between rows
+        if (r < rows.count - 1) {
+            [self appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n"]];
+        }
+    }
+
+    return NSMakeRange(startLoc, self.length - startLoc);
+}
+
+-(NSRange) appendTaskItem:(WKTaskItemToken*)token {
+    NSString *displayText = token.itemText ?: @"";
+    NSString *checkbox = token.checked ? @"\u2611 " : @"\u2610 ";
+    NSString *fullText = [NSString stringWithFormat:@"%@%@", checkbox, displayText];
+
+    NSMutableParagraphStyle *style = [[NSParagraphStyle defaultParagraphStyle] mutableCopy];
+    style.lineBreakMode = NSLineBreakByWordWrapping;
+    style.headIndent = 24.0f;
+    style.firstLineHeadIndent = 0.0f;
+
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+    [attributes setObject:style forKey:NSParagraphStyleAttributeName];
+    if (self.font) {
+        [attributes setObject:self.font forKey:NSFontAttributeName];
+    }
+    if (self.textColor) {
+        [attributes setObject:self.textColor forKey:NSForegroundColorAttributeName];
+    }
+
+    NSAttributedString *string = [[NSAttributedString alloc] initWithString:fullText attributes:attributes];
+    NSUInteger startLoc = self.length;
+    [self appendAttributedString:string];
+
+    // Apply strikethrough to checked items
+    if (token.checked) {
+        NSRange textRange = NSMakeRange(startLoc + checkbox.length, displayText.length);
+        [self addAttribute:NSStrikethroughStyleAttributeName value:@(NSUnderlineStyleSingle) range:textRange];
+        [self addAttribute:NSForegroundColorAttributeName value:[UIColor grayColor] range:textRange];
+    }
+
+    return NSMakeRange(startLoc, fullText.length);
+}
+
+-(NSRange) appendHorizontalRule:(WKHorizontalRuleToken*)token {
+    NSString *rule = @"\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500";
+
+    NSMutableParagraphStyle *style = [[NSParagraphStyle defaultParagraphStyle] mutableCopy];
+    style.lineBreakMode = NSLineBreakByClipping;
+    style.paragraphSpacingBefore = 4.0f;
+    style.paragraphSpacing = 4.0f;
+    style.alignment = NSTextAlignmentCenter;
+
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+    [attributes setObject:style forKey:NSParagraphStyleAttributeName];
+    [attributes setObject:[UIColor lightGrayColor] forKey:NSForegroundColorAttributeName];
+    if (self.font) {
+        [attributes setObject:[UIFont systemFontOfSize:self.font.pointSize * 0.6f] forKey:NSFontAttributeName];
+    }
+
+    NSUInteger startLoc = self.length;
+    NSAttributedString *string = [[NSAttributedString alloc] initWithString:rule attributes:attributes];
+    [self appendAttributedString:string];
+    return NSMakeRange(startLoc, rule.length);
+}
+
+-(NSRange) appendBoldItalic:(WKBoldItalicToken*)token {
+    NSString *displayText = token.boldItalicText ?: @"";
+    NSRange range = [self appendText:displayText];
+    // Apply bold
+    [self addAttribute:NSFontAttributeName value:[WKApp.shared.config appFontOfSizeMedium:self.font.pointSize] range:range];
+    // Apply italic via oblique transform
+    if (self.font) {
+        UIFont *boldFont = [WKApp.shared.config appFontOfSizeMedium:self.font.pointSize];
+        UIFontDescriptor *descriptor = [boldFont.fontDescriptor fontDescriptorWithMatrix:CGAffineTransformMake(1, 0, tanf(M_PI * -12.0f / 180.0f), 1, 0, 0)];
+        UIFont *boldItalicFont = [UIFont fontWithDescriptor:descriptor size:self.font.pointSize];
+        [self addAttribute:NSFontAttributeName value:boldItalicFont range:range];
+    }
+    return range;
+}
+
 -(CGSize) size:(CGFloat)maxWidth {
     CGSize size =   [self boundingRectWithSize:CGSizeMake(maxWidth, MAXFLOAT) options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading context:nil].size;
-    
+
     return size;
 }
 

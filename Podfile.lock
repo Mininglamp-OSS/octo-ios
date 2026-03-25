@@ -23,6 +23,7 @@ PODS:
     - CocoaLumberjack/Core (= 3.9.0)
   - CocoaLumberjack/Core (3.9.0)
   - DGActivityIndicatorView (2.1.1)
+  - Down (0.11.0)
   - FMDB/Core (2.7.12)
   - FMDB/SQLCipher (2.7.12):
     - FMDB/Core
@@ -85,6 +86,7 @@ PODS:
     - CocoaAsyncSocket (~> 7.6.5)
     - CocoaLumberjack (~> 3.0)
     - DGActivityIndicatorView (~> 2.1.1)
+    - Down (~> 0.11)
     - FMDB/SQLCipher (~> 2.7.5)
     - FPSCounter (~> 4.1)
     - GZIP (~> 1.3.0)
@@ -143,6 +145,7 @@ PODS:
 DEPENDENCIES:
   - Aspects
   - AsyncDisplayKit (from `https://github.com/tangtaoit/AsyncDisplayKit.git`)
+  - Down (from `https://github.com/johnxnguyen/Down.git`, tag `v0.11.0`)
   - librlottie (from `https://github.com/tangtaoit/librlottie.git`)
   - ReactiveObjC
   - Socket.IO-Client-Swift
@@ -194,6 +197,9 @@ SPEC REPOS:
 EXTERNAL SOURCES:
   AsyncDisplayKit:
     :git: https://github.com/tangtaoit/AsyncDisplayKit.git
+  Down:
+    :git: https://github.com/johnxnguyen/Down.git
+    :tag: v0.11.0
   librlottie:
     :git: https://github.com/tangtaoit/librlottie.git
   WuKongBase:
@@ -215,6 +221,9 @@ CHECKOUT OPTIONS:
   AsyncDisplayKit:
     :commit: 3f2a0b8f5069ddefd53cf4796da22eec105c5c7c
     :git: https://github.com/tangtaoit/AsyncDisplayKit.git
+  Down:
+    :git: https://github.com/johnxnguyen/Down.git
+    :tag: v0.11.0
   librlottie:
     :commit: bed3cfe62cdb77d728adfe76893ff51b69c05e08
     :git: https://github.com/tangtaoit/librlottie.git
@@ -234,6 +243,7 @@ SPEC CHECKSUMS:
   CocoaAsyncSocket: 065fd1e645c7abab64f7a6a2007a48038fdc6a99
   CocoaLumberjack: 5644158777912b7de7469fa881f8a3f259c2512a
   DGActivityIndicatorView: ff2c76073d79692f724863c8dd38685866a03cb6
+  Down: b6ba1bc985c9d2f4e15e3b293d2207766fa12612
   FMDB: 728731dd336af3936ce00f91d9d8495f5718a0e6
   FPSCounter: 884afec377de66637808c4f52ecc3b85a404732b
   GZIP: 3c0abf794bfce8c7cb34ea05a1837752416c8868
@@ -258,7 +268,7 @@ SPEC CHECKSUMS:
   Toast: 1f5ea13423a1e6674c4abdac5be53587ae481c4e
   TOCropViewController: da59f531f8ac8a94ef6d6c0fc34009350f9e8bfe
   TZImagePickerController: 2cad3db94ba70eb947d26c10ff5c66c9a93798c8
-  WuKongBase: 47bcccaf4b87d46a30b0289a1b4c40eb89820148
+  WuKongBase: 28bc637e0dd16b1215161384d5e04c7207922d34
   WuKongContacts: 9a7748952bd1760ba84fe7f595200d4c19d52d8b
   WuKongDataSource: 239cffd62c1d6d14b137102de5ec59b6c1f16cf7
   WuKongIMSDK: 9c93f5e5e5038e0f11618cb1f87c85c09edcca79
@@ -268,6 +278,6 @@ SPEC CHECKSUMS:
   ZLImageEditor: ee86f044fb7c5dec6b5de49eb7bb6fd42286f2ae
   ZLPhotoBrowser: 6fb0eff03c8269001e29ef233e7bdab0691e05fe
 
-PODFILE CHECKSUM: 2435573315942d7dfc7b37a82c647c0bcc8337b4
+PODFILE CHECKSUM: 17088009b5722e99e54abe0d2bb578d88e4f61cb
 
 COCOAPODS: 1.16.2

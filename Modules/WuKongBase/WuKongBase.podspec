@@ -97,6 +97,11 @@ TODO: Add long description of the pod here.
   s.dependency 'AsyncDisplayKit', '~> 1.0'
   s.dependency 'FPSCounter', '~> 4.1'
   s.dependency 'librlottie', '~> 0.1'
+  s.dependency 'Down', '~> 0.11'
+  s.pod_target_xcconfig = {
+    'SWIFT_INCLUDE_PATHS' => '$(inherited) $(PODS_ROOT)/Down/Sources/cmark/include $(PODS_ROOT)/Down/Sources/cmark',
+    'HEADER_SEARCH_PATHS' => '$(inherited) $(PODS_ROOT)/Down/Sources/cmark/include $(PODS_ROOT)/Down/Sources/cmark'
+  }
   
 #  s.dependency 'SVGKit'
   

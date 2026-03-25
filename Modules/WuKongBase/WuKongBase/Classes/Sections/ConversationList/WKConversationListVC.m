@@ -204,10 +204,16 @@
 
 -(void) viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-   
+
     [self refreshTitle];
-    [self refreshTableNoSort];
     [self hiddenRightItem:NO];
+
+    // 重新从 SDK 加载会话列表，确保新会话（如首次发消息）能显示出来
+    __weak typeof(self) weakSelf = self;
+    [self.conversationListVM loadConversationList:^{
+        [weakSelf.tableView reloadData];
+        [weakSelf refreshBadge];
+    }];
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -672,6 +678,35 @@
     if (status == WKConnected) {
         // 连接成功，重新加载 Space 信息
         [self loadCurrentSpace];
+
+        // 连接成功后主动同步会话列表（解决首次登录后会话列表为空的问题）
+        __weak typeof(self) weakSelf = self;
+        WKSyncConversationProvider provider = [WKSDK shared].conversationManager.syncConversationProvider;
+        if (provider) {
+            long long version = [[WKConversationDB shared] getConversationMaxVersion];
+            NSString *syncKey = [[WKConversationDB shared] getConversationSyncKey];
+            provider(version, syncKey, ^(WKSyncConversationWrapModel * _Nullable model, NSError * _Nullable error) {
+                if (error) {
+                    NSLog(@"❌ 连接后会话同步失败: %@", error);
+                    return;
+                }
+                if (model) {
+                    [[WKSDK shared].conversationManager handleSyncConversation:model];
+                }
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [weakSelf.conversationListVM loadConversationList:^{
+                        [weakSelf.tableView reloadData];
+                        [weakSelf refreshBadge];
+                    }];
+                });
+            });
+        } else {
+            // 没有 syncProvider 时直接从本地 DB 重新加载
+            [self.conversationListVM loadConversationList:^{
+                [weakSelf.tableView reloadData];
+                [weakSelf refreshBadge];
+            }];
+        }
 
         // 记录时间并开始 ping 监控
         self.connectedAtTime = [[NSDate date] timeIntervalSince1970];

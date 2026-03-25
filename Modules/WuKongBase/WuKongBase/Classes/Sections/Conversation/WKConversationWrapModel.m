@@ -193,21 +193,26 @@
         return rawLastMessage;
     }
 
-    // 检查原始lastMessage是否明确属于当前空间
+    // 检查原始lastMessage是否属于当前空间（或没有space_id标记）
     if(rawLastMessage) {
         NSString *msgSpaceId = rawLastMessage.content.contentDict[@"space_id"];
         if([msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:currentSpaceId]) {
             return rawLastMessage; // 明确匹配当前空间
         }
+        // 消息没有 space_id 标记（nil或空），视为属于当前空间
+        if(!msgSpaceId || [msgSpaceId isEqual:[NSNull null]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0)) {
+            return rawLastMessage;
+        }
     }
 
-    // lastMessage不属于当前空间（或无space_id），从本地DB查找
+    // lastMessage属于其他空间，从本地DB查找当前空间的消息
     if(self.cachedSpaceLastMessage && [self.cachedSpaceId isEqualToString:currentSpaceId]) {
         return self.cachedSpaceLastMessage;
     }
 
-    // 分页迭代查询，无数量限制，从最新消息往旧查找匹配当前space_id的消息
+    // 分页迭代查询，从最新消息往旧查找匹配当前space_id的消息
     WKMessage *spaceLastMessage = nil;
+    WKMessage *noSpaceIdMessage = nil; // 记录第一条没有space_id的消息作为兜底
     uint32_t cursor = 0; // 0表示从最新开始
     BOOL hasMore = YES;
     while (hasMore) {
@@ -215,24 +220,30 @@
         if(!messages || messages.count == 0) {
             break;
         }
-        // messages按DESC排序（最新在前），从index 0开始找最新的匹配消息
         for (WKMessage *msg in messages) {
             NSString *msgSpaceId = msg.content.contentDict[@"space_id"];
             if([msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:currentSpaceId]) {
                 spaceLastMessage = msg;
                 break;
             }
+            // 记录第一条没有space_id的消息
+            if(!noSpaceIdMessage && (!msgSpaceId || [msgSpaceId isEqual:[NSNull null]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0))) {
+                noSpaceIdMessage = msg;
+            }
         }
         if(spaceLastMessage) {
             break;
         }
-        // 取本批次最后一条（最旧的）的orderSeq作为下一批的游标
         WKMessage *oldestMsg = messages.lastObject;
         if(oldestMsg.orderSeq == 0) {
-            break; // 已到最旧消息
+            break;
         }
         cursor = oldestMsg.orderSeq;
-        hasMore = messages.count == 200; // 不足200条说明已无更多消息
+        hasMore = messages.count == 200;
+    }
+    // 没有匹配当前空间的消息时，用没有space_id的消息兜底
+    if(!spaceLastMessage && noSpaceIdMessage) {
+        spaceLastMessage = noSpaceIdMessage;
     }
     self.cachedSpaceLastMessage = spaceLastMessage;
     self.cachedSpaceId = currentSpaceId;
