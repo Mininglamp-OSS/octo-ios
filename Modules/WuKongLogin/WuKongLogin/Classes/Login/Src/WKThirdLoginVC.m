@@ -10,6 +10,7 @@
 #import "WKLoginVC.h"
 #import <AuthenticationServices/AuthenticationServices.h>
 #import "WKLoginSettingVC.h"
+#import "WKServerSettingHelper.h"
 
 API_AVAILABLE(ios(13.0))
 @interface WKThirdLoginVC ()
@@ -137,8 +138,10 @@ API_AVAILABLE(ios(13.0))
 
 -(void) titleLongPressed:(UILongPressGestureRecognizer*)gestureRecognizer {
     if(gestureRecognizer.state == UIGestureRecognizerStateBegan) {
-        WKLoginVC *vc = [[WKLoginVC alloc] init];
-        [WKNavigationManager.shared pushViewController:vc animated:YES];
+        UIViewController *vc = [WKNavigationManager shared].topViewController;
+        if (vc) {
+            [WKServerSettingHelper showServerSettingAlertInViewController:vc];
+        }
     }
 }
 

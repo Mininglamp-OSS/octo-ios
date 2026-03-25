@@ -865,10 +865,22 @@
         return YES;
     }
 
-    // 群聊和社区频道：通过conversation/sync已过滤，实时新增的大概率是跨空间的
-    // 个人聊天：需要检查对方是否属于当前空间
-    // 简单策略：实时新增的未知会话不添加，等下次sync时自然出现
-    return NO;
+    // 检查最后一条消息的 space_id 是否匹配当前空间
+    if(conversation.lastMessage) {
+        NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
+        if([msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:spaceId]) {
+            return YES; // 消息明确属于当前空间
+        }
+        // 消息没有 space_id 标记，视为属于当前空间（兼容旧消息和非Bot消息）
+        if(!msgSpaceId || [msgSpaceId isEqual:[NSNull null]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0)) {
+            return YES;
+        }
+        // 消息有 space_id 但不匹配当前空间
+        return NO;
+    }
+
+    // 无最后一条消息，允许显示（如空会话）
+    return YES;
 }
 
 -(void) uiAddConversation:(WKConversation*)conversation {

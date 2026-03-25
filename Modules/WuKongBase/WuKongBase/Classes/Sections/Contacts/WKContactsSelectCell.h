@@ -28,6 +28,9 @@ NS_ASSUME_NONNULL_BEGIN
 // 是否被选择
 @property(nonatomic,assign) BOOL selected;
 
+// 是否是机器人
+@property(nonatomic,assign) BOOL robot;
+
 @end
 
 typedef void (^stateChangeCheckBlock)(WKContactsSelect *model);

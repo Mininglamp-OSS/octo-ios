@@ -57,12 +57,19 @@ static NSString * const kDefaultServerIP       = @"api-test.example.com";
     NSArray *saved = [[NSUserDefaults standardUserDefaults] arrayForKey:kWKServerHistoryKey];
     NSMutableArray *result = saved ? [saved mutableCopy] : [NSMutableArray array];
 
-    // 确保预设地址始终存在
+    // 确保预设地址始终存在，且 label 不丢失
     for (NSDictionary *preset in [self presetServers]) {
         BOOL exists = NO;
-        for (NSDictionary *item in result) {
+        for (NSUInteger i = 0; i < result.count; i++) {
+            NSDictionary *item = result[i];
             if ([item[@"ip"] isEqualToString:preset[@"ip"]]) {
                 exists = YES;
+                // 如果历史记录中缺少 label，用预设的补上
+                if (!item[@"label"] || [item[@"label"] length] == 0) {
+                    NSMutableDictionary *updated = [item mutableCopy];
+                    updated[@"label"] = preset[@"label"];
+                    result[i] = updated;
+                }
                 break;
             }
         }
@@ -75,6 +82,16 @@ static NSString * const kDefaultServerIP       = @"api-test.example.com";
 
 + (void)addToHistory:(NSString *)ip httpsOn:(BOOL)on {
     NSMutableArray *history = [[self serverHistory] mutableCopy];
+
+    // 查找预设 label（如果是预设服务器，保留其标签）
+    NSString *label = nil;
+    for (NSDictionary *preset in [self presetServers]) {
+        if ([preset[@"ip"] isEqualToString:ip]) {
+            label = preset[@"label"];
+            break;
+        }
+    }
+
     // 去重：移除已有的相同条目
     NSMutableArray *toRemove = [NSMutableArray array];
     for (NSDictionary *entry in history) {
@@ -83,8 +100,14 @@ static NSString * const kDefaultServerIP       = @"api-test.example.com";
         }
     }
     [history removeObjectsInArray:toRemove];
-    // 插入到最前面
-    [history insertObject:@{@"ip": ip, @"https": @(on)} atIndex:0];
+
+    // 插入到最前面（带 label）
+    NSMutableDictionary *newEntry = [@{@"ip": ip, @"https": @(on)} mutableCopy];
+    if (label.length > 0) {
+        newEntry[@"label"] = label;
+    }
+    [history insertObject:newEntry atIndex:0];
+
     // 最多保留 10 条
     if (history.count > 10) {
         history = [[history subarrayWithRange:NSMakeRange(0, 10)] mutableCopy];

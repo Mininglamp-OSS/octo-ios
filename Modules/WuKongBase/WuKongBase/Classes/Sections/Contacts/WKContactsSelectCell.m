@@ -16,7 +16,7 @@
 
 @interface WKContactsSelectCell()<WKCheckBoxDelegate>
 
-
+@property(nonatomic,strong) UILabel *botBadgeLbl;
 
 @end
 @implementation WKContactsSelectCell
@@ -44,7 +44,17 @@
 //    self.checkBox.tintColor = [UIColor grayColor];
     self.checkBox.delegate = self;
     [self addSubview:self.checkBox];
-    
+
+    _botBadgeLbl = [[UILabel alloc] init];
+    _botBadgeLbl.text = @"AI";
+    _botBadgeLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
+    _botBadgeLbl.textColor = [UIColor whiteColor];
+    _botBadgeLbl.backgroundColor = [UIColor colorWithRed:136.0f/255.0f green:84.0f/255.0f blue:208.0f/255.0f alpha:1.0f];
+    _botBadgeLbl.textAlignment = NSTextAlignmentCenter;
+    _botBadgeLbl.layer.cornerRadius = 4.0f;
+    _botBadgeLbl.layer.masksToBounds = YES;
+    _botBadgeLbl.hidden = YES;
+    [self.contentView addSubview:_botBadgeLbl];
 }
 
 +(NSString*) cellId{
@@ -60,7 +70,16 @@
     self.nameLbl.text = _contactSelectModel.displayName;
     [self.nameLbl sizeToFit];
     self.checkBox.on = self.contactSelectModel.selected;
-    
+
+    self.botBadgeLbl.hidden = !_contactSelectModel.robot;
+    if(_contactSelectModel.robot) {
+        [self.botBadgeLbl sizeToFit];
+        CGRect frame = self.botBadgeLbl.frame;
+        frame.size.width += 8.0f;
+        frame.size.height += 4.0f;
+        self.botBadgeLbl.frame = frame;
+    }
+
     if(_contactSelectModel.mode == WKContactsModeSingle) {
         self.checkBox.hidden = YES;
         self.avatarImgView.alpha = _contactSelectModel.disable ? 0.5 : 1.0;
@@ -99,6 +118,11 @@
     self.avatarImgView.lim_top = self.lim_height/2.0f - self.avatarImgView.lim_height/2.0f;
     self.nameLbl.lim_left = self.avatarImgView.lim_right + nameLeft;
     self.nameLbl.lim_top = self.lim_height/2.0f - self.nameLbl.lim_height/2.0f;
+
+    if(!self.botBadgeLbl.hidden) {
+        self.botBadgeLbl.lim_left = self.nameLbl.lim_right + 6.0f;
+        self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
+    }
     
 //    if(_contactSelectModel.last) {
 //        self.bottomLineView.lim_left =  0;

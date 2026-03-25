@@ -61,6 +61,7 @@
                 contacts.name = channelInfo.name;
                 contacts.displayName =channelInfo.displayName;
                 contacts.avatar = [WKAvatarUtil getAvatar:channelInfo.channel.channelId];
+                contacts.robot = channelInfo.robot;
                 [items addObject:contacts];
             }
         }

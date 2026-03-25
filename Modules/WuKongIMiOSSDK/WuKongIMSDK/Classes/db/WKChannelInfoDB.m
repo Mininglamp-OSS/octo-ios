@@ -307,7 +307,6 @@ static WKChannelInfoDB *_instance;
 }
 
 -(NSArray<WKChannelInfo*>*) addOrUpdateChannelInfos:(NSArray<WKChannelInfo*>*)channelInfos {
-    NSLog(@"-------------addOrUpdateChannelInfos------------>");
     if(!channelInfos || channelInfos.count<=0) {
         return nil;
     }

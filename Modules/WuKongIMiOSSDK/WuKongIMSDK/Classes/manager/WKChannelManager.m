@@ -217,36 +217,41 @@ static WKChannelManager *_instance;
      WKChannelInfo *channelInfo =  [self getChannelInfo:channel];
     if(channelInfo) {
         for (NSString *key in setting.allKeys) {
-            if([key isEqualToString:@"mute"]) { // 免打扰
+            if([key isEqualToString:@"mute"]) {
                 channelInfo.mute = [setting[key] boolValue];
             }
-            if([key isEqualToString:@"stick"]) { // 置顶
+            if([key isEqualToString:@"stick"]) {
                 channelInfo.stick = [setting[key] boolValue];
             }
-            if([key isEqualToString:@"show_nick"]) { // 置顶
+            if([key isEqualToString:@"show_nick"]) {
                 channelInfo.showNick = [setting[key] boolValue];
             }
-            if([key isEqualToString:@"save"]) { // 保存
+            if([key isEqualToString:@"save"]) {
                 channelInfo.save = [setting[key] boolValue];
             }
-            if([key isEqualToString:@"invite"]) { // 确认邀请
+            if([key isEqualToString:@"invite"]) {
                 channelInfo.invite = [setting[key] boolValue];
             }
-            if([key isEqualToString:@"flame"]) { // 阅后即焚
+            if([key isEqualToString:@"flame"]) {
                 channelInfo.flame = [setting[key] boolValue];
             }
-            if([key isEqualToString:@"flame_second"] && setting[key] ) { // 阅后即焚
+            if([key isEqualToString:@"flame_second"] && setting[key] ) {
                 channelInfo.flameSecond = [setting[key] integerValue];
             }
-             [self updateChannelInfo:channelInfo];
         }
+        // 所有设置项应用完毕后统一更新一次（而不是每个 key 更新一次）
+        [self updateChannelInfo:channelInfo];
     }
 }
 
 -(void) addOrUpdateChannelInfos:(NSArray<WKChannelInfo*>*) channelInfos {
     for (WKChannelInfo *channelInfo in channelInfos) {
         if(channelInfo.channel.channelType == WK_GROUP) {
-            WKChannelInfo *existChannelInfo = [self getChannelInfo:channelInfo.channel];
+            // 优先从缓存读取，避免逐条 DB 查询
+            WKChannelInfo *existChannelInfo = [self getCache:channelInfo.channel];
+            if (!existChannelInfo) {
+                existChannelInfo = [self getChannelInfo:channelInfo.channel];
+            }
             if(existChannelInfo && existChannelInfo.avatarCacheKey.length > 0 && existChannelInfo.version == channelInfo.version) {
                 channelInfo.avatarCacheKey = existChannelInfo.avatarCacheKey;
             } else {
@@ -255,21 +260,28 @@ static WKChannelManager *_instance;
         }
     }
      NSArray<WKChannelInfo*> *oldChannelInfos = [[WKChannelInfoDB shared] addOrUpdateChannelInfos:channelInfos];
-    if(channelInfos && channelInfos.count>0) {
-        for (WKChannelInfo *channelInfo in channelInfos) {
-            [self setCache:channelInfo];
-            WKChannelInfo *oldChannelInfo;
-            if(oldChannelInfos && oldChannelInfos.count>0) {
-                for (WKChannelInfo *oldC in oldChannelInfos) {
+
+    // 先批量更新缓存
+    for (WKChannelInfo *channelInfo in channelInfos) {
+        [self setCache:channelInfo];
+    }
+
+    // 再统一通知 delegate（异步到下一个 runloop，避免大量同步回调阻塞主线程）
+    if(channelInfos && channelInfos.count > 0) {
+        NSArray *infoCopy = [channelInfos copy];
+        NSArray *oldCopy = oldChannelInfos ? [oldChannelInfos copy] : @[];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            for (WKChannelInfo *channelInfo in infoCopy) {
+                WKChannelInfo *oldChannelInfo = nil;
+                for (WKChannelInfo *oldC in oldCopy) {
                     if([oldC.channel isEqual:channelInfo.channel]) {
                         oldChannelInfo = oldC;
                         break;
                     }
                 }
+                [self callChannelInfoUpdateDelegate:channelInfo oldChannelInfo:oldChannelInfo];
             }
-            [self callChannelInfoUpdateDelegate:channelInfo oldChannelInfo:oldChannelInfo];
-        }
-       
+        });
     }
 }
 

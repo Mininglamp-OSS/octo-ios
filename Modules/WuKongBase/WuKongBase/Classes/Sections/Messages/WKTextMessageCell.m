@@ -214,8 +214,10 @@
                 NSMutableAttributedString *mdMutable = [[NSMutableAttributedString alloc] initWithAttributedString:mdAttr];
                 mdMutable.font = attrStr.font;
 
-                // 从 Down 渲染结果中提取链接 token，供点击处理使用
-                NSMutableArray<id<WKMatchToken>> *linkTokens = [NSMutableArray array];
+                // 从 Down 渲染结果中提取可点击的 tokens
+                NSMutableArray<id<WKMatchToken>> *clickableTokens = [NSMutableArray array];
+
+                // 1. 提取链接 tokens
                 [mdMutable enumerateAttribute:NSLinkAttributeName inRange:NSMakeRange(0, mdMutable.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
                     if (value) {
                         WKLinkToken *token = [WKLinkToken new];
@@ -227,10 +229,42 @@
                             token.linkContent = (NSString*)value;
                         }
                         token.text = token.linkText;
-                        [linkTokens addObject:token];
+                        [clickableTokens addObject:token];
                     }
                 }];
-                mdMutable.tokens = linkTokens;
+
+                // 2. 从消息 entities 中提取 @mention tokens，在渲染后的文本中查找匹配位置
+                NSArray<WKMessageEntity*> *entities = message.content.entities;
+                if (message.remoteExtra.contentEdit) {
+                    entities = message.remoteExtra.contentEdit.entities;
+                }
+                if (entities) {
+                    NSString *renderedText = mdMutable.string;
+                    for (WKMessageEntity *entity in entities) {
+                        if (![entity.type isEqualToString:WKMentionRichTextStyle]) continue;
+                        // 从原文中取出 @xxx 文本
+                        if (entity.range.location + entity.range.length > content.length) continue;
+                        NSString *mentionText = [content substringWithRange:entity.range];
+                        if ([mentionText hasSuffix:@" "]) {
+                            mentionText = [mentionText substringToIndex:mentionText.length - 1];
+                        }
+                        // 在渲染后的文本中查找这段 @xxx
+                        NSRange foundRange = [renderedText rangeOfString:mentionText];
+                        if (foundRange.location != NSNotFound) {
+                            WKMetionToken *token = [WKMetionToken new];
+                            token.range = foundRange;
+                            token.uid = entity.value ?: @"";
+                            token.text = mentionText;
+                            [clickableTokens addObject:token];
+                            // 给 @mention 文本加上下划线 + 颜色
+                            UIColor *mentionColor = message.isSend ? [UIColor whiteColor] : [WKApp shared].config.themeColor;
+                            [mdMutable addAttribute:NSForegroundColorAttributeName value:mentionColor range:foundRange];
+                            [mdMutable addAttribute:NSUnderlineStyleAttributeName value:@1 range:foundRange];
+                        }
+                    }
+                }
+
+                mdMutable.tokens = clickableTokens;
 
                 return mdMutable;
             }
@@ -248,7 +282,6 @@
             if(linkToken.type != WKatchTokenTypeLink) {
                 continue;
             }
-            // 检查该链接是否与已有 entity token 重叠，避免重复
             BOOL overlaps = NO;
             for (id<WKMatchToken> entityToken in entityTokens) {
                 NSRange lr = linkToken.range;
@@ -262,10 +295,100 @@
                 [tokens addObject:linkToken];
             }
         }
+
+        // 自动检测手写/复制的 @mention（补充 entity 中未包含的 @提及）
+        NSArray<id<WKMatchToken>> *autoMentionTokens = [self detectMentionsInText:content channel:message.message.channel existingTokens:tokens];
+        if (autoMentionTokens.count > 0) {
+            [tokens addObjectsFromArray:autoMentionTokens];
+        }
+
         [attrStr lim_render:content tokens:tokens];
     }
 
     return attrStr;
+}
+
+/// 自动检测文本中的 @mention（匹配群成员或联系人）
++(NSArray<id<WKMatchToken>>*) detectMentionsInText:(NSString*)text channel:(WKChannel*)channel existingTokens:(NSArray<id<WKMatchToken>>*)existingTokens {
+    if (!text || text.length == 0) return @[];
+
+    NSMutableArray<id<WKMatchToken>> *result = [NSMutableArray array];
+
+    // 用正则找出所有 @xxx 片段（@后跟非空白字符）
+    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"@(\\S+)" options:0 error:nil];
+    if (!regex) return @[];
+
+    NSArray<NSTextCheckingResult*> *matches = [regex matchesInString:text options:0 range:NSMakeRange(0, text.length)];
+    if (matches.count == 0) return @[];
+
+    // 获取可匹配的成员/联系人列表
+    NSArray<WKChannelMember*> *members = nil;
+    if (channel.channelType == WK_GROUP) {
+        members = [[WKSDK shared].channelManager getMembersWithChannel:channel];
+    }
+
+    for (NSTextCheckingResult *match in matches) {
+        NSRange fullRange = [match range];           // @xxx 的完整范围
+        NSRange nameRange = [match rangeAtIndex:1];  // xxx 部分
+
+        // 检查是否与已有 token 重叠，避免重复
+        BOOL overlaps = NO;
+        for (id<WKMatchToken> token in existingTokens) {
+            if (token.type != WKatchTokenTypeMetion) continue;
+            NSRange tr = token.range;
+            if (fullRange.location < tr.location + tr.length && tr.location < fullRange.location + fullRange.length) {
+                overlaps = YES;
+                break;
+            }
+        }
+        if (overlaps) continue;
+
+        NSString *mentionName = [text substringWithRange:nameRange];
+        NSString *matchedUID = nil;
+
+        // 在群成员中匹配（名字/备注/uid）
+        if (members) {
+            for (WKChannelMember *member in members) {
+                WKChannelInfo *memberInfo = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:member.memberUid]];
+                if (memberInfo) {
+                    if (([memberInfo.name isEqualToString:mentionName]) ||
+                        (memberInfo.remark && [memberInfo.remark isEqualToString:mentionName]) ||
+                        ([memberInfo.displayName isEqualToString:mentionName]) ||
+                        ([member.memberUid isEqualToString:mentionName])) {
+                        matchedUID = member.memberUid;
+                        break;
+                    }
+                } else if ([member.memberUid isEqualToString:mentionName] ||
+                           (member.memberName && [member.memberName isEqualToString:mentionName])) {
+                    matchedUID = member.memberUid;
+                    break;
+                }
+            }
+        }
+
+        // 群成员没匹配到，尝试从联系人缓存中按名字匹配
+        if (!matchedUID) {
+            NSArray<WKChannelInfo*> *allContacts = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
+            for (WKChannelInfo *info in allContacts) {
+                if (([info.name isEqualToString:mentionName]) ||
+                    (info.remark && [info.remark isEqualToString:mentionName]) ||
+                    ([info.displayName isEqualToString:mentionName])) {
+                    matchedUID = info.channel.channelId;
+                    break;
+                }
+            }
+        }
+
+        if (matchedUID) {
+            WKMetionToken *token = [WKMetionToken new];
+            token.range = fullRange;
+            token.uid = matchedUID;
+            token.text = [text substringWithRange:fullRange];
+            [result addObject:token];
+        }
+    }
+
+    return result;
 }
 
 +(NSMutableAttributedString*) parseText:(WKTextContent*)content isSend:(BOOL)isSend parseBefore:(void(^)(NSMutableAttributedString *attr))parseBeforeBlock{
@@ -408,7 +531,14 @@
         attrStr.textColor = [WKApp shared].config.messageRecvTextColor;
         attrStr.linkColor = [UIColor blueColor];
     }
-    attrStr.metionColor = attrStr.textColor;
+    // @mention 下划线 + 区分发送/接收的颜色
+    if(model.isSend) {
+        // 紫色气泡上用白色，醒目
+        attrStr.metionColor = [UIColor whiteColor];
+    } else {
+        // 白色气泡上用主题紫色
+        attrStr.metionColor = [WKApp shared].config.themeColor;
+    }
     attrStr.metionUnderline = true;
 
     self.textLbl.attributedText = attrStr;
