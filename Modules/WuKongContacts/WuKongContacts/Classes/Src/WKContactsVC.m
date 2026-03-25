@@ -93,10 +93,10 @@
     return _searchbarView;
 }
 
-// 联系人数据更新
+// 联系人数据更新（仅从本地 DB 刷新，不触发 API 请求，避免循环）
 -(void) contactsUpdate:(NSNotification*)notify {
-    [self requestData];
-   
+    NSArray<WKChannelInfo*> *dbInfos = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
+    [self refreshContactsList:dbInfos ?: @[]];
 }
 
 -(void) refreshContactsHeader {

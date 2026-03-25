@@ -51,37 +51,29 @@
     }
     
     
-    if(position) {
+    if(position && ![self needsSpaceFiltering]) {
+        // 无需空间过滤时，使用 position 直接加载
         __weak typeof(self) weakSelf = self;
         [[WKSDK shared].chatManager pullAround:self.channel orderSeq:position.orderSeq maxMessageSeq:maxMessageSeq limit:[WKApp shared].config.eachPageMsgLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
             if(error || !messages || messages.count == 0) {
-                // 加载历史消息失败或为空时，不清除现有消息，避免空屏
                 if(complete) {
                     complete(false);
                 }
                 return;
             }
-            [weakSelf.messageList clearMessages]; // 先清除原来的数据
+            [weakSelf.messageList clearMessages];
             [weakSelf handleMessages:[weakSelf messagesToMessageModels:messages] insertFirst:false complete:complete];
         }];
-    }else {
+    } else {
+        // 需要空间过滤时，忽略全局 position（因为它可能指向其他空间的消息区域），
+        // 从最新消息开始递归向前搜索当前空间的消息
         __weak typeof(self) weakSelf = self;
-       
-        [[WKSDK shared].chatManager pullLastMessages:self.channel endOrderSeq:0 maxMessageSeq: maxMessageSeq limit:[WKApp shared].config.eachPageMsgLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
-            if(error) {
-                WKLogError(@"获取第一屏消息失败！->%@",error);
-                [[WKNavigationManager shared].topViewController.view showHUDWithHide:@"获取消息失败！"];
-                return;
-            }
-            [weakSelf.messageList clearMessages]; // 现清除原来的数据
-            [weakSelf handleMessages:[weakSelf messagesToMessageModels:messages] insertFirst:false complete:complete];
-            
-        }];
+        [self pullLastWithSpaceFilter:0 maxMessageSeq:maxMessageSeq accumulated:[NSMutableArray array] complete:complete];
     }
 }
 -(NSArray<WKMessageModel*>*) messagesToMessageModels:(NSArray<WKMessage*>*) messages {
-    // 对系统Bot（如BotFather）的消息按space_id过滤，实现会话隔离
-    NSArray<WKMessage*> *filteredMessages = [self filterSystemBotMessages:messages];
+    // 按当前空间过滤消息
+    NSArray<WKMessage*> *filteredMessages = [self filterMessagesBySpace:messages];
     NSMutableArray<WKMessageModel*> *messageModels = [NSMutableArray array];
     for (WKMessage *message in filteredMessages) {
         WKMessageModel *messageModel = [[WKMessageModel alloc] initWithMessage:message];
@@ -90,51 +82,85 @@
     return messageModels;
 }
 
-/// 判断当前频道是否为系统Bot（如BotFather）
--(BOOL) isSystemBotChannel {
+/// 判断当前频道是否需要按空间过滤消息（所有个人聊天在多空间模式下都需要过滤）
+-(BOOL) needsSpaceFiltering {
     if(self.channel.channelType != WK_PERSON) {
         return NO;
     }
-    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
-    return [self.channel.channelId isEqualToString:botfatherUID];
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    return currentSpaceId && currentSpaceId.length > 0;
 }
 
-/// 过滤系统Bot消息：仅显示当前空间的消息（参考web端filterSystemBotMessages）
--(NSArray<WKMessage*>*) filterSystemBotMessages:(NSArray<WKMessage*>*)messages {
-    if(![self isSystemBotChannel]) {
-        return messages; // 非系统Bot，不过滤
+/// 过滤消息：仅显示当前空间的消息
+/// 空间过滤模式下加载首屏：从最新消息递归向前搜索，直到凑够一页当前空间的消息
+-(void) pullLastWithSpaceFilter:(uint32_t)endOrderSeq maxMessageSeq:(uint32_t)maxMessageSeq accumulated:(NSMutableArray<WKMessageModel*>*)accumulated complete:(void(^)(bool more))complete {
+    NSInteger pageLimit = [WKApp shared].config.eachPageMsgLimit;
+    __weak typeof(self) weakSelf = self;
+
+    [[WKSDK shared].chatManager pullLastMessages:self.channel endOrderSeq:endOrderSeq maxMessageSeq:maxMessageSeq limit:(int)pageLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
+        if (error || !messages || messages.count == 0) {
+            // 没有更多消息了
+            [weakSelf.messageList clearMessages];
+            if (accumulated.count > 0) {
+                [weakSelf handleMessages:accumulated insertFirst:NO complete:complete];
+            } else if (complete) {
+                complete(NO);
+            }
+            return;
+        }
+
+        NSArray<WKMessageModel*> *models = [weakSelf messagesToMessageModels:messages];
+        [accumulated addObjectsFromArray:models];
+
+        BOOL rawHasMore = messages.count >= pageLimit;
+
+        // 过滤后不足一页且 DB 还有更多消息，继续向前搜索
+        if (accumulated.count < pageLimit && rawHasMore) {
+            WKMessage *oldestMsg = messages.lastObject;
+            if (oldestMsg.orderSeq > 0) {
+                [weakSelf pullLastWithSpaceFilter:oldestMsg.orderSeq maxMessageSeq:maxMessageSeq accumulated:accumulated complete:complete];
+                return;
+            }
+        }
+
+        [weakSelf.messageList clearMessages];
+        [weakSelf handleMessages:accumulated insertFirst:NO complete:complete];
+    }];
+}
+
+-(NSArray<WKMessage*>*) filterMessagesBySpace:(NSArray<WKMessage*>*)messages {
+    if(![self needsSpaceFiltering]) {
+        return messages;
     }
     NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
-    if(!currentSpaceId || currentSpaceId.length == 0) {
-        return messages; // 无空间上下文，不过滤
-    }
     NSMutableArray<WKMessage*> *filtered = [NSMutableArray array];
     for (WKMessage *message in messages) {
         NSString *msgSpaceId = message.content.contentDict[@"space_id"];
-        if(!msgSpaceId || [msgSpaceId isKindOfClass:[NSNull class]]) {
+        if(!msgSpaceId || [msgSpaceId isKindOfClass:[NSNull class]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0)) {
             [filtered addObject:message]; // 无space_id的历史消息：所有空间可见（向前兼容）
         } else if([msgSpaceId isEqualToString:currentSpaceId]) {
             [filtered addObject:message]; // space_id匹配当前空间
         }
-        // 其他space_id不匹配的消息被过滤掉
     }
     return filtered;
 }
 
 /// 判断单条消息是否应在当前空间显示（用于实时消息过滤）
 -(BOOL) shouldShowMessageInCurrentSpace:(WKMessage*)message {
-    if(![self isSystemBotChannel]) {
+    if(![self needsSpaceFiltering]) {
         return YES;
     }
     NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
-    if(!currentSpaceId || currentSpaceId.length == 0) {
+    NSString *msgSpaceId = message.content.contentDict[@"space_id"];
+    if(!msgSpaceId || [msgSpaceId isKindOfClass:[NSNull class]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0)) {
         return YES;
     }
-    NSString *msgSpaceId = message.content.contentDict[@"space_id"];
-    if(!msgSpaceId || [msgSpaceId isKindOfClass:[NSNull class]]) {
-        return YES; // 无space_id的历史消息，所有空间可见
-    }
     return [msgSpaceId isEqualToString:currentSpaceId];
+}
+
+// 兼容旧方法名
+-(BOOL) isSystemBotChannel {
+    return [self needsSpaceFiltering];
 }
 
 // insertFirst 是否插入到数组最前
@@ -272,8 +298,40 @@
         baseOrderSeq = firstMessageModel.orderSeq;
     }
     __weak typeof(self) weakSelf = self;
-    [[WKSDK shared].chatManager pullDown:self.channel startOrderSeq:baseOrderSeq limit:[WKApp shared].config.eachPageMsgLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
-        [weakSelf handleMessages:[self messagesToMessageModels:messages] insertFirst:true complete:complete];
+    [self pullDownRecursive:baseOrderSeq accumulated:[NSMutableArray array] complete:complete];
+}
+
+/// 递归加载历史消息：空间过滤后不足一页时自动继续往前拉取，确保历史完整
+-(void) pullDownRecursive:(uint32_t)startOrderSeq accumulated:(NSMutableArray<WKMessageModel*>*)accumulated complete:(void(^)(bool more))complete {
+    NSInteger pageLimit = [WKApp shared].config.eachPageMsgLimit;
+    __weak typeof(self) weakSelf = self;
+    [[WKSDK shared].chatManager pullDown:self.channel startOrderSeq:startOrderSeq limit:(int)pageLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
+        if (error || !messages || messages.count == 0) {
+            // 没有更多消息了，把已积累的返回
+            if (accumulated.count > 0) {
+                [weakSelf handleMessages:accumulated insertFirst:YES complete:complete];
+            } else if (complete) {
+                complete(NO);
+            }
+            return;
+        }
+
+        NSArray<WKMessageModel*> *models = [weakSelf messagesToMessageModels:messages];
+        [accumulated addObjectsFromArray:models];
+
+        BOOL rawHasMore = messages.count >= pageLimit;
+
+        // 空间过滤后不足一页，且 DB 还有更多消息，继续拉下一页
+        if ([weakSelf needsSpaceFiltering] && accumulated.count < pageLimit && rawHasMore) {
+            WKMessage *oldestMsg = messages.lastObject;
+            uint32_t nextSeq = oldestMsg.orderSeq;
+            if (nextSeq > 0) {
+                [weakSelf pullDownRecursive:nextSeq accumulated:accumulated complete:complete];
+                return;
+            }
+        }
+
+        [weakSelf handleMessages:accumulated insertFirst:YES complete:complete];
     }];
 }
 
