@@ -61,7 +61,8 @@
       "WebFetch(domain:cocoapods.org)",
       "Bash(pod install:*)",
       "Bash(ASSETS=\"/Users/wanglitao/Documents/octo-ios/Modules/WuKongBase/WuKongBase/Assets/Images.xcassets/FileType\" && mkdir -p \"$ASSETS/FileWord.imageset\" \"$ASSETS/FileExcel.imageset\" \"$ASSETS/FilePDF.imageset\" \"$ASSETS/FilePPT.imageset\" && cp /Users/wanglitao/Documents/octo-ios/docx.png \"$ASSETS/FileWord.imageset/FileWord.png\" && cp /Users/wanglitao/Documents/octo-ios/Microsoft-Excel.png \"$ASSETS/FileExcel.imageset/FileExcel.png\" && cp /Users/wanglitao/Documents/octo-ios/pdf.png \"$ASSETS/FilePDF.imageset/FilePDF.png\" && cp /Users/wanglitao/Documents/octo-ios/ppt-3.png \"$ASSETS/FilePPT.imageset/FilePPT.png\" && echo \"OK\")",
-      "Bash(ASSETS=\"/Users/wanglitao/Documents/octo-ios/Modules/WuKongBase/WuKongBase/Assets/Images.xcassets/FileType\" && mkdir -p \"$ASSETS/FileVideo.imageset\" \"$ASSETS/FileMarkdown.imageset\" && cp /Users/wanglitao/Documents/octo-ios/shipin-2.png \"$ASSETS/FileVideo.imageset/FileVideo.png\" && cp /Users/wanglitao/Documents/octo-ios/MarkDown.png \"$ASSETS/FileMarkdown.imageset/FileMarkdown.png\" && echo \"OK\")"
+      "Bash(ASSETS=\"/Users/wanglitao/Documents/octo-ios/Modules/WuKongBase/WuKongBase/Assets/Images.xcassets/FileType\" && mkdir -p \"$ASSETS/FileVideo.imageset\" \"$ASSETS/FileMarkdown.imageset\" && cp /Users/wanglitao/Documents/octo-ios/shipin-2.png \"$ASSETS/FileVideo.imageset/FileVideo.png\" && cp /Users/wanglitao/Documents/octo-ios/MarkDown.png \"$ASSETS/FileMarkdown.imageset/FileMarkdown.png\" && echo \"OK\")",
+      "Bash(/usr/bin/python3 /Users/wanglitao/Documents/octo-ios/test_botfather.py)"
     ]
   }
 }

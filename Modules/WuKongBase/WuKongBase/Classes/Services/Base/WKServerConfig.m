@@ -10,7 +10,7 @@
 static NSString * const kWKCustomServerIPKey   = @"WKCustomServerIP";
 static NSString * const kWKCustomHttpsOnKey    = @"WKCustomHttpsOn";
 static NSString * const kWKServerHistoryKey    = @"WKServerHistory";
-static NSString * const kDefaultServerIP       = @"api-test.example.com";
+static NSString * const kDefaultServerIP       = @"api.example.com";
 
 @implementation WKServerConfig
 
@@ -48,8 +48,9 @@ static NSString * const kDefaultServerIP       = @"api-test.example.com";
 
 + (NSArray<NSDictionary *> *)presetServers {
     return @[
-        @{@"ip": @"api-test.example.com", @"https": @(YES), @"label": @"国内版"},
-        @{@"ip": @"api-test.example.com",         @"https": @(YES), @"label": @"国际版"},
+        @{@"ip": @"api.example.com",      @"https": @(YES), @"label": @"国内正式版"},
+        @{@"ip": @"api-test.example.com",  @"https": @(YES), @"label": @"国内测试版"},
+        @{@"ip": @"api-test.example.com",          @"https": @(YES), @"label": @"国际版"},
     ];
 }
 

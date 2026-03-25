@@ -783,21 +783,17 @@
             [filtered addObject:conversation];
             continue;
         }
-        // 检查触发更新的lastMessage是否属于当前空间
-        if(conversation.lastMessage) {
-            NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
-            if(msgSpaceId && ![msgSpaceId isKindOfClass:[NSNull class]] && msgSpaceId.length > 0) {
-                if(![msgSpaceId isEqualToString:currentSpaceId]) {
-                    continue; // 消息来自其他空间，跳过此更新
-                }
-            }
-        }
-        // 检查该会话是否已在当前列表中（列表已按空间过滤）
+        // 检查该会话是否已在当前列表中
         BOOL existsInList = [self.conversationListVM indexAtChannel:conversation.channel] != -1;
         if(existsInList) {
+            // 已在列表中的会话：允许更新（列表通过 sync 按空间加载，已在列表就是当前空间的）
             [filtered addObject:conversation];
         } else {
-            // 新会话：检查是否属于当前空间
+            // 群聊不在列表中：不自动添加（群聊归属通过 conversation/sync 确定）
+            if(conversation.channel.channelType == WK_GROUP) {
+                continue;
+            }
+            // 个人聊天不在列表中：检查消息 space_id
             if([self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
                 [filtered addObject:conversation];
             }
@@ -865,7 +861,12 @@
         return YES;
     }
 
-    // 检查最后一条消息的 space_id 是否匹配当前空间
+    // 群聊/社区频道：不自动添加到其他空间，群聊通过 conversation/sync 按空间加载
+    if(conversation.channel.channelType == WK_GROUP) {
+        return NO;
+    }
+
+    // 个人聊天：检查最后一条消息的 space_id 是否匹配当前空间
     if(conversation.lastMessage) {
         NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
         if([msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:spaceId]) {

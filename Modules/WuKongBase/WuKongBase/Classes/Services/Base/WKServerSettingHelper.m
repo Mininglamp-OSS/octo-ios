@@ -70,7 +70,7 @@
     [sheet addAction:newAction];
 
     // 管理历史记录（删除用户手动添加的，预设地址保留）
-    NSArray *presetIPs = @[@"api-test.example.com", @"api-test.example.com"];
+    NSArray *presetIPs = @[@"api.example.com", @"api-test.example.com", @"api-test.example.com"];
     BOOL hasUserAdded = NO;
     for (NSDictionary *entry in history) {
         if (![presetIPs containsObject:entry[@"ip"]]) {

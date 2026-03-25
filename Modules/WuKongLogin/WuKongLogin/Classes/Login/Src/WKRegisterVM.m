@@ -23,9 +23,8 @@
 }
 
 - (AnyPromise *)emailRegister:(NSString *)email code:(NSString *)code name:(NSString *)name password:(NSString *)password inviteCode:(NSString *)inviteCode {
-    // 移除验证码验证，code参数传空字符串
     // flag: 0=app(旧版), 1=pc/web, 2=Android, 3=iOS
-    return [[WKAPIClient sharedClient] POST:@"user/emailregister" parameters:@{@"email":email?:@"",@"code":@"",@"name":name?:@"",@"password":password?:@"",@"invite_code":inviteCode?:@"",@"flag":@(3),@"device":@{@"device_id":[UIDevice getUUID],@"device_name":[UIDevice getDeviceName],@"device_model":[UIDevice getDeviceModel]}} model:WKLoginResp.class];
+    return [[WKAPIClient sharedClient] POST:@"user/emailregister" parameters:@{@"email":email?:@"",@"code":code?:@"",@"name":name?:@"",@"password":password?:@"",@"invite_code":inviteCode?:@"",@"flag":@(3),@"device":@{@"device_id":[UIDevice getUUID],@"device_name":[UIDevice getDeviceName],@"device_model":[UIDevice getDeviceModel]}} model:WKLoginResp.class];
 }
 
 -(AnyPromise*) updateName:(NSString*)name {
