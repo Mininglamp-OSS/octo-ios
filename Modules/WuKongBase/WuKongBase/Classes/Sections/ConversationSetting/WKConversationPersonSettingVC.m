@@ -192,19 +192,29 @@
 }
 
 -(void) memberAddClick {
-    [[WKApp shared] invoke:WKPOINT_CONTACTS_SELECT param:@{@"on_finished":^(NSArray<NSString*>*uids){
-        NSMutableArray *newUids = [NSMutableArray arrayWithArray:uids];
-        [newUids insertObject:self.channel.channelId atIndex:0];
-        [[WKNavigationManager shared].topViewController.view showHUD];
-        [[WKGroupManager shared] createGroup:newUids object:nil complete:^(NSString * _Nonnull groupNo, NSError * _Nullable error) {
-            [[WKNavigationManager shared].topViewController.view hideHud];
-            if(error) {
-                [[WKNavigationManager shared].topViewController.view showMsg:error.domain];
-                return;
+    NSString *partnerUid = self.channel.channelId;
+    [[WKApp shared] invoke:WKPOINT_CONTACTS_SELECT param:@{
+        @"on_finished":^(NSArray<NSString*>*uids){
+            NSLog(@"🔧 memberAddClick callback uids: %@, partnerUid: %@", uids, partnerUid);
+            NSMutableArray *newUids = [NSMutableArray arrayWithArray:uids];
+            // 确保当前聊天对象在成员列表中（防止重复添加）
+            if (partnerUid && ![newUids containsObject:partnerUid]) {
+                [newUids insertObject:partnerUid atIndex:0];
             }
-            [[WKNavigationManager shared] popToRootViewControllerAnimated:YES];
-        }];
-    },@"disables":@[self.channel.channelId]}];
+            NSLog(@"🔧 createGroup with newUids: %@", newUids);
+            [[WKNavigationManager shared].topViewController.view showHUD];
+            [[WKGroupManager shared] createGroup:newUids object:nil complete:^(NSString * _Nonnull groupNo, NSError * _Nullable error) {
+                [[WKNavigationManager shared].topViewController.view hideHud];
+                if(error) {
+                    [[WKNavigationManager shared].topViewController.view showMsg:error.domain];
+                    return;
+                }
+                [[WKNavigationManager shared] popToRootViewControllerAnimated:YES];
+            }];
+        },
+        @"selecteds": @[partnerUid ?: @""],  // 预选中（checkbox 打勾）
+        @"disables": @[partnerUid ?: @""]    // 禁止取消选中
+    }];
 }
 
 

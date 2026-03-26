@@ -173,13 +173,13 @@
     self.c.unreadCount = unreadCount;
 }
 
-/// 判断是否为系统Bot频道（如BotFather），需要按space_id过滤最后一条消息
+/// 判断是否需要按空间过滤最后一条消息（所有个人聊天在多空间模式下都需要）
 -(BOOL) isSystemBotChannel {
     if(self.c.channel.channelType != WK_PERSON) {
         return NO;
     }
-    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
-    return botfatherUID && [self.c.channel.channelId isEqualToString:botfatherUID];
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    return currentSpaceId && currentSpaceId.length > 0;
 }
 
 /// 获取当前空间对应的最后一条消息（仅用于会话列表的显示内容，不影响SDK逻辑）
@@ -284,6 +284,9 @@
 
 -(void) setConversation:(WKConversation*) conversation {
     self.c = conversation;
+    // 清除空间过滤缓存，确保预览消息根据新会话数据重新计算
+    self.cachedSpaceLastMessage = nil;
+    self.cachedSpaceId = nil;
 }
 
 -(WKConversation*) getConversation {

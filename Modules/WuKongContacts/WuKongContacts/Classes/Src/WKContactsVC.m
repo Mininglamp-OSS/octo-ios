@@ -156,6 +156,12 @@
 
 // 请求有效联系人数据（从 API 拉取最新数据）
 -(void) requestData{
+    // 确保 items 至少有 header section（防止空数组越界崩溃）
+    if (self.items.count == 0) {
+        NSArray *headerItems = [[WKApp shared] invokes:WKPOINT_CATEGORY_CONTACTSITEM param:nil];
+        [self.items insertObject:[NSMutableArray arrayWithArray:headerItems] atIndex:0];
+    }
+
     // 首次加载（无指纹）时先用本地数据快速显示
     if (!self.currentContactsFingerprint) {
         NSArray<WKChannelInfo*> *dbInfos = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
@@ -389,7 +395,8 @@
 
 #pragma mark UITableDataSource
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section{
-    return  self.items[section].count;;
+    if(section >= (NSInteger)self.items.count) return 0;
+    return  self.items[section].count;
 }
 -(UITableViewCell*) tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     if(self.items.count<=indexPath.section || self.items[indexPath.section].count<=indexPath.row) {

@@ -923,26 +923,19 @@
 }
 // 更新最近会话未读数
 - (void)onConversationUnreadCountUpdate:(WKChannel*)channel unreadCount:(NSInteger)unreadCount {
-    // BotFather等全局Bot的未读数需要空间隔离
-    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
-    if(currentSpaceId && currentSpaceId.length > 0 &&
-       [channel.channelId isEqualToString:[WKApp shared].config.botfatherUID]) {
-        // 不更新BotFather的未读数，由空间过滤后的会话更新负责
-        return;
-    }
-
+    // 只更新当前会话列表中存在的会话（列表已按空间过滤，不在列表中说明属于其他空间）
     NSInteger index = [self.conversationListVM indexAtChannel:channel];
-    if(index!=-1) {
-        WKConversationListCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]];
-        if(cell) {
-           WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
-            model.unreadCount = unreadCount;
-            [cell refreshWithModel:model];
-            [cell layoutSubviews];
-            [self refreshBadge];
-        }
-
+    if(index == -1) {
+        return; // 不在当前空间的会话列表中，忽略
     }
+    WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
+    model.unreadCount = unreadCount;
+    WKConversationListCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]];
+    if(cell) {
+        [cell refreshWithModel:model];
+        [cell layoutSubviews];
+    }
+    [self refreshBadge];
 }
 // 删除所有最近会话
 - (void)onConversationAllDelete {

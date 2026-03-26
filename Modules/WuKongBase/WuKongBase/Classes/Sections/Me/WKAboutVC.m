@@ -85,8 +85,29 @@
     if (!_appIconView) {
         _appIconView = [[UIImageView alloc] init];
         _appIconView.contentMode = UIViewContentModeScaleAspectFit;
-        // 加载App图标（Xcode编译后的AppIcon名称为 AppIcon60x60）
-        UIImage *appIcon = [UIImage imageNamed:@"AppIcon60x60"];
+        // 从 Info.plist 读取实际的 App Icon 文件名
+        UIImage *appIcon = nil;
+        NSDictionary *infoDic = [[NSBundle mainBundle] infoDictionary];
+        // 优先尝试新格式（Xcode 14+）
+        NSString *iconName = infoDic[@"CFBundleIcons"][@"CFBundlePrimaryIcon"][@"CFBundleIconName"];
+        if (iconName) {
+            appIcon = [UIImage imageNamed:iconName];
+        }
+        // 回退旧格式
+        if (!appIcon) {
+            NSArray *iconFiles = infoDic[@"CFBundleIcons"][@"CFBundlePrimaryIcon"][@"CFBundleIconFiles"];
+            if (iconFiles.count > 0) {
+                appIcon = [UIImage imageNamed:iconFiles.lastObject];
+            }
+        }
+        // 再回退：尝试常见名称
+        if (!appIcon) {
+            appIcon = [UIImage imageNamed:@"AppIcon"];
+        }
+        // 最终兜底：用 lanch_logo
+        if (!appIcon) {
+            appIcon = [UIImage imageNamed:@"lanch_logo"];
+        }
         _appIconView.image = appIcon;
     }
     return _appIconView;
