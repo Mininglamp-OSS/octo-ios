@@ -102,18 +102,10 @@ static WKConversationListVM *_instance;
         }
         return YES;
     }
-    // 群聊：没有 space_id 标记，不能通过消息判断归属
-    // 群聊应通过 conversation/sync 按空间加载，首次加载时 DB 中的旧群聊不应自动显示
+    // 群聊：空间切换时 deleteAllConversation + sync 已确保 DB 中只有当前空间的群聊
+    // 参考 Android：sync 后直接显示，不再二次过滤
     if(conversation.channel.channelType == WK_GROUP) {
-        // 群聊只有在最后一条消息明确属于当前空间时才显示
-        if(conversation.lastMessage) {
-            NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
-            if([msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:currentSpaceId]) {
-                return YES;
-            }
-        }
-        // 群聊没有 space_id 或不匹配：依赖 conversation/sync 后续加载，这里不显示
-        return NO;
+        return YES;
     }
 
     // DM 频道：检查 lastMessage 的 space_id
