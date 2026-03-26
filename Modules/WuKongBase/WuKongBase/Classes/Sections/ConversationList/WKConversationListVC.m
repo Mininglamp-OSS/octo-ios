@@ -923,11 +923,25 @@
 }
 // 更新最近会话未读数
 - (void)onConversationUnreadCountUpdate:(WKChannel*)channel unreadCount:(NSInteger)unreadCount {
-    // 只更新当前会话列表中存在的会话（列表已按空间过滤，不在列表中说明属于其他空间）
     NSInteger index = [self.conversationListVM indexAtChannel:channel];
     if(index == -1) {
-        return; // 不在当前空间的会话列表中，忽略
+        return;
     }
+
+    // DM 频道的未读数是全局的（不区分空间），需要忽略其他空间触发的未读更新
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(currentSpaceId.length > 0 && channel.channelType == WK_PERSON) {
+        // 从 SDK 获取该频道的最新会话，检查 lastMessage 的 space_id
+        WKConversation *conv = [[WKSDK shared].conversationManager getConversation:channel];
+        if(conv && conv.lastMessage) {
+            NSString *msgSpaceId = conv.lastMessage.content.contentDict[@"space_id"];
+            if(msgSpaceId && [msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0
+               && ![msgSpaceId isEqualToString:currentSpaceId]) {
+                return; // 最新消息来自其他空间，不更新当前空间的未读数
+            }
+        }
+    }
+
     WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
     model.unreadCount = unreadCount;
     WKConversationListCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]];

@@ -102,14 +102,28 @@ static WKConversationListVM *_instance;
         }
         return YES;
     }
-    // 检查lastMessage的space_id：如果明确属于其他空间则不显示
+    // 群聊：没有 space_id 标记，不能通过消息判断归属
+    // 群聊应通过 conversation/sync 按空间加载，首次加载时 DB 中的旧群聊不应自动显示
+    if(conversation.channel.channelType == WK_GROUP) {
+        // 群聊只有在最后一条消息明确属于当前空间时才显示
+        if(conversation.lastMessage) {
+            NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
+            if([msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:currentSpaceId]) {
+                return YES;
+            }
+        }
+        // 群聊没有 space_id 或不匹配：依赖 conversation/sync 后续加载，这里不显示
+        return NO;
+    }
+
+    // DM 频道：检查 lastMessage 的 space_id
     if(conversation.lastMessage) {
         NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
         if(msgSpaceId && ![msgSpaceId isKindOfClass:[NSNull class]] && msgSpaceId.length > 0) {
             return [msgSpaceId isEqualToString:currentSpaceId];
         }
     }
-    // 无space_id的会话：保留显示（由conversation/sync决定的）
+    // DM 无 space_id：保留显示（兼容旧消息）
     return YES;
 }
 

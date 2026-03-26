@@ -528,7 +528,16 @@
     
     BOOL hasDraft = false;
     if(model.remoteExtra.draft && ![model.remoteExtra.draft isEqualToString:@""]) {
-        hasDraft  = true;
+        hasDraft = true;
+        // DM 频道草稿按空间隔离：只在保存时的空间显示
+        NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+        if(currentSpaceId.length > 0 && model.channel.channelType == WK_PERSON) {
+            NSString *draftKey = [NSString stringWithFormat:@"WKDraftSpaceId_%@_%d", model.channel.channelId, model.channel.channelType];
+            NSString *draftSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:draftKey];
+            if(draftSpaceId && ![draftSpaceId isEqualToString:currentSpaceId]) {
+                hasDraft = false; // 草稿属于其他空间，不显示
+            }
+        }
     }
     
     NSMutableString *reminderStr  = [[NSMutableString alloc] init];

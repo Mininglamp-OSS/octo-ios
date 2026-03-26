@@ -328,8 +328,17 @@
         NSString *text = [self.input inputText];
         if(![text isEqualToString:@""]) {
             extra.draft = text;
+            // 记录草稿保存时的空间 ID（用于显示时按空间隔离）
+            NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+            if(currentSpaceId.length > 0) {
+                NSString *draftKey = [NSString stringWithFormat:@"WKDraftSpaceId_%@_%d", conversation.channel.channelId, conversation.channel.channelType];
+                [[NSUserDefaults standardUserDefaults] setObject:currentSpaceId forKey:draftKey];
+            }
         }else {
             extra.draft = @"";
+            // 清除草稿空间标记
+            NSString *draftKey = [NSString stringWithFormat:@"WKDraftSpaceId_%@_%d", conversation.channel.channelId, conversation.channel.channelType];
+            [[NSUserDefaults standardUserDefaults] removeObjectForKey:draftKey];
         }
         if(self.messageListView.keepPosition) {
             WKConversationPosition *position = self.messageListView.keepPosition;
