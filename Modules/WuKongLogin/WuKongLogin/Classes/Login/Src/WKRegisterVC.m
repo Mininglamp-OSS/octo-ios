@@ -71,10 +71,9 @@ typedef enum : NSUInteger {
     return self;
 }
 
-/// 是否为正式服务器（需要验证码）
+/// 注册始终需要邮箱验证码
 - (BOOL)needsVerificationCode {
-    NSString *serverIP = [WKServerConfig serverIP];
-    return [serverIP isEqualToString:@"api.example.com"];
+    return YES;
 }
 
 - (void)viewDidLoad {

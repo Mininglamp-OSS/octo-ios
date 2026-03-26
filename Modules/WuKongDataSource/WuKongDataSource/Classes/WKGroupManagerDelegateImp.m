@@ -15,8 +15,14 @@
 
     NSLog(@"🔧 createGroup members: %@", members);
     NSMutableArray *names = [NSMutableArray array];
+    NSMutableDictionary *params = [NSMutableDictionary dictionaryWithDictionary:@{@"members":members?:@[],@"member_names":names}];
+    // 注入当前空间 ID
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    if (currentSpaceId && currentSpaceId.length > 0) {
+        params[@"space_id"] = currentSpaceId;
+    }
     __weak typeof(self) weakSelf = self;
-    [[WKAPIClient sharedClient] POST:@"group/create" parameters:@{@"members":members?:@[],@"member_names":names} model:WKGroupModel.class].then(^(WKGroupModel *groupModel){
+    [[WKAPIClient sharedClient] POST:@"group/create" parameters:params model:WKGroupModel.class].then(^(WKGroupModel *groupModel){
         if(complete) {
             [weakSelf updateChannelInfoByGroupModel:groupModel];
             complete(groupModel.groupNo,nil);
@@ -33,7 +39,12 @@
 // 添加群成员
 - (void)groupManager:(nonnull WKGroupManager *)manager groupNo:(nonnull NSString *)groupNo membersOfAdd:(nonnull NSArray<NSString *> *)members object:(id _Nullable)object complete:(void (^ _Nullable)(NSError * __nullable))complete {
     NSMutableArray *names = [NSMutableArray array];
-    [[WKAPIClient sharedClient] POST:[NSString stringWithFormat:@"groups/%@/members",groupNo] parameters:@{@"members":members?:@[],@"names":names}].then(^{
+    NSMutableDictionary *params = [NSMutableDictionary dictionaryWithDictionary:@{@"members":members?:@[],@"names":names}];
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    if (currentSpaceId && currentSpaceId.length > 0) {
+        params[@"space_id"] = currentSpaceId;
+    }
+    [[WKAPIClient sharedClient] POST:[NSString stringWithFormat:@"groups/%@/members",groupNo] parameters:params].then(^{
         if(complete) {
             complete(nil);
         }
