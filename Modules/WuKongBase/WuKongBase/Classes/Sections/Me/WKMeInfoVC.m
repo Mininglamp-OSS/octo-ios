@@ -39,7 +39,9 @@
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
-    [self reloadData]; // TODO: 修改名字或short_no后刷新
+    NSLog(@"[Avatar] WKMeInfoVC viewDidAppear, uid=%@", [WKApp shared].loginInfo.uid);
+    [self reloadData];
+    [WKSDK.shared.channelManager fetchChannelInfo:[WKChannel personWithChannelID:[WKApp shared].loginInfo.uid]];
 }
 
 - (void)dealloc {
@@ -50,6 +52,7 @@
 -(void) avatarUpdate:(NSNotification*)noti {
     NSDictionary *data = noti.object;
     if(data && data[@"uid"] && [[WKApp shared].loginInfo.uid isEqualToString:data[@"uid"]]) {
+        NSLog(@"[Avatar] WKMeInfoVC received avatarUpdate notification");
         [self.tableView reloadData];
     }
 }

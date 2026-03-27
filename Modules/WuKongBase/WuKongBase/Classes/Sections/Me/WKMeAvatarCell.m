@@ -41,6 +41,7 @@
 
 - (void)refresh:(WKMeAvatarModel*)cellModel {
     [super refresh:cellModel];
+    NSLog(@"[Avatar] WKMeAvatarCell refresh");
     [_avatarImgView setUrl:[WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid]];
 }
 

@@ -124,10 +124,34 @@ didCropToImage:(nonnull UIImage *)image withRect:(CGRect)cropRect
             [weakSelf.view switchHUDSuccess:LLangW(@"上传失败", weakSelf)];
             WKLogError(@"上传失败！-> %@",error);
         }else {
+            NSLog(@"[Avatar] upload success, imageSize=%@", NSStringFromCGSize(image.size));
             weakSelf.avatarImgView.avatarImgView.image = image;
             [weakSelf.view switchHUDSuccess:LLangW(@"上传成功", weakSelf)];
-            [[SDImageCache sharedImageCache] removeImageForKey:[WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid] withCompletion:nil];
-            
+
+            NSString *avatarKey = [WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid];
+            NSLog(@"[Avatar] cacheKey=%@", avatarKey);
+
+            // 1. 先清除旧缓存，在完成回调中再写入新图，避免异步磁盘操作竞争
+            [[SDImageCache sharedImageCache] removeImageForKey:avatarKey fromDisk:YES withCompletion:^{
+                NSLog(@"[Avatar] old cache removed, now storing new image");
+                [[SDImageCache sharedImageCache] storeImage:image forKey:avatarKey toDisk:YES completion:^{
+                    NSLog(@"[Avatar] new image stored to disk cache done");
+                }];
+            }];
+            // 同步写入内存缓存，确保通知触发时立即可用
+            [[SDImageCache sharedImageCache] storeImage:image forKey:avatarKey toDisk:NO completion:nil];
+
+            // 2. 清除NSURLCache中该URL的HTTP缓存
+            NSURL *avatarURL = [NSURL URLWithString:avatarKey];
+            [[NSURLCache sharedURLCache] removeCachedResponseForRequest:[NSURLRequest requestWithURL:avatarURL]];
+            NSLog(@"[Avatar] NSURLCache cleared for avatarURL");
+
+            // 4. 验证内存缓存是否已更新
+            UIImage *verify = [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:avatarKey];
+            NSLog(@"[Avatar] verify memoryCache after store: %@, size=%@", verify ? @"HIT" : @"MISS", verify ? NSStringFromCGSize(verify.size) : @"nil");
+
+            // 5. 发送通知，其他页面从缓存加载新头像
+            NSLog(@"[Avatar] posting WKNOTIFY_USER_AVATAR_UPDATE");
             [[NSNotificationCenter defaultCenter] postNotificationName:WKNOTIFY_USER_AVATAR_UPDATE object:@{@"uid":[WKApp shared].loginInfo.uid?:@""}];
         }
         

@@ -41,7 +41,9 @@
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
+    NSLog(@"[Avatar] WKMeVC viewDidAppear, uid=%@", [WKApp shared].loginInfo.uid);
     [self.meHeader reloadData];
+    [WKSDK.shared.channelManager fetchChannelInfo:[WKChannel personWithChannelID:[WKApp shared].loginInfo.uid]];
 }
 
 
@@ -80,7 +82,7 @@
     if(![channelInfo.channel.channelId isEqualToString:WKApp.shared.loginInfo.uid]) {
         return;
     }
-    [[SDImageCache sharedImageCache] removeImageForKey:WKApp.shared.loginInfo.uid withCompletion:nil];
+    NSLog(@"[Avatar] WKMeVC channelInfoUpdate, channelId=%@", channelInfo.channel.channelId);
     WKApp.shared.loginInfo.extra[@"name"] = channelInfo.name;
     [WKApp shared].loginInfo.extra[@"short_no"] = channelInfo.extra[@"short_no"];
     [WKApp shared].loginInfo.extra[@"sex"] = channelInfo.extra[@"sex"];
@@ -124,6 +126,7 @@
 -(void) avatarUpdate:(NSNotification*)noti {
     NSDictionary *data = noti.object;
     if(data && data[@"uid"] && [[WKApp shared].loginInfo.uid isEqualToString:data[@"uid"]]) {
+        NSLog(@"[Avatar] WKeHeader received avatarUpdate notification");
         self.avatarImgView.url = [WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid];
     }
 }
@@ -149,6 +152,7 @@
 }
 
 -(void) reloadData {
+    NSLog(@"[Avatar] WKeHeader reloadData");
     self.avatarImgView.url = [WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid];
     self.nameLbl.textColor = [WKApp shared].config.defaultTextColor;
     self.nameLbl.text = [WKApp shared].loginInfo.extra[@"name"];

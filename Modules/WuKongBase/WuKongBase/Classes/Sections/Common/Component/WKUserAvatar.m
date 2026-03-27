@@ -9,6 +9,7 @@
 
 #import "WKApp.h"
 #import "UIView+WK.h"
+#import "UIImageView+WK.h"
 
 
 @interface WKUserAvatar ()
@@ -48,7 +49,29 @@
 
 - (void)setUrl:(NSString *)url {
     _url = url;
-    [_avatarImgView loadImage:[NSURL URLWithString:url] placeholderImage:[WKApp shared].config.defaultAvatar];
+    UIImage *memCached = [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:url];
+    NSLog(@"[Avatar] setUrl: memoryCache=%@ url=%@", memCached ? @"HIT" : @"MISS", url);
+    [_avatarImgView sd_setImageWithURL:[NSURL URLWithString:url]
+                      placeholderImage:[WKApp shared].config.defaultAvatar
+                               options:SDWebImageAllowInvalidSSLCertificates
+                             completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, NSURL *imageURL) {
+        NSString *source = (cacheType == SDImageCacheTypeMemory) ? @"memory" :
+                           (cacheType == SDImageCacheTypeDisk) ? @"disk" : @"network";
+        NSLog(@"[Avatar] setUrl loaded: source=%@, hasImage=%@, error=%@", source, image ? @"YES" : @"NO", error);
+    }];
+}
+
+- (void)setUrlWithRefresh:(NSString *)url {
+    _url = url;
+    NSLog(@"[Avatar] setUrlWithRefresh: url=%@", url);
+    [_avatarImgView sd_setImageWithURL:[NSURL URLWithString:url]
+                      placeholderImage:[WKApp shared].config.defaultAvatar
+                               options:SDWebImageAllowInvalidSSLCertificates | SDWebImageRefreshCached
+                             completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, NSURL *imageURL) {
+        NSString *source = (cacheType == SDImageCacheTypeMemory) ? @"memory" :
+                           (cacheType == SDImageCacheTypeDisk) ? @"disk" : @"network";
+        NSLog(@"[Avatar] setUrlWithRefresh loaded: source=%@, hasImage=%@, error=%@", source, image ? @"YES" : @"NO", error);
+    }];
 }
 
 - (void)setBorderWidth:(CGFloat)borderWidth {

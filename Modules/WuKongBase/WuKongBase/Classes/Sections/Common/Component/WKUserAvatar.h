@@ -16,6 +16,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,copy) NSString *url;
 
+// 强制刷新头像，使用SDWebImageRefreshCached选项
+-(void) setUrlWithRefresh:(NSString*)url;
+
 @property(nonatomic,copy) NSString *uid;
 
 @property(nonatomic,assign) CGFloat borderWidth;
