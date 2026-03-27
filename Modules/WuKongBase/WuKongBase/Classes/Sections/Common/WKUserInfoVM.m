@@ -137,7 +137,12 @@
 }
 
 -(AnyPromise*) applyFriend:(NSString*)uid remark:(NSString*)remark vercode:(NSString*)vercode{
-    return [[WKAPIClient sharedClient] POST:@"friend/apply" parameters:@{@"to_uid":uid?:@"",@"to_name":self.channelInfo.name?:@"",@"remark":remark?:@"",@"vercode":vercode?:@""}];
+    NSMutableDictionary *params = [NSMutableDictionary dictionaryWithDictionary:@{@"to_uid":uid?:@"",@"to_name":self.channelInfo.name?:@"",@"remark":remark?:@"",@"vercode":vercode?:@""}];
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    if (spaceId.length > 0) {
+        params[@"space_id"] = spaceId;
+    }
+    return [[WKAPIClient sharedClient] POST:@"friend/apply" parameters:params];
 }
 
 -(AnyPromise*) updateRemark:(NSString*)remark {

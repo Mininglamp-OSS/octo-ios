@@ -56,7 +56,12 @@
 // 确认邀请
 -(void) requestFriendSure:(WKFriendRequestDBModel*)model {
     __weak typeof(self) weakSelf = self;
-    [[WKAPIClient sharedClient] POST:@"friend/sure" parameters:@{@"token":model.token}].then(^(){
+    NSMutableDictionary *sureParams = [NSMutableDictionary dictionaryWithDictionary:@{@"token":model.token}];
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    if (spaceId.length > 0) {
+        sureParams[@"space_id"] = spaceId;
+    }
+    [[WKAPIClient sharedClient] POST:@"friend/sure" parameters:sureParams].then(^(){
         // 更新状态
         [[WKContactsManager shared] updateFriendRequestStatus:model.uid status:WKFriendRequestStatusSured];
         [weakSelf startSyncContacts:model.uid];

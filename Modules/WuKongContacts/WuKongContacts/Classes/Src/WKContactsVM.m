@@ -14,7 +14,12 @@
 @implementation WKContactsVM
 
 -(AnyPromise*) searchFriend:(NSString*)keyword {
-    return [[WKAPIClient sharedClient] GET:@"user/search" parameters:@{@"keyword":keyword} model:WKUserSearchResp.class];
+    NSMutableDictionary *params = [NSMutableDictionary dictionaryWithDictionary:@{@"keyword":keyword}];
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    if (spaceId.length > 0) {
+        params[@"space_id"] = spaceId;
+    }
+    return [[WKAPIClient sharedClient] GET:@"user/search" parameters:params model:WKUserSearchResp.class];
 }
 
 - (NSArray<NSDictionary *> *)tableSectionMaps {
