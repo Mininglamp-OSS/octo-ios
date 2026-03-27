@@ -225,7 +225,12 @@
     __weak typeof(self) weakSelf = self;
     NSString *cacheKey = [NSString stringWithFormat:@"%@_%@",[WKApp shared].loginInfo.uid,@"friend_version"];
     NSString *friendMaxVersion = [[NSUserDefaults standardUserDefaults] stringForKey:cacheKey];
-    [[WKAPIClient sharedClient] GET:@"friend/sync" parameters:@{@"version":friendMaxVersion?:@"",@"api_version":@"1",@"limit":@(200)}].then(^(NSArray<NSDictionary*>* contacts){
+    NSMutableDictionary *syncParams = [NSMutableDictionary dictionaryWithDictionary:@{@"version":friendMaxVersion?:@"",@"api_version":@"1",@"limit":@(200)}];
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    if (currentSpaceId && currentSpaceId.length > 0) {
+        syncParams[@"space_id"] = currentSpaceId;
+    }
+    [[WKAPIClient sharedClient] GET:@"friend/sync" parameters:syncParams].then(^(NSArray<NSDictionary*>* contacts){
         if(contacts && contacts.count > 0) {
             NSMutableArray *channelInfos = [NSMutableArray array];
             for (NSDictionary *dict in contacts) {
