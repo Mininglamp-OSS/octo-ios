@@ -13,7 +13,12 @@
     return [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"users/%@",uid] parameters:nil model:WKUserInfoResp.class];
 }
 -(AnyPromise*) applyFriend:(NSString*)uid remark:(NSString*)remark {
-    return [[WKAPIClient sharedClient] POST:@"friend/apply" parameters:@{@"to_uid":uid?:@"",@"remark":remark?:@""}];
+    NSMutableDictionary *params = [NSMutableDictionary dictionaryWithDictionary:@{@"to_uid":uid?:@"",@"remark":remark?:@""}];
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    if (spaceId.length > 0) {
+        params[@"space_id"] = spaceId;
+    }
+    return [[WKAPIClient sharedClient] POST:@"friend/apply" parameters:params];
 }
 @end
 
