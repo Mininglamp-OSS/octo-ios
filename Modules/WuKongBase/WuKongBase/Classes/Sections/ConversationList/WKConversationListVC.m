@@ -491,6 +491,8 @@
                 NSLog(@"✅ Space会话同步成功");
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [weakSelf.conversationListVM loadConversationList:^{
+                        // sync完成后记录当前空间的合法群聊白名单
+                        [weakSelf.conversationListVM snapshotSyncedGroupIds];
                         [weakSelf.tableView reloadData];
                         [weakSelf refreshBadge];
                     }];
@@ -700,6 +702,8 @@
                 }
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [weakSelf.conversationListVM loadConversationList:^{
+                        // sync完成后记录当前空间的合法群聊白名单
+                        [weakSelf.conversationListVM snapshotSyncedGroupIds];
                         [weakSelf.tableView reloadData];
                         [weakSelf refreshBadge];
                     }];
@@ -708,6 +712,8 @@
         } else {
             // 没有 syncProvider 时直接从本地 DB 重新加载
             [self.conversationListVM loadConversationList:^{
+                // 无sync时也记录白名单（DB中的数据视为当前空间的）
+                [weakSelf.conversationListVM snapshotSyncedGroupIds];
                 [weakSelf.tableView reloadData];
                 [weakSelf refreshBadge];
             }];

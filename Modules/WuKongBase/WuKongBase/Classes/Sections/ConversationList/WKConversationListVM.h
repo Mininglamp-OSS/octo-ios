@@ -15,6 +15,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 
 -(void) reset; // 重置数据
+
+/// sync完成后调用：记录当前VM中的群聊channelId作为"当前空间合法群聊"白名单
+/// shouldShowConversation: 中会用此白名单过滤其他空间的群聊
+-(void) snapshotSyncedGroupIds;
 /**
  加载最近会话列表
  */

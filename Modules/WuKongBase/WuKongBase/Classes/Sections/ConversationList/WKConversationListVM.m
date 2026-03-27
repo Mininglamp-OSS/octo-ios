@@ -11,6 +11,7 @@
 @interface WKConversationListVM ()
 @property(nonatomic,strong) NSMutableArray<WKConversationWrapModel*> *conversationWrapModels;
 @property(nonatomic,strong) NSRecursiveLock *conversationsLock;
+@property(nonatomic,strong) NSSet<NSString*> *syncedGroupChannelIds; // 当前空间的合法群聊白名单
 
 @end
 
@@ -46,6 +47,18 @@ static WKConversationListVM *_instance;
 
 - (void)reset {
     [self.conversationWrapModels removeAllObjects];
+    self.syncedGroupChannelIds = nil; // 重置白名单
+}
+
+-(void) snapshotSyncedGroupIds {
+    NSMutableSet *groupIds = [NSMutableSet set];
+    for (WKConversationWrapModel *model in self.conversationWrapModels) {
+        if (model.channel.channelType == WK_GROUP) {
+            [groupIds addObject:model.channel.channelId];
+        }
+    }
+    self.syncedGroupChannelIds = [groupIds copy];
+    NSLog(@"📋 已记录当前空间合法群聊白名单: %lu 个群", (unsigned long)groupIds.count);
 }
 
 -(void) loadConversationList:(void(^)(void)) finished {
@@ -102,10 +115,16 @@ static WKConversationListVM *_instance;
         }
         return YES;
     }
-    // 群聊：空间切换时 deleteAllConversation + sync 已确保 DB 中只有当前空间的群聊
-    // 参考 Android：sync 后直接显示，不再二次过滤
+    // 群聊：群聊消息不带space_id，无法通过消息内容判断归属空间
+    // 使用sync后记录的白名单过滤：
+    //   - nil: 尚未sync（首次启动DB清空后），暂不过滤
+    //   - 空集合: sync完成但当前空间无群聊，过滤掉所有群聊
+    //   - 非空: 只显示白名单中的群聊
     if(conversation.channel.channelType == WK_GROUP) {
-        return YES;
+        if(self.syncedGroupChannelIds) {
+            return [self.syncedGroupChannelIds containsObject:conversation.channel.channelId];
+        }
+        return YES; // 白名单未初始化（首次sync前），暂不过滤
     }
 
     // DM 频道：检查 lastMessage 的 space_id
