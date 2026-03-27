@@ -59,9 +59,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,assign,readonly) NSInteger lastMsgTimestamp;
 
 /**
- 最近会话的内容
+ 最近会话的内容（已按空间过滤）
  */
 @property(nonatomic,copy,readonly) NSString *content;
+
+/// 获取当前空间的最后一条消息（用于会话列表的展示判断，如撤回、未知类型等）
+-(WKMessage* _Nullable) spaceFilteredLastMessage;
 
 
 /**

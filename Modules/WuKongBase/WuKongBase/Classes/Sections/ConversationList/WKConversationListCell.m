@@ -361,11 +361,12 @@
 }
 
 -(void) refreshLastMessage:(WKConversationWrapModel*)model {
-    // 最后一条消息
-    if(model.lastMessage) {
-        if(model.lastMessage.remoteExtra.revoke) {
+    // 使用空间过滤后的消息做展示判断（解决BotFather跨空间预览消息问题）
+    WKMessage *displayMsg = [model spaceFilteredLastMessage];
+    if(displayMsg) {
+        if(displayMsg.remoteExtra.revoke) {
             self.lastContentLbl.text = self.revokeTip;
-        }else if(model.lastContentType == WK_UNKNOWN) {
+        }else if(displayMsg.contentType == WK_UNKNOWN) {
             self.lastContentLbl.text = [WKApp shared].config.unkownMessageText;
         }else {
             self.lastContentLbl.attributedText =[self getLastContent:model];

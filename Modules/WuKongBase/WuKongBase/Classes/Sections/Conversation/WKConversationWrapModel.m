@@ -120,11 +120,10 @@
 }
 
 - (NSInteger)lastContentType {
-    if(self.lastChildConversation) {
-        return self.lastChildConversation.lastMessage.contentType;
-    }
-    if(self.c.lastMessage) {
-        return self.c.lastMessage.contentType;
+    // 使用空间过滤后的消息的类型（与预览内容保持一致）
+    WKMessage *displayMsg = [self spaceFilteredLastMessage];
+    if(displayMsg) {
+        return displayMsg.contentType;
     }
     return 0;
 }
@@ -193,26 +192,34 @@
         return rawLastMessage;
     }
 
-    // 检查原始lastMessage是否属于当前空间（或没有space_id标记）
+    // 判断是否为BotFather（BotFather无space_id的消息不展示预览）
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    BOOL isBotFather = botfatherUID && [self.c.channel.channelId isEqualToString:botfatherUID];
+
+    // 检查原始lastMessage是否属于当前空间
     if(rawLastMessage) {
         NSString *msgSpaceId = rawLastMessage.content.contentDict[@"space_id"];
         if([msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:currentSpaceId]) {
             return rawLastMessage; // 明确匹配当前空间
         }
-        // 消息没有 space_id 标记（nil或空），视为属于当前空间
+        // 消息没有 space_id 标记（nil或空）
         if(!msgSpaceId || [msgSpaceId isEqual:[NSNull null]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0)) {
-            return rawLastMessage;
+            if(isBotFather) {
+                // BotFather无space_id的消息：不展示，继续查找有space_id的消息
+            } else {
+                return rawLastMessage; // 非BotFather：视为属于当前空间
+            }
         }
     }
 
-    // lastMessage属于其他空间，从本地DB查找当前空间的消息
+    // lastMessage不属于当前空间（或BotFather无space_id），从本地DB查找当前空间的消息
     if(self.cachedSpaceLastMessage && [self.cachedSpaceId isEqualToString:currentSpaceId]) {
         return self.cachedSpaceLastMessage;
     }
 
     // 分页迭代查询，从最新消息往旧查找匹配当前space_id的消息
     WKMessage *spaceLastMessage = nil;
-    WKMessage *noSpaceIdMessage = nil; // 记录第一条没有space_id的消息作为兜底
+    WKMessage *noSpaceIdMessage = nil; // 记录第一条没有space_id的消息作为兜底（仅用于非BotFather）
     uint32_t cursor = 0; // 0表示从最新开始
     BOOL hasMore = YES;
     while (hasMore) {
@@ -226,8 +233,8 @@
                 spaceLastMessage = msg;
                 break;
             }
-            // 记录第一条没有space_id的消息
-            if(!noSpaceIdMessage && (!msgSpaceId || [msgSpaceId isEqual:[NSNull null]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0))) {
+            // 记录第一条没有space_id的消息（BotFather不兜底，只有非BotFather才用）
+            if(!isBotFather && !noSpaceIdMessage && (!msgSpaceId || [msgSpaceId isEqual:[NSNull null]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0))) {
                 noSpaceIdMessage = msg;
             }
         }
@@ -241,10 +248,11 @@
         cursor = oldestMsg.orderSeq;
         hasMore = messages.count == 200;
     }
-    // 没有匹配当前空间的消息时，用没有space_id的消息兜底
+    // 没有匹配当前空间的消息时，非BotFather用没有space_id的消息兜底
     if(!spaceLastMessage && noSpaceIdMessage) {
         spaceLastMessage = noSpaceIdMessage;
     }
+    // spaceLastMessage可能为nil（BotFather无匹配消息时返回nil，展示为空）
     self.cachedSpaceLastMessage = spaceLastMessage;
     self.cachedSpaceId = currentSpaceId;
     return spaceLastMessage;

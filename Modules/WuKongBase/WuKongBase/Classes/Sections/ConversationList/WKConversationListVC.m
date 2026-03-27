@@ -65,6 +65,7 @@
 @property(nonatomic,assign) BOOL spaceListLoaded; // Space列表是否已加载
 @property(nonatomic,assign) NSInteger spaceCount; // Space总数
 @property(nonatomic,strong) UIImageView *spaceArrowView; // Space标题右侧折叠箭头
+@property(nonatomic,assign) BOOL hasCleanedConversationsOnStartup; // 本次启动是否已清理会话数据
 
 @end
 
@@ -149,12 +150,16 @@
     // 从本地获取当前 Space ID
     self.currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
 
-    // 检测空间是否发生变化（切换服务器或切换空间后重启 App）
-    NSString *lastSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"WKLastLoadedSpaceId"];
     if (self.currentSpaceId && self.currentSpaceId.length > 0) {
-        if (!lastSpaceId || ![lastSpaceId isEqualToString:self.currentSpaceId]) {
-            // 空间变化，清空旧会话数据，等待新的同步数据
-            NSLog(@"🔄 Space 变化: %@ -> %@，清空旧会话", lastSpaceId, self.currentSpaceId);
+        NSString *lastSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"WKLastLoadedSpaceId"];
+        // 每次App启动都清空旧会话数据，等待sync重新填充当前空间的会话
+        // 原因：群聊消息不带space_id，无法通过消息内容过滤归属空间
+        //       DB中可能积累了其他空间的群聊（通过实时消息推送写入），
+        //       只有deleteAllConversation + sync才能确保DB只包含当前空间的会话
+        // 使用hasCleanedConversationsOnStartup防止reconnect时重复清理
+        if (!self.hasCleanedConversationsOnStartup || !lastSpaceId || ![lastSpaceId isEqualToString:self.currentSpaceId]) {
+            self.hasCleanedConversationsOnStartup = YES;
+            NSLog(@"🔄 清空会话数据 (上次Space: %@, 当前Space: %@)", lastSpaceId, self.currentSpaceId);
             [self.conversationListVM reset];
             [[WKConversationDB shared] deleteAllConversation];
             [self.tableView reloadData];
@@ -772,9 +777,23 @@
                     [filtered addObject:conversation];
                     continue;
                 } else if(msgSpaceId && ![msgSpaceId isKindOfClass:[NSNull class]] && msgSpaceId.length > 0) {
-                    continue; // 消息来自其他空间，跳过
+                    // 消息来自其他空间：清除已有WrapModel的缓存，确保预览刷新为当前空间
+                    WKConversationWrapModel *existingModel = [self.conversationListVM modelAtChannel:conversation.channel];
+                    if(existingModel) {
+                        [existingModel reloadLastMessage];
+                        // 刷新对应Cell的预览显示
+                        NSInteger idx = [self.conversationListVM indexAtChannel:conversation.channel];
+                        if(idx != -1) {
+                            WKConversationListCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:idx inSection:0]];
+                            if(cell) {
+                                [cell refreshWithModel:existingModel];
+                            }
+                        }
+                    }
+                    continue;
                 }
             }
+            // BotFather消息没有space_id：仍然让其通过（但预览内容由spaceFilteredLastMessage控制，会展示为空）
             // 检查是否被当前空间隐藏
             NSString *hiddenKey = [NSString stringWithFormat:@"WKBotFatherHidden_%@", currentSpaceId];
             if([[NSUserDefaults standardUserDefaults] boolForKey:hiddenKey]) {
