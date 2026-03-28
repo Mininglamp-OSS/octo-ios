@@ -18,6 +18,7 @@
 #import "WKSecurityTipManager.h"
 #import "WKRichTextParseService.h"
 #import "WKMarkdownParser.h"
+#import <WebKit/WebKit.h>
 #import <WuKongBase/WuKongBase-Swift.h>
 
 #define replyNameFontSize 13.0f
@@ -38,10 +39,19 @@
 
 #define replyToNameSpace 4.0f // 回复离名字的距离
 
+#define kTableRowHeight 32.0f
+#define kTableTopSpace 8.0f
+#define kTableExtraPadding 4.0f
+
+#define kBotActionBtnHeight 32.0f
+#define kBotActionTopSpace 10.0f
+#define kBotActionBtnSpacing 10.0f
+
 
 @interface WKTextMessageCell ()<CNContactViewControllerDelegate,CNContactPickerDelegate>
 
 @property(nonatomic,strong) UILabel *textLbl;
+@property(nonatomic,strong) WKWebView *tableWebView;
 @property(nonatomic,strong) id selectLinkData;
 
 
@@ -54,6 +64,13 @@
 
 // ---------- 安全提醒 ----------
 @property(nonatomic,strong) WKTipLabel *securityTipLbl;
+
+// ---------- BotFather 审批按钮 ----------
+@property(nonatomic,strong) UIView *botActionView;
+@property(nonatomic,strong) UIButton *approveBtn;
+@property(nonatomic,strong) UIButton *rejectBtn;
+@property(nonatomic,copy) NSString *approveCommand;
+@property(nonatomic,copy) NSString *rejectCommand;
 
 @end
 
@@ -89,6 +106,22 @@
     }
     
     
+    // 表格高度
+    CGFloat tableH = [[self class] tableHeightForMessage:model];
+    if (tableH > 0) {
+        if (messageTextSize.height > 0) {
+            size.height += kTableTopSpace + tableH;
+        } else {
+            size.height += tableH;
+        }
+        size.width = MAX(size.width, [WKApp shared].config.messageContentMaxWidth);
+    }
+
+    // BotFather 审批按钮高度
+    if ([self isBotFatherApproveMessage:model]) {
+        size.height += kBotActionTopSpace + kBotActionBtnHeight;
+    }
+
     CGSize trailingSize = [WKTrailingView size:model];
 
     CGFloat lastlineWidth = [[self class] textLastlineWidth:attrStr messageModel:model];
@@ -124,7 +157,8 @@
     self.textLbl.numberOfLines = 0;
     self.textLbl.lineBreakMode = NSLineBreakByWordWrapping;
     [self.messageContentView addSubview:self.textLbl];
-    
+    [self.messageContentView addSubview:self.tableWebView];
+
     // 回复
     [self.messageContentView addSubview:self.replyBox];
     [self.replyBox addSubview:self.splitView];
@@ -134,7 +168,32 @@
     
     // 安全提醒
     [self.contentView addSubview:self.securityTipLbl];
-    
+
+    // BotFather 审批按钮
+    self.botActionView = [[UIView alloc] init];
+    self.botActionView.hidden = YES;
+    [self.messageContentView addSubview:self.botActionView];
+
+    self.rejectBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    [self.rejectBtn setTitle:LLang(@"拒绝") forState:UIControlStateNormal];
+    [self.rejectBtn setTitleColor:[WKApp shared].config.defaultTextColor forState:UIControlStateNormal];
+    self.rejectBtn.backgroundColor = [UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0];
+    self.rejectBtn.titleLabel.font = [[WKApp shared].config appFontOfSize:14.0f];
+    self.rejectBtn.layer.cornerRadius = 4.0f;
+    self.rejectBtn.layer.masksToBounds = YES;
+    [self.rejectBtn addTarget:self action:@selector(rejectBtnTap) forControlEvents:UIControlEventTouchUpInside];
+    [self.botActionView addSubview:self.rejectBtn];
+
+    self.approveBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    [self.approveBtn setTitle:LLang(@"通过") forState:UIControlStateNormal];
+    [self.approveBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    self.approveBtn.backgroundColor = [WKApp shared].config.themeColor;
+    self.approveBtn.titleLabel.font = [[WKApp shared].config appFontOfSize:14.0f];
+    self.approveBtn.layer.cornerRadius = 4.0f;
+    self.approveBtn.layer.masksToBounds = YES;
+    [self.approveBtn addTarget:self action:@selector(approveBtnTap) forControlEvents:UIControlEventTouchUpInside];
+    [self.botActionView addSubview:self.approveBtn];
+
 }
 
 -(void) removeAllGestureRecognizers {
@@ -199,16 +258,40 @@
         }
     }
 
+    // BotFather 审批消息：从显示文本中剥离 /approve 和 /reject 命令行
+    if ([[self class] isBotFatherApproveMessage:message]) {
+        NSRange approveRange = [content rangeOfString:@"/approve"];
+        NSRange rejectRange = [content rangeOfString:@"/reject"];
+        NSUInteger cutPos = NSNotFound;
+        if (approveRange.location != NSNotFound && rejectRange.location != NSNotFound) {
+            cutPos = MIN(approveRange.location, rejectRange.location);
+        } else if (approveRange.location != NSNotFound) {
+            cutPos = approveRange.location;
+        } else if (rejectRange.location != NSNotFound) {
+            cutPos = rejectRange.location;
+        }
+        if (cutPos != NSNotFound && cutPos > 0) {
+            NSString *trimmed = [[content substringToIndex:cutPos] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            [content setString:trimmed];
+        }
+    }
+
     NSMutableAttributedString *attrStr = [[NSMutableAttributedString alloc] init];
     attrStr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+
+    // 如果内容包含表格，将表格部分移除（表格由 WKWebView 单独渲染）
+    NSString *renderContent = content;
+    if (![textContent.format isEqualToString:@"html"] && [WKMarkdownRenderer containsTable:content]) {
+        renderContent = [[WKMarkdownRenderer removeTableMarkdown:content] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    }
 
     // 尝试使用 Down 库进行 markdown 渲染
     BOOL useMarkdown = NO;
     if (![textContent.format isEqualToString:@"html"]) {
-        if ([WKMarkdownRenderer containsMarkdown:content]) {
+        if (renderContent.length > 0 && [WKMarkdownRenderer containsMarkdown:renderContent]) {
             UIColor *textColor = message.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
             NSString *colorHex = [textColor toHexRGB];
-            NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+            NSAttributedString *mdAttr = [WKMarkdownRenderer render:renderContent fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
             if (mdAttr && mdAttr.length > 0) {
                 useMarkdown = YES;
                 NSMutableAttributedString *mdMutable = [[NSMutableAttributedString alloc] initWithAttributedString:mdAttr];
@@ -217,7 +300,8 @@
                 // 从 Down 渲染结果中提取可点击的 tokens
                 NSMutableArray<id<WKMatchToken>> *clickableTokens = [NSMutableArray array];
 
-                // 1. 提取链接 tokens
+                // 1. 提取链接 tokens，并记录需要移除NSLinkAttributeName的range
+                NSMutableArray<NSValue*> *linkRanges = [NSMutableArray array];
                 [mdMutable enumerateAttribute:NSLinkAttributeName inRange:NSMakeRange(0, mdMutable.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
                     if (value) {
                         WKLinkToken *token = [WKLinkToken new];
@@ -230,8 +314,18 @@
                         }
                         token.text = token.linkText;
                         [clickableTokens addObject:token];
+                        [linkRanges addObject:[NSValue valueWithRange:range]];
                     }
                 }];
+                // 移除NSLinkAttributeName：UILabel不支持该属性，且会导致hitTest用的
+                // UITextView布局与UILabel不一致，使点击坐标无法匹配到token range
+                for (NSValue *rangeValue in linkRanges) {
+                    NSRange range = [rangeValue rangeValue];
+                    [mdMutable removeAttribute:NSLinkAttributeName range:range];
+                    // 确保链接有可见的视觉样式（颜色+下划线）
+                    [mdMutable addAttribute:NSForegroundColorAttributeName value:[UIColor blueColor] range:range];
+                    [mdMutable addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:range];
+                }
 
                 // 2. 从消息 entities 中提取 @mention tokens，在渲染后的文本中查找匹配位置
                 NSArray<WKMessageEntity*> *entities = message.content.entities;
@@ -264,6 +358,32 @@
                     }
                 }
 
+                // 3. Auto-detect pure URLs not covered by markdown [text](url) links
+                NSArray<id<WKMatchToken>> *autoLinkTokens = [[WKRichTextParseService shared] parseLink:mdMutable.string];
+                for (id<WKMatchToken> autoToken in autoLinkTokens) {
+                    if (autoToken.type != WKatchTokenTypeLink) continue;
+                    // Check if this URL overlaps with any existing clickable token
+                    BOOL overlaps = NO;
+                    for (id<WKMatchToken> existing in clickableTokens) {
+                        NSRange ar = autoToken.range;
+                        NSRange er = existing.range;
+                        if (ar.location < er.location + er.length && er.location < ar.location + ar.length) {
+                            overlaps = YES;
+                            break;
+                        }
+                    }
+                    if (overlaps) continue;
+                    // Create a clickable link token for the pure URL
+                    WKLinkToken *linkToken = [WKLinkToken new];
+                    linkToken.range = autoToken.range;
+                    linkToken.linkText = autoToken.text;
+                    linkToken.linkContent = autoToken.text;
+                    linkToken.text = autoToken.text;
+                    [clickableTokens addObject:linkToken];
+                    [mdMutable addAttribute:NSForegroundColorAttributeName value:[UIColor blueColor] range:autoToken.range];
+                    [mdMutable addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:autoToken.range];
+                }
+
                 mdMutable.tokens = clickableTokens;
 
                 return mdMutable;
@@ -273,10 +393,11 @@
 
     if (!useMarkdown) {
         // 原有逻辑：entity tokens + 自动 URL 检测
-        NSArray<id<WKMatchToken>> *entityTokens = [self getTokens:message text:content];
+        NSString *textForRender = renderContent.length > 0 ? renderContent : content;
+        NSArray<id<WKMatchToken>> *entityTokens = [self getTokens:message text:textForRender];
 
         // 自动检测 URL 链接（补充 entity 中未包含的链接）
-        NSArray<id<WKMatchToken>> *linkTokens = [[WKRichTextParseService shared] parseLink:content];
+        NSArray<id<WKMatchToken>> *linkTokens = [[WKRichTextParseService shared] parseLink:textForRender];
         NSMutableArray<id<WKMatchToken>> *tokens = [NSMutableArray arrayWithArray:entityTokens];
         for (id<WKMatchToken> linkToken in linkTokens) {
             if(linkToken.type != WKatchTokenTypeLink) {
@@ -297,12 +418,12 @@
         }
 
         // 自动检测手写/复制的 @mention（补充 entity 中未包含的 @提及）
-        NSArray<id<WKMatchToken>> *autoMentionTokens = [self detectMentionsInText:content channel:message.message.channel existingTokens:tokens];
+        NSArray<id<WKMatchToken>> *autoMentionTokens = [self detectMentionsInText:textForRender channel:message.message.channel existingTokens:tokens];
         if (autoMentionTokens.count > 0) {
             [tokens addObjectsFromArray:autoMentionTokens];
         }
 
-        [attrStr lim_render:content tokens:tokens];
+        [attrStr lim_render:textForRender tokens:tokens];
     }
 
     return attrStr;
@@ -462,6 +583,52 @@
     return tokens;
 }
 
+/// 提取消息的原始文本内容（合并流式内容）
++(NSString*) getRawContent:(WKMessageModel*)message {
+    WKTextContent *textContent = (WKTextContent*)[message content];
+    if (message.remoteExtra.contentEdit) {
+        textContent = (WKTextContent*)message.remoteExtra.contentEdit;
+    }
+    NSMutableString *content = [[NSMutableString alloc] initWithString:textContent.content ?: @""];
+    if (message.streams && message.streams.count > 0) {
+        for (WKStream *stream in message.streams) {
+            if ([stream.content isKindOfClass:WKTextContent.class]) {
+                [content appendString:((WKTextContent*)stream.content).content];
+            }
+        }
+    }
+    return content;
+}
+
+/// 判断是否为 BotFather 好友审批消息
++(BOOL) isBotFatherApproveMessage:(WKMessageModel*)model {
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    if (!botfatherUID || botfatherUID.length == 0) return NO;
+    if (![model.channel.channelId isEqualToString:botfatherUID]) return NO;
+    if (model.isSend) return NO;
+    NSString *rawContent = [[self class] getRawContent:model];
+    return [rawContent containsString:@"/approve"];
+}
+
+/// 用正则从文本中提取指定前缀的完整命令（如 /approve uid botname）
++(NSString*) extractCommand:(NSString*)content prefix:(NSString*)prefix {
+    if (!content || !prefix) return nil;
+    NSString *pattern = [NSString stringWithFormat:@"%@\\s+\\S+(?:\\s+\\S+)?", [NSRegularExpression escapedPatternForString:prefix]];
+    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:pattern options:0 error:nil];
+    if (!regex) return nil;
+    NSTextCheckingResult *match = [regex firstMatchInString:content options:0 range:NSMakeRange(0, content.length)];
+    if (!match) return nil;
+    return [content substringWithRange:match.range];
+}
+
+/// 计算表格部分的高度（不含顶部间距）
++(CGFloat) tableHeightForMessage:(WKMessageModel*)message {
+    NSString *content = [[self class] getRawContent:message];
+    if (![WKMarkdownRenderer containsTable:content]) return 0;
+    NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
+    if (rowCount <= 0) return 0;
+    return rowCount * kTableRowHeight + kTableExtraPadding;
+}
 
 +(CGSize) textSize:(NSMutableAttributedString*)attrStr messageModel:(WKMessageModel*)model{
     
@@ -545,7 +712,21 @@
     self.textLbl.tokens = attrStr.tokens;
     self.textLbl.lim_size =[[self class] textSize:attrStr messageModel:model];
     //[self.textLbl lim_setText:text mentionInfo:textContent.mentionedInfo];
-    
+
+    // 表格渲染
+    NSString *rawContent = [[self class] getRawContent:model];
+    if ([WKMarkdownRenderer containsTable:rawContent]) {
+        self.tableWebView.hidden = NO;
+        UIColor *textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
+        NSString *colorHex = [textColor toHexRGB];
+        NSString *tableHTML = [WKMarkdownRenderer extractTableHTML:rawContent fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+        if (tableHTML) {
+            [self.tableWebView loadHTMLString:tableHTML baseURL:nil];
+        }
+    } else {
+        self.tableWebView.hidden = YES;
+    }
+
     self.replyBox.hidden = YES;
     if([[self class] hasReply:model]) {
         self.replyBox.hidden = NO;
@@ -566,11 +747,33 @@
         self.replyContentLbl.textColor =[WKApp shared].config.tipColor;
         self.replyNameLbl.textColor = [WKApp shared].config.tipColor;
     }
-    
+
+    // BotFather 审批按钮
+    if ([[self class] isBotFatherApproveMessage:model]) {
+        self.botActionView.hidden = NO;
+        NSString *rawContent = [[self class] getRawContent:model];
+        self.approveCommand = [[self class] extractCommand:rawContent prefix:@"/approve"];
+        self.rejectCommand = [[self class] extractCommand:rawContent prefix:@"/reject"];
+    } else {
+        self.botActionView.hidden = YES;
+    }
+
 }
 
 -(void) onTapWithGestureRecognizer:(TapLongTapOrDoubleTapGestureRecognizerWrap*)gesture {
    // [self.textLbl onTap:gesture];
+    // BotFather 审批按钮点击检测
+    if (!self.botActionView.hidden) {
+        CGPoint pointInBotAction = [self.botActionView convertPoint:gesture.tapPoint fromView:self.contentView];
+        if (CGRectContainsPoint(self.approveBtn.frame, pointInBotAction)) {
+            [self approveBtnTap];
+            return;
+        }
+        if (CGRectContainsPoint(self.rejectBtn.frame, pointInBotAction)) {
+            [self rejectBtnTap];
+            return;
+        }
+    }
     if([self replyAtPoint:gesture.tapPoint]) {
         [self replyBoxTap];
         return;
@@ -646,7 +849,29 @@
     
     self.textLbl.lim_left = 0.0f;
     self.textLbl.lim_top = replyBoxBottom;
-    
+
+    // 表格 WebView 布局
+    if (!self.tableWebView.hidden) {
+        CGFloat tableH = [[self class] tableHeightForMessage:self.messageModel];
+        CGFloat tableTop = replyBoxBottom;
+        if (self.textLbl.lim_size.height > 0) {
+            tableTop = self.textLbl.lim_top + self.textLbl.lim_size.height + kTableTopSpace;
+        }
+        self.tableWebView.frame = CGRectMake(0, tableTop, self.messageContentView.lim_width, tableH);
+    }
+
+    // BotFather 审批按钮布局
+    if (!self.botActionView.hidden) {
+        CGFloat top = self.textLbl.lim_top + self.textLbl.lim_size.height + kBotActionTopSpace;
+        if (!self.tableWebView.hidden) {
+            top = CGRectGetMaxY(self.tableWebView.frame) + kBotActionTopSpace;
+        }
+        self.botActionView.frame = CGRectMake(0, top, self.messageContentView.lim_width, kBotActionBtnHeight);
+        CGFloat btnW = (self.botActionView.lim_width - kBotActionBtnSpacing) / 2.0;
+        self.rejectBtn.frame = CGRectMake(0, 0, btnW, kBotActionBtnHeight);
+        self.approveBtn.frame = CGRectMake(btnW + kBotActionBtnSpacing, 0, btnW, kBotActionBtnHeight);
+    }
+
     self.securityTipLbl.lim_top = self.messageContentView.lim_bottom + securityTipTopSpace;
     self.securityTipLbl.lim_centerX_parent = self.contentView;
     
@@ -774,7 +999,20 @@
     return _securityTipLbl;
 }
 
-
+- (WKWebView *)tableWebView {
+    if (!_tableWebView) {
+        WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
+        _tableWebView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:config];
+        _tableWebView.scrollView.showsHorizontalScrollIndicator = YES;
+        _tableWebView.scrollView.showsVerticalScrollIndicator = NO;
+        _tableWebView.scrollView.bounces = NO;
+        _tableWebView.backgroundColor = [UIColor clearColor];
+        _tableWebView.opaque = NO;
+        _tableWebView.scrollView.backgroundColor = [UIColor clearColor];
+        _tableWebView.hidden = YES;
+    }
+    return _tableWebView;
+}
 
 +(CGSize) getReplyNameSize:(WKMessageModel *)message {
     return [self getTextSize:message.content.reply.fromName?:@"" maxWidth:[WKApp shared].config.messageContentMaxWidth - 20*2 fontSize:replyNameFontSize];
@@ -937,6 +1175,20 @@
 - (void)contactViewController:(CNContactViewController *)viewController
        didCompleteWithContact:(nullable CNContact *)contact  API_AVAILABLE(ios(9.0)){
   [viewController dismissViewControllerAnimated:YES completion:nil];
+}
+
+#pragma mark -- BotFather 审批按钮
+
+-(void) approveBtnTap {
+    if (self.approveCommand) {
+        [self.conversationContext sendTextMessage:self.approveCommand];
+    }
+}
+
+-(void) rejectBtnTap {
+    if (self.rejectCommand) {
+        [self.conversationContext sendTextMessage:self.rejectCommand];
+    }
 }
 
 @end
