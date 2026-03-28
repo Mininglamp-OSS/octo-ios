@@ -27,6 +27,7 @@
 #import "WKSpaceModel.h"
 #import "WKSpacePopupView.h"
 #import "WKSyncService.h"
+#import "WKSpaceConversationCache.h"
 @interface WKConversationListVC ()<UITableViewDelegate,UITableViewDataSource,UISearchControllerDelegate,WKConnectionManagerDelegate,WKChannelManagerDelegate,WKConversationManagerDelegate,WKNetworkListenerDelegate,WKChatManagerDelegate,WKTypingManagerDelegate,SwipeTableViewCellDelegate,WKOnlineStatusManagerDelegate>
 @property(nonatomic,copy) NSString *_title;
 @property(nonatomic,strong)  WKConversationListTableView *tableView;
@@ -454,6 +455,9 @@
         [[NSUserDefaults standardUserDefaults] setObject:space.space_id forKey:@"WKLastLoadedSpaceId"];
         [[NSUserDefaults standardUserDefaults] synchronize];
 
+        // 清空 space_unread / space_last_message 缓存（新空间会重新同步）
+        [[WKSpaceConversationCache shared] clearAll];
+
         // 更新标题
         [weakSelf refreshTitle];
 
@@ -818,10 +822,8 @@
             if(conversation.channel.channelType == WK_GROUP) {
                 continue;
             }
-            // 个人聊天不在列表中：检查消息 space_id
-            if([self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
-                [filtered addObject:conversation];
-            }
+            // Person 频道直接放行（不再按 space_id 过滤，避免私聊会话消失）
+            [filtered addObject:conversation];
         }
     }
     return filtered;
@@ -914,10 +916,11 @@
     // 该会话会在用户切换到对应空间时通过conversation/sync加载
     NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
     if(currentSpaceId && currentSpaceId.length > 0) {
-        // 已在列表中的会话直接更新（在uiAddOrUpdateConversationForOne中已处理）
-        // 这里是真正的"新增"，需要验证是否属于当前空间
-        if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
-            return;
+        // Person 频道直接放行，不做空间过滤（避免私聊会话消失）
+        if(conversation.channel.channelType != WK_PERSON) {
+            if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
+                return;
+            }
         }
     }
     WKConversationWrapModel *model = [[WKConversationWrapModel alloc] initWithConversation:conversation];
@@ -939,8 +942,11 @@
         // 有活跃空间时，不自动添加不属于当前空间的新会话
         NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
         if(currentSpaceId && currentSpaceId.length > 0) {
-            if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
-                return;
+            // Person 频道直接放行（避免私聊会话消失）
+            if(conversation.channel.channelType != WK_PERSON) {
+                if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
+                    return;
+                }
             }
         }
         [self.conversationListVM insert:[[WKConversationWrapModel alloc] initWithConversation:conversation] atIndex:0];
@@ -953,16 +959,16 @@
         return;
     }
 
-    // DM 频道的未读数是全局的（不区分空间），需要忽略其他空间触发的未读更新
+    // Person 频道：不阻塞未读更新（Person 会话已全局可见，SDK 回调的 unreadCount 直接使用）
+    // Group 频道：仍需检查是否属于当前空间
     NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
-    if(currentSpaceId.length > 0 && channel.channelType == WK_PERSON) {
-        // 从 SDK 获取该频道的最新会话，检查 lastMessage 的 space_id
+    if(currentSpaceId.length > 0 && channel.channelType != WK_PERSON) {
         WKConversation *conv = [[WKSDK shared].conversationManager getConversation:channel];
         if(conv && conv.lastMessage) {
             NSString *msgSpaceId = conv.lastMessage.content.contentDict[@"space_id"];
             if(msgSpaceId && [msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0
                && ![msgSpaceId isEqualToString:currentSpaceId]) {
-                return; // 最新消息来自其他空间，不更新当前空间的未读数
+                return;
             }
         }
     }

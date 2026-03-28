@@ -7,6 +7,7 @@
 
 #import "WKConversationWrapModel.h"
 #import "WKApp.h"
+#import "WKSpaceConversationCache.h"
 
 @interface WKConversationWrapModel ()
 @property(nonatomic,strong) WKConversation *c;
@@ -164,7 +165,13 @@
 
 
 - (NSInteger)unreadCount {
-    
+    // Person 频道：优先使用后端的 space_unread
+    if (self.c.channel.channelType == WK_PERSON) {
+        NSNumber *spaceUnread = [[WKSpaceConversationCache shared] spaceUnreadForChannel:self.c.channel];
+        if (spaceUnread != nil) {
+            return [spaceUnread integerValue];
+        }
+    }
     return self.c.unreadCount;
 }
 
@@ -184,6 +191,19 @@
 /// 获取当前空间对应的最后一条消息（仅用于会话列表的显示内容，不影响SDK逻辑）
 -(WKMessage*) spaceFilteredLastMessage {
     WKMessage *rawLastMessage = self.lastChildConversation ? self.lastChildConversation.lastMessage : self.c.lastMessage;
+    // Person 频道：先检查 rawLastMessage 是否属于当前空间（实时性优先）
+    if (self.c.channel.channelType == WK_PERSON && rawLastMessage) {
+        NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+        NSString *msgSpaceId = rawLastMessage.content.contentDict[@"space_id"];
+        if (currentSpaceId.length > 0 && [msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:currentSpaceId]) {
+            return rawLastMessage; // rawLastMessage 属于当前空间，直接用（比缓存更新）
+        }
+        // rawLastMessage 不属于当前空间 → 用缓存替代 DB 扫描
+        WKMessage *cached = [[WKSpaceConversationCache shared] spaceLastMessageForChannel:self.c.channel];
+        if (cached) {
+            return cached;
+        }
+    }
     if(![self isSystemBotChannel]) {
         return rawLastMessage;
     }
