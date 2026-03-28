@@ -13,6 +13,7 @@
 #import "WKMyGroupListVC.h"
 #import "WKOrgMembersListVC.h"
 #import "WKBotListVC.h"
+#import "WKBotPlazaVC.h"
 #import "WKAllGroupListVC.h"
 @WKModule(WKContactsModule)
 
@@ -103,11 +104,19 @@
 
     // Bot item
     [self setMethod:@"contacts.header.bot" handler:^id _Nullable(id  _Nonnull param) {
-        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"bot" title:LLangW(@"AI",weakSelf) icon:@"Contacts/Index/Bot" moduleID:[weakSelf moduleId] onClick:^{
+        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"bot" title:LLangW(@"我的AI",weakSelf) icon:@"Contacts/Index/Bot" moduleID:[weakSelf moduleId] onClick:^{
             [[WKNavigationManager shared] pushViewController:[WKBotListVC new] animated:YES];
         }];
         return item;
     } category:WKPOINT_CATEGORY_CONTACTSITEM sort:6000];
+
+    // AI广场item
+    [self setMethod:@"contacts.header.botPlaza" handler:^id _Nullable(id  _Nonnull param) {
+        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"botPlaza" title:LLangW(@"AI广场",weakSelf) icon:@"Contacts/Index/Bot" moduleID:[weakSelf moduleId] onClick:^{
+            [[WKNavigationManager shared] pushViewController:[WKBotPlazaVC new] animated:YES];
+        }];
+        return item;
+    } category:WKPOINT_CATEGORY_CONTACTSITEM sort:5900];
 
     // 我的群组item
     [self setMethod:@"contacts.header.allGroups" handler:^id _Nullable(id  _Nonnull param) {

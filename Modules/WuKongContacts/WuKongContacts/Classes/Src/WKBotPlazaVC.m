@@ -1,28 +1,28 @@
 //
-//  WKBotListVC.m
+//  WKBotPlazaVC.m
 //  WuKongContacts
 //
 
-#import "WKBotListVC.h"
-#import "WKBotListVM.h"
+#import "WKBotPlazaVC.h"
+#import "WKBotPlazaVM.h"
 #import "WKContactsCell.h"
 #import "WKChineseSort.h"
 
-@interface WKBotListVC () <UITableViewDataSource, UITableViewDelegate>
+@interface WKBotPlazaVC () <UITableViewDataSource, UITableViewDelegate>
 
 @property(nonatomic,strong) UITableView *tableView;
-@property(nonatomic,strong) WKBotListVM *vm;
+@property(nonatomic,strong) WKBotPlazaVM *vm;
 @property(nonatomic,strong) NSMutableArray *sectionTitleArr;
 @property(nonatomic,strong) NSMutableArray<NSMutableArray*> *items;
 
 @end
 
-@implementation WKBotListVC
+@implementation WKBotPlazaVC
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.navigationBar.title = LLang(@"我的AI");
-    self.vm = [WKBotListVM new];
+    self.navigationBar.title = LLang(@"AI广场");
+    self.vm = [WKBotPlazaVM new];
     self.items = [NSMutableArray array];
     self.sectionTitleArr = [NSMutableArray array];
     [self.view addSubview:self.tableView];
@@ -62,7 +62,7 @@
         }
         [weakSelf sortAndGroup:cellModels];
     }).catch(^(NSError *error) {
-        NSLog(@"WKBotListVC requestData error: %@", error);
+        NSLog(@"WKBotPlazaVC requestData error: %@", error);
     });
 }
 

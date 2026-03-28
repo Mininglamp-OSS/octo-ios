@@ -230,6 +230,185 @@ import Down
             .replacingOccurrences(of: ">", with: "&gt;")
     }
 
+    // MARK: - Table extraction for WKWebView rendering
+
+    /// Check if markdown text contains a valid table (at least 2 consecutive | lines)
+    @objc public static func containsTable(_ text: String) -> Bool {
+        let lines = text.components(separatedBy: "\n")
+        var inCodeBlock = false
+        var consecutiveTableLines = 0
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                inCodeBlock = !inCodeBlock
+                consecutiveTableLines = 0
+                continue
+            }
+            if inCodeBlock {
+                consecutiveTableLines = 0
+                continue
+            }
+            if isTableLine(line) {
+                consecutiveTableLines += 1
+                if consecutiveTableLines >= 2 { return true }
+            } else {
+                consecutiveTableLines = 0
+            }
+        }
+        return false
+    }
+
+    /// Extract table portions from markdown and return a full HTML document for WKWebView rendering
+    @objc public static func extractTableHTML(_ text: String,
+                                               fontSize: CGFloat,
+                                               textColorHex: String) -> String? {
+        let lines = text.components(separatedBy: "\n")
+        var tableGroups: [[String]] = []
+        var currentTable: [String] = []
+        var inCodeBlock = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                inCodeBlock = !inCodeBlock
+                if currentTable.count >= 2 { tableGroups.append(currentTable) }
+                currentTable = []
+                continue
+            }
+            if inCodeBlock { continue }
+
+            if isTableLine(line) {
+                currentTable.append(line)
+            } else {
+                if currentTable.count >= 2 { tableGroups.append(currentTable) }
+                currentTable = []
+            }
+        }
+        if currentTable.count >= 2 { tableGroups.append(currentTable) }
+        if tableGroups.isEmpty { return nil }
+
+        var tablesHTML = ""
+        for tableLines in tableGroups {
+            tablesHTML += convertTableToHTML(tableLines)
+        }
+
+        let css = buildTableWebViewCSS(fontSize: fontSize, textColorHex: textColorHex)
+        return """
+        <!DOCTYPE html>
+        <html><head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <style>\(css)</style>
+        </head><body>\(tablesHTML)</body></html>
+        """
+    }
+
+    /// Remove table markdown lines from text, keeping the rest
+    @objc public static func removeTableMarkdown(_ text: String) -> String {
+        let lines = text.components(separatedBy: "\n")
+        var result: [String] = []
+        var inCodeBlock = false
+        var i = 0
+
+        while i < lines.count {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed.hasPrefix("```") {
+                inCodeBlock = !inCodeBlock
+                result.append(line)
+                i += 1
+                continue
+            }
+            if inCodeBlock {
+                result.append(line)
+                i += 1
+                continue
+            }
+
+            if isTableLine(line) {
+                var j = i
+                while j < lines.count && isTableLine(lines[j]) { j += 1 }
+                if j - i >= 2 {
+                    i = j   // skip valid table block
+                    continue
+                }
+            }
+
+            result.append(line)
+            i += 1
+        }
+
+        return result.joined(separator: "\n")
+    }
+
+    /// Count visible table rows (excluding separator rows) for height estimation
+    @objc public static func tableRowCount(_ text: String) -> Int {
+        let lines = text.components(separatedBy: "\n")
+        var count = 0
+        var inCodeBlock = false
+        var currentTableLines: [String] = []
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                inCodeBlock = !inCodeBlock
+                if currentTableLines.count >= 2 {
+                    for tl in currentTableLines {
+                        if !isTableSeparator(tl) { count += 1 }
+                    }
+                }
+                currentTableLines = []
+                continue
+            }
+            if inCodeBlock { continue }
+
+            if isTableLine(line) {
+                currentTableLines.append(line)
+            } else {
+                if currentTableLines.count >= 2 {
+                    for tl in currentTableLines {
+                        if !isTableSeparator(tl) { count += 1 }
+                    }
+                }
+                currentTableLines = []
+            }
+        }
+        if currentTableLines.count >= 2 {
+            for tl in currentTableLines {
+                if !isTableSeparator(tl) { count += 1 }
+            }
+        }
+
+        return count
+    }
+
+    private static func buildTableWebViewCSS(fontSize: CGFloat, textColorHex: String) -> String {
+        return """
+        * {
+            font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
+            font-size: \(fontSize)px;
+            color: \(textColorHex);
+            margin: 0;
+            padding: 0;
+        }
+        body { margin: 0; padding: 0; -webkit-text-size-adjust: none; }
+        table { border-collapse: collapse; width: auto; white-space: nowrap; }
+        th {
+            font-weight: 600;
+            padding: 6px 12px;
+            border-bottom: 2px solid #999;
+            text-align: left;
+            background-color: rgba(0,0,0,0.04);
+        }
+        td {
+            padding: 6px 12px;
+            border-bottom: 1px solid #E0E0E0;
+        }
+        tr:last-child td { border-bottom: none; }
+        """
+    }
+
     // MARK: - CSS
 
     private static func buildCSS(fontSize: CGFloat, textColorHex: String) -> String {
