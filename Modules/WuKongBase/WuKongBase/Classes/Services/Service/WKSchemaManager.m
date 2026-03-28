@@ -118,7 +118,12 @@ static WKSchemaManager *_instance = nil;
     [[WKNavigationManager shared].topViewController presentViewController:alertController animated:true completion:nil];
 }
 -(AnyPromise*) applyFriend:(NSString*)uid remark:(NSString*)remark vercode:(NSString*)vercode{
-    return [[WKAPIClient sharedClient] POST:@"friend/apply" parameters:@{@"to_uid":uid?:@"",@"remark":remark?:@"",@"vercode":vercode?:@""}];
+    NSMutableDictionary *params = [NSMutableDictionary dictionaryWithDictionary:@{@"to_uid":uid?:@"",@"remark":remark?:@"",@"vercode":vercode?:@""}];
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    if (spaceId.length > 0) {
+        params[@"space_id"] = spaceId;
+    }
+    return [[WKAPIClient sharedClient] POST:@"friend/apply" parameters:params];
 }
 
 -(void) registerHandler:(NSString*)sid handler:(WKSchemaHandler)handler {

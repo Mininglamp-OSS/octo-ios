@@ -80,7 +80,12 @@
     NSString *friendMaxVersion = [[NSUserDefaults standardUserDefaults] stringForKey:cacheKey];
     NSInteger limit = 200;
     __weak typeof(self) weakSelf = self;
-    [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"friend/sync"] parameters:@{@"version":friendMaxVersion?:@"",@"api_version":@"1",@"limit":@(limit)}].then(^(NSArray<NSDictionary*>* contacts){
+    NSMutableDictionary *params = [NSMutableDictionary dictionaryWithDictionary:@{@"version":friendMaxVersion?:@"",@"api_version":@"1",@"limit":@(limit)}];
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    if (currentSpaceId && currentSpaceId.length > 0) {
+        params[@"space_id"] = currentSpaceId;
+    }
+    [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"friend/sync"] parameters:params].then(^(NSArray<NSDictionary*>* contacts){
         if(contacts && contacts.count>0) {
             NSMutableArray *channelInfos = [NSMutableArray array];
             for (NSDictionary *dict in contacts) {
