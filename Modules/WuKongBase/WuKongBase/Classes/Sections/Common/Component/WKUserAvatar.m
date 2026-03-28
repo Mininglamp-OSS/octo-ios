@@ -61,16 +61,14 @@
     }];
 }
 
-- (void)setUrlWithRefresh:(NSString *)url {
+// 跳过所有缓存，直接从服务器下载最新头像，下载后自动存入缓存
+- (void)refreshUrlFromServer:(NSString *)url {
     _url = url;
-    NSLog(@"[Avatar] setUrlWithRefresh: url=%@", url);
     [_avatarImgView sd_setImageWithURL:[NSURL URLWithString:url]
                       placeholderImage:[WKApp shared].config.defaultAvatar
-                               options:SDWebImageAllowInvalidSSLCertificates | SDWebImageRefreshCached
+                               options:SDWebImageAllowInvalidSSLCertificates | SDWebImageFromLoaderOnly
                              completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, NSURL *imageURL) {
-        NSString *source = (cacheType == SDImageCacheTypeMemory) ? @"memory" :
-                           (cacheType == SDImageCacheTypeDisk) ? @"disk" : @"network";
-        NSLog(@"[Avatar] setUrlWithRefresh loaded: source=%@, hasImage=%@, error=%@", source, image ? @"YES" : @"NO", error);
+        NSLog(@"[Avatar] refreshFromServer done: hasImage=%@, error=%@, url=%@", image ? @"YES" : @"NO", error, imageURL);
     }];
 }
 

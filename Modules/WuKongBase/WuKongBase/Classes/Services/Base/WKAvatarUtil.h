@@ -16,6 +16,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// @param uid <#uid description#>
 +(NSString*) getAvatar:(NSString*)uid;
 
+/// 获取用户头像（带缓存key，用于使SDWebImage缓存失效）
++(NSString*) getAvatar:(NSString*)uid cacheKey:(NSString*)cacheKey;
 
 /// 获取完整头像URL
 /// @param avatarPath <#avatarPath description#>

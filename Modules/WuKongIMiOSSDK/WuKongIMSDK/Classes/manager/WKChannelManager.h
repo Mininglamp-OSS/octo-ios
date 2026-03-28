@@ -53,6 +53,9 @@ typedef void  (^WKChannelInfoBlock)(WKChannelInfo*);
 
 -(void) fetchChannelInfo:(WKChannel*) channel;
 
+/// 刷新头像缓存key（生成新UUID使SDWebImage缓存失效，触发channelInfoUpdate回调）
+-(void) refreshAvatarCacheKey:(WKChannel*)channel;
+
 /**
   添加频道请求（此方法适合大量cell获取频道数据）
  */

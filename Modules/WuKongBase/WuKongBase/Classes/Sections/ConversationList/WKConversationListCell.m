@@ -328,10 +328,16 @@
                 avatarURL = [WKAvatarUtil getGroupAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
             }
         } else {
+            // 个人频道：和群频道一样，始终拼接 ?v=cacheKey
+            NSString *key = (model.channelInfo.avatarCacheKey.length > 0) ? model.channelInfo.avatarCacheKey : @"0";
             if([model.channelInfo.logo hasPrefix:@"http"]) {
-                avatarURL = model.channelInfo.logo;
+                NSString *separator = [model.channelInfo.logo containsString:@"?"] ? @"&" : @"?";
+                avatarURL = [NSString stringWithFormat:@"%@%@v=%@", model.channelInfo.logo, separator, key];
+            } else if(model.channelInfo.logo && ![model.channelInfo.logo isEqualToString:@""]) {
+                NSString *fullUrl = [WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo];
+                avatarURL = [NSString stringWithFormat:@"%@?v=%@", fullUrl, key];
             } else {
-                avatarURL = [WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo];
+                avatarURL = [WKAvatarUtil getAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
             }
         }
         [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL] placeholderImage:[self imageName:@"Common/Index/DefaultAvatar"] options:0 context:@{

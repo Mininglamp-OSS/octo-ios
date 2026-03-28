@@ -16,8 +16,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,copy) NSString *url;
 
-// 强制刷新头像，使用SDWebImageRefreshCached选项
--(void) setUrlWithRefresh:(NSString*)url;
+// 跳过所有缓存，直接从服务器下载最新头像（打开详情页时调用）
+-(void) refreshUrlFromServer:(NSString*)url;
 
 @property(nonatomic,copy) NSString *uid;
 

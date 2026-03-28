@@ -311,7 +311,8 @@
 - (WKUserAvatar *)userAvatarView {
     if(!_userAvatarView) {
         _userAvatarView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0.0f, 0.0f, 64.0f, 64.0f)];
-        [_userAvatarView setUrl:[WKAvatarUtil getAvatar:self.uid]];
+        WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:self.uid]];
+        [_userAvatarView setUrl:[WKAvatarUtil getAvatar:self.uid cacheKey:info.avatarCacheKey]];
         _userAvatarView.lim_left = 20.0f;
         _userAvatarView.lim_top = self.userHeader.lim_height/2.0f - _userAvatarView.lim_height/2.0f;
         _userAvatarView.hidden = YES;
@@ -323,19 +324,25 @@
 }
 
 -(void) avatarPressed:(UIGestureRecognizer*)gesture  {
+    // 先刷新cacheKey（生成新UUID），确保后续URL带新key
+    [[WKSDK shared].channelManager refreshAvatarCacheKey:[WKChannel personWithChannelID:self.uid]];
+
+    // 用新cacheKey构建URL，SDWebImage没有该URL缓存 → 从服务器下载最新头像
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:self.uid]];
+    NSString *avatarUrl = [WKAvatarUtil getAvatar:self.uid cacheKey:info.avatarCacheKey];
+
     WKUserAvatar *imgView = (WKUserAvatar*)gesture.view;
     YBImageBrowser *imageBrowser = [[YBImageBrowser alloc] init];
     imageBrowser.toolViewHandlers = @[WKBrowserToolbar.new];
     imageBrowser.webImageMediator = [WKDefaultWebImageMediator new];
-    
+
     YBIBImageData *data = [YBIBImageData new];
-    data.imageURL = [NSURL URLWithString:[WKAvatarUtil getAvatar:self.uid]];
+    data.imageURL = [NSURL URLWithString:avatarUrl];
     data.projectiveView = imgView.avatarImgView;
-    
+
     imageBrowser.dataSourceArray = @[data];
-    
+
     [imageBrowser show];
-    
 }
 
 - (UIImageView *)sexImgView {
@@ -571,6 +578,11 @@
         [self refreshData];
     }else if(channelInfo.channel.channelType == WK_PERSON && [channelInfo.channel.channelId isEqualToString:self.uid]) {
         self.viewModel.channelInfo = channelInfo;
+        // 用新的cacheKey更新头像URL，触发SDWebImage重新下载
+        NSString *key = (channelInfo.avatarCacheKey.length > 0) ? channelInfo.avatarCacheKey : @"0";
+        NSString *baseUrl = (channelInfo.logo && ![channelInfo.logo isEqualToString:@""]) ?
+            [WKAvatarUtil getFullAvatarWIthPath:channelInfo.logo] : [WKAvatarUtil getAvatar:self.uid];
+        [self.userAvatarView setUrl:[NSString stringWithFormat:@"%@?v=%@", baseUrl, key]];
         [self refreshData];
     }
 }

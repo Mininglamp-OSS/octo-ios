@@ -191,10 +191,16 @@
             self.subtitleLbl.hidden = YES;
         }
         [self.subtitleLbl sizeToFit];
-        if(channelInfo.logo && ![channelInfo.logo isEqualToString:@""]) {
-            self.avatarImgView.url = [WKAvatarUtil getFullAvatarWIthPath:channelInfo.logo];
-        }else{
-            self.avatarImgView.url = [WKAvatarUtil getAvatar:channelInfo.channel.channelId];
+        {
+            // 个人频道：始终拼接 ?v=cacheKey，cacheKey变化时SDWebImage自动重新下载
+            NSString *key = (channelInfo.avatarCacheKey.length > 0) ? channelInfo.avatarCacheKey : @"0";
+            NSString *baseUrl;
+            if(channelInfo.logo && ![channelInfo.logo isEqualToString:@""]) {
+                baseUrl = [WKAvatarUtil getFullAvatarWIthPath:channelInfo.logo];
+            }else{
+                baseUrl = [WKAvatarUtil getAvatar:channelInfo.channel.channelId];
+            }
+            self.avatarImgView.url = [NSString stringWithFormat:@"%@?v=%@", baseUrl, key];
         }
         
     }else {
