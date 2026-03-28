@@ -61,6 +61,25 @@ static WKConversationListVM *_instance;
     NSLog(@"📋 已记录当前空间合法群聊白名单: %lu 个群", (unsigned long)groupIds.count);
 }
 
+-(void) addToSyncedGroupIds:(NSString*)channelId {
+    if(!channelId) return;
+    if(self.syncedGroupChannelIds) {
+        NSMutableSet *mutable = [self.syncedGroupChannelIds mutableCopy];
+        [mutable addObject:channelId];
+        self.syncedGroupChannelIds = [mutable copy];
+    }
+}
+
+-(BOOL) isInSyncedGroupIds:(NSString*)channelId {
+    if(!self.syncedGroupChannelIds) return YES; // 白名单未初始化，不过滤
+    if(!channelId) return NO;
+    return [self.syncedGroupChannelIds containsObject:channelId];
+}
+
+-(void) resetSyncedGroupIds {
+    self.syncedGroupChannelIds = nil;
+}
+
 -(void) loadConversationList:(void(^)(void)) finished {
     NSMutableArray<WKConversationWrapModel*> *conversationWrapModels = [[NSMutableArray alloc] init];
     NSArray<WKConversation*> *conversations = [[[WKSDK shared] conversationManager] getConversationList];

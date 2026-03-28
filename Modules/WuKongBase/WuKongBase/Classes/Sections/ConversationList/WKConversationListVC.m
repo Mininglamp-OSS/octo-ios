@@ -66,7 +66,7 @@
 @property(nonatomic,assign) NSInteger spaceCount; // Space总数
 @property(nonatomic,strong) UIImageView *spaceArrowView; // Space标题右侧折叠箭头
 @property(nonatomic,assign) BOOL hasCleanedConversationsOnStartup; // 本次启动是否已清理会话数据
-
+@property(nonatomic,assign) BOOL resyncScheduled; // 是否已安排重新sync（防抖）
 @end
 
 @implementation WKConversationListVC
@@ -814,11 +814,7 @@
             // 已在列表中的会话：允许更新（列表通过 sync 按空间加载，已在列表就是当前空间的）
             [filtered addObject:conversation];
         } else {
-            // 群聊不在列表中：不自动添加（群聊归属通过 conversation/sync 确定）
-            if(conversation.channel.channelType == WK_GROUP) {
-                continue;
-            }
-            // 个人聊天不在列表中：检查消息 space_id
+            // 不在列表中的新会话：检查是否属于当前空间
             if([self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
                 [filtered addObject:conversation];
             }
@@ -886,26 +882,26 @@
         return YES;
     }
 
-    // 群聊/社区频道：不自动添加到其他空间，群聊通过 conversation/sync 按空间加载
+    // 群聊：只有白名单中的群才显示（白名单来自conversation/sync?space_id=xxx）
+    // iOS切换空间后IM连接不断开，服务端仍推送旧空间群消息，必须靠白名单过滤
+    // 新被拉入的群不在白名单中 → 触发重新sync → 服务端返回当前空间群 → 白名单更新 → 群显示
     if(conversation.channel.channelType == WK_GROUP) {
-        return NO;
-    }
-
-    // 个人聊天：检查最后一条消息的 space_id 是否匹配当前空间
-    if(conversation.lastMessage) {
-        NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
-        if([msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:spaceId]) {
-            return YES; // 消息明确属于当前空间
-        }
-        // 消息没有 space_id 标记，视为属于当前空间（兼容旧消息和非Bot消息）
-        if(!msgSpaceId || [msgSpaceId isEqual:[NSNull null]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0)) {
+        if([[WKConversationListVM shared] isInSyncedGroupIds:channelId]) {
             return YES;
         }
-        // 消息有 space_id 但不匹配当前空间
+        [self scheduleConversationResync];
         return NO;
     }
 
-    // 无最后一条消息，允许显示（如空会话）
+    // 私聊：检查消息 space_id（和安卓 isMessageFromOtherSpace 一致）
+    // 新好友首条消息不在sync结果中，不能仅凭白名单丢弃，要看消息的space_id
+    if(conversation.lastMessage) {
+        NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
+        if(msgSpaceId && [msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0
+           && ![msgSpaceId isEqualToString:spaceId]) {
+            return NO; // 消息明确属于其他空间
+        }
+    }
     return YES;
 }
 
@@ -925,6 +921,33 @@
     [self.tableView insertRowsAtIndexPaths:@[ [NSIndexPath indexPathForRow:insertPlace inSection:0] ] withRowAnimation:UITableViewRowAnimationFade];
 }
 // 删除最近会话
+/// 新群不在白名单时触发重新sync（防抖2秒，避免频繁请求）
+-(void) scheduleConversationResync {
+    if(self.resyncScheduled) return;
+    self.resyncScheduled = YES;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        weakSelf.resyncScheduled = NO;
+        WKSyncConversationProvider provider = [WKSDK shared].conversationManager.syncConversationProvider;
+        if(!provider) return;
+        long long version = [[WKConversationDB shared] getConversationMaxVersion];
+        NSString *syncKey = [[WKConversationDB shared] getConversationSyncKey];
+        provider(version, syncKey, ^(WKSyncConversationWrapModel *model, NSError *error) {
+            if(error || !model) return;
+            [[WKSDK shared].conversationManager handleSyncConversation:model];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                // 重置白名单，避免旧白名单过滤掉sync新返回的群（如删除后有新消息的群）
+                [weakSelf.conversationListVM resetSyncedGroupIds];
+                [weakSelf.conversationListVM loadConversationList:^{
+                    [weakSelf.conversationListVM snapshotSyncedGroupIds];
+                    [weakSelf.tableView reloadData];
+                    [weakSelf refreshBadge];
+                }];
+            });
+        });
+    });
+}
+
 - (void)onConversationDelete:(WKChannel *)channel {
     [self.conversationListVM removeAtChannnel:channel];
     [self refreshTable];
@@ -1003,7 +1026,6 @@
 #pragma mark - WKChannelManagerDelegate
 
 -(void) channelInfoUpdate:(WKChannelInfo *)channelInfo oldChannelInfo:(WKChannelInfo *)oldChannelInfo{
-   //[self refreshTable];
     NSInteger index = [self.conversationListVM indexAtChannel:channelInfo.channel];
     if(index!= -1) {
         WKConversationWrapModel *oldModel = [self.conversationListVM modelAtIndex:index];
@@ -1216,6 +1238,8 @@
 
             [weakSelf.conversationListVM removeConversationAtIndex:indexPath.row];
             [weakSelf.tableView deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationAutomatic];
+            // 通知服务端offset（防止sync时还原）+ 清除本地消息 + 删除本地会话
+            [[WKMessageManager shared] clearMessages:conversationModel.channel];
             [[WKSDK shared].conversationManager deleteConversation:conversationModel.channel];
         }]];
         [sheet show];
