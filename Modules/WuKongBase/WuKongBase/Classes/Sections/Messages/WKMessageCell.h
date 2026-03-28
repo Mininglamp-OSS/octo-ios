@@ -149,6 +149,9 @@ typedef enum :NSUInteger {
 // 响应上述方法返回的行为
 -(void) tapLongTapOrDoubleTapGesture:(TapLongTapOrDoubleTapGestureRecognizerWrap*)recognizer;
 
+/// 长按上下文手势是否应该在该点开始（子类可重写以排除特定区域）
+-(BOOL) shouldBeginContextGestureAtPoint:(CGPoint)point;
+
 
 
 @end

@@ -259,6 +259,60 @@ import Down
         return false
     }
 
+    /// Split content into ordered segments of text and table blocks
+    @objc public static func splitContentSegments(_ text: String) -> NSArray {
+        let lines = text.components(separatedBy: "\n")
+        var segments: [[String: String]] = []
+        var currentTextLines: [String] = []
+        var inCodeBlock = false
+        var i = 0
+
+        while i < lines.count {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed.hasPrefix("```") {
+                inCodeBlock = !inCodeBlock
+                currentTextLines.append(line)
+                i += 1
+                continue
+            }
+            if inCodeBlock {
+                currentTextLines.append(line)
+                i += 1
+                continue
+            }
+
+            if isTableLine(line) {
+                var j = i
+                while j < lines.count && isTableLine(lines[j]) { j += 1 }
+                if j - i >= 2 {
+                    // Flush accumulated text
+                    let txt = currentTextLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !txt.isEmpty {
+                        segments.append(["type": "text", "content": txt])
+                    }
+                    currentTextLines = []
+                    // Add table segment
+                    let tableContent = Array(lines[i..<j]).joined(separator: "\n")
+                    segments.append(["type": "table", "content": tableContent])
+                    i = j
+                    continue
+                }
+            }
+
+            currentTextLines.append(line)
+            i += 1
+        }
+
+        let remaining = currentTextLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !remaining.isEmpty {
+            segments.append(["type": "text", "content": remaining])
+        }
+
+        return segments as NSArray
+    }
+
     /// Extract table portions from markdown and return a full HTML document for WKWebView rendering
     @objc public static func extractTableHTML(_ text: String,
                                                fontSize: CGFloat,
@@ -300,6 +354,154 @@ import Down
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <style>\(css)</style>
         </head><body>\(tablesHTML)</body></html>
+        """
+    }
+
+    /// Render full content (text + tables) as HTML, preserving original order
+    @objc public static func renderFullContentHTML(_ text: String,
+                                                    fontSize: CGFloat,
+                                                    textColorHex: String) -> String? {
+        let lines = text.components(separatedBy: "\n")
+        var html = ""
+        var inCodeBlock = false
+        var i = 0
+        var currentTextLines: [String] = []
+
+        while i < lines.count {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed.hasPrefix("```") {
+                inCodeBlock = !inCodeBlock
+                currentTextLines.append(line)
+                i += 1
+                continue
+            }
+            if inCodeBlock {
+                currentTextLines.append(line)
+                i += 1
+                continue
+            }
+
+            if isTableLine(line) {
+                var j = i
+                while j < lines.count && isTableLine(lines[j]) { j += 1 }
+                if j - i >= 2 {
+                    // Flush accumulated text
+                    if !currentTextLines.isEmpty {
+                        html += textLinesToHTML(currentTextLines)
+                        currentTextLines = []
+                    }
+                    let tableLines = Array(lines[i..<j])
+                    html += convertTableToHTML(tableLines)
+                    i = j
+                    continue
+                }
+            }
+
+            currentTextLines.append(line)
+            i += 1
+        }
+        // Flush remaining text
+        if !currentTextLines.isEmpty {
+            html += textLinesToHTML(currentTextLines)
+        }
+
+        if html.isEmpty { return nil }
+
+        let css = buildFullContentCSS(fontSize: fontSize, textColorHex: textColorHex)
+        return """
+        <!DOCTYPE html>
+        <html><head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <style>\(css)</style>
+        </head><body>\(html)</body></html>
+        """
+    }
+
+    /// Estimate total content height (text lines + table rows)
+    @objc public static func fullContentHeight(_ text: String, fontSize: CGFloat) -> CGFloat {
+        let lines = text.components(separatedBy: "\n")
+        let lineHeight = fontSize * 1.4
+        var height: CGFloat = 0
+        var inCodeBlock = false
+        var i = 0
+
+        while i < lines.count {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed.hasPrefix("```") {
+                inCodeBlock = !inCodeBlock
+                height += lineHeight
+                i += 1
+                continue
+            }
+            if inCodeBlock {
+                height += lineHeight
+                i += 1
+                continue
+            }
+
+            if isTableLine(line) {
+                var j = i
+                while j < lines.count && isTableLine(lines[j]) { j += 1 }
+                if j - i >= 2 {
+                    let hasSep = j - i >= 2 && isTableSeparator(lines[i + 1])
+                    let visibleRows = hasSep ? j - i - 1 : j - i
+                    height += CGFloat(visibleRows) * 32.0 + 4.0
+                    i = j
+                    continue
+                }
+            }
+
+            if line.isEmpty {
+                height += lineHeight * 0.5
+            } else {
+                height += lineHeight
+            }
+            i += 1
+        }
+
+        return height
+    }
+
+    private static func textLinesToHTML(_ lines: [String]) -> String {
+        let joined = lines.joined(separator: "\n")
+        let trimmed = joined.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "" }
+        var escaped = escapeHTML(trimmed)
+        // Basic markdown: **bold**
+        if let boldRegex = try? NSRegularExpression(pattern: "\\*\\*(.+?)\\*\\*", options: []) {
+            escaped = boldRegex.stringByReplacingMatches(in: escaped, options: [], range: NSRange(escaped.startIndex..., in: escaped), withTemplate: "<strong>$1</strong>")
+        }
+        return "<div class=\"text-block\">\(escaped.replacingOccurrences(of: "\n", with: "<br>"))</div>"
+    }
+
+    private static func buildFullContentCSS(fontSize: CGFloat, textColorHex: String) -> String {
+        return """
+        * {
+            font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
+            font-size: \(fontSize)px;
+            color: \(textColorHex);
+            margin: 0;
+            padding: 0;
+        }
+        body { margin: 0; padding: 0; -webkit-text-size-adjust: none; }
+        .text-block { white-space: pre-wrap; line-height: 1.4; padding: 2px 0; }
+        table { border-collapse: collapse; width: max-content; white-space: nowrap; margin: 4px 0; }
+        th {
+            font-weight: 600;
+            padding: 6px 12px;
+            border-bottom: 2px solid #999;
+            text-align: left;
+            background-color: rgba(0,0,0,0.04);
+        }
+        td {
+            padding: 6px 12px;
+            border-bottom: 1px solid #E0E0E0;
+        }
+        tr:last-child td { border-bottom: none; }
         """
     }
 
@@ -393,7 +595,7 @@ import Down
             padding: 0;
         }
         body { margin: 0; padding: 0; -webkit-text-size-adjust: none; }
-        table { border-collapse: collapse; width: auto; white-space: nowrap; }
+        table { border-collapse: collapse; width: max-content; white-space: nowrap; }
         th {
             font-weight: 600;
             padding: 6px 12px;

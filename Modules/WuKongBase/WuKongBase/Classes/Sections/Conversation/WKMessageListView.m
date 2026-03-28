@@ -11,6 +11,8 @@
 #import <MJRefresh/MJRefresh.h>
 #import "WKTimeHeaderView.h"
 #import "WKMessageRevokeCell.h"
+#import "WKTextMessageCell.h"
+#import <WuKongBase/WuKongBase-Swift.h>
 #import "WKHistorySplitTipContent.h"
 #import "WKTypingManager.h"
 #import "WKMessageListView+Position.h"
@@ -1122,11 +1124,19 @@
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath{
-    
+
     WKMessageModel *messageModel = [self.dataProvider messageAtIndexPath:indexPath];
     Class messageCellClass =  [self getMessageCellClass:messageModel];
-   
+
     NSString *identifier = NSStringFromClass(messageCellClass);
+    // 含表格的文本消息：用 messageId 做唯一 reuseIdentifier，不参与复用池
+    if (messageCellClass == WKTextMessageCell.class && messageModel.contentType == WK_TEXT) {
+        WKTextContent *textContent = (WKTextContent*)[messageModel content];
+        NSString *rawText = textContent.content ?: @"";
+        if ([WKMarkdownRenderer containsTable:rawText]) {
+            identifier = [NSString stringWithFormat:@"%@_table_%llu", identifier, messageModel.messageId];
+        }
+    }
     WKMessageBaseCell *cell = [self.tableView dequeueReusableCellWithIdentifier:identifier];
     if(!cell) {
         cell = [[messageCellClass alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:identifier];

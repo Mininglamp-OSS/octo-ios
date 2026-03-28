@@ -136,15 +136,7 @@ static NSMutableDictionary *flameNodeCacheDict;
         if(!weakSelf) {
             return false;
         }
-        if(!CGRectContainsPoint(weakSelf.bubbleBackgroundView.frame, point)) {
-            return false;
-        }
-//        WKTapLongTapOrDoubleTapGestureRecognizerEvent *event = [weakSelf tapActionAtPoint:point];
-//        if(event.action != WKTapLongTapOrDoubleTapGestureRecognizerActionNone) {
-//            return false;
-//        }
-        
-        return true;
+        return [weakSelf shouldBeginContextGestureAtPoint:point];
     }];
     [self.mainContainerNode setActivated:^(ContextGesture *gesture, CGPoint point) {
         if(!weakSelf) {
@@ -302,6 +294,13 @@ static NSMutableDictionary *flameNodeCacheDict;
         event = [WKTapLongTapOrDoubleTapGestureRecognizerEvent action:WKTapLongTapOrDoubleTapGestureRecognizerActionWaitForSingleTap];
     }
     return event;
+}
+
+-(BOOL) shouldBeginContextGestureAtPoint:(CGPoint)point {
+    if (!CGRectContainsPoint(self.bubbleBackgroundView.frame, point)) {
+        return NO;
+    }
+    return YES;
 }
 
 -(BOOL) avatarTapAtPoint:(CGPoint)point {

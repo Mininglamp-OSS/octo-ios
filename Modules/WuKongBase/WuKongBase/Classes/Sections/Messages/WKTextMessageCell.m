@@ -48,11 +48,16 @@
 #define kBotActionBtnSpacing 10.0f
 
 
-@interface WKTextMessageCell ()<CNContactViewControllerDelegate,CNContactPickerDelegate>
+@interface WKTextMessageCell ()<CNContactViewControllerDelegate,CNContactPickerDelegate,WKNavigationDelegate,UIScrollViewDelegate>
 
 @property(nonatomic,strong) UILabel *textLbl;
-@property(nonatomic,strong) WKWebView *tableWebView;
 @property(nonatomic,strong) id selectLinkData;
+
+// ---------- 分段渲染（文本段=UILabel，表格段=WKWebView）----------
+@property(nonatomic,strong) NSMutableArray<UIView*> *segmentViews;       // 按顺序的 UILabel / WKWebView
+@property(nonatomic,strong) NSMutableArray<WKWebView*> *tableWebViews;   // 表格 WebView 引用
+@property(nonatomic,strong) NSMutableArray<UIScrollView*> *tableOverlays; // 滑动遮罩（在 contentView 上）
+@property(nonatomic,assign) BOOL segmentsBuilt; // 分段视图是否已创建
 
 
 // ---------- 回复 ----------
@@ -104,15 +109,21 @@
         }
         size = CGSizeMake(MAX(MAX(messageTextSize.width, replyNameSize.width+replyNameLeftSpace+replyAvatarSize+splitWidth), replyContentSize.width) , messageTextSize.height + replyNameSize.height+replyContentSize.height+textTopSpace + nameTopSpace);
     }
-    
-    
-    // 表格高度
+
+
+    // 含表格时：基于已缓存的 messageTextSize + tableH（保证稳定一致）+ 段间距补偿
+    NSString *rawContent = [[self class] getRawContent:model];
     CGFloat tableH = [[self class] tableHeightForMessage:model];
     if (tableH > 0) {
         if (messageTextSize.height > 0) {
             size.height += kTableTopSpace + tableH;
         } else {
             size.height += tableH;
+        }
+        // 多段时补偿额外间距
+        NSArray *segments = [WKMarkdownRenderer splitContentSegments:rawContent];
+        if (segments.count > 2) {
+            size.height += ((NSInteger)segments.count - 2) * kTableTopSpace;
         }
         size.width = MAX(size.width, [WKApp shared].config.messageContentMaxWidth);
     }
@@ -157,7 +168,11 @@
     self.textLbl.numberOfLines = 0;
     self.textLbl.lineBreakMode = NSLineBreakByWordWrapping;
     [self.messageContentView addSubview:self.textLbl];
-    [self.messageContentView addSubview:self.tableWebView];
+
+    // 分段渲染数组
+    self.segmentViews = [NSMutableArray array];
+    self.tableWebViews = [NSMutableArray array];
+    self.tableOverlays = [NSMutableArray array];
 
     // 回复
     [self.messageContentView addSubview:self.replyBox];
@@ -194,6 +209,40 @@
     [self.approveBtn addTarget:self action:@selector(approveBtnTap) forControlEvents:UIControlEventTouchUpInside];
     [self.botActionView addSubview:self.approveBtn];
 
+
+}
+
+-(void) clearSegmentViews {
+    for (UIView *v in self.segmentViews) {
+        // 不移除 textLbl（它是 initUI 创建的持久视图，移除后复用会空白）
+        if (v != self.textLbl) { [v removeFromSuperview]; }
+    }
+    [self.segmentViews removeAllObjects];
+    for (UIScrollView *o in self.tableOverlays) { [o removeFromSuperview]; }
+    [self.tableOverlays removeAllObjects];
+    [self.tableWebViews removeAllObjects];
+}
+
+-(WKWebView*) createSegmentWebView {
+    WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
+    WKWebView *wv = [[WKWebView alloc] initWithFrame:CGRectZero configuration:config];
+    wv.scrollView.scrollEnabled = NO;
+    wv.backgroundColor = [UIColor clearColor];
+    wv.opaque = NO;
+    wv.scrollView.backgroundColor = [UIColor clearColor];
+    wv.navigationDelegate = self;
+    return wv;
+}
+
+-(UIScrollView*) createSegmentOverlay {
+    UIScrollView *sv = [[UIScrollView alloc] init];
+    sv.backgroundColor = [UIColor clearColor];
+    sv.showsHorizontalScrollIndicator = YES;
+    sv.showsVerticalScrollIndicator = NO;
+    sv.bounces = NO;
+    sv.directionalLockEnabled = YES;
+    sv.delegate = self;
+    return sv;
 }
 
 -(void) removeAllGestureRecognizers {
@@ -708,23 +757,135 @@
     }
     attrStr.metionUnderline = true;
 
-    self.textLbl.attributedText = attrStr;
-    self.textLbl.tokens = attrStr.tokens;
-    self.textLbl.lim_size =[[self class] textSize:attrStr messageModel:model];
-    //[self.textLbl lim_setText:text mentionInfo:textContent.mentionedInfo];
-
-    // 表格渲染
+    // 分段渲染：文本段用 UILabel，表格段用 WKWebView，按原始顺序排列
     NSString *rawContent = [[self class] getRawContent:model];
-    if ([WKMarkdownRenderer containsTable:rawContent]) {
-        self.tableWebView.hidden = NO;
-        UIColor *textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
-        NSString *colorHex = [textColor toHexRGB];
-        NSString *tableHTML = [WKMarkdownRenderer extractTableHTML:rawContent fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
-        if (tableHTML) {
-            [self.tableWebView loadHTMLString:tableHTML baseURL:nil];
+    BOOL hasTable = [WKMarkdownRenderer containsTable:rawContent];
+
+    // 有表格且分段已创建时，不要用全文覆盖 textLbl（否则会把第一段文本变成全文，高度错乱）
+    if (!hasTable || !self.segmentsBuilt) {
+        self.textLbl.attributedText = attrStr;
+        self.textLbl.tokens = attrStr.tokens;
+        self.textLbl.lim_size =[[self class] textSize:attrStr messageModel:model];
+    }
+
+    if (hasTable) {
+        // 表格 cell 用唯一 reuseIdentifier，不会被复用给其他消息，只需创建一次
+        if (!self.segmentsBuilt) {
+            [self clearSegmentViews];
+            NSArray *segments = [WKMarkdownRenderer splitContentSegments:rawContent];
+            UIColor *textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
+            BOOL firstTextUsed = NO;
+            for (NSDictionary *seg in segments) {
+                NSString *type = seg[@"type"];
+                NSString *content = seg[@"content"];
+                if ([type isEqualToString:@"text"]) {
+                    // 统一用 WKMarkdownRenderer 渲染文本段（和 getContentAttrStr: 同一套逻辑，确保高度一致）
+                    NSString *colorHex = [textColor toHexRGB];
+                    UILabel *lbl;
+                    if (!firstTextUsed) {
+                        // 第一个文本段复用 textLbl（支持点击链接等交互）
+                        firstTextUsed = YES;
+                        lbl = self.textLbl;
+                        lbl.hidden = NO;
+                    } else {
+                        lbl = [[UILabel alloc] init];
+                        lbl.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+                        lbl.textColor = textColor;
+                        lbl.numberOfLines = 0;
+                        lbl.lineBreakMode = NSLineBreakByWordWrapping;
+                        lbl.backgroundColor = [UIColor clearColor];
+                        [self.messageContentView addSubview:lbl];
+                    }
+                    // markdown 渲染 + 链接提取
+                    if ([WKMarkdownRenderer containsMarkdown:content]) {
+                        NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+                        if (mdAttr) {
+                            NSMutableAttributedString *mutable = [[NSMutableAttributedString alloc] initWithAttributedString:mdAttr];
+                            // 提取 markdown 链接 token 并移除 NSLinkAttributeName（UILabel 不支持）
+                            NSMutableArray<id<WKMatchToken>> *tokens = [NSMutableArray array];
+                            [mutable enumerateAttribute:NSLinkAttributeName inRange:NSMakeRange(0, mutable.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
+                                if (value) {
+                                    WKLinkToken *token = [WKLinkToken new];
+                                    token.range = range;
+                                    token.linkText = [mutable.string substringWithRange:range];
+                                    if ([value isKindOfClass:[NSURL class]]) {
+                                        token.linkContent = [(NSURL*)value absoluteString];
+                                    } else if ([value isKindOfClass:[NSString class]]) {
+                                        token.linkContent = (NSString*)value;
+                                    }
+                                    token.text = token.linkText;
+                                    [tokens addObject:token];
+                                }
+                            }];
+                            [mutable enumerateAttribute:NSLinkAttributeName inRange:NSMakeRange(0, mutable.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
+                                if (value) {
+                                    [mutable removeAttribute:NSLinkAttributeName range:range];
+                                    [mutable addAttribute:NSForegroundColorAttributeName value:[UIColor blueColor] range:range];
+                                    [mutable addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:range];
+                                }
+                            }];
+                            // 自动检测纯 URL
+                            NSArray *autoLinks = [[WKRichTextParseService shared] parseLink:mutable.string];
+                            for (id<WKMatchToken> autoToken in autoLinks) {
+                                if (autoToken.type != WKatchTokenTypeLink) continue;
+                                BOOL overlaps = NO;
+                                for (id<WKMatchToken> existing in tokens) {
+                                    NSRange ar = autoToken.range, er = existing.range;
+                                    if (ar.location < er.location + er.length && er.location < ar.location + ar.length) { overlaps = YES; break; }
+                                }
+                                if (!overlaps) {
+                                    [tokens addObject:autoToken];
+                                    [mutable addAttribute:NSForegroundColorAttributeName value:[UIColor blueColor] range:autoToken.range];
+                                    [mutable addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:autoToken.range];
+                                }
+                            }
+                            mutable.tokens = tokens;
+                            lbl.attributedText = mutable;
+                            if ([lbl respondsToSelector:@selector(setTokens:)]) {
+                                [(id)lbl setTokens:tokens];
+                            }
+                        } else {
+                            lbl.text = content;
+                        }
+                    } else {
+                        // 非 markdown：纯文本 + URL 检测
+                        NSMutableAttributedString *plainAttr = [[NSMutableAttributedString alloc] init];
+                        plainAttr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+                        NSArray *tokens = [[WKRichTextParseService shared] parseLink:content];
+                        [plainAttr lim_render:content tokens:tokens];
+                        plainAttr.textColor = textColor;
+                        plainAttr.linkColor = [UIColor blueColor];
+                        lbl.attributedText = plainAttr;
+                        if ([lbl respondsToSelector:@selector(setTokens:)]) {
+                            [(id)lbl setTokens:plainAttr.tokens];
+                        }
+                    }
+                    [self.segmentViews addObject:lbl];
+                } else {
+                    WKWebView *wv = [self createSegmentWebView];
+                    NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
+                    wv.tag = (NSInteger)(rowCount * kTableRowHeight + kTableExtraPadding);
+                    NSString *colorHex = [textColor toHexRGB];
+                    NSString *tableHTML = [WKMarkdownRenderer extractTableHTML:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+                    if (tableHTML) { [wv loadHTMLString:tableHTML baseURL:nil]; }
+                    [self.messageContentView addSubview:wv];
+                    [self.segmentViews addObject:wv];
+                    [self.tableWebViews addObject:wv];
+                    UIScrollView *overlay = [self createSegmentOverlay];
+                    [self.contentView addSubview:overlay];
+                    [self.tableOverlays addObject:overlay];
+                }
+            }
+            // 如果第一个段不是文本段，隐藏 textLbl
+            if (!firstTextUsed) {
+                self.textLbl.hidden = YES;
+            }
+            self.segmentsBuilt = YES;
         }
     } else {
-        self.tableWebView.hidden = YES;
+        self.textLbl.hidden = NO;
+        [self clearSegmentViews];
+        self.segmentsBuilt = NO;
     }
 
     self.replyBox.hidden = YES;
@@ -778,20 +939,52 @@
         [self replyBoxTap];
         return;
     }
-    CGPoint point = [self.textLbl convertPoint:gesture.tapPoint fromView:self.contentView];
-   id<WKMatchToken> token = [self.textLbl matchDidTapAttributedTextInLabelWithPoint:point];
-    if(token) {
-        if(token.type == WKatchTokenTypeMetion) {
-            [self didMetionClick:token];
-        }else if(token.type == WKatchTokenTypeLink) {
-            [self didLinkClick:token.text];
-        }else if(token.type == WKatchTokenTypeLink2) {
-            WKLinkToken *linToken = (WKLinkToken*)token;
-            NSString *linkTarget = linToken.linkContent ?: linToken.linkText;
-            [self didLinkClick:linkTarget];
+    // 检查所有文本段 label 的 token（包括 textLbl 和分段创建的 label）
+    NSArray *labelsToCheck = (self.segmentViews.count > 0) ? self.segmentViews : @[self.textLbl];
+    for (UIView *v in labelsToCheck) {
+        if (![v isKindOfClass:[UILabel class]]) continue;
+        UILabel *lbl = (UILabel *)v;
+        CGPoint point = [lbl convertPoint:gesture.tapPoint fromView:self.contentView];
+        if (![lbl pointInside:point withEvent:nil]) continue;
+        if (![lbl respondsToSelector:@selector(matchDidTapAttributedTextInLabelWithPoint:)]) continue;
+        id<WKMatchToken> token = [(id)lbl matchDidTapAttributedTextInLabelWithPoint:point];
+        if (token) {
+            if (token.type == WKatchTokenTypeMetion) {
+                [self didMetionClick:token];
+            } else if (token.type == WKatchTokenTypeLink) {
+                [self didLinkClick:token.text];
+            } else if (token.type == WKatchTokenTypeLink2) {
+                WKLinkToken *linToken = (WKLinkToken *)token;
+                NSString *linkTarget = linToken.linkContent ?: linToken.linkText;
+                [self didLinkClick:linkTarget];
+            }
+            return;
         }
     }
     
+}
+
+-(WKTapLongTapOrDoubleTapGestureRecognizerEvent*) tapActionAtPoint:(CGPoint)point {
+    // 表格遮罩区域：让手势识别器 fail，使触摸事件传递到遮罩 UIScrollView
+    for (UIScrollView *overlay in self.tableOverlays) {
+        if (CGRectContainsPoint(overlay.frame, point)) {
+            return [WKTapLongTapOrDoubleTapGestureRecognizerEvent action:WKTapLongTapOrDoubleTapGestureRecognizerActionFail];
+        }
+    }
+    return [super tapActionAtPoint:point];
+}
+
+-(BOOL) shouldBeginContextGestureAtPoint:(CGPoint)point {
+    // 表格遮罩区域不触发长按菜单
+    if (self.tableOverlays.count > 0) {
+        CGPoint pointInContentView = [self.contentView convertPoint:point fromView:self.bubbleBackgroundView.superview];
+        for (UIScrollView *overlay in self.tableOverlays) {
+            if (CGRectContainsPoint(overlay.frame, pointInContentView)) {
+                return NO;
+            }
+        }
+    }
+    return [super shouldBeginContextGestureAtPoint:point];
 }
 
 -(BOOL) replyAtPoint:(CGPoint)point {
@@ -850,21 +1043,37 @@
     self.textLbl.lim_left = 0.0f;
     self.textLbl.lim_top = replyBoxBottom;
 
-    // 表格 WebView 布局
-    if (!self.tableWebView.hidden) {
-        CGFloat tableH = [[self class] tableHeightForMessage:self.messageModel];
-        CGFloat tableTop = replyBoxBottom;
-        if (self.textLbl.lim_size.height > 0) {
-            tableTop = self.textLbl.lim_top + self.textLbl.lim_size.height + kTableTopSpace;
+    // 分段布局：按顺序排列文本段和表格段
+    if (self.segmentViews.count > 0) {
+        CGFloat segTop = replyBoxBottom;
+        NSInteger tableIdx = 0;
+        CGFloat contentW = self.messageContentView.lim_width;
+        for (NSUInteger i = 0; i < self.segmentViews.count; i++) {
+            UIView *v = self.segmentViews[i];
+            CGFloat spacing = (i < self.segmentViews.count - 1) ? kTableTopSpace : 0;
+            if ([v isKindOfClass:[UILabel class]]) {
+                CGSize fitSize = [v sizeThatFits:CGSizeMake(contentW, CGFLOAT_MAX)];
+                v.frame = CGRectMake(0, segTop, contentW, fitSize.height);
+                segTop += fitSize.height + spacing;
+            } else {
+                CGFloat tableH = v.tag > 0 ? v.tag : (kTableRowHeight + kTableExtraPadding);
+                v.frame = CGRectMake(0, segTop, contentW, tableH);
+                if (tableIdx < (NSInteger)self.tableOverlays.count) {
+                    CGRect rectInContentView = [self.contentView convertRect:v.frame fromView:self.messageContentView];
+                    self.tableOverlays[tableIdx].frame = rectInContentView;
+                    tableIdx++;
+                }
+                segTop += tableH + spacing;
+            }
         }
-        self.tableWebView.frame = CGRectMake(0, tableTop, self.messageContentView.lim_width, tableH);
     }
 
     // BotFather 审批按钮布局
     if (!self.botActionView.hidden) {
         CGFloat top = self.textLbl.lim_top + self.textLbl.lim_size.height + kBotActionTopSpace;
-        if (!self.tableWebView.hidden) {
-            top = CGRectGetMaxY(self.tableWebView.frame) + kBotActionTopSpace;
+        if (self.segmentViews.count > 0) {
+            UIView *lastSeg = self.segmentViews.lastObject;
+            top = CGRectGetMaxY(lastSeg.frame) + kBotActionTopSpace;
         }
         self.botActionView.frame = CGRectMake(0, top, self.messageContentView.lim_width, kBotActionBtnHeight);
         CGFloat btnW = (self.botActionView.lim_width - kBotActionBtnSpacing) / 2.0;
@@ -999,20 +1208,6 @@
     return _securityTipLbl;
 }
 
-- (WKWebView *)tableWebView {
-    if (!_tableWebView) {
-        WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-        _tableWebView = [[WKWebView alloc] initWithFrame:CGRectZero configuration:config];
-        _tableWebView.scrollView.showsHorizontalScrollIndicator = YES;
-        _tableWebView.scrollView.showsVerticalScrollIndicator = NO;
-        _tableWebView.scrollView.bounces = NO;
-        _tableWebView.backgroundColor = [UIColor clearColor];
-        _tableWebView.opaque = NO;
-        _tableWebView.scrollView.backgroundColor = [UIColor clearColor];
-        _tableWebView.hidden = YES;
-    }
-    return _tableWebView;
-}
 
 +(CGSize) getReplyNameSize:(WKMessageModel *)message {
     return [self getTextSize:message.content.reply.fromName?:@"" maxWidth:[WKApp shared].config.messageContentMaxWidth - 20*2 fontSize:replyNameFontSize];
@@ -1175,6 +1370,31 @@
 - (void)contactViewController:(CNContactViewController *)viewController
        didCompleteWithContact:(nullable CNContact *)contact  API_AVAILABLE(ios(9.0)){
   [viewController dismissViewControllerAnimated:YES completion:nil];
+}
+
+#pragma mark -- WKNavigationDelegate & UIScrollViewDelegate (表格滑动)
+
+-(void) webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    // 找到对应的 overlay，设置 contentSize
+    NSUInteger idx = [self.tableWebViews indexOfObject:webView];
+    if (idx == NSNotFound || idx >= self.tableOverlays.count) return;
+    UIScrollView *overlay = self.tableOverlays[idx];
+    [webView evaluateJavaScript:@"Math.max(document.body.scrollWidth, document.documentElement.scrollWidth)" completionHandler:^(id result, NSError *error) {
+        if (!result || error) return;
+        CGFloat contentWidth = [result floatValue];
+        CGFloat frameWidth = overlay.frame.size.width;
+        if (contentWidth > frameWidth && frameWidth > 0) {
+            overlay.contentSize = CGSizeMake(contentWidth, overlay.frame.size.height);
+        }
+    }];
+}
+
+-(void) scrollViewDidScroll:(UIScrollView *)scrollView {
+    // 遮罩层滑动时，同步偏移到对应的 WebView
+    NSUInteger idx = [self.tableOverlays indexOfObject:scrollView];
+    if (idx != NSNotFound && idx < self.tableWebViews.count) {
+        self.tableWebViews[idx].scrollView.contentOffset = scrollView.contentOffset;
+    }
 }
 
 #pragma mark -- BotFather 审批按钮
