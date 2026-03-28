@@ -127,14 +127,8 @@ static WKConversationListVM *_instance;
         return YES; // 白名单未初始化（首次sync前），暂不过滤
     }
 
-    // DM 频道：检查 lastMessage 的 space_id
-    if(conversation.lastMessage) {
-        NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
-        if(msgSpaceId && ![msgSpaceId isKindOfClass:[NSNull class]] && msgSpaceId.length > 0) {
-            return [msgSpaceId isEqualToString:currentSpaceId];
-        }
-    }
-    // DM 无 space_id：保留显示（兼容旧消息）
+    // Person 频道直接放行（不按 lastMessage.space_id 过滤，避免跨 Space 私聊会话消失）
+    // 消息级隔离在聊天页面内独立处理（shouldShowMessageInCurrentSpace）
     return YES;
 }
 
