@@ -80,9 +80,9 @@
             WKLogError(@"群[%@]同步成员失败！->%@",groupNo,error);
             return;
         }
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            [[WKSDK shared].channelManager addOrUpdateMembers:members];
-        });
+        // 同步写入 DB，确保 finish 触发通知时 DB 已有成员数据
+        // （原 dispatch_async 会导致通知先于 DB 写入，新建群聊时 memberCount 为 0）
+        [[WKSDK shared].channelManager addOrUpdateMembers:members];
         memberCount+= members.count;
                    
     } finish:^{
