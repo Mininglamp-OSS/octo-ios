@@ -488,6 +488,9 @@
 
 + (CGFloat)contentHeightForModel:(WKMergeForwardDetailTextModel *)model maxWidth:(CGFloat)maxWidth{
     NSString *conversationDigest = [model.message.content conversationDigest];
+    if(!conversationDigest || conversationDigest.length == 0) {
+        conversationDigest = @"[未知消息]";
+    }
     CGSize size = [self getTextSize:conversationDigest maxWidth:maxWidth fontSize:[WKApp shared].config.messageTextFontSize];
     return size.height;
 }
