@@ -267,6 +267,8 @@
     [[WKTypingManager shared] addDelegate:self];
     // 在线状态
     [[WKOnlineStatusManager shared] addDelegate:self];
+    // 监听当前空间新建群聊，立即加入白名单
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onGroupCreatedInCurrentSpace:) name:@"WKGroupCreatedInCurrentSpace" object:nil];
 }
 
 -(void) removeDelegates {
@@ -284,6 +286,8 @@
     [[WKTypingManager shared] removeDelegate:self];
     // 在线状态
     [[WKOnlineStatusManager shared] removeDelegate:self];
+    // 移除群聊创建通知监听
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKGroupCreatedInCurrentSpace" object:nil];
 }
 
 -(UIView*) rightAddItem {
@@ -767,6 +771,7 @@
         return conversations; // 无空间上下文，不过滤
     }
     NSMutableArray<WKConversation*> *filtered = [NSMutableArray array];
+    NSMutableArray<NSString*> *unknownGroupChannelIds = [NSMutableArray array]; // 不在白名单中的群聊，待后台验证
     NSString *botfatherUID = [WKApp shared].config.botfatherUID;
     for (WKConversation *conversation in conversations) {
         NSString *channelId = conversation.channel.channelId;
@@ -818,15 +823,94 @@
             // 已在列表中的会话：允许更新（列表通过 sync 按空间加载，已在列表就是当前空间的）
             [filtered addObject:conversation];
         } else {
-            // 群聊不在列表中：不自动添加（群聊归属通过 conversation/sync 确定）
+            // 群聊不在列表中：检查白名单决定是否允许添加
             if(conversation.channel.channelType == WK_GROUP) {
+                if([self.conversationListVM isGroupInWhitelist:channelId]) {
+                    // 群聊在白名单中（通过sync或创建时添加），允许通过
+                    [filtered addObject:conversation];
+                } else {
+                    // 群聊不在白名单中，可能是被人拉入的新群聊
+                    // 收集起来，循环结束后统一后台验证
+                    [unknownGroupChannelIds addObject:channelId];
+                }
                 continue;
             }
-            // Person 频道直接放行（不再按 space_id 过滤，避免私聊会话消失）
+            // Person 频道（新会话）：检查消息的 space_id 是否属于当前空间
+            // 已在列表中的 Person 会话不受此影响（由 existsInList 分支处理）
+            if(conversation.channel.channelType == WK_PERSON) {
+                if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
+                    continue; // 消息来自其他空间，不添加到当前空间列表
+                }
+            }
             [filtered addObject:conversation];
         }
     }
+    // 对不在白名单中的群聊，后台调 sync API 验证是否属于当前空间
+    // 验证通过后单独插入到 tableview（不刷新整个列表）
+    if(unknownGroupChannelIds.count > 0) {
+        [self verifyAndAddGroupsToList:unknownGroupChannelIds];
+    }
     return filtered;
+}
+
+/// 后台调用 conversation/sync API 验证群聊是否属于当前空间
+/// 验证通过的群聊加入白名单并单独插入到 tableview（不刷新整个列表）
+-(void) verifyAndAddGroupsToList:(NSArray<NSString*>*)groupChannelIds {
+    static NSTimeInterval lastVerifyTime = 0;
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if(now - lastVerifyTime < 2.0) {
+        return; // 2秒内不重复触发
+    }
+    lastVerifyTime = now;
+
+    __weak typeof(self) weakSelf = self;
+    WKSyncConversationProvider provider = [WKSDK shared].conversationManager.syncConversationProvider;
+    if(!provider) return;
+
+    NSSet *pendingIds = [NSSet setWithArray:groupChannelIds];
+    NSLog(@"🔍 后台验证 %lu 个未知群聊是否属于当前空间", (unsigned long)pendingIds.count);
+
+    // 用 version=0 调用 sync API 获取当前空间的所有会话（仅用于验证，不走 handleSyncConversation）
+    provider(0, @"", ^(WKSyncConversationWrapModel * _Nullable model, NSError * _Nullable error) {
+        if(error || !model) {
+            NSLog(@"❌ 群聊空间验证失败: %@", error);
+            return;
+        }
+        // 从 sync 响应中收集当前空间的所有群聊 channelId
+        NSMutableSet *spaceGroupIds = [NSMutableSet set];
+        for(WKSyncConversationModel *conv in model.conversations) {
+            if(conv.channel.channelType == WK_GROUP) {
+                [spaceGroupIds addObject:conv.channel.channelId];
+            }
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            for(NSString *gid in pendingIds) {
+                if([spaceGroupIds containsObject:gid]) {
+                    // 验证通过：群聊属于当前空间
+                    [weakSelf.conversationListVM addGroupToWhitelist:gid];
+                    // 避免重复添加
+                    WKChannel *channel = [[WKChannel alloc] initWith:gid channelType:WK_GROUP];
+                    if([weakSelf.conversationListVM indexAtChannel:channel] == -1) {
+                        WKConversation *conv = [[WKSDK shared].conversationManager getConversation:channel];
+                        if(conv) {
+                            NSLog(@"✅ 群聊 %@ 属于当前空间，插入会话列表", gid);
+                            [weakSelf uiAddConversation:conv];
+                        }
+                    }
+                }
+            }
+            [weakSelf refreshBadge];
+        });
+    });
+}
+
+/// 当前空间新建群聊的通知回调：将新群聊添加到白名单
+-(void) onGroupCreatedInCurrentSpace:(NSNotification*)notification {
+    NSString *groupNo = notification.object;
+    if(groupNo) {
+        [self.conversationListVM addGroupToWhitelist:groupNo];
+    }
 }
 
 // 单个会话添加或更新(大量会话不要使用此方法，容易卡顿)
@@ -888,9 +972,9 @@
         return YES;
     }
 
-    // 群聊/社区频道：不自动添加到其他空间，群聊通过 conversation/sync 按空间加载
+    // 群聊：检查白名单确定是否属于当前空间
     if(conversation.channel.channelType == WK_GROUP) {
-        return NO;
+        return [self.conversationListVM isGroupInWhitelist:conversation.channel.channelId];
     }
 
     // 个人聊天：检查最后一条消息的 space_id 是否匹配当前空间
@@ -916,11 +1000,8 @@
     // 该会话会在用户切换到对应空间时通过conversation/sync加载
     NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
     if(currentSpaceId && currentSpaceId.length > 0) {
-        // Person 频道直接放行，不做空间过滤（避免私聊会话消失）
-        if(conversation.channel.channelType != WK_PERSON) {
-            if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
-                return;
-            }
+        if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
+            return;
         }
     }
     WKConversationWrapModel *model = [[WKConversationWrapModel alloc] initWithConversation:conversation];
@@ -942,11 +1023,8 @@
         // 有活跃空间时，不自动添加不属于当前空间的新会话
         NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
         if(currentSpaceId && currentSpaceId.length > 0) {
-            // Person 频道直接放行（避免私聊会话消失）
-            if(conversation.channel.channelType != WK_PERSON) {
-                if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
-                    return;
-                }
+            if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
+                return;
             }
         }
         [self.conversationListVM insert:[[WKConversationWrapModel alloc] initWithConversation:conversation] atIndex:0];
