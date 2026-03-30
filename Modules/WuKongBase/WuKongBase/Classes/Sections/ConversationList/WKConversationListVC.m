@@ -750,6 +750,21 @@
         return;
     }
 
+    // 同步 WK_PERSON 的 space 未读缓存：通过 space 过滤的消息属于当前空间，需递增 space_unread
+    for (WKConversation *conversation in filtered) {
+        if (conversation.channel.channelType == WK_PERSON) {
+            WKConversationWrapModel *existingModel = [self.conversationListVM modelAtChannel:conversation.channel];
+            if (existingModel) {
+                NSInteger oldSDKUnread = [existingModel getConversation].unreadCount;
+                NSInteger newSDKUnread = conversation.unreadCount;
+                NSInteger delta = newSDKUnread - oldSDKUnread;
+                if (delta > 0) {
+                    [[WKSpaceConversationCache shared] incrementSpaceUnread:delta forChannel:conversation.channel];
+                }
+            }
+        }
+    }
+
     if(filtered.count>1) {
         for (WKConversation *conversation in filtered) {
             [self onlyAddOrUpdateConversation:conversation];
@@ -820,7 +835,26 @@
         // 检查该会话是否已在当前列表中
         BOOL existsInList = [self.conversationListVM indexAtChannel:conversation.channel] != -1;
         if(existsInList) {
-            // 已在列表中的会话：允许更新（列表通过 sync 按空间加载，已在列表就是当前空间的）
+            // 已在列表中的 Person 会话：仍需检查消息 space_id，避免跨空间消息产生红点
+            if(conversation.channel.channelType == WK_PERSON && conversation.lastMessage) {
+                NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
+                if(msgSpaceId && [msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0
+                   && ![msgSpaceId isEqualToString:currentSpaceId]) {
+                    // 消息来自其他空间：刷新预览但不递增未读数
+                    WKConversationWrapModel *existingModel = [self.conversationListVM modelAtChannel:conversation.channel];
+                    if(existingModel) {
+                        [existingModel reloadLastMessage];
+                        NSInteger idx = [self.conversationListVM indexAtChannel:conversation.channel];
+                        if(idx != -1) {
+                            WKConversationListCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:idx inSection:0]];
+                            if(cell) {
+                                [cell refreshWithModel:existingModel];
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
             [filtered addObject:conversation];
         } else {
             // 群聊不在列表中：检查白名单决定是否允许添加
@@ -1053,6 +1087,10 @@
 
     WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
     model.unreadCount = unreadCount;
+    // 同步更新 space 未读缓存（清零或设置具体值）
+    if (channel.channelType == WK_PERSON) {
+        [[WKSpaceConversationCache shared] setSpaceUnread:@(unreadCount) spaceLastMessage:nil forChannel:channel];
+    }
     WKConversationListCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]];
     if(cell) {
         [cell refreshWithModel:model];

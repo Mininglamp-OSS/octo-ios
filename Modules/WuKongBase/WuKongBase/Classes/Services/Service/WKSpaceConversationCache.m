@@ -60,6 +60,17 @@
     }
 }
 
+- (void)incrementSpaceUnread:(NSInteger)delta forChannel:(WKChannel *)channel {
+    if (delta <= 0) return;
+    NSString *key = [self keyForChannel:channel];
+    @synchronized (self) {
+        NSNumber *current = self.unreadMap[key];
+        if (current != nil) {
+            self.unreadMap[key] = @([current integerValue] + delta);
+        }
+    }
+}
+
 - (void)clearAll {
     @synchronized (self) {
         [self.unreadMap removeAllObjects];

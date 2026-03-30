@@ -67,10 +67,10 @@ static WKLocalNotificationManager *_instance = nil;
         return NO; // 不在当前空间的会话列表中，不通知
     }
 
-    // BotFather 存在于所有空间，需要额外检查消息的 space_id 做隔离
-    if([channelId isEqualToString:[WKApp shared].config.botfatherUID]) {
+    // Person 频道（含 BotFather）：检查消息的 space_id，避免跨空间消息触发提醒
+    if(message.channel.channelType == WK_PERSON) {
         NSString *msgSpaceId = message.content.contentDict[@"space_id"];
-        if(msgSpaceId && ![msgSpaceId isKindOfClass:[NSNull class]] && msgSpaceId.length > 0) {
+        if(msgSpaceId && [msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0) {
             return [msgSpaceId isEqualToString:currentSpaceId];
         }
     }
