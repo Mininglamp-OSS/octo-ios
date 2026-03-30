@@ -13,6 +13,7 @@
 #import <WuKongIMSDK/WKMOSContentConvertManager.h>
 #import <WuKongIMSDK/WKReminderDB.h>
 #import "WKChannelDataManagerDelegateImp.h"
+#import "WKSpaceConversationCache.h"
 
 @WKModule(WKDataSourceModule)
 
@@ -426,6 +427,16 @@
             [messages addObject:[WKMessageUtil toMessage:messageDict]];
         }
         model.recents = messages.reverseObjectEnumerator.allObjects;
+    }
+    // 提取后端 space_unread 和 space_last_message（不碰 SDK，应用层缓存）
+    NSNumber *spaceUnread = dataDict[@"space_unread"];
+    NSDictionary *spaceLastMsgDict = dataDict[@"space_last_message"];
+    if (model.channel.channelType == WK_PERSON && (spaceUnread || spaceLastMsgDict)) {
+        WKMessage *spaceLastMsg = nil;
+        if (spaceLastMsgDict && [spaceLastMsgDict isKindOfClass:[NSDictionary class]]) {
+            spaceLastMsg = [WKMessageUtil toMessage:spaceLastMsgDict];
+        }
+        [[WKSpaceConversationCache shared] setSpaceUnread:spaceUnread spaceLastMessage:spaceLastMsg forChannel:model.channel];
     }
     return model;
 }

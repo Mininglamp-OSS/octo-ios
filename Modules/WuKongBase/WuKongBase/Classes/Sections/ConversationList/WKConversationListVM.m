@@ -61,23 +61,21 @@ static WKConversationListVM *_instance;
     NSLog(@"📋 已记录当前空间合法群聊白名单: %lu 个群", (unsigned long)groupIds.count);
 }
 
--(void) addToSyncedGroupIds:(NSString*)channelId {
-    if(!channelId) return;
+-(void) addGroupToWhitelist:(NSString*)channelId {
+    if(!channelId || channelId.length == 0) return;
     if(self.syncedGroupChannelIds) {
         NSMutableSet *mutable = [self.syncedGroupChannelIds mutableCopy];
         [mutable addObject:channelId];
         self.syncedGroupChannelIds = [mutable copy];
+    } else {
+        self.syncedGroupChannelIds = [NSSet setWithObject:channelId];
     }
+    NSLog(@"📋 群聊 %@ 已添加到当前空间白名单", channelId);
 }
 
--(BOOL) isInSyncedGroupIds:(NSString*)channelId {
-    if(!self.syncedGroupChannelIds) return YES; // 白名单未初始化，不过滤
-    if(!channelId) return NO;
+-(BOOL) isGroupInWhitelist:(NSString*)channelId {
+    if(!self.syncedGroupChannelIds) return YES; // 白名单未初始化（首次sync前），暂不过滤
     return [self.syncedGroupChannelIds containsObject:channelId];
-}
-
--(void) resetSyncedGroupIds {
-    self.syncedGroupChannelIds = nil;
 }
 
 -(void) loadConversationList:(void(^)(void)) finished {
@@ -146,14 +144,8 @@ static WKConversationListVM *_instance;
         return YES; // 白名单未初始化（首次sync前），暂不过滤
     }
 
-    // DM 频道：检查 lastMessage 的 space_id
-    if(conversation.lastMessage) {
-        NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
-        if(msgSpaceId && ![msgSpaceId isKindOfClass:[NSNull class]] && msgSpaceId.length > 0) {
-            return [msgSpaceId isEqualToString:currentSpaceId];
-        }
-    }
-    // DM 无 space_id：保留显示（兼容旧消息）
+    // Person 频道直接放行（不按 lastMessage.space_id 过滤，避免跨 Space 私聊会话消失）
+    // 消息级隔离在聊天页面内独立处理（shouldShowMessageInCurrentSpace）
     return YES;
 }
 

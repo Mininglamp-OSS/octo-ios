@@ -20,14 +20,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// shouldShowConversation: 中会用此白名单过滤其他空间的群聊
 -(void) snapshotSyncedGroupIds;
 
-/// 将新群聊加入白名单（运行时被拉入新群时调用）
--(void) addToSyncedGroupIds:(NSString*)channelId;
+/// 将群聊添加到当前空间白名单（用于群聊创建后立即显示在会话列表）
+-(void) addGroupToWhitelist:(NSString*)channelId;
 
-/// 判断群聊是否在白名单中
--(BOOL) isInSyncedGroupIds:(NSString*)channelId;
-
-/// 重置白名单（resync前调用，避免旧白名单阻止新数据加载）
--(void) resetSyncedGroupIds;
+/// 检查群聊是否在当前空间白名单中
+/// 白名单未初始化（首次sync前）时返回YES（暂不过滤）
+-(BOOL) isGroupInWhitelist:(NSString*)channelId;
 /**
  加载最近会话列表
  */

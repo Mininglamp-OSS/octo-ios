@@ -26,8 +26,10 @@
         if(complete) {
             [weakSelf updateChannelInfoByGroupModel:groupModel];
             complete(groupModel.groupNo,nil);
-            
+
             [WKSDK.shared.channelManager fetchChannelInfo:[WKChannel groupWithChannelID:groupModel.groupNo]];
+            // 通知会话列表将新群聊加入当前空间白名单，确保新群聊立即出现在列表中
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"WKGroupCreatedInCurrentSpace" object:groupModel.groupNo];
         }
     }).catch(^(NSError *error){
         if(complete) {
