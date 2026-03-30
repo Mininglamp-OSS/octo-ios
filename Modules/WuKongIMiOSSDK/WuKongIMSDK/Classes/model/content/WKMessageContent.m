@@ -160,14 +160,14 @@ NSString * const WKEntityTypeRobotCommand = @"bot_command";
         
         // 解码用户信息
         [self decodeSenderUserInfo:dictionary];
-        // 解码@数据
+        // 先解码顶层 entities（链接、加粗等富文本标记）
+        [self decodeEntities:dictionary];
+        // 再解码 @mention 数据（含 mention.entities 合并，已有去重逻辑，不会被顶层 entities 覆盖）
         NSMutableDictionary *newDict = [NSMutableDictionary dictionaryWithDictionary:dictionary];
         [self decodeMentionInfo:newDict];
         dictionary = newDict;
         // 解码回复
         [self decodeReply:dictionary];
-        // 解码entities
-        [self decodeEntities:dictionary];
         
         // 解码阅后即焚
         if(dictionary[@"flame"]) {
@@ -228,6 +228,34 @@ NSString * const WKEntityTypeRobotCommand = @"bot_command";
              uids =mentionDict[@"uids"];
         }
          self.mentionedInfo = [[WKMentionedInfo alloc] initWithMentionedType:type uids:uids];
+
+        // 从 mention.entities 提取精确定位的 mention entity 合并到顶层 self.entities
+        NSArray *mentionEntities = mentionDict[@"entities"];
+        if(mentionEntities && [mentionEntities isKindOfClass:[NSArray class]]) {
+            NSMutableArray *existingEntities = self.entities ? [self.entities mutableCopy] : [NSMutableArray array];
+            for(NSDictionary *entityDict in mentionEntities) {
+                if(![entityDict isKindOfClass:[NSDictionary class]]) continue;
+                NSString *uid = entityDict[@"uid"];
+                NSNumber *offset = entityDict[@"offset"];
+                NSNumber *length = entityDict[@"length"];
+                if(!uid || !offset || !length) continue;
+                NSRange range = NSMakeRange([offset unsignedIntegerValue], [length unsignedIntegerValue]);
+                // 去重：跳过同位置已存在的 mention entity
+                BOOL duplicate = NO;
+                for(WKMessageEntity *existing in existingEntities) {
+                    if([existing.type isEqualToString:@"mention"] &&
+                       existing.range.location == range.location &&
+                       existing.range.length == range.length) {
+                        duplicate = YES;
+                        break;
+                    }
+                }
+                if(!duplicate) {
+                    [existingEntities addObject:[WKMessageEntity type:@"mention" range:range value:uid]];
+                }
+            }
+            self.entities = existingEntities;
+        }
     }
 }
 
@@ -263,6 +291,22 @@ NSString * const WKEntityTypeRobotCommand = @"bot_command";
         mentionDic[@"all"] = self.mentionedInfo.type == WK_Mentioned_All?@(1):@(0);
         if(self.mentionedInfo.uids && self.mentionedInfo.uids.count>0) {
             mentionDic[@"uids"] = self.mentionedInfo.uids;
+        }
+        // 从顶层 self.entities 中筛选 type=mention 写入 mention.entities
+        if(self.entities && self.entities.count > 0) {
+            NSMutableArray *mentionEntitiesArr = [NSMutableArray array];
+            for(WKMessageEntity *entity in self.entities) {
+                if([entity.type isEqualToString:@"mention"] && entity.value) {
+                    [mentionEntitiesArr addObject:@{
+                        @"uid": entity.value,
+                        @"offset": @(entity.range.location),
+                        @"length": @(entity.range.length)
+                    }];
+                }
+            }
+            if(mentionEntitiesArr.count > 0) {
+                mentionDic[@"entities"] = mentionEntitiesArr;
+            }
         }
         dict[@"mention"] = mentionDic;
     }
