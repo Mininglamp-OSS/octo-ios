@@ -50,7 +50,7 @@
                     modelCls = WKMergeForwardDetailImageModel.class;
                     break;
                 case WK_VOICE:
-                    modelCls = WKMergeForwardDetailVoiceModel.class;
+                    modelCls = WKMergeForwardDetailOtherModel.class;
                     break;
                 case WK_SMALLVIDEO:
                     modelCls = WKMergeForwardDetailVideoModel.class;
