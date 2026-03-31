@@ -16,6 +16,127 @@
 #import "WKDefaultWebImageMediator.h"
 #import "WKBrowserToolbar.h"
 #import "UIImageView+WK.h"
+#import <WuKongIMSDK/WKFileContent.h>
+#import <WuKongIMSDK/WKVoiceContent.h>
+#import "WKNavigationManager.h"
+#import <AVKit/AVKit.h>
+
+// 下载进度遮罩（黑色半透明蒙版 + 转圈 + 百分比）
+@interface WKDownloadProgressOverlay : UIView
+@property(nonatomic,strong) UIActivityIndicatorView *activity;
+@property(nonatomic,strong) UILabel *progressLabel;
+- (void)showWithProgress:(CGFloat)progress;
+- (void)dismiss;
+@end
+
+@implementation WKDownloadProgressOverlay
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.backgroundColor = [UIColor colorWithRed:0 green:0 blue:0 alpha:0.5];
+        self.hidden = YES;
+
+        _activity = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
+        _activity.hidesWhenStopped = YES;
+        [self addSubview:_activity];
+
+        _progressLabel = [[UILabel alloc] init];
+        _progressLabel.font = [UIFont systemFontOfSize:14.0f];
+        _progressLabel.textColor = [UIColor whiteColor];
+        _progressLabel.textAlignment = NSTextAlignmentCenter;
+        [self addSubview:_progressLabel];
+    }
+    return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat centerY = self.bounds.size.height / 2.0f;
+    self.activity.center = CGPointMake(self.bounds.size.width / 2.0f, centerY - 10.0f);
+    self.progressLabel.frame = CGRectMake(0, CGRectGetMaxY(self.activity.frame) + 4.0f, self.bounds.size.width, 18.0f);
+}
+
+- (void)showWithProgress:(CGFloat)progress {
+    self.hidden = NO;
+    [self.activity startAnimating];
+    if (progress <= 0) {
+        self.progressLabel.text = @"0%";
+    } else if (progress >= 1.0) {
+        self.progressLabel.text = @"100%";
+    } else {
+        self.progressLabel.text = [NSString stringWithFormat:@"%d%%", (int)(progress * 100)];
+    }
+}
+
+- (void)dismiss {
+    self.hidden = YES;
+    [self.activity stopAnimating];
+    self.progressLabel.text = @"";
+}
+
+@end
+
+// 全局下载状态跟踪（跨 cell 刷新保持进度）
+static NSString * const kMergeForwardDownloadNotification = @"WKMergeForwardDownloadProgress";
+static NSMutableDictionary<NSNumber *, NSNumber *> *_downloadingMessages;
+static NSMutableSet<NSNumber *> *_cancelledDownloads;
+
+static NSMutableDictionary<NSNumber *, NSNumber *> *downloadingMessages(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        _downloadingMessages = [NSMutableDictionary dictionary];
+    });
+    return _downloadingMessages;
+}
+
+static NSMutableSet<NSNumber *> *cancelledDownloads(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        _cancelledDownloads = [NSMutableSet set];
+    });
+    return _cancelledDownloads;
+}
+
+/// 发起下载并通过通知广播进度
+static void startDownloadForMessage(WKMessage *message, void(^onSuccess)(void)) {
+    NSNumber *msgKey = @(message.messageId);
+    if (downloadingMessages()[msgKey]) return; // 已在下载中
+    [cancelledDownloads() removeObject:msgKey]; // 清除取消标记
+    downloadingMessages()[msgKey] = @(0);
+    [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"progress": @(0), @"state": @"downloading"}];
+
+    [[WKSDK shared].mediaManager download:message callback:^(WKMediaDownloadState state, CGFloat progress, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            // 已取消：忽略回调，仅在成功/失败时清理取消标记
+            if ([cancelledDownloads() containsObject:msgKey]) {
+                if (state == WKMediaDownloadStateSuccess || state == WKMediaDownloadStateFail) {
+                    [cancelledDownloads() removeObject:msgKey];
+                }
+                return;
+            }
+            if (state == WKMediaDownloadStateSuccess) {
+                [downloadingMessages() removeObjectForKey:msgKey];
+                [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"state": @"success"}];
+                if (onSuccess) onSuccess();
+            } else if (state == WKMediaDownloadStateFail) {
+                [downloadingMessages() removeObjectForKey:msgKey];
+                [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"state": @"fail"}];
+            } else {
+                downloadingMessages()[msgKey] = @(progress);
+                [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"progress": @(progress), @"state": @"downloading"}];
+            }
+        });
+    }];
+}
+
+/// 取消下载（UI 层面停止显示进度，后台继续下载）
+static void cancelDownloadForMessage(WKMessage *message) {
+    NSNumber *msgKey = @(message.messageId);
+    [downloadingMessages() removeObjectForKey:msgKey];
+    [cancelledDownloads() addObject:msgKey];
+    [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"state": @"cancelled"}];
+}
 
 @interface WKMergeForwardDetailHeaderView ()
 
@@ -466,6 +587,536 @@
 
 
 @end
+
+//---------- 文件cell ----------
+
+@implementation WKMergeForwardDetailFileModel
+
+- (Class)cell {
+    return WKMergeForwardDetailFileCell.class;
+}
+
+@end
+
+@interface WKMergeForwardDetailFileCell () <UIDocumentInteractionControllerDelegate>
+
+@property(nonatomic,strong) UIImageView *fileIconView;
+@property(nonatomic,strong) UILabel *fileNameLbl;
+@property(nonatomic,strong) UILabel *fileSizeLbl;
+@property(nonatomic,strong) UIDocumentInteractionController *documentController;
+@property(nonatomic,strong) WKDownloadProgressOverlay *downloadProgressView;
+
+@end
+
+@implementation WKMergeForwardDetailFileCell
+
++ (CGFloat)contentHeightForModel:(WKMergeForwardDetailFileModel *)model maxWidth:(CGFloat)maxWidth {
+    return 72.0f;
+}
+
+- (void)setupUI {
+    [super setupUI];
+
+    self.fileIconView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 40, 40)];
+    self.fileIconView.contentMode = UIViewContentModeScaleAspectFit;
+    [self.messageContentView addSubview:self.fileIconView];
+
+    self.fileNameLbl = [[UILabel alloc] init];
+    self.fileNameLbl.font = [[WKApp shared].config appFontOfSize:15.0f];
+    self.fileNameLbl.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    self.fileNameLbl.numberOfLines = 1;
+    [self.messageContentView addSubview:self.fileNameLbl];
+
+    self.fileSizeLbl = [[UILabel alloc] init];
+    self.fileSizeLbl.font = [UIFont systemFontOfSize:12.0f];
+    self.fileSizeLbl.textColor = [UIColor grayColor];
+    [self.messageContentView addSubview:self.fileSizeLbl];
+
+    self.messageContentView.layer.masksToBounds = YES;
+    self.messageContentView.layer.cornerRadius = 4.0f;
+    [self.messageContentView setBackgroundColor:[WKApp shared].config.cellBackgroundColor];
+
+    self.downloadProgressView = [[WKDownloadProgressOverlay alloc] init];
+    self.downloadProgressView.layer.masksToBounds = YES;
+    self.downloadProgressView.layer.cornerRadius = 4.0f;
+    [self.messageContentView addSubview:self.downloadProgressView];
+
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onFileTap)];
+    self.messageContentView.userInteractionEnabled = YES;
+    [self.messageContentView addGestureRecognizer:tap];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onDownloadProgress:) name:kMergeForwardDownloadNotification object:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:kMergeForwardDownloadNotification object:nil];
+}
+
+- (void)onDownloadProgress:(NSNotification *)notification {
+    NSNumber *msgKey = notification.object;
+    if (!self.model || ![msgKey isEqualToNumber:@(self.model.message.messageId)]) return;
+    NSString *state = notification.userInfo[@"state"];
+    if ([state isEqualToString:@"downloading"]) {
+        CGFloat progress = [notification.userInfo[@"progress"] floatValue];
+        [self.downloadProgressView showWithProgress:progress];
+    } else if ([state isEqualToString:@"success"]) {
+        [self.downloadProgressView dismiss];
+        WKFileContent *fileContent = (WKFileContent *)self.model.message.content;
+        NSString *downloadedPath = fileContent.localPath;
+        if (downloadedPath && [[NSFileManager defaultManager] fileExistsAtPath:downloadedPath]) {
+            [self previewFileAtPath:downloadedPath];
+        }
+    } else { // fail / cancelled
+        [self.downloadProgressView dismiss];
+    }
+}
+
+- (void)refresh:(WKMergeForwardDetailFileModel *)model {
+    [super refresh:model];
+    WKFileContent *fileContent = (WKFileContent *)model.message.content;
+    self.fileNameLbl.text = fileContent.name ?: @"";
+    self.fileSizeLbl.text = [self formatFileSize:fileContent.fileSize];
+    self.fileNameLbl.textColor = [WKApp shared].config.defaultTextColor;
+
+    // 恢复下载进度状态
+    NSNumber *msgKey = @(model.message.messageId);
+    NSNumber *cachedProgress = downloadingMessages()[msgKey];
+    if (cachedProgress) {
+        [self.downloadProgressView showWithProgress:[cachedProgress floatValue]];
+    } else {
+        [self.downloadProgressView dismiss];
+    }
+
+    NSString *ext = fileContent.fileExtension;
+    if (!ext || ext.length == 0 || [ext isEqualToString:@"."]) {
+        ext = [fileContent.name pathExtension];
+    }
+    self.fileIconView.image = [self iconForFileExtension:ext];
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+
+    CGFloat padding = 12.0f;
+    self.fileIconView.lim_left = padding;
+    self.fileIconView.lim_top = (self.messageContentView.lim_height - 40) / 2.0f;
+
+    CGFloat textLeft = self.fileIconView.lim_right + 10.0f;
+    CGFloat textMaxWidth = self.messageContentView.lim_width - textLeft - padding;
+
+    self.fileNameLbl.lim_left = textLeft;
+    self.fileNameLbl.lim_top = padding;
+    self.fileNameLbl.lim_width = textMaxWidth;
+    self.fileNameLbl.lim_height = 20.0f;
+
+    self.fileSizeLbl.lim_left = textLeft;
+    self.fileSizeLbl.lim_top = self.fileNameLbl.lim_bottom + 4.0f;
+    self.fileSizeLbl.lim_width = textMaxWidth;
+    self.fileSizeLbl.lim_height = 16.0f;
+
+    self.downloadProgressView.frame = self.messageContentView.bounds;
+}
+
+- (void)onFileTap {
+    WKFileContent *fileContent = (WKFileContent *)self.model.message.content;
+    NSString *localPath = fileContent.localPath;
+    if (localPath && [[NSFileManager defaultManager] fileExistsAtPath:localPath]) {
+        [self previewFileAtPath:localPath];
+        return;
+    }
+    if (fileContent.remoteUrl && fileContent.remoteUrl.length > 0) {
+        // 下载中再点击 → 取消
+        NSNumber *msgKey = @(self.model.message.messageId);
+        if (downloadingMessages()[msgKey]) {
+            cancelDownloadForMessage(self.model.message);
+            return;
+        }
+        startDownloadForMessage(self.model.message, nil);
+    }
+}
+
+- (void)previewFileAtPath:(NSString *)path {
+    WKFileContent *fileContent = (WKFileContent *)self.model.message.content;
+    NSString *realName = fileContent.name;
+    NSString *previewPath = path;
+    if (realName && realName.length > 0) {
+        NSString *tmpDir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"WKFilePreview"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:tmpDir withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *destPath = [tmpDir stringByAppendingPathComponent:realName];
+        [[NSFileManager defaultManager] removeItemAtPath:destPath error:nil];
+        if ([[NSFileManager defaultManager] linkItemAtPath:path toPath:destPath error:nil]) {
+            previewPath = destPath;
+        } else if ([[NSFileManager defaultManager] copyItemAtPath:path toPath:destPath error:nil]) {
+            previewPath = destPath;
+        }
+    }
+    NSURL *fileURL = [NSURL fileURLWithPath:previewPath];
+    self.documentController = [UIDocumentInteractionController interactionControllerWithURL:fileURL];
+    self.documentController.delegate = self;
+    UIViewController *topVC = [WKNavigationManager shared].topViewController;
+    if (![self.documentController presentPreviewAnimated:YES]) {
+        [self.documentController presentOptionsMenuFromRect:topVC.view.bounds inView:topVC.view animated:YES];
+    }
+}
+
+- (UIViewController *)documentInteractionControllerViewControllerForPreview:(UIDocumentInteractionController *)controller {
+    return [WKNavigationManager shared].topViewController;
+}
+
+- (UIImage *)iconForFileExtension:(NSString *)ext {
+    NSString *lowExt = [ext lowercaseString];
+    if ([lowExt hasPrefix:@"."]) {
+        lowExt = [lowExt substringFromIndex:1];
+    }
+    NSString *imageName = nil;
+    if ([@[@"doc", @"docx", @"docm", @"dot", @"dotx", @"dotm", @"rtf", @"odt", @"wps"] containsObject:lowExt]) {
+        imageName = @"FileType/FileWord";
+    } else if ([@[@"xls", @"xlsx", @"xlsm", @"xlsb", @"xlt", @"xltx", @"xltm", @"csv", @"ods", @"et", @"ett"] containsObject:lowExt]) {
+        imageName = @"FileType/FileExcel";
+    } else if ([lowExt isEqualToString:@"pdf"]) {
+        imageName = @"FileType/FilePDF";
+    } else if ([@[@"ppt", @"pptx", @"pptm", @"pps", @"ppsx", @"ppsm", @"pot", @"potx", @"potm", @"odp", @"dps", @"dpt"] containsObject:lowExt]) {
+        imageName = @"FileType/FilePPT";
+    } else if ([@[@"mp4", @"mov", @"avi", @"mkv", @"wmv", @"flv", @"webm", @"m4v", @"mpg", @"mpeg", @"3gp", @"3gpp", @"ts", @"rmvb", @"rm"] containsObject:lowExt]) {
+        imageName = @"FileType/FileVideo";
+    } else if ([@[@"md", @"markdown", @"mdown", @"mkd", @"mdwn"] containsObject:lowExt]) {
+        imageName = @"FileType/FileMarkdown";
+    }
+    if (imageName) {
+        UIImage *img = [[WKApp shared] loadImage:imageName moduleID:@"WuKongBase"];
+        if (img) {
+            self.fileIconView.tintColor = nil;
+            return [img imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+        }
+    }
+    self.fileIconView.tintColor = [UIColor systemBlueColor];
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:30 weight:UIImageSymbolWeightRegular];
+        return [UIImage systemImageNamed:@"doc.fill" withConfiguration:config];
+    }
+    return nil;
+}
+
+- (NSString *)formatFileSize:(long long)size {
+    if (size < 1024) {
+        return [NSString stringWithFormat:@"%lld B", size];
+    } else if (size < 1024 * 1024) {
+        return [NSString stringWithFormat:@"%.1f KB", size / 1024.0];
+    } else if (size < 1024 * 1024 * 1024) {
+        return [NSString stringWithFormat:@"%.1f MB", size / (1024.0 * 1024.0)];
+    } else {
+        return [NSString stringWithFormat:@"%.1f GB", size / (1024.0 * 1024.0 * 1024.0)];
+    }
+}
+
+@end
+
+
+//---------- 语音cell ----------
+
+@implementation WKMergeForwardDetailVoiceModel
+
+- (Class)cell {
+    return WKMergeForwardDetailVoiceCell.class;
+}
+
+@end
+
+@interface WKMergeForwardDetailVoiceCell ()
+
+@property(nonatomic,strong) UIImageView *playIconView;
+@property(nonatomic,strong) UILabel *durationLbl;
+@property(nonatomic,strong) UIActivityIndicatorView *voiceLoadingView;
+@property(nonatomic,assign) BOOL isPlaying;
+@property(nonatomic,assign) BOOL isDownloading;
+
+@end
+
+@implementation WKMergeForwardDetailVoiceCell
+
++ (CGFloat)contentHeightForModel:(WKMergeForwardDetailVoiceModel *)model maxWidth:(CGFloat)maxWidth {
+    return 50.0f;
+}
+
+- (void)setupUI {
+    [super setupUI];
+
+    self.playIconView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 36, 36)];
+    self.playIconView.contentMode = UIViewContentModeScaleAspectFit;
+    self.playIconView.tintColor = [WKApp shared].config.themeColor;
+    [self.messageContentView addSubview:self.playIconView];
+
+    self.durationLbl = [[UILabel alloc] init];
+    self.durationLbl.font = [UIFont systemFontOfSize:14.0f];
+    self.durationLbl.textColor = [WKApp shared].config.defaultTextColor;
+    [self.messageContentView addSubview:self.durationLbl];
+
+    self.voiceLoadingView = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+    self.voiceLoadingView.hidesWhenStopped = YES;
+    [self.messageContentView addSubview:self.voiceLoadingView];
+
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onVoiceTap)];
+    self.messageContentView.userInteractionEnabled = YES;
+    [self.messageContentView addGestureRecognizer:tap];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onDownloadProgress:) name:kMergeForwardDownloadNotification object:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:kMergeForwardDownloadNotification object:nil];
+}
+
+- (void)onDownloadProgress:(NSNotification *)notification {
+    NSNumber *msgKey = notification.object;
+    if (!self.model || ![msgKey isEqualToNumber:@(self.model.message.messageId)]) return;
+    NSString *state = notification.userInfo[@"state"];
+    if ([state isEqualToString:@"downloading"]) {
+        self.isDownloading = YES;
+        self.playIconView.hidden = YES;
+        [self.voiceLoadingView startAnimating];
+    } else { // success / fail / cancelled
+        self.isDownloading = NO;
+        self.playIconView.hidden = NO;
+        [self.voiceLoadingView stopAnimating];
+        if ([state isEqualToString:@"success"]) {
+            WKVoiceContent *voiceContent = (WKVoiceContent *)self.model.message.content;
+            NSString *downloadedPath = voiceContent.localPath;
+            if (downloadedPath && [[NSFileManager defaultManager] fileExistsAtPath:downloadedPath]) {
+                [self playAudioAtPath:downloadedPath];
+            }
+        }
+    }
+}
+
+- (void)refresh:(WKMergeForwardDetailVoiceModel *)model {
+    [super refresh:model];
+    WKVoiceContent *voiceContent = (WKVoiceContent *)model.message.content;
+    NSInteger second = voiceContent.second;
+    self.durationLbl.text = [NSString stringWithFormat:@"%02ld:%02ld", (long)(second / 60), (long)(second % 60)];
+    [self.durationLbl sizeToFit];
+
+    // 恢复下载状态
+    NSNumber *msgKey = @(model.message.messageId);
+    if (downloadingMessages()[msgKey]) {
+        self.isDownloading = YES;
+        self.playIconView.hidden = YES;
+        [self.voiceLoadingView startAnimating];
+    } else {
+        self.isDownloading = NO;
+        self.playIconView.hidden = NO;
+        [self.voiceLoadingView stopAnimating];
+    }
+    [self updatePlayIcon];
+}
+
+- (void)updatePlayIcon {
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:28 weight:UIImageSymbolWeightRegular];
+        NSString *name = self.isPlaying ? @"stop.circle.fill" : @"play.circle.fill";
+        self.playIconView.image = [UIImage systemImageNamed:name withConfiguration:config];
+    }
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+
+    self.playIconView.lim_left = 4.0f;
+    self.playIconView.lim_centerY_parent = self.messageContentView;
+
+    self.durationLbl.lim_left = self.playIconView.lim_right + 8.0f;
+    self.durationLbl.lim_centerY_parent = self.messageContentView;
+
+    self.voiceLoadingView.center = self.playIconView.center;
+}
+
+- (void)onVoiceTap {
+    if (self.isPlaying) {
+        [[WKSDK shared].mediaManager stopAudioPlay];
+        self.isPlaying = NO;
+        [self updatePlayIcon];
+        return;
+    }
+    // 下载中再点击 → 取消
+    if (self.isDownloading) {
+        cancelDownloadForMessage(self.model.message);
+        return;
+    }
+
+    WKVoiceContent *voiceContent = (WKVoiceContent *)self.model.message.content;
+    NSString *localPath = voiceContent.localPath;
+
+    if (localPath && [[NSFileManager defaultManager] fileExistsAtPath:localPath]) {
+        [self playAudioAtPath:localPath];
+        return;
+    }
+
+    if (voiceContent.remoteUrl && voiceContent.remoteUrl.length > 0) {
+        startDownloadForMessage(self.model.message, nil);
+    }
+}
+
+- (void)playAudioAtPath:(NSString *)path {
+    self.isPlaying = YES;
+    [self updatePlayIcon];
+    __weak typeof(self) weakSelf = self;
+    [[WKSDK shared].mediaManager playAudio:path playerDidFinish:^(AVAudioPlayer *player, BOOL successFlag) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            weakSelf.isPlaying = NO;
+            [weakSelf updatePlayIcon];
+        });
+    } progress:nil];
+}
+
+@end
+
+
+//---------- 视频cell ----------
+
+@implementation WKMergeForwardDetailVideoModel
+
+- (Class)cell {
+    return WKMergeForwardDetailVideoCell.class;
+}
+
+@end
+
+@interface WKMergeForwardDetailVideoCell ()
+
+@property(nonatomic,strong) UIImageView *videoImgView;
+@property(nonatomic,strong) UIImageView *playOverlayView;
+@property(nonatomic,strong) WKDownloadProgressOverlay *videoProgressView;
+
+@end
+
+@implementation WKMergeForwardDetailVideoCell
+
++ (CGFloat)contentHeightForModel:(WKMergeForwardDetailVideoModel *)model maxWidth:(CGFloat)maxWidth {
+    WKImageContent *imageContent = (WKImageContent *)model.message.content;
+    if (imageContent.width > 0 && imageContent.height > 0) {
+        return [UIImage lim_sizeWithImageOriginSize:CGSizeMake(imageContent.width, imageContent.height) maxLength:maxWidth].height;
+    }
+    return 150.0f;
+}
+
+- (void)setupUI {
+    [super setupUI];
+
+    self.videoImgView = [[UIImageView alloc] init];
+    self.videoImgView.layer.masksToBounds = YES;
+    self.videoImgView.layer.cornerRadius = 4.0f;
+    self.videoImgView.contentMode = UIViewContentModeScaleAspectFill;
+    [self.messageContentView addSubview:self.videoImgView];
+
+    self.playOverlayView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 44, 44)];
+    self.playOverlayView.contentMode = UIViewContentModeScaleAspectFit;
+    self.playOverlayView.tintColor = [UIColor whiteColor];
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:36 weight:UIImageSymbolWeightRegular];
+        self.playOverlayView.image = [UIImage systemImageNamed:@"play.circle.fill" withConfiguration:config];
+    }
+    [self.messageContentView addSubview:self.playOverlayView];
+
+    self.videoProgressView = [[WKDownloadProgressOverlay alloc] init];
+    self.videoProgressView.layer.masksToBounds = YES;
+    self.videoProgressView.layer.cornerRadius = 4.0f;
+    [self.messageContentView addSubview:self.videoProgressView];
+
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onVideoTap)];
+    self.messageContentView.userInteractionEnabled = YES;
+    [self.messageContentView addGestureRecognizer:tap];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onDownloadProgress:) name:kMergeForwardDownloadNotification object:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:kMergeForwardDownloadNotification object:nil];
+}
+
+- (void)onDownloadProgress:(NSNotification *)notification {
+    NSNumber *msgKey = notification.object;
+    if (!self.model || ![msgKey isEqualToNumber:@(self.model.message.messageId)]) return;
+    NSString *state = notification.userInfo[@"state"];
+    if ([state isEqualToString:@"downloading"]) {
+        CGFloat progress = [notification.userInfo[@"progress"] floatValue];
+        self.playOverlayView.hidden = YES;
+        [self.videoProgressView showWithProgress:progress];
+    } else { // success / fail / cancelled
+        self.playOverlayView.hidden = NO;
+        [self.videoProgressView dismiss];
+        if ([state isEqualToString:@"success"]) {
+            WKImageContent *imageContent = (WKImageContent *)self.model.message.content;
+            NSString *downloadedPath = imageContent.localPath;
+            if (downloadedPath && [[NSFileManager defaultManager] fileExistsAtPath:downloadedPath]) {
+                [self playVideoAtPath:downloadedPath];
+            }
+        }
+    }
+}
+
+- (void)refresh:(WKMergeForwardDetailVideoModel *)model {
+    [super refresh:model];
+    WKImageContent *imageContent = (WKImageContent *)model.message.content;
+    NSURL *url = [[WKApp shared] getImageFullUrl:imageContent.remoteUrl];
+    [self.videoImgView lim_setImageWithURL:url placeholderImage:[WKApp shared].config.defaultPlaceholder];
+
+    // 恢复下载进度状态
+    NSNumber *msgKey = @(model.message.messageId);
+    NSNumber *cachedProgress = downloadingMessages()[msgKey];
+    if (cachedProgress) {
+        self.playOverlayView.hidden = YES;
+        [self.videoProgressView showWithProgress:[cachedProgress floatValue]];
+    } else {
+        self.playOverlayView.hidden = NO;
+        [self.videoProgressView dismiss];
+    }
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    WKImageContent *imageContent = (WKImageContent *)self.model.message.content;
+    if (imageContent.width > 0 && imageContent.height > 0) {
+        self.videoImgView.lim_size = [UIImage lim_sizeWithImageOriginSize:CGSizeMake(imageContent.width, imageContent.height) maxLength:contentMaxWidth];
+    } else {
+        self.videoImgView.lim_size = CGSizeMake(contentMaxWidth, 150.0f);
+    }
+    self.playOverlayView.center = CGPointMake(self.videoImgView.lim_width / 2.0f, self.videoImgView.lim_height / 2.0f);
+    self.videoProgressView.frame = self.videoImgView.frame;
+}
+
+- (void)onVideoTap {
+    WKImageContent *imageContent = (WKImageContent *)self.model.message.content;
+    NSString *localPath = imageContent.localPath;
+
+    if (localPath && [[NSFileManager defaultManager] fileExistsAtPath:localPath]) {
+        [self playVideoAtPath:localPath];
+        return;
+    }
+    if (imageContent.remoteUrl && imageContent.remoteUrl.length > 0) {
+        // 下载中再点击 → 取消
+        NSNumber *msgKey = @(self.model.message.messageId);
+        if (downloadingMessages()[msgKey]) {
+            cancelDownloadForMessage(self.model.message);
+            return;
+        }
+        startDownloadForMessage(self.model.message, nil);
+    }
+}
+
+- (void)playVideoAtPath:(NSString *)path {
+    [self playVideoWithURL:[NSURL fileURLWithPath:path]];
+}
+
+- (void)playVideoWithURL:(NSURL *)url {
+    AVPlayerViewController *playerVC = [[AVPlayerViewController alloc] init];
+    playerVC.player = [AVPlayer playerWithURL:url];
+    UIViewController *topVC = [WKNavigationManager shared].topViewController;
+    [topVC presentViewController:playerVC animated:YES completion:^{
+        [playerVC.player play];
+    }];
+}
+
+@end
+
 
 //----------其他cell ----------
 

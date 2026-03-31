@@ -8,6 +8,7 @@
 #import "WKMergeForwardDetailVM.h"
 
 #import "WKMergeForwardDetailCell.h"
+#import "WKConstant.h"
 
 @implementation WKMergeForwardDetailVM
 
@@ -47,6 +48,15 @@
                     break;
                 case WK_IMAGE:
                     modelCls = WKMergeForwardDetailImageModel.class;
+                    break;
+                case WK_VOICE:
+                    modelCls = WKMergeForwardDetailVoiceModel.class;
+                    break;
+                case WK_SMALLVIDEO:
+                    modelCls = WKMergeForwardDetailVideoModel.class;
+                    break;
+                case WK_FILE:
+                    modelCls = WKMergeForwardDetailFileModel.class;
                     break;
                 default:
                     modelCls = [WKApp.shared.endpointManager mergeForwardItem:message.contentType];

@@ -24,6 +24,7 @@
 @property(nonatomic,strong) WKLoadProgressView *progressView;
 @property(nonatomic,strong) WKMessageFileUploadTask *uploadTask;
 @property(nonatomic,strong) UIDocumentInteractionController *documentController;
+@property(nonatomic,assign) BOOL isFileDownloading;
 
 @end
 
@@ -165,18 +166,39 @@
         return;
     }
 
+    // 下载中再点击 → 取消下载
+    if (self.isFileDownloading) {
+        self.isFileDownloading = NO;
+        self.progressView.hidden = YES;
+        [self.progressView setProgress:0];
+        return;
+    }
+
     // 需要下载
     if (fileContent.remoteUrl && fileContent.remoteUrl.length > 0) {
+        self.isFileDownloading = YES;
+        self.progressView.hidden = NO;
+        [self.progressView setProgress:0];
         __weak typeof(self) weakSelf = self;
         [[WKSDK shared].mediaManager download:self.messageModel.message callback:^(WKMediaDownloadState state, CGFloat progress, NSError *error) {
-            if (state == WKMediaDownloadStateSuccess) {
-                dispatch_async(dispatch_get_main_queue(), ^{
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (!weakSelf.isFileDownloading) return; // 已取消，忽略回调
+                if (state == WKMediaDownloadStateSuccess) {
+                    weakSelf.isFileDownloading = NO;
+                    weakSelf.progressView.hidden = YES;
+                    [weakSelf.progressView setProgress:0];
                     NSString *downloadedPath = fileContent.localPath;
                     if (downloadedPath && [[NSFileManager defaultManager] fileExistsAtPath:downloadedPath]) {
                         [weakSelf previewFileAtPath:downloadedPath];
                     }
-                });
-            }
+                } else if (state == WKMediaDownloadStateFail) {
+                    weakSelf.isFileDownloading = NO;
+                    weakSelf.progressView.hidden = YES;
+                    [weakSelf.progressView setProgress:0];
+                } else {
+                    [weakSelf.progressView setProgress:progress];
+                }
+            });
         }];
     }
 }
