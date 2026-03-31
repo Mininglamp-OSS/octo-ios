@@ -87,6 +87,16 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
+//---------- 嵌套合并转发cell ----------
+
+@interface WKMergeForwardDetailNestedModel : WKMergeForwardDetailModel
+
+@end
+
+@interface WKMergeForwardDetailNestedCell : WKMergeForwardDetailCell
+
+@end
+
 //----------其他cell ----------
 
 @interface WKMergeForwardDetailOtherModel : WKMergeForwardDetailModel

@@ -58,6 +58,9 @@
                 case WK_FILE:
                     modelCls = WKMergeForwardDetailFileModel.class;
                     break;
+                case WK_MERGEFORWARD:
+                    modelCls = WKMergeForwardDetailNestedModel.class;
+                    break;
                 default:
                     modelCls = [WKApp.shared.endpointManager mergeForwardItem:message.contentType];
                     if(!modelCls) {

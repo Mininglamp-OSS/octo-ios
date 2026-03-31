@@ -19,6 +19,8 @@
 #import <WuKongIMSDK/WKFileContent.h>
 #import <WuKongIMSDK/WKVoiceContent.h>
 #import "WKNavigationManager.h"
+#import "WKMergeForwardContent.h"
+#import "WKMergeForwardDetailVC.h"
 #import <AVKit/AVKit.h>
 
 // 下载进度遮罩（黑色半透明蒙版 + 转圈 + 百分比）
@@ -1124,6 +1126,131 @@ static void cancelDownloadForMessage(WKMessage *message) {
     [topVC presentViewController:playerVC animated:YES completion:^{
         [playerVC.player play];
     }];
+}
+
+@end
+
+
+//---------- 嵌套合并转发cell ----------
+
+@implementation WKMergeForwardDetailNestedModel
+
+- (Class)cell {
+    return WKMergeForwardDetailNestedCell.class;
+}
+
+@end
+
+@interface WKMergeForwardDetailNestedCell ()
+
+@property(nonatomic,strong) UILabel *nestedTitleLbl;
+@property(nonatomic,strong) UIView *nestedMessageBox;
+@property(nonatomic,strong) UIView *nestedLineView;
+@property(nonatomic,strong) UILabel *nestedDescLbl;
+
+@end
+
+#define nestedTitleHeight 18.0f
+#define nestedTitleTop 10.0f
+#define nestedMsgBoxTop 4.0f
+#define nestedMsgHeight 13.0f
+#define nestedLineTop 4.0f
+#define nestedDescHeight 26.0f
+#define nestedPadding 10.0f
+
+@implementation WKMergeForwardDetailNestedCell
+
++ (CGFloat)contentHeightForModel:(WKMergeForwardDetailNestedModel *)model maxWidth:(CGFloat)maxWidth {
+    WKMergeForwardContent *content = (WKMergeForwardContent *)model.message.content;
+    NSInteger msgCount = content.msgs.count > 4 ? 4 : content.msgs.count;
+    return nestedTitleTop + nestedTitleHeight + nestedMsgBoxTop + nestedMsgHeight * msgCount + nestedLineTop + 1.0f + nestedDescHeight;
+}
+
+- (void)setupUI {
+    [super setupUI];
+
+    self.messageContentView.layer.masksToBounds = YES;
+    self.messageContentView.layer.cornerRadius = 4.0f;
+    [self.messageContentView setBackgroundColor:[WKApp shared].config.cellBackgroundColor];
+
+    self.nestedTitleLbl = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 0, nestedTitleHeight)];
+    self.nestedTitleLbl.font = [[WKApp shared].config appFontOfSize:14.0f];
+    self.nestedTitleLbl.textColor = [WKApp shared].config.defaultTextColor;
+    [self.messageContentView addSubview:self.nestedTitleLbl];
+
+    self.nestedMessageBox = [[UIView alloc] init];
+    [self.messageContentView addSubview:self.nestedMessageBox];
+
+    self.nestedLineView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 0, 1.0f)];
+    self.nestedLineView.backgroundColor = [WKApp shared].config.lineColor;
+    [self.messageContentView addSubview:self.nestedLineView];
+
+    self.nestedDescLbl = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 0, nestedDescHeight)];
+    self.nestedDescLbl.font = [[WKApp shared].config appFontOfSize:12.0f];
+    self.nestedDescLbl.textColor = [WKApp shared].config.tipColor;
+    self.nestedDescLbl.text = LLang(@"聊天记录");
+    [self.messageContentView addSubview:self.nestedDescLbl];
+
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onNestedTap)];
+    self.messageContentView.userInteractionEnabled = YES;
+    [self.messageContentView addGestureRecognizer:tap];
+}
+
+- (void)refresh:(WKMergeForwardDetailNestedModel *)model {
+    [super refresh:model];
+    WKMergeForwardContent *content = (WKMergeForwardContent *)model.message.content;
+
+    self.nestedTitleLbl.text = content.title;
+
+    [[self.nestedMessageBox subviews] makeObjectsPerformSelector:@selector(removeFromSuperview)];
+    if (content.msgs && content.msgs.count > 0) {
+        for (NSInteger i = 0; i < content.msgs.count && i < 4; i++) {
+            WKMessage *msg = content.msgs[i];
+            UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 0, nestedMsgHeight)];
+            lbl.font = [[WKApp shared].config appFontOfSize:11.0f];
+            lbl.textColor = [WKApp shared].config.tipColor;
+            NSString *fromName = @"";
+            if (msg.from) {
+                fromName = msg.from.displayName;
+            }
+            lbl.text = [NSString stringWithFormat:@"%@: %@", fromName, [msg.content conversationDigest]];
+            [self.nestedMessageBox addSubview:lbl];
+        }
+    }
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+
+    self.nestedTitleLbl.lim_top = nestedTitleTop;
+    self.nestedTitleLbl.lim_left = nestedPadding;
+    self.nestedTitleLbl.lim_width = self.messageContentView.lim_width - nestedPadding * 2;
+
+    self.nestedMessageBox.lim_top = self.nestedTitleLbl.lim_bottom + nestedMsgBoxTop;
+    self.nestedMessageBox.lim_width = self.messageContentView.lim_width;
+    self.nestedMessageBox.lim_height = nestedMsgHeight * self.nestedMessageBox.subviews.count;
+    for (NSInteger i = 0; i < self.nestedMessageBox.subviews.count; i++) {
+        UIView *v = self.nestedMessageBox.subviews[i];
+        v.lim_left = nestedPadding;
+        v.lim_top = i * nestedMsgHeight;
+        v.lim_width = self.messageContentView.lim_width - nestedPadding * 2;
+        v.lim_height = nestedMsgHeight;
+    }
+
+    self.nestedLineView.lim_left = nestedPadding;
+    self.nestedLineView.lim_width = self.messageContentView.lim_width - nestedPadding * 2;
+    self.nestedLineView.lim_top = self.nestedMessageBox.lim_bottom + nestedLineTop;
+
+    self.nestedDescLbl.lim_left = nestedPadding;
+    self.nestedDescLbl.lim_width = self.messageContentView.lim_width - nestedPadding * 2;
+    self.nestedDescLbl.lim_top = self.nestedLineView.lim_bottom;
+}
+
+- (void)onNestedTap {
+    WKMergeForwardContent *content = (WKMergeForwardContent *)self.model.message.content;
+    WKMergeForwardDetailVC *vc = [WKMergeForwardDetailVC new];
+    vc.mergeForwardContent = content;
+    [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
 
 @end
