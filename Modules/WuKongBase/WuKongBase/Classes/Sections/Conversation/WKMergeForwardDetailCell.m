@@ -879,10 +879,11 @@ static void cancelDownloadForMessage(WKMessage *message) {
         self.playIconView.hidden = NO;
         [self.voiceLoadingView stopAnimating];
         if ([state isEqualToString:@"success"]) {
+            // 下载完成后转码 AMR → WAV，再播放
+            [[WKSDK shared].mediaManager voiceMessageThumbToSource:self.model.message];
             WKVoiceContent *voiceContent = (WKVoiceContent *)self.model.message.content;
-            NSString *downloadedPath = voiceContent.localPath;
-            if (downloadedPath && [[NSFileManager defaultManager] fileExistsAtPath:downloadedPath]) {
-                [self playAudioAtPath:downloadedPath];
+            if (voiceContent.localPath && [[NSFileManager defaultManager] fileExistsAtPath:voiceContent.localPath]) {
+                [self playAudioAtPath:voiceContent.localPath];
             }
         }
     }
@@ -943,13 +944,23 @@ static void cancelDownloadForMessage(WKMessage *message) {
     }
 
     WKVoiceContent *voiceContent = (WKVoiceContent *)self.model.message.content;
-    NSString *localPath = voiceContent.localPath;
 
-    if (localPath && [[NSFileManager defaultManager] fileExistsAtPath:localPath]) {
-        [self playAudioAtPath:localPath];
+    // 1. localPath 存在（已转码的 WAV）→ 直接播放
+    if (voiceContent.localPath && [[NSFileManager defaultManager] fileExistsAtPath:voiceContent.localPath]) {
+        [self playAudioAtPath:voiceContent.localPath];
         return;
     }
 
+    // 2. thumbPath 存在（下载的 AMR 副本）→ 转码后播放
+    if (voiceContent.thumbPath && [[NSFileManager defaultManager] fileExistsAtPath:voiceContent.thumbPath]) {
+        [[WKSDK shared].mediaManager voiceMessageThumbToSource:self.model.message];
+        if (voiceContent.localPath && [[NSFileManager defaultManager] fileExistsAtPath:voiceContent.localPath]) {
+            [self playAudioAtPath:voiceContent.localPath];
+        }
+        return;
+    }
+
+    // 3. 都不存在 → 下载
     if (voiceContent.remoteUrl && voiceContent.remoteUrl.length > 0) {
         startDownloadForMessage(self.model.message, nil);
     }
