@@ -643,11 +643,11 @@ CGFloat itemSpace = 10.0f;
     NSString *content = self.textView.text;
     if([WKApp shared].config.messageTextMaxBytes !=0) {
         if(content && [self convertToByte:content]>[WKApp shared].config.messageTextMaxBytes) {
-            [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送的内容太长！")];
+            [self showTextToFileAlert:content];
             return;
         }
     }
-    
+
     self.textView.text = @"";
     self.sendButton.show = NO;
     [self resetInputHeight];
@@ -656,7 +656,57 @@ CGFloat itemSpace = 10.0f;
             [self.delegate inputPanelSend:self text:content];
         }
     }];
-   
+
+}
+
+/// 文本超出限制时弹窗提示，确认后转为 .txt 文件发送
+-(void) showTextToFileAlert:(NSString *)text {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil
+        message:LLang(@"字数超出限制无法发送，是否需将消息转为文档发出？")
+        preferredStyle:UIAlertControllerStyleAlert];
+
+    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:LLang(@"取消")
+        style:UIAlertActionStyleCancel handler:nil];
+
+    __weak typeof(self) weakSelf = self;
+    UIAlertAction *confirmAction = [UIAlertAction actionWithTitle:LLang(@"确认发送")
+        style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [weakSelf sendTextAsFile:text];
+        }];
+
+    [alert addAction:cancelAction];
+    [alert addAction:confirmAction];
+    [[WKNavigationManager shared].topViewController presentViewController:alert animated:YES completion:nil];
+}
+
+/// 将文本内容生成 .txt 文件并以文件消息发送
+-(void) sendTextAsFile:(NSString *)text {
+    // 用前10个字符作为文件名
+    NSString *namePrefix = text.length > 10 ? [text substringToIndex:10] : text;
+    // 移除文件名中的非法字符
+    NSCharacterSet *illegal = [NSCharacterSet characterSetWithCharactersInString:@"/\\:*?\"<>|\n\r\t"];
+    namePrefix = [[namePrefix componentsSeparatedByCharactersInSet:illegal] componentsJoinedByString:@""];
+    if (namePrefix.length == 0) namePrefix = @"消息";
+    NSString *fileName = [NSString stringWithFormat:@"%@.txt", namePrefix];
+
+    // 写入临时文件
+    NSString *tmpDir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"WKTextToFile"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:tmpDir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *filePath = [tmpDir stringByAppendingPathComponent:fileName];
+    [text writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+    NSURL *fileURL = [NSURL fileURLWithPath:filePath];
+    WKFileContent *fileContent = [WKFileContent initWithFileURL:fileURL];
+
+    // 清空输入框
+    self.textView.text = @"";
+    self.sendButton.show = NO;
+    [self resetInputHeight];
+
+    // 通过 delegate 发送文件消息
+    if (self.delegate && [self.delegate respondsToSelector:@selector(inputPanel:sendMessage:)]) {
+        [self.delegate inputPanel:self sendMessage:fileContent];
+    }
 }
 
 #pragma mark - UITextViewDelegate
