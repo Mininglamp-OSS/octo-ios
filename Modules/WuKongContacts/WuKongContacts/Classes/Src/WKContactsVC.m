@@ -265,8 +265,12 @@
     
     contactsCellModel.robot = channelInfo.robot;
     if(channelInfo.logo) {
-        NSString *avatarURL = [[NSURL URLWithString:[WKAvatarUtil getFullAvatarWIthPath:channelInfo.logo]] absoluteString];
-        contactsCellModel.avatar =avatarURL;
+        NSString *key = (channelInfo.avatarCacheKey.length > 0) ? channelInfo.avatarCacheKey : @"0";
+        NSString *fullUrl = [WKAvatarUtil getFullAvatarWIthPath:channelInfo.logo];
+        NSString *separator = [fullUrl containsString:@"?"] ? @"&" : @"?";
+        contactsCellModel.avatar = [NSString stringWithFormat:@"%@%@v=%@", fullUrl, separator, key];
+    } else {
+        contactsCellModel.avatar = [WKAvatarUtil getAvatar:channelInfo.channel.channelId cacheKey:channelInfo.avatarCacheKey];
     }
     if([channelInfo.displayName isEqualToString:@"系统通知"]) {
         NSLog(@"[DEBUG] 系统通知 头像URL: %@, logo: %@, uid: %@", contactsCellModel.avatar, channelInfo.logo, channelInfo.channel.channelId);
@@ -665,6 +669,19 @@
         existCellModel.online = channelInfo.online;
         existCellModel.lastOffline = channelInfo.lastOffline;
         existCellModel.channelInfo = channelInfo;
+        hasChange = true;
+    }
+    // 头像变化时重新生成带 cacheKey 的 URL
+    if(channelInfo.avatarCacheKey && ![channelInfo.avatarCacheKey isEqualToString:existCellModel.channelInfo.avatarCacheKey ?: @""]) {
+        existCellModel.channelInfo = channelInfo;
+        if(channelInfo.logo) {
+            NSString *key = channelInfo.avatarCacheKey.length > 0 ? channelInfo.avatarCacheKey : @"0";
+            NSString *fullUrl = [WKAvatarUtil getFullAvatarWIthPath:channelInfo.logo];
+            NSString *separator = [fullUrl containsString:@"?"] ? @"&" : @"?";
+            existCellModel.avatar = [NSString stringWithFormat:@"%@%@v=%@", fullUrl, separator, key];
+        } else {
+            existCellModel.avatar = [WKAvatarUtil getAvatar:channelInfo.channel.channelId cacheKey:channelInfo.avatarCacheKey];
+        }
         hasChange = true;
     }
     if(hasChange) {
