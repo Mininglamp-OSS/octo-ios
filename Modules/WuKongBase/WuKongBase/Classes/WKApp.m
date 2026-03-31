@@ -1392,6 +1392,9 @@ static  AVAudioPlayer *_silentAudioPlayer;
     [[WKApp shared] addMessageAllowForward:WK_TEXT];
     [[WKApp shared] addMessageAllowForward:WK_IMAGE];
     [[WKApp shared] addMessageAllowForward:WK_GIF];
+    [[WKApp shared] addMessageAllowForward:WK_FILE];
+    [[WKApp shared] addMessageAllowForward:WK_SMALLVIDEO];
+    [[WKApp shared] addMessageAllowForward:WK_MERGEFORWARD];
     [self setMethod:WKPOINT_LONGMENUS_FORWARD handler:^id _Nullable(id  _Nonnull param) {
         WKMessageModel *message = param[@"message"];
         
