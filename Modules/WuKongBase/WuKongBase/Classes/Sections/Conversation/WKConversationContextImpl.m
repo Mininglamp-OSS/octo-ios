@@ -618,15 +618,10 @@
 -(NSArray<WKMentionUserCellModel*>*) membersToMentionUsers:(NSArray<WKChannelMember*>*)members role:(WKMemberRole)role keyword:(NSString*)keyword{
     
     NSMutableArray<WKMentionUserCellModel*> *users = [NSMutableArray array];
-    BOOL isManager =  false;
-    if(role == WKMemberRoleCreator || role == WKMemberRoleManager) {
-        isManager = true;
-    }
-    if(isManager) {
-        NSString *allStr = LLang(@"所有人");
-        if(!keyword || [keyword isEqualToString:@""] || [allStr containsString:keyword]) {
-            [users addObject:[WKMentionUserCellModel uid:@"all" name:allStr]];
-        }
+    // @所有人 对所有群成员可见，对齐 Web 端行为（移除管理员角色限制）
+    NSString *allStr = LLang(@"所有人");
+    if(!keyword || [keyword isEqualToString:@""] || [allStr containsString:keyword]) {
+        [users addObject:[WKMentionUserCellModel uid:@"all" name:allStr]];
     }
     if(members && members.count>0) {
         for (WKChannelMember *member in members) {
