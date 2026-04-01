@@ -18,6 +18,8 @@
 
 @property(nonatomic,strong) WKOnlineBadgeView *onlineBadgeView;
 
+@property(nonatomic,strong) UILabel *botBadgeLbl; // AI标识
+
 @property(nonatomic,strong) WKUserOnlineResp *online;
 
 @end
@@ -30,6 +32,7 @@
     [self.contentView addSubview:self.checkBox];
     [self.contentView addSubview:self.avatar];
     [self.contentView addSubview:self.nameLbl];
+    [self.contentView addSubview:self.botBadgeLbl];
     [self.avatar addSubview:self.onlineBadgeView];
 }
 
@@ -51,6 +54,16 @@
     }
     
     
+    // AI标识
+    self.botBadgeLbl.hidden = !member.robot;
+    if(member.robot) {
+        [self.botBadgeLbl sizeToFit];
+        CGRect frame = self.botBadgeLbl.frame;
+        frame.size.width += 8.0f;
+        frame.size.height += 4.0f;
+        self.botBadgeLbl.frame = frame;
+    }
+
     self.onlineBadgeView.hidden = YES;
     if(online) {
         if(!online.online) {
@@ -103,7 +116,14 @@
     self.nameLbl.lim_left = self.avatar.lim_right + leftSpace;
     self.nameLbl.lim_height = self.contentView.lim_height;
     self.nameLbl.lim_width = self.contentView.lim_width - self.nameLbl.lim_left - 40.0f;
-    
+
+    // AI标识
+    if(!self.botBadgeLbl.hidden) {
+        CGFloat textWidth = [self.nameLbl.text sizeWithAttributes:@{NSFontAttributeName: self.nameLbl.font}].width;
+        self.botBadgeLbl.lim_left = self.nameLbl.lim_left + textWidth + 6.0f;
+        self.botBadgeLbl.lim_centerY_parent = self.contentView;
+    }
+
     // 在线标记
     if(self.online && self.online.online) {
         self.onlineBadgeView.lim_left = self.avatar.lim_width - self.onlineBadgeView.lim_width;
@@ -133,6 +153,21 @@
         _nameLbl.font = [WKApp.shared.config appFontOfSize:16.0f];
     }
     return _nameLbl;
+}
+
+- (UILabel *)botBadgeLbl {
+    if(!_botBadgeLbl) {
+        _botBadgeLbl = [[UILabel alloc] init];
+        _botBadgeLbl.text = @"AI";
+        _botBadgeLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
+        _botBadgeLbl.textColor = [UIColor whiteColor];
+        _botBadgeLbl.backgroundColor = [UIColor colorWithRed:136.0f/255.0f green:84.0f/255.0f blue:208.0f/255.0f alpha:1.0f];
+        _botBadgeLbl.textAlignment = NSTextAlignmentCenter;
+        _botBadgeLbl.layer.cornerRadius = 4.0f;
+        _botBadgeLbl.layer.masksToBounds = YES;
+        _botBadgeLbl.hidden = YES;
+    }
+    return _botBadgeLbl;
 }
 
 - (WKCheckBox *)checkBox {

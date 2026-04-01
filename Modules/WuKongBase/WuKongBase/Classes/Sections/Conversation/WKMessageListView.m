@@ -398,24 +398,70 @@
 }
 
 -(void) pulldown {
-    WKMessageModel *firstMessage = [self.dataProvider firstMessage];
     __weak typeof(self) weakSelf = self;
-    
+
+    // 记录旧状态，用于增量插入
+    NSInteger oldSectionCount = [self.dataProvider dateCount];
+    NSInteger oldFirstSectionRowCount = 0;
+    if (oldSectionCount > 0) {
+        oldFirstSectionRowCount = [self.dataProvider messagesAtSection:0].count;
+    }
+
     [self.dataProvider pulldown:^(bool hasMore) {
         if(!hasMore) {
             [weakSelf pulldownFinished];
         }
-        [weakSelf.tableView reloadData];
-        [weakSelf.tableView.mj_header endRefreshing];
-        
-        if(firstMessage) {
-            NSIndexPath *oldIndexPath = [self.dataProvider indexPathAtClientMsgNo:firstMessage.clientMsgNo];
-            [weakSelf scrollToIndex:oldIndexPath];
+
+        NSInteger newSectionCount = [weakSelf.dataProvider dateCount];
+        NSInteger newSectionsAdded = newSectionCount - oldSectionCount;
+
+        // 旧的第一个 section 现在偏移到 newSectionsAdded 位置，检查是否新增了行
+        NSInteger newRowsInOldFirstSection = 0;
+        if (oldSectionCount > 0 && newSectionsAdded >= 0 && newSectionsAdded < newSectionCount) {
+            NSInteger currentRowCount = [weakSelf.dataProvider messagesAtSection:newSectionsAdded].count;
+            newRowsInOldFirstSection = currentRowCount - oldFirstSectionRowCount;
         }
 
-//        [weakSelf insertHistoryMsgSplitIfNeed]; // 插入历史消息分割线
+        BOOL hasInsertions = (newSectionsAdded > 0 || newRowsInOldFirstSection > 0);
+
+        if (hasInsertions) {
+            CGFloat oldContentHeight = weakSelf.tableView.contentSize.height;
+            CGFloat oldOffsetY = weakSelf.tableView.contentOffset.y;
+
+            // 增量插入，不做全量 reloadData，避免闪烁
+            [UIView performWithoutAnimation:^{
+                [weakSelf.tableView beginUpdates];
+
+                // 插入新增的日期 section
+                if (newSectionsAdded > 0) {
+                    NSIndexSet *sectionIndexSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, newSectionsAdded)];
+                    [weakSelf.tableView insertSections:sectionIndexSet withRowAnimation:UITableViewRowAnimationNone];
+                }
+
+                // 在原来第一个 section 中插入新增的行（新消息插在 index 0 起始位置）
+                if (newRowsInOldFirstSection > 0) {
+                    NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
+                    for (NSInteger row = 0; row < newRowsInOldFirstSection; row++) {
+                        [indexPaths addObject:[NSIndexPath indexPathForRow:row inSection:newSectionsAdded]];
+                    }
+                    [weakSelf.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
+                }
+
+                [weakSelf.tableView endUpdates];
+                [weakSelf.tableView layoutIfNeeded];
+
+                // 补偿 contentOffset，让用户看到的内容纹丝不动
+                CGFloat newContentHeight = weakSelf.tableView.contentSize.height;
+                CGFloat delta = newContentHeight - oldContentHeight;
+                if (delta > 0) {
+                    weakSelf.tableView.contentOffset = CGPointMake(0, oldOffsetY + delta);
+                }
+            }];
+        }
+
+        [weakSelf.tableView.mj_header endRefreshing];
     }];
-   
+
 }
 
 -(void) pullup {
