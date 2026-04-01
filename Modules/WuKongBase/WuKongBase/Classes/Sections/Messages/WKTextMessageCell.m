@@ -111,20 +111,12 @@
     }
 
 
-    // 含表格时：基于已缓存的 messageTextSize + tableH（保证稳定一致）+ 段间距补偿
+    // 含表格时：逐段计算高度（与 layoutSubviews 保持一致，避免合并文本与分段之和的偏差）
     NSString *rawContent = [[self class] getRawContent:model];
-    CGFloat tableH = [[self class] tableHeightForMessage:model];
-    if (tableH > 0) {
-        if (messageTextSize.height > 0) {
-            size.height += kTableTopSpace + tableH;
-        } else {
-            size.height += tableH;
-        }
-        // 多段时补偿额外间距
-        NSArray *segments = [WKMarkdownRenderer splitContentSegments:rawContent];
-        if (segments.count > 2) {
-            size.height += ((NSInteger)segments.count - 2) * kTableTopSpace;
-        }
+    if ([WKMarkdownRenderer containsTable:rawContent]) {
+        CGFloat segHeight = [[self class] segmentedContentHeightForMessage:model];
+        // 用分段高度替换 messageTextSize 中的文本高度部分（保留 reply 等其他高度）
+        size.height = size.height - messageTextSize.height + segHeight;
         size.width = MAX(size.width, [WKApp shared].config.messageContentMaxWidth);
     }
 
@@ -677,6 +669,85 @@
     NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
     if (rowCount <= 0) return 0;
     return rowCount * kTableRowHeight + kTableExtraPadding;
+}
+
+/// 分段计算内容高度（与 layoutSubviews 中逐段布局逻辑完全一致）
+/// 使用静态 UILabel.sizeThatFits: 测量文本高度，与 layoutSubviews 使用相同的测量方式，
+/// 避免 boundingRectWithSize: 对长文本+复杂属性字符串的高度低估。
++(CGFloat) segmentedContentHeightForMessage:(WKMessageModel*)model {
+    static WKMemoryCache *segHeightCache;
+    if (!segHeightCache) {
+        segHeightCache = [[WKMemoryCache alloc] init];
+        segHeightCache.maxCacheNum = 100;
+    }
+
+    // 流式消息不缓存
+    BOOL isStreaming = model.streamOn && model.streamFlag != WKStreamFlagEnd;
+    NSString *cacheKey = [NSString stringWithFormat:@"%@-segH", model.clientMsgNo];
+    if (model.remoteExtra.contentEdit) {
+        cacheKey = [NSString stringWithFormat:@"%@-segH-edit-%lu", model.clientMsgNo, model.remoteExtra.editedAt];
+    }
+    if (!isStreaming) {
+        NSNumber *cached = [segHeightCache getCache:cacheKey];
+        if (cached) return cached.floatValue;
+    }
+
+    NSString *rawContent = [[self class] getRawContent:model];
+    NSArray *segments = [WKMarkdownRenderer splitContentSegments:rawContent];
+    if (segments.count == 0) return 0;
+
+    CGFloat maxWidth = [WKApp shared].config.messageContentMaxWidth;
+    UIColor *textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
+    NSString *colorHex = [textColor toHexRGB];
+    CGFloat totalHeight = 0;
+
+    // 用静态 UILabel 测量文本段高度（与 layoutSubviews 中 sizeThatFits: 一致）
+    static UILabel *measureLabel;
+    if (!measureLabel) {
+        measureLabel = [[UILabel alloc] init];
+        measureLabel.numberOfLines = 0;
+        measureLabel.lineBreakMode = NSLineBreakByWordWrapping;
+    }
+    measureLabel.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+
+    for (NSUInteger i = 0; i < segments.count; i++) {
+        NSDictionary *seg = segments[i];
+        NSString *type = seg[@"type"];
+        NSString *content = seg[@"content"];
+        CGFloat spacing = (i < segments.count - 1) ? kTableTopSpace : 0;
+
+        if ([type isEqualToString:@"text"]) {
+            // 与 refresh: 中的渲染逻辑完全一致：
+            // markdown 文本走 WKMarkdownRenderer，非 markdown 走 lim_render
+            if ([WKMarkdownRenderer containsMarkdown:content]) {
+                NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+                if (mdAttr) {
+                    measureLabel.attributedText = mdAttr;
+                } else {
+                    measureLabel.text = content;
+                }
+            } else {
+                // 非 markdown：用 lim_render 渲染（带段落样式），与 refresh: 中一致
+                NSMutableAttributedString *plainAttr = [[NSMutableAttributedString alloc] init];
+                plainAttr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+                plainAttr.textColor = textColor;
+                [plainAttr lim_render:content tokens:nil];
+                measureLabel.attributedText = plainAttr;
+            }
+            // 用 sizeThatFits: 测量（与 layoutSubviews 中完全一致）
+            CGSize fitSize = [measureLabel sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
+            totalHeight += ceil(fitSize.height) + spacing;
+        } else {
+            // 表格段：每个表格独立计算高度（各自包含 kTableExtraPadding）
+            NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
+            totalHeight += rowCount * kTableRowHeight + kTableExtraPadding + spacing;
+        }
+    }
+
+    if (!isStreaming) {
+        [segHeightCache setCache:@(totalHeight) forKey:cacheKey];
+    }
+    return totalHeight;
 }
 
 +(CGSize) textSize:(NSMutableAttributedString*)attrStr messageModel:(WKMessageModel*)model{
