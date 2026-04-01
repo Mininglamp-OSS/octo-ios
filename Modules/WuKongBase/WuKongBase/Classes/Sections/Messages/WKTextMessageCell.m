@@ -39,9 +39,10 @@
 
 #define replyToNameSpace 4.0f // 回复离名字的距离
 
-#define kTableRowHeight 32.0f
+#define kTableRowHeight 38.0f
 #define kTableTopSpace 8.0f
 #define kTableExtraPadding 4.0f
+#define kTableToolbarHeight 36.0f
 
 #define kBotActionBtnHeight 32.0f
 #define kBotActionTopSpace 10.0f
@@ -57,6 +58,8 @@
 @property(nonatomic,strong) NSMutableArray<UIView*> *segmentViews;       // 按顺序的 UILabel / WKWebView
 @property(nonatomic,strong) NSMutableArray<WKWebView*> *tableWebViews;   // 表格 WebView 引用
 @property(nonatomic,strong) NSMutableArray<UIScrollView*> *tableOverlays; // 滑动遮罩（在 contentView 上）
+@property(nonatomic,strong) NSMutableArray<UIView*> *tableToolbars;      // 表格工具栏
+@property(nonatomic,strong) NSMutableArray<NSString*> *tableRawContents; // 表格原始 markdown 内容（供复制用）
 @property(nonatomic,assign) BOOL segmentsBuilt; // 分段视图是否已创建
 
 
@@ -165,6 +168,8 @@
     self.segmentViews = [NSMutableArray array];
     self.tableWebViews = [NSMutableArray array];
     self.tableOverlays = [NSMutableArray array];
+    self.tableToolbars = [NSMutableArray array];
+    self.tableRawContents = [NSMutableArray array];
 
     // 回复
     [self.messageContentView addSubview:self.replyBox];
@@ -213,6 +218,8 @@
     for (UIScrollView *o in self.tableOverlays) { [o removeFromSuperview]; }
     [self.tableOverlays removeAllObjects];
     [self.tableWebViews removeAllObjects];
+    [self.tableToolbars removeAllObjects];
+    [self.tableRawContents removeAllObjects];
 }
 
 -(WKWebView*) createSegmentWebView {
@@ -235,6 +242,54 @@
     sv.directionalLockEnabled = YES;
     sv.delegate = self;
     return sv;
+}
+
+-(UIView*) createTableToolbar:(NSInteger)tableIndex {
+    UIView *toolbar = [[UIView alloc] init];
+    toolbar.backgroundColor = [UIColor colorWithRed:0xF5/255.0 green:0xF5/255.0 blue:0xF6/255.0 alpha:1.0];
+
+    // 左侧 "表格" 标签
+    UILabel *titleLbl = [[UILabel alloc] init];
+    titleLbl.text = @"表格";
+    titleLbl.font = [UIFont boldSystemFontOfSize:15];
+    titleLbl.textColor = [UIColor colorWithRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0];
+    [titleLbl sizeToFit];
+    titleLbl.frame = CGRectMake(12, (kTableToolbarHeight - titleLbl.frame.size.height) / 2.0, titleLbl.frame.size.width, titleLbl.frame.size.height);
+    [toolbar addSubview:titleLbl];
+
+    // 右侧复制按钮
+    UIButton *copyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    copyBtn.tag = tableIndex;
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightRegular];
+        UIImage *icon = [UIImage systemImageNamed:@"doc.on.doc" withConfiguration:config];
+        [copyBtn setImage:[icon imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal];
+    } else {
+        [copyBtn setTitle:@"复制" forState:UIControlStateNormal];
+        copyBtn.titleLabel.font = [UIFont systemFontOfSize:13];
+    }
+    copyBtn.tintColor = [UIColor colorWithRed:0x99/255.0 green:0x99/255.0 blue:0x99/255.0 alpha:1.0];
+    [copyBtn addTarget:self action:@selector(copyTableTapped:) forControlEvents:UIControlEventTouchUpInside];
+    copyBtn.frame = CGRectMake(0, 0, 36, kTableToolbarHeight);
+    [toolbar addSubview:copyBtn];
+
+    // 底部分隔线
+    UIView *separator = [[UIView alloc] init];
+    separator.backgroundColor = [UIColor colorWithRed:0xE0/255.0 green:0xE0/255.0 blue:0xE0/255.0 alpha:1.0];
+    separator.tag = 9999; // 用于 layoutSubviews 中定位
+    [toolbar addSubview:separator];
+
+    return toolbar;
+}
+
+-(void) copyTableTapped:(UIButton*)sender {
+    NSInteger idx = sender.tag;
+    if (idx < (NSInteger)self.tableRawContents.count) {
+        NSString *content = self.tableRawContents[idx];
+        [UIPasteboard generalPasteboard].string = content;
+        UIView *topView = [WKNavigationManager shared].topViewController.view;
+        [topView showHUDWithHide:LLang(@"已复制")];
+    }
 }
 
 -(void) removeAllGestureRecognizers {
@@ -668,7 +723,7 @@
     if (![WKMarkdownRenderer containsTable:content]) return 0;
     NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
     if (rowCount <= 0) return 0;
-    return rowCount * kTableRowHeight + kTableExtraPadding;
+    return kTableToolbarHeight + rowCount * kTableRowHeight + kTableExtraPadding;
 }
 
 /// 分段计算内容高度（与 layoutSubviews 中逐段布局逻辑完全一致）
@@ -738,9 +793,9 @@
             CGSize fitSize = [measureLabel sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
             totalHeight += ceil(fitSize.height) + spacing;
         } else {
-            // 表格段：每个表格独立计算高度（各自包含 kTableExtraPadding）
+            // 表格段：工具栏 + 表格行高 + 额外 padding
             NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
-            totalHeight += rowCount * kTableRowHeight + kTableExtraPadding + spacing;
+            totalHeight += kTableToolbarHeight + rowCount * kTableRowHeight + kTableExtraPadding + spacing;
         }
     }
 
@@ -933,15 +988,33 @@
                     }
                     [self.segmentViews addObject:lbl];
                 } else {
+                    // 表格段：容器（圆角灰色背景）+ 工具栏 + WebView
+                    NSInteger tableIndex = (NSInteger)self.tableRawContents.count;
+                    [self.tableRawContents addObject:content];
+
+                    UIView *container = [[UIView alloc] init];
+                    container.backgroundColor = [UIColor colorWithRed:0xF5/255.0 green:0xF5/255.0 blue:0xF6/255.0 alpha:1.0];
+                    container.layer.cornerRadius = 8.0;
+                    container.clipsToBounds = YES;
+
+                    UIView *toolbar = [self createTableToolbar:tableIndex];
+                    [container addSubview:toolbar];
+
                     WKWebView *wv = [self createSegmentWebView];
-                    NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
-                    wv.tag = (NSInteger)(rowCount * kTableRowHeight + kTableExtraPadding);
-                    NSString *colorHex = [textColor toHexRGB];
-                    NSString *tableHTML = [WKMarkdownRenderer extractTableHTML:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+                    // 表格在灰色容器内，文字始终用深色（不跟随发送/接收消息颜色）
+                    NSString *tableColorHex = @"#333333";
+                    NSString *tableHTML = [WKMarkdownRenderer extractTableHTML:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:tableColorHex];
                     if (tableHTML) { [wv loadHTMLString:tableHTML baseURL:nil]; }
-                    [self.messageContentView addSubview:wv];
-                    [self.segmentViews addObject:wv];
+                    [container addSubview:wv];
+
+                    NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
+                    container.tag = (NSInteger)(kTableToolbarHeight + rowCount * kTableRowHeight + kTableExtraPadding);
+
+                    [self.messageContentView addSubview:container];
+                    [self.segmentViews addObject:container];
                     [self.tableWebViews addObject:wv];
+                    [self.tableToolbars addObject:toolbar];
+
                     UIScrollView *overlay = [self createSegmentOverlay];
                     [self.contentView addSubview:overlay];
                     [self.tableOverlays addObject:overlay];
@@ -1127,11 +1200,34 @@
                 v.frame = CGRectMake(0, segTop, contentW, fitSize.height);
                 segTop += fitSize.height + spacing;
             } else {
-                CGFloat tableH = v.tag > 0 ? v.tag : (kTableRowHeight + kTableExtraPadding);
+                // 表格容器布局（容器内含 toolbar + webview）
+                CGFloat tableH = v.tag > 0 ? v.tag : (kTableToolbarHeight + kTableRowHeight + kTableExtraPadding);
                 v.frame = CGRectMake(0, segTop, contentW, tableH);
+
+                // 容器内部布局：toolbar 在顶部，webview 紧跟其下
+                if (tableIdx < (NSInteger)self.tableToolbars.count) {
+                    UIView *toolbar = self.tableToolbars[tableIdx];
+                    toolbar.frame = CGRectMake(0, 0, contentW, kTableToolbarHeight);
+                    // 复制按钮靠右
+                    for (UIView *sub in toolbar.subviews) {
+                        if ([sub isKindOfClass:[UIButton class]]) {
+                            sub.frame = CGRectMake(contentW - 36, 0, 36, kTableToolbarHeight);
+                        }
+                        // 底部分隔线
+                        if (sub.tag == 9999) {
+                            sub.frame = CGRectMake(0, kTableToolbarHeight - 0.5, contentW, 0.5);
+                        }
+                    }
+                }
+                if (tableIdx < (NSInteger)self.tableWebViews.count) {
+                    WKWebView *wv = self.tableWebViews[tableIdx];
+                    wv.frame = CGRectMake(0, kTableToolbarHeight, contentW, tableH - kTableToolbarHeight);
+                }
                 if (tableIdx < (NSInteger)self.tableOverlays.count) {
-                    CGRect rectInContentView = [self.contentView convertRect:v.frame fromView:self.messageContentView];
-                    self.tableOverlays[tableIdx].frame = rectInContentView;
+                    // overlay 只覆盖 webview 区域（跳过 toolbar）
+                    CGRect containerInContentView = [self.contentView convertRect:v.frame fromView:self.messageContentView];
+                    CGRect overlayRect = CGRectMake(containerInContentView.origin.x, containerInContentView.origin.y + kTableToolbarHeight, containerInContentView.size.width, containerInContentView.size.height - kTableToolbarHeight);
+                    self.tableOverlays[tableIdx].frame = overlayRect;
                     tableIdx++;
                 }
                 segTop += tableH + spacing;

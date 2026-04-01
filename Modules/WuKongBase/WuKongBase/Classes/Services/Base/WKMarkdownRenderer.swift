@@ -594,20 +594,19 @@ import Down
             margin: 0;
             padding: 0;
         }
-        body { margin: 0; padding: 0; -webkit-text-size-adjust: none; }
+        body { margin: 0; padding: 0; -webkit-text-size-adjust: none; background-color: transparent; }
         table { border-collapse: collapse; width: max-content; white-space: nowrap; }
         th {
             font-weight: 600;
-            padding: 6px 12px;
-            border-bottom: 2px solid #999;
+            padding: 10px 14px;
+            border: 1px solid #E0E0E0;
             text-align: left;
-            background-color: rgba(0,0,0,0.04);
+            background-color: #F5F5F5;
         }
         td {
-            padding: 6px 12px;
-            border-bottom: 1px solid #E0E0E0;
+            padding: 10px 14px;
+            border: 1px solid #E0E0E0;
         }
-        tr:last-child td { border-bottom: none; }
         """
     }
 

@@ -67,7 +67,10 @@
       "Bash(find /Users/wanglitao/Documents/dmwork-android/app/src/main/java/com/dmwork/im -type f \\\\\\( -name \"*.kt\" -o -name \"*.java\" \\\\\\) 2>/dev/null | sort)",
       "Bash(git status:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(git merge:*)",
+      "Bash(git show:*)",
+      "Bash(xcodebuild -workspace TangSengDaoDaoiOS.xcworkspace -scheme WuKongBase -configuration Debug -destination 'generic/platform=iOS' build 2>&1 | tee /tmp/build_output.txt | tail -5)"
     ]
   }
 }
