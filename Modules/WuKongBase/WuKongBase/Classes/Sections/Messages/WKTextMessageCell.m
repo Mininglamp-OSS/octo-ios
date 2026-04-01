@@ -39,9 +39,9 @@
 
 #define replyToNameSpace 4.0f // 回复离名字的距离
 
-#define kTableRowHeight 38.0f
+#define kTableRowHeight 44.0f
 #define kTableTopSpace 8.0f
-#define kTableExtraPadding 4.0f
+#define kTableExtraPadding 10.0f
 #define kTableToolbarHeight 36.0f
 
 #define kBotActionBtnHeight 32.0f
@@ -887,11 +887,17 @@
     NSString *rawContent = [[self class] getRawContent:model];
     BOOL hasTable = [WKMarkdownRenderer containsTable:rawContent];
 
-    // 有表格且分段已创建时，不要用全文覆盖 textLbl（否则会把第一段文本变成全文，高度错乱）
-    if (!hasTable || !self.segmentsBuilt) {
+    // 无表格 或 有表格但分段未创建时，才设置 textLbl
+    if (!hasTable) {
+        // 无表格：textLbl 显示全部内容
         self.textLbl.attributedText = attrStr;
         self.textLbl.tokens = attrStr.tokens;
         self.textLbl.lim_size =[[self class] textSize:attrStr messageModel:model];
+    } else if (!self.segmentsBuilt) {
+        // 有表格且首次构建：仅设置内容，不设 lim_size 为全文尺寸
+        // lim_size 会在段落构建完成后根据第一段文本正确设置
+        self.textLbl.attributedText = attrStr;
+        self.textLbl.tokens = attrStr.tokens;
     }
 
     if (hasTable) {
@@ -1023,6 +1029,11 @@
             // 如果第一个段不是文本段，隐藏 textLbl
             if (!firstTextUsed) {
                 self.textLbl.hidden = YES;
+            } else {
+                // 段落构建后 textLbl 内容已是第一段文本，须重置 lim_size
+                // 避免仍保持全文尺寸导致溢出（转发时触发）
+                CGSize fitSize = [self.textLbl sizeThatFits:CGSizeMake([WKApp shared].config.messageContentMaxWidth, CGFLOAT_MAX)];
+                self.textLbl.lim_size = fitSize;
             }
             self.segmentsBuilt = YES;
         }
@@ -1067,6 +1078,19 @@
 
 -(void) onTapWithGestureRecognizer:(TapLongTapOrDoubleTapGestureRecognizerWrap*)gesture {
    // [self.textLbl onTap:gesture];
+    // 表格工具栏复制按钮点击检测（参考 BotFather 按钮模式）
+    for (NSUInteger i = 0; i < self.tableToolbars.count; i++) {
+        UIView *toolbar = self.tableToolbars[i];
+        // 找到工具栏中的复制按钮
+        for (UIView *sub in toolbar.subviews) {
+            if (![sub isKindOfClass:[UIButton class]]) continue;
+            CGRect btnInContentView = [self.contentView convertRect:sub.bounds fromView:sub];
+            if (CGRectContainsPoint(btnInContentView, gesture.tapPoint)) {
+                [self copyTableTapped:(UIButton*)sub];
+                return;
+            }
+        }
+    }
     // BotFather 审批按钮点击检测
     if (!self.botActionView.hidden) {
         CGPoint pointInBotAction = [self.botActionView convertPoint:gesture.tapPoint fromView:self.contentView];
@@ -1109,23 +1133,31 @@
 }
 
 -(WKTapLongTapOrDoubleTapGestureRecognizerEvent*) tapActionAtPoint:(CGPoint)point {
-    // 表格遮罩区域：让手势识别器 fail，使触摸事件传递到遮罩 UIScrollView
+    // 表格遮罩区域 + 工具栏区域：让手势识别器 fail，使触摸事件传递到遮罩/按钮
     for (UIScrollView *overlay in self.tableOverlays) {
         if (CGRectContainsPoint(overlay.frame, point)) {
             return [WKTapLongTapOrDoubleTapGestureRecognizerEvent action:WKTapLongTapOrDoubleTapGestureRecognizerActionFail];
         }
     }
+    // 表格工具栏区域：不 fail，走 onTapWithGestureRecognizer: 处理复制按钮点击
     return [super tapActionAtPoint:point];
 }
 
 -(BOOL) shouldBeginContextGestureAtPoint:(CGPoint)point {
+    CGPoint pointInContentView = [self.contentView convertPoint:point fromView:self.bubbleBackgroundView.superview];
     // 表格遮罩区域不触发长按菜单
     if (self.tableOverlays.count > 0) {
-        CGPoint pointInContentView = [self.contentView convertPoint:point fromView:self.bubbleBackgroundView.superview];
         for (UIScrollView *overlay in self.tableOverlays) {
             if (CGRectContainsPoint(overlay.frame, pointInContentView)) {
                 return NO;
             }
+        }
+    }
+    // 表格工具栏区域不触发长按菜单
+    for (UIView *toolbar in self.tableToolbars) {
+        CGRect toolbarInContentView = [self.contentView convertRect:toolbar.bounds fromView:toolbar];
+        if (CGRectContainsPoint(toolbarInContentView, pointInContentView)) {
+            return NO;
         }
     }
     return [super shouldBeginContextGestureAtPoint:point];
