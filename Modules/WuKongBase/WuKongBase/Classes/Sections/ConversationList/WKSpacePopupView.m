@@ -165,6 +165,9 @@
     _tableView.backgroundColor = [UIColor clearColor];
     _tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
     _tableView.rowHeight = 48;
+    _tableView.scrollEnabled = NO;
+    _tableView.showsVerticalScrollIndicator = YES;
+    _tableView.bounces = NO;
     [_tableView registerClass:[WKSpaceListCell class] forCellReuseIdentifier:@"SpaceCell"];
     [_containerView addSubview:_tableView];
 
@@ -325,9 +328,11 @@
         dispatch_async(dispatch_get_main_queue(), ^{
             weakSelf.spaces = spaces ?: @[];  // 防止nil
 
-            // 更新tableView高度：每行48，最大300
-            CGFloat height = MIN(weakSelf.spaces.count * 48, 300);
+            // 更新tableView高度：每行48，最多显示6行，超出可滚动
+            NSInteger maxVisibleRows = 6;
+            CGFloat height = MIN(weakSelf.spaces.count, maxVisibleRows) * 48;
             NSLog(@"📐 更新tableView高度: %.0f (共%lu个Space)", height, (unsigned long)weakSelf.spaces.count);
+            weakSelf.tableView.scrollEnabled = (NSInteger)weakSelf.spaces.count > maxVisibleRows;
             weakSelf.tableViewHeightConstraint.constant = height;
 
             [weakSelf.tableView reloadData];
