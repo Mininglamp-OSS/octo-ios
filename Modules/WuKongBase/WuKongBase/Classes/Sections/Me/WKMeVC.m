@@ -127,7 +127,8 @@
     NSDictionary *data = noti.object;
     if(data && data[@"uid"] && [[WKApp shared].loginInfo.uid isEqualToString:data[@"uid"]]) {
         NSLog(@"[Avatar] WKeHeader received avatarUpdate notification");
-        self.avatarImgView.url = [WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid];
+        WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:[WKApp shared].loginInfo.uid]];
+        self.avatarImgView.url = [WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid cacheKey:info.avatarCacheKey];
     }
 }
 
@@ -153,7 +154,8 @@
 
 -(void) reloadData {
     NSLog(@"[Avatar] WKeHeader reloadData");
-    self.avatarImgView.url = [WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid];
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:[WKApp shared].loginInfo.uid]];
+    self.avatarImgView.url = [WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid cacheKey:info.avatarCacheKey];
     self.nameLbl.textColor = [WKApp shared].config.defaultTextColor;
     self.nameLbl.text = [WKApp shared].loginInfo.extra[@"name"];
     [self.nameLbl sizeToFit];

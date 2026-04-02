@@ -244,7 +244,14 @@
     
     // 用户头像
     WKUserAvatar *avatarView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, 54.0f,  54.0f)];
-    [avatarView setUrl:[WKAvatarUtil getFullAvatarWIthPath:member.memberAvatar]];
+    WKChannelInfo *avatarChannelInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:member.memberUid channelType:WK_PERSON]];
+    if (avatarChannelInfo && avatarChannelInfo.avatarCacheKey.length > 0) {
+        NSString *fullUrl = [WKAvatarUtil getFullAvatarWIthPath:member.memberAvatar];
+        NSString *separator = [fullUrl containsString:@"?"] ? @"&" : @"?";
+        [avatarView setUrl:[NSString stringWithFormat:@"%@%@v=%@", fullUrl, separator, avatarChannelInfo.avatarCacheKey]];
+    } else {
+        [avatarView setUrl:[WKAvatarUtil getFullAvatarWIthPath:member.memberAvatar]];
+    }
     
     [view addSubview:avatarView];
     avatarView.lim_left = view.lim_width/2.0f - avatarView.lim_width/2.0f;

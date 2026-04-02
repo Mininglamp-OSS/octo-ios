@@ -42,7 +42,8 @@
 - (void)refresh:(WKMeAvatarModel*)cellModel {
     [super refresh:cellModel];
     NSLog(@"[Avatar] WKMeAvatarCell refresh");
-    [_avatarImgView setUrl:[WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid]];
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:[WKApp shared].loginInfo.uid]];
+    [_avatarImgView setUrl:[WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid cacheKey:info.avatarCacheKey]];
 }
 
 - (void)layoutSubviews {
