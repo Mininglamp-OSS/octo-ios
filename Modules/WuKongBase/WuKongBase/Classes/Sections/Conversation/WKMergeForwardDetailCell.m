@@ -22,6 +22,9 @@
 #import "WKMergeForwardContent.h"
 #import "WKMergeForwardDetailVC.h"
 #import <AVKit/AVKit.h>
+#import <WebKit/WebKit.h>
+#import <WuKongBase/WuKongBase-Swift.h>
+#import "UIColor+WK.h"
 
 // 下载进度遮罩（黑色半透明蒙版 + 转圈 + 百分比）
 @interface WKDownloadProgressOverlay : UIView
@@ -371,9 +374,20 @@ static void cancelDownloadForMessage(WKMessage *message) {
 
 @end
 
-@interface WKMergeForwardDetailTextCell ()
+static const CGFloat kMFTableRowHeight = 44.0f;
+static const CGFloat kMFTableExtraPadding = 10.0f;
+static const CGFloat kMFTableTopSpace = 8.0f;
+static const CGFloat kMFTableToolbarHeight = 36.0f;
+
+@interface WKMergeForwardDetailTextCell () <WKNavigationDelegate, UIScrollViewDelegate>
 
 @property(nonatomic,strong) M80AttributedLabel *textLbl;
+@property(nonatomic,strong) UILabel *markdownLbl;
+@property(nonatomic,strong) NSMutableArray<UIView *> *segmentViews;
+@property(nonatomic,strong) NSMutableArray<WKWebView *> *tableWebViews;
+@property(nonatomic,strong) NSMutableArray<UIScrollView *> *tableOverlays;
+@property(nonatomic,strong) NSMutableArray<NSString *> *tableRawContents;
+@property(nonatomic,assign) BOOL segmentsBuilt;
 
 @end
 
@@ -388,7 +402,8 @@ static void cancelDownloadForMessage(WKMessage *message) {
     [super setupUI];
     
     [self.messageContentView addSubview:self.textLbl];
-    
+    [self.messageContentView addSubview:self.markdownLbl];
+
     self.messageContentView.userInteractionEnabled = YES;
     UILongPressGestureRecognizer *longPressGesture = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPressGesture:)];
     
@@ -401,23 +416,254 @@ static void cancelDownloadForMessage(WKMessage *message) {
     [self.textLbl setBackgroundColor:[UIColor clearColor]];
 }
 
+- (void)clearSegmentViews {
+    for (UIView *v in self.segmentViews) {
+        if (v != self.textLbl && v != self.markdownLbl) {
+            [v removeFromSuperview];
+        }
+    }
+    [self.segmentViews removeAllObjects];
+    for (UIScrollView *o in self.tableOverlays) { [o removeFromSuperview]; }
+    [self.tableOverlays removeAllObjects];
+    [self.tableWebViews removeAllObjects];
+    [self.tableRawContents removeAllObjects];
+    self.segmentsBuilt = NO;
+}
+
+- (WKWebView *)createTableWebView {
+    WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
+    WKWebView *wv = [[WKWebView alloc] initWithFrame:CGRectZero configuration:config];
+    wv.scrollView.scrollEnabled = NO;
+    wv.backgroundColor = [UIColor clearColor];
+    wv.opaque = NO;
+    wv.scrollView.backgroundColor = [UIColor clearColor];
+    wv.navigationDelegate = self;
+    return wv;
+}
+
+- (UIScrollView *)createTableOverlay {
+    UIScrollView *sv = [[UIScrollView alloc] init];
+    sv.backgroundColor = [UIColor clearColor];
+    sv.showsHorizontalScrollIndicator = YES;
+    sv.showsVerticalScrollIndicator = NO;
+    sv.bounces = NO;
+    sv.directionalLockEnabled = YES;
+    sv.delegate = self;
+    return sv;
+}
+
+- (UIView *)createTableToolbar:(NSInteger)tableIndex {
+    UIView *toolbar = [[UIView alloc] init];
+    toolbar.backgroundColor = [UIColor colorWithRed:0xF5/255.0 green:0xF5/255.0 blue:0xF6/255.0 alpha:1.0];
+
+    UILabel *titleLbl = [[UILabel alloc] init];
+    titleLbl.text = @"表格";
+    titleLbl.font = [UIFont boldSystemFontOfSize:15];
+    titleLbl.textColor = [UIColor colorWithRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0];
+    [titleLbl sizeToFit];
+    titleLbl.frame = CGRectMake(12, (kMFTableToolbarHeight - titleLbl.frame.size.height) / 2.0, titleLbl.frame.size.width, titleLbl.frame.size.height);
+    [toolbar addSubview:titleLbl];
+
+    UIButton *copyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    copyBtn.tag = tableIndex;
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *iconConfig = [UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightRegular];
+        UIImage *icon = [UIImage systemImageNamed:@"doc.on.doc" withConfiguration:iconConfig];
+        [copyBtn setImage:[icon imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal];
+    } else {
+        [copyBtn setTitle:@"复制" forState:UIControlStateNormal];
+        copyBtn.titleLabel.font = [UIFont systemFontOfSize:13];
+    }
+    copyBtn.tintColor = [UIColor colorWithRed:0x99/255.0 green:0x99/255.0 blue:0x99/255.0 alpha:1.0];
+    [copyBtn addTarget:self action:@selector(copyTableTapped:) forControlEvents:UIControlEventTouchUpInside];
+    copyBtn.frame = CGRectMake(0, 0, 36, kMFTableToolbarHeight);
+    [toolbar addSubview:copyBtn];
+
+    UIView *separator = [[UIView alloc] init];
+    separator.backgroundColor = [UIColor colorWithRed:0xE0/255.0 green:0xE0/255.0 blue:0xE0/255.0 alpha:1.0];
+    separator.tag = 9999;
+    [toolbar addSubview:separator];
+
+    return toolbar;
+}
+
+- (void)copyTableTapped:(UIButton *)sender {
+    NSInteger idx = sender.tag;
+    if (idx < (NSInteger)self.tableRawContents.count) {
+        [UIPasteboard generalPasteboard].string = self.tableRawContents[idx];
+        UIView *topView = [WKNavigationManager shared].topViewController.view;
+        [topView showHUDWithHide:LLang(@"已复制")];
+    }
+}
+
 - (void)refresh:(WKMergeForwardDetailTextModel *)model {
     [super refresh:model];
-    
-    WKTextContent *textContent = (WKTextContent*)[model.message content];
-    
-    [self.textLbl lim_setText:textContent.content mentionInfo:textContent.mentionedInfo];
-    
+
+    WKTextContent *textContent = (WKTextContent *)[model.message content];
+    NSString *content = textContent.content;
+    UIColor *textColor = [WKApp shared].config.defaultTextColor;
+    NSString *colorHex = [textColor toHexRGB];
+    BOOL hasTable = [WKMarkdownRenderer containsTable:content];
+
+    if (hasTable) {
+        self.textLbl.hidden = YES;
+        self.markdownLbl.hidden = YES;
+
+        if (!self.segmentsBuilt) {
+            [self clearSegmentViews];
+            NSArray *segments = [WKMarkdownRenderer splitContentSegments:content];
+            for (NSDictionary *seg in segments) {
+                NSString *type = seg[@"type"];
+                NSString *segContent = seg[@"content"];
+                if ([type isEqualToString:@"text"]) {
+                    UILabel *lbl = [[UILabel alloc] init];
+                    lbl.font = [UIFont systemFontOfSize:[WKApp shared].config.messageTextFontSize];
+                    lbl.textColor = textColor;
+                    lbl.numberOfLines = 0;
+                    lbl.lineBreakMode = NSLineBreakByWordWrapping;
+                    lbl.backgroundColor = [UIColor clearColor];
+                    if ([WKMarkdownRenderer containsMarkdown:segContent]) {
+                        NSAttributedString *mdAttr = [WKMarkdownRenderer render:segContent fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+                        if (mdAttr) { lbl.attributedText = mdAttr; }
+                        else { lbl.text = segContent; }
+                    } else {
+                        lbl.text = segContent;
+                    }
+                    [self.messageContentView addSubview:lbl];
+                    [self.segmentViews addObject:lbl];
+                } else {
+                    // 表格段：工具栏 + WebView + 滚动遮罩
+                    NSInteger tableIndex = (NSInteger)self.tableRawContents.count;
+                    [self.tableRawContents addObject:segContent];
+
+                    UIView *container = [[UIView alloc] init];
+                    container.backgroundColor = [UIColor colorWithRed:0xF5/255.0 green:0xF5/255.0 blue:0xF6/255.0 alpha:1.0];
+                    container.layer.cornerRadius = 8.0;
+                    container.clipsToBounds = YES;
+
+                    UIView *toolbar = [self createTableToolbar:tableIndex];
+                    [container addSubview:toolbar];
+
+                    WKWebView *wv = [self createTableWebView];
+                    NSString *tableHTML = [WKMarkdownRenderer extractTableHTML:segContent fontSize:[WKApp shared].config.messageTextFontSize textColorHex:@"#333333"];
+                    if (tableHTML) { [wv loadHTMLString:tableHTML baseURL:nil]; }
+                    [container addSubview:wv];
+
+                    NSInteger rowCount = [WKMarkdownRenderer tableRowCount:segContent];
+                    container.tag = (NSInteger)(kMFTableToolbarHeight + rowCount * kMFTableRowHeight + kMFTableExtraPadding);
+
+                    [self.messageContentView addSubview:container];
+                    [self.segmentViews addObject:container];
+                    [self.tableWebViews addObject:wv];
+
+                    UIScrollView *overlay = [self createTableOverlay];
+                    [self.contentView addSubview:overlay];
+                    [self.tableOverlays addObject:overlay];
+                }
+            }
+            self.segmentsBuilt = YES;
+        }
+    } else if ([WKMarkdownRenderer containsMarkdown:content]) {
+        self.textLbl.hidden = YES;
+        self.markdownLbl.hidden = NO;
+        [self clearSegmentViews];
+        NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+        if (mdAttr && mdAttr.length > 0) {
+            self.markdownLbl.attributedText = mdAttr;
+        } else {
+            self.textLbl.hidden = NO;
+            self.markdownLbl.hidden = YES;
+            [self.textLbl lim_setText:content mentionInfo:textContent.mentionedInfo];
+        }
+    } else {
+        self.textLbl.hidden = NO;
+        self.markdownLbl.hidden = YES;
+        [self clearSegmentViews];
+        [self.textLbl lim_setText:content mentionInfo:textContent.mentionedInfo];
+    }
+
     [self.textLbl setBackgroundColor:[UIColor clearColor]];
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    
-    CGSize textLabelSize = [[self class] getTextLabelSize:self.model.message maxWidth:contentMaxWidth];
-    
-    self.textLbl.lim_width = textLabelSize.width;
-    self.textLbl.lim_height = textLabelSize.height;
+
+    if (self.segmentViews.count > 0) {
+        CGFloat y = 0;
+        CGFloat maxWidth = contentMaxWidth;
+        NSInteger tableIdx = 0;
+        for (NSUInteger i = 0; i < self.segmentViews.count; i++) {
+            UIView *v = self.segmentViews[i];
+            CGFloat spacing = (i < self.segmentViews.count - 1) ? kMFTableTopSpace : 0;
+            if ([v isKindOfClass:[UILabel class]]) {
+                CGSize fitSize = [(UILabel *)v sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
+                v.frame = CGRectMake(0, y, ceilf(fitSize.width), ceilf(fitSize.height));
+                y += ceilf(fitSize.height) + spacing;
+            } else {
+                CGFloat tableH = (CGFloat)v.tag;
+                v.frame = CGRectMake(0, y, maxWidth, tableH);
+
+                // 容器内布局：toolbar 在顶部，webview 在 toolbar 下方
+                for (UIView *sub in v.subviews) {
+                    if ([sub isKindOfClass:[WKWebView class]]) {
+                        sub.frame = CGRectMake(0, kMFTableToolbarHeight, maxWidth, tableH - kMFTableToolbarHeight);
+                    } else {
+                        // toolbar
+                        sub.frame = CGRectMake(0, 0, maxWidth, kMFTableToolbarHeight);
+                        for (UIView *toolSub in sub.subviews) {
+                            if ([toolSub isKindOfClass:[UIButton class]]) {
+                                toolSub.frame = CGRectMake(maxWidth - 36 - 8, 0, 36, kMFTableToolbarHeight);
+                            } else if (toolSub.tag == 9999) {
+                                toolSub.frame = CGRectMake(0, kMFTableToolbarHeight - 0.5, maxWidth, 0.5);
+                            }
+                        }
+                    }
+                }
+
+                // 滚动遮罩覆盖 webview 区域
+                if (tableIdx < (NSInteger)self.tableOverlays.count) {
+                    CGRect containerInContent = [self.contentView convertRect:v.frame fromView:self.messageContentView];
+                    CGRect overlayRect = CGRectMake(containerInContent.origin.x, containerInContent.origin.y + kMFTableToolbarHeight, containerInContent.size.width, containerInContent.size.height - kMFTableToolbarHeight);
+                    self.tableOverlays[tableIdx].frame = overlayRect;
+                    tableIdx++;
+                }
+
+                y += tableH + spacing;
+            }
+        }
+    } else if (!self.markdownLbl.hidden) {
+        CGSize textLabelSize = [[self class] getTextLabelSize:self.model.message maxWidth:contentMaxWidth];
+        self.markdownLbl.frame = CGRectMake(0, 0, textLabelSize.width, textLabelSize.height);
+    } else {
+        CGSize textLabelSize = [[self class] getTextLabelSize:self.model.message maxWidth:contentMaxWidth];
+        self.textLbl.lim_width = textLabelSize.width;
+        self.textLbl.lim_height = textLabelSize.height;
+    }
+}
+
+#pragma mark - WKNavigationDelegate (WebView 加载完成后同步 contentSize 到遮罩层)
+
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    NSUInteger idx = [self.tableWebViews indexOfObject:webView];
+    if (idx == NSNotFound || idx >= self.tableOverlays.count) return;
+    UIScrollView *overlay = self.tableOverlays[idx];
+    [webView evaluateJavaScript:@"Math.max(document.body.scrollWidth, document.documentElement.scrollWidth)" completionHandler:^(id result, NSError *error) {
+        if (!result || error) return;
+        CGFloat contentWidth = [result floatValue];
+        CGFloat frameWidth = overlay.frame.size.width;
+        if (contentWidth > frameWidth && frameWidth > 0) {
+            overlay.contentSize = CGSizeMake(contentWidth, overlay.frame.size.height);
+        }
+    }];
+}
+
+#pragma mark - UIScrollViewDelegate (遮罩层滑动同步到 WebView)
+
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+    NSUInteger idx = [self.tableOverlays indexOfObject:scrollView];
+    if (idx != NSNotFound && idx < self.tableWebViews.count) {
+        self.tableWebViews[idx].scrollView.contentOffset = scrollView.contentOffset;
+    }
 }
 
 
@@ -434,6 +680,36 @@ static void cancelDownloadForMessage(WKMessage *message) {
         
     }
     return _textLbl;
+}
+
+- (NSMutableArray<UIView *> *)segmentViews {
+    if (!_segmentViews) { _segmentViews = [NSMutableArray array]; }
+    return _segmentViews;
+}
+- (NSMutableArray<WKWebView *> *)tableWebViews {
+    if (!_tableWebViews) { _tableWebViews = [NSMutableArray array]; }
+    return _tableWebViews;
+}
+- (NSMutableArray<UIScrollView *> *)tableOverlays {
+    if (!_tableOverlays) { _tableOverlays = [NSMutableArray array]; }
+    return _tableOverlays;
+}
+- (NSMutableArray<NSString *> *)tableRawContents {
+    if (!_tableRawContents) { _tableRawContents = [NSMutableArray array]; }
+    return _tableRawContents;
+}
+
+- (UILabel *)markdownLbl {
+    if (!_markdownLbl) {
+        _markdownLbl = [[UILabel alloc] init];
+        _markdownLbl.font = [UIFont systemFontOfSize:[WKApp shared].config.messageTextFontSize];
+        _markdownLbl.textColor = [WKApp shared].config.defaultTextColor;
+        _markdownLbl.numberOfLines = 0;
+        _markdownLbl.lineBreakMode = NSLineBreakByWordWrapping;
+        _markdownLbl.backgroundColor = [UIColor clearColor];
+        _markdownLbl.hidden = YES;
+    }
+    return _markdownLbl;
 }
 
 -(void) handleLongPressGesture:(UILongPressGestureRecognizer *)longPressGR {
@@ -467,14 +743,76 @@ static void cancelDownloadForMessage(WKMessage *message) {
     if(cacheSizeStr) {
         return CGSizeFromString(cacheSizeStr);
     }
-    static M80AttributedLabel *textLbl;
-    if(!textLbl) {
-        textLbl = [[M80AttributedLabel alloc] init];
-        [textLbl setFont:[UIFont systemFontOfSize:[WKApp shared].config.messageTextFontSize]];
+    WKTextContent *textContent = (WKTextContent *)message.content;
+    NSString *content = textContent.content;
+    CGSize textSize;
+
+    BOOL hasTable = [WKMarkdownRenderer containsTable:content];
+    if (hasTable) {
+        // 分段计算总高度
+        NSArray *segments = [WKMarkdownRenderer splitContentSegments:content];
+        UIColor *textColor = [WKApp shared].config.defaultTextColor;
+        NSString *colorHex = [textColor toHexRGB];
+        CGFloat totalHeight = 0;
+        CGFloat totalWidth = maxWidth;
+
+        static UILabel *measureLabel;
+        if (!measureLabel) {
+            measureLabel = [[UILabel alloc] init];
+            measureLabel.numberOfLines = 0;
+            measureLabel.lineBreakMode = NSLineBreakByWordWrapping;
+        }
+        measureLabel.font = [UIFont systemFontOfSize:[WKApp shared].config.messageTextFontSize];
+
+        for (NSUInteger i = 0; i < segments.count; i++) {
+            NSDictionary *seg = segments[i];
+            NSString *type = seg[@"type"];
+            NSString *segContent = seg[@"content"];
+            CGFloat spacing = (i < segments.count - 1) ? kMFTableTopSpace : 0;
+            if ([type isEqualToString:@"text"]) {
+                if ([WKMarkdownRenderer containsMarkdown:segContent]) {
+                    NSAttributedString *mdAttr = [WKMarkdownRenderer render:segContent fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+                    if (mdAttr) {
+                        measureLabel.attributedText = mdAttr;
+                    } else {
+                        measureLabel.text = segContent;
+                    }
+                } else {
+                    measureLabel.text = segContent;
+                }
+                CGSize fitSize = [measureLabel sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
+                totalHeight += ceilf(fitSize.height) + spacing;
+            } else {
+                NSInteger rowCount = [WKMarkdownRenderer tableRowCount:segContent];
+                totalHeight += kMFTableToolbarHeight + rowCount * kMFTableRowHeight + kMFTableExtraPadding + spacing;
+            }
+        }
+        textSize = CGSizeMake(totalWidth, totalHeight);
+    } else if ([WKMarkdownRenderer containsMarkdown:content]) {
+        UIColor *textColor = [WKApp shared].config.defaultTextColor;
+        NSString *colorHex = [textColor toHexRGB];
+        NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+        if (mdAttr && mdAttr.length > 0) {
+            CGRect rect = [mdAttr boundingRectWithSize:CGSizeMake(maxWidth, CGFLOAT_MAX) options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading context:nil];
+            textSize = CGSizeMake(ceilf(rect.size.width), ceilf(rect.size.height));
+        } else {
+            static M80AttributedLabel *plainLbl;
+            if(!plainLbl) {
+                plainLbl = [[M80AttributedLabel alloc] init];
+                [plainLbl setFont:[UIFont systemFontOfSize:[WKApp shared].config.messageTextFontSize]];
+            }
+            [plainLbl lim_setText:content];
+            textSize = [plainLbl sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
+        }
+    } else {
+        static M80AttributedLabel *plainLbl2;
+        if(!plainLbl2) {
+            plainLbl2 = [[M80AttributedLabel alloc] init];
+            [plainLbl2 setFont:[UIFont systemFontOfSize:[WKApp shared].config.messageTextFontSize]];
+        }
+        [plainLbl2 lim_setText:content];
+        textSize = [plainLbl2 sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
     }
-    [textLbl lim_setText:((WKTextContent*)message.content).content];
-    
-    CGSize textSize = [textLbl sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
     if(message.messageId !=0 ) {
          [memoryLock lock];
         [memoryCache setCache:NSStringFromCGSize(textSize) forKey:cacheKey];
