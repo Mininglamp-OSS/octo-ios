@@ -103,21 +103,13 @@
 }
 
 - (void)setStyle:(WKSystemStyle)style {
-    _innerStyle = style;
-    if(style == WKSystemStyleDark) {
-        [WKApp shared].loginInfo.extra[@"systemStyle"] = @"dark";
-        [[WKApp shared].loginInfo save];
-        if (@available(iOS 13.0, *)) {
-            [UIApplication sharedApplication].statusBarStyle =   UIStatusBarStyleLightContent;
-            [UIApplication sharedApplication].keyWindow.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
-        }
-    }else {
-        [WKApp shared].loginInfo.extra[@"systemStyle"] = @"light";
-        [[WKApp shared].loginInfo save];
-        if (@available(iOS 13.0, *)) {
-            [UIApplication sharedApplication].statusBarStyle = UIStatusBarStyleDarkContent;
-            [UIApplication sharedApplication].keyWindow.overrideUserInterfaceStyle = UIUserInterfaceStyleLight;
-        }
+    // 临时关闭暗黑模式，强制使用浅色模式
+    _innerStyle = WKSystemStyleLight;
+    [WKApp shared].loginInfo.extra[@"systemStyle"] = @"light";
+    [[WKApp shared].loginInfo save];
+    if (@available(iOS 13.0, *)) {
+        [UIApplication sharedApplication].statusBarStyle = UIStatusBarStyleDarkContent;
+        [UIApplication sharedApplication].keyWindow.overrideUserInterfaceStyle = UIUserInterfaceStyleLight;
     }
 }
 

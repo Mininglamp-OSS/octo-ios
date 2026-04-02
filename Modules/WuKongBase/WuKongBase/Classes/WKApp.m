@@ -759,20 +759,8 @@ static  AVAudioPlayer *_silentAudioPlayer;
         [[[WKSDK shared] connectionManager] connect];
     }
     
-    if([WKApp shared].config.darkModeWithSystem) {
-        if (@available(iOS 13.0, *)) {
-            // 延迟一点执行模式切换（TODO: 延迟为了解决有时候UI界面模式没有切换成功的问题）
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                if(UITraitCollection.currentTraitCollection.userInterfaceStyle == UIUserInterfaceStyleDark) {
-                    [WKApp shared].config.style = WKSystemStyleDark;
-                }else{
-                    [WKApp shared].config.style = WKSystemStyleLight;
-                }
-            });
-        }
-    }else{
-        [WKApp shared].config.style =  [WKApp shared].config.style; // 这里重新设置下 触发setStyle方法里的逻辑
-    }
+    // 临时关闭暗黑模式，强制使用浅色模式
+    [WKApp shared].config.style = WKSystemStyleLight;
 }
 
 // 录屏

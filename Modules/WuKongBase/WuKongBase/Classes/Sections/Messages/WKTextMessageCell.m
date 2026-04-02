@@ -1352,6 +1352,9 @@
 }
 
 -(void) replyBoxTap {
+    if(!self.messageModel.content.reply || self.messageModel.content.reply.messageSeq == 0) {
+        return;
+    }
     [self.conversationContext locateMessageCell:self.messageModel.content.reply.messageSeq];
 }
 

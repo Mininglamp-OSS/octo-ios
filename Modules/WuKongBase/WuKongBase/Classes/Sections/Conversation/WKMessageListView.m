@@ -191,18 +191,17 @@
         NSIndexPath *indexPath = [self.dataProvider indexPathAtOrderSeq:self.keepPosition.orderSeq];
         if(!indexPath) {
             [self scrollToBottom:animation];
-            return;
-        }
-        CGRect indexRect = [self.tableView rectForRowAtIndexPath:indexPath];
-        [self setContentOffsetYSafely:indexRect.origin.y+self.keepPosition.offset - self.tableView.contentInset.top];
-        if(self.needPositionReminder) {
-            WKMessageBaseCell *cell =  (WKMessageBaseCell*) [self.tableView cellForRowAtIndexPath:indexPath];
-            if(cell && [cell isKindOfClass:[WKMessageCell class]]) {
-                [(WKMessageCell*)cell startReminderAnimation];
+        } else {
+            CGRect indexRect = [self.tableView rectForRowAtIndexPath:indexPath];
+            [self setContentOffsetYSafely:indexRect.origin.y+self.keepPosition.offset - self.tableView.contentInset.top];
+            if(self.needPositionReminder) {
+                WKMessageBaseCell *cell =  (WKMessageBaseCell*) [self.tableView cellForRowAtIndexPath:indexPath];
+                if(cell && [cell isKindOfClass:[WKMessageCell class]]) {
+                    [(WKMessageCell*)cell startReminderAnimation];
+                }
+                self.needPositionReminder = false;
             }
-            self.needPositionReminder = false;
         }
-       
     }
     if(complete) {
         complete();
@@ -998,13 +997,20 @@
         return;
     }
     
+    // 查DB确认消息是否存在且可用（未删除、未撤回），不可用则直接提示
+    WKMessage *targetMsg = [[WKMessageDB shared] getMessage:self.channel messageSeq:messageSeq];
+    if(!targetMsg || targetMsg.isDeleted || targetMsg.remoteExtra.revoke) {
+        [self.tableView showHUDWithHide:LLang(@"原消息不存在")];
+        return;
+    }
+
     self.keepPosition = [WKConversationPosition orderSeq:[[WKSDK shared].chatManager getOrderSeq:messageSeq] offset:0];
-    
+
     __weak typeof(self) weakSelf = self;
     [self loadMessages:true firstLoad:false complete:^{
-        NSIndexPath *browseToIndex = [self.dataProvider indexPathAtOrderSeq:[WKSDK.shared.chatManager getOrderSeq:messageSeq]];
+        NSIndexPath *browseToIndex = [weakSelf.dataProvider indexPathAtOrderSeq:[WKSDK.shared.chatManager getOrderSeq:messageSeq]];
         if(browseToIndex) {
-             WKMessageModel *messageModel =  [weakSelf.dataProvider messageAtIndexPath:browseToIndex];
+             WKMessageModel *messageModel = [weakSelf.dataProvider messageAtIndexPath:browseToIndex];
             [weakSelf scrollToIndex:browseToIndex animated:YES atScrollPosition:UITableViewScrollPositionMiddle];
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 messageModel.reminderAnimation = YES;
@@ -1012,7 +1018,6 @@
                 [weakSelf.tableView reloadRowsAtIndexPaths:@[browseToIndex] withRowAnimation:UITableViewRowAnimationNone];
                 [weakSelf.tableView endUpdates];
             });
-            
         }
     }];
     
