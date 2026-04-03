@@ -15,6 +15,8 @@
 
 @property(nonatomic,strong) WKBadgeView *badgeView; // 红点
 
+@property(nonatomic,strong) UILabel *countLbl; // 右侧计数
+
 @property(nonatomic,strong) UIImageView *avatarImgView; // 头像
 @property(nonatomic,strong) WKBadgeView *avatarReddotView;  // 头像红点
 
@@ -32,8 +34,12 @@
     [self.contentView addSubview:self.avatarImgView];
     self.badgeView = [WKBadgeView viewWithoutBadgeTip];
     self.avatarReddotView = [WKBadgeView viewWithoutBadgeTip];
+    self.countLbl = [[UILabel alloc] init];
+    self.countLbl.font = [UIFont systemFontOfSize:14.0f];
+    self.countLbl.textColor = [UIColor grayColor];
     [self.contentView addSubview:self.avatarReddotView];
     [self.contentView addSubview:self.badgeView];
+    [self.contentView addSubview:self.countLbl];
 }
 
 -(void)refresh:(WKContactsHeaderItem*)model {
@@ -57,6 +63,10 @@
     }else {
         self.badgeView.hidden = YES;
     }
+    self.countLbl.text = model.countValue ?: @"";
+    [self.countLbl sizeToFit];
+    self.countLbl.hidden = (!model.countValue || model.countValue.length == 0);
+
     self.avatarImgView.hidden = YES;
     self.avatarReddotView.hidden = YES;
     if(model.avatarURL && ![model.avatarURL isEqualToString:@""]) {
@@ -75,6 +85,8 @@
     self.titleLbl.lim_top = self.lim_height/2.0f - self.titleLbl.lim_height/2.0f;
     self.badgeView.lim_left = self.titleLbl.lim_left + self.titleLbl.lim_width + 10.0f;
     self.badgeView.lim_top = self.lim_height/2.0f - self.badgeView.lim_height/2.0f;
+    self.countLbl.lim_left = self.titleLbl.lim_left + self.titleLbl.lim_width + 8.0f;
+    self.countLbl.lim_top = self.lim_height/2.0f - self.countLbl.lim_height/2.0f;
     
     self.avatarImgView.lim_centerY_parent = self.contentView;
     self.avatarImgView.lim_left = self.contentView.lim_width - self.avatarImgView.lim_width - 20.0f;

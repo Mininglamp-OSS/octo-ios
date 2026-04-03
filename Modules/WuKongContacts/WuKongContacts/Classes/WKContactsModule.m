@@ -85,46 +85,21 @@
         return item;
     } category:WKPOINT_CATEGORY_CONTACTSITEM sort:9000];
     
-    // 保存的群item
-       [self setMethod:@"contacts.header.groupSave" handler:^id _Nullable(id  _Nonnull param) {
-           WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:WK_CONTACTS_HEADER_ITEM_NEWFRIEND title:LLangW(@"保存的群聊",weakSelf) icon:@"Contacts/Index/GroupSave" moduleID:[weakSelf moduleId] onClick:^{
-               // 跳转
-               [[WKNavigationManager shared] pushViewController:[WKMyGroupListVC new] animated:YES];
-           }];
-           return item;
-       } category:WKPOINT_CATEGORY_CONTACTSITEM sort:8000];
-
-    // 组织内联系人item
-    [self setMethod:@"contacts.header.orgMembers" handler:^id _Nullable(id  _Nonnull param) {
-        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"orgMembers" title:LLangW(@"组织内联系人",weakSelf) icon:@"Contacts/Index/OrgMembers" moduleID:[weakSelf moduleId] onClick:^{
-            [[WKNavigationManager shared] pushViewController:[WKOrgMembersListVC new] animated:YES];
-        }];
-        return item;
-    } category:WKPOINT_CATEGORY_CONTACTSITEM sort:7000];
-
-    // Bot item
-    [self setMethod:@"contacts.header.bot" handler:^id _Nullable(id  _Nonnull param) {
-        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"bot" title:LLangW(@"我的AI",weakSelf) icon:@"Contacts/Index/Bot" moduleID:[weakSelf moduleId] onClick:^{
-            [[WKNavigationManager shared] pushViewController:[WKBotListVC new] animated:YES];
-        }];
-        return item;
-    } category:WKPOINT_CATEGORY_CONTACTSITEM sort:6000];
-
-    // AI广场item
-    [self setMethod:@"contacts.header.botPlaza" handler:^id _Nullable(id  _Nonnull param) {
-        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"botPlaza" title:LLangW(@"AI广场",weakSelf) icon:@"Contacts/Index/Bot" moduleID:[weakSelf moduleId] onClick:^{
-            [[WKNavigationManager shared] pushViewController:[WKBotPlazaVC new] animated:YES];
-        }];
-        return item;
-    } category:WKPOINT_CATEGORY_CONTACTSITEM sort:5900];
-
-    // 我的群组item
-    [self setMethod:@"contacts.header.allGroups" handler:^id _Nullable(id  _Nonnull param) {
-        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"allGroups" title:LLangW(@"我的群组",weakSelf) icon:@"Contacts/Index/AllGroups" moduleID:[weakSelf moduleId] onClick:^{
+    // 群聊item（原我的群组，改名并前移）
+    [self setMethod:@"contacts.header.groups" handler:^id _Nullable(id  _Nonnull param) {
+        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"groups" title:LLangW(@"群聊",weakSelf) icon:@"Contacts/Index/AllGroups" moduleID:[weakSelf moduleId] onClick:^{
             [[WKNavigationManager shared] pushViewController:[WKAllGroupListVC new] animated:YES];
         }];
         return item;
-    } category:WKPOINT_CATEGORY_CONTACTSITEM sort:5000];
+    } category:WKPOINT_CATEGORY_CONTACTSITEM sort:8500];
+
+    // 已添加AI item（原我的AI，改名）
+    [self setMethod:@"contacts.header.bot" handler:^id _Nullable(id  _Nonnull param) {
+        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"bot" title:LLangW(@"已添加AI",weakSelf) icon:@"Contacts/Index/Bot" moduleID:[weakSelf moduleId] onClick:^{
+            [[WKNavigationManager shared] pushViewController:[WKBotListVC new] animated:YES];
+        }];
+        return item;
+    } category:WKPOINT_CATEGORY_CONTACTSITEM sort:8000];
 
 
 }

@@ -30,6 +30,14 @@
 
 @property(nonatomic,copy) NSString *currentContactsFingerprint; // 当前显示的联系人数据指纹
 
+// 联系人过滤
+@property(nonatomic,assign) NSInteger contactsFilter; // 0=全部 1=AI 2=人类
+@property(nonatomic,strong) NSArray<WKChannelInfo*> *allContactInfos; // 完整联系人列表
+@property(nonatomic,assign) NSInteger groupCount; // 群聊数量
+@property(nonatomic,assign) NSInteger myBotCount; // 已添加AI数量（仅 space/members 中的 bot）
+@property(nonatomic,assign) BOOL isLoadingData; // 防止重复请求
+@property(nonatomic,assign) NSTimeInterval lastRequestTime; // 上次请求时间
+
 @end
 
 @implementation WKContactsVC
@@ -61,8 +69,11 @@
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     self.navigationBar.title = LLang(@"联系人");
-    // 每次切换到通讯录时重新从数据库加载最新联系人数据
-    [self requestData];
+    // 切换 tab 时，距上次请求超过 30 秒才重新拉取，避免频繁切换导致卡顿
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (now - self.lastRequestTime > 30 || !self.currentContactsFingerprint) {
+        [self requestData];
+    }
 }
 
 
@@ -95,13 +106,14 @@
 
 // 联系人数据更新（仅从本地 DB 刷新，不触发 API 请求，避免循环）
 -(void) contactsUpdate:(NSNotification*)notify {
+    if (self.isLoadingData) return; // 正在加载时跳过，避免与API回调冲突
     NSArray<WKChannelInfo*> *dbInfos = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
     [self refreshContactsList:dbInfos ?: @[]];
 }
 
 -(void) refreshContactsHeader {
     if(self.items.count>0) {
-        NSArray *headerItems = [[WKApp shared] invokes:WKPOINT_CATEGORY_CONTACTSITEM param:nil];
+        NSArray *headerItems = [self buildHeaderItemsWithCounts];
         if(self.items.count>0) {
             [self.items replaceObjectAtIndex:0 withObject:[NSMutableArray arrayWithArray:headerItems]];
         }
@@ -136,14 +148,17 @@
         return; // 数据无变化，跳过刷新
     }
     self.currentContactsFingerprint = newFingerprint;
+    self.allContactInfos = channelInfos;
 
-    self.contactsCountLbl.text = [NSString stringWithFormat:LLang(@"%ld个朋友"),(long)channelInfos.count];
+    // 根据 filter 过滤联系人
+    NSArray<WKChannelInfo*> *filtered = [self filteredContactInfos];
+    self.contactsCountLbl.text = [NSString stringWithFormat:LLang(@"%ld个联系人"),(long)filtered.count];
     NSMutableArray *items = [NSMutableArray array];
-    for (WKChannelInfo *info in channelInfos) {
+    for (WKChannelInfo *info in filtered) {
         [items addObject:[self toContactsCellModel:info]];
     }
     // 重建 items（保留 header）
-    NSArray *headerItems = [[WKApp shared] invokes:WKPOINT_CATEGORY_CONTACTSITEM param:nil];
+    NSArray *headerItems = [self buildHeaderItemsWithCounts];
     self.items = [NSMutableArray array];
     self.sectionTitleArr = [NSMutableArray array];
     [self.items insertObject:[NSMutableArray arrayWithArray:headerItems] atIndex:0];
@@ -154,8 +169,62 @@
     }
 }
 
+// 根据当前 filter 过滤联系人
+-(NSArray<WKChannelInfo*>*) filteredContactInfos {
+    if(!self.allContactInfos) return @[];
+    if(self.contactsFilter == 1) { // AI
+        NSMutableArray *result = [NSMutableArray array];
+        for(WKChannelInfo *info in self.allContactInfos) {
+            if(info.robot) [result addObject:info];
+        }
+        return result;
+    } else if(self.contactsFilter == 2) { // 人类
+        NSMutableArray *result = [NSMutableArray array];
+        for(WKChannelInfo *info in self.allContactInfos) {
+            if(!info.robot) [result addObject:info];
+        }
+        return result;
+    }
+    return self.allContactInfos; // 全部
+}
+
+// 重新应用过滤（tab 切换时调用）
+-(void) applyFilter {
+    NSArray<WKChannelInfo*> *filtered = [self filteredContactInfos];
+    self.contactsCountLbl.text = [NSString stringWithFormat:LLang(@"%ld个联系人"),(long)filtered.count];
+    NSMutableArray *cellModels = [NSMutableArray array];
+    for (WKChannelInfo *info in filtered) {
+        [cellModels addObject:[self toContactsCellModel:info]];
+    }
+    NSArray *headerItems = [self buildHeaderItemsWithCounts];
+    self.items = [NSMutableArray array];
+    self.sectionTitleArr = [NSMutableArray array];
+    [self.items insertObject:[NSMutableArray arrayWithArray:headerItems] atIndex:0];
+    if (cellModels.count > 0) {
+        [self sortAndGroup:cellModels];
+    } else {
+        [self.tableView reloadData];
+    }
+}
+
+// 构建带计数的 header items
+-(NSArray*) buildHeaderItemsWithCounts {
+    NSArray *headerItems = [[WKApp shared] invokes:WKPOINT_CATEGORY_CONTACTSITEM param:nil];
+    for (WKContactsHeaderItem *item in headerItems) {
+        if([item.sid isEqualToString:@"groups"]) {
+            item.countValue = [NSString stringWithFormat:@"(%ld)", (long)self.groupCount];
+        } else if([item.sid isEqualToString:@"bot"]) {
+            item.countValue = [NSString stringWithFormat:@"(%ld)", (long)self.myBotCount];
+        }
+    }
+    return headerItems;
+}
+
 // 请求有效联系人数据（从 API 拉取最新数据）
 -(void) requestData{
+    // 防止重复请求
+    if (self.isLoadingData) return;
+
     // 确保 items 至少有 header section（防止空数组越界崩溃）
     if (self.items.count == 0) {
         NSArray *headerItems = [[WKApp shared] invokes:WKPOINT_CATEGORY_CONTACTSITEM param:nil];
@@ -170,53 +239,106 @@
         }
     }
 
-    // 从 API 拉取最新数据
+    self.isLoadingData = YES;
+    self.lastRequestTime = [[NSDate date] timeIntervalSince1970];
+
+    // 所有接口并行请求，全部完成后一次性刷新 UI
     NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
     if (currentSpaceId && currentSpaceId.length > 0) {
-        [self fetchSpaceMembers:currentSpaceId];
+        [self fetchAllDataWithSpaceId:currentSpaceId];
     } else {
         [self fetchFriendContacts];
     }
 }
 
-// Space 模式：从 API 拉取成员列表
--(void) fetchSpaceMembers:(NSString*)spaceId {
+// Space 模式：并行请求 members + space_bots + groups，全部完成后一次性刷新
+-(void) fetchAllDataWithSpaceId:(NSString*)spaceId {
     __weak typeof(self) weakSelf = self;
-    NSString *path = [NSString stringWithFormat:@"space/%@/members", spaceId];
-    [[WKAPIClient sharedClient] GET:path parameters:@{@"page":@"1", @"limit":@"10000"}].then(^(NSArray<NSDictionary*>* members){
-        NSString *nowSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
-        if (![spaceId isEqualToString:nowSpaceId]) return;
 
-        NSMutableArray<WKChannelInfo*> *channelInfos = [NSMutableArray array];
-        if (members && members.count > 0) {
-            for (NSDictionary *m in members) {
-                NSString *uid = m[@"uid"];
-                if (!uid || [uid isEqualToString:[WKApp shared].loginInfo.uid]) continue;
+    NSString *membersPath = [NSString stringWithFormat:@"space/%@/members", spaceId];
+    AnyPromise *membersPromise = [[WKAPIClient sharedClient] GET:membersPath parameters:@{@"page":@"1", @"limit":@"10000"}];
+    AnyPromise *botsPromise = [[WKAPIClient sharedClient] GET:@"robot/space_bots" parameters:@{@"space_id": spaceId}];
+    NSMutableDictionary *groupParams = [NSMutableDictionary dictionaryWithDictionary:@{@"page_size":@(1000), @"space_id": spaceId}];
+    AnyPromise *groupsPromise = [[WKAPIClient sharedClient] GET:@"group/my" parameters:groupParams];
 
-                WKChannel *channel = [[WKChannel alloc] initWith:uid channelType:WK_PERSON];
-                WKChannelInfo *channelInfo = [[WKSDK shared].channelManager getChannelInfo:channel];
-                if (!channelInfo) {
-                    channelInfo = [WKChannelInfo new];
-                    channelInfo.channel = channel;
-                }
-                channelInfo.name = m[@"name"] ?: @"";
-                channelInfo.logo = m[@"avatar"] ?: @"";
-                if (!channelInfo.logo || [channelInfo.logo isEqualToString:@""]) {
-                    channelInfo.logo = [NSString stringWithFormat:@"users/%@/avatar", uid];
-                }
-                channelInfo.follow = WKChannelInfoFollowFriend;
-                channelInfo.status = 1;
-                channelInfo.robot = m[@"robot"] ? [m[@"robot"] boolValue] : NO;
-                if (m[@"category"] && ![m[@"category"] isEqual:[NSNull null]]) {
-                    channelInfo.category = m[@"category"];
-                }
-                [channelInfos addObject:channelInfo];
+    PMKWhen(@[membersPromise, botsPromise, groupsPromise]).then(^(NSArray *results) {
+        // 数据处理放到后台线程，避免阻塞 UI
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            NSString *nowSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+            if (![spaceId isEqualToString:nowSpaceId]) {
+                dispatch_async(dispatch_get_main_queue(), ^{ weakSelf.isLoadingData = NO; });
+                return;
             }
-        }
-        [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
-        [weakSelf refreshContactsList:channelInfos];
+
+            NSString *myUid = [WKApp shared].loginInfo.uid;
+            NSMutableArray<WKChannelInfo*> *channelInfos = [NSMutableArray array];
+            NSMutableSet *addedUids = [NSMutableSet set];
+            NSInteger myBotCount = 0;
+
+            // 处理 members
+            NSArray<NSDictionary*> *members = results.count > 0 ? results[0] : @[];
+            if (members && [members isKindOfClass:[NSArray class]]) {
+                for (NSDictionary *m in members) {
+                    NSString *uid = m[@"uid"];
+                    if (!uid || [uid isEqualToString:myUid]) continue;
+                    [addedUids addObject:uid];
+
+                    WKChannelInfo *channelInfo = [WKChannelInfo new];
+                    channelInfo.channel = [[WKChannel alloc] initWith:uid channelType:WK_PERSON];
+                    channelInfo.name = m[@"name"] ?: @"";
+                    channelInfo.logo = m[@"avatar"] ?: @"";
+                    if (!channelInfo.logo || [channelInfo.logo isEqualToString:@""]) {
+                        channelInfo.logo = [NSString stringWithFormat:@"users/%@/avatar", uid];
+                    }
+                    channelInfo.follow = WKChannelInfoFollowFriend;
+                    channelInfo.status = 1;
+                    channelInfo.robot = m[@"robot"] ? [m[@"robot"] boolValue] : NO;
+                    if (channelInfo.robot) myBotCount++;
+                    if (m[@"category"] && ![m[@"category"] isEqual:[NSNull null]]) {
+                        channelInfo.category = m[@"category"];
+                    }
+                    [channelInfos addObject:channelInfo];
+                }
+            }
+
+            // 处理 space_bots（去重合并）
+            NSArray<NSDictionary*> *bots = results.count > 1 ? results[1] : @[];
+            if (bots && [bots isKindOfClass:[NSArray class]]) {
+                for (NSDictionary *bot in bots) {
+                    NSString *uid = bot[@"uid"];
+                    if (!uid || [addedUids containsObject:uid]) continue;
+                    [addedUids addObject:uid];
+
+                    WKChannelInfo *channelInfo = [WKChannelInfo new];
+                    channelInfo.channel = [[WKChannel alloc] initWith:uid channelType:WK_PERSON];
+                    channelInfo.name = bot[@"name"] ?: @"";
+                    channelInfo.logo = [NSString stringWithFormat:@"users/%@/avatar", uid];
+                    channelInfo.follow = WKChannelInfoFollowFriend;
+                    channelInfo.status = 1;
+                    channelInfo.robot = YES;
+                    [channelInfos addObject:channelInfo];
+                }
+            }
+
+            // 处理群聊数量
+            NSArray *groups = results.count > 2 ? results[2] : @[];
+            NSInteger groupCount = 0;
+            if (groups && [groups isKindOfClass:[NSArray class]]) {
+                groupCount = groups.count;
+            }
+
+            // 回主线程更新 UI
+            dispatch_async(dispatch_get_main_queue(), ^{
+                weakSelf.myBotCount = myBotCount;
+                weakSelf.groupCount = groupCount;
+                [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
+                [weakSelf refreshContactsList:channelInfos];
+                weakSelf.isLoadingData = NO;
+            });
+        });
     }).catch(^(NSError *error){
-        WKLogError(@"拉取Space联系人失败:%@", error);
+        WKLogError(@"拉取通讯录数据失败:%@", error);
+        weakSelf.isLoadingData = NO;
     });
 }
 
@@ -250,8 +372,10 @@
         // 从数据库重新加载（API 可能只返回增量数据）
         NSArray<WKChannelInfo*> *allInfos = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
         [weakSelf refreshContactsList:allInfos ?: @[]];
+        weakSelf.isLoadingData = NO;
     }).catch(^(NSError *error){
         WKLogError(@"拉取好友联系人失败:%@", error);
+        weakSelf.isLoadingData = NO;
     });
 }
 
@@ -444,17 +568,89 @@
     if(section == 0) {
         return 0.0f;
     }
+    if(section == 1) {
+        return 80.0f; // 全部联系人 + tab 按钮
+    }
     return 20.0f;
 }
 -(UIView*) tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section{
     if(section == 0) {
         return nil;
     }
+    if(section == 1) {
+        return [self contactsFilterHeaderView];
+    }
     if (!self.sectionTitleArr || self.sectionTitleArr.count == 0) {
         return nil;
     }
     NSString *title = [self.sectionTitleArr objectAtIndex:section-1];
     return [self headView:title headHeight:20.0f color:WKApp.shared.config.themeColor];
+}
+
+// 全部联系人 section header（含 tab 过滤按钮）
+-(UIView*) contactsFilterHeaderView {
+    UIView *container = [[UIView alloc] initWithFrame:CGRectMake(0, 0, WKScreenWidth, 80.0f)];
+    container.backgroundColor = WKApp.shared.config.cellBackgroundColor;
+
+    // 全部联系人标题和数量
+    NSInteger totalCount = self.allContactInfos ? self.allContactInfos.count : 0;
+    UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(15, 8, WKScreenWidth - 30, 20)];
+    titleLbl.text = [NSString stringWithFormat:@"%@  (%ld)", LLang(@"全部联系人"), (long)totalCount];
+    titleLbl.font = [[WKApp shared].config appFontOfSizeMedium:14.0f];
+    titleLbl.textColor = [UIColor grayColor];
+    [container addSubview:titleLbl];
+
+    // Tab 按钮
+    NSInteger aiCount = 0;
+    NSInteger humanCount = 0;
+    for (WKChannelInfo *info in self.allContactInfos) {
+        if(info.robot) aiCount++; else humanCount++;
+    }
+
+    NSArray *titles = @[
+        [NSString stringWithFormat:@"%@ %ld", LLang(@"全部"), (long)totalCount],
+        [NSString stringWithFormat:@"AI %ld", (long)aiCount],
+        [NSString stringWithFormat:@"%@ %ld", LLang(@"人类"), (long)humanCount]
+    ];
+
+    CGFloat tabY = 36.0f;
+    CGFloat tabX = 15.0f;
+    CGFloat tabH = 30.0f;
+    CGFloat tabSpacing = 8.0f;
+
+    for (NSInteger i = 0; i < 3; i++) {
+        UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+        [btn setTitle:titles[i] forState:UIControlStateNormal];
+        btn.titleLabel.font = [UIFont systemFontOfSize:13.0f weight:UIFontWeightMedium];
+        btn.layer.cornerRadius = tabH / 2.0f;
+        btn.layer.borderWidth = 1.0f;
+        btn.tag = i;
+        [btn addTarget:self action:@selector(filterTabTapped:) forControlEvents:UIControlEventTouchUpInside];
+
+        if(self.contactsFilter == i) {
+            btn.backgroundColor = [WKApp.shared.config.themeColor colorWithAlphaComponent:0.1f];
+            btn.layer.borderColor = WKApp.shared.config.themeColor.CGColor;
+            [btn setTitleColor:WKApp.shared.config.themeColor forState:UIControlStateNormal];
+        } else {
+            btn.backgroundColor = [UIColor clearColor];
+            btn.layer.borderColor = [UIColor colorWithWhite:0.8f alpha:1.0f].CGColor;
+            [btn setTitleColor:[UIColor grayColor] forState:UIControlStateNormal];
+        }
+
+        [btn sizeToFit];
+        CGFloat btnW = btn.lim_width + 24.0f;
+        btn.frame = CGRectMake(tabX, tabY, btnW, tabH);
+        tabX += btnW + tabSpacing;
+        [container addSubview:btn];
+    }
+
+    return container;
+}
+
+-(void) filterTabTapped:(UIButton*)sender {
+    self.contactsFilter = sender.tag;
+    self.currentContactsFingerprint = nil; // 强制刷新
+    [self applyFilter];
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {

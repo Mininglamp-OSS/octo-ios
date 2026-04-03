@@ -17,6 +17,7 @@ typedef void(^WKContactsHeaderItemClick)(void);
 @property(nonatomic,copy) NSString *moduleID; // 模块ID
 @property(nonatomic,strong) WKContactsHeaderItemClick onClick; // 点击
 @property(nonatomic,copy) NSString *badgeValue; // 红点
+@property(nonatomic,copy) NSString *countValue; // 右侧计数，如 "(4)"
 
 @property(nonatomic,copy) NSString *avatarURL; // 头像url
 
