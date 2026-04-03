@@ -479,10 +479,22 @@ static NSMutableDictionary *flameNodeCacheDict;
     }
 
     if(model.isSend) {
-        self.avatarImgView.url = [WKApp shared].loginInfo.extra[@"avatar"];
+        NSString *myUid = [WKApp shared].loginInfo.uid;
+        WKChannelInfo *myInfo = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:myUid]];
+        NSString *myAvatar = [WKApp shared].loginInfo.extra[@"avatar"];
+        if(myInfo && myInfo.avatarCacheKey.length > 0 && myAvatar) {
+            NSString *separator = [myAvatar containsString:@"?"] ? @"&" : @"?";
+            myAvatar = [NSString stringWithFormat:@"%@%@v=%@", myAvatar, separator, myInfo.avatarCacheKey];
+        }
+        self.avatarImgView.url = myAvatar;
     }else {
-        if(model.from) { // 如果有发送者信息
-            self.avatarImgView.url = [WKAvatarUtil getFullAvatarWIthPath:model.from.logo];
+        if(model.from) {
+            NSString *avatarURL = [WKAvatarUtil getFullAvatarWIthPath:model.from.logo];
+            if(avatarURL && model.from.avatarCacheKey.length > 0) {
+                NSString *separator = [avatarURL containsString:@"?"] ? @"&" : @"?";
+                avatarURL = [NSString stringWithFormat:@"%@%@v=%@", avatarURL, separator, model.from.avatarCacheKey];
+            }
+            self.avatarImgView.url = avatarURL;
         }else {
             self.avatarImgView.avatarImgView.image = nil;
         }
