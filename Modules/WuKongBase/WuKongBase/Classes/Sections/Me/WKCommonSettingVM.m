@@ -34,10 +34,13 @@
 }
 
 -(void) registerItems {
-    // 深色模式（临时关闭，隐藏设置入口）
+    // 深色模式
     [[WKApp shared] setMethod:@"commonsetting.notify" handler:^id _Nullable(id  _Nonnull param) {
         BOOL supportDarkMode = NO;
-        NSString *darkDesc = LLang(@"关闭");
+        if (@available(iOS 13.0, *)) {
+            supportDarkMode = YES;
+        }
+        NSString *darkDesc = LLang(@"打开");
         if([WKApp shared].config.darkModeWithSystem) {
             darkDesc = LLang(@"跟随系统");
         }else {

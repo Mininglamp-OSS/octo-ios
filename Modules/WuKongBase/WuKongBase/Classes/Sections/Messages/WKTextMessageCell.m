@@ -85,6 +85,11 @@
 
 @implementation WKTextMessageCell
 
+-(void) invalidateSegments {
+    self.segmentsBuilt = NO;
+    [self clearSegmentViews];
+}
+
 + (CGSize)sizeForMessage:(WKMessageModel *)model {
    CGSize size = [super sizeForMessage:model];
     CGFloat securityTipHeight = 0.0f;
@@ -738,9 +743,10 @@
 
     // 流式消息不缓存
     BOOL isStreaming = model.streamOn && model.streamFlag != WKStreamFlagEnd;
-    NSString *cacheKey = [NSString stringWithFormat:@"%@-segH", model.clientMsgNo];
+    NSString *modeTag = ([WKApp shared].config.style == WKSystemStyleDark) ? @"d" : @"l";
+    NSString *cacheKey = [NSString stringWithFormat:@"%@-segH-%@", model.clientMsgNo, modeTag];
     if (model.remoteExtra.contentEdit) {
-        cacheKey = [NSString stringWithFormat:@"%@-segH-edit-%lu", model.clientMsgNo, model.remoteExtra.editedAt];
+        cacheKey = [NSString stringWithFormat:@"%@-segH-edit-%lu-%@", model.clientMsgNo, model.remoteExtra.editedAt, modeTag];
     }
     if (!isStreaming) {
         NSNumber *cached = [segHeightCache getCache:cacheKey];
@@ -906,13 +912,13 @@
             [self clearSegmentViews];
             NSArray *segments = [WKMarkdownRenderer splitContentSegments:rawContent];
             UIColor *textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
+            NSString *colorHex = [textColor toHexRGB];
             BOOL firstTextUsed = NO;
             for (NSDictionary *seg in segments) {
                 NSString *type = seg[@"type"];
                 NSString *content = seg[@"content"];
                 if ([type isEqualToString:@"text"]) {
                     // 统一用 WKMarkdownRenderer 渲染文本段（和 getContentAttrStr: 同一套逻辑，确保高度一致）
-                    NSString *colorHex = [textColor toHexRGB];
                     UILabel *lbl;
                     if (!firstTextUsed) {
                         // 第一个文本段复用 textLbl（支持点击链接等交互）

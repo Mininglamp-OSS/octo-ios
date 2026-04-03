@@ -20,7 +20,8 @@ import Down
         let preprocessed = preprocessGFM(text)
 
         let down = Down(markdownString: preprocessed)
-        let css = buildCSS(fontSize: fontSize, textColorHex: textColorHex)
+        let isDark = WKApp.shared().config.style == WKSystemStyleDark
+        let css = buildCSS(fontSize: fontSize, textColorHex: textColorHex, isDark: isDark)
 
         do {
             let attributed = try down.toAttributedString(.unsafe, stylesheet: css)
@@ -35,6 +36,12 @@ import Down
                     break
                 }
             }
+
+            // 强制修正文本颜色：WebKit HTML→NSAttributedString 有进程级缓存，
+            // 切换深浅色后可能返回旧颜色的缓存结果。这里直接用目标颜色覆盖，
+            // 只替换"默认文本色"，保留链接等特殊颜色。
+            let targetColor = UIColor.wk_fromHex(textColorHex)
+            fixForegroundColors(in: mutable, targetColor: targetColor, isDark: isDark)
 
             return mutable
         } catch {
@@ -347,7 +354,8 @@ import Down
             tablesHTML += convertTableToHTML(tableLines)
         }
 
-        let css = buildTableWebViewCSS(fontSize: fontSize, textColorHex: textColorHex)
+        let isDark = WKApp.shared().config.style == WKSystemStyleDark
+        let css = buildTableWebViewCSS(fontSize: fontSize, textColorHex: textColorHex, isDark: isDark)
         return """
         <!DOCTYPE html>
         <html><head>
@@ -409,7 +417,8 @@ import Down
 
         if html.isEmpty { return nil }
 
-        let css = buildFullContentCSS(fontSize: fontSize, textColorHex: textColorHex)
+        let isDark = WKApp.shared().config.style == WKSystemStyleDark
+        let css = buildFullContentCSS(fontSize: fontSize, textColorHex: textColorHex, isDark: isDark)
         return """
         <!DOCTYPE html>
         <html><head>
@@ -478,7 +487,11 @@ import Down
         return "<div class=\"text-block\">\(escaped.replacingOccurrences(of: "\n", with: "<br>"))</div>"
     }
 
-    private static func buildFullContentCSS(fontSize: CGFloat, textColorHex: String) -> String {
+    private static func buildFullContentCSS(fontSize: CGFloat, textColorHex: String, isDark: Bool) -> String {
+        let thBorder = isDark ? "#666666" : "#999"
+        let thBg = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)"
+        let tdBorder = isDark ? "#444444" : "#E0E0E0"
+
         return """
         * {
             font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
@@ -493,13 +506,13 @@ import Down
         th {
             font-weight: 600;
             padding: 6px 12px;
-            border-bottom: 2px solid #999;
+            border-bottom: 2px solid \(thBorder);
             text-align: left;
-            background-color: rgba(0,0,0,0.04);
+            background-color: \(thBg);
         }
         td {
             padding: 6px 12px;
-            border-bottom: 1px solid #E0E0E0;
+            border-bottom: 1px solid \(tdBorder);
         }
         tr:last-child td { border-bottom: none; }
         """
@@ -585,7 +598,10 @@ import Down
         return count
     }
 
-    private static func buildTableWebViewCSS(fontSize: CGFloat, textColorHex: String) -> String {
+    private static func buildTableWebViewCSS(fontSize: CGFloat, textColorHex: String, isDark: Bool) -> String {
+        let borderColor = isDark ? "#444444" : "#E0E0E0"
+        let thBg = isDark ? "rgba(255,255,255,0.08)" : "#F5F5F5"
+
         return """
         * {
             font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
@@ -599,24 +615,32 @@ import Down
         th {
             font-weight: 600;
             padding: 10px 14px;
-            border: 1px solid #E0E0E0;
+            border: 1px solid \(borderColor);
             text-align: left;
-            background-color: #F5F5F5;
+            background-color: \(thBg);
         }
         td {
             padding: 10px 14px;
-            border: 1px solid #E0E0E0;
+            border: 1px solid \(borderColor);
         }
         """
     }
 
     // MARK: - CSS
 
-    private static func buildCSS(fontSize: CGFloat, textColorHex: String) -> String {
+    private static func buildCSS(fontSize: CGFloat, textColorHex: String, isDark: Bool) -> String {
         let h1 = fontSize * 1.5
         let h2 = fontSize * 1.3
         let h3 = fontSize * 1.15
         let codeFontSize = fontSize - 1.0
+
+        let codeBg = isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)"
+        let blockquoteColor = isDark ? "#aaaaaa" : "gray"
+        let blockquoteBorder = isDark ? "#555555" : "#ccc"
+        let linkColor = isDark ? "#64B5F6" : "#007AFF"
+        let thBorder = isDark ? "#666666" : "#999"
+        let tdBorder = isDark ? "#444444" : "#E0E0E0"
+        let hrColor = isDark ? "#555555" : "#ccc"
 
         return """
         * {
@@ -632,12 +656,12 @@ import Down
         code {
             font-family: Menlo, monospace;
             font-size: \(codeFontSize)px;
-            background-color: rgba(0,0,0,0.06);
+            background-color: \(codeBg);
             padding: 1px 4px;
             border-radius: 3px;
         }
         pre {
-            background-color: rgba(0,0,0,0.06);
+            background-color: \(codeBg);
             padding: 8px;
             border-radius: 6px;
             margin: 4px 0;
@@ -645,27 +669,79 @@ import Down
         }
         pre code { background-color: transparent; padding: 0; }
         blockquote {
-            color: gray;
+            color: \(blockquoteColor);
             margin: 2px 0;
             padding-left: 12px;
-            border-left: 3px solid #ccc;
+            border-left: 3px solid \(blockquoteBorder);
         }
-        a { color: #007AFF; text-decoration: underline; }
+        a { color: \(linkColor); text-decoration: underline; }
         table { border-collapse: collapse; margin: 4px 0; width: auto; }
         th {
             font-weight: 600;
             padding: 4px 8px;
-            border-bottom: 2px solid #999;
+            border-bottom: 2px solid \(thBorder);
             text-align: left;
         }
         td {
             padding: 4px 8px;
-            border-bottom: 1px solid #E0E0E0;
+            border-bottom: 1px solid \(tdBorder);
         }
         ul, ol { padding-left: 20px; margin: 2px 0; }
         li { margin: 1px 0; }
-        hr { border: none; border-top: 1px solid #ccc; margin: 6px 0; }
+        hr { border: none; border-top: 1px solid \(hrColor); margin: 6px 0; }
         del, s { text-decoration: line-through; }
         """
+    }
+
+    // MARK: - 颜色修正
+
+    /// 修正 WebKit 缓存导致的文本颜色错误。
+    /// 遍历 NSAttributedString 中所有 foreground color，将"默认文本色"替换为目标颜色，
+    /// 保留链接、blockquote 等特殊颜色不变。
+    private static func fixForegroundColors(in attrStr: NSMutableAttributedString, targetColor: UIColor, isDark: Bool) {
+        // 链接色和 blockquote 色不应被替换
+        let linkColor = isDark ? UIColor(red: 100/255, green: 181/255, blue: 246/255, alpha: 1) // #64B5F6
+                               : UIColor(red: 0, green: 122/255, blue: 1, alpha: 1) // #007AFF
+        let blockquoteColor = isDark ? UIColor(red: 170/255, green: 170/255, blue: 170/255, alpha: 1) // #AAAAAA
+                                     : UIColor.gray
+
+        let fullRange = NSRange(location: 0, length: attrStr.length)
+        attrStr.enumerateAttribute(.foregroundColor, in: fullRange, options: []) { value, range, _ in
+            guard let color = value as? UIColor else {
+                // 没有显式设置颜色的文本，直接设置目标色
+                attrStr.addAttribute(.foregroundColor, value: targetColor, range: range)
+                return
+            }
+            // 判断是否是特殊颜色（链接、blockquote），如果不是则替换为目标色
+            if !isColorSimilar(color, linkColor) && !isColorSimilar(color, blockquoteColor) {
+                attrStr.addAttribute(.foregroundColor, value: targetColor, range: range)
+            }
+        }
+    }
+
+    /// 判断两个颜色是否相近（容差 0.1）
+    private static func isColorSimilar(_ c1: UIColor, _ c2: UIColor) -> Bool {
+        var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
+        var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
+        c1.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
+        c2.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+        let threshold: CGFloat = 0.1
+        return abs(r1 - r2) < threshold && abs(g1 - g2) < threshold && abs(b1 - b2) < threshold
+    }
+}
+
+// MARK: - UIColor hex 工具
+
+private extension UIColor {
+    static func wk_fromHex(_ hexString: String) -> UIColor {
+        var hex = hexString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if hex.hasPrefix("#") { hex.removeFirst() }
+        guard hex.count == 6 else { return UIColor.black }
+        var rgb: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&rgb)
+        return UIColor(red: CGFloat((rgb >> 16) & 0xFF) / 255,
+                       green: CGFloat((rgb >> 8) & 0xFF) / 255,
+                       blue: CGFloat(rgb & 0xFF) / 255,
+                       alpha: 1)
     }
 }

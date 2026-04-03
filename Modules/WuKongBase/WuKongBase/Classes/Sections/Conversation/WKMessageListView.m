@@ -44,13 +44,28 @@
 }
 
 -(void) setupUI {
-    
+
     self.clipsToBounds = YES;
     [self addSubview:self.tableView];
     [self initPosition];
-    
+
     [self addDelegates];
 
+}
+
+-(void) rebuildForStyleChange {
+    // 保存当前滚动位置
+    [self updatePosition];
+    // 先清空数据源，防止旧 tableView 布局时越界
+    [self.dataProvider clearMessages];
+    [self.tableView reloadData];
+    // 销毁旧 tableView（连同所有 cell 的 WebKit 缓存）
+    [self.tableView removeFromSuperview];
+    _tableView = nil;
+    // 创建全新的 tableView
+    [self addSubview:self.tableView];
+    // 重新加载消息数据
+    [self loadMessages];
 }
 
 - (void)viewDidLoad {

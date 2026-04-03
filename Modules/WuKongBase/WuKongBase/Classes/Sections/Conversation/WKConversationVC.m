@@ -7,6 +7,7 @@
 
 #import "WKConversationVC.h"
 #import "WKMessageListView.h"
+#import "WKTextMessageCell.h"
 #import "WuKongBase.h"
 #import "WKMessageListDataProviderImp.h"
 #import "WKConversationChannelHeader.h"

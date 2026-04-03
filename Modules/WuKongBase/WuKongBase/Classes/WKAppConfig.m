@@ -103,13 +103,38 @@
 }
 
 - (void)setStyle:(WKSystemStyle)style {
-    // 临时关闭暗黑模式，强制使用浅色模式
-    _innerStyle = WKSystemStyleLight;
-    [WKApp shared].loginInfo.extra[@"systemStyle"] = @"light";
-    [[WKApp shared].loginInfo save];
-    if (@available(iOS 13.0, *)) {
-        [UIApplication sharedApplication].statusBarStyle = UIStatusBarStyleDarkContent;
-        [UIApplication sharedApplication].keyWindow.overrideUserInterfaceStyle = UIUserInterfaceStyleLight;
+    WKSystemStyle oldStyle = _innerStyle;
+    _innerStyle = style;
+    if(style == WKSystemStyleDark) {
+        [WKApp shared].loginInfo.extra[@"systemStyle"] = @"dark";
+        [[WKApp shared].loginInfo save];
+        if (@available(iOS 13.0, *)) {
+            [UIApplication sharedApplication].statusBarStyle =   UIStatusBarStyleLightContent;
+            [UIApplication sharedApplication].keyWindow.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+        }
+    }else {
+        [WKApp shared].loginInfo.extra[@"systemStyle"] = @"light";
+        [[WKApp shared].loginInfo save];
+        if (@available(iOS 13.0, *)) {
+            [UIApplication sharedApplication].statusBarStyle = UIStatusBarStyleDarkContent;
+            [UIApplication sharedApplication].keyWindow.overrideUserInterfaceStyle = UIUserInterfaceStyleLight;
+        }
+    }
+    // 模式切换后提示用户重启以获得最佳体验
+    if(oldStyle != WKSystemStyleUnknown && oldStyle != style) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"提示")
+                message:LLang(@"切换显示模式后，重启应用可获得最佳显示效果")
+                preferredStyle:UIAlertControllerStyleAlert];
+            [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
+            [alert addAction:[UIAlertAction actionWithTitle:LLang(@"立即重启") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                exit(0);
+            }]];
+            UIViewController *topVC = [WKNavigationManager shared].topViewController;
+            if(topVC) {
+                [topVC presentViewController:alert animated:YES completion:nil];
+            }
+        });
     }
 }
 

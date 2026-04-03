@@ -79,6 +79,9 @@ NS_ASSUME_NONNULL_BEGIN
 // 请求到最底部
 -(void) pullBottom;
 
+// 深浅色切换时调用：销毁旧 tableView 并重建，清除 WebKit 渲染缓存
+-(void) rebuildForStyleChange;
+
 -(void) adjustTableWithOffset:(CGFloat)offset;
 
 - (void)stopScrollingAnimation;

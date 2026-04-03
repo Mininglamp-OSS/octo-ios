@@ -80,8 +80,11 @@
     [[WKApp shared] appInit];
     
     if (@available(iOS 13.0, *)) {
-        // 临时关闭暗黑模式，强制使用浅色模式
-        self.window.overrideUserInterfaceStyle = UIUserInterfaceStyleLight;
+        if([WKApp shared].config.style == WKSystemStyleDark) {
+            self.window.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+        }else{
+            self.window.overrideUserInterfaceStyle = UIUserInterfaceStyleLight;
+        }
     }
    
     return YES;
