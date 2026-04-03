@@ -57,6 +57,7 @@
 #import "WKHistorySplitTipContent.h"
 #import "WKMergeForwardContent.h"
 #import "WKMergeForwardCell.h"
+#import "WKGroupScanJoinVC.h"
 #import "WKScreenshotCell.h"
 #import "WKScreenshotContent.h"
 #import "WKConversationAddItem.h"
@@ -1459,8 +1460,12 @@ static  AVAudioPlayer *_silentAudioPlayer;
             if(![result.type isEqualToString:@"group"]) {
                 return false;
             }
-            WKConversationVC *vc = [WKConversationVC new];
-            vc.channel = [[WKChannel alloc] initWith:result.data[@"group_no"]?:@"" channelType:WK_GROUP];
+            WKGroupScanJoinVC *vc = [WKGroupScanJoinVC new];
+            vc.groupNo = result.data[@"group_no"] ?: @"";
+            vc.authCode = result.data[@"auth_code"] ?: @"";
+            vc.groupName = result.data[@"name"] ?: @"";
+            vc.groupAvatar = result.data[@"avatar"] ?: @"";
+            vc.memberCount = [result.data[@"member_count"] integerValue];
             [[WKNavigationManager shared] replacePushViewController:vc animated:YES];
             return true;
         }];
