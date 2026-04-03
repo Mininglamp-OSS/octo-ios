@@ -10,6 +10,7 @@
 #import "WKServerSettingHelper.h"
 @interface WKMeVC ()<WKChannelManagerDelegate>
 @property(nonatomic,strong) WKeHeader *meHeader;
+@property(nonatomic,assign) NSTimeInterval lastAppearTime;
 @end
 
 @implementation WKMeVC
@@ -41,8 +42,11 @@
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
-    NSLog(@"[Avatar] WKMeVC viewDidAppear, uid=%@", [WKApp shared].loginInfo.uid);
     [self.meHeader reloadData];
+    // 频繁切换 tab 时节流，10 秒内不重复请求
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (now - self.lastAppearTime < 10) return;
+    self.lastAppearTime = now;
     [WKSDK.shared.channelManager fetchChannelInfo:[WKChannel personWithChannelID:[WKApp shared].loginInfo.uid]];
 }
 

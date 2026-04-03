@@ -51,6 +51,7 @@
 //@property(nonatomic,strong) UIView *tableHeaderBottomEmptyView;
 
 @property(nonatomic,strong) NSTimer *refreshTimer; // 定时刷新table的定时器
+@property(nonatomic,assign) NSTimeInterval lastLoadTime; // 上次加载时间
 
 // 网络信号监控
 @property(nonatomic,assign) NSTimeInterval connectedAtTime; // 连接成功的时间
@@ -213,6 +214,13 @@
 
     [self refreshTitle];
     [self hiddenRightItem:NO];
+
+    // 频繁切换 tab 时节流，2 秒内不重复加载
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (now - self.lastLoadTime < 2) {
+        return;
+    }
+    self.lastLoadTime = now;
 
     // 重新从 SDK 加载会话列表，确保新会话（如首次发消息）能显示出来
     __weak typeof(self) weakSelf = self;
