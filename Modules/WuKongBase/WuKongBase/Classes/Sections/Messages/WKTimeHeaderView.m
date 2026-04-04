@@ -40,6 +40,24 @@
     self.alpha = 1;
 }
 
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    [self updateDateLblBackground];
+}
+
+// layer.cornerRadius + masksToBounds 会让 UIView.backgroundColor 内部走 CALayer.backgroundColor (CGColor)，
+// CGColor 不支持动态颜色自动更新，所以必须手动解析后直接设到 layer 上。
+- (void)updateDateLblBackground {
+    if (@available(iOS 13.0, *)) {
+        UIColor *bg = [WKApp shared].config.cellBackgroundColor;
+        UIColor *resolved = [bg resolvedColorWithTraitCollection:self.traitCollection];
+        self.dateLbl.backgroundColor = [UIColor clearColor]; // 清除 UIView 层的颜色，防止覆盖 layer
+        self.dateLbl.layer.backgroundColor = resolved.CGColor;
+    } else {
+        self.dateLbl.backgroundColor = [WKApp shared].config.cellBackgroundColor;
+    }
+}
+
 
 +(NSString*) reuseId {
     return @"WKTimeHeaderView";
@@ -51,7 +69,8 @@
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    
+
+    [self updateDateLblBackground];
     self.dateLbl.lim_top = self.contentView.lim_height/2.0f - self.dateLbl.lim_height/2.0f;
     self.dateLbl.lim_left = self.contentView.lim_width/2.0f - self.dateLbl.lim_width/2.0f;
     
@@ -75,7 +94,6 @@
         _dateLbl.layer.masksToBounds = YES;
         _dateLbl.layer.cornerRadius = 10.0f;
         _dateLbl.textAlignment = NSTextAlignmentCenter;
-        _dateLbl.backgroundColor = [WKApp shared].config.cellBackgroundColor;
         _dateLbl.textColor = [UIColor grayColor];
        
         [_dateLbl setFont:[[WKApp shared].config appFontOfSize:14.0f]];

@@ -26,8 +26,13 @@
 -(instancetype) init{
     self = [super init];
     if(!self)return nil;
-    [self setBackgroundColor:ColorSessionPanel];
+    [self setBackgroundColor:[WKApp shared].config.cellBackgroundColor];
     return self;
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    [self setBackgroundColor:[WKApp shared].config.cellBackgroundColor];
 }
 
 

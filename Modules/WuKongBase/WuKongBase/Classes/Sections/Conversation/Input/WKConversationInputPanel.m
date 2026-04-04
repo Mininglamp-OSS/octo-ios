@@ -202,6 +202,12 @@ CGFloat itemSpace = 10.0f;
     
 
 }
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
+}
+
 -(void) layoutContentView{
     
 //    UIEdgeInsets inputFieldInsets = [self inputFieldInsets];

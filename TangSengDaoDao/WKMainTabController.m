@@ -24,20 +24,10 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.delegate = self;
-    // Do any additional setup after loading the view.
-    [self.tabBar setBarTintColor:[UIColor whiteColor]];
-    
-    [[UITabBar appearance] setShadowImage:[[UIImage alloc]init]];
-    [[UITabBar appearance] setBackgroundImage:[[UIImage alloc]init]];
-    if (@available(iOS 13.0, *)) {
-        [self.tabBar setBarTintColor:[UIColor systemBackgroundColor]];
-        [self.tabBar setBackgroundColor:[UIColor systemBackgroundColor]];
-    } else {
-        [self.tabBar setBarTintColor:[UIColor whiteColor]];
-        [self.tabBar setBackgroundColor:[UIColor whiteColor]];
-    }
-   
+    [self updateTabBarAppearance];
     self.tabBar.tintColor = [WKApp shared].config.themeColor;
+    // 监听 viewConfigChange 通知（WKBaseVC 的 traitCollectionDidChange 会发这个）
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onStyleChange) name:@"WK_NOTIFY_STYLE_CHANGE" object:nil];
 
     [self setupChildVC:WKConversationListVC.class title:@"" andImage:@"HomeTab" andSelectImage:@"HomeTabSelected"];
     [self setupChildVC:WKContactsVC.class title:@"" andImage:@"ContactsTab" andSelectImage:@"ContactsTabSelected"];
@@ -86,9 +76,33 @@
     [self addChildViewController:vcInstall];
 }
 
--(void) dealloc {
-    WKLogDebug(@"WKMainTabController dealloc");
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    [self onStyleChange];
 }
+
+- (void)onStyleChange {
+    [self updateTabBarAppearance];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)updateTabBarAppearance {
+    if (@available(iOS 13.0, *)) {
+        UITabBarAppearance *appearance = [[UITabBarAppearance alloc] init];
+        [appearance configureWithOpaqueBackground];
+        appearance.backgroundColor = [UIColor systemBackgroundColor];
+        appearance.shadowColor = [UIColor clearColor];
+        self.tabBar.standardAppearance = appearance;
+        if (@available(iOS 15.0, *)) {
+            self.tabBar.scrollEdgeAppearance = appearance;
+        }
+    }
+    self.tabBar.translucent = NO;
+}
+
 
 #pragma mark - UITabBarControllerDelegate
 

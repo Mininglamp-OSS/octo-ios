@@ -8,6 +8,7 @@
 #import "WKConversationVC.h"
 #import "WKMessageListView.h"
 #import "WKTextMessageCell.h"
+#import "WKTimeHeaderView.h"
 #import "WuKongBase.h"
 #import "WKMessageListDataProviderImp.h"
 #import "WKConversationChannelHeader.h"
@@ -262,6 +263,22 @@
     [super viewConfigChange:type];
     if(type == WKViewConfigChangeTypeStyle) {
         [self setupChatBackground];
+        // 刷新时间标签（今天/昨天）的背景色
+        // layer.cornerRadius + masksToBounds 导致动态颜色不生效，需手动设置 layer.backgroundColor
+        UITableView *tv = self.conversationView.messageListView.tableView;
+        if (@available(iOS 13.0, *)) {
+            UIColor *bg = [WKApp shared].config.cellBackgroundColor;
+            CGColorRef resolvedBg = [bg resolvedColorWithTraitCollection:self.traitCollection].CGColor;
+            for (NSInteger section = 0; section < tv.numberOfSections; section++) {
+                UITableViewHeaderFooterView *header = [tv headerViewForSection:section];
+                if ([header isKindOfClass:[WKTimeHeaderView class]]) {
+                    ((WKTimeHeaderView *)header).dateLbl.layer.backgroundColor = resolvedBg;
+                }
+            }
+        }
+        // 刷新输入框区域颜色
+        [self.conversationView.input setNeedsLayout];
+        [self.conversationView.input layoutIfNeeded];
     }
 }
 

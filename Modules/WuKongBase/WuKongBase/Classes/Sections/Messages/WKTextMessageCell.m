@@ -392,7 +392,7 @@
         if (renderContent.length > 0 && [WKMarkdownRenderer containsMarkdown:renderContent]) {
             UIColor *textColor = message.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
             NSString *colorHex = [textColor toHexRGB];
-            NSAttributedString *mdAttr = [WKMarkdownRenderer render:renderContent fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+            NSAttributedString *mdAttr = [WKMarkdownRenderer render:renderContent fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex dynamicTextColor:textColor];
             if (mdAttr && mdAttr.length > 0) {
                 useMarkdown = YES;
                 NSMutableAttributedString *mdMutable = [[NSMutableAttributedString alloc] initWithAttributedString:mdAttr];
@@ -424,7 +424,7 @@
                     NSRange range = [rangeValue rangeValue];
                     [mdMutable removeAttribute:NSLinkAttributeName range:range];
                     // 确保链接有可见的视觉样式（颜色+下划线）
-                    [mdMutable addAttribute:NSForegroundColorAttributeName value:[UIColor blueColor] range:range];
+                    [mdMutable addAttribute:NSForegroundColorAttributeName value:[UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f] range:range];
                     [mdMutable addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:range];
                 }
 
@@ -481,7 +481,7 @@
                     linkToken.linkContent = autoToken.text;
                     linkToken.text = autoToken.text;
                     [clickableTokens addObject:linkToken];
-                    [mdMutable addAttribute:NSForegroundColorAttributeName value:[UIColor blueColor] range:autoToken.range];
+                    [mdMutable addAttribute:NSForegroundColorAttributeName value:[UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f] range:autoToken.range];
                     [mdMutable addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:autoToken.range];
                 }
 
@@ -874,10 +874,10 @@
 
     if(model.isSend) {
         attrStr.textColor =  [WKApp shared].config.messageSendTextColor;
-        attrStr.linkColor = [UIColor blueColor];
+        attrStr.linkColor = [UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f];
     }else {
         attrStr.textColor = [WKApp shared].config.messageRecvTextColor;
-        attrStr.linkColor = [UIColor blueColor];
+        attrStr.linkColor = [UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f];
     }
     // @mention 下划线 + 区分发送/接收的颜色
     if(model.isSend) {
@@ -936,7 +936,7 @@
                     }
                     // markdown 渲染 + 链接提取
                     if ([WKMarkdownRenderer containsMarkdown:content]) {
-                        NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+                        NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex dynamicTextColor:textColor];
                         if (mdAttr) {
                             NSMutableAttributedString *mutable = [[NSMutableAttributedString alloc] initWithAttributedString:mdAttr];
                             // 提取 markdown 链接 token 并移除 NSLinkAttributeName（UILabel 不支持）
@@ -958,7 +958,7 @@
                             [mutable enumerateAttribute:NSLinkAttributeName inRange:NSMakeRange(0, mutable.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
                                 if (value) {
                                     [mutable removeAttribute:NSLinkAttributeName range:range];
-                                    [mutable addAttribute:NSForegroundColorAttributeName value:[UIColor blueColor] range:range];
+                                    [mutable addAttribute:NSForegroundColorAttributeName value:[UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f] range:range];
                                     [mutable addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:range];
                                 }
                             }];
@@ -973,7 +973,7 @@
                                 }
                                 if (!overlaps) {
                                     [tokens addObject:autoToken];
-                                    [mutable addAttribute:NSForegroundColorAttributeName value:[UIColor blueColor] range:autoToken.range];
+                                    [mutable addAttribute:NSForegroundColorAttributeName value:[UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f] range:autoToken.range];
                                     [mutable addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:autoToken.range];
                                 }
                             }
@@ -992,7 +992,7 @@
                         NSArray *tokens = [[WKRichTextParseService shared] parseLink:content];
                         [plainAttr lim_render:content tokens:tokens];
                         plainAttr.textColor = textColor;
-                        plainAttr.linkColor = [UIColor blueColor];
+                        plainAttr.linkColor = [UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f];
                         lbl.attributedText = plainAttr;
                         if ([lbl respondsToSelector:@selector(setTokens:)]) {
                             [(id)lbl setTokens:plainAttr.tokens];

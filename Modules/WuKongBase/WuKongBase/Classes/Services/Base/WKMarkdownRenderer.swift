@@ -14,6 +14,15 @@ import Down
     @objc public static func render(_ text: String,
                                      fontSize: CGFloat,
                                      textColorHex: String) -> NSAttributedString? {
+        return render(text, fontSize: fontSize, textColorHex: textColorHex, dynamicTextColor: nil)
+    }
+
+    /// 带动态颜色的渲染方法，dynamicTextColor 会被设置到 attributed string 中，
+    /// 使文本颜色能跟随系统深浅色模式实时变化。
+    @objc public static func render(_ text: String,
+                                     fontSize: CGFloat,
+                                     textColorHex: String,
+                                     dynamicTextColor: UIColor?) -> NSAttributedString? {
         guard !text.isEmpty else { return nil }
 
         // Pre-process: convert GFM extensions (tables, task lists, strikethrough) to HTML
@@ -37,11 +46,9 @@ import Down
                 }
             }
 
-            // 强制修正文本颜色：WebKit HTML→NSAttributedString 有进程级缓存，
-            // 切换深浅色后可能返回旧颜色的缓存结果。这里直接用目标颜色覆盖，
-            // 只替换"默认文本色"，保留链接等特殊颜色。
-            let targetColor = UIColor.wk_fromHex(textColorHex)
-            fixForegroundColors(in: mutable, targetColor: targetColor, isDark: isDark)
+            // 用动态 UIColor 替换 WebKit 渲染的静态颜色，使文本能跟随深浅色实时变化
+            let replaceColor = dynamicTextColor ?? UIColor.wk_fromHex(textColorHex)
+            fixForegroundColors(in: mutable, replaceColor: replaceColor, isDark: isDark)
 
             return mutable
         } catch {
@@ -637,7 +644,7 @@ import Down
         let codeBg = isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)"
         let blockquoteColor = isDark ? "#aaaaaa" : "gray"
         let blockquoteBorder = isDark ? "#555555" : "#ccc"
-        let linkColor = isDark ? "#64B5F6" : "#007AFF"
+        let linkColor = isDark ? "#64B5F6" : "#5979F0"
         let thBorder = isDark ? "#666666" : "#999"
         let tdBorder = isDark ? "#444444" : "#E0E0E0"
         let hrColor = isDark ? "#555555" : "#ccc"
@@ -695,26 +702,40 @@ import Down
 
     // MARK: - 颜色修正
 
-    /// 修正 WebKit 缓存导致的文本颜色错误。
-    /// 遍历 NSAttributedString 中所有 foreground color，将"默认文本色"替换为目标颜色，
+    /// 修正文本颜色：将 WebKit 渲染产生的静态颜色替换为动态 UIColor，
+    /// 使 UILabel 在深浅色模式切换时能自动更新颜色，无需手动 reloadData。
     /// 保留链接、blockquote 等特殊颜色不变。
-    private static func fixForegroundColors(in attrStr: NSMutableAttributedString, targetColor: UIColor, isDark: Bool) {
-        // 链接色和 blockquote 色不应被替换
-        let linkColor = isDark ? UIColor(red: 100/255, green: 181/255, blue: 246/255, alpha: 1) // #64B5F6
-                               : UIColor(red: 0, green: 122/255, blue: 1, alpha: 1) // #007AFF
-        let blockquoteColor = isDark ? UIColor(red: 170/255, green: 170/255, blue: 170/255, alpha: 1) // #AAAAAA
-                                     : UIColor.gray
+    /// replaceColor: 传入动态 UIColor（如 messageRecvTextColor），UILabel 在 trait 变化时自动更新
+    private static func fixForegroundColors(in attrStr: NSMutableAttributedString, replaceColor: UIColor, isDark: Bool) {
+        // 动态链接颜色
+        let dynamicLinkColor: UIColor
+        if #available(iOS 13.0, *) {
+            dynamicLinkColor = UIColor { traitCollection in
+                let dark = traitCollection.userInterfaceStyle == .dark
+                return dark ? UIColor(red: 100/255, green: 181/255, blue: 246/255, alpha: 1)
+                            : UIColor(red: 89/255, green: 121/255, blue: 240/255, alpha: 1)
+            }
+        } else {
+            dynamicLinkColor = isDark ? UIColor(red: 100/255, green: 181/255, blue: 246/255, alpha: 1)
+                                      : UIColor(red: 89/255, green: 121/255, blue: 240/255, alpha: 1)
+        }
+
+        // 当前模式下的链接色和引用色，用于识别不应替换的特殊颜色
+        let curLinkColor = isDark ? UIColor(red: 100/255, green: 181/255, blue: 246/255, alpha: 1)
+                                  : UIColor(red: 89/255, green: 121/255, blue: 240/255, alpha: 1)
+        let curBlockquoteColor = isDark ? UIColor(red: 170/255, green: 170/255, blue: 170/255, alpha: 1)
+                                        : UIColor.gray
 
         let fullRange = NSRange(location: 0, length: attrStr.length)
         attrStr.enumerateAttribute(.foregroundColor, in: fullRange, options: []) { value, range, _ in
             guard let color = value as? UIColor else {
-                // 没有显式设置颜色的文本，直接设置目标色
-                attrStr.addAttribute(.foregroundColor, value: targetColor, range: range)
+                attrStr.addAttribute(.foregroundColor, value: replaceColor, range: range)
                 return
             }
-            // 判断是否是特殊颜色（链接、blockquote），如果不是则替换为目标色
-            if !isColorSimilar(color, linkColor) && !isColorSimilar(color, blockquoteColor) {
-                attrStr.addAttribute(.foregroundColor, value: targetColor, range: range)
+            if isColorSimilar(color, curLinkColor) {
+                attrStr.addAttribute(.foregroundColor, value: dynamicLinkColor, range: range)
+            } else if !isColorSimilar(color, curBlockquoteColor) {
+                attrStr.addAttribute(.foregroundColor, value: replaceColor, range: range)
             }
         }
     }
