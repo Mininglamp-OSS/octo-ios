@@ -9,7 +9,7 @@
 #import "CWVoiceView.h"
 #import "UIView+CWChat.h"
 #import "CWTalkBackView.h"
-#import "CWRecordView.h"
+#import "CWSpeechToTextView.h"
 #import "CWChangeVoiceView.h"
 #import "WuKongBase.h"
 
@@ -18,7 +18,7 @@
 @property (nonatomic,weak) UIScrollView *contentScrollView; // 承载内容的视图
 
 @property (nonatomic,weak) CWTalkBackView *talkBackView;    // 对讲视图
-@property (nonatomic,weak) CWRecordView *recordView;        // 录音视图
+@property (nonatomic,weak) CWSpeechToTextView *speechToTextView; // 语音转文字视图
 @property (nonatomic,weak) CWChangeVoiceView *voiceChangeView; // 变声视图
 
 @property (nonatomic,weak) UIView *smallCirle; // 蓝色小圆点
@@ -51,10 +51,10 @@
 - (void)setupSubViews {
     // 设置内容滚动视图
     [self contentScrollView];
-    // 设置对讲界面
+    // 设置语音转文字界面（第一个tab）
+    [self speechToTextView];
+    // 设置对讲界面（第二个tab）
     [self talkBackView];
-    // 设置录音界面
-    [self recordView];
     // 设置变声界面
 //    [self voiceChangeView];
     // 设置下方三个标签界面
@@ -92,7 +92,7 @@
 - (CWTalkBackView *)talkBackView {
     if (_talkBackView == nil) {
 //        CWTalkBackView *talkView = [[CWTalkBackView alloc] initWithFrame:CGRectMake(self.cw_width, 0, self.cw_width, self.contentScrollView.cw_height)];
-         CWTalkBackView *talkView = [[CWTalkBackView alloc] initWithFrame:CGRectMake(0, 0, self.cw_width, self.contentScrollView.cw_height)];
+         CWTalkBackView *talkView = [[CWTalkBackView alloc] initWithFrame:CGRectMake(self.cw_width * 1, 0, self.cw_width, self.contentScrollView.cw_height)];
         [self.contentScrollView addSubview:talkView];
         _talkBackView = talkView;
         _talkBackView.delegate = self.talkBackViewDelegate;
@@ -101,15 +101,14 @@
     return _talkBackView;
 }
 
-- (CWRecordView *)recordView {
-    if (_recordView == nil) {
-        CWRecordView *recordView = [[CWRecordView alloc] initWithFrame:CGRectMake(self.cw_width * 1, 0, self.cw_width, self.contentScrollView.cw_height)];
-        recordView.playViewDelegate = self.playViewDelegate;
-        recordView.recordViewDelegate = self.voiceRecordViewDelegate;
-        [self.contentScrollView addSubview:recordView];
-        _recordView = recordView;
+- (CWSpeechToTextView *)speechToTextView {
+    if (_speechToTextView == nil) {
+        CWSpeechToTextView *sttView = [[CWSpeechToTextView alloc] initWithFrame:CGRectMake(0, 0, self.cw_width, self.contentScrollView.cw_height)];
+        sttView.delegate = self.speechToTextDelegate;
+        [self.contentScrollView addSubview:sttView];
+        _speechToTextView = sttView;
     }
-    return _recordView;
+    return _speechToTextView;
 }
 
 - (CWChangeVoiceView *)voiceChangeView {
@@ -136,7 +135,7 @@
 - (void)setupBottomViewSubviews {
     CGFloat margin = 10;
 //    NSArray *titleArr = @[@"变声",@"对讲",@"录音"];
-    NSArray *titleArr = @[LLang(@"对讲"),LLang(@"录音")];
+    NSArray *titleArr = @[LLang(@"语音转文字"),LLang(@"对讲")];
     
 //    _bottomsLabels = [NSMutableArray array];
     

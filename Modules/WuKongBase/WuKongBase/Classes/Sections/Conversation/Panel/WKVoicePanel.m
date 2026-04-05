@@ -12,10 +12,11 @@
 #import "CWRecorder.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 #import "CWRecordModel.h"
+#import "CWSpeechToTextView.h"
 
 #define MAXWaveformNum 30
 
-@interface WKVoicePanel ()<CWTalkBackViewDelegate,CWAudioPlayViewDelegate,CWRecordViewDelegate,CWVoiceChangePlayViewDelegate>
+@interface WKVoicePanel ()<CWTalkBackViewDelegate,CWAudioPlayViewDelegate,CWSpeechToTextViewDelegate,CWVoiceChangePlayViewDelegate>
 @property(nonatomic,strong) CWVoiceView *voiceView;
 @end
 
@@ -35,7 +36,7 @@
         _voiceView.talkBackViewDelegate = self;
         _voiceView.playViewDelegate = self;
         _voiceView.voiceChangePlayDelegate = self;
-        _voiceView.voiceRecordViewDelegate = self;
+        _voiceView.speechToTextDelegate = self;
         [_voiceView setupSubViews];
         [_voiceView setBackgroundColor:[WKApp shared].config.backgroundColor];
         [self.contentView addSubview:_voiceView];
@@ -74,6 +75,18 @@
     if(voiceData) {
         [self sendVoiceMessage:voiceData second:second waveform:[CWRecordModel shareInstance].levels];
         [CWFlieManager removeFile:path];
+    }
+}
+
+#pragma mark - CWSpeechToTextViewDelegate
+
+- (void)speechToTextViewDidBeginRecording:(CWSpeechToTextView *)view {
+    [self.context startRecordingVoiceMessage];
+}
+
+- (void)speechToTextView:(CWSpeechToTextView *)view didRecognizeText:(NSString *)text {
+    if (text.length > 0) {
+        [self.context sendTextMessage:text];
     }
 }
 

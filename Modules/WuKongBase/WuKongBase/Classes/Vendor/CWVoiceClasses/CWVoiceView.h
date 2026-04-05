@@ -10,7 +10,7 @@
 #import "CWTalkBackView.h"
 #import "CWAudioPlayView.h"
 #import "CWVoiceChangePlayView.h"
-#import "CWRecordView.h"
+#import "CWSpeechToTextView.h"
 typedef NS_ENUM(NSInteger,CWVoiceState) {
     CWVoiceStateDefault = 0, // 默认状态
     CWVoiceStateRecord,      // 录音
@@ -27,7 +27,7 @@ typedef NS_ENUM(NSInteger,CWVoiceState) {
 @property(nonatomic,weak) id<CWAudioPlayViewDelegate> playViewDelegate;
 
 @property (nonatomic,weak) id<CWVoiceChangePlayViewDelegate> voiceChangePlayDelegate;
-@property (nonatomic,weak) id<CWRecordViewDelegate> voiceRecordViewDelegate;
+@property (nonatomic,weak) id<CWSpeechToTextViewDelegate> speechToTextDelegate;
 
 
 

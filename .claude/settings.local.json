@@ -70,7 +70,13 @@
       "Bash(git push:*)",
       "Bash(git merge:*)",
       "Bash(git show:*)",
-      "Bash(xcodebuild -workspace TangSengDaoDaoiOS.xcworkspace -scheme WuKongBase -configuration Debug -destination 'generic/platform=iOS' build 2>&1 | tee /tmp/build_output.txt | tail -5)"
+      "Bash(xcodebuild -workspace TangSengDaoDaoiOS.xcworkspace -scheme WuKongBase -configuration Debug -destination 'generic/platform=iOS' build 2>&1 | tee /tmp/build_output.txt | tail -5)",
+      "Bash(gh pr:*)",
+      "Bash(brew list:*)",
+      "WebFetch(domain:codex.mlamp.cn)",
+      "Bash(git -C /Users/wanglitao/Documents/dmwork-web log --oneline --all --grep=\"contacts\")",
+      "Bash(git -C /Users/wanglitao/Documents/dmwork-web show feat/contacts-integration-phase1:packages/dmworkcontacts/src/Contacts/index.tsx)",
+      "Bash(xcrun:*)"
     ]
   }
 }

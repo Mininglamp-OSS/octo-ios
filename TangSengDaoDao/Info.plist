@@ -71,7 +71,9 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>“Octo”想访问您的麦克风，用于聊天和视频</string>
 	<key>NSMicrophoneUsageDescriptionApp</key>
-	<string>“Octo”需要您的同意,才能访问麦克风﻿﻿﻿，用于聊天和视频</string>
+	<string>”Octo”需要您的同意,才能访问麦克风﻿﻿﻿，用于聊天和视频</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>”Octo”需要您的同意，才能访问语音识别，用于将语音转为文字</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>“Octo”需要您的同意,才能访问相册﻿﻿，用于聊天图片的发送</string>
 	<key>NSPhotoLibraryUsageDescription</key>
