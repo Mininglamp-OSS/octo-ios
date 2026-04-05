@@ -22,6 +22,8 @@
 #import "WKMergeForwardContent.h"
 #import "WKScreenshotContent.h"
 #import "WKConversationView+Robot.h"
+#import "WKVoiceInputView.h"
+#import "WKVoiceInputService.h"
 
 
 @interface WKConversationView ()<WKConversationInputPanelDelegate,WKMultiplePanelDelegate>
@@ -136,7 +138,9 @@
     if(self.inputParentView != self) {
         [self.inputParentView addSubview:self.input];
     }
-    
+
+    // 预取语音输入 config
+    [[WKVoiceInputService shared] prefetchConfig];
 }
 - (void)viewWillDisappear:(BOOL)animated {
     
@@ -157,7 +161,10 @@
     if(self.inputParentView != self) {
         [self.input removeFromSuperview];
     }
-    
+
+    // 取消语音输入录音
+    [[NSNotificationCenter defaultCenter] postNotificationName:WKVoiceInputCancelRecordingNotification
+                                                        object:self];
 }
 -(void) viewDidDisappear {
     // 截屏通知

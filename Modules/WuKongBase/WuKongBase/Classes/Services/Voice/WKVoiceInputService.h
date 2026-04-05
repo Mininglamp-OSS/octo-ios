@@ -1,0 +1,50 @@
+//
+//  WKVoiceInputService.h
+//  WuKongBase
+//
+
+#import <Foundation/Foundation.h>
+
+NS_ASSUME_NONNULL_BEGIN
+
+@interface WKVoiceInputConfig : NSObject
+@property (nonatomic, assign) BOOL enabled;
+@property (nonatomic, assign) NSInteger maxDuration;
+@end
+
+@interface WKVoiceInputResult : NSObject
+@property (nonatomic, copy) NSString *text;
+@property (nonatomic, copy) NSString *model;
+@end
+
+@interface WKVoiceInputService : NSObject
+
++ (instancetype)shared;
+
+/// 已缓存的配置（可能为 nil，需先调用 prefetchConfig 或 fetchConfigWithCompletion:）
+@property (nonatomic, strong, readonly, nullable) WKVoiceInputConfig *cachedConfig;
+
+/// 获取语音输入配置（带缓存，5 分钟 TTL）
+/// 回调保证在主线程执行
+/// @param completion 完成回调，可为 nil（prefetchConfig 场景）
+- (void)fetchConfigWithCompletion:(nullable void(^)(WKVoiceInputConfig * _Nullable config,
+                                                     NSError * _Nullable error))completion;
+
+/// 预取配置（进入会话页时调用，无需等待结果）
+- (void)prefetchConfig;
+
+/// 清除配置缓存
+- (void)clearConfigCache;
+
+/// 语音转写
+/// @param audioData    音频数据（m4a/AAC 格式）
+/// @param contextText  输入框已有文本（可选，nil 为纯转写模式）
+/// @param chatContext  最近聊天记录（v1 传 nil，deferred）
+- (void)transcribeAudio:(NSData *)audioData
+            contextText:(nullable NSString *)contextText
+            chatContext:(nullable NSString *)chatContext
+             completion:(void(^)(WKVoiceInputResult * _Nullable result,
+                                 NSError * _Nullable error))completion;
+@end
+
+NS_ASSUME_NONNULL_END

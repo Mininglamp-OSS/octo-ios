@@ -13,10 +13,13 @@
 #import <WuKongIMSDK/WuKongIMSDK.h>
 #import "CWRecordModel.h"
 #import "CWSpeechToTextView.h"
+#import "WKVoiceInputView.h"
+#import "WKVoiceInputViewDelegate.h"
+#import "WKVoiceInputService.h"
 
 #define MAXWaveformNum 30
 
-@interface WKVoicePanel ()<CWTalkBackViewDelegate,CWAudioPlayViewDelegate,CWSpeechToTextViewDelegate,CWVoiceChangePlayViewDelegate>
+@interface WKVoicePanel ()<CWTalkBackViewDelegate,CWAudioPlayViewDelegate,CWSpeechToTextViewDelegate,CWVoiceChangePlayViewDelegate,WKVoiceInputViewDelegate>
 @property(nonatomic,strong) CWVoiceView *voiceView;
 @end
 
@@ -32,16 +35,20 @@
 -(void) layoutPanel:(CGFloat)height {
     [super layoutPanel:height];
     if(!_voiceView) {
-        _voiceView = [[CWVoiceView alloc] initWithFrame:CGRectMake(0, 0,WKScreenWidth, height)];
+        WKVoiceInputConfig *config = [WKVoiceInputService shared].cachedConfig;
+        BOOL enabled = config ? config.enabled : YES; // optimistic default
+
+        _voiceView = [[CWVoiceView alloc] initWithFrame:CGRectMake(0, 0, WKScreenWidth, height)];
+        _voiceView.voiceInputEnabled = enabled;
         _voiceView.talkBackViewDelegate = self;
         _voiceView.playViewDelegate = self;
         _voiceView.voiceChangePlayDelegate = self;
         _voiceView.speechToTextDelegate = self;
+        _voiceView.voiceInputDelegate = self;
         [_voiceView setupSubViews];
         [_voiceView setBackgroundColor:[WKApp shared].config.backgroundColor];
         [self.contentView addSubview:_voiceView];
     }
-    
     _voiceView.frame = self.contentView.bounds;
 }
 
@@ -88,6 +95,76 @@
     if (text.length > 0) {
         [self.context sendTextMessage:text];
     }
+}
+
+#pragma mark - WKVoiceInputViewDelegate
+
+- (void)voiceInputDidTranscribe:(NSString *)text shouldReplace:(BOOL)shouldReplace {
+    if (shouldReplace) {
+        if ([self.context respondsToSelector:@selector(inputSetText:)]) {
+            [self.context inputSetText:text];
+        }
+    } else {
+        if ([self.context respondsToSelector:@selector(inputInsertText:)]) {
+            [self.context inputInsertText:text];
+        }
+    }
+}
+
+- (void)voiceInputInsertText:(NSString *)text {
+    if ([text isEqualToString:@"@"]) {
+        if ([self.context respondsToSelector:@selector(inputInsertText:)]) {
+            [self.context inputInsertText:@"@"];
+        }
+        if ([self.context respondsToSelector:@selector(showMentionUsers)]) {
+            [self.context showMentionUsers];
+        }
+    } else {
+        if ([self.context respondsToSelector:@selector(inputInsertText:)]) {
+            [self.context inputInsertText:text];
+        }
+    }
+}
+
+- (void)voiceInputDeleteBackward {
+    if (![self.context respondsToSelector:@selector(inputSelectedRange)]) return;
+    NSRange selectedRange = [self.context inputSelectedRange];
+
+    if (selectedRange.length > 0) {
+        if ([self.context respondsToSelector:@selector(inputDeleteText:)]) {
+            [self.context inputDeleteText:selectedRange];
+        }
+    } else if (selectedRange.location > 0) {
+        if ([self.context respondsToSelector:@selector(inputText)]) {
+            NSString *text = [self.context inputText];
+            NSRange charRange = [text rangeOfComposedCharacterSequenceAtIndex:selectedRange.location - 1];
+            if ([self.context respondsToSelector:@selector(inputDeleteText:)]) {
+                [self.context inputDeleteText:charRange];
+            }
+        }
+    }
+}
+
+- (NSString *)voiceInputCurrentText {
+    if ([self.context respondsToSelector:@selector(inputText)]) {
+        return [self.context inputText];
+    }
+    return nil;
+}
+
+- (NSRange)voiceInputSelectedRange {
+    if ([self.context respondsToSelector:@selector(inputSelectedRange)]) {
+        return [self.context inputSelectedRange];
+    }
+    return NSMakeRange(0, 0);
+}
+
+- (void)voiceInputRecordingDidStart {
+    [self.context startRecordingVoiceMessage];
+}
+
+- (void)voiceInputRecordingDidStop {
+    // 录音结束，无需额外操作
 }
 
 -(void) sendVoiceMessage:(NSData*)voiceData second:(NSInteger)second waveform:(NSArray<NSNumber*>*)waveform{

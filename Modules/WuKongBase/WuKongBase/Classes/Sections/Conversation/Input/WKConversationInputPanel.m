@@ -954,14 +954,26 @@ CGFloat itemSpace = 10.0f;
  */
 -(void) inputInsertText:(NSString *)text{
     [self.textView insertText:text];
-    
     [self handleTextViewContentDidChange];
+    // 滚动到文本末尾
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UITextView *tv = self.textView.internalTextView;
+        if (tv.text.length > 0) {
+            [tv scrollRangeToVisible:NSMakeRange(tv.text.length, 0)];
+        }
+    });
 }
 
 -(void) inputSetText:(NSString *)text {
     [self.textView setText:text];
-    [self resetInputHeight];
     [self handleTextViewContentDidChange];
+    // 滚动到文本末尾
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UITextView *tv = self.textView.internalTextView;
+        if (tv.text.length > 0) {
+            [tv scrollRangeToVisible:NSMakeRange(tv.text.length, 0)];
+        }
+    });
 }
 
 

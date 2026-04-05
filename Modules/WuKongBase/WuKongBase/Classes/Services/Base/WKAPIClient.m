@@ -215,6 +215,72 @@
     
 }
 
+-(NSURLSessionDataTask *)fileUpload:(NSString *)path
+                         formFields:(NSDictionary<NSString *, NSString *> *)formFields
+                           fileData:(NSData *)fileData
+                           fileName:(NSString *)fileName
+                          fileField:(NSString *)fileField
+                           mimeType:(NSString *)mimeType
+                            timeout:(NSTimeInterval)timeout
+                   completeCallback:(void(^)(id, NSError *))completeCallback {
+
+    NSString *requestPath = path;
+    if (_config.requestPathReplace) {
+        requestPath = _config.requestPathReplace(path);
+    }
+    [self resetPublicHeader];
+
+    NSError *serializerError = nil;
+    NSMutableURLRequest *request =
+        [_sessionManager.requestSerializer
+         multipartFormRequestWithMethod:@"POST"
+         URLString:[[NSURL URLWithString:[self pathURLEncode:requestPath]
+                            relativeToURL:_sessionManager.baseURL] absoluteString]
+         parameters:nil
+         constructingBodyWithBlock:^(id<AFMultipartFormData> formData) {
+             [formData appendPartWithFileData:fileData
+                                        name:fileField
+                                    fileName:fileName
+                                    mimeType:mimeType];
+             [formFields enumerateKeysAndObjectsUsingBlock:^(NSString *key, NSString *value, BOOL *stop) {
+                 [formData appendPartWithFormData:[value dataUsingEncoding:NSUTF8StringEncoding]
+                                             name:key];
+             }];
+         }
+         error:&serializerError];
+
+    if (serializerError) {
+        if (completeCallback) completeCallback(nil, serializerError);
+        return nil;
+    }
+
+    if (timeout > 0) {
+        request.timeoutInterval = timeout;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    NSURLSessionDataTask *task =
+        [_sessionManager dataTaskWithRequest:request
+                              uploadProgress:nil
+                            downloadProgress:nil
+                           completionHandler:^(NSURLResponse *response, id responseObject, NSError *error) {
+            if (error) {
+                NSError *er = nil;
+                if (weakSelf.config.errorHandler) {
+                    er = weakSelf.config.errorHandler(nil, error);
+                }
+                if (!er) {
+                    er = error;
+                }
+                if (completeCallback) completeCallback(nil, er);
+            } else {
+                if (completeCallback) completeCallback(responseObject, nil);
+            }
+        }];
+    [task resume];
+    return task;
+}
+
 -(void) uploadChatFile:(NSString*)serverPath localURL:(NSURL*)localURL progress:(void(^_Nullable)(NSProgress * _Nonnull progress)) progressCallback completeCallback:(void(^_Nullable)(id __nullable resposeObject,NSError * __nullable error)) completeCallback {
     [self getChatUploadURL:serverPath].then(^(NSDictionary*result){
         NSString *uploadUrl = result[@"url"];
