@@ -171,8 +171,29 @@
     label.textColor = kNormalBackGroudColor;
     label.textAlignment = NSTextAlignmentCenter;
     label.font = [UIFont systemFontOfSize:14];
+    label.userInteractionEnabled = YES;
     [label sizeToFit];
+
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTabLabelTapped:)];
+    [label addGestureRecognizer:tap];
+
     return label;
+}
+
+- (void)onTabLabelTapped:(UITapGestureRecognizer *)tap {
+    UILabel *label = (UILabel *)tap.view;
+    NSInteger index = [self.bottomsLabels indexOfObject:label];
+    if (index == NSNotFound) return;
+
+    [self.contentScrollView setContentOffset:CGPointMake(self.cw_width * index, 0) animated:YES];
+    [self setupSelectLabel:label];
+    [self updateDotPositionForPage:index];
+
+    // 离开语音输入 Tab 时取消录音
+    NSInteger voiceInputIndex = self.voiceInputEnabled ? 0 : -1;
+    if (index != voiceInputIndex) {
+        [self.voiceInputView cancelIfRecording];
+    }
 }
 
 - (void)setupSmallCircleView {
@@ -204,8 +225,8 @@
     CGFloat nextCenterX = [self.labelCenterXs[nextPage] floatValue];
     CGFloat dotCenterX = currentCenterX + (nextCenterX - currentCenterX) * fraction;
 
-    CGFloat originDotX = [self.labelCenterXs[0] floatValue];
-    self.bottomView.transform = CGAffineTransformMakeTranslation(-(dotCenterX - originDotX), 0);
+    // 只移动小圆点，bottomView 固定不动
+    self.smallCirle.center = CGPointMake(dotCenterX, self.smallCirle.center.y);
 }
 
 - (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView {
@@ -213,12 +234,19 @@
     if (index < 0) index = 0;
     if (index >= (NSInteger)self.bottomsLabels.count) index = self.bottomsLabels.count - 1;
     [self setupSelectLabel:self.bottomsLabels[index]];
+    [self updateDotPositionForPage:index];
 
     // 离开语音输入 Tab 时取消录音
     NSInteger voiceInputIndex = self.voiceInputEnabled ? 0 : -1;
     if (index != voiceInputIndex) {
         [self.voiceInputView cancelIfRecording];
     }
+}
+
+- (void)updateDotPositionForPage:(NSInteger)page {
+    if (page < 0 || page >= (NSInteger)self.labelCenterXs.count) return;
+    CGFloat centerX = [self.labelCenterXs[page] floatValue];
+    self.smallCirle.center = CGPointMake(centerX, self.smallCirle.center.y);
 }
 
 #pragma mark - setter
