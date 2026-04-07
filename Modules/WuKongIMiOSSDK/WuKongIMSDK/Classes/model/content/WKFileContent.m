@@ -48,6 +48,14 @@
     self.fileExtension = contentDic[@"extension"] ?: @"";
     self.fileSize = contentDic[@"size"] ? [contentDic[@"size"] longLongValue] : 0;
     self.remoteUrl = contentDic[@"url"] ?: @"";
+
+    // extension 为空时，从文件名中提取扩展名
+    if (self.fileExtension.length == 0 && self.name.length > 0) {
+        NSString *ext = [self.name pathExtension];
+        if (ext.length > 0) {
+            self.fileExtension = [NSString stringWithFormat:@".%@", ext];
+        }
+    }
 }
 
 - (NSDictionary *)encodeWithJSON {

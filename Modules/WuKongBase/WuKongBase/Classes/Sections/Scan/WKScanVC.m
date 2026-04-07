@@ -219,8 +219,8 @@
                }
            }).catch(^(NSError *error){
                WKLogError(@"扫码请求失败！-> %@",error);
-               if(error) {
-                   [topView showMsg:error.domain];
+               if(error && error.domain.length > 0) {
+                   [topView showHUDWithHide:error.domain];
                }
                if(reStartDevice) {
                    reStartDevice();

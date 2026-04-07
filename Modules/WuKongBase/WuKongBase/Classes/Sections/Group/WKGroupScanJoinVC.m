@@ -40,6 +40,13 @@
 
     self.nameLbl.text = self.groupName ?: @"";
     self.memberCountLbl.text = [NSString stringWithFormat:LLang(@"%ld位成员"), (long)self.memberCount];
+
+    // 已在群内显示"进入群聊"，否则显示"加入群聊"
+    if (self.isMember) {
+        [self.joinBtn setTitle:LLang(@"进入群聊") forState:UIControlStateNormal];
+    } else {
+        [self.joinBtn setTitle:LLang(@"加入群聊") forState:UIControlStateNormal];
+    }
 }
 
 - (NSString *)langTitle {
@@ -49,6 +56,14 @@
 #pragma mark - Actions
 
 -(void) joinBtnPressed {
+    // 已在群内，直接进入群聊
+    if (self.isMember) {
+        WKConversationVC *vc = [WKConversationVC new];
+        vc.channel = [[WKChannel alloc] initWith:self.groupNo channelType:WK_GROUP];
+        [[WKNavigationManager shared] replacePushViewController:vc animated:YES];
+        return;
+    }
+
     self.joinBtn.enabled = NO;
     [self.view showHUD];
 

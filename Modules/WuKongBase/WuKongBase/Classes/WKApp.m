@@ -897,8 +897,9 @@ static  AVAudioPlayer *_silentAudioPlayer;
     // file/preview/ 路径使用服务器公共文件地址（与 web 端一致）
     if ([path hasPrefix:@"file/preview/"]) {
         NSString *filePath = [path stringByReplacingCharactersInRange:NSMakeRange(0, [@"file/preview/" length]) withString:@"file/"];
-        NSString *urlStr = [NSString stringWithFormat:@"%@/%@", [self serverOrigin], filePath];
-        return [NSURL URLWithString:[urlStr stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
+        NSString *encodedPath = [filePath stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
+        NSString *urlStr = [NSString stringWithFormat:@"%@/%@", [self serverOrigin], encodedPath];
+        return [NSURL URLWithString:urlStr];
     }
     NSString *encodePath = [path stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
     if(encodePath) {
@@ -919,8 +920,9 @@ static  AVAudioPlayer *_silentAudioPlayer;
     // file/preview/ 路径使用服务器公共文件地址（与 web 端一致）
     if ([path hasPrefix:@"file/preview/"]) {
         NSString *filePath = [path stringByReplacingCharactersInRange:NSMakeRange(0, [@"file/preview/" length]) withString:@"file/"];
-        NSString *urlStr = [NSString stringWithFormat:@"%@/%@", [self serverOrigin], filePath];
-        return [NSURL URLWithString:[urlStr stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
+        NSString *encodedPath = [filePath stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
+        NSString *urlStr = [NSString stringWithFormat:@"%@/%@", [self serverOrigin], encodedPath];
+        return [NSURL URLWithString:urlStr];
     }
     NSString *encodePath = [path stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
     if(encodePath) {
@@ -1477,6 +1479,7 @@ static  AVAudioPlayer *_silentAudioPlayer;
             vc.groupName = result.data[@"name"] ?: @"";
             vc.groupAvatar = result.data[@"avatar"] ?: @"";
             vc.memberCount = [result.data[@"member_count"] integerValue];
+            vc.isMember = [result.data[@"is_member"] boolValue];
             [[WKNavigationManager shared] replacePushViewController:vc animated:YES];
             return true;
         }];

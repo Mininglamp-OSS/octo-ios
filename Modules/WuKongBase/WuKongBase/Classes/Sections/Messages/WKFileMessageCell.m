@@ -188,8 +188,15 @@
                     weakSelf.progressView.hidden = YES;
                     [weakSelf.progressView setProgress:0];
                     NSString *downloadedPath = fileContent.localPath;
+                    NSLog(@"[File] download success, localPath=%@, exists=%d, extension='%@', name='%@'",
+                          downloadedPath,
+                          [[NSFileManager defaultManager] fileExistsAtPath:downloadedPath],
+                          fileContent.fileExtension ?: @"(nil)",
+                          fileContent.name ?: @"(nil)");
                     if (downloadedPath && [[NSFileManager defaultManager] fileExistsAtPath:downloadedPath]) {
                         [weakSelf previewFileAtPath:downloadedPath];
+                    } else {
+                        NSLog(@"[File] downloaded file NOT found at localPath!");
                     }
                 } else if (state == WKMediaDownloadStateFail) {
                     weakSelf.isFileDownloading = NO;
@@ -228,10 +235,14 @@
     }
 
     NSURL *fileURL = [NSURL fileURLWithPath:previewPath];
+    NSLog(@"[File] preview path=%@, fileSize=%lld", previewPath,
+          [[[NSFileManager defaultManager] attributesOfItemAtPath:previewPath error:nil] fileSize]);
     self.documentController = [UIDocumentInteractionController interactionControllerWithURL:fileURL];
     self.documentController.delegate = self;
     UIViewController *topVC = [WKNavigationManager shared].topViewController;
-    if (![self.documentController presentPreviewAnimated:YES]) {
+    BOOL canPreview = [self.documentController presentPreviewAnimated:YES];
+    NSLog(@"[File] presentPreview=%d, UTI=%@", canPreview, self.documentController.UTI ?: @"(nil)");
+    if (!canPreview) {
         [self.documentController presentOptionsMenuFromRect:topVC.view.bounds inView:topVC.view animated:YES];
     }
 }

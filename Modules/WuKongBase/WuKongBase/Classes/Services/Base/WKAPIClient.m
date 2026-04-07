@@ -302,7 +302,14 @@
     if(_config.requestPathReplace) {
         requestPath = _config.requestPathReplace(path);
     }
-     NSMutableURLRequest *request = [_sessionManager.requestSerializer requestWithMethod:@"GET" URLString:[[NSURL URLWithString:[self pathURLEncode:requestPath] relativeToURL:_sessionManager.baseURL] absoluteString] parameters:nil error:nil];
+     // 完整 URL 不再做 percent encoding，避免中文文件名被多重编码导致 404
+     NSString *urlString;
+     if ([requestPath hasPrefix:@"http"]) {
+         urlString = requestPath;
+     } else {
+         urlString = [[NSURL URLWithString:[self pathURLEncode:requestPath] relativeToURL:_sessionManager.baseURL] absoluteString];
+     }
+     NSMutableURLRequest *request = [_sessionManager.requestSerializer requestWithMethod:@"GET" URLString:urlString parameters:nil error:nil];
    NSURLSessionDownloadTask *task = [_sessionManager downloadTaskWithRequest:request progress:downloadProgressBlock destination:^NSURL * _Nonnull(NSURL * _Nonnull targetPath, NSURLResponse * _Nonnull response) {
         return [NSURL fileURLWithPath:storePath];
     } completionHandler:^(NSURLResponse * _Nonnull response, NSURL * _Nullable filePath, NSError * _Nullable error) {

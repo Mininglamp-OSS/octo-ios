@@ -14,6 +14,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,copy) NSString *groupName;
 @property(nonatomic,copy) NSString *groupAvatar;
 @property(nonatomic,assign) NSInteger memberCount;
+@property(nonatomic,assign) BOOL isMember; // 是否已在群内
 
 @end
 
