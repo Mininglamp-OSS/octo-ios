@@ -148,16 +148,27 @@
         return messages;
     }
     NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    BOOL isSystemBot = [self isSystemBotChannel];
     NSMutableArray<WKMessage*> *filtered = [NSMutableArray array];
     for (WKMessage *message in messages) {
         NSString *msgSpaceId = message.content.contentDict[@"space_id"];
-        if(!msgSpaceId || [msgSpaceId isKindOfClass:[NSNull class]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0)) {
-            [filtered addObject:message]; // 无space_id的历史消息：所有空间可见（向前兼容）
+        BOOL hasSpaceId = msgSpaceId && ![msgSpaceId isKindOfClass:[NSNull class]] && ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0);
+        if(!hasSpaceId) {
+            // 无space_id的消息：系统bot(botfather)在空间模式下隐藏，普通聊天向前兼容显示
+            if(!isSystemBot) {
+                [filtered addObject:message];
+            }
         } else if([msgSpaceId isEqualToString:currentSpaceId]) {
             [filtered addObject:message]; // space_id匹配当前空间
         }
     }
     return filtered;
+}
+
+/// 判断是否为系统bot频道（botfather等）
+-(BOOL) isSystemBotChannel {
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    return botfatherUID && [self.channel.channelId isEqualToString:botfatherUID];
 }
 
 /// 判断单条消息是否应在当前空间显示（用于实时消息过滤）
@@ -167,15 +178,12 @@
     }
     NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
     NSString *msgSpaceId = message.content.contentDict[@"space_id"];
-    if(!msgSpaceId || [msgSpaceId isKindOfClass:[NSNull class]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0)) {
-        return YES;
+    BOOL hasSpaceId = msgSpaceId && ![msgSpaceId isKindOfClass:[NSNull class]] && ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0);
+    if(!hasSpaceId) {
+        // 系统bot无space_id的消息在空间模式下不显示
+        return ![self isSystemBotChannel];
     }
     return [msgSpaceId isEqualToString:currentSpaceId];
-}
-
-// 兼容旧方法名
--(BOOL) isSystemBotChannel {
-    return [self needsSpaceFiltering];
 }
 
 // insertFirst 是否插入到数组最前
