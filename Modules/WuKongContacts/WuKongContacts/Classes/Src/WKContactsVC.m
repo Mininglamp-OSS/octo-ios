@@ -70,11 +70,6 @@
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     self.navigationBar.title = LLang(@"联系人");
-    // 切换 tab 时，距上次请求超过 30 秒才重新拉取，避免频繁切换导致卡顿
-    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    if (now - self.lastRequestTime > 30 || !self.currentContactsFingerprint) {
-        [self requestData];
-    }
 }
 
 
