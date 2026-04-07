@@ -435,6 +435,7 @@
                 }
                 if (entities) {
                     NSString *renderedText = mdMutable.string;
+                    NSMutableIndexSet *usedRanges = [NSMutableIndexSet indexSet];
                     for (WKMessageEntity *entity in entities) {
                         if (![entity.type isEqualToString:WKMentionRichTextStyle]) continue;
                         // 从原文中取出 @xxx 文本
@@ -443,15 +444,28 @@
                         if ([mentionText hasSuffix:@" "]) {
                             mentionText = [mentionText substringToIndex:mentionText.length - 1];
                         }
-                        // 在渲染后的文本中查找这段 @xxx
-                        NSRange foundRange = [renderedText rangeOfString:mentionText];
+                        // 验证提取的文本确实以 @ 开头（防止 entity range 偏移导致匹配错误文本）
+                        if (![mentionText hasPrefix:@"@"]) continue;
+                        // 在渲染后的文本中查找这段 @xxx（跳过已使用的位置，避免重复匹配）
+                        NSRange searchRange = NSMakeRange(0, renderedText.length);
+                        NSRange foundRange = NSMakeRange(NSNotFound, 0);
+                        while (searchRange.location < renderedText.length) {
+                            foundRange = [renderedText rangeOfString:mentionText options:0 range:searchRange];
+                            if (foundRange.location == NSNotFound) break;
+                            // 检查是否已被其他 entity 使用
+                            if (![usedRanges containsIndexesInRange:foundRange]) break;
+                            // 已被使用，继续往后搜索
+                            searchRange.location = foundRange.location + foundRange.length;
+                            searchRange.length = renderedText.length - searchRange.location;
+                            foundRange.location = NSNotFound;
+                        }
                         if (foundRange.location != NSNotFound) {
+                            [usedRanges addIndexesInRange:foundRange];
                             WKMetionToken *token = [WKMetionToken new];
                             token.range = foundRange;
                             token.uid = entity.value ?: @"";
                             token.text = mentionText;
                             [clickableTokens addObject:token];
-                            // 给 @mention 文本加上下划线 + 颜色
                             UIColor *mentionColor = message.isSend ? [UIColor whiteColor] : [WKApp shared].config.themeColor;
                             [mdMutable addAttribute:NSForegroundColorAttributeName value:mentionColor range:foundRange];
                             [mdMutable addAttribute:NSUnderlineStyleAttributeName value:@1 range:foundRange];
@@ -656,13 +670,17 @@
                     continue;
                 }
                 if(messageEntiy.type && [messageEntiy.type isEqualToString:WKMentionRichTextStyle]) {
+                    // 范围越界检查
+                    if(messageEntiy.range.location + messageEntiy.range.length > text.length) continue;
                    NSString *mentionText =  [text substringWithRange:messageEntiy.range];
-                    
+                    // 验证提取的文本确实以 @ 开头（防止 entity range 偏移）
+                    if (![mentionText hasPrefix:@"@"]) continue;
+
                     NSRange range = messageEntiy.range;
                     if([mentionText hasSuffix:@" "]) {
                         range = NSMakeRange(range.location, range.length-1);
                     }
-                    
+
                     WKMetionToken *token = [WKMetionToken new];
                     token.range = range;
                     token.uid = messageEntiy.value?:@"";

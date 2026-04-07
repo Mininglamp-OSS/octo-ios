@@ -126,7 +126,7 @@ static CGFloat const kCircleBaseSize = 80.0; // 基础圆形大小，会随音�
 
     // 主按钮
     _micButton = [UIButton buttonWithType:UIButtonTypeCustom];
-    _micButton.backgroundColor = [UIColor blackColor];
+    _micButton.backgroundColor = [WKApp shared].config.themeColor;
     _micButton.clipsToBounds = YES;
     _micButton.imageView.contentMode = UIViewContentModeScaleAspectFit;
     _micButton.imageEdgeInsets = UIEdgeInsetsMake(10, 10, 10, 10);
@@ -321,7 +321,7 @@ static CGFloat const kCircleBaseSize = 80.0; // 基础圆形大小，会随音�
 }
 
 - (void)applyIdleLayout:(BOOL)animated {
-    _micButton.backgroundColor = [UIColor blackColor];
+    _micButton.backgroundColor = [WKApp shared].config.themeColor;
     _micButton.enabled = YES;
     _micButton.alpha = 1.0;
     _micButton.imageEdgeInsets = UIEdgeInsetsMake(10, 10, 10, 10);
@@ -356,7 +356,7 @@ static CGFloat const kCircleBaseSize = 80.0; // 基础圆形大小，会随音�
 }
 
 - (void)applyRecordingLayout:(BOOL)animated {
-    _micButton.backgroundColor = [UIColor blackColor];
+    _micButton.backgroundColor = [WKApp shared].config.themeColor;
     _micButton.enabled = YES;
     _micButton.alpha = 1.0;
     [_micButton setImage:nil forState:UIControlStateNormal];
@@ -378,7 +378,11 @@ static CGFloat const kCircleBaseSize = 80.0; // 基础圆形大小，会随音�
 }
 
 - (void)applyTranscribingLayout:(BOOL)animated {
-    _micButton.backgroundColor = [UIColor colorWithRed:0.35 green:0.35 blue:0.37 alpha:1.0];
+    // 转写中：主题色稍浅
+    UIColor *themeColor = [WKApp shared].config.themeColor;
+    CGFloat r, g, b, a;
+    [themeColor getRed:&r green:&g blue:&b alpha:&a];
+    _micButton.backgroundColor = [UIColor colorWithRed:r green:g blue:b alpha:0.6];
     _micButton.enabled = NO;
     _micButton.alpha = 1.0;
     [_micButton setImage:nil forState:UIControlStateNormal];
@@ -399,7 +403,7 @@ static CGFloat const kCircleBaseSize = 80.0; // 基础圆形大小，会随音�
     [self stopThinkingAnimation];
 
     _thinkingFillView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 0, kPillHeight)];
-    _thinkingFillView.backgroundColor = [UIColor colorWithRed:0.25 green:0.25 blue:0.27 alpha:1.0];
+    _thinkingFillView.backgroundColor = [WKApp shared].config.themeColor;
     _thinkingFillView.userInteractionEnabled = NO;
     [_micButton insertSubview:_thinkingFillView atIndex:0];
 
