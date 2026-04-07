@@ -37,6 +37,7 @@
 @property(nonatomic,assign) NSInteger myBotCount; // 已添加AI数量（仅 space/members 中的 bot）
 @property(nonatomic,assign) BOOL isLoadingData; // 防止重复请求
 @property(nonatomic,assign) NSTimeInterval lastRequestTime; // 上次请求时间
+@property(nonatomic,assign) NSInteger sortGeneration; // 排序序号，防止异步回调错乱
 
 @end
 
@@ -257,11 +258,12 @@
 
     NSString *membersPath = [NSString stringWithFormat:@"space/%@/members", spaceId];
     AnyPromise *membersPromise = [[WKAPIClient sharedClient] GET:membersPath parameters:@{@"page":@"1", @"limit":@"10000"}];
-    AnyPromise *botsPromise = [[WKAPIClient sharedClient] GET:@"robot/space_bots" parameters:@{@"space_id": spaceId}];
+    AnyPromise *spaceBotsPromise = [[WKAPIClient sharedClient] GET:@"robot/space_bots" parameters:@{@"space_id": spaceId}];
+    AnyPromise *myBotsPromise = [[WKAPIClient sharedClient] GET:@"robot/my_bots" parameters:@{@"space_id": spaceId}];
     NSMutableDictionary *groupParams = [NSMutableDictionary dictionaryWithDictionary:@{@"page_size":@(1000), @"space_id": spaceId}];
     AnyPromise *groupsPromise = [[WKAPIClient sharedClient] GET:@"group/my" parameters:groupParams];
 
-    PMKWhen(@[membersPromise, botsPromise, groupsPromise]).then(^(NSArray *results) {
+    PMKWhen(@[membersPromise, spaceBotsPromise, groupsPromise, myBotsPromise]).then(^(NSArray *results) {
         // 数据处理放到后台线程，避免阻塞 UI
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
             NSString *nowSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
@@ -274,6 +276,29 @@
             NSMutableArray<WKChannelInfo*> *channelInfos = [NSMutableArray array];
             NSMutableSet *addedUids = [NSMutableSet set];
             NSInteger myBotCount = 0;
+
+            // 日志：打印各接口返回数量
+            NSArray *_members = results.count > 0 ? results[0] : @[];
+            NSArray *_spaceBots = results.count > 1 ? results[1] : @[];
+            NSArray *_groups = results.count > 2 ? results[2] : @[];
+            NSArray *_myBots = results.count > 3 ? results[3] : @[];
+            NSLog(@"[Contacts] members=%lu, space_bots=%lu, groups=%lu, my_bots=%lu",
+                  (unsigned long)([_members isKindOfClass:[NSArray class]] ? _members.count : 0),
+                  (unsigned long)([_spaceBots isKindOfClass:[NSArray class]] ? _spaceBots.count : 0),
+                  (unsigned long)([_groups isKindOfClass:[NSArray class]] ? _groups.count : 0),
+                  (unsigned long)([_myBots isKindOfClass:[NSArray class]] ? _myBots.count : 0));
+            // space_bots 里 status 分布
+            if ([_spaceBots isKindOfClass:[NSArray class]]) {
+                NSInteger added = 0, notAdded = 0, pending = 0, other = 0;
+                for (NSDictionary *b in _spaceBots) {
+                    NSString *s = b[@"status"];
+                    if ([s isEqualToString:@"added"]) added++;
+                    else if ([s isEqualToString:@"not_added"]) notAdded++;
+                    else if ([s isEqualToString:@"pending"]) pending++;
+                    else other++;
+                }
+                NSLog(@"[Contacts] space_bots status: added=%ld, not_added=%ld, pending=%ld, other=%ld", (long)added, (long)notAdded, (long)pending, (long)other);
+            }
 
             // 处理 members
             NSArray<NSDictionary*> *members = results.count > 0 ? results[0] : @[];
@@ -301,10 +326,11 @@
                 }
             }
 
-            // 处理 space_bots（去重合并）
-            NSArray<NSDictionary*> *bots = results.count > 1 ? results[1] : @[];
-            if (bots && [bots isKindOfClass:[NSArray class]]) {
-                for (NSDictionary *bot in bots) {
+            // 处理 space_bots：全部合并到通讯录（AI tab 展示所有 AI）
+            // myBotCount 只统计 status=added 的（用于"已添加AI"入口的数量显示）
+            NSArray<NSDictionary*> *spaceBots = results.count > 1 ? results[1] : @[];
+            if (spaceBots && [spaceBots isKindOfClass:[NSArray class]]) {
+                for (NSDictionary *bot in spaceBots) {
                     NSString *uid = bot[@"uid"];
                     if (!uid || [addedUids containsObject:uid]) continue;
                     [addedUids addObject:uid];
@@ -316,6 +342,36 @@
                     channelInfo.follow = WKChannelInfoFollowFriend;
                     channelInfo.status = 1;
                     channelInfo.robot = YES;
+                    // 已添加AI数量只算 status=added
+                    NSString *status = bot[@"status"];
+                    if ([status isEqualToString:@"added"]) {
+                        myBotCount++;
+                    }
+                    [channelInfos addObject:channelInfo];
+                }
+            }
+
+            // 处理 my_bots（去重合并）
+            NSArray *myBots = results.count > 3 ? results[3] : @[];
+            if (myBots && [myBots isKindOfClass:[NSArray class]]) {
+                for (id item in myBots) {
+                    NSDictionary *bot = nil;
+                    if ([item isKindOfClass:[NSDictionary class]]) {
+                        bot = (NSDictionary *)item;
+                    }
+                    if (!bot) continue;
+                    NSString *uid = bot[@"uid"];
+                    if (!uid || [addedUids containsObject:uid]) continue;
+                    [addedUids addObject:uid];
+
+                    WKChannelInfo *channelInfo = [WKChannelInfo new];
+                    channelInfo.channel = [[WKChannel alloc] initWith:uid channelType:WK_PERSON];
+                    channelInfo.name = bot[@"name"] ?: @"";
+                    channelInfo.logo = [NSString stringWithFormat:@"users/%@/avatar", uid];
+                    channelInfo.follow = WKChannelInfoFollowFriend;
+                    channelInfo.status = 1;
+                    channelInfo.robot = YES;
+                    myBotCount++;
                     [channelInfos addObject:channelInfo];
                 }
             }
@@ -404,11 +460,24 @@
 
 // 联系人排序和分组
 -(void) sortAndGroup:(NSArray*)items{
+    // 递增序号，旧的异步回调会因序号不匹配被丢弃
+    self.sortGeneration++;
+    NSInteger currentGeneration = self.sortGeneration;
+    // 保存当前 header（items[0]），排序完成后重建
+    NSArray *currentHeader = (self.items.count > 0) ? self.items[0] : @[];
+
     __weak typeof(self) weakSelf = self;
     [WKChineseSort sortAndGroup:items key:@"name" finish:^(bool isSuccess, NSMutableArray *unGroupArr, NSMutableArray *sectionTitleArr, NSMutableArray<NSMutableArray *> *sortedObjArr) {
+        if (!weakSelf) return;
+        // 序号不匹配说明有更新的排序请求，丢弃本次结果
+        if (currentGeneration != weakSelf.sortGeneration) return;
         if(isSuccess) {
             weakSelf.sectionTitleArr = sectionTitleArr;
-            [weakSelf.items addObjectsFromArray:sortedObjArr];
+            // 重建 items：header + 排序后的分组（不用 addObjects 避免追加到脏数据上）
+            NSMutableArray *newItems = [NSMutableArray array];
+            [newItems addObject:[NSMutableArray arrayWithArray:currentHeader]];
+            [newItems addObjectsFromArray:sortedObjArr];
+            weakSelf.items = newItems;
             [weakSelf.tableView reloadData];
         }
     }];
