@@ -152,6 +152,51 @@
     return nil;
 }
 
+- (NSString *)voiceInputChatContext {
+    // 收集所有消息，按时间顺序
+    NSMutableArray<WKMessageModel*> *allMessages = [NSMutableArray array];
+    NSArray<NSString*> *dates = [self.context dates];
+    for (NSString *date in dates) {
+        NSArray<WKMessageModel*> *msgs = [self.context messagesAtDate:date];
+        if (msgs) [allMessages addObjectsFromArray:msgs];
+    }
+    if (allMessages.count == 0) return nil;
+
+    // 过滤文本类型消息（纯文本 + markdown 等含 content 字段的消息）
+    NSMutableArray<WKMessageModel*> *textMessages = [NSMutableArray array];
+    for (WKMessageModel *msg in allMessages) {
+        NSString *content = msg.content.contentDict[@"content"];
+        if (content && content.length > 0 && (msg.contentType == WK_TEXT || msg.content.contentDict[@"type"])) {
+            [textMessages addObject:msg];
+        }
+    }
+    if (textMessages.count == 0) return nil;
+
+    // 取最后10条
+    NSInteger count = MIN(textMessages.count, 10);
+    NSArray<WKMessageModel*> *recentMessages = [textMessages subarrayWithRange:NSMakeRange(textMessages.count - count, count)];
+
+    // 格式化: [用户名]:消息内容
+    NSMutableArray<NSString*> *lines = [NSMutableArray array];
+    for (WKMessageModel *msg in recentMessages) {
+        NSString *text = msg.content.contentDict[@"content"];
+
+        // 获取发送者名称（兼容群聊和单聊）
+        NSString *name = nil;
+        WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfoOfUser:msg.fromUid];
+        if (info) {
+            name = info.displayName;
+        }
+        if (!name || name.length == 0) {
+            name = msg.fromUid;
+        }
+
+        [lines addObject:[NSString stringWithFormat:@"[%@]:%@", name, text]];
+    }
+
+    return lines.count > 0 ? [lines componentsJoinedByString:@"\n"] : nil;
+}
+
 - (NSRange)voiceInputSelectedRange {
     if ([self.context respondsToSelector:@selector(inputSelectedRange)]) {
         return [self.context inputSelectedRange];

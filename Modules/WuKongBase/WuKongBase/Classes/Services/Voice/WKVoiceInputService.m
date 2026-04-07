@@ -95,6 +95,11 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
         formFields[@"chat_context"] = chatContext;
     }
 
+    NSLog(@"[VoiceInput] ===== 语音转写请求 =====");
+    NSLog(@"[VoiceInput] context_text: %@", contextText ?: @"(nil)");
+    NSLog(@"[VoiceInput] chat_context: %@", chatContext ?: @"(nil)");
+    NSLog(@"[VoiceInput] audio size: %lu bytes", (unsigned long)audioData.length);
+
     [[WKAPIClient sharedClient] fileUpload:@"voice/transcribe"
                                 formFields:formFields
                                   fileData:audioData
@@ -105,9 +110,17 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
                           completeCallback:^(id responseObject, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (error) {
+                NSLog(@"[VoiceInput] ===== 转写失败 =====");
+                NSLog(@"[VoiceInput] error: %@", error.localizedDescription);
                 if (completion) completion(nil, error);
                 return;
             }
+
+            NSLog(@"[VoiceInput] ===== 转写结果 =====");
+            NSLog(@"[VoiceInput] status: %@", responseObject[@"status"]);
+            NSLog(@"[VoiceInput] text: %@", responseObject[@"text"] ?: @"(nil)");
+            NSLog(@"[VoiceInput] model: %@", responseObject[@"model"] ?: @"(nil)");
+
             // 检查响应 status 字段
             NSInteger status = [responseObject[@"status"] integerValue];
             if (status != 200) {

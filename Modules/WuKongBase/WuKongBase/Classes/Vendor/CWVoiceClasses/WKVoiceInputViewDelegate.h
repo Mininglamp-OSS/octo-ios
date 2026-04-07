@@ -25,6 +25,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 获取输入框当前文本（用于 context_text）
 - (nullable NSString *)voiceInputCurrentText;
 
+/// 获取聊天上下文（用于 chat_context，最近几条消息带用户名）
+- (nullable NSString *)voiceInputChatContext;
+
 /// 获取输入框当前选区
 - (NSRange)voiceInputSelectedRange;
 

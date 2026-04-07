@@ -368,11 +368,15 @@ NSNotificationName const WKVoiceInputCancelRecordingNotification = @"WKVoiceInpu
     if ([self.delegate respondsToSelector:@selector(voiceInputCurrentText)]) {
         contextText = [self.delegate voiceInputCurrentText];
     }
+    NSString *chatContext = nil;
+    if ([self.delegate respondsToSelector:@selector(voiceInputChatContext)]) {
+        chatContext = [self.delegate voiceInputChatContext];
+    }
 
     __weak typeof(self) weakSelf = self;
     [[WKVoiceInputService shared] transcribeAudio:audioData
                                       contextText:contextText
-                                      chatContext:nil
+                                      chatContext:chatContext
                                        completion:^(WKVoiceInputResult *result, NSError *error) {
         [weakSelf cleanupRecordFile];
 
