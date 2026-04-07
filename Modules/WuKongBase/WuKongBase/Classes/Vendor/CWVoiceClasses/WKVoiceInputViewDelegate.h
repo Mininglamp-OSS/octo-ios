@@ -37,6 +37,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 通知外层：录音结束了
 - (void)voiceInputRecordingDidStop;
 
+/// 请求输入框显示光标
+- (void)voiceInputRequestCursor;
+
 @end
 
 NS_ASSUME_NONNULL_END

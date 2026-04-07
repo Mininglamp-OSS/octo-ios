@@ -212,6 +212,12 @@
     // 录音结束，无需额外操作
 }
 
+- (void)voiceInputRequestCursor {
+    if ([self.context respondsToSelector:@selector(inputBecomeFirstResponder)]) {
+        [self.context inputBecomeFirstResponder];
+    }
+}
+
 -(void) sendVoiceMessage:(NSData*)voiceData second:(NSInteger)second waveform:(NSArray<NSNumber*>*)waveform{
     if(second<=0) {
         [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"说话时间太短")];
