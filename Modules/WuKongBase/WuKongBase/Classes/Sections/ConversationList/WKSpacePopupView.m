@@ -436,21 +436,41 @@
         [window showHUD:LLang(@"加入中...")];
         [[WKSpaceModel shared] joinSpace:inviteCode].then(^(id result){
             [window hideHud];
-            [window showMsg:LLang(@"加入成功")];
-            // 加入成功后刷新列表，并自动切换到新加入的空间
+            [window showHUDWithHide:LLang(@"加入成功")];
+
+            // 从 API 返回中提取新空间 ID
+            NSString *joinedSpaceId = nil;
+            if ([result isKindOfClass:[NSDictionary class]]) {
+                joinedSpaceId = result[@"space_id"];
+            }
+
+            // 刷新空间列表，自动切换到新加入的空间
             [[WKSpaceModel shared] invalidateCache];
             [[WKSpaceModel shared] getMySpaces].then(^(NSArray<WKSpaceEntity *> *spaces) {
                 weakSelf.spaces = spaces ?: @[];
                 [weakSelf.tableView reloadData];
-                // 找到新加入的空间并自动选中
-                for (WKSpaceEntity *space in spaces) {
-                    if (![space.space_id isEqualToString:weakSelf.currentSpaceId]) {
-                        // 选中非当前空间的最后一个（新加入的通常在最后）
+
+                // 用 API 返回的 space_id 精确匹配新空间
+                WKSpaceEntity *newSpace = nil;
+                if (joinedSpaceId) {
+                    for (WKSpaceEntity *space in spaces) {
+                        if ([space.space_id isEqualToString:joinedSpaceId]) {
+                            newSpace = space;
+                            break;
+                        }
                     }
                 }
-                // 选中最后一个空间（新加入的）
-                WKSpaceEntity *newSpace = spaces.lastObject;
-                if (newSpace && ![newSpace.space_id isEqualToString:weakSelf.currentSpaceId]) {
+                // 兜底：找不到则用不等于当前空间的最后一个
+                if (!newSpace) {
+                    for (NSInteger i = spaces.count - 1; i >= 0; i--) {
+                        if (![spaces[i].space_id isEqualToString:weakSelf.currentSpaceId]) {
+                            newSpace = spaces[i];
+                            break;
+                        }
+                    }
+                }
+
+                if (newSpace) {
                     [weakSelf dismiss];
                     if (weakSelf.onSpaceSelected) {
                         weakSelf.onSpaceSelected(newSpace);
@@ -459,7 +479,7 @@
             });
         }).catch(^(NSError *error){
             [window hideHud];
-            [window showMsg:error.localizedDescription];
+            [window showHUDWithHide:error.localizedDescription];
         });
     }]];
 
