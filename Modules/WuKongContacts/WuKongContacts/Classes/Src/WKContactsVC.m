@@ -35,8 +35,10 @@
 @property(nonatomic,strong) NSArray<WKChannelInfo*> *allContactInfos; // 完整联系人列表
 @property(nonatomic,assign) NSInteger groupCount; // 群聊数量
 @property(nonatomic,assign) NSInteger myBotCount; // 已添加AI数量（仅 space/members 中的 bot）
-@property(nonatomic,assign) BOOL isLoadingData; // 防止重复请求
-@property(nonatomic,assign) NSTimeInterval lastRequestTime; // 上次请求时间
+@property(nonatomic,assign) BOOL isLoadingData;  // 防止重复请求
+@property(nonatomic,assign) BOOL dataLoaded;     // 数据是否已加载过
+@property(nonatomic,assign) BOOL isBatchUpdating; // 批量写DB期间，屏蔽逐条通知
+@property(nonatomic,assign) NSTimeInterval lastLoadTime; // 上次加载完成时间
 @property(nonatomic,assign) NSInteger sortGeneration; // 排序序号，防止异步回调错乱
 
 @end
@@ -70,6 +72,14 @@
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     self.navigationBar.title = LLang(@"联系人");
+
+    // 数据过期（30秒）时重新拉取，确保新添加的好友/bot能及时显示
+    if (self.dataLoaded && !self.isLoadingData) {
+        NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+        if (now - self.lastLoadTime > 30) {
+            [self requestData];
+        }
+    }
 }
 
 
@@ -100,9 +110,11 @@
     return _searchbarView;
 }
 
-// 联系人数据更新（仅从本地 DB 刷新，不触发 API 请求，避免循环）
+// 联系人数据更新通知
 -(void) contactsUpdate:(NSNotification*)notify {
-    if (self.isLoadingData) return; // 正在加载时跳过，避免与API回调冲突
+    if (self.isBatchUpdating) return; // 批量写DB期间忽略
+    if (self.isLoadingData) return;
+    if (!self.dataLoaded) return;
     NSArray<WKChannelInfo*> *dbInfos = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
     [self refreshContactsList:dbInfos ?: @[]];
 }
@@ -145,24 +157,7 @@
     }
     self.currentContactsFingerprint = newFingerprint;
     self.allContactInfos = channelInfos;
-
-    // 根据 filter 过滤联系人
-    NSArray<WKChannelInfo*> *filtered = [self filteredContactInfos];
-    self.contactsCountLbl.text = [NSString stringWithFormat:LLang(@"%ld个联系人"),(long)filtered.count];
-    NSMutableArray *items = [NSMutableArray array];
-    for (WKChannelInfo *info in filtered) {
-        [items addObject:[self toContactsCellModel:info]];
-    }
-    // 重建 items（保留 header）
-    NSArray *headerItems = [self buildHeaderItemsWithCounts];
-    self.items = [NSMutableArray array];
-    self.sectionTitleArr = [NSMutableArray array];
-    [self.items insertObject:[NSMutableArray arrayWithArray:headerItems] atIndex:0];
-    if (items.count > 0) {
-        [self sortAndGroup:items];
-    } else {
-        [self.tableView reloadData];
-    }
+    [self rebuildTableData];
 }
 
 // 根据当前 filter 过滤联系人
@@ -186,21 +181,49 @@
 
 // 重新应用过滤（tab 切换时调用）
 -(void) applyFilter {
+    [self rebuildTableData];
+}
+
+// 统一的列表重建方法（所有列表更新都走这里，用 generation 防止异步竞争）
+-(void) rebuildTableData {
+    self.sortGeneration++;
+    NSInteger currentGeneration = self.sortGeneration;
+
     NSArray<WKChannelInfo*> *filtered = [self filteredContactInfos];
     self.contactsCountLbl.text = [NSString stringWithFormat:LLang(@"%ld个联系人"),(long)filtered.count];
+
     NSMutableArray *cellModels = [NSMutableArray array];
     for (WKChannelInfo *info in filtered) {
         [cellModels addObject:[self toContactsCellModel:info]];
     }
+
     NSArray *headerItems = [self buildHeaderItemsWithCounts];
-    self.items = [NSMutableArray array];
-    self.sectionTitleArr = [NSMutableArray array];
-    [self.items insertObject:[NSMutableArray arrayWithArray:headerItems] atIndex:0];
-    if (cellModels.count > 0) {
-        [self sortAndGroup:cellModels];
-    } else {
+
+    if (cellModels.count == 0) {
+        // 无数据，直接同步更新
+        NSMutableArray *newItems = [NSMutableArray array];
+        [newItems addObject:[NSMutableArray arrayWithArray:headerItems]];
+        self.sectionTitleArr = [NSMutableArray array];
+        self.items = newItems;
         [self.tableView reloadData];
+        return;
     }
+
+    // 异步排序，回调时检查 generation
+    __weak typeof(self) weakSelf = self;
+    [WKChineseSort sortAndGroup:cellModels key:@"name" finish:^(bool isSuccess, NSMutableArray *unGroupArr, NSMutableArray *sectionTitleArr, NSMutableArray<NSMutableArray *> *sortedObjArr) {
+        if (!weakSelf) return;
+        if (currentGeneration != weakSelf.sortGeneration) return; // 已过时，丢弃
+        if (!isSuccess) return;
+
+        // 原子性重建 items = header + 排序分组
+        NSMutableArray *newItems = [NSMutableArray array];
+        [newItems addObject:[NSMutableArray arrayWithArray:headerItems]];
+        [newItems addObjectsFromArray:sortedObjArr];
+        weakSelf.sectionTitleArr = sectionTitleArr;
+        weakSelf.items = newItems;
+        [weakSelf.tableView reloadData];
+    }];
 }
 
 // 构建带计数的 header items
@@ -216,29 +239,19 @@
     return headerItems;
 }
 
-// 请求有效联系人数据（从 API 拉取最新数据）
+// 请求联系人数据（只在 viewDidLoad 调用一次）
 -(void) requestData{
-    // 防止重复请求
     if (self.isLoadingData) return;
 
-    // 确保 items 至少有 header section（防止空数组越界崩溃）
+    // 确保 items 至少有 header section
     if (self.items.count == 0) {
         NSArray *headerItems = [[WKApp shared] invokes:WKPOINT_CATEGORY_CONTACTSITEM param:nil];
         [self.items insertObject:[NSMutableArray arrayWithArray:headerItems] atIndex:0];
-    }
-
-    // 首次加载（无指纹）时先用本地数据快速显示
-    if (!self.currentContactsFingerprint) {
-        NSArray<WKChannelInfo*> *dbInfos = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
-        if (dbInfos && dbInfos.count > 0) {
-            [self refreshContactsList:dbInfos];
-        }
+        [self.tableView reloadData];
     }
 
     self.isLoadingData = YES;
-    self.lastRequestTime = [[NSDate date] timeIntervalSince1970];
 
-    // 所有接口并行请求，全部完成后一次性刷新 UI
     NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
     if (currentSpaceId && currentSpaceId.length > 0) {
         [self fetchAllDataWithSpaceId:currentSpaceId];
@@ -382,13 +395,19 @@
             dispatch_async(dispatch_get_main_queue(), ^{
                 weakSelf.myBotCount = myBotCount;
                 weakSelf.groupCount = groupCount;
+                // 批量写DB前设标志，屏蔽逐条 channelInfoUpdate 通知
+                weakSelf.isBatchUpdating = YES;
                 [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
+                weakSelf.isBatchUpdating = NO;
                 [weakSelf refreshContactsList:channelInfos];
+                weakSelf.dataLoaded = YES;
+                weakSelf.lastLoadTime = [[NSDate date] timeIntervalSince1970];
                 weakSelf.isLoadingData = NO;
             });
         });
     }).catch(^(NSError *error){
         WKLogError(@"拉取通讯录数据失败:%@", error);
+        weakSelf.dataLoaded = YES;
         weakSelf.isLoadingData = NO;
     });
 }
@@ -418,14 +437,20 @@
             long long version = [contacts.lastObject[@"version"] longLongValue];
             [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%lld",version] forKey:cacheKey];
             [[NSUserDefaults standardUserDefaults] synchronize];
+            weakSelf.isBatchUpdating = YES;
             [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
+            weakSelf.isBatchUpdating = NO;
         }
         // 从数据库重新加载（API 可能只返回增量数据）
         NSArray<WKChannelInfo*> *allInfos = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
         [weakSelf refreshContactsList:allInfos ?: @[]];
+        weakSelf.dataLoaded = YES;
+        weakSelf.lastLoadTime = [[NSDate date] timeIntervalSince1970];
         weakSelf.isLoadingData = NO;
     }).catch(^(NSError *error){
         WKLogError(@"拉取好友联系人失败:%@", error);
+        weakSelf.dataLoaded = YES;
+        weakSelf.lastLoadTime = [[NSDate date] timeIntervalSince1970];
         weakSelf.isLoadingData = NO;
     });
 }
@@ -454,29 +479,7 @@
 }
 
 // 联系人排序和分组
--(void) sortAndGroup:(NSArray*)items{
-    // 递增序号，旧的异步回调会因序号不匹配被丢弃
-    self.sortGeneration++;
-    NSInteger currentGeneration = self.sortGeneration;
-    // 保存当前 header（items[0]），排序完成后重建
-    NSArray *currentHeader = (self.items.count > 0) ? self.items[0] : @[];
-
-    __weak typeof(self) weakSelf = self;
-    [WKChineseSort sortAndGroup:items key:@"name" finish:^(bool isSuccess, NSMutableArray *unGroupArr, NSMutableArray *sectionTitleArr, NSMutableArray<NSMutableArray *> *sortedObjArr) {
-        if (!weakSelf) return;
-        // 序号不匹配说明有更新的排序请求，丢弃本次结果
-        if (currentGeneration != weakSelf.sortGeneration) return;
-        if(isSuccess) {
-            weakSelf.sectionTitleArr = sectionTitleArr;
-            // 重建 items：header + 排序后的分组（不用 addObjects 避免追加到脏数据上）
-            NSMutableArray *newItems = [NSMutableArray array];
-            [newItems addObject:[NSMutableArray arrayWithArray:currentHeader]];
-            [newItems addObjectsFromArray:sortedObjArr];
-            weakSelf.items = newItems;
-            [weakSelf.tableView reloadData];
-        }
-    }];
-}
+// sortAndGroup 已统一到 rebuildTableData 中
 
 
 
@@ -916,13 +919,16 @@
     
    
     if(!existCellModel) {
+        // 新联系人：加到列表并刷新（单条添加，不重新请求API）
         [self addContactsWithChannelInfo:channelInfo];
         [self.tableView reloadData];
         return;
     }
     BOOL hasChange = false;
     if(![channelInfo.displayName isEqualToString:existCellModel.name]) { // 改变了名字
-        [self requestData];
+        existCellModel.name = channelInfo.displayName;
+        existCellModel.channelInfo = channelInfo;
+        hasChange = true;
     }
     
     if(channelInfo.online != existCellModel.online || channelInfo.lastOffline != existCellModel.lastOffline || channelInfo.deviceFlag !=existCellModel.channelInfo.deviceFlag) { // 上线或离线状态改变
@@ -967,8 +973,11 @@
         }
         i++;
     }
-    if(!has) { // 没有添加成功应该是没有对应的字母索引，所以这里直接重新请求
-        [self requestData];
+    if(!has) {
+        // 没有对应的字母索引，直接重建列表（不重新请求API，避免死循环）
+        if (self.allContactInfos) {
+            [self rebuildTableData];
+        }
     }
 }
 
@@ -1009,6 +1018,7 @@
 #pragma mark - WKChannelManagerDelegate
 
 - (void)channelInfoUpdate:(WKChannelInfo *)channelInfo oldChannelInfo:(WKChannelInfo *)oldChannelInfo {
+    if (self.isBatchUpdating) return; // 批量写DB期间忽略，防止循环
     if(channelInfo.channel.channelType == WK_PERSON && channelInfo.follow == WKChannelInfoFollowFriend) {
         [self addOrUpdateContactsWithChannelInfo:channelInfo];
     }
