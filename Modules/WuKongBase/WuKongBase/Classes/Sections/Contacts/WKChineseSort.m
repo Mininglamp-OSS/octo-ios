@@ -224,6 +224,19 @@
         }
         //
 
+        // 对 # 组（数字/符号）内按原始 name 字符串排序
+        NSString *specialTitle = WKChineseSortSetting.share.specialCharSectionTitle;
+        for (NSInteger i = 0; i < sectionTitleArr.count; i++) {
+            if ([sectionTitleArr[i] isEqualToString:specialTitle]) {
+                [sortedObjArr[i] sortUsingComparator:^NSComparisonResult(id a, id b) {
+                    NSString *nameA = key ? [a valueForKeyPath:key] : a;
+                    NSString *nameB = key ? [b valueForKeyPath:key] : b;
+                    return [nameA compare:nameB options:NSCaseInsensitiveSearch];
+                }];
+                break;
+            }
+        }
+
         //打印 总用时
         CFAbsoluteTime state3 = CFAbsoluteTimeGetCurrent();
         [WKChineseSort logMsg:[NSString stringWithFormat:@"分组用时：\t %f s", (state3-state2)]];
