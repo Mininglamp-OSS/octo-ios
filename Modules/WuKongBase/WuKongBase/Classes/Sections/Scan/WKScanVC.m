@@ -55,6 +55,8 @@
     [super viewDidAppear:animated];
     [self drawNavigationBar];
     [self bottomView];
+    // 从子页面返回时重启摄像头扫描（防止画面卡死）
+    [self reStartDevice];
 }
 
 -(void) drawNavigationBar {
@@ -207,6 +209,7 @@
    if([self isQRCodeURL:strResult]) {
        if(handlers && handlers.count>0) {
            [[WKAPIClient sharedClient] GET:strResult parameters:nil model:WKScanResult.class].then(^(WKScanResult*result){
+               BOOL handled = NO;
                for (WKScanHandler *handler in handlers) {
                   BOOL can =  [handler handle:result reScan:^{
                       if(reStartDevice) {
@@ -214,16 +217,27 @@
                       }
                    }];
                    if(can) {
+                       handled = YES;
                        break;
                    }
+               }
+               // 没有 handler 能处理，延迟后重启摄像头
+               if (!handled && reStartDevice) {
+                   [topView showHUDWithHide:LLang(@"无法识别的二维码")];
+                   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                       reStartDevice();
+                   });
                }
            }).catch(^(NSError *error){
                WKLogError(@"扫码请求失败！-> %@",error);
                if(error && error.domain.length > 0) {
                    [topView showHUDWithHide:error.domain];
                }
+               // 延迟3秒再重启扫描，避免立即识别同一个二维码导致循环弹窗卡死
                if(reStartDevice) {
-                   reStartDevice();
+                   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                       reStartDevice();
+                   });
                }
            });
            return;
