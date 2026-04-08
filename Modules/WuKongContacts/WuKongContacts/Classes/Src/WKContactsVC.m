@@ -520,6 +520,9 @@
         _tableView.sectionFooterHeight = 0.0f;
         _tableView.sectionIndexColor = WKApp.shared.config.themeColor;
         _tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
+        // tabbar高度 + 额外边距，确保最后一行完整显示
+        CGFloat tabBarHeight = self.tabBarController.tabBar.frame.size.height ?: 49;
+        _tableView.contentInset = UIEdgeInsetsMake(0, 0, tabBarHeight + 10, 0);
         [_tableView registerClass:WKContactsCell.class forCellReuseIdentifier:[WKContactsCell cellId]];
         [_tableView registerClass:WKContactsHeaderItemCell.class forCellReuseIdentifier:[WKContactsHeaderItemCell cellId]];
         

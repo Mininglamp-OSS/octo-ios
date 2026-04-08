@@ -541,7 +541,9 @@
         _tableView.backgroundColor=[UIColor clearColor];
         _tableView.sectionIndexBackgroundColor = [UIColor clearColor];
         _tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
-        _tableView.contentInset = UIEdgeInsetsMake(0, 0, 0, 0);
+        // tabbar高度 + 额外边距，确保最后一行完整显示
+        CGFloat tabBarHeight = self.tabBarController.tabBar.frame.size.height ?: 49;
+        _tableView.contentInset = UIEdgeInsetsMake(0, 0, tabBarHeight + 10, 0);
         _tableView.scrollIndicatorInsets = UIEdgeInsetsMake(-0.1f, 0.0f, 0.0f, 0.0f);
         _tableView.tableFooterView = [[UIView alloc] init];
         _tableView.estimatedRowHeight = 0;

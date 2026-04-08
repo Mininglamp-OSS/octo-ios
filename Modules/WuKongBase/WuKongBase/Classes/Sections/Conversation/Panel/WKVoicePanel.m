@@ -33,12 +33,7 @@
     return self;
 }
 -(void) layoutPanel:(CGFloat)height {
-    // 将面板高度延伸到覆盖底部安全区域
-    CGFloat safeBottom = 0;
-    if (@available(iOS 11.0, *)) {
-        safeBottom = [UIApplication sharedApplication].keyWindow.safeAreaInsets.bottom;
-    }
-    [super layoutPanel:height + safeBottom];
+    [super layoutPanel:height];
     if(!_voiceView) {
         WKVoiceInputConfig *config = [WKVoiceInputService shared].cachedConfig;
         BOOL enabled = config ? config.enabled : YES; // optimistic default
