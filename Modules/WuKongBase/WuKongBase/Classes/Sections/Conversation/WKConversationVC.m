@@ -369,6 +369,8 @@
             _channelHeader.videoCallBtn.hidden = NO;
         }
     }
+    // 群聊显示三个点按钮（打开群组设置）
+    _channelHeader.moreDotsBtn.hidden = (self.channel.channelType != WK_GROUP);
     [_channelHeader layoutSubviews];
 }
 

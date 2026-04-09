@@ -16,6 +16,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,strong) UIButton *videoCallBtn;
 
+@property(nonatomic,strong) UIButton *moreDotsBtn; // 三个点按钮（打开群组设置）
+
 @property(nonatomic,assign) NSInteger memberCount; // 成员数量
 
 @property(nonatomic,strong) WKChannelInfo *channelInfo; // 频道信息

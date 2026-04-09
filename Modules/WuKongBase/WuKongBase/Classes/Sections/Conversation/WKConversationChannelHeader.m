@@ -49,11 +49,13 @@
     [self.infoBoxBtn addSubview:self.officialTag];
     [self addSubview:self.voiceCallBtn];
     [self addSubview:self.videoCallBtn];
+    [self addSubview:self.moreDotsBtn];
     [self.avatarImgView addSubview:self.autoDeleteView];
-    
+
     [self.infoBoxBtn addTarget:self action:@selector(infoPressed) forControlEvents:UIControlEventTouchUpInside];
     [self.voiceCallBtn addTarget:self action:@selector(voiceCallPressed) forControlEvents:UIControlEventTouchUpInside];
     [self.videoCallBtn addTarget:self action:@selector(videoCallPressed) forControlEvents:UIControlEventTouchUpInside];
+    [self.moreDotsBtn addTarget:self action:@selector(moreDotsPressed) forControlEvents:UIControlEventTouchUpInside];
     
     [WKApp.shared addChannelAvatarUpdateNotify:self selector:@selector(channelAvatarUpdate:)];
     
@@ -85,29 +87,40 @@
     }
 }
 
+-(void) moreDotsPressed {
+    if(self.onInfo) {
+        self.onInfo(); // 与点击标题/头像打开群组设置相同
+    }
+}
+
 - (void)layoutSubviews {
     [super layoutSubviews];
-    
+
     self.avatarImgView.lim_left = 0.0f;
     self.avatarImgView.lim_centerY_parent = self;
-    
-    self.videoCallBtn.lim_left = self.lim_width - self.videoCallBtn.lim_width;
+
+    // 三个点按钮在最右侧
+    self.moreDotsBtn.lim_left = self.lim_width - self.moreDotsBtn.lim_width;
+    self.moreDotsBtn.lim_centerY_parent = self;
+
+    // 右侧按钮的左边界（三个点按钮左侧）
+    CGFloat rightEdge = self.moreDotsBtn.hidden ? self.lim_width : self.moreDotsBtn.lim_left - 8.0f;
+
+    self.videoCallBtn.lim_left = rightEdge - self.videoCallBtn.lim_width;
     self.videoCallBtn.lim_centerY_parent = self;
-    
+
     if(self.videoCallBtn.hidden) {
-        self.voiceCallBtn.lim_left = self.lim_width - self.voiceCallBtn.lim_width;
+        self.voiceCallBtn.lim_left = rightEdge - self.voiceCallBtn.lim_width;
         self.voiceCallBtn.lim_centerY_parent = self;
     }else {
         self.voiceCallBtn.lim_left = self.videoCallBtn.lim_left - self.voiceCallBtn.lim_width - 15.0f;
         self.voiceCallBtn.lim_centerY_parent = self;
     }
-   
-    
-   
+
     self.infoBoxBtn.lim_height = self.lim_height;
     if(self.voiceCallBtn.hidden) {
-        self.infoBoxBtn.lim_width = self.lim_width -  10.0f;
-        
+        CGFloat infoRight = self.moreDotsBtn.hidden ? (self.lim_width - 10.0f) : (self.moreDotsBtn.lim_left - 8.0f);
+        self.infoBoxBtn.lim_width = infoRight;
     }else{
         self.infoBoxBtn.lim_width = self.voiceCallBtn.lim_left;
     }
@@ -343,6 +356,22 @@
         _botBadgeLbl.hidden = YES;
     }
     return _botBadgeLbl;
+}
+
+- (UIButton *)moreDotsBtn {
+    if(!_moreDotsBtn) {
+        _moreDotsBtn = [[UIButton alloc] initWithFrame:CGRectMake(0.0f, 0.0f, 32.0f, 32.0f)];
+        UIImage *img;
+        if (@available(iOS 13.0, *)) {
+            img = [[self imageName:@"Conversation/Index/MoreDots"] imageWithTintColor:[WKApp shared].config.navBarButtonColor renderingMode:UIImageRenderingModeAlwaysTemplate];
+        } else {
+            img = [[self imageName:@"Conversation/Index/MoreDots"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        }
+        [_moreDotsBtn setImage:img forState:UIControlStateNormal];
+        [_moreDotsBtn setTintColor:[WKApp shared].config.navBarButtonColor];
+        _moreDotsBtn.hidden = YES; // 默认隐藏，由外部控制显示
+    }
+    return _moreDotsBtn;
 }
 
 - (UIButton *)videoCallBtn {
