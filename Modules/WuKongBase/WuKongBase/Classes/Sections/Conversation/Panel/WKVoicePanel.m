@@ -11,6 +11,7 @@
 #import "CWFlieManager.h"
 #import "CWRecorder.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
+#import <WuKongIMSDK/WKChannelMemberDB.h>
 #import "CWRecordModel.h"
 #import "CWSpeechToTextView.h"
 #import "WKVoiceInputView.h"
@@ -153,48 +154,122 @@
 }
 
 - (NSString *)voiceInputChatContext {
-    // 收集所有消息，按时间顺序
+    NSMutableArray<NSString*> *parts = [NSMutableArray array];
+    NSString *myUid = [WKApp shared].loginInfo.uid;
+    WKChannel *channel = self.context.channel;
+
+    // === 第一部分：聊天成员名单（与Web端 buildChatContext 对齐）===
+    NSMutableArray<NSString*> *memberNames = [NSMutableArray array];
+    NSMutableSet<NSString*> *uniqueNames = [NSMutableSet set];
+
+    if (channel.channelType == WK_GROUP) {
+        // 群聊：从DB读取群成员
+        NSArray<WKChannelMember*> *members = [[WKChannelMemberDB shared] getMembersWithChannel:channel];
+        if (members.count <= 100) {
+            // 小群：收集所有成员
+            for (WKChannelMember *member in members) {
+                if ([member.memberUid isEqualToString:myUid]) continue;
+                if (member.status != WKMemberStatusNormal) continue;
+                WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfoOfUser:member.memberUid];
+                if (info) {
+                    NSString *name = info.name;
+                    if (name.length > 0 && ![uniqueNames containsObject:name]) {
+                        [uniqueNames addObject:name];
+                        [memberNames addObject:name];
+                    }
+                    NSString *remark = info.remark;
+                    if (remark.length > 0 && ![remark isEqualToString:name] && ![uniqueNames containsObject:remark]) {
+                        [uniqueNames addObject:remark];
+                        [memberNames addObject:remark];
+                    }
+                }
+            }
+        } else {
+            // 大群(>100人)：只收集最后100条消息中的活跃成员
+            NSMutableArray<WKMessageModel*> *allMsgs = [NSMutableArray array];
+            for (NSString *date in [self.context dates]) {
+                NSArray<WKMessageModel*> *msgs = [self.context messagesAtDate:date];
+                if (msgs) [allMsgs addObjectsFromArray:msgs];
+            }
+            NSMutableOrderedSet<NSString*> *activeUids = [NSMutableOrderedSet orderedSet];
+            for (NSInteger i = allMsgs.count - 1; i >= 0 && activeUids.count < 100; i--) {
+                NSString *uid = allMsgs[i].fromUid;
+                if (uid.length > 0 && ![uid isEqualToString:myUid]) {
+                    [activeUids addObject:uid];
+                }
+            }
+            for (NSString *uid in activeUids) {
+                WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfoOfUser:uid];
+                if (info) {
+                    NSString *name = info.name;
+                    if (name.length > 0 && ![uniqueNames containsObject:name]) {
+                        [uniqueNames addObject:name];
+                        [memberNames addObject:name];
+                    }
+                    NSString *remark = info.remark;
+                    if (remark.length > 0 && ![remark isEqualToString:name] && ![uniqueNames containsObject:remark]) {
+                        [uniqueNames addObject:remark];
+                        [memberNames addObject:remark];
+                    }
+                }
+            }
+        }
+    } else if (channel.channelType == WK_PERSON) {
+        // 单聊：使用对方的名称和备注
+        WKChannelInfo *peerInfo = [[WKSDK shared].channelManager getChannelInfo:channel];
+        if (peerInfo) {
+            if (peerInfo.name.length > 0 && ![uniqueNames containsObject:peerInfo.name]) {
+                [uniqueNames addObject:peerInfo.name];
+                [memberNames addObject:peerInfo.name];
+            }
+            if (peerInfo.remark.length > 0 && ![peerInfo.remark isEqualToString:peerInfo.name] && ![uniqueNames containsObject:peerInfo.remark]) {
+                [uniqueNames addObject:peerInfo.remark];
+                [memberNames addObject:peerInfo.remark];
+            }
+        }
+    }
+
+    if (memberNames.count > 0) {
+        [parts addObject:[NSString stringWithFormat:@"聊天成员：%@", [memberNames componentsJoinedByString:@","]]];
+    }
+
+    // === 第二部分：最后10条消息 ===
     NSMutableArray<WKMessageModel*> *allMessages = [NSMutableArray array];
-    NSArray<NSString*> *dates = [self.context dates];
-    for (NSString *date in dates) {
+    for (NSString *date in [self.context dates]) {
         NSArray<WKMessageModel*> *msgs = [self.context messagesAtDate:date];
         if (msgs) [allMessages addObjectsFromArray:msgs];
     }
-    if (allMessages.count == 0) return nil;
 
-    // 过滤文本类型消息（纯文本 + markdown 等含 content 字段的消息）
+    // 过滤文本类型消息
     NSMutableArray<WKMessageModel*> *textMessages = [NSMutableArray array];
     for (WKMessageModel *msg in allMessages) {
         NSString *content = msg.content.contentDict[@"content"];
-        if (content && content.length > 0 && (msg.contentType == WK_TEXT || msg.content.contentDict[@"type"])) {
+        if (content.length > 0 && (msg.contentType == WK_TEXT || msg.content.contentDict[@"type"])) {
             [textMessages addObject:msg];
         }
     }
-    if (textMessages.count == 0) return nil;
 
-    // 取最后10条
-    NSInteger count = MIN(textMessages.count, 10);
-    NSArray<WKMessageModel*> *recentMessages = [textMessages subarrayWithRange:NSMakeRange(textMessages.count - count, count)];
+    if (textMessages.count > 0) {
+        NSInteger count = MIN(textMessages.count, 10);
+        NSArray<WKMessageModel*> *recentMessages = [textMessages subarrayWithRange:NSMakeRange(textMessages.count - count, count)];
 
-    // 格式化: [用户名]:消息内容
-    NSMutableArray<NSString*> *lines = [NSMutableArray array];
-    for (WKMessageModel *msg in recentMessages) {
-        NSString *text = msg.content.contentDict[@"content"];
-
-        // 获取发送者名称（兼容群聊和单聊）
-        NSString *name = nil;
-        WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfoOfUser:msg.fromUid];
-        if (info) {
-            name = info.displayName;
+        NSMutableArray<NSString*> *msgLines = [NSMutableArray array];
+        for (WKMessageModel *msg in recentMessages) {
+            NSString *text = msg.content.contentDict[@"content"];
+            NSString *name = nil;
+            WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfoOfUser:msg.fromUid];
+            if (info) {
+                name = info.displayName;
+            }
+            if (!name || name.length == 0) {
+                name = msg.fromUid;
+            }
+            [msgLines addObject:[NSString stringWithFormat:@"[%@]: %@", name, text]];
         }
-        if (!name || name.length == 0) {
-            name = msg.fromUid;
-        }
-
-        [lines addObject:[NSString stringWithFormat:@"[%@]:%@", name, text]];
+        [parts addObject:[msgLines componentsJoinedByString:@"\n"]];
     }
 
-    return lines.count > 0 ? [lines componentsJoinedByString:@"\n"] : nil;
+    return parts.count > 0 ? [parts componentsJoinedByString:@"\n"] : nil;
 }
 
 - (NSRange)voiceInputSelectedRange {

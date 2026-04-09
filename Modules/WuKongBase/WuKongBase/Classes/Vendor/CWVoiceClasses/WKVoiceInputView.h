@@ -13,6 +13,7 @@ extern NSNotificationName const WKVoiceInputCancelRecordingNotification;
 typedef NS_ENUM(NSInteger, WKVoiceInputState) {
     WKVoiceInputStateIdle,
     WKVoiceInputStateRecording,
+    WKVoiceInputStateCancelling,
     WKVoiceInputStateTranscribing,
 };
 
