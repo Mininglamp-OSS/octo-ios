@@ -892,10 +892,11 @@
 
     if(model.isSend) {
         attrStr.textColor =  [WKApp shared].config.messageSendTextColor;
-        attrStr.linkColor = [UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f];
+        // 紫色气泡上用偏青的亮蓝色，避免蓝紫混淆看不清
+        attrStr.linkColor = [UIColor colorWithRed:168.0f/255.0f green:222.0f/255.0f blue:255.0f/255.0f alpha:1.0f]; // #A8DEFF
     }else {
         attrStr.textColor = [WKApp shared].config.messageRecvTextColor;
-        attrStr.linkColor = [UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f];
+        attrStr.linkColor = [UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f]; // #5979F0
     }
     // @mention 下划线 + 区分发送/接收的颜色
     if(model.isSend) {
@@ -973,10 +974,13 @@
                                     [tokens addObject:token];
                                 }
                             }];
+                            UIColor *segLinkColor = model.isSend
+                                ? [UIColor colorWithRed:168.0f/255.0f green:222.0f/255.0f blue:255.0f/255.0f alpha:1.0f]  // #A8DEFF
+                                : [UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f]; // #5979F0
                             [mutable enumerateAttribute:NSLinkAttributeName inRange:NSMakeRange(0, mutable.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
                                 if (value) {
                                     [mutable removeAttribute:NSLinkAttributeName range:range];
-                                    [mutable addAttribute:NSForegroundColorAttributeName value:[UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f] range:range];
+                                    [mutable addAttribute:NSForegroundColorAttributeName value:segLinkColor range:range];
                                     [mutable addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:range];
                                 }
                             }];
@@ -991,7 +995,7 @@
                                 }
                                 if (!overlaps) {
                                     [tokens addObject:autoToken];
-                                    [mutable addAttribute:NSForegroundColorAttributeName value:[UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f] range:autoToken.range];
+                                    [mutable addAttribute:NSForegroundColorAttributeName value:segLinkColor range:autoToken.range];
                                     [mutable addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:autoToken.range];
                                 }
                             }
@@ -1010,7 +1014,9 @@
                         NSArray *tokens = [[WKRichTextParseService shared] parseLink:content];
                         [plainAttr lim_render:content tokens:tokens];
                         plainAttr.textColor = textColor;
-                        plainAttr.linkColor = [UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f];
+                        plainAttr.linkColor = model.isSend
+                            ? [UIColor colorWithRed:168.0f/255.0f green:222.0f/255.0f blue:255.0f/255.0f alpha:1.0f]  // #A8DEFF
+                            : [UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f]; // #5979F0
                         lbl.attributedText = plainAttr;
                         if ([lbl respondsToSelector:@selector(setTokens:)]) {
                             [(id)lbl setTokens:plainAttr.tokens];
