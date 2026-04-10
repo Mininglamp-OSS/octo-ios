@@ -501,6 +501,9 @@
             if(resultDict[@"register_user_must_complete_info_on"]) {
                 weakSelf.registerUserMustCompleteInfoOn = [resultDict[@"register_user_must_complete_info_on"] boolValue];
             }
+            if(resultDict[@"thread_on"]) {
+                weakSelf.threadOn = [resultDict[@"thread_on"] boolValue];
+            }
            
             
             weakSelf.requestSuccess = true;

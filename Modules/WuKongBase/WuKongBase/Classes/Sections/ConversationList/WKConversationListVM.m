@@ -8,6 +8,8 @@
 #import "WKConversationListVM.h"
 #import "WuKongBase.h"
 #import "WKProhibitwordsService.h"
+#import "WKThreadService.h"
+#import "WKThreadModel.h"
 @interface WKConversationListVM ()
 @property(nonatomic,strong) NSMutableArray<WKConversationWrapModel*> *conversationWrapModels;
 @property(nonatomic,strong) NSRecursiveLock *conversationsLock;
@@ -87,6 +89,10 @@ static WKConversationListVM *_instance;
             if(![self shouldShowConversation:conversation]) {
                 continue;
             }
+            // 子区完全不显示在会话列表
+            if(conversation.channel.channelType == WK_COMMUNITY_TOPIC) {
+                continue;
+            }
             WKConversationWrapModel *wrapModel = [[WKConversationWrapModel alloc] initWithConversation:conversation];
             if(conversation.parentChannel) {
 
@@ -100,7 +106,6 @@ static WKConversationListVM *_instance;
                 [self handleProhibitwords:wrapModel];
                 [conversationWrapModels addObject:wrapModel];
             }
-
         }
     }
 
@@ -108,6 +113,37 @@ static WKConversationListVM *_instance;
     [self sortConversationList];
     if(finished) {
         finished();
+    }
+
+    // 异步请求每个群组的真实子区数量
+    [self fetchThreadCountsForGroups];
+}
+
+/// 通过 API 获取每个群组的子区真实数量
+-(void) fetchThreadCountsForGroups {
+    for (WKConversationWrapModel *model in self.conversationWrapModels) {
+        if(model.channel.channelType != WK_GROUP) continue;
+        NSString *groupNo = model.channel.channelId;
+        __weak typeof(self) weakSelf = self;
+        [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
+            // 只计活跃状态的子区
+            NSInteger activeCount = 0;
+            for (WKThreadModel *t in threads) {
+                if(t.status == WKThreadStatusActive) {
+                    activeCount++;
+                }
+            }
+            model.threadCount = activeCount;
+            // 通知列表刷新该 cell
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSInteger index = [weakSelf indexAtChannel:model.channel];
+                if(index != -1) {
+                    [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountUpdated" object:model.channel];
+                }
+            });
+        }).catch(^(NSError *error) {
+            // 请求失败不影响显示
+        });
     }
 }
 
@@ -285,6 +321,11 @@ static WKConversationListVM *_instance;
      NSInteger index =[self indexAtChannel:channel];
     if(index!=-1) {
          // [_conversationsLock lock];
+        // 继承旧 model 的子区数量
+        WKConversationWrapModel *oldModel = self.conversationWrapModels[index];
+        if(oldModel.threadCount > 0 && model.threadCount == 0) {
+            model.threadCount = oldModel.threadCount;
+        }
         [self handleProhibitwords:model];
         [self.conversationWrapModels replaceObjectAtIndex:index withObject:model];
          // [_conversationsLock unlock];

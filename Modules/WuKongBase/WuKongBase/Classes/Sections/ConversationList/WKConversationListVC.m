@@ -277,9 +277,12 @@
     [[WKOnlineStatusManager shared] addDelegate:self];
     // 监听当前空间新建群聊，立即加入白名单
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onGroupCreatedInCurrentSpace:) name:@"WKGroupCreatedInCurrentSpace" object:nil];
+    // 监听子区数量更新
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onThreadCountUpdated:) name:@"WKThreadCountUpdated" object:nil];
 }
 
 -(void) removeDelegates {
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKThreadCountUpdated" object:nil];
     // 移除连接监听
     [[[WKSDK shared] connectionManager] removeDelegate:self];
     // 移除频道监听
@@ -957,11 +960,30 @@
     }
 }
 
+-(void) onThreadCountUpdated:(NSNotification*)notification {
+    WKChannel *channel = notification.object;
+    if(!channel) return;
+    NSInteger index = [self.conversationListVM indexAtChannel:channel];
+    if(index == -1) return;
+    WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
+    WKConversationListCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]];
+    if(cell) {
+        [cell refreshWithModel:model];
+    }
+}
+
 // 单个会话添加或更新(大量会话不要使用此方法，容易卡顿)
 -(void) uiAddOrUpdateConversationForOne:(WKConversation*)conversation {
     WKConversationWrapModel *newModel = [self.conversationListVM getRealShowConversationWrap:[[WKConversationWrapModel alloc] initWithConversation:conversation]];
-    
+
+    // 继承旧 model 的子区数量
     NSInteger oldIndex =[self.conversationListVM indexAtChannel:newModel.channel];
+    if(oldIndex != -1) {
+        WKConversationWrapModel *oldModel = [self.conversationListVM modelAtIndex:oldIndex];
+        if(oldModel.threadCount > 0 && newModel.threadCount == 0) {
+            newModel.threadCount = oldModel.threadCount;
+        }
+    }
     if(oldIndex!=-1) {
         
         NSInteger insertPlace =  [self.conversationListVM findInsertPlace:newModel];
@@ -1060,6 +1082,10 @@
 }
 
 -(void) onlyAddOrUpdateConversation:(WKConversation*)conversation {
+    // 子区不独立显示在会话列表
+    if(conversation.channel.channelType == WK_COMMUNITY_TOPIC) {
+        return;
+    }
     WKConversationWrapModel *model =  [self.conversationListVM modelAtChannel:conversation.channel];
     if(model) {
         [model setConversation:conversation];

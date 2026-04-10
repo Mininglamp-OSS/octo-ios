@@ -26,6 +26,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 -(void) addOrUpdateChildren:(WKConversationWrapModel *)conversationWrapModel;
 
+/// 子区数量 (通过 children 计算)
+@property(nonatomic,assign,readonly) NSInteger childrenCount;
+
+/// 子区数量 (通过解析 channelId 计算，用于会话列表显示)
+@property(nonatomic,assign) NSInteger threadCount;
+
 -(void) setChannelInfo:(WKChannelInfo * _Nullable)channelInfo;
 
 

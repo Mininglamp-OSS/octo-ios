@@ -179,6 +179,15 @@
         return;
     }
     WKChannel *channel = channelInfo.channel;
+    // 子区：使用子区图标作为默认头像
+    if(channel.channelType == WK_COMMUNITY_TOPIC) {
+        self.avatarImgView.avatarImgView.image = [self imageName:@"Conversation/Index/ThreadIcon"];
+        self.titleLbl.text = channelInfo.displayName;
+        self.autoDeleteView.hidden = YES;
+        self.officialTag.hidden = YES;
+        self.botBadgeLbl.hidden = YES;
+        return;
+    }
     self.titleLbl.text = channelInfo.displayName;
     if(channel.channelType == WK_PERSON) {
         if([channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
@@ -269,6 +278,15 @@
     }
 }
 
+
+- (void)setSubtitleText:(NSString *)subtitleText {
+    _subtitleText = subtitleText;
+    if (subtitleText.length > 0) {
+        self.subtitleLbl.text = subtitleText;
+        self.subtitleLbl.hidden = NO;
+        [self.subtitleLbl sizeToFit];
+    }
+}
 
 - (void)setMemberCount:(NSInteger)memberCount {
     if(self.channelInfo && self.channelInfo.channel.channelType != WK_PERSON && self.channelInfo.channel.channelType != WK_CustomerService) {

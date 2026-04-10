@@ -54,6 +54,8 @@
 
 @property(nonatomic,strong) UILabel *botBadgeLbl; // Bot标识
 
+@property(nonatomic,strong) UILabel *threadCountLbl; // 子区数量提示
+
 @end
 
 @implementation WKConversationListCell
@@ -100,6 +102,8 @@
         [self.contextContainerView addSubview:self.autoDeleteView];
         // Bot标识
         [self.contextContainerView addSubview:self.botBadgeLbl];
+        // 子区数量提示
+        [self.contextContainerView addSubview:self.threadCountLbl];
 
     }
     return self;
@@ -305,6 +309,20 @@
         frame.size.width += 8.0f;
         frame.size.height += 4.0f;
         self.botBadgeLbl.frame = frame;
+    }
+
+    // 子区数量提示
+    NSInteger threadCount = model.threadCount;
+    if(threadCount > 0 && [WKApp shared].remoteConfig.threadOn) {
+        self.threadCountLbl.hidden = NO;
+        self.threadCountLbl.text = [NSString stringWithFormat:@"+%ld%@", (long)threadCount, LLang(@"个子区")];
+        [self.threadCountLbl sizeToFit];
+        CGRect tcFrame = self.threadCountLbl.frame;
+        tcFrame.size.width += 8.0f;
+        tcFrame.size.height += 2.0f;
+        self.threadCountLbl.frame = tcFrame;
+    } else {
+        self.threadCountLbl.hidden = YES;
     }
 }
 
@@ -714,7 +732,30 @@
         self.botBadgeLbl.lim_left = botLeft;
         self.botBadgeLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
     }
+
+    // 子区数量提示
+    if(!self.threadCountLbl.hidden) {
+        CGFloat tcLeft = self.titleLbl.lim_right + 4.0f;
+        if(!self.botBadgeLbl.hidden) {
+            tcLeft = self.botBadgeLbl.lim_right + 4.0f;
+        } else if(!self.officialTag.hidden) {
+            tcLeft = self.officialTag.lim_right + 4.0f;
+        }
+        self.threadCountLbl.lim_left = tcLeft;
+        self.threadCountLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.threadCountLbl.lim_height) / 2.0f;
+    }
 }
+- (UILabel *)threadCountLbl {
+    if(!_threadCountLbl) {
+        _threadCountLbl = [[UILabel alloc] init];
+        _threadCountLbl.font = [[WKApp shared].config appFontOfSize:11.0f];
+        _threadCountLbl.textColor = [UIColor colorWithRed:255.0f/255.0f green:149.0f/255.0f blue:0.0f/255.0f alpha:1.0f]; // #FF9500 橘黄色
+        _threadCountLbl.textAlignment = NSTextAlignmentCenter;
+        _threadCountLbl.hidden = YES;
+    }
+    return _threadCountLbl;
+}
+
 -(UIImage*) imageName:(NSString*)name {
     return [WKApp.shared loadImage:name moduleID:@"WuKongBase"];
 //    return [[WKResource shared] resourceForImage:name podName:@"WuKongBase_images"];

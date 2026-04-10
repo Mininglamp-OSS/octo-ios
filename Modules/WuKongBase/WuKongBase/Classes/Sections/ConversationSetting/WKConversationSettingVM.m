@@ -19,6 +19,8 @@
 #import "WKTableSectionUtil.h"
 #import "WKGroupQRCodeVC.h"
 #import "WKGlobalSearchResultController.h"
+#import "WKThreadListVC.h"
+#import "WKThreadService.h"
 
 @interface WKConversationSettingVM ()<WKChannelManagerDelegate>
 
@@ -201,7 +203,33 @@
             ],
         };
     } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89800];
-    
+
+    // 子区
+    [[WKApp shared] setMethod:@"channelsetting.threads" handler:^id _Nullable(id  _Nonnull param) {
+        WKChannel *channel = param[@"channel"];
+        if(channel.channelType != WK_GROUP) {
+            return nil;
+        }
+        if(![WKApp shared].remoteConfig.threadOn) {
+            return nil;
+        }
+        return @{
+            @"height":@(0.0f),
+            @"items": @[
+                @{
+                    @"class": WKLabelItemModel.class,
+                    @"label": LLang(@"子区"),
+                    @"showBottomLine":@(YES),
+                    @"onClick":^{
+                        WKThreadListVC *vc = [WKThreadListVC new];
+                        vc.groupNo = weakSelf.channel.channelId;
+                        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+                    }
+                }
+            ]
+        };
+    } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89750];
+
     [[WKApp shared] setMethod:@"channelsetting.groupintro" handler:^id _Nullable(id  _Nonnull param) {
         WKChannel *channel = param[@"channel"];
         BOOL isCreatorOrManager = [param[@"is_creator_or_manager"] boolValue];

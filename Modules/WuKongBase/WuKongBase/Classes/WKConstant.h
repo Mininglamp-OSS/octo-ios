@@ -100,6 +100,9 @@
 // 长按菜单 - 置顶
 #define WKPOINT_LONGMENUS_PIN @"longmenus.pin"
 
+// 长按菜单 - 创建子区
+#define WKPOINT_LONGMENUS_THREAD @"longmenus.thread"
+
 
 
 // ---------- 消息扩展 ----------
@@ -339,7 +342,9 @@ typedef enum : NSUInteger {
    
     
     WK_GROUP_UPGRADE = 1022, // 群升级
-    
+
+    WK_THREAD_CREATED = 1100, // 子区创建通知
+
     WK_TIP = 2000, // tip消息
     
     // 音频通话消息号段 9900 - 9999

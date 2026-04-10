@@ -22,6 +22,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,strong) WKChannelInfo *channelInfo; // 频道信息
 
+@property(nonatomic,copy, nullable) NSString *subtitleText; // 副标题文本 (子区用 "来自: 群名")
+
 @property(nonatomic,copy) void(^onInfo)(void); // 资料信息被点击
 
 @property(nonatomic,copy) void(^onVoiceCall)(void); // 拨打语音

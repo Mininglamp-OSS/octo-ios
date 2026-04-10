@@ -233,20 +233,44 @@
 }
 -(void) refreshTitle {
     if(self.channelInfo) {
-        
+
         self.channelHeader.channelInfo = self.channelInfo;
         self.channelHeader.memberCount = self.conversationView.conversationVM.memberCount;
-        
-        
+
+        // 子区会话：标题加 # 前缀，副标题显示来源群名
+        if(self.channel.channelType == WK_COMMUNITY_TOPIC) {
+            [self setupThreadHeader];
+        }
+
         [self.channelHeader layoutSubviews];
-        
+
         NSString *channelName = self.channelInfo.displayName;
         NSString *showChannelName = [channelName limitedStringForMaxBytesLength:20];
         if(showChannelName.length <channelName.length) {
             showChannelName = [NSString stringWithFormat:@"%@...",showChannelName];
         }
         [self.conversationView.input.textView internalTextView].placeholder=[NSString stringWithFormat:LLang(@"发送给 %@"),showChannelName];
-       
+
+    }
+}
+
+/// 子区会话头部定制
+-(void) setupThreadHeader {
+    // 解析 groupNo: channelId 格式为 {groupNo}____{shortId}
+    NSString *channelId = self.channel.channelId;
+    NSRange separatorRange = [channelId rangeOfString:@"____"];
+    if(separatorRange.location != NSNotFound) {
+        NSString *groupNo = [channelId substringToIndex:separatorRange.location];
+        // 获取父群信息
+        WKChannel *parentChannel = [WKChannel groupWithChannelID:groupNo];
+        WKChannelInfo *parentInfo = [[WKChannelManager shared] getChannelInfo:parentChannel];
+        if(parentInfo && parentInfo.displayName.length > 0) {
+            self.channelHeader.subtitleText = [NSString stringWithFormat:@"%@: %@", LLang(@"来自"), parentInfo.displayName];
+        } else {
+            // 如果还没有父群信息，先请求
+            self.channelHeader.subtitleText = [NSString stringWithFormat:@"%@: %@", LLang(@"来自"), LLang(@"群聊")];
+            [[WKChannelManager shared] fetchChannelInfo:parentChannel];
+        }
     }
 }
 
@@ -358,6 +382,14 @@
 }
 
 -(void) showVideoCall:(BOOL) show {
+    // 子区会话：隐藏通话按钮，显示设置按钮
+    if(self.channel.channelType == WK_COMMUNITY_TOPIC) {
+        _channelHeader.voiceCallBtn.hidden = YES;
+        _channelHeader.videoCallBtn.hidden = YES;
+        _channelHeader.moreDotsBtn.hidden = NO;
+        [_channelHeader layoutSubviews];
+        return;
+    }
     if(!show) {
         _channelHeader.voiceCallBtn.hidden = YES;
         _channelHeader.videoCallBtn.hidden = YES;

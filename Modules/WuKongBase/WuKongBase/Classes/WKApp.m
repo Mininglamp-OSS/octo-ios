@@ -5,7 +5,7 @@
 //  Created by tt on 2019/12/1.
 //
 #import <UserNotifications/UserNotifications.h>
-#import <AVFoundation/AVFoundation.h>
+
 #import "WKApp.h"
 #import "WKEndpointManager.h"
 #import "WKModuleManager.h"
@@ -60,6 +60,11 @@
 #import "WKGroupScanJoinVC.h"
 #import "WKScreenshotCell.h"
 #import "WKScreenshotContent.h"
+#import "WKThreadCreatedCell.h"
+#import "WKThreadCreatedContent.h"
+#import "WKThreadService.h"
+#import "WKThreadModel.h"
+#import "WKThreadSettingVC.h"
 #import "WKConversationAddItem.h"
 #import "WKConversationContext.h"
 #import <SDWebImageWebPCoder/SDWebImageWebPCoder.h>
@@ -235,6 +240,7 @@ static WKApp *_instance;
     [self.messageRegitry registerCellClass:WKLottieStickerCell.class forMessageContentClass:WKLottieStickerContent.class]; // lottie格式的贴图
     [self.messageRegitry registerCellClass:WKEmojiStickerCell.class forMessageContentClass:WKEmojiStickerContent.class];
     [self.messageRegitry registerCellClass:[WKFileMessageCell class] forMessageContentClass:[WKFileContent class]]; // 文件消息
+    [self.messageRegitry registerCellClass:[WKThreadCreatedCell class] forMessageContentClass:[WKThreadCreatedContent class]]; // 子区创建通知
 }
 
 -(void) traceConfig {
@@ -640,11 +646,7 @@ static WKApp *_instance;
     [self invoke:WKPOINT_LOGIN_LOGOUT param:nil];
 }
 
-static  UIBackgroundTaskIdentifier _bgTaskToken;
-static  AVAudioPlayer *_silentAudioPlayer;
-
 - (void)appDidEnterBackground:(NSNotification *)notification   {
-    UIApplication *application = (UIApplication*)notification.object;
     if([WKApp shared].isLogined) {
         NSInteger unreadCount = [[WKConversationListVM shared] getAllUnreadCount];
            [[UIApplication sharedApplication] setApplicationIconBadgeNumber:unreadCount];
@@ -654,26 +656,8 @@ static  AVAudioPlayer *_silentAudioPlayer;
     }else {
           [[UIApplication sharedApplication] setApplicationIconBadgeNumber:0];
     }
-//        [[[WKSDK shared] connectionManager] disconnect:YES];
-    
-    // 后台静音播放，保持 App 和 IM 连接存活
-    [self startSilentAudioPlay];
 
-    // 需要下面这代码回到桌面后台进程才会保持
-    _bgTaskToken = [application beginBackgroundTaskWithExpirationHandler:^{
-        // 取消后台任务
-        [application endBackgroundTask:_bgTaskToken];
-        _bgTaskToken = UIBackgroundTaskInvalid;
-        // 有静音播放保活，不再断开连接
-    }];
-    
     [WKApp shared].loginInfo.extra[@"enter_background_time"] = @([[NSDate date] timeIntervalSince1970]);
-    
-//
-//    self.myTimer =[NSTimer scheduledTimerWithTimeInterval:1.0f
-//                            target:self
-//                           selector:@selector(timerMethod:)     userInfo:nil
-//                           repeats:YES];
 }
 
 
@@ -693,62 +677,9 @@ static  AVAudioPlayer *_silentAudioPlayer;
     WKLogDebug(@"appWillTerminate---------------------------->");
 }
 
-#pragma mark - 后台静音播放保活
-
-- (void)startSilentAudioPlay {
-    if (_silentAudioPlayer && _silentAudioPlayer.isPlaying) {
-        return;
-    }
-    NSError *error = nil;
-    AVAudioSession *session = [AVAudioSession sharedInstance];
-    [session setCategory:AVAudioSessionCategoryPlayback
-             withOptions:AVAudioSessionCategoryOptionMixWithOthers
-                   error:&error];
-    if (error) {
-        NSLog(@"[BackgroundAudio] setCategory error: %@", error);
-        return;
-    }
-    [session setActive:YES error:&error];
-    if (error) {
-        NSLog(@"[BackgroundAudio] setActive error: %@", error);
-        return;
-    }
-    if (!_silentAudioPlayer) {
-        NSString *path = [[NSBundle mainBundle] pathForResource:@"silence" ofType:@"mp3"];
-        if (!path) {
-            NSLog(@"[BackgroundAudio] silence.mp3 not found");
-            return;
-        }
-        _silentAudioPlayer = [[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:path] error:&error];
-        if (error) {
-            NSLog(@"[BackgroundAudio] init player error: %@", error);
-            return;
-        }
-        _silentAudioPlayer.numberOfLoops = -1;
-        _silentAudioPlayer.volume = 0.0f;
-    }
-    [_silentAudioPlayer prepareToPlay];
-    [_silentAudioPlayer play];
-    NSLog(@"[BackgroundAudio] started");
-}
-
-- (void)stopSilentAudioPlay {
-    if (_silentAudioPlayer && _silentAudioPlayer.isPlaying) {
-        [_silentAudioPlayer stop];
-        NSLog(@"[BackgroundAudio] stopped");
-    }
-}
-
 - (void)appDidBecomeActive:(NSNotification *)notification  {
     WKLogDebug(@"appDidBecomeActive--->");
-    // 停止后台静音播放
-    [self stopSilentAudioPlay];
 
-    UIApplication *application = (UIApplication*)notification.object;
-    if(_bgTaskToken) {
-        [application endBackgroundTask:_bgTaskToken];
-        _bgTaskToken = UIBackgroundTaskInvalid;
-    }
     if([self isLogined]) {
         // 回到前台时强制刷新在线状态（参考Android的onFront方案）
         // 解决网页端异常断开后iOS端仍显示"网页端在线"的问题
@@ -1041,7 +972,7 @@ static  AVAudioPlayer *_silentAudioPlayer;
     
     [self setMethod:WKPOINT_CONVERSATION_SHOW_DEFAULT handler:^id _Nullable(id  _Nonnull param) {
         WKChannel *channel = (WKChannel*)param[@"channel"];
-        if(channel.channelType == WK_GROUP || channel.channelType == WK_PERSON) {
+        if(channel.channelType == WK_GROUP || channel.channelType == WK_PERSON || channel.channelType == WK_COMMUNITY_TOPIC) {
             WKConversationVC *conversationVC =  [WKConversationVC new];
            conversationVC.channel = channel;
            [[WKNavigationManager shared] pushViewController:conversationVC animated:YES];
@@ -1149,6 +1080,10 @@ static  AVAudioPlayer *_silentAudioPlayer;
             WKConversationGroupSettingVC *vc = [WKConversationGroupSettingVC new];
             vc.channel = channel;
             vc.context = context;
+            [[WKNavigationManager shared] pushViewController:vc animated:YES];
+        } else if(channel.channelType == WK_COMMUNITY_TOPIC) {
+            WKThreadSettingVC *vc = [WKThreadSettingVC new];
+            vc.channel = channel;
             [[WKNavigationManager shared] pushViewController:vc animated:YES];
         } else {
             WKConversationPersonSettingVC *vc = [WKConversationPersonSettingVC new];
@@ -1447,9 +1382,60 @@ static  AVAudioPlayer *_silentAudioPlayer;
             [context setMultipleOn:YES selectedMessage:message];
         }];
     } category:WKPOINT_CATEGORY_MESSAGE_LONGMENUS sort:980];
-    
-    
-  
+
+    // 创建子区
+    [self setMethod:WKPOINT_LONGMENUS_THREAD handler:^id _Nullable(id  _Nonnull param) {
+        WKMessageModel *message = param[@"message"];
+        // 仅群聊 + 非系统消息 + threadOn 开关 + 未创建过子区
+        if(message.channel.channelType != WK_GROUP) return nil;
+        if([[WKSDK shared] isSystemMessage:message.contentType]) return nil;
+        if(![WKApp shared].remoteConfig.threadOn) return nil;
+        // 该消息已创建过子区，不再显示
+        NSString *msgIdStr = [NSString stringWithFormat:@"%llu", message.message.messageId];
+        if([[WKThreadCreatedContent sourceMessageIdSet] containsObject:msgIdStr]) return nil;
+        UIImage *icon = [GenerateImageUtils generateTintedImgWithImage:[weakSelf imageName:@"Conversation/ContextMenu/Forward"] color:weakSelf.config.contextMenu.primaryColor backgroundColor:nil];
+        return [WKMessageLongMenusItem initWithTitle:LLangW(@"创建子区", weakSelf) icon:icon onTap:^(id<WKConversationContext> context){
+            // 弹出创建子区对话框
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLangW(@"创建子区", weakSelf)
+                                                                          message:nil
+                                                                   preferredStyle:UIAlertControllerStyleAlert];
+            [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+                tf.placeholder = LLangW(@"子区名称 (最多50字)", weakSelf);
+                // 默认取消息前10个字符
+                NSString *digest = [message.content conversationDigest];
+                if(digest.length > 10) {
+                    digest = [digest substringToIndex:10];
+                }
+                tf.text = digest;
+            }];
+            UIAlertAction *createAction = [UIAlertAction actionWithTitle:LLangW(@"创建", weakSelf) style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                NSString *name = alert.textFields.firstObject.text;
+                if(name.length == 0) return;
+                if(name.length > 50) name = [name substringToIndex:50];
+                NSString *msgId = [NSString stringWithFormat:@"%llu", message.message.messageId];
+                // 构建消息正文 payload（与 web 端一致）
+                NSMutableDictionary *payload = [NSMutableDictionary dictionary];
+                if (message.content.contentDict) {
+                    [payload addEntriesFromDictionary:message.content.contentDict];
+                }
+                payload[@"type"] = @(message.contentType);
+                [[WKThreadService shared] createThread:message.channel.channelId name:name sourceMessageId:msgId sourceMessagePayload:payload].then(^(WKThreadModel *thread) {
+                    [[WKThreadService shared] joinThread:thread.shortId].then(^(id result) {
+                        [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:[thread toChannel]];
+                    }).catch(^(NSError *error) {
+                        [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:[thread toChannel]];
+                    });
+                }).catch(^(NSError *error) {
+                    [[[WKNavigationManager shared] topViewController].view showMsg:error.domain];
+                });
+            }];
+            UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:LLangW(@"取消", weakSelf) style:UIAlertActionStyleCancel handler:nil];
+            [alert addAction:cancelAction];
+            [alert addAction:createAction];
+            [[[WKNavigationManager shared] topViewController] presentViewController:alert animated:YES completion:nil];
+        }];
+    } category:WKPOINT_CATEGORY_MESSAGE_LONGMENUS sort:970];
+
     // 个人资料
     [self setMethod:WKPOINT_USER_INFO handler:^id _Nullable(id  _Nonnull param) {
         NSString *uid = param[@"uid"];

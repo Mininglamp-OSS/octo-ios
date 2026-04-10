@@ -76,6 +76,10 @@
     
 }
 
+- (NSInteger)childrenCount {
+    return _children ? _children.count : 0;
+}
+
 -(WKConversationWrapModel*) getChildren:(WKChannel*)channel {
     for (WKConversationWrapModel *c in self.children) {
         if([c.channel isEqual:channel]) {
