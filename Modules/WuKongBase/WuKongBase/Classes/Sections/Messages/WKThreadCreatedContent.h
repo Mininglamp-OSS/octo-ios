@@ -21,6 +21,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// 已创建子区的源消息ID集合（用于判断消息是否已创建过子区）
 + (NSMutableSet<NSString *> *)sourceMessageIdSet;
 
+/// 子区消息数量缓存：threadChannelId -> @(messageCount)
++ (NSMutableDictionary<NSString *, NSNumber *> *)messageCountCache;
+
+/// 通知名：子区消息数量更新
+extern NSString * const WKThreadMessageCountUpdatedNotification;
+
 @end
 
 NS_ASSUME_NONNULL_END

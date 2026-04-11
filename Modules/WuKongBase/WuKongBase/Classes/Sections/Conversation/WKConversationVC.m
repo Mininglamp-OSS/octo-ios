@@ -20,6 +20,9 @@
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "Svg.h"
 #import "WKThemeUtil.h"
+#import "WKThreadService.h"
+#import "WKThreadModel.h"
+#import "WKThreadCreatedContent.h"
 @interface WKConversationVC ()<WKChannelManagerDelegate>
 
 @property(nonatomic,strong) WKConversationView *conversationView;
@@ -188,6 +191,24 @@
 // 普通群初始化
 -(void) commonGroupInit {
     [self.conversationView.conversationVM requestMembers];
+    // 获取子区消息数量缓存
+    [self fetchThreadMessageCounts];
+}
+
+/// 获取群内子区的消息数量，更新到全局缓存
+-(void) fetchThreadMessageCounts {
+    if (self.channel.channelType != WK_GROUP) return;
+    [[WKThreadService shared] listThreads:self.channel.channelId].then(^(NSArray<WKThreadModel *> *threads) {
+        for (WKThreadModel *t in threads) {
+            if (t.channelId.length > 0) {
+                [WKThreadCreatedContent messageCountCache][t.channelId] = @(t.messageCount);
+            }
+        }
+        // 通知群聊页面刷新子区卡片
+        [[NSNotificationCenter defaultCenter] postNotificationName:WKThreadMessageCountUpdatedNotification object:self.channel];
+    }).catch(^(NSError *error) {
+        // 忽略
+    });
 }
 
 

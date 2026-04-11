@@ -7,6 +7,9 @@
 #import "WKConstant.h"
 
 static NSMutableSet<NSString *> *_sourceMessageIdSet = nil;
+static NSMutableDictionary<NSString *, NSNumber *> *_messageCountCache = nil;
+
+NSString * const WKThreadMessageCountUpdatedNotification = @"WKThreadMessageCountUpdated";
 
 @implementation WKThreadCreatedContent
 
@@ -16,6 +19,14 @@ static NSMutableSet<NSString *> *_sourceMessageIdSet = nil;
         _sourceMessageIdSet = [NSMutableSet set];
     });
     return _sourceMessageIdSet;
+}
+
++ (NSMutableDictionary<NSString *, NSNumber *> *)messageCountCache {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        _messageCountCache = [NSMutableDictionary dictionary];
+    });
+    return _messageCountCache;
 }
 
 + (NSNumber *)contentType {

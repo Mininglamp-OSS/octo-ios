@@ -7,6 +7,7 @@
 
 #import "WKConversationListVC.h"
 #import "WKConversationListVM.h"
+#import "WKThreadCreatedContent.h"
 #import "WKConversationListCell.h"
 #import <WuKongBase/WuKongBase.h>
 #import "WKResource.h"
@@ -759,15 +760,23 @@
 
     // 空间隔离：过滤掉不属于当前空间的会话更新
     NSArray<WKConversation*> *filtered = [self filterConversationsBySpace:conversations];
-    // 过滤子区：子区不独立显示在会话列表，但触发父群子区数量刷新
+    // 过滤子区：子区不独立显示在会话列表，但触发父群子区数量刷新 + 消息计数更新
     NSMutableArray<WKConversation*> *nonThreadFiltered = [NSMutableArray array];
     NSMutableSet<NSString*> *refreshGroupNos = [NSMutableSet set];
     for (WKConversation *conv in filtered) {
         if (conv.channel.channelType == WK_COMMUNITY_TOPIC) {
-            // 提取父群 groupNo，稍后刷新其子区数量
-            NSRange range = [conv.channel.channelId rangeOfString:@"____"];
+            NSString *threadChannelId = conv.channel.channelId;
+            NSRange range = [threadChannelId rangeOfString:@"____"];
             if (range.location != NSNotFound) {
-                [refreshGroupNos addObject:[conv.channel.channelId substringToIndex:range.location]];
+                NSString *groupNo = [threadChannelId substringToIndex:range.location];
+                [refreshGroupNos addObject:groupNo];
+                // 更新子区消息数量缓存（当前缓存值+1，或从未读数推算）
+                NSNumber *cached = [WKThreadCreatedContent messageCountCache][threadChannelId];
+                if (cached) {
+                    [WKThreadCreatedContent messageCountCache][threadChannelId] = @(cached.integerValue + 1);
+                }
+                // 通知群聊页面刷新子区卡片
+                [[NSNotificationCenter defaultCenter] postNotificationName:WKThreadMessageCountUpdatedNotification object:nil];
             }
         } else {
             [nonThreadFiltered addObject:conv];

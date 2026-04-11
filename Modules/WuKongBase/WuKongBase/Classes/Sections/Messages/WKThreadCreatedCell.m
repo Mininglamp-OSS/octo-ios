@@ -94,6 +94,29 @@
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onCardTap)];
     [self.cardView addGestureRecognizer:tap];
+
+    // 监听子区消息数量更新
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onThreadMessageCountUpdated:) name:WKThreadMessageCountUpdatedNotification object:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:WKThreadMessageCountUpdatedNotification object:nil];
+}
+
+/// 获取子区最新消息数量：优先从缓存取，fallback 到 content 的值
+- (NSInteger)latestMessageCount:(WKThreadCreatedContent *)content {
+    NSNumber *cached = [WKThreadCreatedContent messageCountCache][content.threadChannelId];
+    if (cached) {
+        return cached.integerValue;
+    }
+    return content.messageCount;
+}
+
+/// 子区消息数量更新通知 → 刷新 cell
+- (void)onThreadMessageCountUpdated:(NSNotification *)notification {
+    if (self.model) {
+        [self refresh:self.model];
+    }
 }
 
 - (void)refresh:(WKMessageModel *)model {
@@ -133,9 +156,12 @@
         self.threadNameLbl.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
         self.threadNameLbl.textColor = [WKApp shared].config.defaultTextColor;
 
+        // 获取最新消息数量（优先缓存）
+        NSInteger latestCount = [self latestMessageCount:content];
+
         // 副标题
-        if (content.messageCount > 0) {
-            self.subtitleLbl.text = [NSString stringWithFormat:@"%ld条消息", (long)content.messageCount];
+        if (latestCount > 0) {
+            self.subtitleLbl.text = [NSString stringWithFormat:@"%ld条消息", (long)latestCount];
         } else {
             self.subtitleLbl.text = @"该子区暂时没有消息。";
         }
@@ -164,8 +190,10 @@
         self.threadNameLbl.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
         self.threadNameLbl.textColor = [WKApp shared].config.themeColor;
 
-        if (content.messageCount > 0) {
-            self.actionLbl.text = [NSString stringWithFormat:@"%ld条 >", (long)content.messageCount];
+        // 获取最新消息数量（优先缓存）
+        NSInteger latestCount = [self latestMessageCount:content];
+        if (latestCount > 0) {
+            self.actionLbl.text = [NSString stringWithFormat:@"%ld条 >", (long)latestCount];
         } else {
             self.actionLbl.text = @"查看子区";
         }
