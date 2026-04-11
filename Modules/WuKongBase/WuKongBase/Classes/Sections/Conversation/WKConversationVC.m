@@ -165,11 +165,16 @@
     
     if(self.firstLoad) {
         self.firstLoad = false;
-        WKGroupType groupType =  self.conversationView.conversationVM.groupType;
-        if(groupType == WKGroupTypeCommon) { // 普通群
-            [self commonGroupInit];
-        }else if(groupType == WKGroupTypeSuper) { // 超级群
-            [self superGroupInit];
+        if(self.channel.channelType == WK_COMMUNITY_TOPIC) {
+            // 子区：同步成员（服务端已支持子区 channelId 格式）
+            [self.conversationView.conversationVM syncMembersIfNeed];
+        } else {
+            WKGroupType groupType =  self.conversationView.conversationVM.groupType;
+            if(groupType == WKGroupTypeCommon) { // 普通群
+                [self commonGroupInit];
+            }else if(groupType == WKGroupTypeSuper) { // 超级群
+                [self superGroupInit];
+            }
         }
     }
     

@@ -147,6 +147,32 @@ static WKConversationListVM *_instance;
     }
 }
 
+/// 刷新指定群组的子区数量
+-(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos {
+    for (NSString *groupNo in groupNos) {
+        WKChannel *groupChannel = [WKChannel groupWithChannelID:groupNo];
+        WKConversationWrapModel *model = [self getConversationWrap:groupChannel conversations:self.conversationWrapModels];
+        if (!model) continue;
+        __weak typeof(self) weakSelf = self;
+        [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
+            NSInteger activeCount = 0;
+            for (WKThreadModel *t in threads) {
+                if(t.status == WKThreadStatusActive) {
+                    activeCount++;
+                }
+            }
+            model.threadCount = activeCount;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSInteger index = [weakSelf indexAtChannel:groupChannel];
+                if(index != -1) {
+                    [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountUpdated" object:groupChannel];
+                }
+            });
+        }).catch(^(NSError *error) {
+        });
+    }
+}
+
 /// 判断会话是否应在当前空间显示
 -(BOOL) shouldShowConversation:(WKConversation*)conversation {
     NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];

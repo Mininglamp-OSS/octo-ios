@@ -26,6 +26,7 @@
 @property (nonatomic, copy) NSString *threadName;
 
 @property (nonatomic, strong) NSArray *members; // API 返回的成员字典数组
+@property (nonatomic, assign) BOOL isMember;   // 当前用户是否在子区成员中
 
 @end
 
@@ -87,6 +88,15 @@
         weakSelf.members = members ?: @[];
         BOOL hasMore = (weakSelf.members.count > MEMBER_LIMIT);
         weakSelf.memberGridView.hasMore = hasMore;
+        // 判断当前用户是否在成员列表中
+        NSString *myUid = [WKSDK shared].options.connectInfo.uid;
+        weakSelf.isMember = NO;
+        for (NSDictionary *m in weakSelf.members) {
+            if ([myUid isEqualToString:m[@"uid"]]) {
+                weakSelf.isMember = YES;
+                break;
+            }
+        }
         [weakSelf refreshMemberGrid];
     }).catch(^(NSError *error) {
         [weakSelf.view showMsg:error.domain];
@@ -171,7 +181,7 @@
 #pragma mark - UITableViewDataSource
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    return 2;
+    return self.isMember ? 2 : 1;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -242,7 +252,14 @@
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"退出") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         [[WKThreadService shared] leaveThread:weakSelf.shortId].then(^(id result) {
-            [[WKNavigationManager shared] popViewControllerAnimated:YES];
+            // pop 两层：设置页 + 子区聊天页，回到群组聊天页
+            UINavigationController *nav = [WKNavigationManager shared].topViewController.navigationController;
+            NSArray *vcs = nav.viewControllers;
+            if (vcs.count >= 3) {
+                [nav popToViewController:vcs[vcs.count - 3] animated:YES];
+            } else {
+                [nav popToRootViewControllerAnimated:YES];
+            }
         }).catch(^(NSError *error) {
             [weakSelf.view showMsg:error.domain];
         });

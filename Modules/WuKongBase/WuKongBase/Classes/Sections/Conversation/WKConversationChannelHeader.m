@@ -289,11 +289,11 @@
 }
 
 - (void)setMemberCount:(NSInteger)memberCount {
-    if(self.channelInfo && self.channelInfo.channel.channelType != WK_PERSON && self.channelInfo.channel.channelType != WK_CustomerService) {
+    if(self.channelInfo && self.channelInfo.channel.channelType != WK_PERSON && self.channelInfo.channel.channelType != WK_CustomerService && self.channelInfo.channel.channelType != WK_COMMUNITY_TOPIC) {
         self.subtitleLbl.text = [NSString stringWithFormat:LLang(@"%ld个成员"),memberCount];
     }
     [self.subtitleLbl sizeToFit];
-    
+
 }
 
 - (UIButton *)infoBoxBtn {

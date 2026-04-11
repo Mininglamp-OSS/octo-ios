@@ -115,9 +115,13 @@
     NSMutableArray *conversationWrapModels = [[NSMutableArray alloc] init];
     if(conversations) {
         for (WKConversation *conversation in conversations) {
+            // 过滤子区，不显示在转发列表中
+            if(conversation.channel.channelType == WK_COMMUNITY_TOPIC) {
+                continue;
+            }
             WKConversationWrapModel *wrapModel = [[WKConversationWrapModel alloc] initWithConversation:conversation];
             [conversationWrapModels addObject:wrapModel];
-            
+
         }
         [self sortConversationList:conversationWrapModels];
     }

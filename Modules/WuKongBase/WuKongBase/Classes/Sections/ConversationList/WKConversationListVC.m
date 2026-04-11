@@ -759,6 +759,25 @@
 
     // 空间隔离：过滤掉不属于当前空间的会话更新
     NSArray<WKConversation*> *filtered = [self filterConversationsBySpace:conversations];
+    // 过滤子区：子区不独立显示在会话列表，但触发父群子区数量刷新
+    NSMutableArray<WKConversation*> *nonThreadFiltered = [NSMutableArray array];
+    NSMutableSet<NSString*> *refreshGroupNos = [NSMutableSet set];
+    for (WKConversation *conv in filtered) {
+        if (conv.channel.channelType == WK_COMMUNITY_TOPIC) {
+            // 提取父群 groupNo，稍后刷新其子区数量
+            NSRange range = [conv.channel.channelId rangeOfString:@"____"];
+            if (range.location != NSNotFound) {
+                [refreshGroupNos addObject:[conv.channel.channelId substringToIndex:range.location]];
+            }
+        } else {
+            [nonThreadFiltered addObject:conv];
+        }
+    }
+    // 刷新受影响的父群子区数量
+    if (refreshGroupNos.count > 0) {
+        [self.conversationListVM refreshThreadCountForGroups:refreshGroupNos];
+    }
+    filtered = nonThreadFiltered;
     if(filtered.count <= 0) {
         return;
     }

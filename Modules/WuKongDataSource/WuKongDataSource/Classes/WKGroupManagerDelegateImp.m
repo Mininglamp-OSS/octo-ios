@@ -96,9 +96,14 @@
 
 -(void) requestSyncMembers:(NSString*)groupNo limit:(NSInteger)limit  maxRetryCount:(NSInteger)maxRetryCount complete:(void(^)(NSArray<WKChannelMember*>*members,NSError *error))complete finish:(void(^)(void))finish{
     __weak typeof(self) weakSelf = self;
-    NSString *syncKey = [[WKSDK shared].channelManager getMemberLastSyncKey:[[WKChannel alloc] initWith:groupNo channelType:WK_GROUP]];
+    // 子区 channelId 含 ____，channelType 用 WK_COMMUNITY_TOPIC
+    BOOL isThread = ([groupNo rangeOfString:@"____"].location != NSNotFound);
+    uint8_t channelType = isThread ? WK_COMMUNITY_TOPIC : WK_GROUP;
+
+    NSString *syncKey = [[WKSDK shared].channelManager getMemberLastSyncKey:[[WKChannel alloc] initWith:groupNo channelType:channelType]];
+    NSLog(@"[Mention] requestSyncMembers groupNo=%@ channelType=%d syncKey=%@", groupNo, channelType, syncKey);
     [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"groups/%@/membersync",groupNo] parameters:@{@"version":syncKey?:@"",@"limit":@(limit)} model:WKGroupMemberModel.class].then(^(NSArray<WKGroupMemberModel*> *members){
-        NSLog(@"同步到成员数量[%ld]",members.count);
+        NSLog(@"[Mention] 同步到成员数量[%ld] for %@",(long)members.count, groupNo);
         if(members && members.count>0) {
             NSMutableArray<WKChannelMember*> *channelMembers = [NSMutableArray array];
             for (WKGroupMemberModel *groupMember in members) {
@@ -140,7 +145,9 @@
 }
 
 -(void) groupManager:(WKGroupManager*)manager searchMembers:(NSString*)groupNo keyword:(NSString*)keyword page:(NSInteger)page  limit:(NSInteger)limit complete:(void(^__nullable)(NSError * __nullable error,NSArray<WKChannelMember*>*members))complete {
+    NSLog(@"[Mention] searchMembers API groupNo=%@ keyword=%@", groupNo, keyword);
     [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"groups/%@/members",groupNo] parameters:@{@"keyword":keyword?:@"",@"limit":@(limit),@"page":@(page)} model:WKGroupMemberModel.class].then(^(NSArray<WKGroupMemberModel*> *members){
+        NSLog(@"[Mention] searchMembers API returned %lu members", (unsigned long)members.count);
         NSMutableArray<WKChannelMember*> *channelMembers = [NSMutableArray array];
         if(members && members.count>0) {
             for (WKGroupMemberModel *groupMember in members) {

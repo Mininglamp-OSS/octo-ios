@@ -126,6 +126,9 @@ NS_ASSUME_NONNULL_BEGIN
 -(void) removeConversationAtIndex:(NSInteger)index;
 
 
+/// 刷新指定群组的子区数量
+-(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos;
+
 /// 有会话置顶
 -(BOOL) hasConversationTop;
 

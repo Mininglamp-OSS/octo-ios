@@ -6,6 +6,7 @@
 //
 
 #import "WKMessageCell.h"
+#import "WKThreadCreatedContent.h"
 #import "WKImageView.h"
 #import "WKResource.h"
 #import "WKConversationInputPanel.h"
@@ -693,7 +694,20 @@ static NSMutableDictionary *flameNodeCacheDict;
 
 // 下一条消息是否连续
 +(BOOL) nextIsContinue:(WKMessageModel*) messageModel {
-    
+    // 如果下一条是带 sourceMessageId 的子区创建通知，打断连续性（强制当前消息显示头像）
+    if(messageModel.nextMessageModel && messageModel.nextMessageModel.contentType == WK_THREAD_CREATED) {
+        BOOL hasSource = NO;
+        if([messageModel.nextMessageModel.content isKindOfClass:[WKThreadCreatedContent class]]) {
+            WKThreadCreatedContent *threadContent = (WKThreadCreatedContent *)messageModel.nextMessageModel.content;
+            hasSource = (threadContent.sourceMessageId.length > 0);
+        }
+        if(!hasSource && messageModel.nextMessageModel.content.contentDict[@"source_message_id"]) {
+            hasSource = ([messageModel.nextMessageModel.content.contentDict[@"source_message_id"] longLongValue] > 0);
+        }
+        if(hasSource) {
+            return false;
+        }
+    }
     return [self nextIsSameFrom:messageModel] && ![self nextIsSystemOrRevoke:messageModel] && [self nextIsSameDay:messageModel];
 }
 

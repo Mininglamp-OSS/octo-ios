@@ -602,11 +602,14 @@
 -(void) getMentionUserListWithKeyword:(NSString*)keyword complete:(void(^)(NSArray<WKMentionUserCellModel*>*users))complete{
 
     __weak typeof(self) weakSelf = self;
-    
+
+    NSLog(@"[Mention] getMentionUserList channel=%@/%d keyword=%@", self.channel.channelId, self.channel.channelType, keyword);
     [[WKGroupManager shared] searchMembers:self.channel keyword:keyword limit:10000 complete:^(WKChannelMemberCacheType cacheType, NSArray<WKChannelMember *> * _Nonnull members) {
+        NSLog(@"[Mention] searchMembers returned %lu members, cacheType=%ld", (unsigned long)members.count, (long)cacheType);
         WKMemberRole role =  weakSelf.conversationVM.memberRole;
-        
+
         NSArray<WKMentionUserCellModel*>*users = [weakSelf membersToMentionUsers:members role:role keyword:keyword];
+        NSLog(@"[Mention] final mention users count=%lu", (unsigned long)users.count);
         if(complete) {
             complete(users);
         }

@@ -255,7 +255,13 @@ static WKGroupManager *_instance;
         if(_delegate && [_delegate respondsToSelector:@selector(groupManager:searchMembers:keyword:page:limit:complete:)]) {
             [_delegate groupManager:self searchMembers:channel.channelId keyword:keyword page:page limit:limit complete:^(NSError * _Nullable error, NSArray<WKChannelMember *> * _Nonnull members) {
                 if(!error) {
-                    if(needDB) {
+                    NSLog(@"[Mention] network returned %lu members for channel %@/%d", (unsigned long)members.count, channel.channelId, channel.channelType);
+                    // 子区：成员的 channelId 是父群，无法通过子区 channel 从 DB 查到，直接返回网络结果
+                    if(channel.channelType == WK_COMMUNITY_TOPIC) {
+                        if(complete) {
+                            complete(WKChannelMemberCacheTypeNetwork, members);
+                        }
+                    } else if(needDB) {
                         [[WKSDK shared].channelManager addOrUpdateMembers:members];
                         [weakSelf searchMembersFromDB:channel keyword:keyword page:page limit:limit cacheType:WKChannelMemberCacheTypeNetwork complete:complete];
                     }else {
@@ -272,7 +278,9 @@ static WKGroupManager *_instance;
 }
 
 -(void) searchMembersFromDB:(WKChannel*)channel keyword:(NSString*)keyword page:(NSInteger)page limit:(NSInteger)limit cacheType:(WKChannelMemberCacheType)cacheType complete:(void(^)(WKChannelMemberCacheType cacheType,NSArray<WKChannelMember*>* members))complete {
+    NSLog(@"[Mention] searchMembersFromDB channelId=%@ channelType=%d keyword=%@ cacheType=%ld", channel.channelId, channel.channelType, keyword, (long)cacheType);
     NSArray<WKChannelMember*> *members = [[WKChannelMemberDB shared] getMembersWithChannel:channel keyword:keyword page:page limit:limit];
+    NSLog(@"[Mention] searchMembersFromDB returned %lu members", (unsigned long)members.count);
     if(complete) {
         complete(cacheType,members);
     }

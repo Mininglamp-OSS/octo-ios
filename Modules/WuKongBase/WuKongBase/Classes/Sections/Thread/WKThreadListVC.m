@@ -46,6 +46,12 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
     [self loadThreads];
 }
 
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    // 从子区聊天/设置页返回时刷新列表
+    [self loadThreads];
+}
+
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
 
@@ -228,6 +234,16 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
             unarchiveAction.backgroundColor = [UIColor systemGreenColor];
             [actions addObject:unarchiveAction];
         }
+    } else if (thread.isMember) {
+        // 非创建者但已加入：退出子区
+        UIContextualAction *leaveAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal
+                                                                                  title:LLang(@"退出")
+                                                                                handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
+            [self leaveThread:thread];
+            completionHandler(YES);
+        }];
+        leaveAction.backgroundColor = [UIColor grayColor];
+        [actions addObject:leaveAction];
     }
 
     return [UISwipeActionsConfiguration configurationWithActions:actions];
@@ -249,6 +265,15 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
         });
     }]];
     [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)leaveThread:(WKThreadModel *)thread {
+    __weak typeof(self) weakSelf = self;
+    [[WKThreadService shared] leaveThread:thread.shortId].then(^(id result) {
+        [weakSelf loadThreads];
+    }).catch(^(NSError *error) {
+        [weakSelf.view showMsg:error.domain];
+    });
 }
 
 - (void)archiveThread:(WKThreadModel *)thread {

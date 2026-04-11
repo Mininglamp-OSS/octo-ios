@@ -52,7 +52,9 @@
             timeStr = [WKTimeTool getTimeStringAutoShort2:date mustIncludeTime:NO];
         }
     }
-    self.statsLbl.text = [NSString stringWithFormat:@"%ld%@ · %ld%@ · %@",
+    NSString *creator = (model.creatorName.length > 0) ? model.creatorName : @"";
+    self.statsLbl.text = [NSString stringWithFormat:@"%@%@ · %ld%@ · %ld%@ · %@",
+                          creator, LLang(@"创建"),
                           (long)model.messageCount, LLang(@"条消息"),
                           (long)model.memberCount, LLang(@"位成员"),
                           timeStr];

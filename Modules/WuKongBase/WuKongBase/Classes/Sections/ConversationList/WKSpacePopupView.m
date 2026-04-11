@@ -321,6 +321,8 @@
 
 - (void)loadSpaces {
     NSLog(@"📡 开始加载Space列表");
+    // 清除缓存，强制从服务器获取最新数据
+    [[WKSpaceModel shared] invalidateCache];
     __weak typeof(self) weakSelf = self;
     [[WKSpaceModel shared] getMySpaces].then(^(NSArray *spaces){
         NSLog(@"✅ Space列表加载成功，数量: %lu", (unsigned long)spaces.count);

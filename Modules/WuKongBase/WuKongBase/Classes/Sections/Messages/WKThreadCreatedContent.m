@@ -30,20 +30,28 @@ static NSMutableSet<NSString *> *_sourceMessageIdSet = nil;
     self.creatorUid       = contentDic[@"from_uid"] ?: @"";
     self.creatorName      = contentDic[@"from_name"] ?: @"";
     self.messageCount     = [contentDic[@"message_count"] integerValue];
-    if (contentDic[@"source_message_id"] && [contentDic[@"source_message_id"] longLongValue] > 0) {
-        self.sourceMessageId = [NSString stringWithFormat:@"%@", contentDic[@"source_message_id"]];
-        [[WKThreadCreatedContent sourceMessageIdSet] addObject:self.sourceMessageId];
+    if (contentDic[@"source_message_id"]) {
+        long long srcId = [contentDic[@"source_message_id"] longLongValue];
+        if (srcId > 0) {
+            self.sourceMessageId = [NSString stringWithFormat:@"%lld", srcId];
+            [[WKThreadCreatedContent sourceMessageIdSet] addObject:self.sourceMessageId];
+        }
     }
 }
 
 - (NSDictionary *)encodeWithJSON {
-    return @{
-        @"thread_name": self.threadName ?: @"",
-        @"short_id": self.threadShortId ?: @"",
-        @"channel_id": self.threadChannelId ?: @"",
-        @"channel_type": @(self.threadChannelType),
-        @"from_name": self.creatorName ?: @"",
-    };
+    NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+    dict[@"thread_name"] = self.threadName ?: @"";
+    dict[@"short_id"] = self.threadShortId ?: @"";
+    dict[@"channel_id"] = self.threadChannelId ?: @"";
+    dict[@"channel_type"] = @(self.threadChannelType);
+    dict[@"from_uid"] = self.creatorUid ?: @"";
+    dict[@"from_name"] = self.creatorName ?: @"";
+    dict[@"message_count"] = @(self.messageCount);
+    if (self.sourceMessageId) {
+        dict[@"source_message_id"] = @([self.sourceMessageId longLongValue]);
+    }
+    return dict;
 }
 
 - (NSString *)conversationDigest {
