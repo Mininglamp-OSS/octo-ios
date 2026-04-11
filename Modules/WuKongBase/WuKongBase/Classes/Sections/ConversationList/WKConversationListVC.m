@@ -9,6 +9,7 @@
 #import "WKConversationListVM.h"
 #import "WKThreadCreatedContent.h"
 #import "WKConversationListCell.h"
+#import "WKConversationGroupThreadCell.h"
 #import <WuKongBase/WuKongBase.h>
 #import "WKResource.h"
 #import "WKPopMenuView.h"
@@ -559,6 +560,7 @@
         _tableView.tableHeaderView = self.tableHeader;
         
         [_tableView registerClass:[WKConversationListCell class] forCellReuseIdentifier:@"WKConversationListCell"];
+        [_tableView registerClass:[WKConversationGroupThreadCell class] forCellReuseIdentifier:@"WKConversationGroupThreadCell"];
     }
     return _tableView;
 }
@@ -770,13 +772,6 @@
             if (range.location != NSNotFound) {
                 NSString *groupNo = [threadChannelId substringToIndex:range.location];
                 [refreshGroupNos addObject:groupNo];
-                // 更新子区消息数量缓存（当前缓存值+1，或从未读数推算）
-                NSNumber *cached = [WKThreadCreatedContent messageCountCache][threadChannelId];
-                if (cached) {
-                    [WKThreadCreatedContent messageCountCache][threadChannelId] = @(cached.integerValue + 1);
-                }
-                // 通知群聊页面刷新子区卡片
-                [[NSNotificationCenter defaultCenter] postNotificationName:WKThreadMessageCountUpdatedNotification object:nil];
             }
         } else {
             [nonThreadFiltered addObject:conv];
@@ -994,9 +989,25 @@
     NSInteger index = [self.conversationListVM indexAtChannel:channel];
     if(index == -1) return;
     WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
-    WKConversationListCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]];
-    if(cell) {
-        [cell refreshWithModel:model];
+    NSIndexPath *indexPath = [NSIndexPath indexPathForRow:index inSection:0];
+    UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
+    BOOL needThreadCell = (model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn);
+    BOOL isThreadCell = [cell isKindOfClass:[WKConversationGroupThreadCell class]];
+
+    if (needThreadCell == isThreadCell && cell) {
+        // 类型没变，只刷新数据
+        if (isThreadCell) {
+            [(WKConversationGroupThreadCell *)cell refreshWithModel:model];
+        } else {
+            [(WKConversationListCell *)cell refreshWithModel:model];
+        }
+    } else {
+        // 类型变了，需要 reload（用 fade 动画减少突兀感）
+        @try {
+            [self.tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationFade];
+        } @catch (NSException *exception) {
+            [self.tableView reloadData];
+        }
     }
 }
 
@@ -1004,12 +1015,15 @@
 -(void) uiAddOrUpdateConversationForOne:(WKConversation*)conversation {
     WKConversationWrapModel *newModel = [self.conversationListVM getRealShowConversationWrap:[[WKConversationWrapModel alloc] initWithConversation:conversation]];
 
-    // 继承旧 model 的子区数量
+    // 继承旧 model 的子区数量和预览
     NSInteger oldIndex =[self.conversationListVM indexAtChannel:newModel.channel];
     if(oldIndex != -1) {
         WKConversationWrapModel *oldModel = [self.conversationListVM modelAtIndex:oldIndex];
         if(oldModel.threadCount > 0 && newModel.threadCount == 0) {
             newModel.threadCount = oldModel.threadCount;
+        }
+        if(oldModel.threadPreviews.count > 0 && newModel.threadPreviews.count == 0) {
+            newModel.threadPreviews = oldModel.threadPreviews;
         }
     }
     if(oldIndex!=-1) {
@@ -1232,7 +1246,10 @@
 #pragma mark-  UITableViewDataSource && UITableViewDelegate
 
 -(CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath{
-
+    WKConversationWrapModel *model = [_conversationListVM conversationAtIndex:indexPath.row];
+    if (model && model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn) {
+        return [WKConversationGroupThreadCell heightForModel:model];
+    }
     return 88.0f;
 }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section{
@@ -1241,18 +1258,30 @@
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath{
-    
+    WKConversationWrapModel *model = [_conversationListVM conversationAtIndex:indexPath.row];
+    if (model && model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn) {
+        WKConversationGroupThreadCell *cell = [tableView dequeueReusableCellWithIdentifier:@"WKConversationGroupThreadCell" forIndexPath:indexPath];
+        cell.swipeDelegate = self;
+        return cell;
+    }
     WKConversationListCell *cell = [tableView dequeueReusableCellWithIdentifier:@"WKConversationListCell" forIndexPath:indexPath];
     cell.swipeDelegate = self;
-    
-//    [cell setDisplaySeparator:YES];
     return cell;
 }
 
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
-    WKConversationListCell *conversationListCell = (WKConversationListCell*)cell;
     WKConversationWrapModel *conversationModel = [_conversationListVM conversationAtIndex:indexPath.row];
-    if(conversationModel) {
+    if (!conversationModel) return;
+
+    if ([cell isKindOfClass:[WKConversationGroupThreadCell class]]) {
+        WKConversationGroupThreadCell *threadCell = (WKConversationGroupThreadCell *)cell;
+        [threadCell refreshWithModel:conversationModel];
+        [threadCell setOnThreadPreviewTap:^(NSString *threadChannelId) {
+            WKChannel *channel = [WKChannel channelID:threadChannelId channelType:WK_COMMUNITY_TOPIC];
+            [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:channel];
+        }];
+    } else {
+        WKConversationListCell *conversationListCell = (WKConversationListCell *)cell;
         [conversationListCell refreshWithModel:conversationModel];
     }
 }

@@ -10,6 +10,7 @@
 #import "WKProhibitwordsService.h"
 #import "WKThreadService.h"
 #import "WKThreadModel.h"
+#import "WKThreadCreatedContent.h"
 @interface WKConversationListVM ()
 @property(nonatomic,strong) NSMutableArray<WKConversationWrapModel*> *conversationWrapModels;
 @property(nonatomic,strong) NSRecursiveLock *conversationsLock;
@@ -126,14 +127,24 @@ static WKConversationListVM *_instance;
         NSString *groupNo = model.channel.channelId;
         __weak typeof(self) weakSelf = self;
         [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
+            // 按最后消息时间排序（最新的在前）
+            NSArray *sorted = [threads sortedArrayUsingComparator:^NSComparisonResult(WKThreadModel *a, WKThreadModel *b) {
+                return [b.updatedAt compare:a.updatedAt];
+            }];
             // 只计活跃状态的子区
-            NSInteger activeCount = 0;
-            for (WKThreadModel *t in threads) {
+            NSMutableArray *activePreviews = [NSMutableArray array];
+            for (WKThreadModel *t in sorted) {
                 if(t.status == WKThreadStatusActive) {
-                    activeCount++;
+                    [activePreviews addObject:t];
                 }
             }
-            model.threadCount = activeCount;
+            model.threadCount = activePreviews.count;
+            // 最多保留2个预览
+            if (activePreviews.count > 2) {
+                model.threadPreviews = [activePreviews subarrayWithRange:NSMakeRange(0, 2)];
+            } else {
+                model.threadPreviews = [activePreviews copy];
+            }
             // 通知列表刷新该 cell
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSInteger index = [weakSelf indexAtChannel:model.channel];
@@ -155,18 +166,34 @@ static WKConversationListVM *_instance;
         if (!model) continue;
         __weak typeof(self) weakSelf = self;
         [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
-            NSInteger activeCount = 0;
-            for (WKThreadModel *t in threads) {
+            NSArray *sorted = [threads sortedArrayUsingComparator:^NSComparisonResult(WKThreadModel *a, WKThreadModel *b) {
+                return [b.updatedAt compare:a.updatedAt];
+            }];
+            NSMutableArray *activePreviews = [NSMutableArray array];
+            for (WKThreadModel *t in sorted) {
                 if(t.status == WKThreadStatusActive) {
-                    activeCount++;
+                    [activePreviews addObject:t];
                 }
             }
-            model.threadCount = activeCount;
+            model.threadCount = activePreviews.count;
+            if (activePreviews.count > 2) {
+                model.threadPreviews = [activePreviews subarrayWithRange:NSMakeRange(0, 2)];
+            } else {
+                model.threadPreviews = [activePreviews copy];
+            }
+            // 同步更新 messageCountCache（供群聊页面子区卡片使用）
+            for (WKThreadModel *t in activePreviews) {
+                if (t.channelId.length > 0) {
+                    [WKThreadCreatedContent messageCountCache][t.channelId] = @(t.messageCount);
+                }
+            }
             dispatch_async(dispatch_get_main_queue(), ^{
                 NSInteger index = [weakSelf indexAtChannel:groupChannel];
                 if(index != -1) {
                     [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountUpdated" object:groupChannel];
                 }
+                // 通知群聊页面刷新子区卡片消息数量
+                [[NSNotificationCenter defaultCenter] postNotificationName:WKThreadMessageCountUpdatedNotification object:nil];
             });
         }).catch(^(NSError *error) {
         });
@@ -347,10 +374,13 @@ static WKConversationListVM *_instance;
      NSInteger index =[self indexAtChannel:channel];
     if(index!=-1) {
          // [_conversationsLock lock];
-        // 继承旧 model 的子区数量
+        // 继承旧 model 的子区数量和预览
         WKConversationWrapModel *oldModel = self.conversationWrapModels[index];
         if(oldModel.threadCount > 0 && model.threadCount == 0) {
             model.threadCount = oldModel.threadCount;
+        }
+        if(oldModel.threadPreviews.count > 0 && model.threadPreviews.count == 0) {
+            model.threadPreviews = oldModel.threadPreviews;
         }
         [self handleProhibitwords:model];
         [self.conversationWrapModels replaceObjectAtIndex:index withObject:model];

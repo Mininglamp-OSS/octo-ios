@@ -32,6 +32,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 子区数量 (通过解析 channelId 计算，用于会话列表显示)
 @property(nonatomic,assign) NSInteger threadCount;
 
+/// 子区预览数据（最多2个，用于会话列表展示）
+@property(nonatomic,strong, nullable) NSArray *threadPreviews;
+
 -(void) setChannelInfo:(WKChannelInfo * _Nullable)channelInfo;
 
 

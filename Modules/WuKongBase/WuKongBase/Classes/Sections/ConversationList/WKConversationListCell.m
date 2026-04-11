@@ -26,6 +26,7 @@
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKUserAvatar.h"
 #import "WKAutoDeleteView.h"
+#import "WKThreadModel.h"
 //#define avatarSize 56.0f
 @interface WKConversationListCell ()
 
@@ -311,9 +312,9 @@
         self.botBadgeLbl.frame = frame;
     }
 
-    // 子区数量提示
+    // 子区数量提示（无预览时显示）
     NSInteger threadCount = model.threadCount;
-    if(threadCount > 0 && [WKApp shared].remoteConfig.threadOn) {
+    if(threadCount > 0 && [WKApp shared].remoteConfig.threadOn && (!model.threadPreviews || model.threadPreviews.count == 0)) {
         self.threadCountLbl.hidden = NO;
         self.threadCountLbl.text = [NSString stringWithFormat:@"+%ld%@", (long)threadCount, LLang(@"个子区")];
         [self.threadCountLbl sizeToFit];
