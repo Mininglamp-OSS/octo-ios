@@ -8,6 +8,7 @@
 
 static NSMutableSet<NSString *> *_sourceMessageIdSet = nil;
 static NSMutableDictionary<NSString *, NSNumber *> *_messageCountCache = nil;
+static NSMutableDictionary<NSString *, WKThreadCreatedContent *> *_sourceMessageThreadMap = nil;
 
 NSString * const WKThreadMessageCountUpdatedNotification = @"WKThreadMessageCountUpdated";
 
@@ -29,6 +30,14 @@ NSString * const WKThreadMessageCountUpdatedNotification = @"WKThreadMessageCoun
     return _messageCountCache;
 }
 
++ (NSMutableDictionary<NSString *, WKThreadCreatedContent *> *)sourceMessageThreadMap {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        _sourceMessageThreadMap = [NSMutableDictionary dictionary];
+    });
+    return _sourceMessageThreadMap;
+}
+
 + (NSNumber *)contentType {
     return @(WK_THREAD_CREATED);
 }
@@ -46,6 +55,7 @@ NSString * const WKThreadMessageCountUpdatedNotification = @"WKThreadMessageCoun
         if (srcId > 0) {
             self.sourceMessageId = [NSString stringWithFormat:@"%lld", srcId];
             [[WKThreadCreatedContent sourceMessageIdSet] addObject:self.sourceMessageId];
+            [[WKThreadCreatedContent sourceMessageThreadMap] setObject:self forKey:self.sourceMessageId];
         }
     }
 }

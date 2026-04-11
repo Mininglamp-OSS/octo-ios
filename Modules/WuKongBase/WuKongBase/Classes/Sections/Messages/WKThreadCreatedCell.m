@@ -11,6 +11,7 @@
 #import "WKUserAvatar.h"
 #import "WKAvatarUtil.h"
 #import "WKTimeTool.h"
+#import <WuKongIMSDK/WKMessageDB.h>
 
 @interface WKThreadCurveLineView : UIView
 @end
@@ -36,7 +37,10 @@
 
 @interface WKThreadCreatedCell ()
 
-@property (nonatomic, strong) WKThreadCurveLineView *curveLineView; // 弧线（有源消息时）
+@property (nonatomic, strong) UIView *quoteView;      // 引用消息缩略条
+@property (nonatomic, strong) UIView *quoteBar;       // 引用左侧竖线
+@property (nonatomic, strong) UILabel *quoteLbl;      // 引用消息文本
+@property (nonatomic, strong) WKThreadCurveLineView *curveLineView; // 弧线（不再使用，保留兼容）
 @property (nonatomic, strong) UIView *cardView;
 @property (nonatomic, strong) WKUserAvatar *creatorAvatar;
 @property (nonatomic, strong) UILabel *titleLbl;
@@ -54,18 +58,11 @@
 #define CARD_PADDING 12.0f
 #define CARD_CORNER_RADIUS 10.0f
 
-// 有源消息时的布局常量
-#define LINKED_CARD_LEFT 56.0f   // 与消息头像右侧对齐
-#define LINKED_CARD_HEIGHT 56.0f
-#define LINKED_CURVE_WIDTH 24.0f
-#define LINKED_CURVE_HEIGHT 18.0f
-
-// 无源消息时的布局常量
-#define STANDALONE_CARD_WIDTH 300.0f
-#define STANDALONE_CARD_HEIGHT 66.0f
+#define CARD_WIDTH  300.0f
+#define CARD_HEIGHT 66.0f
+#define QUOTE_HEIGHT 24.0f  // 引用消息缩略行高度
 
 + (CGSize)sizeForMessage:(WKMessageModel *)model {
-    // 判断是否有源消息
     BOOL hasSource = NO;
     if ([model.content isKindOfClass:[WKThreadCreatedContent class]]) {
         WKThreadCreatedContent *content = (WKThreadCreatedContent *)model.content;
@@ -75,15 +72,16 @@
         hasSource = ([model.content.contentDict[@"source_message_id"] longLongValue] > 0);
     }
     if (hasSource) {
-        return CGSizeMake(STANDALONE_CARD_WIDTH, LINKED_CURVE_HEIGHT + LINKED_CARD_HEIGHT + 8.0f);
+        // 有源消息：引用行 + 卡片 + 间距
+        return CGSizeMake(CARD_WIDTH, QUOTE_HEIGHT + CARD_HEIGHT + 12.0f);
     }
-    return CGSizeMake(STANDALONE_CARD_WIDTH, STANDALONE_CARD_HEIGHT + 12.0f);
+    return CGSizeMake(CARD_WIDTH, CARD_HEIGHT + 12.0f);
 }
 
 - (void)initUI {
     [super initUI];
 
-    [self.contentView addSubview:self.curveLineView];
+    [self.contentView addSubview:self.quoteView];
     [self.contentView addSubview:self.cardView];
     [self.cardView addSubview:self.creatorAvatar];
     [self.cardView addSubview:self.titleLbl];
@@ -144,62 +142,50 @@
     }
     self.hasSourceMessage = hasSource;
 
-    if (self.hasSourceMessage) {
-        // Discord 风格：左对齐卡片
-        self.creatorAvatar.hidden = YES;
-        self.titleLbl.hidden = YES;
-        self.timeLbl.hidden = YES;
-        self.curveLineView.hidden = NO;
-
-        // 子区名称（加粗）
-        self.threadNameLbl.text = content.threadName;
-        self.threadNameLbl.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
-        self.threadNameLbl.textColor = [WKApp shared].config.defaultTextColor;
-
-        // 获取最新消息数量（优先缓存）
-        NSInteger latestCount = [self latestMessageCount:content];
-
-        // 副标题
-        if (latestCount > 0) {
-            self.subtitleLbl.text = [NSString stringWithFormat:@"%ld条消息", (long)latestCount];
+    // 引用消息缩略（有 sourceMessageId 时显示）
+    self.quoteView.hidden = !self.hasSourceMessage;
+    if (self.hasSourceMessage && content) {
+        // 从 contentDict 获取引用的消息内容
+        NSDictionary *lastMsg = content.contentDict[@"last_message"];
+        if (lastMsg && [lastMsg isKindOfClass:[NSDictionary class]]) {
+            NSString *fromName = lastMsg[@"from_name"] ?: @"";
+            NSString *msgContent = lastMsg[@"content"] ?: @"";
+            self.quoteLbl.text = [NSString stringWithFormat:@"%@: %@", fromName, msgContent];
         } else {
-            self.subtitleLbl.text = @"该子区暂时没有消息。";
+            self.quoteLbl.text = LLang(@"引用消息");
         }
-        self.subtitleLbl.hidden = NO;
+    }
+    self.subtitleLbl.hidden = YES;
+    self.creatorAvatar.hidden = NO;
+    self.titleLbl.hidden = NO;
+    self.timeLbl.hidden = NO;
 
-        // 操作
-        self.actionLbl.text = @"查看子区 ›";
+    // 头像
+    NSString *avatarUrl = [WKAvatarUtil getAvatar:content.creatorUid];
+    [self.creatorAvatar setUrl:avatarUrl];
+
+    // 标题
+    self.titleLbl.text = [NSString stringWithFormat:@"%@ 发起了子区", content.creatorName];
+
+    // 时间（右对齐）
+    if (model.message.timestamp > 0) {
+        NSDate *date = [NSDate dateWithTimeIntervalSince1970:model.message.timestamp];
+        self.timeLbl.text = [WKTimeTool getTimeStringAutoShort2:date mustIncludeTime:YES];
     } else {
-        // 独立卡片：居中样式
-        self.creatorAvatar.hidden = NO;
-        self.titleLbl.hidden = NO;
-        self.timeLbl.hidden = NO;
-        self.curveLineView.hidden = YES;
-        self.subtitleLbl.hidden = YES;
+        self.timeLbl.text = @"";
+    }
 
-        self.titleLbl.text = [NSString stringWithFormat:@"%@ 发起了子区", content.creatorName];
+    // 子区名称
+    self.threadNameLbl.text = [NSString stringWithFormat:@"「%@」", content.threadName];
+    self.threadNameLbl.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+    self.threadNameLbl.textColor = [WKApp shared].config.themeColor;
 
-        if (model.message.timestamp > 0) {
-            NSDate *date = [NSDate dateWithTimeIntervalSince1970:model.message.timestamp];
-            self.timeLbl.text = [WKTimeTool getTimeStringAutoShort2:date mustIncludeTime:YES];
-        } else {
-            self.timeLbl.text = @"";
-        }
-
-        self.threadNameLbl.text = [NSString stringWithFormat:@"「%@」", content.threadName];
-        self.threadNameLbl.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
-        self.threadNameLbl.textColor = [WKApp shared].config.themeColor;
-
-        // 获取最新消息数量（优先缓存）
-        NSInteger latestCount = [self latestMessageCount:content];
-        if (latestCount > 0) {
-            self.actionLbl.text = [NSString stringWithFormat:@"%ld条 >", (long)latestCount];
-        } else {
-            self.actionLbl.text = @"查看子区";
-        }
-
-        NSString *avatarUrl = [WKAvatarUtil getAvatar:content.creatorUid];
-        [self.creatorAvatar setUrl:avatarUrl];
+    // 消息条数
+    NSInteger latestCount = [self latestMessageCount:content];
+    if (latestCount > 0) {
+        self.actionLbl.text = [NSString stringWithFormat:@"%ld条 >", (long)latestCount];
+    } else {
+        self.actionLbl.text = @"查看子区";
     }
 
     [self.cardView setBackgroundColor:[WKApp shared].config.cellBackgroundColor];
@@ -210,70 +196,50 @@
     [super layoutSubviews];
     if (!self.model) return;
 
+    CGFloat cardTop = 0;
+
     if (self.hasSourceMessage) {
-        [self layoutLinkedStyle];
-    } else {
-        [self layoutStandaloneStyle];
+        // 引用消息缩略条
+        CGFloat quoteLeft = (self.lim_width - CARD_WIDTH) / 2.0f;
+        self.quoteView.frame = CGRectMake(quoteLeft, 0, CARD_WIDTH, QUOTE_HEIGHT);
+        self.quoteBar.frame = CGRectMake(0, 2, 3, QUOTE_HEIGHT - 4);
+        self.quoteLbl.frame = CGRectMake(10, 2, CARD_WIDTH - 14, QUOTE_HEIGHT - 4);
+        cardTop = QUOTE_HEIGHT;
     }
-}
 
-/// Discord 风格：左对齐 + 弧线连接
-- (void)layoutLinkedStyle {
-    // 头像中心 X 大约在 15 + 头像宽/2 = 15+19 = 34, 弧线从头像中心下方开始
-    CGFloat avatarCenterX = 34.0f;
+    // 卡片居中
+    self.cardView.frame = CGRectMake((self.lim_width - CARD_WIDTH) / 2.0f,
+                                     cardTop,
+                                     CARD_WIDTH,
+                                     CARD_HEIGHT);
 
-    // 弧线
-    self.curveLineView.frame = CGRectMake(avatarCenterX, 0, LINKED_CURVE_WIDTH, LINKED_CURVE_HEIGHT);
-
-    // 卡片：左对齐，从弧线右端开始
-    CGFloat cardLeft = LINKED_CARD_LEFT;
-    CGFloat cardWidth = self.lim_width - cardLeft - 15.0f;
-    CGFloat cardTop = LINKED_CURVE_HEIGHT;
-    self.cardView.frame = CGRectMake(cardLeft, cardTop, cardWidth, LINKED_CARD_HEIGHT);
-
-    // 子区名（第一行，加粗）
-    CGFloat innerPadding = CARD_PADDING;
-    [self.actionLbl sizeToFit];
-    CGFloat actionWidth = self.actionLbl.lim_width;
-    CGFloat nameWidth = cardWidth - innerPadding * 2 - actionWidth - 8;
-    self.threadNameLbl.frame = CGRectMake(innerPadding, 10, nameWidth, 20);
-
-    // 操作按钮（右上角）
-    self.actionLbl.frame = CGRectMake(cardWidth - innerPadding - actionWidth, 10, actionWidth, 20);
-
-    // 副标题（第二行）
-    self.subtitleLbl.frame = CGRectMake(innerPadding, self.threadNameLbl.lim_bottom + 4, cardWidth - innerPadding * 2, 16);
-}
-
-/// 独立卡片：居中样式
-- (void)layoutStandaloneStyle {
-    self.cardView.frame = CGRectMake((self.lim_width - STANDALONE_CARD_WIDTH) / 2.0f,
-                                     0,
-                                     STANDALONE_CARD_WIDTH,
-                                     STANDALONE_CARD_HEIGHT);
-
-    self.creatorAvatar.frame = CGRectMake(CARD_PADDING, (STANDALONE_CARD_HEIGHT - 28) / 2.0f, 28, 28);
+    // 头像
+    self.creatorAvatar.frame = CGRectMake(CARD_PADDING, (CARD_HEIGHT - 28) / 2.0f, 28, 28);
 
     CGFloat textLeft = self.creatorAvatar.lim_right + 8;
 
+    // 时间（右对齐）
     [self.timeLbl sizeToFit];
-    self.timeLbl.frame = CGRectMake(STANDALONE_CARD_WIDTH - CARD_PADDING - self.timeLbl.lim_width,
+    self.timeLbl.frame = CGRectMake(CARD_WIDTH - CARD_PADDING - self.timeLbl.lim_width,
                                     CARD_PADDING,
                                     self.timeLbl.lim_width,
                                     18);
 
+    // 标题
     CGFloat titleMaxWidth = self.timeLbl.lim_left - textLeft - 4;
     self.titleLbl.frame = CGRectMake(textLeft, CARD_PADDING, titleMaxWidth, 18);
 
+    // 条数/操作（右对齐）
     [self.actionLbl sizeToFit];
     CGFloat actionWidth = self.actionLbl.lim_width + 4;
-    CGFloat nameMaxWidth = STANDALONE_CARD_WIDTH - textLeft - CARD_PADDING - actionWidth;
-    self.threadNameLbl.frame = CGRectMake(textLeft, self.titleLbl.lim_bottom + 4, nameMaxWidth, 18);
-
-    self.actionLbl.frame = CGRectMake(STANDALONE_CARD_WIDTH - CARD_PADDING - self.actionLbl.lim_width,
-                                      self.threadNameLbl.lim_top,
+    self.actionLbl.frame = CGRectMake(CARD_WIDTH - CARD_PADDING - self.actionLbl.lim_width,
+                                      self.titleLbl.lim_bottom + 4,
                                       self.actionLbl.lim_width,
                                       18);
+
+    // 子区名称
+    CGFloat nameMaxWidth = CARD_WIDTH - textLeft - CARD_PADDING - actionWidth;
+    self.threadNameLbl.frame = CGRectMake(textLeft, self.titleLbl.lim_bottom + 4, nameMaxWidth, 18);
 }
 
 #pragma mark - Actions
@@ -283,6 +249,19 @@
     if (content.threadChannelId.length > 0) {
         WKChannel *channel = [WKChannel channelID:content.threadChannelId channelType:content.threadChannelType];
         [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:channel];
+    }
+}
+
+- (void)onQuoteTap {
+    if (![self.model.content isKindOfClass:[WKThreadCreatedContent class]]) return;
+    WKThreadCreatedContent *content = (WKThreadCreatedContent *)self.model.content;
+    if (content.sourceMessageId.length == 0) return;
+
+    // 从 sourceMessageId 查找消息的 messageSeq，然后定位
+    uint64_t sourceId = (uint64_t)[content.sourceMessageId longLongValue];
+    WKMessage *sourceMsg = [[WKMessageDB shared] getMessageWithMessageId:sourceId];
+    if (sourceMsg && sourceMsg.messageSeq > 0) {
+        [self.conversationContext locateMessageCell:sourceMsg.messageSeq];
     }
 }
 
@@ -305,6 +284,29 @@
         _cardView.userInteractionEnabled = YES;
     }
     return _cardView;
+}
+
+- (UIView *)quoteView {
+    if (!_quoteView) {
+        _quoteView = [[UIView alloc] init];
+        _quoteView.hidden = YES;
+        _quoteView.userInteractionEnabled = YES;
+
+        _quoteBar = [[UIView alloc] init];
+        _quoteBar.backgroundColor = [WKApp shared].config.themeColor;
+        _quoteBar.layer.cornerRadius = 1.5f;
+        [_quoteView addSubview:_quoteBar];
+
+        _quoteLbl = [[UILabel alloc] init];
+        _quoteLbl.font = [UIFont systemFontOfSize:12];
+        _quoteLbl.textColor = [UIColor grayColor];
+        _quoteLbl.lineBreakMode = NSLineBreakByTruncatingTail;
+        [_quoteView addSubview:_quoteLbl];
+
+        UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onQuoteTap)];
+        [_quoteView addGestureRecognizer:tap];
+    }
+    return _quoteView;
 }
 
 - (WKUserAvatar *)creatorAvatar {

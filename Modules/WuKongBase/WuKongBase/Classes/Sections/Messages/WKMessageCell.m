@@ -50,7 +50,6 @@ static NSMutableDictionary *flameNodeCacheDict;
 
 @property(nonatomic,strong) TapLongTapOrDoubleTapGestureRecognizerWrap *tapLongTapOrDoubleTapGestureRecognizerWrap;
 
-
 @end
 
 @implementation WKMessageCell
@@ -70,7 +69,7 @@ static NSMutableDictionary *flameNodeCacheDict;
         reasonHeight = reasonSize.height + errorTipTopSpace;
     }
     CGFloat height = contentSize.height + contentEdgeInsets.top + contentEdgeInsets.bottom + bubbleEdgeInsets.top + bubbleEdgeInsets.bottom + WK_MESSAGE_TOP + nicknameTop + reasonHeight;
-    
+
     CGFloat contentWidth = contentSize.width;
    
     
@@ -82,17 +81,13 @@ static NSMutableDictionary *flameNodeCacheDict;
 
 - (void)prepareForReuse {
     [super prepareForReuse];
-//    if(self.flameNode) {
-//        [self.flameNode.view removeFromSuperview];
-//    }
-    
+
     [self stopReminderAnimation];
     if(self.onPrepareForReuse) {
         self.onPrepareForReuse();
         self.onPrepareForReuse = nil;
     }
-   
-    
+
 }
 
 + (CGSize) contentSizeForMessage:(WKMessageModel *)model {
@@ -1188,6 +1183,7 @@ static NSMutableDictionary *flameNodeCacheDict;
 - (void)didTapCheckBox:(WKCheckBox *)checkBox {
     [self didTapCheck];
 }
+
 @end
 
 @interface WKBubbleBackgroundView ()

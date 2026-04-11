@@ -256,6 +256,13 @@
     if (self.model.threadCount > (NSInteger)previews.count) {
         self.moreLbl.hidden = NO;
         self.moreLbl.text = [NSString stringWithFormat:@"+%ld %@", (long)(self.model.threadCount - (NSInteger)previews.count), LLang(@"个子区")];
+        self.moreLbl.userInteractionEnabled = YES;
+        // 移除旧手势防止重复
+        for (UIGestureRecognizer *g in self.moreLbl.gestureRecognizers) {
+            [self.moreLbl removeGestureRecognizer:g];
+        }
+        UITapGestureRecognizer *moreTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onMoreTap)];
+        [self.moreLbl addGestureRecognizer:moreTap];
     }
 }
 
@@ -350,6 +357,12 @@
     return row;
 }
 
+-(void) onMoreTap {
+    if (self.onMoreThreadsTap && self.model.channel.channelId.length > 0) {
+        self.onMoreThreadsTap(self.model.channel.channelId);
+    }
+}
+
 -(void) threadRowTapped:(UITapGestureRecognizer *)tap {
     NSInteger index = tap.view.tag - 2000;
     NSArray *previews = self.model.threadPreviews;
@@ -425,6 +438,7 @@
     self.branchView.hidden = YES;
     self.moreLbl.hidden = YES;
     self.onThreadPreviewTap = nil;
+    self.onMoreThreadsTap = nil;
 }
 
 @end

@@ -20,6 +20,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 子区预览被点击
 @property(nonatomic,copy,nullable) void(^onThreadPreviewTap)(NSString *threadChannelId);
 
+/// "+N个子区" 被点击
+@property(nonatomic,copy,nullable) void(^onMoreThreadsTap)(NSString *groupNo);
+
 @end
 
 NS_ASSUME_NONNULL_END

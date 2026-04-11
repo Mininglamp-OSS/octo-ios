@@ -10,6 +10,7 @@
 #import "WKThreadCreatedContent.h"
 #import "WKConversationListCell.h"
 #import "WKConversationGroupThreadCell.h"
+#import "WKThreadListVC.h"
 #import <WuKongBase/WuKongBase.h>
 #import "WKResource.h"
 #import "WKPopMenuView.h"
@@ -1279,6 +1280,11 @@
         [threadCell setOnThreadPreviewTap:^(NSString *threadChannelId) {
             WKChannel *channel = [WKChannel channelID:threadChannelId channelType:WK_COMMUNITY_TOPIC];
             [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:channel];
+        }];
+        [threadCell setOnMoreThreadsTap:^(NSString *groupNo) {
+            WKThreadListVC *vc = [WKThreadListVC new];
+            vc.groupNo = groupNo;
+            [[WKNavigationManager shared] pushViewController:vc animated:YES];
         }];
     } else {
         WKConversationListCell *conversationListCell = (WKConversationListCell *)cell;
