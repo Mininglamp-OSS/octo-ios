@@ -387,12 +387,20 @@
     }
 
     // 尝试使用 Down 库进行 markdown 渲染
+    // Down 库内部使用 WebKit (NSHTMLReader) 运行嵌套 RunLoop，
+    // 在交互式转场（手势返回）期间会导致主线程死锁，跳过 markdown 渲染
+    BOOL isInteractiveTransition = [WKNavigationManager shared].topViewController.navigationController.transitionCoordinator.isInteractive;
     BOOL useMarkdown = NO;
-    if (![textContent.format isEqualToString:@"html"]) {
+    if (!isInteractiveTransition && ![textContent.format isEqualToString:@"html"]) {
         if (renderContent.length > 0 && [WKMarkdownRenderer containsMarkdown:renderContent]) {
             UIColor *textColor = message.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
             NSString *colorHex = [textColor toHexRGB];
-            NSAttributedString *mdAttr = [WKMarkdownRenderer render:renderContent fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex dynamicTextColor:textColor];
+            NSAttributedString *mdAttr = nil;
+            @try {
+                mdAttr = [WKMarkdownRenderer render:renderContent fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex dynamicTextColor:textColor];
+            } @catch (NSException *exception) {
+                mdAttr = nil;
+            }
             if (mdAttr && mdAttr.length > 0) {
                 useMarkdown = YES;
                 NSMutableAttributedString *mdMutable = [[NSMutableAttributedString alloc] initWithAttributedString:mdAttr];
@@ -796,10 +804,16 @@
         CGFloat spacing = (i < segments.count - 1) ? kTableTopSpace : 0;
 
         if ([type isEqualToString:@"text"]) {
-            // 与 refresh: 中的渲染逻辑完全一致：
             // markdown 文本走 WKMarkdownRenderer，非 markdown 走 lim_render
-            if ([WKMarkdownRenderer containsMarkdown:content]) {
-                NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+            // 交互式转场期间跳过 Down 渲染（避免嵌套 RunLoop 死锁）
+            BOOL skipMarkdown = [WKNavigationManager shared].topViewController.navigationController.transitionCoordinator.isInteractive;
+            if (!skipMarkdown && [WKMarkdownRenderer containsMarkdown:content]) {
+                NSAttributedString *mdAttr = nil;
+                @try {
+                    mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+                } @catch (NSException *e) {
+                    mdAttr = nil;
+                }
                 if (mdAttr) {
                     measureLabel.attributedText = mdAttr;
                 } else {
@@ -953,9 +967,13 @@
                         lbl.backgroundColor = [UIColor clearColor];
                         [self.messageContentView addSubview:lbl];
                     }
-                    // markdown 渲染 + 链接提取
-                    if ([WKMarkdownRenderer containsMarkdown:content]) {
-                        NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex dynamicTextColor:textColor];
+                    // markdown 渲染 + 链接提取（交互式转场期间跳过，避免死锁）
+                    BOOL skipMd = [WKNavigationManager shared].topViewController.navigationController.transitionCoordinator.isInteractive;
+                    if (!skipMd && [WKMarkdownRenderer containsMarkdown:content]) {
+                        NSAttributedString *mdAttr = nil;
+                        @try {
+                            mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex dynamicTextColor:textColor];
+                        } @catch (NSException *e) { mdAttr = nil; }
                         if (mdAttr) {
                             NSMutableAttributedString *mutable = [[NSMutableAttributedString alloc] initWithAttributedString:mdAttr];
                             // 提取 markdown 链接 token 并移除 NSLinkAttributeName（UILabel 不支持）

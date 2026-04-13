@@ -39,6 +39,11 @@
     if (self.uploadTask) {
         [self.uploadTask removeListener:self];
     }
+    // 清理文件预览控制器，防止 cell 复用后 delegate 指向错误对象
+    if (self.documentController) {
+        self.documentController.delegate = nil;
+        self.documentController = nil;
+    }
 }
 
 - (void)initUI {
@@ -251,6 +256,24 @@
 
 - (UIViewController *)documentInteractionControllerViewControllerForPreview:(UIDocumentInteractionController *)controller {
     return [WKNavigationManager shared].topViewController;
+}
+
+- (void)documentInteractionControllerWillBeginPreview:(UIDocumentInteractionController *)controller {
+    // 预览期间禁用手势返回（QLPreviewController 内部 WebKit 在手势返回时会触发嵌套 RunLoop 死锁）
+    UINavigationController *nav = [WKNavigationManager shared].topViewController.navigationController;
+    if (nav) {
+        nav.interactivePopGestureRecognizer.enabled = NO;
+    }
+}
+
+- (void)documentInteractionControllerDidEndPreview:(UIDocumentInteractionController *)controller {
+    // 恢复手势返回
+    UINavigationController *nav = [WKNavigationManager shared].topViewController.navigationController;
+    if (nav) {
+        nav.interactivePopGestureRecognizer.enabled = YES;
+    }
+    controller.delegate = nil;
+    self.documentController = nil;
 }
 
 + (BOOL)hiddenBubble {

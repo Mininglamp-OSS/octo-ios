@@ -285,6 +285,11 @@
 - (void)dealloc
 {
     [self.webView removeObserver:self forKeyPath:@"estimatedProgress"];
+    [self.webView removeObserver:self forKeyPath:@"URL"];
+    self.webView.navigationDelegate = nil;
+    self.webView.UIDelegate = nil;
+    self.webView.scrollView.delegate = nil;
+    [self.webView stopLoading];
 }
 
 
