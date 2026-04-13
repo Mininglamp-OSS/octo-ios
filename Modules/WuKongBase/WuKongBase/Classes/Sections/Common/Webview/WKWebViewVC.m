@@ -390,15 +390,13 @@
 
 
 - (void)webView:(WKWebView *)webView didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential * _Nullable credential))completionHandler{
-    
+
     if ([challenge.protectionSpace.authenticationMethod isEqualToString:NSURLAuthenticationMethodServerTrust]) {
         NSURLCredential *card = [[NSURLCredential alloc]initWithTrust:challenge.protectionSpace.serverTrust];
-        
-        dispatch_async(dispatch_get_global_queue(0, 0), ^{
-            completionHandler(NSURLSessionAuthChallengeUseCredential,card);
-        });
-        
-        
+        completionHandler(NSURLSessionAuthChallengeUseCredential, card);
+    } else {
+        // 其他认证方式走默认处理，必须调用 completionHandler 否则 WebKit 会崩溃
+        completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, nil);
     }
 
 }
