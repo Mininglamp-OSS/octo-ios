@@ -1661,6 +1661,9 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 }
 
 + (CGSize) getTextSize:(NSString*) text maxWidth:(CGFloat)maxWidth fontSize:(CGFloat)fontSize{
+    if (!text || text.length == 0) {
+        return CGSizeZero;
+    }
     NSMutableParagraphStyle *style = [[NSParagraphStyle defaultParagraphStyle] mutableCopy];
     style.lineBreakMode = NSLineBreakByWordWrapping;
     style.alignment = NSTextAlignmentCenter;
