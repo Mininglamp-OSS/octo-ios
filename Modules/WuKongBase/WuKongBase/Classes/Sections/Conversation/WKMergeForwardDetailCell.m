@@ -567,10 +567,17 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         self.textLbl.hidden = YES;
         self.markdownLbl.hidden = NO;
         [self clearSegmentViews];
-        NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
-        if (mdAttr && mdAttr.length > 0) {
-            self.markdownLbl.attributedText = mdAttr;
-        } else {
+        @try {
+            NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+            if (mdAttr && mdAttr.length > 0) {
+                self.markdownLbl.attributedText = mdAttr;
+            } else {
+                self.textLbl.hidden = NO;
+                self.markdownLbl.hidden = YES;
+                [self.textLbl lim_setText:content mentionInfo:textContent.mentionedInfo];
+            }
+        } @catch (NSException *exception) {
+            // Down 库 WebKit 渲染在嵌套 RunLoop 中可能触发 autorelease pool 断言，fallback 到纯文本
             self.textLbl.hidden = NO;
             self.markdownLbl.hidden = YES;
             [self.textLbl lim_setText:content mentionInfo:textContent.mentionedInfo];
