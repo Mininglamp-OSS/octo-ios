@@ -298,9 +298,14 @@ static dispatch_queue_t _imsocketQueue;
     [self.connectStatusLock lock];
     self.forceDisconnect = force;
     [self.connectStatusLock unlock];
-    
-    [self.ssocket disconnect];
-    
+
+    // 异步断开，避免主线程 dispatch_sync 到 socketQueue 导致死锁
+    GCDAsyncSocket *socket = self.ssocket;
+    if (socket) {
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            [socket disconnect];
+        });
+    }
 }
 
 -(void) logout {
