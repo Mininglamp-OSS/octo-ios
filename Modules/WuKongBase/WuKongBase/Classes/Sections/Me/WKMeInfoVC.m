@@ -39,9 +39,15 @@
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
-    NSLog(@"[Avatar] WKMeInfoVC viewDidAppear, uid=%@", [WKApp shared].loginInfo.uid);
     [self reloadData];
-    [WKSDK.shared.channelManager fetchChannelInfo:[WKChannel personWithChannelID:[WKApp shared].loginInfo.uid]];
+    // 强制从服务器拉取最新个人信息并刷新头像缓存（解决 web 端修改头像后 iOS 不更新的问题）
+    WKChannel *myChannel = [WKChannel personWithChannelID:[WKApp shared].loginInfo.uid];
+    [WKSDK.shared.channelManager fetchChannelInfo:myChannel completion:^(WKChannelInfo *channelInfo) {
+        if (channelInfo) {
+            // 强制刷新头像缓存 key，确保 SDWebImage 重新下载
+            [[WKSDK shared].channelManager refreshAvatarCacheKey:myChannel];
+        }
+    }];
 }
 
 - (void)dealloc {
