@@ -358,10 +358,13 @@
 
 #pragma mark UITableDataSource
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section{
-    return  self.items[section].count;;
+    if (section >= (NSInteger)self.items.count) return 0;
+    return  self.items[section].count;
 }
 -(UITableViewCell*) tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    
+    if (indexPath.section >= (NSInteger)self.items.count || indexPath.row >= (NSInteger)self.items[indexPath.section].count) {
+        return [tableView dequeueReusableCellWithIdentifier:[WKContactsSelectCell cellId]] ?: [[UITableViewCell alloc] init];
+    }
     id model =  self.items[indexPath.section][indexPath.row];
     WKContactsSelectCell *cell =  [tableView dequeueReusableCellWithIdentifier:[WKContactsSelectCell cellId]];
     WKContactsSelect *contactsSelectModel = (WKContactsSelect*)model;
@@ -406,6 +409,7 @@
     return self.sectionTitleArr.count;
 }
 -(void) tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath{
+    if (indexPath.section >= (NSInteger)self.items.count || indexPath.row >= (NSInteger)self.items[indexPath.section].count) return;
     WKContactsSelect *model =  self.items[indexPath.section][indexPath.row];
     if(model.mode == WKContactsModeSingle) {
         if(model && !model.disable) {
