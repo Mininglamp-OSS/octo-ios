@@ -181,6 +181,7 @@
 }
 
 -(void) handleLoadMessages:(BOOL)animation firstLoad:(BOOL)firstLoad hasMore:(bool)hasMore complete:(void(^)(void))complete {
+    if (!self.tableView) return; // 防止 view 已释放后继续操作
     if(!hasMore) {
         [self pullupFinished];
         if(!self.keepPosition) {
