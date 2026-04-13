@@ -126,13 +126,19 @@
 }
 
 -(void) searchTextChange:(NSString*)text {
+    // 防抖：取消上一次搜索排序，避免信号量并发释放崩溃
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(doSearch:) object:nil];
+    [self performSelector:@selector(doSearch:) withObject:text afterDelay:0.3];
+}
+
+-(void) doSearch:(NSString*)text {
     NSArray *data;
-    if([text isEqualToString:@""]) {
+    if(!text || [text isEqualToString:@""]) {
         data = self.data;
     }else {
         data = [self.data filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"name CONTAINS[c] %@ OR displayName CONTAINS[c] %@",text,text]];
     }
-    
+
     [self parseData:data];
 }
 
