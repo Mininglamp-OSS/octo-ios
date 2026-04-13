@@ -59,12 +59,12 @@ import Down
     @objc public static func containsMarkdown(_ text: String) -> Bool {
         if text.isEmpty { return false }
 
-        if text.contains("**") { return true }
-        if text.contains("```") { return true }
-        if text.contains("~~") { return true }
-        if text.range(of: "^#{1,3} ", options: .regularExpression) != nil { return true }
-        if text.range(of: "`[^`]+`", options: .regularExpression) != nil { return true }
-        if text.range(of: "\\[.+\\]\\(.+\\)", options: .regularExpression) != nil { return true }
+        if text.contains("**") { NSLog("[Markdown] matched: **"); return true }
+        if text.contains("```") { NSLog("[Markdown] matched: ```"); return true }
+        if text.contains("~~") { NSLog("[Markdown] matched: ~~"); return true }
+        if text.range(of: "^#{1,3} ", options: .regularExpression) != nil { NSLog("[Markdown] matched: heading"); return true }
+        if text.range(of: "`[^`]+`", options: .regularExpression) != nil { NSLog("[Markdown] matched: inline code"); return true }
+        if text.range(of: "\\[.+\\]\\(.+\\)", options: .regularExpression) != nil { NSLog("[Markdown] matched: link [%@]", String(text.prefix(30))); return true }
 
         let multilinePatterns = [
             "^- \\[[xX ]\\] ",

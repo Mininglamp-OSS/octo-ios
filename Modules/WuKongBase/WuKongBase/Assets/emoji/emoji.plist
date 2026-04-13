@@ -7,6 +7,22 @@
 		<array>
 			<dict>
 				<key>file</key>
+				<string>custom_action</string>
+				<key>id</key>
+				<string>custom_action</string>
+				<key>tag</key>
+				<string>[崇尚行动]</string>
+			</dict>
+			<dict>
+				<key>file</key>
+				<string>custom_taste</string>
+				<key>id</key>
+				<string>custom_taste</string>
+				<key>tag</key>
+				<string>[有品位]</string>
+			</dict>
+			<dict>
+				<key>file</key>
 				<string>0_0</string>
 				<key>id</key>
 				<string>emoticon_0_0</string>

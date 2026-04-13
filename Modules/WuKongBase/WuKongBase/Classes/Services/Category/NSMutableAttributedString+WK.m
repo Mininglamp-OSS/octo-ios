@@ -155,7 +155,16 @@ static void * kLinkColor = &kLinkColor;
        }
        NSArray<id<WKMatchToken>> *tokens = [ [WKRichTextParseService shared] parse:text mentionInfo:mentionInfo options:options];
 
-       NSMutableArray<id<WKMatchToken>> *realTokens = [NSMutableArray array]; // 解析完后的字符串真实的token range
+       // 判断是否为单个自定义表情（大图模式）：仅在聊天气泡中 + 只有一个 emoji token 且无其他文本
+       BOOL isSingleCustomEmoji = NO;
+       if (options && options.allowLargeCustomEmoji && tokens.count == 1 && tokens.firstObject.type == WKatchTokenTypeEmoji) {
+           WKEmotionToken *singleToken = (WKEmotionToken *)tokens.firstObject;
+           if ([singleToken.imageName hasPrefix:@"custom_"]) {
+               isSingleCustomEmoji = YES;
+           }
+       }
+
+       NSMutableArray<id<WKMatchToken>> *realTokens = [NSMutableArray array];
        for(id<WKMatchToken> token in tokens){
            NSRange range;
            if (token.type == WKatchTokenTypeEmoji){
@@ -163,7 +172,9 @@ static void * kLinkColor = &kLinkColor;
                UIImage *image = [[WKEmoticonService shared] emojiImageNamed:emojiToken.imageName];
                NSInteger location = self.length;
                if(image){
-                   [self appendImage:image size:CGSizeMake(24.0f, 24.0f)];
+                   // 自定义表情单独发送时大图显示，混合文本时正常大小
+                   CGFloat emojiSize = (isSingleCustomEmoji) ? 120.0f : 24.0f;
+                   [self appendImage:image size:CGSizeMake(emojiSize, emojiSize)];
                }
                NSInteger length = self.length - location;
                range = NSMakeRange(location, length);
@@ -183,7 +194,39 @@ static void * kLinkColor = &kLinkColor;
 
 -(void) lim_render:(NSString *)text tokens:(NSArray<id<WKMatchToken>>*)tokens {
     if(!tokens || tokens.count == 0) {
-       NSRange range = [self appendText:text];
+        // 无 entity tokens 时也尝试解析 emoji
+        NSArray<id<WKMatchToken>> *emojiTokens = [[WKEmoticonService shared] parseEmotion:text];
+        if (emojiTokens.count > 0 && !(emojiTokens.count == 1 && emojiTokens.firstObject.type == WKatchTokenTypeText)) {
+            // 判断是否单个自定义表情大图
+            BOOL isSingleCustom = NO;
+            if (emojiTokens.count == 1 && emojiTokens.firstObject.type == WKatchTokenTypeEmoji) {
+                WKEmotionToken *st = (WKEmotionToken *)emojiTokens.firstObject;
+                if ([st.imageName hasPrefix:@"custom_"]) {
+                    isSingleCustom = YES;
+                }
+            }
+            NSMutableArray<id<WKMatchToken>> *realTokens = [NSMutableArray array];
+            for (id<WKMatchToken> token in emojiTokens) {
+                NSRange range;
+                if (token.type == WKatchTokenTypeEmoji) {
+                    WKEmotionToken *emojiToken = (WKEmotionToken *)token;
+                    UIImage *image = [[WKEmoticonService shared] emojiImageNamed:emojiToken.imageName];
+                    NSInteger location = self.length;
+                    if (image) {
+                        CGFloat sz = isSingleCustom ? 120.0f : 24.0f;
+                        [self appendImage:image size:CGSizeMake(sz, sz)];
+                    }
+                    range = NSMakeRange(location, self.length - location);
+                } else {
+                    range = [self appendText:token.text];
+                }
+                token.range = range;
+                [realTokens addObject:token];
+            }
+            self.tokens = realTokens;
+            return;
+        }
+        NSRange range = [self appendText:text];
         WKDefaultToken *token = [WKDefaultToken new];
         token.range = range;
         token.text = text;
@@ -233,15 +276,43 @@ static void * kLinkColor = &kLinkColor;
         }
     }
 
-    NSMutableArray<id<WKMatchToken>> *realTokens = [NSMutableArray array]; // 解析完后的字符串真实的token range
-    for(id<WKMatchToken> token in newtokens){
+    // 对 text 类型的 token 再过一遍 emoji 解析（支持自定义表情 [崇尚行动] 等）
+    NSMutableArray *expandedTokens = [NSMutableArray array];
+    for (id<WKMatchToken> token in newtokens) {
+        if (token.type == WKatchTokenTypeText && token.text.length > 0) {
+            NSArray<id<WKMatchToken>> *emojiTokens = [[WKEmoticonService shared] parseEmotion:token.text];
+            if (emojiTokens.count > 0 && !(emojiTokens.count == 1 && emojiTokens.firstObject.type == WKatchTokenTypeText)) {
+                [expandedTokens addObjectsFromArray:emojiTokens];
+            } else {
+                [expandedTokens addObject:token];
+            }
+        } else {
+            [expandedTokens addObject:token];
+        }
+    }
+
+    // 判断 expandedTokens 是否为单个自定义表情（大图）
+    BOOL isLargeCustom = NO;
+    if (expandedTokens.count == 1) {
+        id<WKMatchToken> onlyToken = expandedTokens.firstObject;
+        if (onlyToken.type == WKatchTokenTypeEmoji) {
+            WKEmotionToken *et = (WKEmotionToken *)onlyToken;
+            if ([et.imageName hasPrefix:@"custom_"]) {
+                isLargeCustom = YES;
+            }
+        }
+    }
+
+    NSMutableArray<id<WKMatchToken>> *realTokens = [NSMutableArray array];
+    for(id<WKMatchToken> token in expandedTokens){
         NSRange range;
         if (token.type == WKatchTokenTypeEmoji){
             WKEmotionToken *emojiToken = (WKEmotionToken*)token;
             UIImage *image = [[WKEmoticonService shared] emojiImageNamed:emojiToken.imageName];
             NSInteger location = self.length;
             if(image){
-                [self appendImage:image size:CGSizeMake(24.0f, 24.0f)];
+                CGFloat sz = isLargeCustom ? 120.0f : 24.0f;
+                [self appendImage:image size:CGSizeMake(sz, sz)];
             }
             NSInteger length = self.length - location;
             range = NSMakeRange(location, length);

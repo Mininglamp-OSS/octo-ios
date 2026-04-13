@@ -22,12 +22,21 @@
     
        
     NSArray<id<WKMatchToken>> *tokens = [ [WKEmoticonService shared] parseEmotion:text];
+    // 判断是否单个自定义表情大图
+    BOOL isSingleCustom = NO;
+    if (tokens.count == 1 && tokens.firstObject.type == WKatchTokenTypeEmoji) {
+        WKEmotionToken *st = (WKEmotionToken *)tokens.firstObject;
+        if ([st.imageName hasPrefix:@"custom_"]) {
+            isSingleCustom = YES;
+        }
+    }
     for(id<WKMatchToken> token in tokens){
            if (token.type == WKatchTokenTypeEmoji){
                WKEmotionToken *emojiToken = (WKEmotionToken*)token;
                UIImage *image = [[WKEmoticonService shared] emojiImageNamed:emojiToken.imageName];
                if(image){
-                   [self appendImage:image maxSize:CGSizeMake(24.0f, 24.0f)];
+                   CGFloat sz = isSingleCustom ? 120.0f : 24.0f;
+                   [self appendImage:image maxSize:CGSizeMake(sz, sz)];
                }
            }else{
                if(mentionInfo) {
