@@ -113,8 +113,15 @@
 
 + (NSString *)tip:(WKMessage*)message {
     NSString *name = LLang(@"你");
-    NSString *revoker = message.remoteExtra.revoker;
-    if([revoker isEqualToString:[WKApp shared].loginInfo.uid]) {
+    id revokerRaw = message.remoteExtra.revoker;
+    // 防御：服务端可能返回 NSNumber 而非 NSString
+    NSString *revoker = nil;
+    if ([revokerRaw isKindOfClass:[NSString class]]) {
+        revoker = revokerRaw;
+    } else if (revokerRaw) {
+        revoker = [NSString stringWithFormat:@"%@", revokerRaw];
+    }
+    if(revoker && [revoker isEqualToString:[WKApp shared].loginInfo.uid]) {
         name = LLang(@"你");
         if(![revoker isEqualToString:message.fromUid]) {
             NSString *memberFromName = @"--";
