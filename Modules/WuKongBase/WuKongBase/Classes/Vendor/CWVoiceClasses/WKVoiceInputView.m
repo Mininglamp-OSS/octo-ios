@@ -1149,7 +1149,13 @@ static NSInteger const kOverlayWaveBarCount = 40;
 }
 
 - (void)showHUDWithHide:(NSString *)text {
-    [(self.window ?: self) showHUDWithHide:text];
+    UIView *target = self.window;
+    if (!target) {
+        target = [UIApplication sharedApplication].keyWindow;
+    }
+    if (target && target != self) {
+        [target showHUDWithHide:text];
+    }
 }
 
 #pragma mark - Public
