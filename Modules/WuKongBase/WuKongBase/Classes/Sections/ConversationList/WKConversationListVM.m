@@ -110,15 +110,36 @@ static WKConversationListVM *_instance;
         }
     }
 
+    // 从旧 model 继承 threadPreviews/threadCount（避免重建后子区预览丢失）
+    if (self.conversationWrapModels.count > 0) {
+        NSMutableDictionary *oldThreadData = [NSMutableDictionary dictionary];
+        for (WKConversationWrapModel *old in self.conversationWrapModels) {
+            if (old.threadPreviews.count > 0) {
+                oldThreadData[old.channel.channelId] = @{
+                    @"previews": old.threadPreviews,
+                    @"count": @(old.threadCount)
+                };
+            }
+        }
+        for (WKConversationWrapModel *model in conversationWrapModels) {
+            NSDictionary *data = oldThreadData[model.channel.channelId];
+            if (data) {
+                model.threadPreviews = data[@"previews"];
+                model.threadCount = [data[@"count"] integerValue];
+            }
+        }
+    }
+
     self.conversationWrapModels = conversationWrapModels;
     [self sortConversationList];
 
-    // 先请求子区数据，全部完成后再回调 finished（避免 reloadData 后再异步更新导致闪烁）
-    [self fetchThreadCountsForGroupsWithCompletion:^{
-        if(finished) {
-            finished();
-        }
-    }];
+    // 立即回调渲染列表（不阻塞等待 thread API，避免网络异常时列表卡死）
+    if(finished) {
+        finished();
+    }
+
+    // 异步请求子区数据，完成后通知刷新
+    [self fetchThreadCountsForGroups];
 }
 
 /// 通过 API 获取每个群组的子区真实数量（带完成回调）

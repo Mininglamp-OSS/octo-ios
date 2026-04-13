@@ -1005,9 +1005,11 @@
             [(WKConversationListCell *)cell refreshWithModel:model];
         }
     } else {
-        // 类型变了，需要 reload（用 fade 动画减少突兀感）
+        // 类型变了，需要 reload（无动画避免闪烁）
         @try {
-            [self.tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationFade];
+            [UIView performWithoutAnimation:^{
+                [self.tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+            }];
         } @catch (NSException *exception) {
             [self.tableView reloadData];
         }
