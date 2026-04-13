@@ -443,8 +443,11 @@
 }
 
 - (WKMessageModel *)messageAtIndexPath:(NSIndexPath *)indexPath {
+    if (indexPath.section >= (NSInteger)self.messageList.dates.count) return nil;
     NSString *date = self.messageList.dates[indexPath.section];
-    return [self.messageList messagesAtDate:date][indexPath.row];
+    NSArray *messages = [self.messageList messagesAtDate:date];
+    if (indexPath.row >= (NSInteger)messages.count) return nil;
+    return messages[indexPath.row];
 }
 
 -(WKMessageModel* __nullable) messageAtClientMsgNo:(NSString*)clientMsgNo {
