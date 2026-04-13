@@ -808,6 +808,8 @@
         }
         [self refreshTable];
         [self refreshBadge];
+        // 批量更新后补拉子区数据（网络恢复等场景）
+        [self.conversationListVM fetchThreadCountsForGroups];
         return;
     }
 

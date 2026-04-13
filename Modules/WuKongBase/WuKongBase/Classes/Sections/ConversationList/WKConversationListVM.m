@@ -112,50 +112,65 @@ static WKConversationListVM *_instance;
 
     self.conversationWrapModels = conversationWrapModels;
     [self sortConversationList];
-    if(finished) {
-        finished();
-    }
 
-    // 异步请求每个群组的真实子区数量
-    [self fetchThreadCountsForGroups];
+    // 先请求子区数据，全部完成后再回调 finished（避免 reloadData 后再异步更新导致闪烁）
+    [self fetchThreadCountsForGroupsWithCompletion:^{
+        if(finished) {
+            finished();
+        }
+    }];
 }
 
-/// 通过 API 获取每个群组的子区真实数量
--(void) fetchThreadCountsForGroups {
+/// 通过 API 获取每个群组的子区真实数量（带完成回调）
+-(void) fetchThreadCountsForGroupsWithCompletion:(void(^)(void))completion {
+    // 收集需要请求的群组
+    NSMutableArray<WKConversationWrapModel *> *groupModels = [NSMutableArray array];
     for (WKConversationWrapModel *model in self.conversationWrapModels) {
-        if(model.channel.channelType != WK_GROUP) continue;
+        if (model.channel.channelType == WK_GROUP) {
+            [groupModels addObject:model];
+        }
+    }
+    if (groupModels.count == 0) {
+        if (completion) completion();
+        return;
+    }
+
+    dispatch_group_t group = dispatch_group_create();
+    __weak typeof(self) weakSelf = self;
+
+    for (WKConversationWrapModel *model in groupModels) {
         NSString *groupNo = model.channel.channelId;
-        __weak typeof(self) weakSelf = self;
+        dispatch_group_enter(group);
         [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
-            // 按最后消息时间排序（最新的在前）
             NSArray *sorted = [threads sortedArrayUsingComparator:^NSComparisonResult(WKThreadModel *a, WKThreadModel *b) {
                 return [b.updatedAt compare:a.updatedAt];
             }];
-            // 只计活跃状态的子区
             NSMutableArray *activePreviews = [NSMutableArray array];
             for (WKThreadModel *t in sorted) {
-                if(t.status == WKThreadStatusActive) {
+                if (t.status == WKThreadStatusActive) {
                     [activePreviews addObject:t];
                 }
             }
             model.threadCount = activePreviews.count;
-            // 最多保留2个预览
             if (activePreviews.count > 2) {
                 model.threadPreviews = [activePreviews subarrayWithRange:NSMakeRange(0, 2)];
             } else {
                 model.threadPreviews = [activePreviews copy];
             }
-            // 通知列表刷新该 cell
-            dispatch_async(dispatch_get_main_queue(), ^{
-                NSInteger index = [weakSelf indexAtChannel:model.channel];
-                if(index != -1) {
-                    [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountUpdated" object:model.channel];
-                }
-            });
+            dispatch_group_leave(group);
         }).catch(^(NSError *error) {
-            // 请求失败不影响显示
+            dispatch_group_leave(group);
         });
     }
+
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        if (completion) completion();
+    });
+}
+
+/// 兼容旧调用
+-(void) fetchThreadCountsForGroups {
+    [self fetchThreadCountsForGroupsWithCompletion:nil];
 }
 
 /// 刷新指定群组的子区数量
