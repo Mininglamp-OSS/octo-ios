@@ -25,6 +25,7 @@
 #import "WKConversationPasswordVC.h"
 #import "WKConversationListTableView.h"
 #import "WKConversationListHeaderView.h"
+#import "WKConversationTabView.h"
 #import "WKOnlineStatusManager.h"
 #import "WKMD5Util.h"
 #import "WKSpaceModel.h"
@@ -71,6 +72,7 @@
 @property(nonatomic,assign) NSInteger spaceCount; // Space总数
 @property(nonatomic,strong) UIImageView *spaceArrowView; // Space标题右侧折叠箭头
 @property(nonatomic,assign) BOOL hasCleanedConversationsOnStartup; // 本次启动是否已清理会话数据
+@property(nonatomic,strong) WKConversationTabView *conversationTabView; // 群组/私聊 tab
 
 @end
 
@@ -102,6 +104,11 @@
     self.connectLock = [[NSLock alloc] init];
     self.conversationLock = [[NSRecursiveLock alloc] init];
     [self addDelegates];
+
+    // 恢复上次选中的 tab
+    NSInteger savedTab = [[NSUserDefaults standardUserDefaults] integerForKey:@"WKConversationTabIndex"];
+    _conversationListVM.filterType = savedTab;
+    [self setupConversationTabView];
 
     // 加载当前 Space 信息
     [self loadCurrentSpace];
@@ -1194,6 +1201,32 @@
 }
 
 
+-(void) setupConversationTabView {
+    _conversationTabView = [[WKConversationTabView alloc] initWithFrame:CGRectMake(0, 0, WKScreenWidth, 36)];
+    _conversationTabView.selectedIndex = _conversationListVM.filterType;
+
+    __weak typeof(self) weakSelf = self;
+    _conversationTabView.onTabChanged = ^(NSInteger index) {
+        weakSelf.conversationListVM.filterType = index;
+        [weakSelf.conversationListVM rebuildFilteredList];
+        [weakSelf.tableView reloadData];
+        [weakSelf updateTabUnreadCounts];
+        [[NSUserDefaults standardUserDefaults] setInteger:index forKey:@"WKConversationTabIndex"];
+    };
+
+    // 将 tabView 添加到 tableHeader 的 contentView 中
+    [self.tableHeader.contentView addSubview:_conversationTabView];
+    // 触发重新布局
+    [self.tableHeader setNeedsLayout];
+    [self.tableHeader layoutIfNeeded];
+    self.tableView.tableHeaderView = self.tableHeader;
+}
+
+-(void) updateTabUnreadCounts {
+    [self.conversationTabView setGroupUnreadCount:[self.conversationListVM getGroupUnreadCount]];
+    [self.conversationTabView setPrivateUnreadCount:[self.conversationListVM getPrivateUnreadCount]];
+}
+
 -(void) refreshBadge {
     NSInteger unreadCount = [self.conversationListVM getAllUnreadCount];
     if(unreadCount>0) {
@@ -1201,7 +1234,7 @@
     }else {
         self.tabBarItem.badgeValue = nil;
     }
-    
+    [self updateTabUnreadCounts];
 }
 
 #pragma mark - WKNetworkListenerDelegate

@@ -13,6 +13,7 @@
 #import "WKThreadCreatedContent.h"
 @interface WKConversationListVM ()
 @property(nonatomic,strong) NSMutableArray<WKConversationWrapModel*> *conversationWrapModels;
+@property(nonatomic,strong) NSArray<WKConversationWrapModel*> *filteredConversations; // 过滤后的列表
 @property(nonatomic,strong) NSRecursiveLock *conversationsLock;
 @property(nonatomic,strong) NSSet<NSString*> *syncedGroupChannelIds; // 当前空间的合法群聊白名单
 
@@ -50,6 +51,7 @@ static WKConversationListVM *_instance;
 
 - (void)reset {
     [self.conversationWrapModels removeAllObjects];
+    self.filteredConversations = @[];
     self.syncedGroupChannelIds = nil; // 重置白名单
 }
 
@@ -346,7 +348,7 @@ static WKConversationListVM *_instance;
 
 -(void) sortConversationList {
     [self.conversationWrapModels sortUsingComparator:^NSComparisonResult(WKConversationWrapModel   *obj1, WKConversationWrapModel   *obj2) {
-        
+
         if(obj1.stick && !obj2.stick) {
             return NSOrderedAscending;
         }
@@ -360,35 +362,72 @@ static WKConversationListVM *_instance;
         }
         return NSOrderedAscending;
     }];
+    [self rebuildFilteredList];
+}
+
+#pragma mark - 过滤
+
+-(BOOL) modelMatchesFilter:(WKConversationWrapModel *)model {
+    uint8_t type = model.channel.channelType;
+    if (type != WK_GROUP && type != WK_PERSON) {
+        return YES; // 系统通知、文件助手等特殊会话两个 tab 都显示
+    }
+    if (self.filterType == WKConversationFilterGroup) {
+        return type == WK_GROUP;
+    } else {
+        return type == WK_PERSON;
+    }
+}
+
+-(void) rebuildFilteredList {
+    NSMutableArray *filtered = [NSMutableArray array];
+    for (WKConversationWrapModel *model in self.conversationWrapModels) {
+        if ([self modelMatchesFilter:model]) {
+            [filtered addObject:model];
+        }
+    }
+    self.filteredConversations = [filtered copy];
+}
+
+-(NSInteger) getGroupUnreadCount {
+    NSInteger count = 0;
+    for (WKConversationWrapModel *model in self.conversationWrapModels) {
+        if (model.channel.channelType == WK_GROUP && !model.mute) {
+            count += model.unreadCount;
+        }
+    }
+    return count;
+}
+
+-(NSInteger) getPrivateUnreadCount {
+    NSInteger count = 0;
+    for (WKConversationWrapModel *model in self.conversationWrapModels) {
+        if (model.channel.channelType == WK_PERSON && !model.mute) {
+            count += model.unreadCount;
+        }
+    }
+    return count;
 }
 
 -(NSArray<WKConversationWrapModel*> *) conversationList {
-    // [_conversationsLock lock];
-    NSArray<WKConversationWrapModel*> *data =  self.conversationWrapModels;
-    // [_conversationsLock unlock];
-    return data;
+    return self.filteredConversations ?: @[];
 }
 
 -(NSInteger) conversationCount {
-     // [_conversationsLock lock];
-    NSInteger count = [self.conversationWrapModels count];
-    // [_conversationsLock unlock];
-    return count;
+    return self.filteredConversations.count;
 }
+
 -(NSInteger) indexAtChannel:(WKChannel*)channel {
-     // [_conversationsLock lock];
-    if( self.conversationWrapModels) {
-        for (int i=0; i< self.conversationWrapModels.count; i++) {
-            WKConversationWrapModel *conversation = self.conversationWrapModels[i];
-            if([conversation.channel isEqual:channel]) {
-                 // [_conversationsLock unlock];
+    NSArray *list = self.filteredConversations;
+    if (list) {
+        for (NSInteger i = 0; i < (NSInteger)list.count; i++) {
+            WKConversationWrapModel *conversation = list[i];
+            if ([conversation.channel isEqual:channel]) {
                 return i;
             }
         }
     }
-    // [_conversationsLock unlock];
     return -1;
-    
 }
 
 -(WKConversationWrapModel*) modelAtChannel:(WKChannel*) channel {
@@ -407,18 +446,23 @@ static WKConversationListVM *_instance;
 }
 
 -(WKConversationWrapModel*) modelAtIndex:(NSInteger)index {
-    // [_conversationsLock lock];
-    WKConversationWrapModel *conversation = self.conversationWrapModels[index];
-    // [_conversationsLock unlock];
-    return conversation;
+    NSArray *list = self.filteredConversations;
+    if (index < 0 || index >= (NSInteger)list.count) return nil;
+    return list[index];
 }
 
 -(void) replaceAtChannel:(WKConversationWrapModel*)model atChannel:(WKChannel*)channel  {
-     NSInteger index =[self indexAtChannel:channel];
-    if(index!=-1) {
-         // [_conversationsLock lock];
+    // 在全量数组中查找
+    NSInteger fullIndex = -1;
+    for (NSInteger i = 0; i < (NSInteger)self.conversationWrapModels.count; i++) {
+        if ([self.conversationWrapModels[i].channel isEqual:channel]) {
+            fullIndex = i;
+            break;
+        }
+    }
+    if (fullIndex != -1) {
         // 继承旧 model 的子区数量和预览
-        WKConversationWrapModel *oldModel = self.conversationWrapModels[index];
+        WKConversationWrapModel *oldModel = self.conversationWrapModels[fullIndex];
         if(oldModel.threadCount > 0 && model.threadCount == 0) {
             model.threadCount = oldModel.threadCount;
         }
@@ -426,49 +470,50 @@ static WKConversationListVM *_instance;
             model.threadPreviews = oldModel.threadPreviews;
         }
         [self handleProhibitwords:model];
-        [self.conversationWrapModels replaceObjectAtIndex:index withObject:model];
-         // [_conversationsLock unlock];
+        [self.conversationWrapModels replaceObjectAtIndex:fullIndex withObject:model];
+        [self rebuildFilteredList];
     }
 }
 -(void) replaceObjectAtIndex:(NSInteger)index withObject:(WKConversationWrapModel*)model{
-    // [self.conversationsLock lock];
+    // 这个方法使用全量数组的 index（内部调用）
     [self handleProhibitwords:model];
-    [self.conversationWrapModels replaceObjectAtIndex:index withObject:model];
-    // [self.conversationsLock unlock];
+    if (index >= 0 && index < (NSInteger)self.conversationWrapModels.count) {
+        [self.conversationWrapModels replaceObjectAtIndex:index withObject:model];
+        [self rebuildFilteredList];
+    }
 }
 
 -(void) removeAtChannnel:(WKChannel*)channel {
-   NSInteger index = [self indexAtChannel:channel];
-    if(index!=-1) {
-        // [self.conversationsLock lock];
-        [self.conversationWrapModels removeObjectAtIndex:index];
-        // [self.conversationsLock unlock];
+    for (NSInteger i = 0; i < (NSInteger)self.conversationWrapModels.count; i++) {
+        if ([self.conversationWrapModels[i].channel isEqual:channel]) {
+            [self.conversationWrapModels removeObjectAtIndex:i];
+            [self rebuildFilteredList];
+            return;
+        }
     }
 }
 
 -(void) removeAtIndex:(NSInteger)index {
-    // [self.conversationsLock lock];
-    [self.conversationWrapModels removeObjectAtIndex:index];
-    // [self.conversationsLock unlock];
+    if (index >= 0 && index < (NSInteger)self.conversationWrapModels.count) {
+        [self.conversationWrapModels removeObjectAtIndex:index];
+        [self rebuildFilteredList];
+    }
 }
 
 
 -(void) removeAll {
-    // [self.conversationsLock lock];
     [self.conversationWrapModels removeAllObjects];
-    // [self.conversationsLock unlock];
+    [self rebuildFilteredList];
 }
 
 -(void) insert:(WKConversationWrapModel*)model atIndex:(NSInteger)insert {
-     // [self.conversationsLock lock];
     if(insert>self.conversationWrapModels.count) {
         WKLogWarn(@"warn: conversationWrapModels数组大小->%ld insert的大小%ld",(long)self.conversationWrapModels.count,(long)insert);
         return;
     }
     [self handleProhibitwords:model];
     [self.conversationWrapModels insertObject:model atIndex:insert];
-   
-    // [self.conversationsLock unlock];
+    [self rebuildFilteredList];
 }
 
 -(NSInteger) insert:(WKConversationWrapModel*)model {
@@ -476,8 +521,13 @@ static WKConversationListVM *_instance;
     WKConversationWrapModel *conversationWrapModel = [self getRealShowConversationWrap:model];
     NSInteger insertPlace =  [self findInsertPlace:conversationWrapModel];
     [self.conversationWrapModels insertObject:conversationWrapModel atIndex:insertPlace];
-    
-    return insertPlace;
+    [self rebuildFilteredList];
+    // 返回过滤后数组中的位置
+    NSArray *list = self.filteredConversations;
+    for (NSInteger i = 0; i < (NSInteger)list.count; i++) {
+        if (list[i] == conversationWrapModel) return i;
+    }
+    return 0;
 }
 
 -(NSInteger) findInsertPlace:(WKConversationWrapModel*)m {
@@ -562,21 +612,20 @@ static WKConversationListVM *_instance;
 
 
 -(WKConversationWrapModel*) conversationAtIndex:(NSInteger)index {
-    if(index>=self.conversationWrapModels.count) {
+    NSArray *list = self.filteredConversations;
+    if (index < 0 || index >= (NSInteger)list.count) {
         return nil;
     }
-    // [_conversationsLock lock];
-    WKConversationWrapModel *model =  [self.conversationWrapModels objectAtIndex:index];
-    // [_conversationsLock unlock];
-    return model;
+    return list[index];
 }
 
 -(void) removeConversationAtIndex:(NSInteger)index {
-    // [_conversationsLock lock];
-    if(index<self.conversationWrapModels.count) {
-        [self.conversationWrapModels removeObjectAtIndex:index];
+    NSArray *list = self.filteredConversations;
+    if (index >= 0 && index < (NSInteger)list.count) {
+        WKConversationWrapModel *model = list[index];
+        [self.conversationWrapModels removeObject:model];
+        [self rebuildFilteredList];
     }
-    // [_conversationsLock unlock];
 }
 
 -(BOOL) hasConversationTop {

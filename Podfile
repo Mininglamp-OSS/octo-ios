@@ -131,7 +131,7 @@ abstract_target 'TangSengDaoDaoiOSBase' do
   pod 'WuKongLogin', :path => './Modules/WuKongLogin'  ##  登录模块
   pod 'WuKongContacts', :path => './Modules/WuKongContacts'  ## 联系人模块
   pod 'WuKongDataSource', :path => './Modules/WuKongDataSource'  ## 数据源
-  pod 'Bugly'  ## 崩溃采集
+# pod 'Bugly'  ## 已通过手动集成 Bugly.framework，无需 CocoaPods 管理
   end
   
 end

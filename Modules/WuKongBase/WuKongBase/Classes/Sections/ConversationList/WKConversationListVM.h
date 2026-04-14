@@ -9,7 +9,15 @@
 #import "WKConversationWrapModel.h"
 NS_ASSUME_NONNULL_BEGIN
 
+typedef NS_ENUM(NSInteger, WKConversationFilterType) {
+    WKConversationFilterGroup = 0,   // 群组
+    WKConversationFilterPrivate = 1, // 私聊
+};
+
 @interface WKConversationListVM : NSObject
+
+/// 当前过滤类型（群组/私聊）
+@property (nonatomic, assign) WKConversationFilterType filterType;
 
 + (WKConversationListVM *)shared;
 
@@ -128,6 +136,15 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// 拉取所有群组的子区数量
 -(void) fetchThreadCountsForGroups;
+
+/// 重建过滤列表（filterType 变更或数据增删后调用）
+-(void) rebuildFilteredList;
+
+/// 获取群组类未读数
+-(NSInteger) getGroupUnreadCount;
+
+/// 获取私聊类未读数
+-(NSInteger) getPrivateUnreadCount;
 
 /// 刷新指定群组的子区数量
 -(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos;
