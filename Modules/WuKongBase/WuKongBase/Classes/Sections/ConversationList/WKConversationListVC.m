@@ -287,12 +287,12 @@
     [[WKOnlineStatusManager shared] addDelegate:self];
     // 监听当前空间新建群聊，立即加入白名单
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onGroupCreatedInCurrentSpace:) name:@"WKGroupCreatedInCurrentSpace" object:nil];
-    // 监听子区数量更新
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onThreadCountUpdated:) name:@"WKThreadCountUpdated" object:nil];
+    // 监听子区数量批量更新（统一 reloadData，不逐行刷新）
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onThreadCountBatchUpdated:) name:@"WKThreadCountBatchUpdated" object:nil];
 }
 
 -(void) removeDelegates {
-    [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKThreadCountUpdated" object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKThreadCountBatchUpdated" object:nil];
     // 移除连接监听
     [[[WKSDK shared] connectionManager] removeDelegate:self];
     // 移除频道监听
@@ -993,85 +993,34 @@
     }
 }
 
--(void) onThreadCountUpdated:(NSNotification*)notification {
-    WKChannel *channel = notification.object;
-    if(!channel) return;
-    NSInteger index = [self.conversationListVM indexAtChannel:channel];
-    if(index == -1) return;
-    WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
-    NSIndexPath *indexPath = [NSIndexPath indexPathForRow:index inSection:0];
-    UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
-    BOOL needThreadCell = (model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn);
-    BOOL isThreadCell = [cell isKindOfClass:[WKConversationGroupThreadCell class]];
-
-    if (needThreadCell == isThreadCell && cell) {
-        // 类型没变，只刷新数据
-        if (isThreadCell) {
-            [(WKConversationGroupThreadCell *)cell refreshWithModel:model];
-        } else {
-            [(WKConversationListCell *)cell refreshWithModel:model];
-        }
-    } else {
-        // 类型变了，需要 reload（无动画避免闪烁）
-        @try {
-            [UIView performWithoutAnimation:^{
-                [self.tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
-            }];
-        } @catch (NSException *exception) {
-            [self.tableView reloadData];
-        }
-    }
+/// 子区数量批量更新完成后统一刷新整个列表（避免大量逐行更新导致 tableView 卡死）
+-(void) onThreadCountBatchUpdated:(NSNotification*)notification {
+    [self.tableView reloadData];
 }
 
-// 单个会话添加或更新(大量会话不要使用此方法，容易卡顿)
+// 单个会话添加或更新
 -(void) uiAddOrUpdateConversationForOne:(WKConversation*)conversation {
     WKConversationWrapModel *newModel = [self.conversationListVM getRealShowConversationWrap:[[WKConversationWrapModel alloc] initWithConversation:conversation]];
 
-    // 继承旧 model 的子区数量和预览
-    NSInteger oldIndex =[self.conversationListVM indexAtChannel:newModel.channel];
+    NSInteger oldIndex = [self.conversationListVM indexAtChannel:newModel.channel];
     if(oldIndex != -1) {
-        WKConversationWrapModel *oldModel = [self.conversationListVM modelAtIndex:oldIndex];
-        if(oldModel.threadCount > 0 && newModel.threadCount == 0) {
-            newModel.threadCount = oldModel.threadCount;
-        }
-        if(oldModel.threadPreviews.count > 0 && newModel.threadPreviews.count == 0) {
-            newModel.threadPreviews = oldModel.threadPreviews;
-        }
-    }
-    if(oldIndex!=-1) {
-        
-        NSInteger insertPlace =  [self.conversationListVM findInsertPlace:newModel];
-        if(oldIndex==insertPlace) {
-            [self.conversationListVM replaceAtChannel:newModel atChannel:newModel.channel];
-            WKConversationListCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:oldIndex inSection:0]];
-            if(cell) {
-                [cell refreshWithModel:newModel];
+        // 已存在：替换数据并重新排序
+        [self.conversationListVM replaceAtChannel:newModel atChannel:newModel.channel];
+        [self.conversationListVM sortConversationList];
+
+        // 位置没变且 cell 可见时直接刷新，否则 reloadData
+        NSInteger newIndex = [self.conversationListVM indexAtChannel:newModel.channel];
+        if (oldIndex == newIndex) {
+            UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:newIndex inSection:0]];
+            if ([cell isKindOfClass:[WKConversationGroupThreadCell class]]) {
+                [(WKConversationGroupThreadCell *)cell refreshWithModel:newModel];
+            } else if ([cell isKindOfClass:[WKConversationListCell class]]) {
+                [(WKConversationListCell *)cell refreshWithModel:newModel];
             }
-            return;
-        }
-        
-        if(oldIndex>self.conversationListVM.conversationCount || insertPlace>self.conversationListVM.conversationCount) {
-            return;
-        }
-       
-        [self.conversationListVM removeAtIndex:oldIndex];
-        [self.conversationListVM insert:newModel atIndex:insertPlace];
-        @try {
-            [self.tableView beginUpdates];
-            [self.tableView moveRowAtIndexPath:[NSIndexPath indexPathForRow:oldIndex inSection:0] toIndexPath:[NSIndexPath indexPathForRow:insertPlace inSection:0]];
-            [self.tableView endUpdates];
-        } @catch (NSException *exception) { // moveRowAtIndexPath 有时会引起异常。原因还没找到
-            WKLogError(@"moveRowAtIndexPath is error -> %@",exception);
+        } else {
             [self.tableView reloadData];
         }
-       
-        WKConversationListCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:insertPlace inSection:0]];
-        if(cell) {
-            [cell refreshWithModel:newModel];
-        }
-        
-        
-    }else {
+    } else {
         [self uiAddConversation:conversation];
     }
 }
@@ -1121,17 +1070,30 @@
 }
 
 -(void) uiAddConversation:(WKConversation*)conversation {
+    // 会话已存在则更新，不重复插入
+    if ([self.conversationListVM indexAtChannel:conversation.channel] != -1) {
+        [self uiAddOrUpdateConversationForOne:conversation];
+        return;
+    }
     // 有活跃空间时，不自动添加不属于当前空间的新会话
-    // 该会话会在用户切换到对应空间时通过conversation/sync加载
     NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
     if(currentSpaceId && currentSpaceId.length > 0) {
         if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
             return;
         }
     }
+    // 记录插入前的行数
+    NSInteger countBefore = [self.conversationListVM conversationCount];
     WKConversationWrapModel *model = [[WKConversationWrapModel alloc] initWithConversation:conversation];
     NSInteger insertPlace = [self.conversationListVM insert:model];
-    [self.tableView insertRowsAtIndexPaths:@[ [NSIndexPath indexPathForRow:insertPlace inSection:0] ] withRowAnimation:UITableViewRowAnimationFade];
+    NSInteger countAfter = [self.conversationListVM conversationCount];
+    // 只有过滤后的列表确实多了一行，才做 insertRowsAtIndexPaths
+    // 否则直接 reloadData（防止 tab 过滤导致 count 不变触发 Invalid batch updates）
+    if (countAfter == countBefore + 1) {
+        [self.tableView insertRowsAtIndexPaths:@[ [NSIndexPath indexPathForRow:insertPlace inSection:0] ] withRowAnimation:UITableViewRowAnimationFade];
+    } else {
+        [self.tableView reloadData];
+    }
 }
 // 删除最近会话
 - (void)onConversationDelete:(WKChannel *)channel {

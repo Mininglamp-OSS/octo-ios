@@ -191,25 +191,22 @@ static WKConversationListVM *_instance;
     });
 }
 
-/// 拉取所有群组的子区数量，完成后逐个通知 VC 刷新对应行
+/// 拉取所有群组的子区数量，完成后统一通知 VC 刷新（不再逐个发通知）
 -(void) fetchThreadCountsForGroups {
     [self fetchThreadCountsForGroupsWithCompletion:^{
-        // 子区数据全部到达后，通知 VC 刷新有子区预览的行
-        for (WKConversationWrapModel *model in self.conversationWrapModels) {
-            if (model.threadPreviews.count > 0) {
-                [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountUpdated" object:model.channel];
-            }
-        }
+        // 所有子区数据到达后，发一次统一刷新通知（避免大量逐行通知导致 tableView 卡死）
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountBatchUpdated" object:nil];
     }];
 }
 
-/// 刷新指定群组的子区数量
+/// 刷新指定群组的子区数量（批量请求，统一刷新）
 -(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos {
+    dispatch_group_t batchGroup = dispatch_group_create();
     for (NSString *groupNo in groupNos) {
         WKChannel *groupChannel = [WKChannel groupWithChannelID:groupNo];
         WKConversationWrapModel *model = [self getConversationWrap:groupChannel conversations:self.conversationWrapModels];
         if (!model) continue;
-        __weak typeof(self) weakSelf = self;
+        dispatch_group_enter(batchGroup);
         [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
             NSArray *sorted = [threads sortedArrayUsingComparator:^NSComparisonResult(WKThreadModel *a, WKThreadModel *b) {
                 return [b.updatedAt compare:a.updatedAt];
@@ -226,23 +223,21 @@ static WKConversationListVM *_instance;
             } else {
                 model.threadPreviews = [activePreviews copy];
             }
-            // 同步更新 messageCountCache（供群聊页面子区卡片使用）
             for (WKThreadModel *t in activePreviews) {
                 if (t.channelId.length > 0) {
                     [WKThreadCreatedContent messageCountCache][t.channelId] = @(t.messageCount);
                 }
             }
-            dispatch_async(dispatch_get_main_queue(), ^{
-                NSInteger index = [weakSelf indexAtChannel:groupChannel];
-                if(index != -1) {
-                    [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountUpdated" object:groupChannel];
-                }
-                // 通知群聊页面刷新子区卡片消息数量
-                [[NSNotificationCenter defaultCenter] postNotificationName:WKThreadMessageCountUpdatedNotification object:nil];
-            });
+            dispatch_group_leave(batchGroup);
         }).catch(^(NSError *error) {
+            dispatch_group_leave(batchGroup);
         });
     }
+    // 所有请求完成后统一通知刷新
+    dispatch_group_notify(batchGroup, dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountBatchUpdated" object:nil];
+        [[NSNotificationCenter defaultCenter] postNotificationName:WKThreadMessageCountUpdatedNotification object:nil];
+    });
 }
 
 /// 判断会话是否应在当前空间显示

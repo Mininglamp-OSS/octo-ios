@@ -728,13 +728,17 @@
 }
 
 /// 判断是否为 BotFather 好友审批消息
+/// 帮助文本包含多个 /command，审批消息只包含 /approve 和 /reject 两个命令
 +(BOOL) isBotFatherApproveMessage:(WKMessageModel*)model {
     NSString *botfatherUID = [WKApp shared].config.botfatherUID;
     if (!botfatherUID || botfatherUID.length == 0) return NO;
     if (![model.channel.channelId isEqualToString:botfatherUID]) return NO;
     if (model.isSend) return NO;
     NSString *rawContent = [[self class] getRawContent:model];
-    return [rawContent containsString:@"/approve"];
+    if (![rawContent containsString:@"/approve"]) return NO;
+    // 帮助文本会包含 /help、/newbot 等多个命令，排除这种情况
+    if ([rawContent containsString:@"/help"] || [rawContent containsString:@"/newbot"]) return NO;
+    return YES;
 }
 
 /// 用正则从文本中提取指定前缀的完整命令（如 /approve uid botname）

@@ -34,7 +34,7 @@
 #define WKConversationInputHeight 36.0f // 输入框高度
 #define WKConversationFuncGroupViewHeight 50.0f // 输入框下面的功能组的视图高度
 
-@interface WKConversationInputPanel()<WKGrowingTextViewDelegate, WKHoldToTalkManagerDelegate>{
+@interface WKConversationInputPanel()<WKGrowingTextViewDelegate, WKHoldToTalkManagerDelegate, UITableViewDelegate, UITableViewDataSource>{
     //    CGFloat _inputPanelBorder;
     BOOL _noFollowKeyboradHeight; // 不追随键盘高度
 }
@@ -69,6 +69,12 @@
 @property(nonatomic,strong) NSArray<UIView*> *textViewRights;
 
 @property(nonatomic,strong) WKHoldToTalkManager *holdToTalkManager;
+
+// BotFather 命令联想
+@property(nonatomic,strong) UIView *cmdSuggestView;
+@property(nonatomic,strong) UITableView *cmdSuggestTable;
+@property(nonatomic,strong) NSArray<NSDictionary *> *cmdSuggestData; // @{@"cmd":..., @"desc":...}
+@property(nonatomic,strong) NSArray<NSDictionary *> *cmdSuggestFiltered;
 
 @end
 
@@ -833,8 +839,11 @@ CGFloat itemSpace = 10.0f;
         [self textChangeMentionCandidateIfNeeded];
     }
     
+    // BotFather 命令联想
+    [self updateCommandSuggestions:text];
+
     [[WKApp shared] invokes:WKPOINT_CATEGORY_CONVERSATION_INPUT_TEXT_CHANGE param:@{@"input":self}];
-    
+
     if(self.delegate && [self.delegate respondsToSelector:@selector(inputPanel:textChange:)]) {
         [self.delegate inputPanel:self textChange:text];
     }
@@ -1308,6 +1317,167 @@ CGFloat itemSpace = 10.0f;
     }
 
     return parts.count > 0 ? [parts componentsJoinedByString:@"\n"] : nil;
+}
+
+#pragma mark - BotFather 命令联想
+
+- (BOOL)isBotFatherChannel {
+    NSString *botUID = [WKApp shared].config.botfatherUID;
+    if (!botUID || botUID.length == 0) return NO;
+    return [self.conversationContext.channel.channelId isEqualToString:botUID];
+}
+
+- (NSArray<NSDictionary *> *)botFatherCommands {
+    if (!_cmdSuggestData) {
+        _cmdSuggestData = @[
+            @{@"cmd": @"/quickstart", @"desc": @"AI Agent 快速入门"},
+            @{@"cmd": @"/newbot",     @"desc": @"创建新机器人"},
+            @{@"cmd": @"/mybots",     @"desc": @"查看我的机器人"},
+            @{@"cmd": @"/connect",    @"desc": @"获取连接 prompt"},
+            @{@"cmd": @"/disconnect", @"desc": @"断开 Agent 连接"},
+            @{@"cmd": @"/setname",    @"desc": @"修改机器人名称"},
+            @{@"cmd": @"/setdescription", @"desc": @"修改机器人描述"},
+            @{@"cmd": @"/deletebot",  @"desc": @"删除机器人"},
+            @{@"cmd": @"/token",      @"desc": @"查看 Token"},
+            @{@"cmd": @"/revoke",     @"desc": @"重置 Token"},
+            @{@"cmd": @"/pending",    @"desc": @"查看待处理的好友申请"},
+            @{@"cmd": @"/approve",    @"desc": @"通过好友申请"},
+            @{@"cmd": @"/reject",     @"desc": @"拒绝好友申请"},
+            @{@"cmd": @"/cancel",     @"desc": @"取消当前操作"},
+            @{@"cmd": @"/help",       @"desc": @"显示帮助"},
+        ];
+    }
+    return _cmdSuggestData;
+}
+
+- (void)updateCommandSuggestions:(NSString *)text {
+    if (![self isBotFatherChannel]) {
+        [self hideCmdSuggestView];
+        return;
+    }
+
+    // 只在文本以 / 开头时显示联想
+    NSString *trimmed = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (![trimmed hasPrefix:@"/"]) {
+        [self hideCmdSuggestView];
+        return;
+    }
+
+    // 用输入的文本过滤命令
+    NSString *keyword = [trimmed lowercaseString];
+    NSMutableArray *filtered = [NSMutableArray array];
+    for (NSDictionary *item in [self botFatherCommands]) {
+        NSString *cmd = item[@"cmd"];
+        if ([cmd hasPrefix:keyword] || [cmd containsString:keyword]) {
+            [filtered addObject:item];
+        }
+    }
+
+    // 如果只剩一个且完全匹配，不显示
+    if (filtered.count == 1 && [filtered[0][@"cmd"] isEqualToString:trimmed]) {
+        [self hideCmdSuggestView];
+        return;
+    }
+
+    if (filtered.count == 0) {
+        [self hideCmdSuggestView];
+        return;
+    }
+
+    self.cmdSuggestFiltered = filtered;
+    [self showCmdSuggestView];
+    [self.cmdSuggestTable reloadData];
+}
+
+- (void)showCmdSuggestView {
+    if (self.cmdSuggestView) {
+        [self layoutCmdSuggestView];
+        return;
+    }
+
+    self.cmdSuggestView = [[UIView alloc] init];
+    self.cmdSuggestView.backgroundColor = [WKApp shared].config.cellBackgroundColor;
+    self.cmdSuggestView.layer.shadowColor = [UIColor blackColor].CGColor;
+    self.cmdSuggestView.layer.shadowOpacity = 0.1;
+    self.cmdSuggestView.layer.shadowOffset = CGSizeMake(0, -2);
+    self.cmdSuggestView.layer.shadowRadius = 4;
+
+    self.cmdSuggestTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    self.cmdSuggestTable.delegate = self;
+    self.cmdSuggestTable.dataSource = self;
+    self.cmdSuggestTable.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
+    self.cmdSuggestTable.separatorInset = UIEdgeInsetsMake(0, 16, 0, 16);
+    self.cmdSuggestTable.backgroundColor = [UIColor clearColor];
+    self.cmdSuggestTable.rowHeight = 44;
+    self.cmdSuggestTable.bounces = NO;
+    [self.cmdSuggestTable registerClass:[UITableViewCell class] forCellReuseIdentifier:@"CmdCell"];
+    [self.cmdSuggestView addSubview:self.cmdSuggestTable];
+
+    UIView *parentView = self.superview;
+    if (parentView) {
+        [parentView insertSubview:self.cmdSuggestView belowSubview:self];
+    }
+    [self layoutCmdSuggestView];
+}
+
+- (void)layoutCmdSuggestView {
+    if (!self.cmdSuggestView || !self.cmdSuggestFiltered) return;
+    CGFloat rowH = 44;
+    CGFloat maxRows = MIN(self.cmdSuggestFiltered.count, 6);
+    CGFloat tableH = rowH * maxRows;
+    CGFloat w = self.lim_width;
+    CGFloat y = self.frame.origin.y - tableH;
+    self.cmdSuggestView.frame = CGRectMake(0, y, w, tableH);
+    self.cmdSuggestTable.frame = self.cmdSuggestView.bounds;
+}
+
+- (void)hideCmdSuggestView {
+    if (self.cmdSuggestView) {
+        [self.cmdSuggestView removeFromSuperview];
+        self.cmdSuggestView = nil;
+        self.cmdSuggestTable = nil;
+        self.cmdSuggestFiltered = nil;
+    }
+}
+
+#pragma mark - Command Suggest UITableView
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    if (tableView == self.cmdSuggestTable) {
+        return self.cmdSuggestFiltered.count;
+    }
+    return 0;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"CmdCell" forIndexPath:indexPath];
+    NSDictionary *item = self.cmdSuggestFiltered[indexPath.row];
+    cell.backgroundColor = [UIColor clearColor];
+    cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+
+    // 命令文字（蓝色加粗）+ 描述（灰色）
+    NSString *cmd = item[@"cmd"];
+    NSString *desc = item[@"desc"];
+    NSString *full = [NSString stringWithFormat:@"%@  %@", cmd, desc];
+
+    NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:full];
+    UIColor *themeColor = [WKApp shared].config.themeColor;
+    [attr addAttribute:NSForegroundColorAttributeName value:themeColor range:NSMakeRange(0, cmd.length)];
+    [attr addAttribute:NSFontAttributeName value:[UIFont systemFontOfSize:15 weight:UIFontWeightMedium] range:NSMakeRange(0, cmd.length)];
+    [attr addAttribute:NSForegroundColorAttributeName value:[UIColor grayColor] range:NSMakeRange(cmd.length + 2, desc.length)];
+    [attr addAttribute:NSFontAttributeName value:[UIFont systemFontOfSize:13] range:NSMakeRange(cmd.length + 2, desc.length)];
+
+    cell.textLabel.attributedText = attr;
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    NSDictionary *item = self.cmdSuggestFiltered[indexPath.row];
+    NSString *cmd = item[@"cmd"];
+    self.textView.text = cmd;
+    [self handleTextViewContentDidChange];
+    [self hideCmdSuggestView];
 }
 
 -(void) dealloc{
