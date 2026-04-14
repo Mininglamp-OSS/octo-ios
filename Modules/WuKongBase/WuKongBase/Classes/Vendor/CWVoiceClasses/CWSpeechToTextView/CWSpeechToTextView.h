@@ -9,8 +9,11 @@
 
 @protocol CWSpeechToTextViewDelegate <NSObject>
 
-/// 语音识别完成，发送识别的文本
+/// 语音识别完成，直接发送识别的文本（拖到发送按钮时触发）
 - (void)speechToTextView:(CWSpeechToTextView *)view didRecognizeText:(NSString *)text;
+
+/// 语音识别完成，将文本输入到输入框（松手时触发）
+- (void)speechToTextView:(CWSpeechToTextView *)view didRecognizeTextForInput:(NSString *)text;
 
 @optional
 

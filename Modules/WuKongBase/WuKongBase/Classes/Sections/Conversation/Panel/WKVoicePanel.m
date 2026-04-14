@@ -98,6 +98,12 @@
     }
 }
 
+- (void)speechToTextView:(CWSpeechToTextView *)view didRecognizeTextForInput:(NSString *)text {
+    if (text.length > 0) {
+        [self.context inputInsertText:text];
+    }
+}
+
 #pragma mark - WKVoiceInputViewDelegate
 
 - (void)voiceInputDidTranscribe:(NSString *)text shouldReplace:(BOOL)shouldReplace {

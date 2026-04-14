@@ -21,7 +21,8 @@ static CGFloat const maxScale = 0.45;
 // UI - 与对讲页完全一致
 @property (nonatomic, weak) CWRecordStateView *stateView;
 @property (nonatomic, weak) CWVoiceButton *micButton;
-@property (nonatomic, weak) CWVoiceButton *cancelButton;
+@property (nonatomic, weak) CWVoiceButton *sendButton;    // 左侧发送按钮
+@property (nonatomic, weak) CWVoiceButton *cancelButton;  // 右侧删除按钮
 @property (nonatomic, weak) UIImageView *voiceLine;
 @property (nonatomic, weak) UIPanGestureRecognizer *pan;
 
@@ -45,6 +46,7 @@ static CGFloat const maxScale = 0.45;
 // 状态
 @property (nonatomic, assign) BOOL isRecording;
 @property (nonatomic, assign) BOOL isCancelled;
+@property (nonatomic, assign) BOOL isSendAction;  // 拖到发送按钮时标记
 @property (nonatomic, assign) float currentAudioLevel;
 @property (nonatomic, copy) NSString *recognizedText;   // 完整的最终文本
 @property (nonatomic, copy) NSString *confirmedText;    // 已结束任务的累积文本（isFinal后保存）
@@ -80,6 +82,7 @@ static CGFloat const levelMargin = 2.0;
     [self stateView];
     [self voiceLine];
     [self micButton];
+    [self sendButton];
     [self cancelButton];
 }
 
@@ -150,16 +153,36 @@ static CGFloat const levelMargin = 2.0;
     return _micButton;
 }
 
-// 取消按钮 - 与对讲页一致
+// 左侧发送按钮
+- (CWVoiceButton *)sendButton {
+    if (_sendButton == nil) {
+        CWVoiceButton *btn = [CWVoiceButton buttonWithBackImageNor:@"Conversation/VoiceRecord/aio_voice_operate_nor"
+                                                  backImageSelected:@"Conversation/VoiceRecord/aio_voice_operate_press"
+                                                           imageNor:@"Conversation/VoiceRecord/aio_voice_stt_send_nor"
+                                                      imageSelected:@"Conversation/VoiceRecord/aio_voice_stt_send_press"
+                                                              frame:CGRectMake(35, self.stateView.cw_bottom + 10, 0, 0)
+                                                         isMicPhone:NO];
+        btn.imageEdgeInsets = UIEdgeInsetsMake(10, 10, 10, 10);
+        btn.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        [self addSubview:btn];
+        btn.hidden = YES;
+        _sendButton = btn;
+    }
+    return _sendButton;
+}
+
+// 右侧删除按钮
 - (CWVoiceButton *)cancelButton {
     if (_cancelButton == nil) {
         CWVoiceButton *btn = [CWVoiceButton buttonWithBackImageNor:@"Conversation/VoiceRecord/aio_voice_operate_nor"
                                                   backImageSelected:@"Conversation/VoiceRecord/aio_voice_operate_press"
-                                                           imageNor:@"Conversation/VoiceRecord/aio_voice_operate_delete_nor"
-                                                      imageSelected:@"Conversation/VoiceRecord/aio_voice_operate_delete_press"
+                                                           imageNor:@"Conversation/VoiceRecord/aio_voice_stt_delete_nor"
+                                                      imageSelected:@"Conversation/VoiceRecord/aio_voice_stt_delete_press"
                                                               frame:CGRectMake(self.cw_width - 35, self.stateView.cw_bottom + 10, 0, 0)
                                                          isMicPhone:NO];
         btn.frame = CGRectMake(self.cw_width - 35 - btn.norImage.size.width, self.stateView.cw_bottom + 10, btn.norImage.size.width, btn.norImage.size.height);
+        btn.imageEdgeInsets = UIEdgeInsetsMake(10, 10, 10, 10);
+        btn.imageView.contentMode = UIViewContentModeScaleAspectFit;
         [self addSubview:btn];
         btn.hidden = YES;
         _cancelButton = btn;
@@ -256,6 +279,7 @@ static CGFloat const levelMargin = 2.0;
 
     btn.selected = YES;
     self.isCancelled = NO;
+    self.isSendAction = NO;
     self.recognizedText = nil;
     self.confirmedText = nil;
 
@@ -275,46 +299,101 @@ static CGFloat const levelMargin = 2.0;
     }];
 }
 
-// 松手发送
+// 松手 → 输入到输入框（不发送）
 - (void)sendRecorde:(UIButton *)btn {
     NSTimeInterval t = 0;
     if (!self.isRecording) {
         t = 0.3;
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(t * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self finishAndSend];
+        [self finishAndInput];
     });
 }
 
 - (void)finishAndSend {
     if (!self.isRecording) return; // 防止重复调用
-    [self stopRecording];
 
+    // 停止音频采集，但保留识别任务处理剩余音频
+    [self stopAudioCapture];
+
+    // 立即切换UI
     self.micButton.selected = NO;
+    self.sendButton.selected = NO;
+    self.sendButton.hidden = YES;
+    self.sendButton.backgroudLayer.transform = CATransform3DIdentity;
     self.cancelButton.selected = NO;
     self.cancelButton.hidden = YES;
     self.cancelButton.backgroudLayer.transform = CATransform3DIdentity;
     self.voiceLine.hidden = YES;
     [(CWVoiceView *)self.superview.superview setState:CWVoiceStateDefault];
 
-    // recognizedText 始终是完整文本，confirmedText 作为兜底
-    NSString *finalText = self.recognizedText.length > 0 ? self.recognizedText : self.confirmedText;
-    NSLog(@"[STT] finishAndSend: finalText='%@'", finalText ?: @"");
+    // 延迟等待识别器处理完剩余音频后再获取最终文本
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
 
-    if (self.isCancelled) {
-        NSLog(@"语音转文字：已取消");
-    } else if (finalText.length > 0) {
-        if ([self.delegate respondsToSelector:@selector(speechToTextView:didRecognizeText:)]) {
-            [self.delegate speechToTextView:self didRecognizeText:finalText];
+        [strongSelf stopRecognitionAndSession];
+
+        NSString *finalText = strongSelf.recognizedText.length > 0 ? strongSelf.recognizedText : strongSelf.confirmedText;
+        NSLog(@"[STT] finishAndSend: finalText='%@'", finalText ?: @"");
+
+        if (strongSelf.isCancelled) {
+            NSLog(@"语音转文字：已取消");
+        } else if (finalText.length > 0) {
+            if ([strongSelf.delegate respondsToSelector:@selector(speechToTextView:didRecognizeText:)]) {
+                [strongSelf.delegate speechToTextView:strongSelf didRecognizeText:finalText];
+            }
+        } else {
+            [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"未识别到语音")];
         }
-    } else {
-        [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"未识别到语音")];
-    }
 
-    [self resetUI];
+        [strongSelf resetUI];
+    });
 }
 
-#pragma mark - 拖动手势（与对讲页一致：右滑取消按钮 + 上滑取消）
+// 松手默认行为：文字输入到输入框
+- (void)finishAndInput {
+    if (!self.isRecording) return;
+
+    // 停止音频采集，但保留识别任务处理剩余音频
+    [self stopAudioCapture];
+
+    // 立即切换UI
+    self.micButton.selected = NO;
+    self.sendButton.selected = NO;
+    self.sendButton.hidden = YES;
+    self.sendButton.backgroudLayer.transform = CATransform3DIdentity;
+    self.cancelButton.selected = NO;
+    self.cancelButton.hidden = YES;
+    self.cancelButton.backgroudLayer.transform = CATransform3DIdentity;
+    self.voiceLine.hidden = YES;
+    [(CWVoiceView *)self.superview.superview setState:CWVoiceStateDefault];
+
+    // 延迟等待识别器处理完剩余音频后再获取最终文本
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        [strongSelf stopRecognitionAndSession];
+
+        NSString *finalText = strongSelf.recognizedText.length > 0 ? strongSelf.recognizedText : strongSelf.confirmedText;
+        NSLog(@"[STT] finishAndInput: finalText='%@'", finalText ?: @"");
+
+        if (finalText.length > 0) {
+            if ([strongSelf.delegate respondsToSelector:@selector(speechToTextView:didRecognizeTextForInput:)]) {
+                [strongSelf.delegate speechToTextView:strongSelf didRecognizeTextForInput:finalText];
+            }
+        } else {
+            [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"未识别到语音")];
+        }
+
+        [strongSelf resetUI];
+    });
+}
+
+#pragma mark - 拖动手势
 
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     if (!self.micButton.isSelected) return;
@@ -328,17 +407,37 @@ static CGFloat const levelMargin = 2.0;
         // 上滑取消
         if (translation.y < kCancelThreshold) {
             self.isCancelled = YES;
+            self.isSendAction = NO;
             self.stateView.hidden = NO;
             self.stateView.recordState = CWRecordStateCancel;
             self.levelContentView.hidden = YES;
             return;
         }
 
-        // 右侧取消按钮交互
-        if (point.x >= self.cw_width / 2.0) {
+        if (point.x < self.cw_width / 2.0) {
+            // 左侧：发送按钮交互
+            [self transitionButton:self.sendButton WithPoint:point containBlock:^(BOOL isContain) {
+                if (isContain) {
+                    self.isSendAction = YES;
+                    self.isCancelled = NO;
+                    self.stateView.hidden = NO;
+                    self.stateView.recordState = CWRecordStateSend;
+                    self.levelContentView.hidden = YES;
+                } else {
+                    self.isSendAction = NO;
+                    self.stateView.hidden = YES;
+                    self.levelContentView.hidden = NO;
+                }
+            }];
+            // 重置右侧按钮
+            self.cancelButton.backgroudLayer.transform = CATransform3DIdentity;
+            self.cancelButton.selected = NO;
+        } else {
+            // 右侧：删除按钮交互
             [self transitionButton:self.cancelButton WithPoint:point containBlock:^(BOOL isContain) {
                 if (isContain) {
                     self.isCancelled = YES;
+                    self.isSendAction = NO;
                     self.stateView.hidden = NO;
                     self.stateView.recordState = CWRecordStateCancel;
                     self.levelContentView.hidden = YES;
@@ -348,19 +447,23 @@ static CGFloat const levelMargin = 2.0;
                     self.levelContentView.hidden = NO;
                 }
             }];
-        } else {
-            self.isCancelled = NO;
-            self.stateView.hidden = YES;
-            self.levelContentView.hidden = NO;
-            self.cancelButton.backgroudLayer.transform = CATransform3DIdentity;
-            self.cancelButton.selected = NO;
+            // 重置左侧按钮
+            self.sendButton.backgroudLayer.transform = CATransform3DIdentity;
+            self.sendButton.selected = NO;
         }
     } else {
         // 松开手指
-        if (self.isCancelled) {
+        if (self.isSendAction) {
+            // 拖到发送按钮 → 直接发送
+            [self finishAndSend];
+        } else if (self.isCancelled) {
+            // 拖到删除按钮或上滑 → 取消
             NSLog(@"语音转文字：已取消");
             [self stopRecording];
             self.micButton.selected = NO;
+            self.sendButton.selected = NO;
+            self.sendButton.hidden = YES;
+            self.sendButton.backgroudLayer.transform = CATransform3DIdentity;
             self.cancelButton.selected = NO;
             self.cancelButton.hidden = YES;
             self.cancelButton.backgroudLayer.transform = CATransform3DIdentity;
@@ -368,8 +471,10 @@ static CGFloat const levelMargin = 2.0;
             [(CWVoiceView *)self.superview.superview setState:CWVoiceStateDefault];
             [self resetUI];
         } else {
-            [self finishAndSend];
+            // 默认松手 → 输入到输入框
+            [self finishAndInput];
         }
+        self.isSendAction = NO;
     }
 }
 
@@ -397,12 +502,17 @@ static CGFloat const levelMargin = 2.0;
     return sqrt(pow((pointA.x - pointB.x), 2) + pow((pointA.y - pointB.y), 2));
 }
 
-// 取消按钮出现动画 - 与对讲页一致
-- (void)animationCancelBtn {
-    self.cancelButton.hidden = NO;
+// 发送按钮与删除按钮出现动画 - 参考对讲页 animationPlayAndCancelBtn
+- (void)animationSendAndCancelBtn {
+    [self animationButtonAppear:self.sendButton fromOffsetX:20];
+    [self animationButtonAppear:self.cancelButton fromOffsetX:-20];
+}
+
+- (void)animationButtonAppear:(UIView *)view fromOffsetX:(CGFloat)offsetX {
+    view.hidden = NO;
     CABasicAnimation *positionAnim = [CABasicAnimation animationWithKeyPath:@"position"];
-    positionAnim.fromValue = [NSValue valueWithCGPoint:CGPointMake(self.cancelButton.cw_centerX - 20, self.cancelButton.cw_centerY)];
-    positionAnim.toValue = [NSValue valueWithCGPoint:self.cancelButton.center];
+    positionAnim.fromValue = [NSValue valueWithCGPoint:CGPointMake(view.center.x + offsetX, view.center.y)];
+    positionAnim.toValue = [NSValue valueWithCGPoint:view.center];
     positionAnim.duration = 0.15;
 
     CABasicAnimation *opacityAnim = [CABasicAnimation animationWithKeyPath:@"opacity"];
@@ -412,7 +522,7 @@ static CGFloat const levelMargin = 2.0;
     CAAnimationGroup *animationGroup = [CAAnimationGroup animation];
     animationGroup.animations = @[positionAnim, opacityAnim];
     animationGroup.duration = 0.15;
-    [self.cancelButton.layer addAnimation:animationGroup forKey:nil];
+    [view.layer addAnimation:animationGroup forKey:nil];
 }
 
 #pragma mark - 语音识别
@@ -480,7 +590,10 @@ static CGFloat const levelMargin = 2.0;
             rms += channelData[i] * channelData[i];
         }
         rms = sqrtf(rms / frameLength);
-        float level = MIN(rms * 5.0, 1.0);
+        // 与语音输入统一：RMS 转 dB，再映射 [-55dB, -10dB] → [0, 1]
+        float dB = 20 * log10f(MAX(rms, 0.00001f));
+        float level = (dB + 55) / 45.0f;
+        level = MAX(0.05f, MIN(1.0f, level));
         strongSelf.currentAudioLevel = level;
     }];
 
@@ -508,8 +621,8 @@ static CGFloat const levelMargin = 2.0;
         self.voiceLine.transform = CGAffineTransformIdentity;
     }];
 
-    // 取消按钮动画 - 与对讲页一致
-    [self animationCancelBtn];
+    // 发送+删除按钮动画
+    [self animationSendAndCancelBtn];
 
     // 启动波形和计时
     [self startMeterTimer];
@@ -578,8 +691,8 @@ static CGFloat const levelMargin = 2.0;
     [self startRecognitionTaskWithGeneration:self.taskGeneration];
 }
 
-- (void)stopRecording {
-    self.isRecording = NO;
+// 仅停止音频采集和UI定时器，保留识别任务让其处理剩余音频
+- (void)stopAudioCapture {
     [self stopMeterTimer];
     [self.audioTimer invalidate];
     self.audioTimer = nil;
@@ -589,7 +702,13 @@ static CGFloat const levelMargin = 2.0;
         [self.audioEngine.inputNode removeTapOnBus:0];
     }
 
+    // 通知识别器音频已结束，让其处理剩余缓冲区
     [self.recognitionRequest endAudio];
+}
+
+// 完全停止识别并释放资源
+- (void)stopRecognitionAndSession {
+    self.isRecording = NO;
 
     if (self.recognitionTask) {
         [self.recognitionTask cancel];
@@ -603,6 +722,12 @@ static CGFloat const levelMargin = 2.0;
                                         error:&error];
 }
 
+// 立即停止一切（用于取消场景，不需要等待识别结果）
+- (void)stopRecording {
+    [self stopAudioCapture];
+    [self stopRecognitionAndSession];
+}
+
 - (void)resetUI {
     self.stateView.hidden = NO;
     self.stateView.recordState = CWRecordStateDefault;
@@ -610,11 +735,13 @@ static CGFloat const levelMargin = 2.0;
 
     self.levelContentView.hidden = YES;
     self.voiceLine.hidden = YES;
+    self.sendButton.hidden = YES;
 
     self.recordDuration = 0;
     self.currentLevels = nil;
     self.confirmedText = nil;
     self.recognizedText = nil;
+    self.isSendAction = NO;
 }
 
 #pragma mark - 波形显示（与 CWRecordStateView 完全一致）
