@@ -189,9 +189,16 @@ static WKConversationListVM *_instance;
     });
 }
 
-/// 兼容旧调用
+/// 拉取所有群组的子区数量，完成后逐个通知 VC 刷新对应行
 -(void) fetchThreadCountsForGroups {
-    [self fetchThreadCountsForGroupsWithCompletion:nil];
+    [self fetchThreadCountsForGroupsWithCompletion:^{
+        // 子区数据全部到达后，通知 VC 刷新有子区预览的行
+        for (WKConversationWrapModel *model in self.conversationWrapModels) {
+            if (model.threadPreviews.count > 0) {
+                [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountUpdated" object:model.channel];
+            }
+        }
+    }];
 }
 
 /// 刷新指定群组的子区数量
