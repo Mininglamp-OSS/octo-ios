@@ -140,4 +140,52 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
     }];
 }
 
+- (void)transcribeWavAudio:(NSData *)audioData
+               contextText:(NSString *)contextText
+               chatContext:(NSString *)chatContext
+                completion:(void(^)(WKVoiceInputResult *, NSError *))completion {
+
+    if (audioData.length > 10 * 1024 * 1024) {
+        if (completion) {
+            completion(nil, [NSError errorWithDomain:@"WKVoiceInput" code:413
+                                            userInfo:@{NSLocalizedDescriptionKey: @"Audio file too large"}]);
+        }
+        return;
+    }
+
+    NSMutableDictionary *formFields = [NSMutableDictionary dictionary];
+    if (contextText.length > 0) formFields[@"context_text"] = contextText;
+    if (chatContext.length > 0) formFields[@"chat_context"] = chatContext;
+
+    NSLog(@"[VoiceInput] ===== WAV 语音转写请求 =====");
+    NSLog(@"[VoiceInput] audio size: %lu bytes", (unsigned long)audioData.length);
+
+    [[WKAPIClient sharedClient] fileUpload:@"voice/transcribe"
+                                formFields:formFields
+                                  fileData:audioData
+                                  fileName:@"recording.wav"
+                                 fileField:@"audio"
+                                  mimeType:@"audio/wav"
+                                   timeout:kTranscribeTimeout
+                          completeCallback:^(id responseObject, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (error) {
+                if (completion) completion(nil, error);
+                return;
+            }
+            NSInteger status = [responseObject[@"status"] integerValue];
+            if (status != 200) {
+                NSString *msg = responseObject[@"msg"] ?: @"transcription failed";
+                if (completion) completion(nil, [NSError errorWithDomain:@"WKVoiceInput" code:status
+                                                               userInfo:@{NSLocalizedDescriptionKey: msg}]);
+                return;
+            }
+            WKVoiceInputResult *result = [[WKVoiceInputResult alloc] init];
+            result.text = responseObject[@"text"] ?: @"";
+            result.model = responseObject[@"model"] ?: @"";
+            if (completion) completion(result, nil);
+        });
+    }];
+}
+
 @end

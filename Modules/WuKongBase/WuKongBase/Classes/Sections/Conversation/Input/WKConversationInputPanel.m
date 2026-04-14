@@ -26,12 +26,15 @@
 #import "WuKongBase.h"
 #import "WKSendButton.h"
 #import "WKFuncGroupView.h"
+#import "WKHoldToTalkManager.h"
+#import <WuKongIMSDK/WKChannelMemberDB.h>
+#import "WKMessageModel.h"
 #define  WKiPhoneX (WKScreenWidth == 375.f && WKScreenHeight == 812.f ? YES : NO)
 
 #define WKConversationInputHeight 36.0f // 输入框高度
 #define WKConversationFuncGroupViewHeight 50.0f // 输入框下面的功能组的视图高度
 
-@interface WKConversationInputPanel()<WKGrowingTextViewDelegate>{
+@interface WKConversationInputPanel()<WKGrowingTextViewDelegate, WKHoldToTalkManagerDelegate>{
     //    CGFloat _inputPanelBorder;
     BOOL _noFollowKeyboradHeight; // 不追随键盘高度
 }
@@ -65,6 +68,7 @@
 
 @property(nonatomic,strong) NSArray<UIView*> *textViewRights;
 
+@property(nonatomic,strong) WKHoldToTalkManager *holdToTalkManager;
 
 @end
 
@@ -111,10 +115,12 @@
     [self.messageToolBar addSubview:self.menusBtn];
     [self.messageToolBar addSubview:self.sendButton];
     
+    [self.messageToolBar addSubview:self.voiceToggleBtn];
+    [self.messageToolBar addSubview:self.holdToTalkBtn];
     [self.messageToolBar addSubview:self.textView];
     [self.messageToolBar addSubview:self.funcGroupView];
-    
-    
+
+
     [self reloadInputPanelFrame];
     [self layoutContentView];
     
@@ -195,9 +201,11 @@ CGFloat itemSpace = 10.0f;
     if([WKApp shared].config.style == WKSystemStyleDark) {
         self.layer.shadowColor = [UIColor colorWithRed:15.0f/255.0f green:15.0f/255.0f blue:15.0f/255.0f alpha:1.0].CGColor;
         [self.textView setBackgroundColor:[UIColor colorWithRed:38.0f/255.0f green:38.0f/255.0f blue:38.0f/255.0f alpha:1.0]];
+        [self.holdToTalkBtn setBackgroundColor:[UIColor colorWithRed:38.0f/255.0f green:38.0f/255.0f blue:38.0f/255.0f alpha:1.0]];
     }else{
         self.layer.shadowColor = [UIColor colorWithRed:240.0f/255.0f green:240.0f/255.0f blue:240.0f/255.0f alpha:1.0].CGColor;
         [self.textView setBackgroundColor:[UIColor colorWithRed:246.0f/255.0f green:246.0f/255.0f blue:246.0f/255.0f alpha:1.0]];
+        [self.holdToTalkBtn setBackgroundColor:[UIColor colorWithRed:246.0f/255.0f green:246.0f/255.0f blue:246.0f/255.0f alpha:1.0]];
     }
     
 
@@ -215,51 +223,53 @@ CGFloat itemSpace = 10.0f;
     CGFloat contentHeight = self.currentContentHeight;
     
     CGFloat leftSpace = 10.0f;
-    
+
     // messageToolBar
     self.contentView.lim_width = self.lim_width;
     self.contentView.lim_height = contentHeight;
-    
+
     self.messageToolBar.lim_size = self.contentView.lim_size;
     if(self.topView) {
         self.messageToolBar.lim_top = self.topView.lim_bottom;
     }else {
         self.messageToolBar.lim_top = 0.0f;
     }
-    
-    
-    
+
+    // voiceToggleBtn
+    CGFloat voiceToggleBtnLeft = leftSpace;
     if(self.showMenusBtn) {
         self.menusBtn.lim_left = leftSpace;
+        voiceToggleBtnLeft = self.menusBtn.lim_right + 6.0f;
     }
-    
-    // textView
+    self.voiceToggleBtn.lim_left = voiceToggleBtnLeft;
+    self.voiceToggleBtn.lim_top = 10.0f + (self.currentInputHeight / 2.0f - self.voiceToggleBtn.lim_height / 2.0f);
+
+    // textView / holdToTalkBtn
+    CGFloat inputLeft = self.voiceToggleBtn.lim_right + 8.0f;
     self.textView.lim_top = 10.0f;
-    CGFloat textViewWidth = 0.0f;
-    if(self.showMenusBtn) {
-        self.textView.lim_left = self.menusBtn.lim_right + 10.0f;
-        textViewWidth = self.lim_width - self.menusBtn.lim_right - 20.0f;
-    }else{
-        self.textView.lim_left = 10.0f;
-        textViewWidth  =self.lim_width - 20.0f;
-    }
-    
+    CGFloat textViewWidth = self.lim_width - inputLeft - 10.0f;
+
     [self.sendButton layoutSubviews];
     CGFloat sendLeftSpace = 10.0f;
-    if(self.sendButton.show) {
-        
+    if(self.sendButton.show && !self.isVoiceMode) {
         textViewWidth -= (self.sendButton.lim_width+sendLeftSpace);
     }
-    
+
+    self.textView.lim_left = inputLeft;
     self.textView.lim_width = textViewWidth;
-    
     self.textView.lim_height = self.currentInputHeight;
     self.textView.lim_top = 10.0f;
-    
+
+    // holdToTalkBtn（语音模式下与textView位置对齐）
+    self.holdToTalkBtn.lim_left = inputLeft;
+    self.holdToTalkBtn.lim_width = self.lim_width - inputLeft - 10.0f;
+    self.holdToTalkBtn.lim_height = WKConversationInputHeight;
+    self.holdToTalkBtn.lim_top = 10.0f;
+
     if(self.showMenusBtn) {
         self.menusBtn.lim_top = self.textView.lim_top + ( self.textView.lim_height/2.0f - self.menusBtn.lim_height/2.0f);
     }
-    
+
     self.sendButton.lim_top = self.textView.lim_bottom - self.sendButton.lim_height;
     self.sendButton.lim_left = self.textView.lim_right + sendLeftSpace;
    
@@ -656,6 +666,7 @@ CGFloat itemSpace = 10.0f;
 
     self.textView.text = @"";
     self.sendButton.show = NO;
+    self.sendButton.hidden = YES;
     [self resetInputHeight];
     [self animateInputPanelChange:^{
         if(self.delegate && [self.delegate respondsToSelector:@selector(inputPanelSend:text:)]) {
@@ -798,11 +809,9 @@ CGFloat itemSpace = 10.0f;
 
 -(void) handleTextViewContentDidChange {
     NSString *text = self.textView.text;
-    if([[text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:@""]) {
-        self.sendButton.show = false;
-    }else {
-        self.sendButton.show = true;
-    }
+    BOOL hasText = ![[text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:@""];
+    self.sendButton.show = hasText;
+    self.sendButton.hidden = !hasText || self.isVoiceMode;
     [self animateInputPanelChange];
     
     if(self.delegate && [self.delegate respondsToSelector:@selector(inputPanelTyping:)]) {
@@ -1096,6 +1105,209 @@ CGFloat itemSpace = 10.0f;
 
 -(BOOL) isFuncGroupZooming {
     return [self.funcGroupView isZooming];
+}
+
+#pragma mark - Voice/Text Mode Toggle
+
+- (UIButton *)voiceToggleBtn {
+    if (!_voiceToggleBtn) {
+        _voiceToggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        _voiceToggleBtn.frame = CGRectMake(0, 0, 30, 30);
+        UIImage *voiceImg = [WKApp.shared loadImage:@"Conversation/Toolbar/VoiceToggle" moduleID:@"WuKongBase"];
+        [_voiceToggleBtn setImage:voiceImg forState:UIControlStateNormal];
+        _voiceToggleBtn.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        [_voiceToggleBtn addTarget:self action:@selector(toggleVoiceMode) forControlEvents:UIControlEventTouchUpInside];
+    }
+    return _voiceToggleBtn;
+}
+
+- (UIButton *)holdToTalkBtn {
+    if (!_holdToTalkBtn) {
+        _holdToTalkBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        _holdToTalkBtn.frame = CGRectMake(0, 0, 100, WKConversationInputHeight);
+        [_holdToTalkBtn setTitle:LLang(@"按住 说话") forState:UIControlStateNormal];
+        [_holdToTalkBtn setTitleColor:[UIColor colorWithRed:0.35 green:0.35 blue:0.37 alpha:1.0] forState:UIControlStateNormal];
+        _holdToTalkBtn.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+        _holdToTalkBtn.layer.cornerRadius = 15.0f;
+        _holdToTalkBtn.layer.masksToBounds = YES;
+        _holdToTalkBtn.hidden = YES;
+
+        // 长按手势
+        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleHoldToTalk:)];
+        longPress.minimumPressDuration = 0.15;
+        [_holdToTalkBtn addGestureRecognizer:longPress];
+    }
+    return _holdToTalkBtn;
+}
+
+- (WKHoldToTalkManager *)holdToTalkManager {
+    if (!_holdToTalkManager) {
+        _holdToTalkManager = [[WKHoldToTalkManager alloc] init];
+        _holdToTalkManager.delegate = self;
+    }
+    return _holdToTalkManager;
+}
+
+- (void)toggleVoiceMode {
+    self.isVoiceMode = !self.isVoiceMode;
+
+    if (self.isVoiceMode) {
+        // 切换到语音模式
+        UIImage *kbImg = [WKApp.shared loadImage:@"Conversation/Toolbar/KeyboardToggle" moduleID:@"WuKongBase"];
+        [self.voiceToggleBtn setImage:kbImg forState:UIControlStateNormal];
+        self.textView.hidden = YES;
+        self.sendButton.hidden = YES;
+        self.holdToTalkBtn.hidden = NO;
+        [self.textView endEditing:YES];
+        // 语音模式下输入栏高度重置为单行
+        self.currentInputHeight = WKConversationInputHeight;
+    } else {
+        // 切换回文本模式
+        UIImage *voiceImg = [WKApp.shared loadImage:@"Conversation/Toolbar/VoiceToggle" moduleID:@"WuKongBase"];
+        [self.voiceToggleBtn setImage:voiceImg forState:UIControlStateNormal];
+        self.textView.hidden = NO;
+        self.holdToTalkBtn.hidden = YES;
+        // 恢复发送按钮状态
+        NSString *text = self.textView.text;
+        BOOL hasText = text && ![[text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:@""];
+        self.sendButton.show = hasText;
+        self.sendButton.hidden = !hasText;
+        // 恢复文本模式下输入框高度
+        [self resetCurrentInputHeight];
+        [self.holdToTalkManager cancelIfRecording];
+    }
+
+    [self animateInputPanelChange];
+}
+
+- (void)handleHoldToTalk:(UILongPressGestureRecognizer *)gesture {
+    UIWindow *window = self.window;
+    if (!window) return;
+    [self.holdToTalkManager handleLongPress:gesture inWindow:window];
+}
+
+#pragma mark - WKHoldToTalkManagerDelegate
+
+- (void)holdToTalkManager:(WKHoldToTalkManager *)manager didTranscribeText:(NSString *)text {
+    [self inputInsertText:text];
+}
+
+- (void)holdToTalkManager:(WKHoldToTalkManager *)manager sendVoiceData:(NSData *)data seconds:(NSInteger)seconds waveform:(NSArray<NSNumber *> *)waveform {
+    if (seconds <= 0) {
+        [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"说话时间太短")];
+        return;
+    }
+    // 将波形数组转为 NSData（与 WKVoicePanel cutAudioWaveform 一致）
+    NSData *waveformData = [self convertWaveformToData:waveform];
+    if ([self.conversationContext respondsToSelector:@selector(sendMessage:)]) {
+        [self.conversationContext sendMessage:[WKVoiceContent initWithData:data second:(int)seconds waveform:waveformData]];
+    }
+}
+
+- (NSData *)convertWaveformToData:(NSArray<NSNumber *> *)waveform {
+    if (!waveform || waveform.count == 0) return nil;
+    NSMutableData *data = [[NSMutableData alloc] init];
+    NSUInteger binSize = waveform.count / 20; // 缩减到约20个采样点
+    if (binSize == 0) binSize = 1;
+    for (NSUInteger i = 0; i < waveform.count; i += binSize) {
+        uint8_t maxVal = 0;
+        for (NSUInteger j = 0; j < binSize && (i + j) < waveform.count; j++) {
+            uint8_t v = (uint8_t)(MIN(waveform[i + j].floatValue * 100.0f, 255));
+            if (v > maxVal) maxVal = v;
+        }
+        [data appendBytes:&maxVal length:1];
+    }
+    return data;
+}
+
+- (void)holdToTalkManager:(WKHoldToTalkManager *)manager sendText:(NSString *)text {
+    if (self.delegate && [self.delegate respondsToSelector:@selector(inputPanelSend:text:)]) {
+        [self.delegate inputPanelSend:self text:text];
+    }
+}
+
+- (void)holdToTalkManagerDidStartRecording:(WKHoldToTalkManager *)manager {
+    if ([self.conversationContext respondsToSelector:@selector(startRecordingVoiceMessage)]) {
+        [self.conversationContext startRecordingVoiceMessage];
+    }
+}
+
+- (void)holdToTalkManagerDidStopRecording:(WKHoldToTalkManager *)manager {
+    // 录音结束
+}
+
+- (NSString *)holdToTalkManagerCurrentInputText:(WKHoldToTalkManager *)manager {
+    return self.textView.text;
+}
+
+- (NSString *)holdToTalkManagerChatContext:(WKHoldToTalkManager *)manager {
+    // 构建聊天上下文（复用 WKVoicePanel 的逻辑）
+    NSMutableArray<NSString*> *parts = [NSMutableArray array];
+    NSString *myUid = [WKApp shared].loginInfo.uid;
+    WKChannel *channel = self.conversationContext.channel;
+
+    // 聊天成员名单
+    NSMutableArray<NSString*> *memberNames = [NSMutableArray array];
+    NSMutableSet<NSString*> *uniqueNames = [NSMutableSet set];
+
+    if (channel.channelType == WK_GROUP) {
+        NSArray<WKChannelMember*> *members = [[WKChannelMemberDB shared] getMembersWithChannel:channel];
+        NSInteger limit = MIN(members.count, 100);
+        for (NSInteger i = 0; i < limit; i++) {
+            WKChannelMember *member = members[i];
+            if ([member.memberUid isEqualToString:myUid]) continue;
+            if (member.status != WKMemberStatusNormal) continue;
+            WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfoOfUser:member.memberUid];
+            if (info) {
+                if (info.name.length > 0 && ![uniqueNames containsObject:info.name]) {
+                    [uniqueNames addObject:info.name];
+                    [memberNames addObject:info.name];
+                }
+            }
+        }
+    } else if (channel.channelType == WK_PERSON) {
+        WKChannelInfo *peerInfo = [[WKSDK shared].channelManager getChannelInfo:channel];
+        if (peerInfo && peerInfo.name.length > 0) {
+            [memberNames addObject:peerInfo.name];
+        }
+    }
+
+    if (memberNames.count > 0) {
+        [parts addObject:[NSString stringWithFormat:@"聊天成员：%@", [memberNames componentsJoinedByString:@","]]];
+    }
+
+    // 最后10条消息
+    if ([self.conversationContext respondsToSelector:@selector(dates)] &&
+        [self.conversationContext respondsToSelector:@selector(messagesAtDate:)]) {
+        NSMutableArray<WKMessageModel*> *allMessages = [NSMutableArray array];
+        for (NSString *date in [self.conversationContext dates]) {
+            NSArray<WKMessageModel*> *msgs = [self.conversationContext messagesAtDate:date];
+            if (msgs) [allMessages addObjectsFromArray:msgs];
+        }
+        NSMutableArray<WKMessageModel*> *textMessages = [NSMutableArray array];
+        for (WKMessageModel *msg in allMessages) {
+            NSString *content = msg.content.contentDict[@"content"];
+            if (content.length > 0) {
+                [textMessages addObject:msg];
+            }
+        }
+        if (textMessages.count > 0) {
+            NSInteger count = MIN(textMessages.count, 10);
+            NSArray *recent = [textMessages subarrayWithRange:NSMakeRange(textMessages.count - count, count)];
+            NSMutableArray<NSString*> *msgLines = [NSMutableArray array];
+            for (WKMessageModel *msg in recent) {
+                NSString *text = msg.content.contentDict[@"content"];
+                NSString *name = nil;
+                WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfoOfUser:msg.fromUid];
+                if (info) name = info.displayName;
+                if (!name) name = msg.fromUid;
+                [msgLines addObject:[NSString stringWithFormat:@"[%@]: %@", name, text]];
+            }
+            [parts addObject:[msgLines componentsJoinedByString:@"\n"]];
+        }
+    }
+
+    return parts.count > 0 ? [parts componentsJoinedByString:@"\n"] : nil;
 }
 
 -(void) dealloc{

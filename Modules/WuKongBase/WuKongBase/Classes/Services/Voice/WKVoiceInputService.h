@@ -36,7 +36,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// 清除配置缓存
 - (void)clearConfigCache;
 
-/// 语音转写
+/// 语音转写（m4a/AAC 格式）
 /// @param audioData    音频数据（m4a/AAC 格式）
 /// @param contextText  输入框已有文本（可选，nil 为纯转写模式）
 /// @param chatContext  最近聊天记录（v1 传 nil，deferred）
@@ -45,6 +45,13 @@ NS_ASSUME_NONNULL_BEGIN
             chatContext:(nullable NSString *)chatContext
              completion:(void(^)(WKVoiceInputResult * _Nullable result,
                                  NSError * _Nullable error))completion;
+
+/// 语音转写（WAV/PCM 格式）
+- (void)transcribeWavAudio:(NSData *)audioData
+               contextText:(nullable NSString *)contextText
+               chatContext:(nullable NSString *)chatContext
+                completion:(void(^)(WKVoiceInputResult * _Nullable result,
+                                    NSError * _Nullable error))completion;
 @end
 
 NS_ASSUME_NONNULL_END
