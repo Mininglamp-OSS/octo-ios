@@ -1129,12 +1129,12 @@ static WKApp *_instance;
     // @
     [self setMethod:WKPOINT_CATEGORY_PANELFUNCITEM_MENTION handler:^id _Nullable(id  _Nonnull param) {
         id<WKConversationContext> context = param[@"context"];
-        if(context.channel.channelType != WK_GROUP) {
+        if(context.channel.channelType != WK_GROUP && context.channel.channelType != WK_COMMUNITY_TOPIC) {
             return nil;
         }
         WKPanelDefaultFuncItem *item = [[WKPanelMentionFuncItem alloc] init];
         item.sort = 4000;
-        item.channelType = WK_GROUP;
+        item.channelType = context.channel.channelType;
         return item;
     } category:WKPOINT_CATEGORY_PANELFUNCITEM];
     
