@@ -19,6 +19,7 @@ static CGFloat const kHorizontalPadding = 16.0f;
 @property (nonatomic, strong) UIView *indicator;
 @property (nonatomic, strong) UILabel *groupBadge;
 @property (nonatomic, strong) UILabel *privateBadge;
+@property (nonatomic, strong) UIView *bottomLine; // 底部分隔线
 
 @end
 
@@ -41,7 +42,7 @@ static CGFloat const kHorizontalPadding = 16.0f;
     UIFont *normalFont = [[WKApp shared].config appFontOfSize:15.0f];
 
     _groupBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    [_groupBtn setTitle:LLang(@"群组") forState:UIControlStateNormal];
+    [_groupBtn setTitle:LLang(@"群聊") forState:UIControlStateNormal];
     [_groupBtn setTitleColor:themeColor forState:UIControlStateNormal];
     _groupBtn.titleLabel.font = selectedFont;
     [_groupBtn addTarget:self action:@selector(onGroupTap) forControlEvents:UIControlEventTouchUpInside];
@@ -64,6 +65,10 @@ static CGFloat const kHorizontalPadding = 16.0f;
 
     _privateBadge = [self createBadgeLabel];
     [self addSubview:_privateBadge];
+
+    _bottomLine = [[UIView alloc] init];
+    _bottomLine.backgroundColor = [UIColor colorWithWhite:0.88 alpha:1.0];
+    [self addSubview:_bottomLine];
 }
 
 - (UILabel *)createBadgeLabel {
@@ -93,16 +98,19 @@ static CGFloat const kHorizontalPadding = 16.0f;
 
     [self layoutIndicatorAnimated:NO];
     [self layoutBadges];
+
+    // 底部分隔线
+    _bottomLine.frame = CGRectMake(0, h - 0.5, w, 0.5);
 }
 
 - (void)layoutIndicatorAnimated:(BOOL)animated {
     UIButton *btn = (_selectedIndex == 0) ? _groupBtn : _privateBtn;
 
-    // 指示线宽度 = 文字宽度 + 8pt
+    // 指示线宽度 = 文字宽度 + 20pt
     NSString *title = btn.titleLabel.text ?: @"";
     UIFont *font = btn.titleLabel.font;
     CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-    CGFloat indicatorW = textW + 8;
+    CGFloat indicatorW = textW + 60;
     CGFloat indicatorX = CGRectGetMidX(btn.frame) - indicatorW / 2.0f;
     CGFloat indicatorY = self.bounds.size.height - kIndicatorHeight;
 

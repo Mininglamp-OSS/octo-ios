@@ -132,7 +132,7 @@
     UIView *preView;
     for (UIView *view in subviews) {
         if(!preView) {
-            view.lim_top = 10.0f;
+            view.lim_top = 0.0f;
         }else {
             view.lim_top = preView.lim_bottom;
         }
@@ -177,7 +177,7 @@
 
 - (UIView *)tableHeaderBottomEmptyView {
     if(!_tableHeaderBottomEmptyView) {
-        _tableHeaderBottomEmptyView = [[UIView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, WKScreenWidth, 10.0f)];
+        _tableHeaderBottomEmptyView = [[UIView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, WKScreenWidth, 0.0f)];
         [_tableHeaderBottomEmptyView setBackgroundColor:[UIColor whiteColor]];
     }
     return _tableHeaderBottomEmptyView;
@@ -187,7 +187,7 @@
 - (UIView *)searchbarBoxView {
     if(!_searchbarBoxView) {
         _searchbarBoxView = [[UIView alloc] init];
-        _searchbarBoxView.lim_size = CGSizeMake(self.searchbarView.bounds.size.width, self.searchbarView.bounds.size.height + 10.0f);
+        _searchbarBoxView.lim_size = CGSizeMake(self.searchbarView.bounds.size.width, self.searchbarView.bounds.size.height + 4.0f);
     }
     return _searchbarBoxView;
 }
