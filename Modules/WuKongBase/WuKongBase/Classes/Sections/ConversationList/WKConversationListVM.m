@@ -11,6 +11,8 @@
 #import "WKThreadService.h"
 #import "WKThreadModel.h"
 #import "WKThreadCreatedContent.h"
+#import "WKCategoryEntity.h"
+#import "WKCategoryService.h"
 @interface WKConversationListVM ()
 @property(nonatomic,strong) NSMutableArray<WKConversationWrapModel*> *conversationWrapModels;
 @property(nonatomic,strong) NSArray<WKConversationWrapModel*> *filteredConversations; // 过滤后的列表
@@ -45,6 +47,8 @@ static WKConversationListVM *_instance;
     self = [super init];
     if(self) {
         self.conversationsLock = [[NSRecursiveLock alloc] init];
+        self.collapsedSections = [NSMutableSet set];
+        self.categoryList = @[];
     }
     return self;
 }
@@ -53,6 +57,7 @@ static WKConversationListVM *_instance;
     [self.conversationWrapModels removeAllObjects];
     self.filteredConversations = @[];
     self.syncedGroupChannelIds = nil; // 重置白名单
+    self.categoryList = @[];
 }
 
 -(void) snapshotSyncedGroupIds {
@@ -645,4 +650,139 @@ static WKConversationListVM *_instance;
     // [_conversationsLock unlock];
     return unreadCount;
 }
+
+#pragma mark - Category (分组)
+
+-(void) loadCategoriesWithCompletion:(void(^)(void))completion {
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(!spaceId || spaceId.length == 0) {
+        self.categoryList = @[];
+        if(completion) completion();
+        return;
+    }
+    [[WKCategoryService shared] listCategories:spaceId].then(^(NSArray<WKCategoryEntity *> *list) {
+        self.categoryList = list ?: @[];
+        if(completion) completion();
+    }).catch(^(NSError *error) {
+        NSLog(@"加载分组失败: %@", error);
+        if(completion) completion();
+    });
+}
+
+-(NSArray<WKConversationDisplayItem *> *) buildGroupDisplayList {
+    // 1. 建立 channelId → WKConversationWrapModel 映射（仅群聊）
+    NSMutableDictionary<NSString *, WKConversationWrapModel *> *channelMap = [NSMutableDictionary dictionary];
+    for (WKConversationWrapModel *model in self.conversationWrapModels) {
+        if(model.channel.channelType == WK_GROUP) {
+            channelMap[model.channel.channelId] = model;
+        }
+    }
+
+    NSMutableArray<WKConversationDisplayItem *> *displayList = [NSMutableArray array];
+    NSMutableSet<NSString *> *groupedChannelIds = [NSMutableSet set];
+
+    // 2. 收集已归组的 channelId
+    for (WKCategoryEntity *cat in self.categoryList) {
+        if(!cat.category_id || cat.category_id.length == 0) continue;
+        for (WKCategoryGroup *cg in cat.groups) {
+            [groupedChannelIds addObject:cg.group_no];
+        }
+    }
+
+    // 3. 用户自建分组
+    for (WKCategoryEntity *cat in self.categoryList) {
+        if(!cat.category_id || cat.category_id.length == 0) continue;
+        [displayList addObject:[WKConversationDisplayItem sectionHeaderWithId:cat.category_id title:cat.name isDefault:NO]];
+
+        if(![self.collapsedSections containsObject:cat.category_id]) {
+            NSMutableArray<WKConversationWrapModel *> *sectionItems = [NSMutableArray array];
+            for (WKCategoryGroup *cg in cat.groups) {
+                WKConversationWrapModel *msg = channelMap[cg.group_no];
+                if(msg) [sectionItems addObject:msg];
+            }
+            // 置顶优先，再按时间排序
+            [sectionItems sortUsingComparator:^NSComparisonResult(WKConversationWrapModel *a, WKConversationWrapModel *b) {
+                if(a.stick && !b.stick) return NSOrderedAscending;
+                if(!a.stick && b.stick) return NSOrderedDescending;
+                if(a.lastMsgTimestamp > b.lastMsgTimestamp) return NSOrderedAscending;
+                if(a.lastMsgTimestamp < b.lastMsgTimestamp) return NSOrderedDescending;
+                return NSOrderedSame;
+            }];
+            for (WKConversationWrapModel *m in sectionItems) {
+                [displayList addObject:[WKConversationDisplayItem itemWithConversation:m]];
+            }
+        }
+    }
+
+    // 4. 默认分组（未归组群聊）
+    NSMutableArray<WKConversationWrapModel *> *ungrouped = [NSMutableArray array];
+    for (WKConversationWrapModel *model in self.conversationWrapModels) {
+        if(model.channel.channelType == WK_GROUP && ![groupedChannelIds containsObject:model.channel.channelId]) {
+            [ungrouped addObject:model];
+        }
+    }
+    [ungrouped sortUsingComparator:^NSComparisonResult(WKConversationWrapModel *a, WKConversationWrapModel *b) {
+        if(a.stick && !b.stick) return NSOrderedAscending;
+        if(!a.stick && b.stick) return NSOrderedDescending;
+        if(a.lastMsgTimestamp > b.lastMsgTimestamp) return NSOrderedAscending;
+        if(a.lastMsgTimestamp < b.lastMsgTimestamp) return NSOrderedDescending;
+        return NSOrderedSame;
+    }];
+
+    // 未归组群聊直接平铺显示（无 section header）
+    for (WKConversationWrapModel *m in ungrouped) {
+        [displayList addObject:[WKConversationDisplayItem itemWithConversation:m]];
+    }
+
+    return displayList;
+}
+
+static NSString *const kCollapsedSectionsKey = @"collapsed_sections";
+
+-(void) saveCollapsedSections {
+    NSString *uid = [WKApp shared].loginInfo.uid;
+    NSString *key = [NSString stringWithFormat:@"%@_%@", uid, kCollapsedSectionsKey];
+    NSString *value = [[self.collapsedSections allObjects] componentsJoinedByString:@","];
+    [[NSUserDefaults standardUserDefaults] setObject:value forKey:key];
+}
+
+-(void) restoreCollapsedSections {
+    if(!self.collapsedSections) {
+        self.collapsedSections = [NSMutableSet set];
+    }
+    NSString *uid = [WKApp shared].loginInfo.uid;
+    NSString *key = [NSString stringWithFormat:@"%@_%@", uid, kCollapsedSectionsKey];
+    NSString *saved = [[NSUserDefaults standardUserDefaults] objectForKey:key];
+    if(saved && saved.length > 0) {
+        NSArray *ids = [saved componentsSeparatedByString:@","];
+        for (NSString *sectionId in ids) {
+            if(sectionId.length > 0) {
+                [self.collapsedSections addObject:sectionId];
+            }
+        }
+    }
+}
+
+@end
+
+#pragma mark - WKConversationDisplayItem
+
+@implementation WKConversationDisplayItem
+
++ (instancetype)itemWithConversation:(WKConversationWrapModel *)model {
+    WKConversationDisplayItem *item = [[WKConversationDisplayItem alloc] init];
+    item.conversation = model;
+    item.isSectionHeader = NO;
+    return item;
+}
+
++ (instancetype)sectionHeaderWithId:(NSString *)sectionId title:(NSString *)title isDefault:(BOOL)isDefault {
+    WKConversationDisplayItem *item = [[WKConversationDisplayItem alloc] init];
+    item.isSectionHeader = YES;
+    item.sectionId = sectionId;
+    item.sectionTitle = title;
+    item.isDefaultSection = isDefault;
+    return item;
+}
+
 @end

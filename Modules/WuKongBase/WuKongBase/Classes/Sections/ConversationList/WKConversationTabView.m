@@ -38,8 +38,8 @@ static CGFloat const kHorizontalPadding = 16.0f;
 - (void)setupUI {
     UIColor *themeColor = [WKApp shared].config.themeColor;
     UIColor *normalColor = [UIColor colorWithWhite:0.5 alpha:1.0];
-    UIFont *selectedFont = [[WKApp shared].config appFontOfSizeMedium:15.0f];
-    UIFont *normalFont = [[WKApp shared].config appFontOfSize:15.0f];
+    UIFont *selectedFont = [[WKApp shared].config appFontOfSizeMedium:17.0f];
+    UIFont *normalFont = [[WKApp shared].config appFontOfSize:17.0f];
 
     _groupBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     [_groupBtn setTitle:LLang(@"群聊") forState:UIControlStateNormal];
@@ -110,7 +110,7 @@ static CGFloat const kHorizontalPadding = 16.0f;
     NSString *title = btn.titleLabel.text ?: @"";
     UIFont *font = btn.titleLabel.font;
     CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-    CGFloat indicatorW = textW + 60;
+    CGFloat indicatorW = textW + 80;
     CGFloat indicatorX = CGRectGetMidX(btn.frame) - indicatorW / 2.0f;
     CGFloat indicatorY = self.bounds.size.height - kIndicatorHeight;
 
@@ -177,8 +177,8 @@ static CGFloat const kHorizontalPadding = 16.0f;
 - (void)updateButtonStyles {
     UIColor *themeColor = [WKApp shared].config.themeColor;
     UIColor *normalColor = [UIColor colorWithWhite:0.5 alpha:1.0];
-    UIFont *selectedFont = [[WKApp shared].config appFontOfSizeMedium:15.0f];
-    UIFont *normalFont = [[WKApp shared].config appFontOfSize:15.0f];
+    UIFont *selectedFont = [[WKApp shared].config appFontOfSizeMedium:17.0f];
+    UIFont *normalFont = [[WKApp shared].config appFontOfSize:17.0f];
 
     if (_selectedIndex == 0) {
         [_groupBtn setTitleColor:themeColor forState:UIControlStateNormal];
@@ -196,13 +196,11 @@ static CGFloat const kHorizontalPadding = 16.0f;
 #pragma mark - Badge
 
 - (void)setGroupUnreadCount:(NSInteger)count {
-    [self updateBadge:_groupBadge count:count];
-    [self layoutBadges];
+    // 不再显示未读红点
 }
 
 - (void)setPrivateUnreadCount:(NSInteger)count {
-    [self updateBadge:_privateBadge count:count];
-    [self layoutBadges];
+    // 不再显示未读红点
 }
 
 - (void)updateBadge:(UILabel *)badge count:(NSInteger)count {

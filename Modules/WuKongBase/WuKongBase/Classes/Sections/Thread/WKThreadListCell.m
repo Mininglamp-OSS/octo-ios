@@ -16,6 +16,7 @@
 @property (nonatomic, strong) UILabel *nameLbl;
 @property (nonatomic, strong) UILabel *statsLbl;
 @property (nonatomic, strong) UILabel *previewLbl;
+@property (nonatomic, strong) UILabel *badgeLbl;
 @property (nonatomic, strong) WKThreadModel *model;
 
 @end
@@ -37,6 +38,7 @@
     [self.contentView addSubview:self.nameLbl];
     [self.contentView addSubview:self.statsLbl];
     [self.contentView addSubview:self.previewLbl];
+    [self.contentView addSubview:self.badgeLbl];
 }
 
 - (void)refreshWithModel:(WKThreadModel *)model {
@@ -65,6 +67,18 @@
         self.previewLbl.hidden = YES;
     }
 
+    // 未读红点
+    NSInteger unread = model.unreadCount;
+    WKChannel *threadChannel = [WKChannel channelID:model.channelId channelType:WK_COMMUNITY_TOPIC];
+    WKConversation *threadConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
+    if (threadConv) unread = threadConv.unreadCount;
+    if (unread > 0) {
+        self.badgeLbl.hidden = NO;
+        self.badgeLbl.text = unread > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)unread];
+    } else {
+        self.badgeLbl.hidden = YES;
+    }
+
     [self setNeedsLayout];
 }
 
@@ -77,9 +91,19 @@
     // # 图标
     self.iconLbl.frame = CGRectMake(padding, 14, 32, 32);
 
+    // 红点
+    CGFloat badgeRight = 0;
+    if (!self.badgeLbl.hidden) {
+        [self.badgeLbl sizeToFit];
+        CGFloat badgeW = MAX(self.badgeLbl.lim_width + 10, 20);
+        CGFloat badgeH = 20;
+        self.badgeLbl.frame = CGRectMake(self.contentView.lim_width - padding - badgeW, 16, badgeW, badgeH);
+        badgeRight = badgeW + 8;
+    }
+
     // 名称
     CGFloat textLeft = self.iconLbl.lim_right + 10;
-    CGFloat textWidth = contentWidth - (textLeft - padding);
+    CGFloat textWidth = contentWidth - (textLeft - padding) - badgeRight;
     [self.nameLbl sizeToFit];
     self.nameLbl.frame = CGRectMake(textLeft, 12, textWidth, 20);
 
@@ -128,6 +152,20 @@
         _statsLbl.lineBreakMode = NSLineBreakByTruncatingTail;
     }
     return _statsLbl;
+}
+
+- (UILabel *)badgeLbl {
+    if (!_badgeLbl) {
+        _badgeLbl = [[UILabel alloc] init];
+        _badgeLbl.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
+        _badgeLbl.textColor = [UIColor whiteColor];
+        _badgeLbl.backgroundColor = [UIColor redColor];
+        _badgeLbl.textAlignment = NSTextAlignmentCenter;
+        _badgeLbl.layer.cornerRadius = 10;
+        _badgeLbl.layer.masksToBounds = YES;
+        _badgeLbl.hidden = YES;
+    }
+    return _badgeLbl;
 }
 
 - (UILabel *)previewLbl {

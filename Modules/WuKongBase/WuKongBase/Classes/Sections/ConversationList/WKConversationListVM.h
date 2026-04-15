@@ -7,12 +7,26 @@
 
 #import <Foundation/Foundation.h>
 #import "WKConversationWrapModel.h"
+
+@class WKCategoryEntity;
+
 NS_ASSUME_NONNULL_BEGIN
 
 typedef NS_ENUM(NSInteger, WKConversationFilterType) {
     WKConversationFilterGroup = 0,   // 群组
     WKConversationFilterPrivate = 1, // 私聊
 };
+
+/// 会话列表展示项（可以是普通会话 或 分组 section header）
+@interface WKConversationDisplayItem : NSObject
+@property (nonatomic, strong, nullable) WKConversationWrapModel *conversation; // 普通会话
+@property (nonatomic, assign) BOOL isSectionHeader;   // 是否为分组 header
+@property (nonatomic, copy, nullable) NSString *sectionId;
+@property (nonatomic, copy, nullable) NSString *sectionTitle;
+@property (nonatomic, assign) BOOL isDefaultSection;  // 默认分组（不可管理）
++ (instancetype)itemWithConversation:(WKConversationWrapModel *)model;
++ (instancetype)sectionHeaderWithId:(NSString *)sectionId title:(NSString *)title isDefault:(BOOL)isDefault;
+@end
 
 @interface WKConversationListVM : NSObject
 
@@ -158,6 +172,26 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
  @return <#return value description#>
  */
 -(NSInteger) getAllUnreadCount;
+
+#pragma mark - Category (分组)
+
+/// 分组列表
+@property (nonatomic, strong) NSArray<WKCategoryEntity *> *categoryList;
+
+/// 折叠状态
+@property (nonatomic, strong) NSMutableSet<NSString *> *collapsedSections;
+
+/// 加载分组数据
+-(void) loadCategoriesWithCompletion:(nullable void(^)(void))completion;
+
+/// 构建群聊 tab 的展示列表（含 section header）
+-(NSArray<WKConversationDisplayItem *> *) buildGroupDisplayList;
+
+/// 保存折叠状态
+-(void) saveCollapsedSections;
+
+/// 恢复折叠状态
+-(void) restoreCollapsedSections;
 
 @end
 

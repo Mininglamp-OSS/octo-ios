@@ -1509,7 +1509,13 @@ static WKApp *_instance;
             [[WKApp shared] invoke:WKPOINT_CONVERSATION_STARTCHAT param:nil];
         }];
     } category:WKPOINT_CATEGORY_CONVERSATION_ADD sort:9000];
-    
+
+    [self setMethod:WKPOINT_CONVERSATION_ADD_CREATECATEGORY handler:^id _Nullable(id  _Nonnull param) {
+        return [WKConversationAddItem title:LLangW(@"创建分组", weakSelf) icon:[WKApp createCategoryIcon] onClick:^{
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"WKShowCreateCategoryDialog" object:nil];
+        }];
+    } category:WKPOINT_CATEGORY_CONVERSATION_ADD sort:8500];
+
     [self setMethod:WKPOINT_CONVERSATION_ADD_ADDFRIEND handler:^id _Nullable(id  _Nonnull param) {
         return [WKConversationAddItem title:LLangW(@"添加朋友", weakSelf) icon:[weakSelf imageName:@"ConversationList/Popmenus/FriendAdd"] onClick:^{
             [[WKApp shared] invoke:WKPOINT_CONVERSATION_ADDCONTACTS param:nil];
@@ -1865,6 +1871,33 @@ static WKApp *_instance;
     return [self loadImage:name moduleID:@"WuKongBase"];
 }
 
+/// 程序化绘制"创建分组"图标（columns-2: 圆角矩形 + 竖线）
++ (UIImage *)createCategoryIcon {
+    CGSize size = CGSizeMake(24, 24);
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    if (!ctx) return nil;
+
+    UIColor *color = [UIColor colorWithWhite:0.2 alpha:1.0];
+    [color setStroke];
+    CGContextSetLineWidth(ctx, 1.5);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+
+    // 圆角矩形 (x=3, y=3, w=18, h=18, rx=2)
+    UIBezierPath *rect = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(3, 3, 18, 18) cornerRadius:2];
+    rect.lineWidth = 1.5;
+    [rect stroke];
+
+    // 竖线 (x=12, y1=3, y2=21)
+    CGContextMoveToPoint(ctx, 12, 3);
+    CGContextAddLineToPoint(ctx, 12, 21);
+    CGContextStrokePath(ctx);
+
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return image;
+}
 
 @end
 

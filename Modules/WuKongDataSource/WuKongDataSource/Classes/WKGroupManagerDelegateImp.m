@@ -21,6 +21,13 @@
     if (currentSpaceId && currentSpaceId.length > 0) {
         params[@"space_id"] = currentSpaceId;
     }
+    // 注入分组 ID（从 object 参数传入）
+    if ([object isKindOfClass:[NSDictionary class]]) {
+        NSString *categoryId = object[@"category_id"];
+        if (categoryId && categoryId.length > 0) {
+            params[@"category_id"] = categoryId;
+        }
+    }
     __weak typeof(self) weakSelf = self;
     [[WKAPIClient sharedClient] POST:@"group/create" parameters:params model:WKGroupModel.class].then(^(WKGroupModel *groupModel){
         if(complete) {
