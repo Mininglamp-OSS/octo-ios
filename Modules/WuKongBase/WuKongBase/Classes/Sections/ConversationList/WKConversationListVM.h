@@ -24,6 +24,7 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 @property (nonatomic, copy, nullable) NSString *sectionId;
 @property (nonatomic, copy, nullable) NSString *sectionTitle;
 @property (nonatomic, assign) BOOL isDefaultSection;  // 默认分组（不可管理）
+@property (nonatomic, assign) NSInteger groupCount;   // 分组内群聊数量
 + (instancetype)itemWithConversation:(WKConversationWrapModel *)model;
 + (instancetype)sectionHeaderWithId:(NSString *)sectionId title:(NSString *)title isDefault:(BOOL)isDefault;
 @end

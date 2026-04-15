@@ -10,6 +10,7 @@
 @interface WKCategorySectionCell ()
 @property (nonatomic, strong) UIImageView *arrowView;
 @property (nonatomic, strong) UILabel *titleLbl;
+@property (nonatomic, strong) UILabel *countLbl;
 @property (nonatomic, strong) UIView *topDivider;
 @end
 
@@ -39,6 +40,13 @@
         _titleLbl.textColor = [UIColor colorWithRed:153/255.0 green:153/255.0 blue:153/255.0 alpha:1.0];
         [self.contentView addSubview:_titleLbl];
 
+        // 数量（折叠时显示）
+        _countLbl = [[UILabel alloc] init];
+        _countLbl.font = [UIFont systemFontOfSize:12];
+        _countLbl.textColor = [UIColor colorWithRed:180/255.0 green:180/255.0 blue:180/255.0 alpha:1.0];
+        _countLbl.hidden = YES;
+        [self.contentView addSubview:_countLbl];
+
         // 点击
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTap)];
         [self.contentView addGestureRecognizer:tap];
@@ -61,7 +69,18 @@
     _arrowView.frame = CGRectMake(15, (h - 12) / 2.0, 12, 12);
     _arrowView.transform = self.collapsed ? CGAffineTransformMakeRotation(-M_PI_2) : CGAffineTransformIdentity;
 
-    _titleLbl.frame = CGRectMake(32, 0, w - 47, h);
+    [_titleLbl sizeToFit];
+    _titleLbl.frame = CGRectMake(32, 0, _titleLbl.lim_width, h);
+
+    // 数量标签（折叠时显示）
+    if (self.collapsed && self.groupCount > 0) {
+        _countLbl.hidden = NO;
+        _countLbl.text = [NSString stringWithFormat:@"(%ld)", (long)self.groupCount];
+        [_countLbl sizeToFit];
+        _countLbl.frame = CGRectMake(_titleLbl.lim_right + 4, 0, _countLbl.lim_width, h);
+    } else {
+        _countLbl.hidden = YES;
+    }
 }
 
 - (void)setSectionTitle:(NSString *)sectionTitle {

@@ -18,7 +18,7 @@
 #import "WKEmojiContentView.h"
 #import "WKUserHandleVC.h"
 #import "WKMultiplePanel.h"
-#import "WKConversationListSelectVC.h"
+#import "WKForwardSelectVC.h"
 #import "WKMergeForwardContent.h"
 #import "WKScreenshotContent.h"
 #import "WKConversationView+Robot.h"
@@ -785,7 +785,7 @@
 
 // 逐条转发
 -(void) multipActionForward {
-    WKConversationListSelectVC *vc = [WKConversationListSelectVC new];
+    WKForwardSelectVC *vc = [WKForwardSelectVC new];
     vc.title = LLang(@"选择一个聊天");
     NSArray *selectedMessages = [self.messageListView getSelectedMessages];
     __weak typeof(self) weakSelf = self;
@@ -820,7 +820,7 @@
 // 合并转发
 -(void) multipActionMergeForward {
     __weak typeof(self) weakSelf = self;
-    WKConversationListSelectVC *vc = [WKConversationListSelectVC new];
+    WKForwardSelectVC *vc = [WKForwardSelectVC new];
     vc.title = LLang(@"选择一个聊天");
     NSArray *selectedMessages = [self.messageListView getSelectedMessages];
     [vc setOnSelect:^(WKChannel * _Nonnull channel) {

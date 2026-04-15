@@ -1480,6 +1480,7 @@
             sectionCell.sectionTitle = item.sectionTitle;
             sectionCell.collapsed = [_conversationListVM.collapsedSections containsObject:item.sectionId];
             sectionCell.isDefault = item.isDefaultSection;
+            sectionCell.groupCount = item.groupCount;
             sectionCell.showTopDivider = (indexPath.row > 0);
             __weak typeof(self) weakSelf = self;
             sectionCell.onToggle = ^(NSString *sectionId, BOOL collapsed) {

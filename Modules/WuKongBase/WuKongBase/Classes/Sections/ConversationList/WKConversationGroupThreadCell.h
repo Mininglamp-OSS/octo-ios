@@ -23,6 +23,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// "+N个子区" 被点击
 @property(nonatomic,copy,nullable) void(^onMoreThreadsTap)(NSString *groupNo);
 
+/// 生成子区矢量 # 图标
++ (UIImage *)channelHashIconWithSize:(CGSize)size color:(UIColor *)color;
+
 @end
 
 NS_ASSUME_NONNULL_END

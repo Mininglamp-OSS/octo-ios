@@ -692,7 +692,14 @@ static WKConversationListVM *_instance;
     // 3. 用户自建分组
     for (WKCategoryEntity *cat in self.categoryList) {
         if(!cat.category_id || cat.category_id.length == 0) continue;
-        [displayList addObject:[WKConversationDisplayItem sectionHeaderWithId:cat.category_id title:cat.name isDefault:NO]];
+        WKConversationDisplayItem *header = [WKConversationDisplayItem sectionHeaderWithId:cat.category_id title:cat.name isDefault:NO];
+        // 统计分组内实际存在于会话列表的群聊数量
+        NSInteger count = 0;
+        for (WKCategoryGroup *cg in cat.groups) {
+            if (channelMap[cg.group_no]) count++;
+        }
+        header.groupCount = count;
+        [displayList addObject:header];
 
         if(![self.collapsedSections containsObject:cat.category_id]) {
             NSMutableArray<WKConversationWrapModel *> *sectionItems = [NSMutableArray array];

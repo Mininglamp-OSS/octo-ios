@@ -6,7 +6,8 @@
 //
 
 #import "WKMessageActionManager.h"
-#import "WKConversationListSelectVC.h"
+#import "WuKongBase.h"
+#import "WKForwardSelectVC.h"
 @implementation WKMessageActionManager
 static WKMessageActionManager *_instance;
 + (WKMessageActionManager *)shared {
@@ -17,7 +18,7 @@ static WKMessageActionManager *_instance;
 }
 
 -(void) forwardMessages:(NSArray<WKMessage*>*)messages{
-    WKConversationListSelectVC *vc = [WKConversationListSelectVC new];
+    WKForwardSelectVC *vc = [WKForwardSelectVC new];
     vc.title = LLang(@"选择一个聊天");
     [vc setOnSelect:^(WKChannel * _Nonnull channel) {
         [[WKNavigationManager shared] popViewControllerAnimated:YES];
@@ -39,7 +40,7 @@ static WKMessageActionManager *_instance;
 }
 
 -(void) forwardContent:(WKMessageContent*)messageContent complete:(void(^)(void))complete{
-    WKConversationListSelectVC *vc = [WKConversationListSelectVC new];
+    WKForwardSelectVC *vc = [WKForwardSelectVC new];
     vc.title = LLang(@"选择一个聊天");
     [vc setOnSelect:^(WKChannel * _Nonnull channel) {
         if(complete) {
@@ -62,7 +63,7 @@ static WKMessageActionManager *_instance;
 }
 
 -(void) sendContentToFriend:(WKMessageContent*)messageContent complete:(void(^__nullable)(void))complete {
-    WKConversationListSelectVC *vc = [WKConversationListSelectVC new];
+    WKForwardSelectVC *vc = [WKForwardSelectVC new];
     vc.title = LLang(@"选择一个聊天");
     [vc setOnSelect:^(WKChannel * _Nonnull channel) {
         if(complete) {

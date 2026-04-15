@@ -35,7 +35,7 @@
 #import "WKStickerGIFContentView.h"
 #import "WKGIFMessageCell.h"
 #import "WKGIFContent.h"
-#import "WKConversationListSelectVC.h"
+#import "WKForwardSelectVC.h"
 #import "WKSyncService.h"
 #import "WKSpaceModel.h"
 #import "WKNavigationManager.h"
@@ -1340,7 +1340,7 @@ static WKApp *_instance;
         }
         UIImage *icon = [GenerateImageUtils generateTintedImgWithImage:[weakSelf imageName:@"Conversation/ContextMenu/Forward"] color:weakSelf.config.contextMenu.primaryColor backgroundColor:nil];
         return [WKMessageLongMenusItem initWithTitle:LLangW(@"转发", weakSelf) icon:icon onTap:^(id<WKConversationContext> context){
-            WKConversationListSelectVC *vc = [WKConversationListSelectVC new];
+            WKForwardSelectVC *vc = [WKForwardSelectVC new];
             vc.title = LLangW(@"选择一个聊天", weakSelf);
             [vc setOnSelect:^(WKChannel * _Nonnull channel) {
                 [[WKNavigationManager shared] popToViewControllerClass:WKConversationVC.class animated:YES];
