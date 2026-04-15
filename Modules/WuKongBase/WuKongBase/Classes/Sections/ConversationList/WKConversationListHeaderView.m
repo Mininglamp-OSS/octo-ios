@@ -47,14 +47,12 @@
 
 -(void) setupUI {
     [self addSubview:self.contentView];
-    
-    [self.searchbarBoxView addSubview:self.searchbarView];
-    [self.contentView addSubview:self.searchbarBoxView];
-    self.searchbarView.lim_centerX_parent = self.searchbarBoxView;
-    
+
+    // 搜索栏已移到固定头部，不再添加到 tableHeaderView
+
     _showEmpty = true;
     [self.contentView addSubview:self.tableHeaderBottomEmptyView];
-    
+
 }
 
 - (void)viewConfigChange:(WKViewConfigChangeType)type{

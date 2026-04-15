@@ -76,6 +76,7 @@
 @property(nonatomic,strong) UIImageView *spaceArrowView; // Space标题右侧折叠箭头
 @property(nonatomic,assign) BOOL hasCleanedConversationsOnStartup; // 本次启动是否已清理会话数据
 @property(nonatomic,strong) WKConversationTabView *conversationTabView; // 群组/私聊 tab
+@property(nonatomic,strong) UIView *fixedHeaderContainer; // 固定在顶部的搜索栏+tab容器
 
 @end
 
@@ -103,6 +104,8 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
 
+    // 先创建固定头部（搜索栏+tab），再创建 tableView（tableView frame 需要依赖固定头部高度）
+    [self setupFixedHeader];
     [self.view addSubview:self.tableView];
     self.connectLock = [[NSLock alloc] init];
     self.conversationLock = [[NSRecursiveLock alloc] init];
@@ -637,6 +640,52 @@
     [popupView showFromView:self.navigationBar.titleLabel];
 }
 
+/// 创建固定在顶部的搜索栏容器（不随 tableView 滚动）
+-(void) setupFixedHeader {
+    CGFloat navBottom = self.navigationBar.lim_bottom;
+    _fixedHeaderContainer = [[UIView alloc] initWithFrame:CGRectMake(0, navBottom, WKScreenWidth, 0)];
+    _fixedHeaderContainer.backgroundColor = [WKApp shared].config.backgroundColor;
+
+    // 搜索栏（与原来 WKConversationListHeaderView 中的保持一致：左右 15pt 间距，圆角 4pt）
+    WKSearchbarView *searchbar = [[WKSearchbarView alloc] initWithFrame:CGRectMake(15, 6, WKScreenWidth - 30, 36)];
+    searchbar.placeholder = LLang(@"搜索");
+    searchbar.layer.cornerRadius = 4.0f;
+    searchbar.layer.masksToBounds = YES;
+    searchbar.onClick = ^{
+        WKGlobalSearchResultController *vc = [WKGlobalSearchResultController new];
+        [[WKNavigationManager shared] pushViewController:vc animated:NO];
+    };
+    searchbar.tag = 9990;
+    [_fixedHeaderContainer addSubview:searchbar];
+
+    [self.view addSubview:_fixedHeaderContainer];
+}
+
+/// 重新布局固定头部（搜索栏 + tabView）并调整 tableView 的 frame
+-(void) layoutFixedHeader {
+    CGFloat navBottom = self.navigationBar.lim_bottom;
+    CGFloat y = 0;
+
+    // 搜索栏（左右 15pt 间距）
+    UIView *searchbar = [_fixedHeaderContainer viewWithTag:9990];
+    if (searchbar && !searchbar.hidden) {
+        searchbar.frame = CGRectMake(15, y + 6, WKScreenWidth - 30, 36);
+        y = searchbar.lim_bottom + 6;
+    }
+
+    // tab 栏
+    if (_conversationTabView) {
+        _conversationTabView.frame = CGRectMake(0, y, WKScreenWidth, 36);
+        y = _conversationTabView.lim_bottom;
+    }
+
+    _fixedHeaderContainer.frame = CGRectMake(0, navBottom, WKScreenWidth, y);
+
+    // 调整 tableView 位置到固定头部下方
+    CGFloat tableTop = _fixedHeaderContainer.lim_bottom;
+    self.tableView.frame = CGRectMake(0, tableTop, self.view.lim_width, self.view.lim_height - tableTop);
+}
+
 - (WKConversationListTableView *)tableView{
     if (!_tableView) {
         _tableView = [[WKConversationListTableView alloc] initWithFrame:[self visibleRect] style:UITableViewStyleGrouped];
@@ -660,8 +709,9 @@
         _tableView.sectionHeaderHeight = 0.0f;
         _tableView.sectionFooterHeight = 0.0f;
         
-        _tableView.tableHeaderView = self.tableHeader;
-        
+        // 搜索栏和 tab 已移到固定头部，不再使用 tableHeaderView
+        _tableView.tableHeaderView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 0, CGFLOAT_MIN)];
+
         [_tableView registerClass:[WKConversationListCell class] forCellReuseIdentifier:@"WKConversationListCell"];
         [_tableView registerClass:[WKConversationGroupThreadCell class] forCellReuseIdentifier:@"WKConversationGroupThreadCell"];
     }
@@ -1265,12 +1315,9 @@
         [[NSUserDefaults standardUserDefaults] setInteger:index forKey:@"WKConversationTabIndex"];
     };
 
-    // 将 tabView 添加到 tableHeader 的 contentView 中
-    [self.tableHeader.contentView addSubview:_conversationTabView];
-    // 触发重新布局
-    [self.tableHeader setNeedsLayout];
-    [self.tableHeader layoutIfNeeded];
-    self.tableView.tableHeaderView = self.tableHeader;
+    // 将 tabView 添加到固定头部容器（不随 tableView 滚动）
+    [self.fixedHeaderContainer addSubview:_conversationTabView];
+    [self layoutFixedHeader];
 }
 
 -(void) updateTabUnreadCounts {
@@ -1343,6 +1390,10 @@
     WKConversationWrapModel *model = [_conversationListVM conversationAtIndex:indexPath.row];
     if (model && model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn) {
         return [WKConversationGroupThreadCell heightForModel:model];
+    }
+    // 群聊：紧凑单行（无预览/时间）
+    if (model && model.channel.channelType == WK_GROUP) {
+        return 48.0f;
     }
     return 88.0f;
 }

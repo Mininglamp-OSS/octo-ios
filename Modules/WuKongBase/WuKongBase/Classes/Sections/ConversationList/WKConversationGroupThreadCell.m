@@ -56,6 +56,7 @@
 
 // 顶部区域（群组信息）
 @property (nonatomic, strong) WKUserAvatar *avatarView;
+@property (nonatomic, strong) UILabel *hashTagLbl; // 群组 # 标识（替代头像）
 @property (nonatomic, strong) UILabel *titleLbl;
 @property (nonatomic, strong) UILabel *timeLbl;
 @property (nonatomic, strong) UILabel *subtitleLbl;
@@ -71,7 +72,7 @@
 // 预创建的 2 个固定预览行（不动态增删）
 @property (nonatomic, strong) NSArray<UIView *> *previewRows;
 // 每行内的子视图引用
-@property (nonatomic, strong) NSArray<UILabel *> *rowHashLbls;
+@property (nonatomic, strong) NSArray<UIImageView *> *rowHashIcons; // 矢量 # 图标
 @property (nonatomic, strong) NSArray<UILabel *> *rowNameLbls;
 @property (nonatomic, strong) NSArray<UILabel *> *rowTimeLbls;
 @property (nonatomic, strong) NSArray<UILabel *> *rowMsgLbls;
@@ -83,12 +84,12 @@
 
 @implementation WKConversationGroupThreadCell
 
-#define TOP_HEIGHT 68.0f
-#define THREAD_ROW_HEIGHT 44.0f
+#define TOP_HEIGHT 48.0f
+#define THREAD_ROW_HEIGHT 32.0f
 #define MORE_HEIGHT 26.0f
-#define AVATAR_SIZE 50.0f
-#define AVATAR_LEFT 15.0f
-#define CONTENT_LEFT 76.0f
+#define HASH_TAG_SIZE 36.0f
+#define HASH_TAG_LEFT 15.0f
+#define CONTENT_LEFT 57.0f
 #define RIGHT_PADDING 15.0f
 
 +(CGFloat) heightForModel:(WKConversationWrapModel *)model {
@@ -113,9 +114,18 @@
 }
 
 - (void)setupUI {
-    // 头像
-    self.avatarView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, AVATAR_SIZE, AVATAR_SIZE)];
+    // 头像（保留但隐藏）
+    self.avatarView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, 50, 50)];
+    self.avatarView.hidden = YES;
     [self.contentView addSubview:self.avatarView];
+
+    // 群组 # 标识（替代头像）
+    self.hashTagLbl = [[UILabel alloc] init];
+    self.hashTagLbl.text = @"#";
+    self.hashTagLbl.font = [UIFont systemFontOfSize:26 weight:UIFontWeightBold];
+    self.hashTagLbl.textColor = [UIColor colorWithRed:148.0f/255.0f green:152.0f/255.0f blue:168.0f/255.0f alpha:1.0f];
+    self.hashTagLbl.textAlignment = NSTextAlignmentCenter;
+    [self.contentView addSubview:self.hashTagLbl];
 
     // 标题
     self.titleLbl = [[UILabel alloc] init];
@@ -124,17 +134,19 @@
     self.titleLbl.lineBreakMode = NSLineBreakByTruncatingTail;
     [self.contentView addSubview:self.titleLbl];
 
-    // 时间
+    // 时间（保留但隐藏）
     self.timeLbl = [[UILabel alloc] init];
     self.timeLbl.font = [[WKApp shared].config appFontOfSize:11.0f];
     self.timeLbl.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
+    self.timeLbl.hidden = YES;
     [self.contentView addSubview:self.timeLbl];
 
-    // 副标题（最新子区消息）
+    // 副标题（保留但隐藏）
     self.subtitleLbl = [[UILabel alloc] init];
     self.subtitleLbl.font = [[WKApp shared].config appFontOfSize:13.0f];
     self.subtitleLbl.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
     self.subtitleLbl.lineBreakMode = NSLineBreakByTruncatingTail;
+    self.subtitleLbl.hidden = YES;
     [self.contentView addSubview:self.subtitleLbl];
 
     // 红点
@@ -157,9 +169,12 @@
     self.threadContainer.layer.masksToBounds = YES;
     [self.contentView addSubview:self.threadContainer];
 
+    // 生成矢量 # 图标
+    UIImage *channelIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(16, 16) color:[UIColor colorWithRed:148.0f/255.0f green:152.0f/255.0f blue:168.0f/255.0f alpha:1.0f]];
+
     // 预创建 2 个固定预览行
     NSMutableArray *rows = [NSMutableArray array];
-    NSMutableArray *hashLbls = [NSMutableArray array];
+    NSMutableArray *hashIcons = [NSMutableArray array];
     NSMutableArray *nameLbls = [NSMutableArray array];
     NSMutableArray *timeLbls = [NSMutableArray array];
     NSMutableArray *msgLbls = [NSMutableArray array];
@@ -174,12 +189,11 @@
         [self.threadContainer addSubview:row];
         [rows addObject:row];
 
-        UILabel *hash = [[UILabel alloc] init];
-        hash.text = @"#";
-        hash.font = [UIFont systemFontOfSize:14 weight:UIFontWeightBold];
-        hash.textColor = [WKApp shared].config.themeColor;
-        [row addSubview:hash];
-        [hashLbls addObject:hash];
+        // 矢量 # 图标
+        UIImageView *hashIcon = [[UIImageView alloc] initWithImage:channelIcon];
+        hashIcon.contentMode = UIViewContentModeScaleAspectFit;
+        [row addSubview:hashIcon];
+        [hashIcons addObject:hashIcon];
 
         UILabel *name = [[UILabel alloc] init];
         name.font = [[WKApp shared].config appFontOfSizeMedium:14.0f];
@@ -188,16 +202,20 @@
         [row addSubview:name];
         [nameLbls addObject:name];
 
+        // 时间（保留但隐藏）
         UILabel *time = [[UILabel alloc] init];
         time.font = [[WKApp shared].config appFontOfSize:10.0f];
         time.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
+        time.hidden = YES;
         [row addSubview:time];
         [timeLbls addObject:time];
 
+        // 消息（保留但隐藏）
         UILabel *msg = [[UILabel alloc] init];
         msg.font = [[WKApp shared].config appFontOfSize:12.0f];
         msg.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
         msg.lineBreakMode = NSLineBreakByTruncatingTail;
+        msg.hidden = YES;
         [row addSubview:msg];
         [msgLbls addObject:msg];
 
@@ -213,7 +231,7 @@
         [badgeLbls addObject:badge];
     }
     self.previewRows = rows;
-    self.rowHashLbls = hashLbls;
+    self.rowHashIcons = hashIcons;
     self.rowNameLbls = nameLbls;
     self.rowTimeLbls = timeLbls;
     self.rowMsgLbls = msgLbls;
@@ -240,45 +258,18 @@
         [model startChannelRequest];
     }
 
-    // 头像
-    if (hasChannelInfo) {
-        if (model.channelInfo.logo && ![model.channelInfo.logo isEqualToString:@""]) {
-            NSString *avatarURL = [WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo];
-            NSString *key = (model.channelInfo.avatarCacheKey.length > 0) ? model.channelInfo.avatarCacheKey : @"0";
-            NSString *separator = [avatarURL containsString:@"?"] ? @"&" : @"?";
-            self.avatarView.url = [NSString stringWithFormat:@"%@%@v=%@", avatarURL, separator, key];
-        } else {
-            self.avatarView.url = [WKAvatarUtil getGroupAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
-        }
-    }
+    // 隐藏头像，显示 # 标识
+    self.avatarView.hidden = YES;
+    self.hashTagLbl.hidden = NO;
+
+    // 隐藏时间和副标题
+    self.timeLbl.hidden = YES;
+    self.subtitleLbl.hidden = YES;
 
     // 标题
     self.titleLbl.text = hasChannelInfo ? model.channelInfo.displayName : LLang(@"群聊");
 
-    // 时间
-    self.timeLbl.text = [WKTimeTool getTimeStringAutoShort2:[NSDate dateWithTimeIntervalSince1970:model.lastMsgTimestamp] mustIncludeTime:YES];
-
-    // 副标题：显示群组最后一条消息（与普通 cell 一致）
-    WKMessage *displayMsg = [model spaceFilteredLastMessage];
-    if (displayMsg && displayMsg.content) {
-        if (displayMsg.remoteExtra.revoke) {
-            self.subtitleLbl.text = LLang(@"撤回了一条消息");
-        } else {
-            NSString *content = model.content ?: @"";
-            // 群聊显示发送者
-            if (model.channel.channelType == WK_GROUP && displayMsg.fromUid.length > 0) {
-                WKChannelInfo *fromInfo = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:displayMsg.fromUid]];
-                NSString *fromName = fromInfo ? fromInfo.displayName : displayMsg.fromUid;
-                self.subtitleLbl.text = [NSString stringWithFormat:@"%@: %@", fromName, content];
-            } else {
-                self.subtitleLbl.text = content;
-            }
-        }
-    } else {
-        self.subtitleLbl.text = model.content ?: @"";
-    }
-
-    // 红点（与普通 cell 一致）
+    // 红点
     self.badgeView.hidden = YES;
     if (model.unreadCount > 0) {
         self.badgeView.hidden = NO;
@@ -321,32 +312,13 @@
             // 名称
             self.rowNameLbls[i].text = thread.name;
 
-            // 时间
-            if (thread.updatedAt.length > 0) {
-                NSDate *date = [WKTimeTool dateFromString:thread.updatedAt];
-                self.rowTimeLbls[i].text = date ? [WKTimeTool getTimeStringAutoShort2:date mustIncludeTime:NO] : @"";
-            } else {
-                self.rowTimeLbls[i].text = @"";
-            }
-
-            // 最后消息
-            WKChannel *threadChannel = [WKChannel channelID:thread.channelId channelType:WK_COMMUNITY_TOPIC];
-            WKConversation *threadConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
-            NSString *lastMsgText = nil;
-            if (threadConv && threadConv.lastMessage && threadConv.lastMessage.content) {
-                NSString *digest = [threadConv.lastMessage.content conversationDigest];
-                if (digest.length > 0) {
-                    WKChannelInfo *senderInfo = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:threadConv.lastMessage.fromUid]];
-                    NSString *senderName = senderInfo ? senderInfo.displayName : threadConv.lastMessage.fromUid;
-                    lastMsgText = senderName.length > 0 ? [NSString stringWithFormat:@"%@: %@", senderName, digest] : digest;
-                }
-            }
-            if (!lastMsgText && thread.lastMessageSenderName.length > 0 && thread.lastMessageContent.length > 0) {
-                lastMsgText = [NSString stringWithFormat:@"%@: %@", thread.lastMessageSenderName, thread.lastMessageContent];
-            }
-            self.rowMsgLbls[i].text = lastMsgText ?: @"";
+            // 时间和消息已隐藏，不再设置
+            self.rowTimeLbls[i].hidden = YES;
+            self.rowMsgLbls[i].hidden = YES;
 
             // 红点
+            WKChannel *threadChannel = [WKChannel channelID:thread.channelId channelType:WK_COMMUNITY_TOPIC];
+            WKConversation *threadConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
             NSInteger unread = thread.unreadCount;
             if (threadConv) unread = threadConv.unreadCount;
             if (unread > 0) {
@@ -400,27 +372,20 @@
 
     CGFloat w = self.contentView.lim_width;
 
-    // 头像
-    self.avatarView.frame = CGRectMake(AVATAR_LEFT, 10, AVATAR_SIZE, AVATAR_SIZE);
+    // # 标识
+    self.hashTagLbl.frame = CGRectMake(HASH_TAG_LEFT, (TOP_HEIGHT - HASH_TAG_SIZE) / 2.0f, HASH_TAG_SIZE, HASH_TAG_SIZE);
 
-    // 时间
-    [self.timeLbl sizeToFit];
-    self.timeLbl.frame = CGRectMake(w - RIGHT_PADDING - self.timeLbl.lim_width, 14, self.timeLbl.lim_width, 14);
+    // 标题（垂直居中，无时间/副标题）
+    CGFloat titleRight = w - RIGHT_PADDING - 50.0f;
+    self.titleLbl.frame = CGRectMake(CONTENT_LEFT, (TOP_HEIGHT - 20) / 2.0f, titleRight - CONTENT_LEFT, 20);
 
-    // 标题
-    CGFloat titleRight = self.timeLbl.lim_left - 8;
-    self.titleLbl.frame = CGRectMake(CONTENT_LEFT, 12, titleRight - CONTENT_LEFT, 20);
-
-    // 副标题
-    self.subtitleLbl.frame = CGRectMake(CONTENT_LEFT, 34, titleRight - CONTENT_LEFT, 18);
-
-    // 红点
+    // 红点 - 垂直居中在顶部区域
     self.badgeView.lim_left = w - RIGHT_PADDING - self.badgeView.lim_width;
-    self.badgeView.lim_top = self.timeLbl.lim_bottom + 6;
+    self.badgeView.lim_top = (TOP_HEIGHT - self.badgeView.lim_height) / 2.0f;
 
     // 免打扰
     self.muteIcon.lim_left = w - RIGHT_PADDING - self.muteIcon.lim_width;
-    self.muteIcon.lim_top = self.badgeView.lim_top + 4;
+    self.muteIcon.lim_top = (TOP_HEIGHT - self.muteIcon.lim_height) / 2.0f;
 
     // 子区预览区域
     NSArray *previews = self.model.threadPreviews;
@@ -431,29 +396,29 @@
 
         self.threadContainer.frame = CGRectMake(CONTENT_LEFT, containerTop, containerWidth, containerHeight);
 
-        // 布局固定预览行
-        CGFloat nameLeft = 28;
+        // 布局固定预览行（只显示图标 + 名称 + 红点）
+        CGFloat iconSize = 16.0f;
+        CGFloat nameLeft = 10 + iconSize + 6;
         for (NSInteger i = 0; i < 2; i++) {
             UIView *row = self.previewRows[i];
             if (row.hidden) continue;
             row.frame = CGRectMake(0, i * THREAD_ROW_HEIGHT, containerWidth, THREAD_ROW_HEIGHT);
-            self.rowHashLbls[i].frame = CGRectMake(10, 7, 16, 16);
 
-            [self.rowTimeLbls[i] sizeToFit];
-            self.rowTimeLbls[i].frame = CGRectMake(containerWidth - 10 - self.rowTimeLbls[i].lim_width, 9, self.rowTimeLbls[i].lim_width, 14);
-            self.rowNameLbls[i].frame = CGRectMake(nameLeft, 6, self.rowTimeLbls[i].lim_left - nameLeft - 4, 17);
+            // 矢量 # 图标
+            self.rowHashIcons[i].frame = CGRectMake(10, (THREAD_ROW_HEIGHT - iconSize) / 2.0f, iconSize, iconSize);
 
             // 红点
             UILabel *badge = self.rowBadgeLbls[i];
+            CGFloat nameRight = containerWidth - 10;
             if (!badge.hidden) {
                 [badge sizeToFit];
                 CGFloat badgeW = MAX(badge.lim_width + 8, 18);
-                badge.frame = CGRectMake(containerWidth - 10 - badgeW, 24, badgeW, 18);
+                badge.frame = CGRectMake(containerWidth - 10 - badgeW, (THREAD_ROW_HEIGHT - 18) / 2.0f, badgeW, 18);
+                nameRight = badge.lim_left - 4;
             }
 
-            // 消息
-            CGFloat msgRight = badge.hidden ? 10 : 36;
-            self.rowMsgLbls[i].frame = CGRectMake(nameLeft, 25, containerWidth - nameLeft - msgRight, 14);
+            // 名称（垂直居中）
+            self.rowNameLbls[i].frame = CGRectMake(nameLeft, (THREAD_ROW_HEIGHT - 17) / 2.0f, nameRight - nameLeft, 17);
         }
 
         // 分割线
@@ -462,15 +427,15 @@
         }
 
         // 弧线
-        CGFloat avatarCenterX = AVATAR_LEFT + AVATAR_SIZE / 2.0f;
-        CGFloat branchWidth = CONTENT_LEFT - avatarCenterX;
-        CGFloat avatarBottom = self.avatarView.lim_top + AVATAR_SIZE;
-        CGFloat branchHeight = containerTop + containerHeight - avatarBottom;
+        CGFloat hashCenterX = HASH_TAG_LEFT + HASH_TAG_SIZE / 2.0f;
+        CGFloat branchWidth = CONTENT_LEFT - hashCenterX;
+        CGFloat hashBottom = self.hashTagLbl.lim_top + HASH_TAG_SIZE;
+        CGFloat branchHeight = containerTop + containerHeight - hashBottom;
 
-        self.branchView.frame = CGRectMake(avatarCenterX - branchWidth / 2.0f, avatarBottom, branchWidth, branchHeight);
+        self.branchView.frame = CGRectMake(hashCenterX - branchWidth / 2.0f, hashBottom, branchWidth, branchHeight);
         self.branchView.branchCount = previews.count;
         self.branchView.rowHeight = THREAD_ROW_HEIGHT;
-        self.branchView.firstRowTop = containerTop - avatarBottom;
+        self.branchView.firstRowTop = containerTop - hashBottom;
         [self.branchView setNeedsDisplay];
 
         // 更多
@@ -490,6 +455,157 @@
     self.moreLbl.hidden = YES;
     self.onThreadPreviewTap = nil;
     self.onMoreThreadsTap = nil;
+}
+
+/// Convert SVG arc endpoint parameterization to center parameterization,
+/// then approximate with cubic bezier curves (SVG spec F.6.5)
++ (void)addSVGArcToPath:(UIBezierPath *)path
+                   fromX:(CGFloat)x1 fromY:(CGFloat)y1
+                      rx:(CGFloat)inRx ry:(CGFloat)inRy xRot:(CGFloat)xRot
+                largeArc:(BOOL)largeArc sweep:(BOOL)sweep
+                     toX:(CGFloat)x2 toY:(CGFloat)y2 {
+    if (x1 == x2 && y1 == y2) return;
+    CGFloat rx = fabs(inRx), ry = fabs(inRy);
+    if (rx == 0 || ry == 0) { [path addLineToPoint:CGPointMake(x2, y2)]; return; }
+
+    CGFloat cosR = cos(xRot), sinR = sin(xRot);
+    CGFloat dx = (x1 - x2) / 2.0, dy = (y1 - y2) / 2.0;
+    CGFloat x1p = cosR * dx + sinR * dy;
+    CGFloat y1p = -sinR * dx + cosR * dy;
+
+    CGFloat x1p2 = x1p * x1p, y1p2 = y1p * y1p;
+    CGFloat rx2 = rx * rx, ry2 = ry * ry;
+    CGFloat lambda = x1p2 / rx2 + y1p2 / ry2;
+    if (lambda > 1.0) { CGFloat s = sqrt(lambda); rx *= s; ry *= s; rx2 = rx*rx; ry2 = ry*ry; }
+
+    CGFloat num = fmax(0, rx2*ry2 - rx2*y1p2 - ry2*x1p2);
+    CGFloat den = rx2*y1p2 + ry2*x1p2;
+    CGFloat sq = (den > 0) ? sqrt(num / den) : 0;
+    if (largeArc == sweep) sq = -sq;
+    CGFloat cxp = sq * rx * y1p / ry;
+    CGFloat cyp = -sq * ry * x1p / rx;
+
+    CGFloat cx = cosR*cxp - sinR*cyp + (x1+x2)/2.0;
+    CGFloat cy = sinR*cxp + cosR*cyp + (y1+y2)/2.0;
+
+    CGFloat ux = (x1p - cxp) / rx, uy = (y1p - cyp) / ry;
+    CGFloat vx = (-x1p - cxp) / rx, vy = (-y1p - cyp) / ry;
+    CGFloat theta1 = atan2(uy, ux);
+    CGFloat n = sqrt(ux*ux+uy*uy) * sqrt(vx*vx+vy*vy);
+    CGFloat cosVal = (n != 0) ? (ux*vx+uy*vy)/n : 0;
+    cosVal = fmax(-1, fmin(1, cosVal));
+    CGFloat dtheta = ((ux*vy - uy*vx) < 0 ? -1 : 1) * acos(cosVal);
+    if (!sweep && dtheta > 0) dtheta -= 2*M_PI;
+    if (sweep && dtheta < 0) dtheta += 2*M_PI;
+
+    NSInteger segs = (NSInteger)ceil(fabs(dtheta) / (M_PI/2.0));
+    if (segs < 1) segs = 1;
+    CGFloat segAngle = dtheta / segs;
+
+    for (NSInteger i = 0; i < segs; i++) {
+        CGFloat t1 = theta1 + i * segAngle;
+        CGFloat t2 = theta1 + (i+1) * segAngle;
+        CGFloat half = segAngle / 2.0;
+        CGFloat tanHalf = tan(half);
+        CGFloat alpha = sin(segAngle) * (sqrt(4.0 + 3.0*tanHalf*tanHalf) - 1.0) / 3.0;
+
+        CGFloat cos1 = cos(t1), sin1 = sin(t1);
+        CGFloat cos2 = cos(t2), sin2 = sin(t2);
+
+        CGFloat cp1x = rx*(cos1 - alpha*sin1), cp1y = ry*(sin1 + alpha*cos1);
+        CGFloat cp2x = rx*(cos2 + alpha*sin2), cp2y = ry*(sin2 - alpha*cos2);
+        CGFloat epx = rx*cos2, epy = ry*sin2;
+
+        [path addCurveToPoint:CGPointMake(cosR*epx - sinR*epy + cx, sinR*epx + cosR*epy + cy)
+                controlPoint1:CGPointMake(cosR*cp1x - sinR*cp1y + cx, sinR*cp1x + cosR*cp1y + cy)
+                controlPoint2:CGPointMake(cosR*cp2x - sinR*cp2y + cx, sinR*cp2x + cosR*cp2y + cy)];
+    }
+}
+
+/// Parse SVG path data string into a UIBezierPath (supports M,m,L,l,A,a,Z,z)
++ (UIBezierPath *)bezierPathFromSVGPathData:(NSString *)pathData {
+    UIBezierPath *path = [UIBezierPath bezierPath];
+
+    CGFloat curX = 0, curY = 0, startX = 0, startY = 0;
+    NSMutableArray *tokens = [NSMutableArray array];
+    NSUInteger len = pathData.length;
+    NSUInteger pos = 0;
+
+    // Tokenize: extract command letters and numbers
+    while (pos < len) {
+        unichar ch = [pathData characterAtIndex:pos];
+        if (ch == ' ' || ch == ',' || ch == '\t' || ch == '\n' || ch == '\r') { pos++; continue; }
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {
+            [tokens addObject:[NSString stringWithFormat:@"%C", ch]]; pos++; continue;
+        }
+        NSUInteger numStart = pos;
+        if (ch == '-' || ch == '+') pos++;
+        BOOL hasDot = NO;
+        while (pos < len) {
+            ch = [pathData characterAtIndex:pos];
+            if (ch >= '0' && ch <= '9') { pos++; }
+            else if (ch == '.' && !hasDot) { hasDot = YES; pos++; }
+            else if ((ch == '-' || ch == '+') && pos > numStart) { break; } // new negative number
+            else break;
+        }
+        if (pos > numStart) {
+            [tokens addObject:@([[pathData substringWithRange:NSMakeRange(numStart, pos-numStart)] doubleValue])];
+        }
+    }
+
+    NSUInteger ti = 0;
+    unichar lastCmd = 0;
+
+    while (ti < tokens.count) {
+        id tok = tokens[ti];
+        unichar cmd;
+        if ([tok isKindOfClass:[NSString class]]) { cmd = [tok characterAtIndex:0]; ti++; }
+        else { cmd = lastCmd; if (cmd == 'M') cmd = 'L'; if (cmd == 'm') cmd = 'l'; }
+        lastCmd = cmd;
+
+        switch (cmd) {
+            case 'M': { CGFloat x=[tokens[ti++] doubleValue], y=[tokens[ti++] doubleValue];
+                [path moveToPoint:CGPointMake(x,y)]; curX=x; curY=y; startX=x; startY=y; break; }
+            case 'm': { CGFloat dx=[tokens[ti++] doubleValue], dy=[tokens[ti++] doubleValue];
+                curX+=dx; curY+=dy; [path moveToPoint:CGPointMake(curX,curY)]; startX=curX; startY=curY; break; }
+            case 'L': { CGFloat x=[tokens[ti++] doubleValue], y=[tokens[ti++] doubleValue];
+                [path addLineToPoint:CGPointMake(x,y)]; curX=x; curY=y; break; }
+            case 'l': { CGFloat dx=[tokens[ti++] doubleValue], dy=[tokens[ti++] doubleValue];
+                curX+=dx; curY+=dy; [path addLineToPoint:CGPointMake(curX,curY)]; break; }
+            case 'A': case 'a': {
+                CGFloat rx=[tokens[ti++] doubleValue], ry=[tokens[ti++] doubleValue];
+                CGFloat xRot=[tokens[ti++] doubleValue]*M_PI/180.0;
+                BOOL la=[tokens[ti++] intValue]!=0, sw=[tokens[ti++] intValue]!=0;
+                CGFloat x2=[tokens[ti++] doubleValue], y2=[tokens[ti++] doubleValue];
+                if (cmd=='a') { x2+=curX; y2+=curY; }
+                [self addSVGArcToPath:path fromX:curX fromY:curY rx:rx ry:ry xRot:xRot largeArc:la sweep:sw toX:x2 toY:y2];
+                curX=x2; curY=y2; break; }
+            case 'Z': case 'z':
+                [path closePath]; curX=startX; curY=startY; break;
+        }
+    }
+    return path;
+}
+
+/// Generate channel hash icon from Android vector XML path data
++ (UIImage *)channelHashIconWithSize:(CGSize)size color:(UIColor *)color {
+    static NSString *svgPath = @"M12,2.81a1,1 0,0 1,0 -1.41l0.36,-0.36a1,1 0,0 1,1.41 0l9.2,9.2a1,1 0,0 1,0 1.4l-0.7,0.7a1,1 0,0 1,-1.3 0.13l-9.54,-6.72a1,1 0,0 1,-0.08 -1.58l1,-1L12,2.8ZM12,21.2a1,1 0,0 1,0 1.41l-0.35,0.35a1,1 0,0 1,-1.41 0l-9.2,-9.19a1,1 0,0 1,0 -1.41l0.7,-0.7a1,1 0,0 1,1.3 -0.12l9.54,6.72a1,1 0,0 1,0.07 1.58l-1,1 0.35,0.36ZM15.66,16.8a1,1 0,0 1,-1.38 0.28l-8.49,-5.66A1,1 0,1 1,6.9 9.76l8.49,5.65a1,1 0,0 1,0.27 1.39ZM17.1,14.25a1,1 0,1 0,1.11 -1.66L9.73,6.93a1,1 0,0 0,-1.11 1.66l8.49,5.66Z";
+
+    UIBezierPath *bezier = [self bezierPathFromSVGPathData:svgPath];
+
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    if (!ctx) return nil;
+
+    // Scale from 24x24 viewport to target size
+    CGContextScaleCTM(ctx, size.width / 24.0f, size.height / 24.0f);
+
+    [color setFill];
+    [bezier fill];
+
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return image;
 }
 
 @end
