@@ -110,6 +110,10 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
         _speechRecognizer.delegate = self;
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillShow:) name:UIKeyboardWillShowNotification object:nil];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardWillHide:) name:UIKeyboardWillHideNotification object:nil];
+        // 系统中断：电话、进入后台、音频被打断 → 自动取消录音
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onSystemInterrupt) name:UIApplicationDidEnterBackgroundNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onSystemInterrupt) name:UIApplicationWillResignActiveNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAudioInterrupt:) name:AVAudioSessionInterruptionNotification object:nil];
     }
     return self;
 }
@@ -117,6 +121,28 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     [self cleanup];
+}
+
+#pragma mark - System Interrupt（电话/后台/音频中断）
+
+- (void)onSystemInterrupt {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.state == WKHTTStateRecording || self.state == WKHTTStateSendVoice || self.state == WKHTTStateCancelling) {
+            self.isGestureActive = NO;
+            [self cancelRecording];
+            [self hideOverlay];
+        } else if (self.state == WKHTTStateThinking) {
+            // thinking 状态不中断，等待结果返回
+        }
+        // result 状态保留，用户回来后可以继续编辑
+    });
+}
+
+- (void)onAudioInterrupt:(NSNotification *)notification {
+    NSInteger type = [notification.userInfo[AVAudioSessionInterruptionTypeKey] integerValue];
+    if (type == AVAudioSessionInterruptionTypeBegan) {
+        [self onSystemInterrupt];
+    }
 }
 
 #pragma mark - API Preference
