@@ -353,10 +353,12 @@ bool needRemind = false; // 是否需要提醒
             // 参考Android: device_flag == 1 才处理
             // 修复: 之前用 != APP && != Unknown 过滤，导致device_flag=3(iOS)也被当作PC/Web设备
             if(deviceFlag == WKDeviceFlagEnumWeb || deviceFlag == WKDeviceFlagEnumPC) {
-                WKPCOnlineResp *pcOnline = [WKPCOnlineResp new];
-                pcOnline.online = [param[@"online"] boolValue];
-                pcOnline.deviceFlag = deviceFlag;
-                [WKOnlineStatusManager.shared callOnlineStatusChangeMyPCOnlineStatusDelegate:pcOnline];
+                BOOL online = [param[@"online"] boolValue];
+                WKOnlineStatusManager.shared.pcOnline = online;
+                WKPCOnlineResp *pcOnlineResp = [WKPCOnlineResp new];
+                pcOnlineResp.online = online;
+                pcOnlineResp.deviceFlag = deviceFlag;
+                [WKOnlineStatusManager.shared callOnlineStatusChangeMyPCOnlineStatusDelegate:pcOnlineResp];
             }
         }
       

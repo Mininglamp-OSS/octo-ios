@@ -32,6 +32,7 @@
 #import "WKSpacePopupView.h"
 #import "WKSyncService.h"
 #import "WKSpaceConversationCache.h"
+#import "WKPCOnlineVC.h"
 @interface WKConversationListVC ()<UITableViewDelegate,UITableViewDataSource,UISearchControllerDelegate,WKConnectionManagerDelegate,WKChannelManagerDelegate,WKConversationManagerDelegate,WKNetworkListenerDelegate,WKChatManagerDelegate,WKTypingManagerDelegate,SwipeTableViewCellDelegate,WKOnlineStatusManagerDelegate>
 @property(nonatomic,copy) NSString *_title;
 @property(nonatomic,strong)  WKConversationListTableView *tableView;
@@ -64,6 +65,8 @@
 @property(nonatomic,strong) UIView *signalContainerView; // 信号显示容器
 @property(nonatomic,strong) UIImageView *signalImageView; // 信号图标
 @property(nonatomic,strong) UILabel *latencyLabel; // 延迟标签
+@property(nonatomic,strong) UIButton *pcOnlineBtn; // PC在线小图标
+@property(nonatomic,strong) NSTimer *pcOnlineCheckTimer; // PC在线状态轮询定时器
 
 // Space 切换
 @property(nonatomic,copy) NSString *currentSpaceName; // 当前 Space 名称
@@ -128,8 +131,8 @@
 
 //    self.refreshTimer = [NSTimer scheduledTimerWithTimeInterval:30 target:self selector:@selector(timerRefreshTable) userInfo:nil repeats:YES];
 //
-    self.tableHeader.pcDeviceFlag = [WKOnlineStatusManager shared].pcDeviceFlag;
-    self.tableHeader.showPCOnline = [WKOnlineStatusManager shared].pcOnline;
+    // PC在线状态移到导航栏图标显示
+    [self updatePCOnlineIcon:[WKOnlineStatusManager shared].pcOnline deviceFlag:[WKOnlineStatusManager shared].pcDeviceFlag];
 
     // 给导航栏标题添加点击手势以切换 Space
     [self setupTitleTapGesture];
@@ -225,6 +228,10 @@
     [self refreshTitle];
     [self hiddenRightItem:NO];
 
+    // 从内存刷新 PC 在线状态
+    self.pcOnlineBtn.hidden = ![WKOnlineStatusManager shared].pcOnline;
+    [self relayoutRightItems];
+
     // 频繁切换 tab 时节流，2 秒内不重复加载
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
     if (now - self.lastLoadTime < 2) {
@@ -254,6 +261,9 @@
         }
         [self startPingMonitoring];
     }
+
+    // 启动 PC 在线状态轮询（服务器只推送登录不推送退出，需要轮询检测退出）
+    [self startPCOnlineCheckTimer];
 }
 
 -(void) viewDidDisappear:(BOOL)animated {
@@ -262,6 +272,7 @@
         [self.refreshTimer invalidate];
         self.refreshTimer = nil;
     }
+    [self stopPCOnlineCheckTimer];
 
     // 停止 ping 监控
     [self stopPingMonitoring];
@@ -313,46 +324,130 @@
 
 -(UIView*) rightAddItem {
     if (!_rightAddItem) {
-        // 创建容器视图，宽度增加以容纳信号显示
-        _rightAddItem = [[UIView alloc] initWithFrame:CGRectMake(0.0f , 0.0f, 120.0f, 32.0f)];
+        CGFloat itemH = 32.0f;
+        CGFloat iconSize = 20.0f;
+        CGFloat gap = 12.0f;
 
-        // 添加信号显示容器（参考 Web 端：始终显示）
-        self.signalContainerView = [[UIView alloc] initWithFrame:CGRectMake(0.0f, 5.0f, 68.0f, 22.0f)];
-        self.signalContainerView.hidden = NO; // 始终显示，不隐藏
-
-        // 创建点击手势
+        // 信号容器（图标+延迟文字）
+        self.signalContainerView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 60, itemH)];
         UITapGestureRecognizer *tapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(signalTapped)];
         [self.signalContainerView addGestureRecognizer:tapGesture];
         self.signalContainerView.userInteractionEnabled = YES;
 
-        // 信号图标
-        self.signalImageView = [[UIImageView alloc] initWithFrame:CGRectMake(0.0f, 4.0f, 16.0f, 14.0f)];
+        self.signalImageView = [[UIImageView alloc] initWithFrame:CGRectMake(0, (itemH - 14) / 2, 16, 14)];
         self.signalImageView.image = [self createSignalBarsImage];
         [self.signalContainerView addSubview:self.signalImageView];
 
-        // 延迟标签
-        self.latencyLabel = [[UILabel alloc] initWithFrame:CGRectMake(20.0f, 0.0f, 48.0f, 22.0f)];
+        self.latencyLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 0, 40, itemH)];
         self.latencyLabel.font = [UIFont systemFontOfSize:11.0f];
         self.latencyLabel.textAlignment = NSTextAlignmentLeft;
         [self.signalContainerView addSubview:self.latencyLabel];
 
+        // PC 在线图标（默认隐藏）
+        self.pcOnlineBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        self.pcOnlineBtn.frame = CGRectMake(0, 0, iconSize, iconSize);
+        UIImage *pcImg = [self imageName:@"ConversationList/Index/PCOnline"];
+        if (pcImg) {
+            pcImg = [pcImg imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+            [self.pcOnlineBtn setImage:pcImg forState:UIControlStateNormal];
+            [self.pcOnlineBtn setTintColor:[UIColor grayColor]];
+        }
+        [self.pcOnlineBtn addTarget:self action:@selector(pcOnlineIconTapped) forControlEvents:UIControlEventTouchUpInside];
+        self.pcOnlineBtn.hidden = YES;
+
+        // 加号按钮
+        UIButton *addBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        addBtn.tag = 8888;
+        addBtn.frame = CGRectMake(0, 0, 24, 24);
+        UIImage *addImg = [self imageName:@"ConversationList/Index/Add"];
+        addImg = [addImg imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        [addBtn setImage:addImg forState:UIControlStateNormal];
+        [addBtn setTintColor:WKApp.shared.config.navBarButtonColor];
+        [addBtn addTarget:self action:@selector(rightAddPressed) forControlEvents:UIControlEventTouchUpInside];
+
+        // 水平排列：信号 | PC图标 | 加号，所有元素垂直居中
+        CGFloat x = 0;
+        self.signalContainerView.frame = CGRectMake(x, 0, 60, itemH);
+        x += 60 + gap;
+
+        self.pcOnlineBtn.frame = CGRectMake(x, (itemH - iconSize) / 2, iconSize, iconSize);
+        x += iconSize + gap;
+
+        addBtn.frame = CGRectMake(x, (itemH - 24) / 2, 24, 24);
+        x += 24;
+
+        _rightAddItem = [[UIView alloc] initWithFrame:CGRectMake(0, 0, x, itemH)];
         [_rightAddItem addSubview:self.signalContainerView];
+        [_rightAddItem addSubview:self.pcOnlineBtn];
+        [_rightAddItem addSubview:addBtn];
 
-        // 添加按钮（调整位置以在信号显示右侧）
-        UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-        [button addTarget:self action:@selector(rightAddPressed) forControlEvents:UIControlEventTouchUpInside];
-        button.frame = CGRectMake(88.0f , 5.0f, 32.0f, 32.0f);
-        UIImage *img = [self imageName:@"ConversationList/Index/Add"];
-        img = [img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        [button setImage:img forState:UIControlStateNormal];
-        [button setBackgroundColor:[UIColor clearColor]];
-        [button setTintColor:WKApp.shared.config.navBarButtonColor];
-        [_rightAddItem addSubview:button];
-
-        // 初始化时立即更新信号显示
         [self updateSignalViewForStatus:[WKSDK shared].connectionManager.connectStatus];
+
+        // 初始化时默认隐藏，等 API 轮询或 CMD 推送更新
+        self.pcOnlineBtn.hidden = YES;
+
+        // 动态排列
+        [self relayoutRightItems];
     }
     return _rightAddItem;
+}
+
+- (void)updatePCOnlineIcon:(BOOL)online deviceFlag:(WKDeviceFlagEnum)deviceFlag {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.pcOnlineBtn.hidden = !online;
+        [self relayoutRightItems];
+    });
+}
+
+- (void)startPCOnlineCheckTimer {
+    [self stopPCOnlineCheckTimer];
+    __weak typeof(self) ws = self;
+    self.pcOnlineCheckTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer *t) {
+        // 只在 PC 图标显示时才需要轮询检测退出
+        if (!ws.pcOnlineBtn.hidden) {
+            [WKOnlineStatusManager shared].needUpdate = YES;
+            [[WKOnlineStatusManager shared] requestUpdateChannelOnlineStatusIfNeed];
+        }
+    }];
+}
+
+- (void)stopPCOnlineCheckTimer {
+    [self.pcOnlineCheckTimer invalidate];
+    self.pcOnlineCheckTimer = nil;
+}
+
+/// 根据 PC 图标显隐动态重排右侧元素（从左到右：信号 → PC图标 → 加号）
+- (void)relayoutRightItems {
+    if (!_rightAddItem) return;
+    CGFloat itemH = 32.0f;
+    CGFloat gap = 12.0f;
+    CGFloat addBtnSize = 24.0f;
+    CGFloat pcIconSize = 20.0f;
+
+    UIView *addBtn = [_rightAddItem viewWithTag:8888];
+
+    CGFloat x = 0;
+    self.signalContainerView.frame = CGRectMake(x, 0, 60, itemH);
+    x += 60 + gap;
+
+    if (!self.pcOnlineBtn.hidden) {
+        self.pcOnlineBtn.frame = CGRectMake(x, (itemH - pcIconSize) / 2, pcIconSize, pcIconSize);
+        x += pcIconSize + gap;
+    }
+
+    if (addBtn) {
+        addBtn.frame = CGRectMake(x, (itemH - addBtnSize) / 2, addBtnSize, addBtnSize);
+        x += addBtnSize;
+    }
+
+    _rightAddItem.frame = CGRectMake(0, 0, x, itemH);
+    self.rightView = _rightAddItem;
+}
+
+- (void)pcOnlineIconTapped {
+    WKPCOnlineVC *vc = [WKPCOnlineVC new];
+    vc.mute = WKOnlineStatusManager.shared.muteOfApp;
+    [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
 
 -(void) hiddenRightItem:(BOOL)hidden {
@@ -578,7 +673,6 @@
 -(WKConversationListHeaderView*) tableHeader {
     if(!_tableHeader) {
         _tableHeader = [[WKConversationListHeaderView alloc] init];
-        _tableHeader.showPCOnline = [WKOnlineStatusManager shared].pcOnline;
         _tableHeader.backgroundColor = [UIColor clearColor];
 //        _tableHeader.showEmpty = true;
 //        [_tableHeader addSubview:self.searchbarView];
@@ -633,12 +727,7 @@
 
 // 我的pc状态改变
 - (void)onlineStatusManagerMyPCOnlineChange:(WKOnlineStatusManager *)manager status:(WKPCOnlineResp *)status {
-    
-    self.tableHeader.pcDeviceFlag = status.deviceFlag;
-    self.tableHeader.showPCOnline = status.online;
-    
-    [self.tableView reloadData];
-    
+    [self updatePCOnlineIcon:status.online deviceFlag:status.deviceFlag];
 }
 
 #pragma mark - WKTypingManagerDelegate
