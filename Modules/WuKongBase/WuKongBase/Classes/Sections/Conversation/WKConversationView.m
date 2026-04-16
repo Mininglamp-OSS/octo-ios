@@ -786,33 +786,39 @@
 // 逐条转发
 -(void) multipActionForward {
     WKForwardSelectVC *vc = [WKForwardSelectVC new];
-    vc.title = LLang(@"选择一个聊天");
+    vc.title = LLang(@"选择聊天");
+    vc.singleSelectMode = YES;
     NSArray *selectedMessages = [self.messageListView getSelectedMessages];
     __weak typeof(self) weakSelf = self;
-    [vc setOnSelect:^(WKChannel * _Nonnull channel) {
+    [vc setOnSingleConfirm:^(WKChannel *channel, NSString *extraText) {
         [[WKNavigationManager shared] popToViewController:weakSelf.lim_viewController animated:YES];
-        for (WKMessageModel *messageModel  in selectedMessages) {
-            if([[WKApp shared] allowMessageForward:messageModel.contentType]) { // 如果允许转发则直接转发
+        for (WKMessageModel *messageModel in selectedMessages) {
+            if([[WKApp shared] allowMessageForward:messageModel.contentType]) {
                 if([weakSelf.channel isEqual:channel]) {
                     [weakSelf.conversationContext forwardMessage:messageModel.content];
-                }else{
+                } else {
                     [[WKSDK shared].chatManager forwardMessage:messageModel.content channel:channel];
                 }
-                
-            }else{ // 如果不允许转发，则将变成文本消息转发
+            } else {
                 WKTextContent *textContent = [[WKTextContent alloc] initWithContent:[messageModel.content conversationDigest]];
                 if([weakSelf.channel isEqual:channel]) {
                     [weakSelf.conversationContext forwardMessage:textContent];
-                }else{
+                } else {
                     [[WKSDK shared].chatManager forwardMessage:textContent channel:channel];
                 }
-                
             }
-           
+        }
+        if (extraText.length > 0) {
+            if([weakSelf.channel isEqual:channel]) {
+                WKTextContent *tc = [[WKTextContent alloc] initWithContent:extraText];
+                [weakSelf.conversationContext forwardMessage:tc];
+            } else {
+                WKTextContent *tc = [[WKTextContent alloc] initWithContent:extraText];
+                [[WKSDK shared].chatManager forwardMessage:tc channel:channel];
+            }
         }
         [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送成功")];
         [weakSelf setMultipleOn:NO];
-        
     }];
     [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
@@ -821,14 +827,15 @@
 -(void) multipActionMergeForward {
     __weak typeof(self) weakSelf = self;
     WKForwardSelectVC *vc = [WKForwardSelectVC new];
-    vc.title = LLang(@"选择一个聊天");
+    vc.title = LLang(@"选择聊天");
+    vc.singleSelectMode = YES;
     NSArray *selectedMessages = [self.messageListView getSelectedMessages];
-    [vc setOnSelect:^(WKChannel * _Nonnull channel) {
+    [vc setOnSingleConfirm:^(WKChannel *channel, NSString *extraText) {
         [[WKNavigationManager shared] popToViewController:weakSelf.lim_viewController animated:YES];
-        
+
         NSMutableArray *msgs = [NSMutableArray array];
         NSMutableArray<NSDictionary*> *userDicts = [NSMutableArray array];
-        for (WKMessageModel *messageModel  in selectedMessages) {
+        for (WKMessageModel *messageModel in selectedMessages) {
             [msgs addObject:messageModel.message];
             bool hasUser = false;
             for (NSDictionary *userDict in userDicts) {
@@ -842,26 +849,29 @@
                 [userDicts addObject:@{@"uid":messageModel.fromUid?:@"",@"name":name}];
             }
         }
-        [msgs sortUsingComparator:^NSComparisonResult(WKMessageModel  *obj1, WKMessageModel *obj2) {
-            if(obj1.timestamp<obj2.timestamp) {
-                return NSOrderedAscending;
-            }
-            if(obj1.timestamp == obj2.timestamp) {
-                return NSOrderedSame;
-            }
+        [msgs sortUsingComparator:^NSComparisonResult(WKMessageModel *obj1, WKMessageModel *obj2) {
+            if(obj1.timestamp<obj2.timestamp) return NSOrderedAscending;
+            if(obj1.timestamp == obj2.timestamp) return NSOrderedSame;
             return NSOrderedDescending;
         }];
-        
+
         WKMergeForwardContent *content = [WKMergeForwardContent msgs:msgs users:userDicts channelType:weakSelf.channel.channelType];
         if([weakSelf.channel isEqual:channel]) {
             [weakSelf.conversationContext sendMessage:content];
-        }else {
+        } else {
             [[WKSDK shared].chatManager sendMessage:content channel:channel];
         }
-       
+        if (extraText.length > 0) {
+            if([weakSelf.channel isEqual:channel]) {
+                WKTextContent *tc = [[WKTextContent alloc] initWithContent:extraText];
+                [weakSelf.conversationContext forwardMessage:tc];
+            } else {
+                WKTextContent *tc = [[WKTextContent alloc] initWithContent:extraText];
+                [[WKSDK shared].chatManager forwardMessage:tc channel:channel];
+            }
+        }
         [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送成功")];
         [weakSelf setMultipleOn:NO];
-        
     }];
     [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }

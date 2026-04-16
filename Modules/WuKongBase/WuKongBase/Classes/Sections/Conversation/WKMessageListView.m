@@ -99,8 +99,8 @@
     [[WKSDK shared].connectionManager addDelegate:self]; // 连接状态监听
     [[WKTypingManager shared] addDelegate:self]; // 正在输入...
     [[WKReminderManager shared] addDelegate:self]; // 提醒项监听
-    
-   
+    // 外部分享消息发送通知
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onShareExtensionMessageSent:) name:@"WKShareExtensionMessageSent" object:nil];
 }
 
 -(void) removeDelegates {
@@ -110,7 +110,46 @@
     [[WKSDK shared].connectionManager  removeDelegate:self];
     [[WKTypingManager shared] removeDelegate:self];
     [[WKReminderManager shared] removeDelegate:self];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKShareExtensionMessageSent" object:nil];
+}
 
+/// 外部分享的消息发送后，插入消息到当前聊天页面
+-(void) onShareExtensionMessageSent:(NSNotification *)notification {
+    WKChannel *channel = notification.object;
+    NSLog(@"[ShareExt] onShareExtensionMessageSent 收到通知, channel=%@_%d", channel.channelId, channel.channelType);
+    if (!channel) {
+        NSLog(@"[ShareExt] channel 为空，跳过");
+        return;
+    }
+
+    NSArray<WKMessage *> *messages = notification.userInfo[@"messages"];
+    NSLog(@"[ShareExt] 消息数量: %lu", (unsigned long)messages.count);
+    if (!messages || messages.count == 0) return;
+
+    // 检查第一条消息是否属于当前会话
+    WKMessage *firstMsg = messages.firstObject;
+    BOOL canHandle = [self needHandle:firstMsg];
+    NSLog(@"[ShareExt] needHandle=%d, 消息channel=%@_%d, contentType=%ld", canHandle, firstMsg.channel.channelId, firstMsg.channel.channelType, (long)firstMsg.contentType);
+    if (!canHandle) {
+        NSLog(@"[ShareExt] 消息不属于当前会话，跳过");
+        return;
+    }
+
+    NSInteger insertedCount = 0;
+    for (WKMessage *msg in messages) {
+        NSIndexPath *existPath = [self.dataProvider indexPathAtClientMsgNo:msg.clientMsgNo];
+        NSLog(@"[ShareExt] 检查消息 clientMsgNo=%@, existPath=%@", msg.clientMsgNo, existPath);
+        if (existPath) {
+            NSLog(@"[ShareExt] 消息已存在，跳过");
+            continue;
+        }
+
+        WKMessageModel *model = [[WKMessageModel alloc] initWithMessage:msg];
+        NSLog(@"[ShareExt] 插入消息到 UI, contentType=%ld, status=%ld", (long)msg.contentType, (long)msg.status);
+        [self sendMessage:model];
+        insertedCount++;
+    }
+    NSLog(@"[ShareExt] 共插入 %ld 条消息到聊天页面", (long)insertedCount);
 }
 
 

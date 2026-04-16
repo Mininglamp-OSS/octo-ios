@@ -164,12 +164,18 @@
     }
     WKFileContent *fileContent = (WKFileContent *)self.messageModel.content;
 
+    NSLog(@"[File-onTap] name=%@, localPath=%@, remoteUrl=%@, fileSize=%lld, status=%ld",
+          fileContent.name, fileContent.localPath, fileContent.remoteUrl, fileContent.fileSize, (long)self.messageModel.status);
+
     // 检查本地文件是否存在
     NSString *localPath = fileContent.localPath;
     if (localPath && [[NSFileManager defaultManager] fileExistsAtPath:localPath]) {
+        NSLog(@"[File-onTap] 本地文件存在，直接预览");
         [self previewFileAtPath:localPath];
         return;
     }
+
+    NSLog(@"[File-onTap] 本地文件不存在 (localPath=%@)", localPath);
 
     // 下载中再点击 → 取消下载
     if (self.isFileDownloading) {
@@ -180,7 +186,12 @@
     }
 
     // 需要下载
-    if (fileContent.remoteUrl && fileContent.remoteUrl.length > 0) {
+    if (!fileContent.remoteUrl || fileContent.remoteUrl.length == 0) {
+        NSLog(@"[File-onTap] remoteUrl 为空，文件无法下载");
+        [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"文件不存在或正在上传中")];
+        return;
+    }
+    if (fileContent.remoteUrl.length > 0) {
         self.isFileDownloading = YES;
         self.progressView.hidden = NO;
         [self.progressView setProgress:0];

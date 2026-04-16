@@ -268,6 +268,13 @@ static WKApp *_instance;
 }
 
 -(BOOL) appOpenURL:(NSURL *)url options:(NSDictionary<UIApplicationOpenURLOptionsKey,id> *)options {
+    // 处理 Share Extension 跳转
+    if ([url.scheme isEqualToString:@"botgate"] && [url.host isEqualToString:@"share"]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self handleShareExtensionData];
+        });
+        return YES;
+    }
     return [[WKSwiftModuleManager shared] didOpen:url options:options];
 }
 
@@ -1341,18 +1348,25 @@ static WKApp *_instance;
         UIImage *icon = [GenerateImageUtils generateTintedImgWithImage:[weakSelf imageName:@"Conversation/ContextMenu/Forward"] color:weakSelf.config.contextMenu.primaryColor backgroundColor:nil];
         return [WKMessageLongMenusItem initWithTitle:LLangW(@"转发", weakSelf) icon:icon onTap:^(id<WKConversationContext> context){
             WKForwardSelectVC *vc = [WKForwardSelectVC new];
-            vc.title = LLangW(@"选择一个聊天", weakSelf);
-            [vc setOnSelect:^(WKChannel * _Nonnull channel) {
+            vc.title = LLangW(@"选择聊天", weakSelf);
+            vc.singleSelectMode = YES;
+            [vc setOnSingleConfirm:^(WKChannel *channel, NSString *extraText) {
                 [[WKNavigationManager shared] popToViewControllerClass:WKConversationVC.class animated:YES];
                 if([channel isEqual:context.channel]) {
                     [context forwardMessage:message.content];
-                }else{
+                } else {
                     [[WKSDK shared].chatManager forwardMessage:message.content channel:channel];
-                   [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLangW(@"发送成功",weakSelf)];
                 }
-               
-                
-                
+                if (extraText.length > 0) {
+                    if([channel isEqual:context.channel]) {
+                        WKTextContent *tc = [[WKTextContent alloc] initWithContent:extraText];
+                        [context forwardMessage:tc];
+                    } else {
+                        WKTextContent *tc = [[WKTextContent alloc] initWithContent:extraText];
+                        [[WKSDK shared].chatManager forwardMessage:tc channel:channel];
+                    }
+                }
+                [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLangW(@"发送成功",weakSelf)];
             }];
             [[WKNavigationManager shared] pushViewController:vc animated:YES];
         }];
@@ -1866,6 +1880,129 @@ static WKApp *_instance;
     }
     return false;
 }
+
+#pragma mark - Share Extension
+
+static NSString *const kShareAppGroupId = @"group.com.example.octo";
+static NSString *const kShareDataKey = @"WKShareExtensionData";
+static NSString *const kShareDirName = @"ShareExtensionFiles";
+
+-(void) handleShareExtensionData {
+    if (![WKApp shared].isLogined) return;
+
+    NSUserDefaults *shared = [[NSUserDefaults alloc] initWithSuiteName:kShareAppGroupId];
+    NSArray *fileInfos = [shared objectForKey:kShareDataKey];
+    if (!fileInfos || fileInfos.count == 0) return;
+
+    // 清除数据，防止重复处理
+    [shared removeObjectForKey:kShareDataKey];
+    [shared synchronize];
+
+    // 单选模式：点击会话弹确认面板，可附带文本
+    WKForwardSelectVC *vc = [WKForwardSelectVC new];
+    vc.title = LLang(@"选择聊天");
+    vc.singleSelectMode = YES;
+    vc.shareFileInfos = fileInfos;
+    __weak typeof(self) weakSelf = self;
+    [vc setOnSingleConfirm:^(WKChannel *channel, NSString *extraText) {
+        [weakSelf sendShareFiles:fileInfos toChannel:channel extraText:extraText];
+    }];
+
+    // 先关闭所有 modal（如 PDF 浏览器），再 push 转发页面
+    UIViewController *topVC = [WKNavigationManager shared].topViewController;
+    if (topVC.presentedViewController) {
+        [topVC dismissViewControllerAnimated:NO completion:^{
+            [[WKNavigationManager shared] pushViewController:vc animated:YES];
+        }];
+    } else if (topVC) {
+        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+    }
+}
+
+-(void) sendShareFiles:(NSArray *)fileInfos toChannel:(WKChannel *)channel extraText:(NSString *)extraText {
+    NSMutableArray<WKMessage *> *sentMessages = [NSMutableArray array];
+
+    // 先发送文件/图片（文件在前，文本在后，符合阅读习惯）
+    for (NSDictionary *info in fileInfos) {
+        NSString *type = info[@"type"];
+
+        if ([type isEqualToString:@"text"]) {
+            NSString *content = info[@"content"];
+            if (content.length > 0) {
+                WKTextContent *textContent = [[WKTextContent alloc] initWithContent:content];
+                WKMessage *msg = [[WKSDK shared].chatManager forwardMessage:textContent channel:channel];
+                if (msg) [sentMessages addObject:msg];
+            }
+        } else if ([type isEqualToString:@"image"]) {
+            NSString *path = info[@"path"];
+            if (path) {
+                UIImage *image = [UIImage imageWithContentsOfFile:path];
+                if (image) {
+                    WKImageContent *imageContent = [WKImageContent initWithImage:image];
+                    // 图片也是媒体消息，用 sendMessage 触发上传
+                    WKMessage *msg = [[WKSDK shared].chatManager sendMessage:imageContent channel:channel];
+                    if (msg) [sentMessages addObject:msg];
+                }
+            }
+        } else {
+            // 文件/视频/音频：先复制到 App 文档目录（共享目录会被清理，导致文件打不开）
+            NSString *path = info[@"path"];
+            if (path && [[NSFileManager defaultManager] fileExistsAtPath:path]) {
+                NSString *docDir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+                NSString *shareDir = [docDir stringByAppendingPathComponent:@"ShareFiles"];
+                [[NSFileManager defaultManager] createDirectoryAtPath:shareDir withIntermediateDirectories:YES attributes:nil error:nil];
+                NSString *destPath = [shareDir stringByAppendingPathComponent:[path lastPathComponent]];
+                // 避免重名
+                if ([[NSFileManager defaultManager] fileExistsAtPath:destPath]) {
+                    NSString *name = [[path lastPathComponent] stringByDeletingPathExtension];
+                    NSString *ext = [path pathExtension];
+                    destPath = [shareDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@_%@.%@", name, [[NSUUID UUID] UUIDString], ext]];
+                }
+                [[NSFileManager defaultManager] copyItemAtPath:path toPath:destPath error:nil];
+                NSURL *fileURL = [NSURL fileURLWithPath:destPath];
+                NSLog(@"[ShareExt] 文件已复制: src=%@ -> dest=%@, exists=%d, size=%lld",
+                      path, destPath,
+                      [[NSFileManager defaultManager] fileExistsAtPath:destPath],
+                      [[[NSFileManager defaultManager] attributesOfItemAtPath:destPath error:nil] fileSize]);
+                WKFileContent *fileContent = [WKFileContent initWithFileURL:fileURL];
+                NSLog(@"[ShareExt] WKFileContent: name=%@, ext=%@, fileSize=%lld, dataLen=%lu",
+                      fileContent.name, fileContent.fileExtension, fileContent.fileSize,
+                      (unsigned long)[[fileContent valueForKey:@"fileData"] length]);
+                // 文件消息必须用 sendMessage（会触发媒体上传），不能用 forwardMessage（直接发协议包，跳过上传）
+                WKMessage *msg = [[WKSDK shared].chatManager sendMessage:fileContent channel:channel];
+                NSLog(@"[ShareExt] sendMessage result: clientMsgNo=%@, status=%ld",
+                      msg.clientMsgNo, (long)msg.status);
+                if (msg) [sentMessages addObject:msg];
+            }
+        }
+    }
+
+    // 文件发完后立即发附带文本（orderSeq 已保持创建顺序，不会被 sendack 覆盖）
+    if (extraText && extraText.length > 0) {
+        WKTextContent *textContent = [[WKTextContent alloc] initWithContent:extraText];
+        WKMessage *textMsg = [[WKSDK shared].chatManager forwardMessage:textContent channel:channel];
+        if (textMsg) [sentMessages addObject:textMsg];
+        NSLog(@"[ShareExt] 附带文本已发送: clientMsgNo=%@", textMsg.clientMsgNo);
+    }
+
+    // 统一通知聊天页面刷新
+    NSLog(@"[ShareExt] 全部消息发送完成, channel=%@_%d, 消息数=%lu", channel.channelId, channel.channelType, (unsigned long)sentMessages.count);
+    if (sentMessages.count > 0) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"WKShareExtensionMessageSent" object:channel userInfo:@{@"messages": [sentMessages copy]}];
+        });
+    }
+
+    [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送成功")];
+
+    // 清理共享目录
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_global_queue(0, 0), ^{
+        NSURL *container = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:kShareAppGroupId];
+        NSURL *dir = [container URLByAppendingPathComponent:kShareDirName];
+        [[NSFileManager defaultManager] removeItemAtURL:dir error:nil];
+    });
+}
+
 
 -(UIImage*) imageName:(NSString*)name {
     return [self loadImage:name moduleID:@"WuKongBase"];

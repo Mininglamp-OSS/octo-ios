@@ -704,7 +704,7 @@ static WKMessageDB *_instance;
                 if(message) {
                     orderSeq = [self getMaxOrderSeqWithChannel:db channel:message.channel]+1;
                 }
-                
+
             }
             [db executeUpdate:SQL_MESSAGE_UPDATE_WITHACK,@(sendackPacket.messageId),@(sendackPacket.messageSeq),@(orderSeq),@(status),@(sendackPacket.reasonCode),@(sendackPacket.clientSeq)];
             

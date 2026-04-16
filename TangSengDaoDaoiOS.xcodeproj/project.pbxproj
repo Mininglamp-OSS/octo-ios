@@ -3,11 +3,11 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 54;
+	objectVersion = 70;
 	objects = {
 
 /* Begin PBXBuildFile section */
-		184AEBC57484611C42076CF1 /* silence.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = D8B4D131F244672EE8EEAE03 /* silence.mp3 */; };
+		4B5FF74C2F908A62005CCF01 /* ShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 4B5FF7412F908A62005CCF01 /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7130BFC524C6817600B9E04B /* NotificationService.m in Sources */ = {isa = PBXBuildFile; fileRef = 7130BFC424C6817600B9E04B /* NotificationService.m */; };
 		7130BFC924C6817600B9E04B /* NotificationService.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 7130BFC124C6817600B9E04B /* NotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7130BFD424C6832F00B9E04B /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7130BFD324C6832F00B9E04B /* UserNotifications.framework */; };
@@ -45,6 +45,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		4B5FF74A2F908A62005CCF01 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 71D695FB23926E3500D092BA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4B5FF7402F908A62005CCF01;
+			remoteInfo = ShareExtension;
+		};
 		7130BFC724C6817600B9E04B /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 71D695FB23926E3500D092BA /* Project object */;
@@ -68,6 +75,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
+				4B5FF74C2F908A62005CCF01 /* ShareExtension.appex in Embed App Extensions */,
 				7130BFC924C6817600B9E04B /* NotificationService.appex in Embed App Extensions */,
 				7130BFE124C6832F00B9E04B /* NotificationContent.appex in Embed App Extensions */,
 			);
@@ -77,6 +85,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		4B5FF7412F908A62005CCF01 /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		5CA0841FAD4ACC73F9DC603F /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		71018ED405ABC6ED8448075E /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig"; sourceTree = "<group>"; };
 		71275E7D240A7BD600A7502C /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
@@ -129,11 +138,31 @@
 		71DB3FA4239B5DE700181E94 /* WKMainTabController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WKMainTabController.h; sourceTree = "<group>"; };
 		71DB3FA5239B5DE700181E94 /* WKMainTabController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMainTabController.m; sourceTree = "<group>"; };
 		71F7E3DB2A47F66900E8D20D /* QUESTION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = QUESTION.md; sourceTree = "<group>"; };
-		D8B4D131F244672EE8EEAE03 /* silence.mp3 */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = audio.mp3; path = silence.mp3; sourceTree = "<group>"; };
 		DE5455F84CCB2C45ED689AA0 /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		4B5FF74D2F908A62005CCF01 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 4B5FF7402F908A62005CCF01 /* ShareExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		4B5FF7422F908A62005CCF01 /* ShareExtension */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (4B5FF74D2F908A62005CCF01 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = ShareExtension; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
 /* Begin PBXFrameworksBuildPhase section */
+		4B5FF73E2F908A62005CCF01 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		7130BFBE24C6817600B9E04B /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -251,6 +280,7 @@
 				71D6960523926E3500D092BA /* TangSengDaoDao */,
 				7130BFC224C6817600B9E04B /* NotificationService */,
 				7130BFD724C6832F00B9E04B /* NotificationContent */,
+				4B5FF7422F908A62005CCF01 /* ShareExtension */,
 				71D6960423926E3500D092BA /* Products */,
 				D0600169DB45E883707B86A6 /* Pods */,
 				1882D30109100A187BA46643 /* Frameworks */,
@@ -264,6 +294,7 @@
 				71D6960323926E3500D092BA /* TangSengDaoDao.app */,
 				7130BFC124C6817600B9E04B /* NotificationService.appex */,
 				7130BFD224C6832F00B9E04B /* NotificationContent.appex */,
+				4B5FF7412F908A62005CCF01 /* ShareExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -284,7 +315,6 @@
 				71DB3FA4239B5DE700181E94 /* WKMainTabController.h */,
 				71DB3FA5239B5DE700181E94 /* WKMainTabController.m */,
 				719FDA5F2595FBFC000C25D6 /* Localizable.strings */,
-				D8B4D131F244672EE8EEAE03 /* silence.mp3 */,
 			);
 			path = TangSengDaoDao;
 			sourceTree = "<group>";
@@ -301,6 +331,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		4B5FF7402F908A62005CCF01 /* ShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4B5FF74E2F908A62005CCF01 /* Build configuration list for PBXNativeTarget "ShareExtension" */;
+			buildPhases = (
+				4B5FF73D2F908A62005CCF01 /* Sources */,
+				4B5FF73E2F908A62005CCF01 /* Frameworks */,
+				4B5FF73F2F908A62005CCF01 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				4B5FF7422F908A62005CCF01 /* ShareExtension */,
+			);
+			name = ShareExtension;
+			packageProductDependencies = (
+			);
+			productName = ShareExtension;
+			productReference = 4B5FF7412F908A62005CCF01 /* ShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		7130BFC024C6817600B9E04B /* NotificationService */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 7130BFCA24C6817600B9E04B /* Build configuration list for PBXNativeTarget "NotificationService" */;
@@ -351,6 +403,7 @@
 			dependencies = (
 				7130BFC824C6817600B9E04B /* PBXTargetDependency */,
 				7130BFE024C6832F00B9E04B /* PBXTargetDependency */,
+				4B5FF74B2F908A62005CCF01 /* PBXTargetDependency */,
 			);
 			name = TangSengDaoDaoiOS;
 			productName = LiMaoIMDemo;
@@ -368,6 +421,9 @@
 				LastUpgradeCheck = 1310;
 				ORGANIZATIONNAME = WK;
 				TargetAttributes = {
+					4B5FF7402F908A62005CCF01 = {
+						CreatedOnToolsVersion = 26.1.1;
+					};
 					7130BFC024C6817600B9E04B = {
 						CreatedOnToolsVersion = 11.6;
 					};
@@ -397,11 +453,19 @@
 				71D6960223926E3500D092BA /* TangSengDaoDaoiOS */,
 				7130BFC024C6817600B9E04B /* NotificationService */,
 				7130BFD124C6832F00B9E04B /* NotificationContent */,
+				4B5FF7402F908A62005CCF01 /* ShareExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		4B5FF73F2F908A62005CCF01 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		7130BFBF24C6817600B9E04B /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -427,7 +491,6 @@
 				71D6961023926E3700D092BA /* Assets.xcassets in Resources */,
 				7191FCB323A6139A00FFFDC1 /* README.md in Resources */,
 				71D6960E23926E3600D092BA /* Main.storyboard in Resources */,
-				184AEBC57484611C42076CF1 /* silence.mp3 in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -464,9 +527,13 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
+			inputPaths = (
+			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -476,6 +543,13 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		4B5FF73D2F908A62005CCF01 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		7130BFBD24C6817600B9E04B /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -508,6 +582,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		4B5FF74B2F908A62005CCF01 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4B5FF7402F908A62005CCF01 /* ShareExtension */;
+			targetProxy = 4B5FF74A2F908A62005CCF01 /* PBXContainerItemProxy */;
+		};
 		7130BFC824C6817600B9E04B /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 7130BFC024C6817600B9E04B /* NotificationService */;
@@ -557,6 +636,72 @@
 /* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
+		4B5FF74F2F908A62005CCF01 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = D5G47RYK64;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = ShareExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 WK. All rights reserved.";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example-app.octo.ShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		4B5FF7502F908A62005CCF01 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = D5G47RYK64;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = ShareExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 WK. All rights reserved.";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example-app.octo.ShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		7130BFCB24C6817600B9E04B /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -793,7 +938,7 @@
 				CODE_SIGN_ENTITLEMENTS = TangSengDaoDao/TangSengDaoDao.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 34;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = D5G47RYK64;
 				ENABLE_BITCODE = NO;
@@ -886,10 +1031,11 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_OBJC_BRIDGING_HEADER = "TangSengDaoDao-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -903,7 +1049,7 @@
 				CODE_SIGN_ENTITLEMENTS = TangSengDaoDao/TangSengDaoDao.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 34;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = D5G47RYK64;
 				ENABLE_BITCODE = NO;
@@ -996,15 +1142,25 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_OBJC_BRIDGING_HEADER = "TangSengDaoDao-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		4B5FF74E2F908A62005CCF01 /* Build configuration list for PBXNativeTarget "ShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4B5FF74F2F908A62005CCF01 /* Debug */,
+				4B5FF7502F908A62005CCF01 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		7130BFCA24C6817600B9E04B /* Build configuration list for PBXNativeTarget "NotificationService" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

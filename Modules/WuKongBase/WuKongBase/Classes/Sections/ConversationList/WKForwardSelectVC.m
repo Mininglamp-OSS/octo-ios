@@ -6,6 +6,7 @@
 //
 
 #import "WKForwardSelectVC.h"
+#import <objc/runtime.h>
 #import "WKConversationWrapModel.h"
 #import "WKConversationGroupThreadCell.h"
 #import "WKCategorySectionCell.h"
@@ -95,8 +96,9 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     return self;
 }
 
-- (void)configureWithModel:(WKConversationWrapModel *)model checked:(BOOL)checked checkOnImage:(UIImage *)onImg checkOffImage:(UIImage *)offImg {
-    _checkView.image = checked ? onImg : offImg;
+- (void)configureWithModel:(WKConversationWrapModel *)model checked:(BOOL)checked checkOnImage:(UIImage *)onImg checkOffImage:(UIImage *)offImg hideCheck:(BOOL)hideCheck {
+    _checkView.hidden = hideCheck;
+    if (!hideCheck) _checkView.image = checked ? onImg : offImg;
     _nameLbl.text = model.channelInfo ? model.channelInfo.displayName : @"";
 
     BOOL isGroup = (model.channel.channelType == WK_GROUP);
@@ -118,16 +120,18 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     CGFloat h = self.contentView.lim_height;
     CGFloat w = self.contentView.lim_width;
 
-    _checkView.frame = CGRectMake(15, (h - 22) / 2, 22, 22);
+    CGFloat left = 15;
+    if (!_checkView.hidden) {
+        _checkView.frame = CGRectMake(15, (h - 22) / 2, 22, 22);
+        left = 42;
+    }
 
     if (!_hashTagLbl.hidden) {
-        // 群聊: # 标识
-        _hashTagLbl.frame = CGRectMake(42, (h - 30) / 2, 30, 30);
-        _nameLbl.frame = CGRectMake(74, 0, w - 90, h);
+        _hashTagLbl.frame = CGRectMake(left, (h - 30) / 2, 30, 30);
+        _nameLbl.frame = CGRectMake(left + 32, 0, w - left - 47, h);
     } else {
-        // 私聊: 头像
-        _avatarView.frame = CGRectMake(45, (h - 40) / 2, 40, 40);
-        _nameLbl.frame = CGRectMake(93, 0, w - 108, h);
+        _avatarView.frame = CGRectMake(left + 3, (h - 40) / 2, 40, 40);
+        _nameLbl.frame = CGRectMake(left + 48, 0, w - left - 63, h);
     }
 }
 
@@ -212,7 +216,7 @@ typedef NS_ENUM(NSInteger, FWItemType) {
 
 #pragma mark - VC
 
-@interface WKForwardSelectVC () <UITableViewDelegate, UITableViewDataSource, UITextFieldDelegate>
+@interface WKForwardSelectVC () <UITableViewDelegate, UITableViewDataSource, UITextFieldDelegate, UIGestureRecognizerDelegate>
 
 @property (nonatomic, strong) WKConversationTabView *tabView;
 @property (nonatomic, strong) UITextField *searchField;
@@ -322,7 +326,11 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     _tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
     _tableView.tableFooterView = [[UIView alloc] init];
     _tableView.tableHeaderView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 0, CGFLOAT_MIN)];
-    _tableView.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
+    _tableView.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
+    // 点击空白收键盘
+    UITapGestureRecognizer *tapDismiss = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissKeyboard)];
+    tapDismiss.cancelsTouchesInView = NO;
+    [_tableView addGestureRecognizer:tapDismiss];
     [_tableView registerClass:[WKForwardConvCell class] forCellReuseIdentifier:@"conv"];
     [_tableView registerClass:[WKCategorySectionCell class] forCellReuseIdentifier:@"section"];
     [_tableView registerClass:[WKForwardThreadCell class] forCellReuseIdentifier:@"thread"];
@@ -341,7 +349,41 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     }
     [self sortList:_allConversations];
 
-    // 加载分组
+    // 如果会话列表为空（App 冷启动、SDK 还未同步），显示加载中并延迟重试
+    if (_allConversations.count == 0) {
+        [self.view showHUD];
+        [self retryLoadDataWithCount:0];
+        return;
+    }
+
+    [self loadCategories];
+}
+
+- (void)retryLoadDataWithCount:(NSInteger)count {
+    if (count > 15) { // 最多等 7.5 秒
+        [self.view hideHud];
+        [self loadCategories];
+        return;
+    }
+    __weak typeof(self) ws = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSArray<WKConversation *> *conversations = [[WKSDK shared].conversationManager getConversationList];
+        [ws.allConversations removeAllObjects];
+        for (WKConversation *conv in conversations) {
+            if (conv.channel.channelType == WK_COMMUNITY_TOPIC) continue;
+            [ws.allConversations addObject:[[WKConversationWrapModel alloc] initWithConversation:conv]];
+        }
+        [ws sortList:ws.allConversations];
+        if (ws.allConversations.count > 0) {
+            [ws.view hideHud];
+            [ws loadCategories];
+        } else {
+            [ws retryLoadDataWithCount:count + 1];
+        }
+    });
+}
+
+- (void)loadCategories {
     NSString *spaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
     __weak typeof(self) ws = self;
     if (spaceId.length > 0) {
@@ -551,6 +593,10 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     return YES;
 }
 
+- (void)dismissKeyboard {
+    [self.view endEditing:YES];
+}
+
 #pragma mark - TableView
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -613,7 +659,10 @@ typedef NS_ENUM(NSInteger, FWItemType) {
         case FWItemThread: {
             WKForwardThreadCell *tc = (WKForwardThreadCell *)cell;
             tc.nameLbl.text = item.threadName;
-            tc.checkView.image = item.isChecked ? [self checkOnImage] : [self checkOffImage];
+            tc.checkView.hidden = self.singleSelectMode;
+            if (!self.singleSelectMode) {
+                tc.checkView.image = item.isChecked ? [self checkOnImage] : [self checkOffImage];
+            }
             break;
         }
         case FWItemThreadToggle: {
@@ -633,7 +682,8 @@ typedef NS_ENUM(NSInteger, FWItemType) {
                 [(WKForwardConvCell *)cell configureWithModel:item.conversation
                                                      checked:item.isChecked
                                                 checkOnImage:[self checkOnImage]
-                                               checkOffImage:[self checkOffImage]];
+                                               checkOffImage:[self checkOffImage]
+                                                   hideCheck:self.singleSelectMode];
             }
             break;
         }
@@ -655,6 +705,27 @@ typedef NS_ENUM(NSInteger, FWItemType) {
             [_expandedThreadGroups addObject:gno];
         }
         [self filterAndDisplay];
+        return;
+    }
+
+    // 单选模式：弹出确认面板
+    if (self.singleSelectMode) {
+        WKChannel *channel = nil;
+        NSString *name = nil;
+        BOOL isGroup = NO;
+        BOOL isThread = NO;
+        if (item.type == FWItemConversation && item.conversation) {
+            channel = item.conversation.channel;
+            name = item.conversation.channelInfo ? item.conversation.channelInfo.displayName : @"";
+            isGroup = (channel.channelType == WK_GROUP);
+        } else if (item.type == FWItemThread) {
+            channel = [WKChannel channelID:item.threadChannelId channelType:WK_COMMUNITY_TOPIC];
+            name = item.threadName;
+            isThread = YES;
+        }
+        if (channel) {
+            [self showShareConfirmPanel:channel name:name isGroup:isGroup isThread:isThread];
+        }
         return;
     }
 
@@ -692,12 +763,326 @@ typedef NS_ENUM(NSInteger, FWItemType) {
             [channels addObject:[WKChannel channelID:item.threadChannelId channelType:WK_COMMUNITY_TOPIC]];
         }
     }
-    if (channels.count > 0 && self.onSelect) {
-        // 逐个转发
-        for (WKChannel *ch in channels) {
-            self.onSelect(ch);
+
+    if (channels.count > 0) {
+        // 先发送消息
+        if (self.onConfirmChannels) {
+            self.onConfirmChannels(channels);
+        } else if (self.onSelect) {
+            for (WKChannel *ch in channels) {
+                self.onSelect(ch);
+            }
         }
     }
+
+    // 延迟关闭，让 SDK 发送回调能被当前页面接收
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [[WKNavigationManager shared] popViewControllerAnimated:YES];
+    });
+}
+
+#pragma mark - Share Confirm Panel
+
+- (void)showShareConfirmPanel:(WKChannel *)channel name:(NSString *)name isGroup:(BOOL)isGroup isThread:(BOOL)isThread {
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    if (!window) window = [UIApplication sharedApplication].windows.firstObject;
+    CGFloat screenW = window.lim_width;
+    CGFloat screenH = window.lim_height;
+
+    // 半透明遮罩
+    UIView *overlay = [[UIView alloc] initWithFrame:window.bounds];
+    overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.4];
+    overlay.alpha = 0;
+    overlay.tag = 88800;
+    [window addSubview:overlay];
+
+    UITapGestureRecognizer *bgTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissShareConfirmPanel)];
+    [overlay addGestureRecognizer:bgTap];
+
+    // 底部面板（高度稍后根据内容动态设置）
+    CGFloat safeBottom = 0;
+    if (@available(iOS 11.0, *)) {
+        safeBottom = window.safeAreaInsets.bottom;
+    }
+    UIView *panel = [[UIView alloc] init];
+    panel.backgroundColor = [WKApp shared].config.cellBackgroundColor;
+    panel.tag = 88801;
+    [overlay addSubview:panel];
+
+    CGFloat pad = 20;
+    CGFloat y = pad;
+
+    // "发送给" 标题
+    UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, screenW - pad*2, 22)];
+    titleLbl.text = LLang(@"发送给");
+    titleLbl.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    titleLbl.textColor = [UIColor colorWithWhite:0.4 alpha:1];
+    [panel addSubview:titleLbl];
+    y += 30;
+
+    // 目标行：图标/头像 + 名称
+    UIView *targetRow = [[UIView alloc] initWithFrame:CGRectMake(pad, y, screenW - pad*2, 44)];
+    [panel addSubview:targetRow];
+
+    CGFloat iconLeft = 0;
+    if (isGroup) {
+        UILabel *hashLbl = [[UILabel alloc] initWithFrame:CGRectMake(0, 7, 30, 30)];
+        hashLbl.text = @"#";
+        hashLbl.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
+        hashLbl.textColor = [UIColor colorWithRed:148/255.0 green:152/255.0 blue:168/255.0 alpha:1.0];
+        hashLbl.textAlignment = NSTextAlignmentCenter;
+        [targetRow addSubview:hashLbl];
+        iconLeft = 34;
+    } else if (isThread) {
+        UIImageView *threadIcon = [[UIImageView alloc] initWithImage:[WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(20, 20) color:[UIColor colorWithRed:148/255.0 green:152/255.0 blue:168/255.0 alpha:1.0]]];
+        threadIcon.frame = CGRectMake(4, 12, 20, 20);
+        [targetRow addSubview:threadIcon];
+        iconLeft = 30;
+    } else {
+        // 私聊头像
+        WKUserAvatar *avatar = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 2, 40, 40)];
+        WKChannelInfo *chInfo = [[WKSDK shared].channelManager getChannelInfo:channel];
+        if (chInfo) {
+            NSString *avatarURL = [WKAvatarUtil getAvatar:channel.channelId cacheKey:chInfo.avatarCacheKey];
+            if (chInfo.logo.length > 0) avatarURL = [WKAvatarUtil getFullAvatarWIthPath:chInfo.logo];
+            [avatar.avatarImgView sd_setImageWithURL:[NSURL URLWithString:avatarURL]
+                                    placeholderImage:[WKApp.shared loadImage:@"Common/Index/DefaultAvatar" moduleID:@"WuKongBase"]];
+        }
+        [targetRow addSubview:avatar];
+        iconLeft = 48;
+    }
+
+    UILabel *nameLbl = [[UILabel alloc] initWithFrame:CGRectMake(iconLeft, 0, targetRow.lim_width - iconLeft, 44)];
+    nameLbl.text = name;
+    nameLbl.font = [[WKApp shared].config appFontOfSizeMedium:16];
+    nameLbl.textColor = [WKApp shared].config.defaultTextColor;
+    [targetRow addSubview:nameLbl];
+    y += 52;
+
+    // 文件预览卡片（居中，宽约60%，参考微信）
+    if (self.shareFileInfos.count > 0) {
+        NSDictionary *fileInfo = self.shareFileInfos.firstObject;
+        NSString *type = fileInfo[@"type"];
+        NSString *fileName = fileInfo[@"fileName"] ?: @"";
+        NSString *filePath = fileInfo[@"path"];
+
+        CGFloat cardW = screenW * 0.62;
+        CGFloat cardH = 66;
+        CGFloat cardX = (screenW - cardW) / 2.0;
+        UIView *fileCard = [[UIView alloc] initWithFrame:CGRectMake(cardX, y, cardW, cardH)];
+        fileCard.backgroundColor = [WKApp shared].config.backgroundColor;
+        fileCard.layer.cornerRadius = 8;
+        fileCard.layer.borderColor = [[UIColor grayColor] colorWithAlphaComponent:0.12].CGColor;
+        fileCard.layer.borderWidth = 0.5;
+        [panel addSubview:fileCard];
+
+        // 文件图标（右侧）
+        CGFloat iconSize = 38;
+        UIImageView *fileIconView = [[UIImageView alloc] initWithFrame:CGRectMake(cardW - iconSize - 12, (cardH - iconSize) / 2, iconSize, iconSize)];
+        fileIconView.contentMode = UIViewContentModeScaleAspectFit;
+
+        if ([type isEqualToString:@"image"] && filePath) {
+            fileIconView.image = [UIImage imageWithContentsOfFile:filePath];
+            fileIconView.contentMode = UIViewContentModeScaleAspectFill;
+            fileIconView.clipsToBounds = YES;
+            fileIconView.layer.cornerRadius = 4;
+        } else {
+            NSString *ext = [fileName pathExtension];
+            fileIconView.image = [self fileIconForExtension:ext];
+        }
+        [fileCard addSubview:fileIconView];
+
+        // 文件名
+        CGFloat textW = cardW - iconSize - 34;
+        UILabel *fl = [[UILabel alloc] initWithFrame:CGRectMake(12, 10, textW, 36)];
+        fl.text = fileName;
+        fl.font = [UIFont systemFontOfSize:14];
+        fl.textColor = [WKApp shared].config.defaultTextColor;
+        fl.lineBreakMode = NSLineBreakByTruncatingMiddle;
+        fl.numberOfLines = 2;
+        [fileCard addSubview:fl];
+
+        // 文件大小
+        if (filePath && [[NSFileManager defaultManager] fileExistsAtPath:filePath]) {
+            NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:filePath error:nil];
+            unsigned long long size = [attrs fileSize];
+            NSString *sizeStr;
+            if (size < 1024) sizeStr = [NSString stringWithFormat:@"%lluB", size];
+            else if (size < 1024*1024) sizeStr = [NSString stringWithFormat:@"%.1fKB", size/1024.0];
+            else sizeStr = [NSString stringWithFormat:@"%.1fMB", size/1024.0/1024.0];
+            UILabel *sl = [[UILabel alloc] initWithFrame:CGRectMake(12, cardH - 22, textW, 16)];
+            sl.text = sizeStr;
+            sl.font = [UIFont systemFontOfSize:11];
+            sl.textColor = [UIColor grayColor];
+            [fileCard addSubview:sl];
+        }
+        y += cardH + 12;
+    }
+
+    // 输入框
+    UITextField *msgField = [[UITextField alloc] initWithFrame:CGRectMake(pad, y, screenW - pad*2, 40)];
+    msgField.backgroundColor = [WKApp shared].config.backgroundColor;
+    msgField.layer.cornerRadius = 6;
+    msgField.placeholder = LLang(@"发消息");
+    msgField.font = [UIFont systemFontOfSize:14];
+    msgField.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 12, 40)];
+    msgField.leftViewMode = UITextFieldViewModeAlways;
+    msgField.tag = 88802;
+    [panel addSubview:msgField];
+    y += 50;
+
+    // 按钮行
+    CGFloat btnW = (screenW - pad*2 - 12) / 2;
+    CGFloat btnH = 44;
+
+    UIButton *cancelBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    cancelBtn.frame = CGRectMake(pad, y, btnW, btnH);
+    [cancelBtn setTitle:LLang(@"取消") forState:UIControlStateNormal];
+    [cancelBtn setTitleColor:[WKApp shared].config.defaultTextColor forState:UIControlStateNormal];
+    cancelBtn.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+    cancelBtn.backgroundColor = [WKApp shared].config.backgroundColor;
+    cancelBtn.layer.cornerRadius = 8;
+    [cancelBtn addTarget:self action:@selector(dismissShareConfirmPanel) forControlEvents:UIControlEventTouchUpInside];
+    [panel addSubview:cancelBtn];
+
+    UIButton *sendBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    sendBtn.frame = CGRectMake(pad + btnW + 12, y, btnW, btnH);
+    [sendBtn setTitle:LLang(@"发送") forState:UIControlStateNormal];
+    [sendBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    sendBtn.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+    sendBtn.backgroundColor = [UIColor colorWithRed:7/255.0 green:193/255.0 blue:96/255.0 alpha:1.0];
+    sendBtn.layer.cornerRadius = 8;
+    sendBtn.tag = 88803;
+    [sendBtn addTarget:self action:@selector(onShareConfirmSend) forControlEvents:UIControlEventTouchUpInside];
+    [panel addSubview:sendBtn];
+
+    // 存储 channel
+    objc_setAssociatedObject(overlay, "shareChannel", channel, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 监听键盘
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(shareConfirmKeyboardWillShow:) name:UIKeyboardWillShowNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(shareConfirmKeyboardWillHide:) name:UIKeyboardWillHideNotification object:nil];
+
+    // 点击面板空白区域收键盘（按钮/输入框上不触发）
+    UITapGestureRecognizer *panelTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(shareConfirmDismissKeyboard)];
+    panelTap.delegate = self;
+    [overlay addGestureRecognizer:panelTap];
+
+    // 动态计算面板高度
+    y += btnH + safeBottom + 16;
+    CGFloat panelH = y;
+    panel.frame = CGRectMake(0, screenH, screenW, panelH);
+
+    // 圆角蒙版
+    UIBezierPath *maskPath = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, screenW, panelH) byRoundingCorners:UIRectCornerTopLeft | UIRectCornerTopRight cornerRadii:CGSizeMake(16, 16)];
+    CAShapeLayer *maskLayer = [CAShapeLayer layer];
+    maskLayer.path = maskPath.CGPath;
+    panel.layer.mask = maskLayer;
+
+    // 弹出动画
+    [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        overlay.alpha = 1;
+        panel.frame = CGRectMake(0, screenH - panelH, screenW, panelH);
+    } completion:nil];
+}
+
+- (void)dismissShareConfirmPanel {
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIKeyboardWillShowNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIKeyboardWillHideNotification object:nil];
+    [self.view endEditing:YES];
+
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    UIView *overlay = [window viewWithTag:88800];
+    if (!overlay) return;
+    UIView *panel = [overlay viewWithTag:88801];
+    CGFloat screenH = window.lim_height;
+    [UIView animateWithDuration:0.25 animations:^{
+        overlay.alpha = 0;
+        panel.frame = CGRectMake(0, screenH, panel.lim_width, panel.lim_height);
+    } completion:^(BOOL finished) {
+        [overlay removeFromSuperview];
+    }];
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    // 点在按钮或输入框上时，不触发收键盘手势
+    if ([touch.view isKindOfClass:[UIButton class]] || [touch.view isKindOfClass:[UITextField class]]) {
+        return NO;
+    }
+    return YES;
+}
+
+- (void)shareConfirmDismissKeyboard {
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    UIView *overlay = [window viewWithTag:88800];
+    [overlay endEditing:YES];
+}
+
+- (void)shareConfirmKeyboardWillShow:(NSNotification *)notification {
+    CGRect kbFrame = [notification.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    NSTimeInterval duration = [notification.userInfo[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    UIView *panel = [[window viewWithTag:88800] viewWithTag:88801];
+    if (!panel) return;
+    CGFloat screenH = window.lim_height;
+    CGFloat panelBottom = screenH - kbFrame.size.height;
+    [UIView animateWithDuration:duration animations:^{
+        panel.frame = CGRectMake(0, panelBottom - panel.lim_height, panel.lim_width, panel.lim_height);
+    }];
+}
+
+- (void)shareConfirmKeyboardWillHide:(NSNotification *)notification {
+    NSTimeInterval duration = [notification.userInfo[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    UIView *panel = [[window viewWithTag:88800] viewWithTag:88801];
+    if (!panel) return;
+    CGFloat screenH = window.lim_height;
+    [UIView animateWithDuration:duration animations:^{
+        panel.frame = CGRectMake(0, screenH - panel.lim_height, panel.lim_width, panel.lim_height);
+    }];
+}
+
+- (void)onShareConfirmSend {
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    UIView *overlay = [window viewWithTag:88800];
+    WKChannel *channel = objc_getAssociatedObject(overlay, "shareChannel");
+    UITextField *msgField = [overlay viewWithTag:88802];
+    NSString *extraText = msgField.text;
+
+    [self dismissShareConfirmPanel];
+
+    if (channel) {
+        if (self.onSingleConfirm) {
+            self.onSingleConfirm(channel, extraText);
+        } else if (self.onSelect) {
+            self.onSelect(channel);
+        }
+    }
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [[WKNavigationManager shared] popViewControllerAnimated:YES];
+    });
+}
+
+- (UIImage *)fileIconForExtension:(NSString *)ext {
+    NSString *lowExt = [[ext lowercaseString] stringByReplacingOccurrencesOfString:@"." withString:@""];
+    NSString *imageName = nil;
+    if ([@[@"doc", @"docx", @"docm", @"rtf", @"odt", @"wps"] containsObject:lowExt]) imageName = @"FileType/FileWord";
+    else if ([@[@"xls", @"xlsx", @"xlsm", @"csv", @"ods", @"et"] containsObject:lowExt]) imageName = @"FileType/FileExcel";
+    else if ([lowExt isEqualToString:@"pdf"]) imageName = @"FileType/FilePDF";
+    else if ([@[@"ppt", @"pptx", @"pptm", @"pps", @"ppsx"] containsObject:lowExt]) imageName = @"FileType/FilePPT";
+    else if ([@[@"mp4", @"mov", @"avi", @"mkv", @"wmv", @"flv", @"webm"] containsObject:lowExt]) imageName = @"FileType/FileVideo";
+    else if ([@[@"md", @"markdown"] containsObject:lowExt]) imageName = @"FileType/FileMarkdown";
+    if (imageName) {
+        UIImage *img = [[WKApp shared] loadImage:imageName moduleID:@"WuKongBase"];
+        if (img) return [img imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+    }
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:28 weight:UIImageSymbolWeightRegular];
+        UIImage *img = [UIImage systemImageNamed:@"doc.fill" withConfiguration:config];
+        return [img imageWithTintColor:[UIColor systemBlueColor] renderingMode:UIImageRenderingModeAlwaysOriginal];
+    }
+    return nil;
 }
 
 #pragma mark - Helper Images

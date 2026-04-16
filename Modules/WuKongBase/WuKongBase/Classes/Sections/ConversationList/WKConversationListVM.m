@@ -380,6 +380,21 @@ static WKConversationListVM *_instance;
 }
 
 -(void) rebuildFilteredList {
+    // 先去重（同一个 channel 只保留一条，防止外部分享时同时发文件+文本导致重复）
+    NSMutableSet *seenKeys = [NSMutableSet set];
+    NSMutableArray *deduped = [NSMutableArray array];
+    for (WKConversationWrapModel *model in self.conversationWrapModels) {
+        NSString *key = [NSString stringWithFormat:@"%@_%d", model.channel.channelId, model.channel.channelType];
+        if ([seenKeys containsObject:key]) continue;
+        [seenKeys addObject:key];
+        [deduped addObject:model];
+    }
+    if (deduped.count != self.conversationWrapModels.count) {
+        NSLog(@"[ShareExt] rebuildFilteredList 去重: %lu -> %lu", (unsigned long)self.conversationWrapModels.count, (unsigned long)deduped.count);
+        [self.conversationWrapModels removeAllObjects];
+        [self.conversationWrapModels addObjectsFromArray:deduped];
+    }
+
     NSMutableArray *filtered = [NSMutableArray array];
     for (WKConversationWrapModel *model in self.conversationWrapModels) {
         if ([self modelMatchesFilter:model]) {
