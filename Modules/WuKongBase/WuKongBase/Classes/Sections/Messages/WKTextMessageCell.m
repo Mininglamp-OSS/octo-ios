@@ -6,6 +6,7 @@
 //
 
 #import "WKTextMessageCell.h"
+#import <objc/runtime.h>
 #import "WKApp.h"
 #import "UIView+WK.h"
 #import "WKMentionService.h"
@@ -62,6 +63,9 @@
 @property(nonatomic,strong) NSMutableArray<NSString*> *tableRawContents; // 表格原始 markdown 内容（供复制用）
 @property(nonatomic,assign) BOOL segmentsBuilt; // 分段视图是否已创建
 
+// ---------- 链接卡片 ----------
+@property(nonatomic,strong) UIView *linkCardView;
+@property(nonatomic,assign) BOOL isLinkCard;
 
 // ---------- 回复 ----------
 @property(nonatomic,strong) UIView *replyBox;
@@ -102,6 +106,11 @@
 }
 
 + (CGSize)contentSizeForMessage:(WKMessageModel *)model {
+    // 链接卡片固定大小
+    NSString *checkContent = [self getRawContent:model];
+    if ([checkContent hasPrefix:@"[链接]"]) {
+        return CGSizeMake(220, 70);
+    }
     NSMutableAttributedString *attrStr = [[self class] parseAndCacheTextMessage:model];
     CGSize  messageTextSize =  [[self class] textSize:attrStr messageModel:model];
     CGSize size = messageTextSize;
@@ -904,8 +913,18 @@
 
 - (void)refresh:(WKMessageModel *)model {
     [super refresh:model];
-//    NSString *text = textContent.content;
-    
+
+    // 检测链接卡片
+    NSString *rawText = [[self class] getRawContent:model];
+    if ([rawText hasPrefix:@"[链接]"]) {
+        [self showLinkCard:rawText model:model];
+        return;
+    }
+    // 非链接卡片：隐藏卡片视图，正常渲染文本
+    self.linkCardView.hidden = YES;
+    self.isLinkCard = NO;
+    self.textLbl.hidden = NO;
+
     NSMutableAttributedString *attrStr = [[self class] parseAndCacheTextMessage:model];
 
     if(model.isSend) {
@@ -1129,7 +1148,14 @@
 }
 
 -(void) onTapWithGestureRecognizer:(TapLongTapOrDoubleTapGestureRecognizerWrap*)gesture {
-   // [self.textLbl onTap:gesture];
+    // 链接卡片点击：打开 URL
+    if (self.isLinkCard && self.linkCardView && !self.linkCardView.hidden) {
+        NSString *url = objc_getAssociatedObject(self.linkCardView, "linkURL");
+        if (url.length > 0) {
+            [[UIApplication sharedApplication] openURL:[NSURL URLWithString:url] options:@{} completionHandler:nil];
+        }
+        return;
+    }
     // 表格工具栏复制按钮点击检测（参考 BotFather 按钮模式）
     for (NSUInteger i = 0; i < self.tableToolbars.count; i++) {
         UIView *toolbar = self.tableToolbars[i];
@@ -1663,6 +1689,136 @@
     if (self.rejectCommand) {
         [self.conversationContext sendTextMessage:self.rejectCommand];
     }
+}
+
+#pragma mark - Link Card
+
+- (void)showLinkCard:(NSString *)rawText model:(WKMessageModel *)model {
+    self.isLinkCard = YES;
+    // 彻底隐藏所有可能残留的子视图
+    self.textLbl.hidden = YES;
+    self.textLbl.text = nil;
+    self.textLbl.attributedText = nil;
+    self.textLbl.lim_size = CGSizeZero;
+    for (UIView *seg in self.segmentViews) seg.hidden = YES;
+    self.replyBox.hidden = YES;
+    self.botActionView.hidden = YES;
+    self.securityTipLbl.hidden = YES;
+    // 隐藏 messageContentView 上所有非 linkCardView 的子视图
+    for (UIView *sub in self.messageContentView.subviews) {
+        if (sub != self.linkCardView) sub.hidden = YES;
+    }
+
+    // 解析 JSON
+    NSString *jsonStr = [rawText substringFromIndex:@"[链接]".length];
+    NSData *jsonData = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
+    NSDictionary *cardData = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+    NSString *title = cardData[@"title"] ?: @"";
+    NSString *url = cardData[@"url"] ?: @"";
+    NSString *iconURL = cardData[@"icon"] ?: @"";
+
+    // 创建或复用卡片视图
+    if (!self.linkCardView) {
+        self.linkCardView = [[UIView alloc] init];
+        [self.messageContentView addSubview:self.linkCardView];
+    }
+    self.linkCardView.hidden = NO;
+
+    // 清除旧的子视图
+    for (UIView *sub in self.linkCardView.subviews) [sub removeFromSuperview];
+
+    CGFloat cardW = 220;
+    CGFloat cardH = 70;
+    self.linkCardView.frame = CGRectMake(0, 0, cardW, cardH);
+
+    // favicon（右侧）
+    CGFloat iconSize = 32;
+    UIImageView *faviconView = [[UIImageView alloc] initWithFrame:CGRectMake(cardW - iconSize - 10, (cardH - iconSize) / 2, iconSize, iconSize)];
+    faviconView.contentMode = UIViewContentModeScaleAspectFit;
+    faviconView.layer.cornerRadius = 4;
+    faviconView.layer.masksToBounds = YES;
+    faviconView.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.1];
+    // 默认链接图标（程序化绘制地球图标）
+    faviconView.image = [[self class] defaultLinkIcon];
+    [self.linkCardView addSubview:faviconView];
+
+    // 异步加载 favicon
+    if (iconURL.length > 0) {
+        dispatch_async(dispatch_get_global_queue(0, 0), ^{
+            NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:iconURL]];
+            if (data) {
+                UIImage *icon = [UIImage imageWithData:data];
+                if (icon) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        faviconView.image = icon;
+                    });
+                }
+            }
+        });
+    }
+
+    // 标题
+    CGFloat textW = cardW - iconSize - 24;
+    UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(8, 10, textW, 22)];
+    titleLbl.text = title.length > 0 ? title : url;
+    titleLbl.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+    titleLbl.textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.defaultTextColor;
+    titleLbl.lineBreakMode = NSLineBreakByTruncatingTail;
+    [self.linkCardView addSubview:titleLbl];
+
+    // URL（截断显示域名）
+    NSURL *parsedURL = [NSURL URLWithString:url];
+    NSString *displayURL = parsedURL.host ?: url;
+    UILabel *urlLbl = [[UILabel alloc] initWithFrame:CGRectMake(8, 34, textW, 16)];
+    urlLbl.text = displayURL;
+    urlLbl.font = [UIFont systemFontOfSize:11];
+    urlLbl.textColor = model.isSend ? [[UIColor whiteColor] colorWithAlphaComponent:0.7] : [UIColor grayColor];
+    urlLbl.lineBreakMode = NSLineBreakByTruncatingTail;
+    [self.linkCardView addSubview:urlLbl];
+
+    // 底部分隔线
+    UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(8, cardH - 20, cardW - 16, 0.5)];
+    sep.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.15];
+    [self.linkCardView addSubview:sep];
+
+    // "网页" 标签
+    UILabel *webLabel = [[UILabel alloc] initWithFrame:CGRectMake(8, cardH - 18, 60, 16)];
+    webLabel.text = LLang(@"网页");
+    webLabel.font = [UIFont systemFontOfSize:10];
+    webLabel.textColor = model.isSend ? [[UIColor whiteColor] colorWithAlphaComponent:0.5] : [UIColor lightGrayColor];
+    [self.linkCardView addSubview:webLabel];
+
+    // 存储 URL 供点击使用
+    objc_setAssociatedObject(self.linkCardView, "linkURL", url, OBJC_ASSOCIATION_COPY_NONATOMIC);
+
+    // 更新 messageContentView 大小
+    self.messageContentView.frame = CGRectMake(self.messageContentView.frame.origin.x,
+                                                self.messageContentView.frame.origin.y,
+                                                cardW, cardH);
+}
+
++ (UIImage *)defaultLinkIcon {
+    CGSize s = CGSizeMake(32, 32);
+    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    if (!ctx) return nil;
+    // 灰色地球图标
+    UIColor *color = [UIColor colorWithWhite:0.65 alpha:1.0];
+    [color setStroke];
+    CGContextSetLineWidth(ctx, 1.5);
+    // 圆
+    CGContextAddEllipseInRect(ctx, CGRectMake(4, 4, 24, 24));
+    CGContextStrokePath(ctx);
+    // 横线
+    CGContextMoveToPoint(ctx, 4, 16);
+    CGContextAddLineToPoint(ctx, 28, 16);
+    CGContextStrokePath(ctx);
+    // 竖椭圆
+    CGContextAddEllipseInRect(ctx, CGRectMake(11, 4, 10, 24));
+    CGContextStrokePath(ctx);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
 }
 
 @end

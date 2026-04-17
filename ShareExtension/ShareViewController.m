@@ -37,6 +37,29 @@ static NSString *const kShareDirName = @"ShareExtensionFiles";
     // 清理旧的共享文件
     [self cleanSharedDirectory];
 
+    // 检测是否为 URL 分享（Safari/浏览器分享链接）
+    // Safari 分享时 providers 包含 URL + 其他（标题、图片），应合并为单个链接
+    BOOL hasURL = NO;
+    BOOL hasNonURLFile = NO;
+    for (NSItemProvider *p in providers) {
+        if ([p hasItemConformingToTypeIdentifier:UTTypeURL.identifier] &&
+            ![p hasItemConformingToTypeIdentifier:UTTypeFileURL.identifier]) {
+            hasURL = YES;
+        }
+        if ([p hasItemConformingToTypeIdentifier:UTTypeImage.identifier] ||
+            [p hasItemConformingToTypeIdentifier:UTTypeMovie.identifier] ||
+            [p hasItemConformingToTypeIdentifier:UTTypeFileURL.identifier]) {
+            hasNonURLFile = YES;
+        }
+    }
+
+    // 如果是纯 URL 分享（如 Safari），合并为单条链接消息
+    if (hasURL && !hasNonURLFile) {
+        [self handleURLShare:item providers:providers];
+        return;
+    }
+
+    // 普通文件/图片/视频分享
     NSMutableArray *fileInfos = [NSMutableArray array];
     __block NSInteger pending = providers.count;
 
@@ -61,22 +84,10 @@ static NSString *const kShareDirName = @"ShareExtensionFiles";
                 pending--;
                 if (pending <= 0) [self finishWithFileInfos:fileInfos];
             }];
-        } else if ([provider hasItemConformingToTypeIdentifier:UTTypeURL.identifier]) {
-            [provider loadItemForTypeIdentifier:UTTypeURL.identifier options:nil completionHandler:^(id<NSSecureCoding> rawItem, NSError *error) {
-                id item = (id)rawItem;
-                NSURL *url = ([item isKindOfClass:[NSURL class]]) ? (NSURL *)item : nil;
-                if (url && !error) {
-                    @synchronized (fileInfos) {
-                        [fileInfos addObject:@{@"type": @"text", @"content": url.absoluteString}];
-                    }
-                }
-                pending--;
-                if (pending <= 0) [self finishWithFileInfos:fileInfos];
-            }];
         } else if ([provider hasItemConformingToTypeIdentifier:UTTypePlainText.identifier]) {
             [provider loadItemForTypeIdentifier:UTTypePlainText.identifier options:nil completionHandler:^(id<NSSecureCoding> rawItem, NSError *error) {
-                id item = (id)rawItem;
-                NSString *text = ([item isKindOfClass:[NSString class]]) ? (NSString *)item : nil;
+                id pi = (id)rawItem;
+                NSString *text = ([pi isKindOfClass:[NSString class]]) ? (NSString *)pi : nil;
                 if (text && !error) {
                     @synchronized (fileInfos) {
                         [fileInfos addObject:@{@"type": @"text", @"content": text}];
@@ -95,6 +106,61 @@ static NSString *const kShareDirName = @"ShareExtensionFiles";
             if (pending <= 0) [self finishWithFileInfos:fileInfos];
         }
     }
+}
+
+/// Safari/浏览器 URL 分享：提取 URL + 网页标题，合并为单条链接消息
+- (void)handleURLShare:(NSExtensionItem *)item providers:(NSArray<NSItemProvider *> *)providers {
+    __block NSString *urlString = nil;
+    __block NSString *title = nil;
+
+    // 获取网页标题（from NSExtensionItem.attributedContentText）
+    if (item.attributedContentText.length > 0) {
+        title = item.attributedContentText.string;
+    }
+
+    // 提取 URL
+    NSItemProvider *urlProvider = nil;
+    for (NSItemProvider *p in providers) {
+        if ([p hasItemConformingToTypeIdentifier:UTTypeURL.identifier]) {
+            urlProvider = p;
+            break;
+        }
+    }
+
+    if (!urlProvider) {
+        [self completeWithError];
+        return;
+    }
+
+    [urlProvider loadItemForTypeIdentifier:UTTypeURL.identifier options:nil completionHandler:^(id<NSSecureCoding> rawItem, NSError *error) {
+        id pi = (id)rawItem;
+        NSURL *url = ([pi isKindOfClass:[NSURL class]]) ? (NSURL *)pi : nil;
+        if (url) urlString = url.absoluteString;
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!urlString) {
+                [self completeWithError];
+                return;
+            }
+
+            // 合并为单条链接消息（type=link），附带 favicon URL
+            NSMutableDictionary *linkInfo = [NSMutableDictionary dictionary];
+            linkInfo[@"type"] = @"link";
+            linkInfo[@"url"] = urlString;
+            if (title.length > 0) linkInfo[@"title"] = title;
+            // 从 URL 提取 favicon
+            NSURL *parsedURL = [NSURL URLWithString:urlString];
+            if (parsedURL.scheme && parsedURL.host) {
+                linkInfo[@"icon"] = [NSString stringWithFormat:@"%@://%@/favicon.ico", parsedURL.scheme, parsedURL.host];
+            }
+
+            NSUserDefaults *shared = [[NSUserDefaults alloc] initWithSuiteName:kAppGroupId];
+            [shared setObject:@[linkInfo] forKey:kShareDataKey];
+            [shared synchronize];
+
+            [self openMainApp];
+        });
+    }];
 }
 
 - (void)loadProvider:(NSItemProvider *)provider

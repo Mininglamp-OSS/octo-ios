@@ -859,7 +859,7 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     [targetRow addSubview:nameLbl];
     y += 52;
 
-    // 文件预览卡片（居中，宽约60%，参考微信）
+    // 文件/链接预览卡片
     if (self.shareFileInfos.count > 0) {
         NSDictionary *fileInfo = self.shareFileInfos.firstObject;
         NSString *type = fileInfo[@"type"];
@@ -869,28 +869,100 @@ typedef NS_ENUM(NSInteger, FWItemType) {
         CGFloat cardW = screenW * 0.62;
         CGFloat cardH = 66;
         CGFloat cardX = (screenW - cardW) / 2.0;
-        UIView *fileCard = [[UIView alloc] initWithFrame:CGRectMake(cardX, y, cardW, cardH)];
-        fileCard.backgroundColor = [WKApp shared].config.backgroundColor;
-        fileCard.layer.cornerRadius = 8;
-        fileCard.layer.borderColor = [[UIColor grayColor] colorWithAlphaComponent:0.12].CGColor;
-        fileCard.layer.borderWidth = 0.5;
-        [panel addSubview:fileCard];
 
-        // 文件图标（右侧）
-        CGFloat iconSize = 38;
-        UIImageView *fileIconView = [[UIImageView alloc] initWithFrame:CGRectMake(cardW - iconSize - 12, (cardH - iconSize) / 2, iconSize, iconSize)];
-        fileIconView.contentMode = UIViewContentModeScaleAspectFit;
+        // 链接分享：显示网页标题 + favicon
+        if ([type isEqualToString:@"link"]) {
+            NSString *linkTitle = fileInfo[@"title"] ?: @"";
+            NSString *linkURL = fileInfo[@"url"] ?: @"";
+            CGFloat linkPad = pad + 10;
+            cardW = screenW - linkPad * 2;
+            cardX = linkPad;
+            cardH = 70;
 
-        if ([type isEqualToString:@"image"] && filePath) {
-            fileIconView.image = [UIImage imageWithContentsOfFile:filePath];
-            fileIconView.contentMode = UIViewContentModeScaleAspectFill;
-            fileIconView.clipsToBounds = YES;
-            fileIconView.layer.cornerRadius = 4;
+            UIView *fileCard = [[UIView alloc] initWithFrame:CGRectMake(cardX, y, cardW, cardH)];
+            fileCard.backgroundColor = [WKApp shared].config.backgroundColor;
+            fileCard.layer.cornerRadius = 10;
+            fileCard.layer.borderColor = [[UIColor grayColor] colorWithAlphaComponent:0.1].CGColor;
+            fileCard.layer.borderWidth = 0.5;
+            [panel addSubview:fileCard];
+
+            // favicon（右侧）
+            CGFloat iconSize = 36;
+            UIImageView *faviconView = [[UIImageView alloc] initWithFrame:CGRectMake(cardW - iconSize - 14, (cardH - iconSize) / 2, iconSize, iconSize)];
+            faviconView.contentMode = UIViewContentModeScaleAspectFit;
+            faviconView.layer.cornerRadius = 6;
+            faviconView.layer.masksToBounds = YES;
+            faviconView.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.08];
+            // 默认链接图标（地球）
+            if (@available(iOS 13.0, *)) {
+                UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIFontWeightRegular];
+                faviconView.image = [[UIImage systemImageNamed:@"globe" withConfiguration:config] imageWithTintColor:[UIColor grayColor] renderingMode:UIImageRenderingModeAlwaysOriginal];
+            }
+            [fileCard addSubview:faviconView];
+            // 异步加载网站 favicon（直接请求网站的 /favicon.ico）
+            NSString *iconURL = fileInfo[@"icon"];
+            NSURL *parsedURL = [NSURL URLWithString:linkURL];
+            if (!iconURL && parsedURL.scheme && parsedURL.host) {
+                iconURL = [NSString stringWithFormat:@"%@://%@/favicon.ico", parsedURL.scheme, parsedURL.host];
+            }
+            if (iconURL) {
+                NSString *faviconURL = iconURL;
+                dispatch_async(dispatch_get_global_queue(0, 0), ^{
+                    NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:faviconURL]];
+                    if (data) {
+                        UIImage *icon = [UIImage imageWithData:data];
+                        if (icon) {
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                faviconView.image = icon;
+                                faviconView.backgroundColor = [UIColor clearColor];
+                            });
+                        }
+                    }
+                });
+            }
+
+            // 标题
+            CGFloat textW = cardW - iconSize - 40;
+            UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 12, textW, 22)];
+            titleLabel.text = linkTitle.length > 0 ? linkTitle : linkURL;
+            titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+            titleLabel.textColor = [WKApp shared].config.defaultTextColor;
+            titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+            [fileCard addSubview:titleLabel];
+
+            // URL
+            UILabel *urlLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 36, textW, 16)];
+            urlLabel.text = linkURL;
+            urlLabel.font = [UIFont systemFontOfSize:11];
+            urlLabel.textColor = [UIColor grayColor];
+            urlLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+            [fileCard addSubview:urlLabel];
+
+            y += cardH + 12;
         } else {
-            NSString *ext = [fileName pathExtension];
-            fileIconView.image = [self fileIconForExtension:ext];
-        }
-        [fileCard addSubview:fileIconView];
+            // 文件/图片预览卡片（居中，宽约60%）
+            UIView *fileCard = [[UIView alloc] initWithFrame:CGRectMake(cardX, y, cardW, cardH)];
+            fileCard.backgroundColor = [WKApp shared].config.backgroundColor;
+            fileCard.layer.cornerRadius = 8;
+            fileCard.layer.borderColor = [[UIColor grayColor] colorWithAlphaComponent:0.12].CGColor;
+            fileCard.layer.borderWidth = 0.5;
+            [panel addSubview:fileCard];
+
+            // 文件图标（右侧）
+            CGFloat iconSize = 38;
+            UIImageView *fileIconView = [[UIImageView alloc] initWithFrame:CGRectMake(cardW - iconSize - 12, (cardH - iconSize) / 2, iconSize, iconSize)];
+            fileIconView.contentMode = UIViewContentModeScaleAspectFit;
+
+            if ([type isEqualToString:@"image"] && filePath) {
+                fileIconView.image = [UIImage imageWithContentsOfFile:filePath];
+                fileIconView.contentMode = UIViewContentModeScaleAspectFill;
+                fileIconView.clipsToBounds = YES;
+                fileIconView.layer.cornerRadius = 4;
+            } else {
+                NSString *ext = [fileName pathExtension];
+                fileIconView.image = [self fileIconForExtension:ext];
+            }
+            [fileCard addSubview:fileIconView];
 
         // 文件名
         CGFloat textW = cardW - iconSize - 34;
@@ -916,7 +988,8 @@ typedef NS_ENUM(NSInteger, FWItemType) {
             sl.textColor = [UIColor grayColor];
             [fileCard addSubview:sl];
         }
-        y += cardH + 12;
+            y += cardH + 12;
+        } // end else (file/image)
     }
 
     // 输入框

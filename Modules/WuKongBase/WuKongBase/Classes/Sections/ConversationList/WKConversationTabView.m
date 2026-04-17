@@ -73,8 +73,8 @@ static CGFloat const kHorizontalPadding = 16.0f;
 
     // @提醒标识
     _mentionLbl = [[UILabel alloc] init];
-    _mentionLbl.text = @"@";
-    _mentionLbl.font = [UIFont systemFontOfSize:10 weight:UIFontWeightBold];
+    _mentionLbl.text = LLang(@"有人@我");
+    _mentionLbl.font = [UIFont systemFontOfSize:9 weight:UIFontWeightMedium];
     _mentionLbl.textColor = [UIColor whiteColor];
     _mentionLbl.backgroundColor = [UIColor orangeColor];
     _mentionLbl.textAlignment = NSTextAlignmentCenter;
@@ -216,7 +216,10 @@ static CGFloat const kHorizontalPadding = 16.0f;
     CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
     CGFloat textRight = CGRectGetMidX(_groupBtn.frame) + textW / 2.0f;
     CGFloat btnCenterY = CGRectGetMidY(_groupBtn.frame);
-    _mentionLbl.frame = CGRectMake(textRight + 3, btnCenterY - 8, 16, 16);
+    [_mentionLbl sizeToFit];
+    CGFloat lblW = _mentionLbl.lim_width + 10;
+    CGFloat lblH = 16;
+    _mentionLbl.frame = CGRectMake(textRight + 4, btnCenterY - lblH / 2.0, lblW, lblH);
 }
 
 - (void)setGroupHasMention:(BOOL)hasMention {

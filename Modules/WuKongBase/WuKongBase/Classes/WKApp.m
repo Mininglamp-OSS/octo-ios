@@ -1926,7 +1926,19 @@ static NSString *const kShareDirName = @"ShareExtensionFiles";
     for (NSDictionary *info in fileInfos) {
         NSString *type = info[@"type"];
 
-        if ([type isEqualToString:@"text"]) {
+        if ([type isEqualToString:@"link"]) {
+            // 链接分享：发送为 [链接] JSON 格式
+            NSString *url = info[@"url"] ?: @"";
+            NSString *title = info[@"title"] ?: @"";
+            NSString *icon = info[@"icon"] ?: @"";
+            NSDictionary *cardData = @{@"title": title, @"url": url, @"icon": icon};
+            NSData *jsonData = [NSJSONSerialization dataWithJSONObject:cardData options:0 error:nil];
+            NSString *jsonStr = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+            NSString *content = [NSString stringWithFormat:@"[链接]%@", jsonStr];
+            WKTextContent *textContent = [[WKTextContent alloc] initWithContent:content];
+            WKMessage *msg = [[WKSDK shared].chatManager forwardMessage:textContent channel:channel];
+            if (msg) [sentMessages addObject:msg];
+        } else if ([type isEqualToString:@"text"]) {
             NSString *content = info[@"content"];
             if (content.length > 0) {
                 WKTextContent *textContent = [[WKTextContent alloc] initWithContent:content];
