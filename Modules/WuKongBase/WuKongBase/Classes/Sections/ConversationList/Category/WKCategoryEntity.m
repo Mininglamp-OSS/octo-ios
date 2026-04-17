@@ -30,6 +30,7 @@ static NSString* safeString(id value) {
     e.category_id = safeString(dict[@"category_id"]);
     e.name = safeString(dict[@"name"]);
     e.sort = [dict[@"sort"] integerValue];
+    e.is_default = [dict[@"is_default"] boolValue];
     NSArray *groupsArr = dict[@"groups"];
     if ([groupsArr isKindOfClass:[NSArray class]]) {
         NSMutableArray *groups = [NSMutableArray array];

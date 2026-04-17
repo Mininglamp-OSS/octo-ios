@@ -696,17 +696,18 @@ static WKConversationListVM *_instance;
     NSMutableArray<WKConversationDisplayItem *> *displayList = [NSMutableArray array];
     NSMutableSet<NSString *> *groupedChannelIds = [NSMutableSet set];
 
-    // 2. 收集已归组的 channelId
+    // 2. 收集已归组的 channelId，找到 is_default 分类
+    WKCategoryEntity *defaultCategory = nil;
     for (WKCategoryEntity *cat in self.categoryList) {
-        if(!cat.category_id || cat.category_id.length == 0) continue;
+        if (cat.is_default) defaultCategory = cat;
         for (WKCategoryGroup *cg in cat.groups) {
             [groupedChannelIds addObject:cg.group_no];
         }
     }
 
-    // 3. 用户自建分组
+    // 3. 非 default 分组
     for (WKCategoryEntity *cat in self.categoryList) {
-        if(!cat.category_id || cat.category_id.length == 0) continue;
+        if (cat.is_default) continue;
         WKConversationDisplayItem *header = [WKConversationDisplayItem sectionHeaderWithId:cat.category_id title:cat.name isDefault:NO];
         // 统计分组内实际存在于会话列表的群聊数量
         NSInteger count = 0;
@@ -751,9 +752,41 @@ static WKConversationListVM *_instance;
         return NSOrderedSame;
     }];
 
-    // 未归组群聊直接平铺显示（无 section header）
-    for (WKConversationWrapModel *m in ungrouped) {
-        [displayList addObject:[WKConversationDisplayItem itemWithConversation:m]];
+    // 4. 将未归组群聊合并到服务端的 is_default 分类中显示
+    if (defaultCategory) {
+        // 把未归组群聊也加入 default 分类的 groups 列表一起显示
+        NSMutableArray<WKConversationWrapModel *> *defaultItems = [NSMutableArray array];
+        if (defaultCategory.groups) {
+            for (WKCategoryGroup *cg in defaultCategory.groups) {
+                WKConversationWrapModel *m = channelMap[cg.group_no];
+                if (m) [defaultItems addObject:m];
+            }
+        }
+        for (WKConversationWrapModel *m in ungrouped) {
+            [defaultItems addObject:m];
+        }
+        [defaultItems sortUsingComparator:^NSComparisonResult(WKConversationWrapModel *a, WKConversationWrapModel *b) {
+            if(a.stick && !b.stick) return NSOrderedAscending;
+            if(!a.stick && b.stick) return NSOrderedDescending;
+            if(a.lastMsgTimestamp > b.lastMsgTimestamp) return NSOrderedAscending;
+            if(a.lastMsgTimestamp < b.lastMsgTimestamp) return NSOrderedDescending;
+            return NSOrderedSame;
+        }];
+
+        NSString *sectionId = defaultCategory.category_id.length > 0 ? defaultCategory.category_id : @"uncategorized";
+        WKConversationDisplayItem *header = [WKConversationDisplayItem sectionHeaderWithId:sectionId title:defaultCategory.name isDefault:YES];
+        header.groupCount = defaultItems.count;
+        [displayList addObject:header];
+        if (![self.collapsedSections containsObject:sectionId]) {
+            for (WKConversationWrapModel *m in defaultItems) {
+                [displayList addObject:[WKConversationDisplayItem itemWithConversation:m]];
+            }
+        }
+    } else if (ungrouped.count > 0) {
+        // 服务端没有返回 default 分类，本地兜底显示
+        for (WKConversationWrapModel *m in ungrouped) {
+            [displayList addObject:[WKConversationDisplayItem itemWithConversation:m]];
+        }
     }
 
     return displayList;

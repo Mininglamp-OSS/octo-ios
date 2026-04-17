@@ -18,6 +18,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy) NSString *category_id;
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic, assign) NSInteger sort;
+@property (nonatomic, assign) BOOL is_default;
 @property (nonatomic, strong, nullable) NSArray<WKCategoryGroup *> *groups;
 + (instancetype)fromDict:(NSDictionary *)dict;
 + (NSArray<WKCategoryEntity *> *)fromDictArray:(NSArray *)array;
