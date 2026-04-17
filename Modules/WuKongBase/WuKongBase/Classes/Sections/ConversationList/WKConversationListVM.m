@@ -13,6 +13,7 @@
 #import "WKThreadCreatedContent.h"
 #import "WKCategoryEntity.h"
 #import "WKCategoryService.h"
+#import <WuKongIMSDK/WKReminderDB.h>
 @interface WKConversationListVM ()
 @property(nonatomic,strong) NSMutableArray<WKConversationWrapModel*> *conversationWrapModels;
 @property(nonatomic,strong) NSArray<WKConversationWrapModel*> *filteredConversations; // 过滤后的列表
@@ -696,6 +697,28 @@ static WKConversationListVM *_instance;
     });
 }
 
+/// 检测指定群聊及其所有子区是否有未处理的@提醒
+-(BOOL) hasMentionForGroup:(NSString *)groupNo model:(WKConversationWrapModel *)model {
+    // 检查群聊自身的 reminder
+    if (model && model.simpleReminders.count > 0) {
+        for (WKReminder *r in model.simpleReminders) {
+            if (r.type == WKReminderTypeMentionMe) return YES;
+        }
+    }
+    // 检查该群聊下所有子区的 reminder
+    NSArray<WKConversation *> *allConvs = [[WKSDK shared].conversationManager getConversationList];
+    NSString *prefix = [NSString stringWithFormat:@"%@____", groupNo];
+    for (WKConversation *conv in allConvs) {
+        if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
+            NSArray<WKReminder *> *reminders = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
+            for (WKReminder *r in reminders) {
+                if (r.type == WKReminderTypeMentionMe) return YES;
+            }
+        }
+    }
+    return NO;
+}
+
 /// 计算指定群聊下所有子区的未读数总和
 -(NSInteger) threadUnreadForGroup:(NSString *)groupNo {
     NSInteger total = 0;
@@ -734,9 +757,10 @@ static WKConversationListVM *_instance;
     for (WKCategoryEntity *cat in self.categoryList) {
         if (cat.is_default) continue;
         WKConversationDisplayItem *header = [WKConversationDisplayItem sectionHeaderWithId:cat.category_id title:cat.name isDefault:NO];
-        // 统计分组内群聊数量 + 群聊未读 + 子区未读
+        // 统计分组内群聊数量 + 群聊未读 + 子区未读 + @提醒
         NSInteger count = 0;
         NSInteger totalUnread = 0;
+        BOOL sectionHasMention = NO;
         for (WKCategoryGroup *cg in cat.groups) {
             WKConversationWrapModel *m = channelMap[cg.group_no];
             if (m) {
@@ -744,10 +768,15 @@ static WKConversationListVM *_instance;
                 totalUnread += m.unreadCount;
                 // 累加该群聊下所有子区的未读
                 totalUnread += [self threadUnreadForGroup:cg.group_no];
+                // 检测群聊及子区的@提醒
+                if (!sectionHasMention) {
+                    sectionHasMention = [self hasMentionForGroup:cg.group_no model:m];
+                }
             }
         }
         header.groupCount = count;
         header.unreadCount = totalUnread;
+        header.hasMention = sectionHasMention;
         [displayList addObject:header];
 
         if(![self.collapsedSections containsObject:cat.category_id]) {
@@ -810,11 +839,16 @@ static WKConversationListVM *_instance;
         WKConversationDisplayItem *header = [WKConversationDisplayItem sectionHeaderWithId:sectionId title:defaultCategory.name isDefault:YES];
         header.groupCount = defaultItems.count;
         NSInteger defaultUnread = 0;
+        BOOL defaultHasMention = NO;
         for (WKConversationWrapModel *m in defaultItems) {
             defaultUnread += m.unreadCount;
             defaultUnread += [self threadUnreadForGroup:m.channel.channelId];
+            if (!defaultHasMention) {
+                defaultHasMention = [self hasMentionForGroup:m.channel.channelId model:m];
+            }
         }
         header.unreadCount = defaultUnread;
+        header.hasMention = defaultHasMention;
         [displayList addObject:header];
         if (![self.collapsedSections containsObject:sectionId]) {
             for (WKConversationWrapModel *m in defaultItems) {

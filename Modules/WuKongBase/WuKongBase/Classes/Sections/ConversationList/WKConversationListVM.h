@@ -26,6 +26,7 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 @property (nonatomic, assign) BOOL isDefaultSection;  // 默认分组（不可管理）
 @property (nonatomic, assign) NSInteger groupCount;   // 分组内群聊数量
 @property (nonatomic, assign) NSInteger unreadCount;  // 分组内未读总数
+@property (nonatomic, assign) BOOL hasMention;        // 分组内是否有@我提醒（折叠时显示）
 + (instancetype)itemWithConversation:(WKConversationWrapModel *)model;
 + (instancetype)sectionHeaderWithId:(NSString *)sectionId title:(NSString *)title isDefault:(BOOL)isDefault;
 @end

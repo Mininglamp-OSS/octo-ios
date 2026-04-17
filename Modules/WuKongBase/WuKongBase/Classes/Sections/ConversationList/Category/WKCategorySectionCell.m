@@ -11,6 +11,7 @@
 @property (nonatomic, strong) UIImageView *arrowView;
 @property (nonatomic, strong) UILabel *titleLbl;
 @property (nonatomic, strong) UILabel *countLbl;
+@property (nonatomic, strong) UILabel *mentionLbl;
 @property (nonatomic, strong) UILabel *badgeLbl;
 @property (nonatomic, strong) UIView *topDivider;
 @end
@@ -47,6 +48,13 @@
         _countLbl.textColor = [UIColor colorWithRed:180/255.0 green:180/255.0 blue:180/255.0 alpha:1.0];
         _countLbl.hidden = YES;
         [self.contentView addSubview:_countLbl];
+
+        // @提醒标识（折叠时显示）
+        _mentionLbl = [[UILabel alloc] init];
+        _mentionLbl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+        _mentionLbl.textColor = [UIColor orangeColor];
+        _mentionLbl.hidden = YES;
+        [self.contentView addSubview:_mentionLbl];
 
         // 未读红点（折叠时显示）
         _badgeLbl = [[UILabel alloc] init];
@@ -92,6 +100,17 @@
         _countLbl.frame = CGRectMake(_titleLbl.lim_right + 4, 0, _countLbl.lim_width, h);
     } else {
         _countLbl.hidden = YES;
+    }
+
+    // @提醒标识（折叠时，分组内有@我则显示在数量后面）
+    if (self.collapsed && self.hasMention) {
+        _mentionLbl.hidden = NO;
+        _mentionLbl.text = @"[有人@我]";
+        [_mentionLbl sizeToFit];
+        CGFloat mentionLeft = _countLbl.hidden ? (_titleLbl.lim_right + 4) : (_countLbl.lim_right + 4);
+        _mentionLbl.frame = CGRectMake(mentionLeft, 0, _mentionLbl.lim_width, h);
+    } else {
+        _mentionLbl.hidden = YES;
     }
 
     // 未读红点（折叠时显示在右侧）

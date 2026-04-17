@@ -1512,6 +1512,7 @@
             sectionCell.isDefault = item.isDefaultSection;
             sectionCell.groupCount = item.groupCount;
             sectionCell.unreadCount = item.unreadCount;
+            sectionCell.hasMention = item.hasMention;
             sectionCell.showTopDivider = (indexPath.row > 0);
             __weak typeof(self) weakSelf = self;
             sectionCell.onToggle = ^(NSString *sectionId, BOOL collapsed) {
