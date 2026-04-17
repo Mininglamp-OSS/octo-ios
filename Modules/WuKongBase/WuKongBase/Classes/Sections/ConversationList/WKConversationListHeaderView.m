@@ -10,6 +10,7 @@
 #import "WKSearchbarView.h"
 #import "WKGlobalSearchResultController.h"
 #import "WKPCOnlineVC.h"
+#import "WKMySettingManager.h"
 #define networkErrorViewHeight 50.0f
 
 @interface WKConversationListHeaderView ()
@@ -210,7 +211,7 @@
 
 -(void) onPCOnlineTap {
     WKPCOnlineVC *vc = [WKPCOnlineVC new];
-    vc.mute = WKOnlineStatusManager.shared.muteOfApp;
+    vc.mute = [WKMySettingManager shared].muteOfApp;
     [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
 

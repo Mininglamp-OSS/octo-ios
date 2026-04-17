@@ -287,6 +287,7 @@ bool needRemind = false; // 是否需要提醒
 }
 
 -(void) handleCMD:(NSString*)cmd param:(NSDictionary*)param {
+    NSLog(@"[PCDebug] handleCMD: cmd='%@'", cmd);
     if([cmd isEqualToString:WKCMDMemberUpdate]) { // 群成员更新
         WKLogDebug(@"处理群成员更新命令！");
         if(param&&param[@"group_no"]) {
@@ -333,6 +334,7 @@ bool needRemind = false; // 是否需要提醒
     }else if([cmd isEqualToString:WKCMDTyping]) { // 输入中
         [[WKTypingManager shared] addTypingByMessage:[[WKTypingManager shared] convertParamToTypingMessage:param]];
     }else if([cmd isEqualToString:WKCMDOnlineStatus]) { // 在线状态通知
+       NSLog(@"[PCDebug] CMD onlineStatus: param=%@", param);
        WKChannel *channel = [[WKChannel alloc] initWith:param[@"uid"] channelType:WK_PERSON];
         BOOL allOffline = false;
         if(param[@"all_offline"]) {
@@ -343,23 +345,28 @@ bool needRemind = false; // 是否需要提醒
                 mainDeviceFlag =  [param[@"main_device_flag"] integerValue];
         }
         [[WKOnlineStatusManager shared] setChannelOnline:channel online:!allOffline deviceFlag:mainDeviceFlag];
-        
+
+        NSLog(@"[PCDebug] CMD uid compare: channelId='%@' loginUid='%@' match=%d, allOffline=%d", channel.channelId, [WKApp shared].loginInfo.uid, [channel.channelId isEqualToString:[WKApp shared].loginInfo.uid], allOffline);
         if(channel.channelType == WK_PERSON && [channel.channelId isEqualToString:[WKApp shared].loginInfo.uid]) {
             WKDeviceFlagEnum deviceFlag = WKDeviceFlagEnumAPP;
             if(param[@"device_flag"]) {
                 deviceFlag = [param[@"device_flag"] integerValue];
             }
+            BOOL online = [param[@"online"] boolValue];
+            NSLog(@"[PCDebug] CMD isSelf=YES: deviceFlag=%ld(Web=1,PC=2,APP=0) online=%d allOffline=%d", (long)deviceFlag, online, allOffline);
             // 只对Web(1)和PC(2)设备状态变化显示"已登录"banner
-            // 参考Android: device_flag == 1 才处理
-            // 修复: 之前用 != APP && != Unknown 过滤，导致device_flag=3(iOS)也被当作PC/Web设备
             if(deviceFlag == WKDeviceFlagEnumWeb || deviceFlag == WKDeviceFlagEnumPC) {
-                BOOL online = [param[@"online"] boolValue];
+                NSLog(@"[PCDebug] CMD matched PC/Web, setting pcOnline=%d", online);
                 WKOnlineStatusManager.shared.pcOnline = online;
                 WKPCOnlineResp *pcOnlineResp = [WKPCOnlineResp new];
                 pcOnlineResp.online = online;
                 pcOnlineResp.deviceFlag = deviceFlag;
                 [WKOnlineStatusManager.shared callOnlineStatusChangeMyPCOnlineStatusDelegate:pcOnlineResp];
+            } else {
+                NSLog(@"[PCDebug] CMD deviceFlag=%ld NOT Web/PC, skipped PC update", (long)deviceFlag);
             }
+        } else {
+            NSLog(@"[PCDebug] CMD isSelf=NO, skipped. channelType=%hhu", channel.channelType);
         }
       
         
@@ -418,7 +425,7 @@ bool needRemind = false; // 是否需要提醒
     if(state != UIApplicationStateActive) { //app在后台 不播铃声，因为WKLocalNotificationManager会播
         return;
     }
-    if(WKOnlineStatusManager.shared.muteOfApp) { // app全局静音不做提醒
+    if([WKMySettingManager shared].muteOfApp) { // app全局静音不做提醒
         return;
     }
     if([WKMySettingManager shared].newMsgNotice) { // 是否开启新消息提醒

@@ -32,6 +32,7 @@
 #import "WKConversationListHeaderView.h"
 #import "WKConversationTabView.h"
 #import "WKOnlineStatusManager.h"
+#import "WKMySettingManager.h"
 #import "WKMD5Util.h"
 #import "WKSpaceModel.h"
 #import "WKSpacePopupView.h"
@@ -236,7 +237,9 @@
     [self hiddenRightItem:NO];
 
     // 从内存刷新 PC 在线状态
-    self.pcOnlineBtn.hidden = ![WKOnlineStatusManager shared].pcOnline;
+    BOOL pcOnline = [WKOnlineStatusManager shared].pcOnline;
+    NSLog(@"[PCDebug] viewWillAppear: pcOnline=%d, setting pcOnlineBtn.hidden=%d", pcOnline, !pcOnline);
+    self.pcOnlineBtn.hidden = !pcOnline;
     [self relayoutRightItems];
 
     // 频繁切换 tab 时节流，2 秒内不重复加载
@@ -406,6 +409,7 @@
 }
 
 - (void)updatePCOnlineIcon:(BOOL)online deviceFlag:(WKDeviceFlagEnum)deviceFlag {
+    NSLog(@"[PCDebug] updatePCOnlineIcon: online=%d, deviceFlag=%ld", online, (long)deviceFlag);
     dispatch_async(dispatch_get_main_queue(), ^{
         self.pcOnlineBtn.hidden = !online;
         [self relayoutRightItems];
@@ -418,6 +422,7 @@
     self.pcOnlineCheckTimer = [NSTimer scheduledTimerWithTimeInterval:5.0 repeats:YES block:^(NSTimer *t) {
         // 只在 PC 图标显示时才需要轮询检测退出
         if (!ws.pcOnlineBtn.hidden) {
+            NSLog(@"[PCDebug] pcOnlineCheckTimer fired, icon visible, polling server");
             [WKOnlineStatusManager shared].needUpdate = YES;
             [[WKOnlineStatusManager shared] requestUpdateChannelOnlineStatusIfNeed];
         }
@@ -459,7 +464,7 @@
 
 - (void)pcOnlineIconTapped {
     WKPCOnlineVC *vc = [WKPCOnlineVC new];
-    vc.mute = WKOnlineStatusManager.shared.muteOfApp;
+    vc.mute = [WKMySettingManager shared].muteOfApp;
     [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
 
@@ -793,6 +798,7 @@
 
 // 我的pc状态改变
 - (void)onlineStatusManagerMyPCOnlineChange:(WKOnlineStatusManager *)manager status:(WKPCOnlineResp *)status {
+    NSLog(@"[PCDebug] delegate onlineStatusManagerMyPCOnlineChange: online=%d, deviceFlag=%ld", status.online, (long)status.deviceFlag);
     [self updatePCOnlineIcon:status.online deviceFlag:status.deviceFlag];
 }
 

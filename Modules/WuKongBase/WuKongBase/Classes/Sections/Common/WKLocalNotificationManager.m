@@ -127,7 +127,11 @@ static WKLocalNotificationManager *_instance = nil;
         UNMutableNotificationContent *notifContent = [[UNMutableNotificationContent alloc] init];
         notifContent.badge = @(totalBadge+1);
         notifContent.title = title;
-        notifContent.sound = [UNNotificationSound defaultSound];
+        if([WKMySettingManager shared].muteOfApp) {
+            notifContent.sound = nil;
+        } else {
+            notifContent.sound = [UNNotificationSound defaultSound];
+        }
         notifContent.categoryIdentifier = [NSString stringWithFormat:@"%llu",message.messageId];
         notifContent.body = content;
         UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:[NSString stringWithFormat:@"%llu",message.messageId] content:notifContent trigger:nil];

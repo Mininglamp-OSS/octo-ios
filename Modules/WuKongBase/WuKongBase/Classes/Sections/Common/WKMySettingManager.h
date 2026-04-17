@@ -59,6 +59,8 @@ NS_ASSUME_NONNULL_BEGIN
 // app静音
 -(AnyPromise*) muteOfApp:(BOOL)on;
 
+// 仅本地保存app静音设置（不同步到服务器，用于从服务端同步状态）
+-(void) saveMuteOfAppLocally:(BOOL)on;
 
 @end
 

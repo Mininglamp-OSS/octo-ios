@@ -180,7 +180,27 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
     WKThreadModel *thread = self.threads[indexPath.row];
-    return (thread.lastMessageContent.length > 0) ? 80.0f : 62.0f;
+    // 判断是否会显示 previewLbl（需要与 cell 的显示逻辑一致）
+    BOOL hasPreview = NO;
+    WKChannel *threadChannel = [WKChannel channelID:thread.channelId channelType:WK_COMMUNITY_TOPIC];
+    // 检查@提醒
+    NSArray<WKReminder *> *reminders = [[WKReminderDB shared] getWaitDoneReminder:threadChannel];
+    for (WKReminder *r in reminders) {
+        if (r.type == WKReminderTypeMentionMe) { hasPreview = YES; break; }
+    }
+    // 检查 SDK 会话的最后消息（如 [图片]、[语音] 等）
+    if (!hasPreview) {
+        WKConversation *threadConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
+        if (threadConv && threadConv.lastMessage && threadConv.lastMessage.content) {
+            NSString *digest = [threadConv.lastMessage.content conversationDigest];
+            if (digest.length > 0) hasPreview = YES;
+        }
+    }
+    // 检查服务端返回的最后消息
+    if (!hasPreview && thread.lastMessageContent.length > 0) {
+        hasPreview = YES;
+    }
+    return hasPreview ? 80.0f : 62.0f;
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
