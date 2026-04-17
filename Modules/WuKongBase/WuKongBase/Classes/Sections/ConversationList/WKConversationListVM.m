@@ -138,6 +138,18 @@ static WKConversationListVM *_instance;
     }
 
     self.conversationWrapModels = conversationWrapModels;
+
+    // 从 DB 恢复每个会话的 reminders（@提醒等）
+    for (WKConversationWrapModel *model in self.conversationWrapModels) {
+        WKConversation *conv = [model getConversation];
+        if (!conv.reminders || conv.reminders.count == 0) {
+            NSArray<WKReminder *> *reminders = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
+            if (reminders.count > 0) {
+                conv.reminders = reminders;
+            }
+        }
+    }
+
     [self sortConversationList];
 
     // 立即回调渲染列表（不阻塞等待 thread API，避免网络异常时列表卡死）

@@ -20,6 +20,7 @@ static CGFloat const kHorizontalPadding = 16.0f;
 @property (nonatomic, strong) UILabel *groupBadge;
 @property (nonatomic, strong) UILabel *privateBadge;
 @property (nonatomic, strong) UIView *bottomLine; // 底部分隔线
+@property (nonatomic, strong) UILabel *mentionLbl; // @提醒标识
 
 @end
 
@@ -69,6 +70,18 @@ static CGFloat const kHorizontalPadding = 16.0f;
     _bottomLine = [[UIView alloc] init];
     _bottomLine.backgroundColor = [UIColor colorWithWhite:0.88 alpha:1.0];
     [self addSubview:_bottomLine];
+
+    // @提醒标识
+    _mentionLbl = [[UILabel alloc] init];
+    _mentionLbl.text = @"@";
+    _mentionLbl.font = [UIFont systemFontOfSize:10 weight:UIFontWeightBold];
+    _mentionLbl.textColor = [UIColor whiteColor];
+    _mentionLbl.backgroundColor = [UIColor orangeColor];
+    _mentionLbl.textAlignment = NSTextAlignmentCenter;
+    _mentionLbl.layer.cornerRadius = 8;
+    _mentionLbl.layer.masksToBounds = YES;
+    _mentionLbl.hidden = YES;
+    [self addSubview:_mentionLbl];
 }
 
 - (UILabel *)createBadgeLabel {
@@ -98,6 +111,7 @@ static CGFloat const kHorizontalPadding = 16.0f;
 
     [self layoutIndicatorAnimated:NO];
     [self layoutBadges];
+    [self layoutMentionLabel];
 
     // 底部分隔线
     _bottomLine.frame = CGRectMake(0, h - 0.5, w, 0.5);
@@ -194,6 +208,21 @@ static CGFloat const kHorizontalPadding = 16.0f;
 }
 
 #pragma mark - Badge
+
+- (void)layoutMentionLabel {
+    if (_mentionLbl.hidden) return;
+    NSString *title = _groupBtn.titleLabel.text ?: @"";
+    UIFont *font = _groupBtn.titleLabel.font;
+    CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
+    CGFloat textRight = CGRectGetMidX(_groupBtn.frame) + textW / 2.0f;
+    CGFloat btnCenterY = CGRectGetMidY(_groupBtn.frame);
+    _mentionLbl.frame = CGRectMake(textRight + 3, btnCenterY - 8, 16, 16);
+}
+
+- (void)setGroupHasMention:(BOOL)hasMention {
+    _mentionLbl.hidden = !hasMention;
+    [self layoutMentionLabel];
+}
 
 - (void)setGroupUnreadCount:(NSInteger)count {
     // 不再显示未读红点

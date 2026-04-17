@@ -16,7 +16,7 @@
 
 static NSString *const kCellIdentifier = @"WKThreadListCell";
 
-@interface WKThreadListVC () <UITableViewDataSource, UITableViewDelegate>
+@interface WKThreadListVC () <UITableViewDataSource, UITableViewDelegate, WKConversationManagerDelegate, WKReminderManagerDelegate>
 
 @property (nonatomic, strong) UISegmentedControl *segmentControl;
 @property (nonatomic, strong) UITableView *tableView;
@@ -44,6 +44,10 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
 
     self.threads = @[];
     [self loadThreads];
+
+    // 监听会话更新和@提醒变化，实时刷新红点和预览
+    [[WKSDK shared].conversationManager addDelegate:self];
+    [[WKReminderManager shared] addDelegate:self];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -352,6 +356,35 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
         _emptyLbl.hidden = YES;
     }
     return _emptyLbl;
+}
+
+- (void)dealloc {
+    [[WKSDK shared].conversationManager removeDelegate:self];
+    [[WKReminderManager shared] removeDelegate:self];
+}
+
+#pragma mark - WKConversationManagerDelegate
+
+- (void)onConversationUpdate:(NSArray<WKConversation *> *)conversations {
+    // 检查是否有本群的子区会话更新
+    NSString *prefix = [NSString stringWithFormat:@"%@____", self.groupNo];
+    for (WKConversation *conv in conversations) {
+        if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
+            // 子区有新消息，刷新列表
+            [self.tableView reloadData];
+            return;
+        }
+    }
+}
+
+#pragma mark - WKReminderManagerDelegate
+
+- (void)reminderManager:(WKReminderManager *)manager didChange:(WKChannel *)channel reminders:(NSArray<WKReminder *> *)reminders {
+    // 子区@提醒变化，刷新列表
+    NSString *prefix = [NSString stringWithFormat:@"%@____", self.groupNo];
+    if (channel.channelType == WK_COMMUNITY_TOPIC && [channel.channelId hasPrefix:prefix]) {
+        [self.tableView reloadData];
+    }
 }
 
 @end

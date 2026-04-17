@@ -94,11 +94,26 @@
 #define RIGHT_PADDING 15.0f
 
 +(CGFloat) heightForModel:(WKConversationWrapModel *)model {
-    if (!model.threadPreviews || model.threadPreviews.count == 0) {
-        return TOP_HEIGHT;
+    // 检查是否有 @我 提醒
+    BOOL hasMention = NO;
+    if (model.simpleReminders.count > 0) {
+        for (WKReminder *r in model.simpleReminders) {
+            if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
+        }
     }
-    CGFloat h = TOP_HEIGHT;
-    h += model.threadPreviews.count * THREAD_ROW_HEIGHT;
+    CGFloat topH = hasMention ? (TOP_HEIGHT + 10) : TOP_HEIGHT;
+    if (!model.threadPreviews || model.threadPreviews.count == 0) {
+        return topH;
+    }
+    CGFloat h = topH;
+    // 子区行高：有@提醒的行更高
+    for (WKThreadModel *t in model.threadPreviews) {
+        WKChannel *tc = [WKChannel channelID:t.channelId channelType:WK_COMMUNITY_TOPIC];
+        NSArray<WKReminder *> *rems = [[WKReminderDB shared] getWaitDoneReminder:tc];
+        BOOL tMention = NO;
+        for (WKReminder *r in rems) { if (r.type == WKReminderTypeMentionMe) { tMention = YES; break; } }
+        h += tMention ? 44.0f : THREAD_ROW_HEIGHT;
+    }
     if (model.threadCount > (NSInteger)model.threadPreviews.count) {
         h += MORE_HEIGHT;
     }
@@ -274,9 +289,31 @@
     self.avatarView.hidden = YES;
     self.hashTagLbl.hidden = NO;
 
-    // 隐藏时间和副标题
+    // 隐藏时间
     self.timeLbl.hidden = YES;
-    self.subtitleLbl.hidden = YES;
+
+    // 检查是否有 @我 提醒
+    BOOL hasMention = NO;
+    if (model.simpleReminders && model.simpleReminders.count > 0) {
+        for (WKReminder *r in model.simpleReminders) {
+            if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
+        }
+    }
+    if (hasMention) {
+        self.subtitleLbl.hidden = NO;
+        NSString *reminderText = @"";
+        for (WKReminder *r in model.simpleReminders) {
+            if (r.type == WKReminderTypeMentionMe) {
+                reminderText = r.text ?: @"";
+                break;
+            }
+        }
+        NSString *content = model.content ?: @"";
+        self.subtitleLbl.text = [NSString stringWithFormat:@"%@ %@", reminderText, content];
+        self.subtitleLbl.textColor = [UIColor orangeColor];
+    } else {
+        self.subtitleLbl.hidden = YES;
+    }
 
     // 标题
     self.titleLbl.text = hasChannelInfo ? model.channelInfo.displayName : LLang(@"群聊");
@@ -324,12 +361,34 @@
             // 名称
             self.rowNameLbls[i].text = thread.name;
 
-            // 时间和消息已隐藏，不再设置
+            // 时间隐藏
             self.rowTimeLbls[i].hidden = YES;
-            self.rowMsgLbls[i].hidden = YES;
+
+            // 检查子区是否有@提醒
+            WKChannel *threadChannel = [WKChannel channelID:thread.channelId channelType:WK_COMMUNITY_TOPIC];
+            NSArray<WKReminder *> *threadReminders = [[WKReminderDB shared] getWaitDoneReminder:threadChannel];
+            BOOL threadHasMention = NO;
+            for (WKReminder *r in threadReminders) {
+                if (r.type == WKReminderTypeMentionMe) { threadHasMention = YES; break; }
+            }
+            if (threadHasMention) {
+                self.rowMsgLbls[i].hidden = NO;
+                // 显示 [有人@我] + 最后一条消息预览
+                WKConversation *tConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
+                NSString *lastContent = @"";
+                if (tConv && tConv.lastMessage && tConv.lastMessage.content) {
+                    lastContent = [tConv.lastMessage.content conversationDigest] ?: @"";
+                } else if (thread.lastMessageContent.length > 0) {
+                    lastContent = thread.lastMessageContent;
+                }
+                self.rowMsgLbls[i].text = [NSString stringWithFormat:@"%@ %@", LLang(@"[有人@我]"), lastContent];
+                self.rowMsgLbls[i].textColor = [UIColor orangeColor];
+                self.rowMsgLbls[i].font = [[WKApp shared].config appFontOfSize:11.0f];
+            } else {
+                self.rowMsgLbls[i].hidden = YES;
+            }
 
             // 红点
-            WKChannel *threadChannel = [WKChannel channelID:thread.channelId channelType:WK_COMMUNITY_TOPIC];
             WKConversation *threadConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
             NSInteger unread = thread.unreadCount;
             if (threadConv) unread = threadConv.unreadCount;
@@ -350,14 +409,13 @@
     // 更多
     if (self.model.threadCount > count) {
         self.moreLbl.hidden = NO;
-        self.moreLbl.text = [NSString stringWithFormat:@"+%ld %@", (long)(self.model.threadCount - count), LLang(@"个子区")];
         self.moreLbl.userInteractionEnabled = YES;
         if (self.moreLbl.gestureRecognizers.count == 0) {
             UITapGestureRecognizer *moreTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onMoreTap)];
             [self.moreLbl addGestureRecognizer:moreTap];
         }
 
-        // 计算未预览子区的未读数：所有子区未读总和 - 已预览子区的未读
+        // 计算未预览子区的未读数和@提醒
         NSString *groupNo = self.model.channel.channelId;
         NSString *prefix = [NSString stringWithFormat:@"%@____", groupNo];
         NSMutableSet *previewedIds = [NSMutableSet set];
@@ -365,14 +423,33 @@
             [previewedIds addObject:previews[i].channelId];
         }
         NSInteger moreUnread = 0;
+        BOOL moreMention = NO;
         NSArray<WKConversation *> *allConvs = [[WKSDK shared].conversationManager getConversationList];
         for (WKConversation *conv in allConvs) {
             if (conv.channel.channelType == WK_COMMUNITY_TOPIC
                 && [conv.channel.channelId hasPrefix:prefix]
                 && ![previewedIds containsObject:conv.channel.channelId]) {
                 moreUnread += conv.unreadCount;
+                if (!moreMention) {
+                    NSArray<WKReminder *> *rems = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
+                    for (WKReminder *r in rems) {
+                        if (r.type == WKReminderTypeMentionMe) { moreMention = YES; break; }
+                    }
+                }
             }
         }
+
+        // 构建文本：+N个子区 [有人@我]
+        NSString *moreText = [NSString stringWithFormat:@"+%ld %@", (long)(self.model.threadCount - count), LLang(@"个子区")];
+        if (moreMention) {
+            NSMutableAttributedString *attrText = [[NSMutableAttributedString alloc] initWithString:moreText attributes:@{NSForegroundColorAttributeName: [WKApp shared].config.themeColor}];
+            [attrText appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@" %@", LLang(@"[有人@我]")] attributes:@{NSForegroundColorAttributeName: [UIColor orangeColor]}]];
+            self.moreLbl.attributedText = attrText;
+        } else {
+            self.moreLbl.text = moreText;
+            self.moreLbl.textColor = [WKApp shared].config.themeColor;
+        }
+
         if (moreUnread > 0) {
             self.moreBadgeLbl.hidden = NO;
             self.moreBadgeLbl.text = moreUnread > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)moreUnread];
@@ -408,40 +485,56 @@
 
     CGFloat w = self.contentView.lim_width;
 
-    // # 标识
-    self.hashTagLbl.frame = CGRectMake(HASH_TAG_LEFT, (TOP_HEIGHT - HASH_TAG_SIZE) / 2.0f, HASH_TAG_SIZE, HASH_TAG_SIZE);
+    BOOL showMention = !self.subtitleLbl.hidden;
+    CGFloat topH = showMention ? (TOP_HEIGHT + 10) : TOP_HEIGHT;
 
-    // 标题（垂直居中，无时间/副标题）
+    // # 标识
+    self.hashTagLbl.frame = CGRectMake(HASH_TAG_LEFT, showMention ? 8.0f : (topH - HASH_TAG_SIZE) / 2.0f, HASH_TAG_SIZE, HASH_TAG_SIZE);
+
+    // 标题
     CGFloat titleRight = w - RIGHT_PADDING - 50.0f;
-    self.titleLbl.frame = CGRectMake(CONTENT_LEFT, (TOP_HEIGHT - 20) / 2.0f, titleRight - CONTENT_LEFT, 20);
+    if (showMention) {
+        self.titleLbl.frame = CGRectMake(CONTENT_LEFT, 8.0f, titleRight - CONTENT_LEFT, 20);
+        self.subtitleLbl.frame = CGRectMake(CONTENT_LEFT, self.titleLbl.lim_bottom + 2, titleRight - CONTENT_LEFT, 18);
+    } else {
+        self.titleLbl.frame = CGRectMake(CONTENT_LEFT, (topH - 20) / 2.0f, titleRight - CONTENT_LEFT, 20);
+    }
 
     // 红点 - 垂直居中在顶部区域
     self.badgeView.lim_left = w - RIGHT_PADDING - self.badgeView.lim_width;
-    self.badgeView.lim_top = (TOP_HEIGHT - self.badgeView.lim_height) / 2.0f;
+    self.badgeView.lim_top = (topH - self.badgeView.lim_height) / 2.0f;
 
     // 免打扰
     self.muteIcon.lim_left = w - RIGHT_PADDING - self.muteIcon.lim_width;
-    self.muteIcon.lim_top = (TOP_HEIGHT - self.muteIcon.lim_height) / 2.0f;
+    self.muteIcon.lim_top = (topH - self.muteIcon.lim_height) / 2.0f;
 
     // 子区预览区域
     NSArray *previews = self.model.threadPreviews;
     if (previews && previews.count > 0) {
-        CGFloat containerTop = TOP_HEIGHT;
+        CGFloat containerTop = topH;
         CGFloat containerWidth = w - CONTENT_LEFT - RIGHT_PADDING;
-        CGFloat containerHeight = previews.count * THREAD_ROW_HEIGHT;
+
+        // 计算每行高度
+        CGFloat rowHeights[2] = {THREAD_ROW_HEIGHT, THREAD_ROW_HEIGHT};
+        for (NSInteger i = 0; i < 2 && i < (NSInteger)previews.count; i++) {
+            if (!self.rowMsgLbls[i].hidden) rowHeights[i] = 44.0f;
+        }
+        CGFloat containerHeight = 0;
+        for (NSInteger i = 0; i < (NSInteger)previews.count && i < 2; i++) containerHeight += rowHeights[i];
 
         self.threadContainer.frame = CGRectMake(CONTENT_LEFT, containerTop, containerWidth, containerHeight);
 
-        // 布局固定预览行（只显示图标 + 名称 + 红点）
         CGFloat iconSize = 16.0f;
         CGFloat nameLeft = 10 + iconSize + 6;
+        CGFloat rowY = 0;
         for (NSInteger i = 0; i < 2; i++) {
             UIView *row = self.previewRows[i];
             if (row.hidden) continue;
-            row.frame = CGRectMake(0, i * THREAD_ROW_HEIGHT, containerWidth, THREAD_ROW_HEIGHT);
+            CGFloat rh = rowHeights[i];
+            row.frame = CGRectMake(0, rowY, containerWidth, rh);
 
             // 矢量 # 图标
-            self.rowHashIcons[i].frame = CGRectMake(10, (THREAD_ROW_HEIGHT - iconSize) / 2.0f, iconSize, iconSize);
+            self.rowHashIcons[i].frame = CGRectMake(10, 8, iconSize, iconSize);
 
             // 红点
             UILabel *badge = self.rowBadgeLbls[i];
@@ -449,17 +542,24 @@
             if (!badge.hidden) {
                 [badge sizeToFit];
                 CGFloat badgeW = MAX(badge.lim_width + 8, 18);
-                badge.frame = CGRectMake(containerWidth - 10 - badgeW, (THREAD_ROW_HEIGHT - 18) / 2.0f, badgeW, 18);
+                badge.frame = CGRectMake(containerWidth - 10 - badgeW, 8, badgeW, 18);
                 nameRight = badge.lim_left - 4;
             }
 
-            // 名称（垂直居中）
-            self.rowNameLbls[i].frame = CGRectMake(nameLeft, (THREAD_ROW_HEIGHT - 17) / 2.0f, nameRight - nameLeft, 17);
+            // 名称和@提醒
+            UILabel *msgLbl = self.rowMsgLbls[i];
+            if (!msgLbl.hidden) {
+                self.rowNameLbls[i].frame = CGRectMake(nameLeft, 6, nameRight - nameLeft, 16);
+                msgLbl.frame = CGRectMake(nameLeft, 23, nameRight - nameLeft, 15);
+            } else {
+                self.rowNameLbls[i].frame = CGRectMake(nameLeft, (rh - 17) / 2.0f, nameRight - nameLeft, 17);
+            }
+            rowY += rh;
         }
 
         // 分割线
         if (!self.separatorLine.hidden) {
-            self.separatorLine.frame = CGRectMake(10, THREAD_ROW_HEIGHT - 0.5f, containerWidth - 20, 0.5f);
+            self.separatorLine.frame = CGRectMake(10, rowHeights[0] - 0.5f, containerWidth - 20, 0.5f);
         }
 
         // 弧线

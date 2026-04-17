@@ -19,6 +19,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 外部切换（带动画）
 - (void)setSelectedIndex:(NSInteger)index animated:(BOOL)animated;
 
+/// 设置群聊 tab 的 @提醒标识
+- (void)setGroupHasMention:(BOOL)hasMention;
+
 @end
 
 NS_ASSUME_NONNULL_END

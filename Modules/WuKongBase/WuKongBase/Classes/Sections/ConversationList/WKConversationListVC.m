@@ -38,7 +38,7 @@
 #import "WKSyncService.h"
 #import "WKSpaceConversationCache.h"
 #import "WKPCOnlineVC.h"
-@interface WKConversationListVC ()<UITableViewDelegate,UITableViewDataSource,UISearchControllerDelegate,WKConnectionManagerDelegate,WKChannelManagerDelegate,WKConversationManagerDelegate,WKNetworkListenerDelegate,WKChatManagerDelegate,WKTypingManagerDelegate,SwipeTableViewCellDelegate,WKOnlineStatusManagerDelegate>
+@interface WKConversationListVC ()<UITableViewDelegate,UITableViewDataSource,UISearchControllerDelegate,WKConnectionManagerDelegate,WKChannelManagerDelegate,WKConversationManagerDelegate,WKNetworkListenerDelegate,WKChatManagerDelegate,WKTypingManagerDelegate,SwipeTableViewCellDelegate,WKOnlineStatusManagerDelegate,WKReminderManagerDelegate>
 @property(nonatomic,copy) NSString *_title;
 @property(nonatomic,strong)  WKConversationListTableView *tableView;
 
@@ -305,6 +305,8 @@
     [[WKOnlineStatusManager shared] addDelegate:self];
     // 监听当前空间新建群聊，立即加入白名单
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onGroupCreatedInCurrentSpace:) name:@"WKGroupCreatedInCurrentSpace" object:nil];
+    // 提醒项（@我）变化监听
+    [[WKReminderManager shared] addDelegate:self];
     // 监听子区数量批量更新（统一 reloadData，不逐行刷新）
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onThreadCountBatchUpdated:) name:@"WKThreadCountBatchUpdated" object:nil];
     // 监听"创建分组"弹窗请求
@@ -312,6 +314,7 @@
 }
 
 -(void) removeDelegates {
+    [[WKReminderManager shared] removeDelegate:self];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKShowCreateCategoryDialog" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKThreadCountBatchUpdated" object:nil];
     // 移除连接监听
@@ -1162,6 +1165,21 @@
     }
 }
 
+#pragma mark - WKReminderManagerDelegate
+
+- (void)reminderManager:(WKReminderManager *)manager didChange:(WKChannel *)channel reminders:(NSArray<WKReminder *> *)reminders {
+    NSLog(@"[@mention] reminderDidChange channel=%@_%d, reminders.count=%lu", channel.channelId, channel.channelType, (unsigned long)reminders.count);
+    // 群聊：直接更新 model 的 reminders
+    WKConversationWrapModel *model = [self.conversationListVM modelAtChannel:channel];
+    if (model) {
+        WKConversation *conv = [model getConversation];
+        conv.reminders = reminders;
+        NSLog(@"[@mention] 已更新 model reminders, simpleReminders.count=%lu", (unsigned long)model.simpleReminders.count);
+    }
+    // 子区：reminder 变化也需要刷新（子区的@提醒显示在父群组的预览行上）
+    [self rebuildGroupDisplayAndReload];
+}
+
 /// 子区数量批量更新完成后统一刷新整个列表（避免大量逐行更新导致 tableView 卡死）
 -(void) onThreadCountBatchUpdated:(NSNotification*)notification {
     [self rebuildGroupDisplayAndReload];
@@ -1427,6 +1445,12 @@
         WKConversationWrapModel *model = item.conversation;
         if (model && model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn) {
             return [WKConversationGroupThreadCell heightForModel:model];
+        }
+        // 有 @我 提醒时需要更高的行来显示预览
+        if (model && model.simpleReminders.count > 0) {
+            for (WKReminder *r in model.simpleReminders) {
+                if (r.type == WKReminderTypeMentionMe) return 58.0f;
+            }
         }
         return 48.0f;
     }
@@ -2107,6 +2131,35 @@
 -(void) rebuildGroupDisplayAndReload {
     self.groupDisplayList = [_conversationListVM buildGroupDisplayList];
     [self.tableView reloadData];
+    [self updateGroupMentionBadge];
+}
+
+/// 检查群聊和子区中是否有未处理的@提醒，更新 tab 标识
+-(void) updateGroupMentionBadge {
+    BOOL hasMention = NO;
+    // 检查群聊
+    for (WKConversationWrapModel *model in [_conversationListVM conversationList]) {
+        if (model.channel.channelType != WK_GROUP) continue;
+        if (model.simpleReminders.count > 0) {
+            for (WKReminder *r in model.simpleReminders) {
+                if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
+            }
+        }
+        if (hasMention) break;
+    }
+    // 检查子区（子区不在会话列表中，从 SDK 会话里查）
+    if (!hasMention) {
+        NSArray<WKConversation *> *allConvs = [[WKSDK shared].conversationManager getConversationList];
+        for (WKConversation *conv in allConvs) {
+            if (conv.channel.channelType != WK_COMMUNITY_TOPIC) continue;
+            NSArray<WKReminder *> *reminders = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
+            for (WKReminder *r in reminders) {
+                if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
+            }
+            if (hasMention) break;
+        }
+    }
+    [_conversationTabView setGroupHasMention:hasMention];
 }
 
 -(void) showCreateCategoryDialog {

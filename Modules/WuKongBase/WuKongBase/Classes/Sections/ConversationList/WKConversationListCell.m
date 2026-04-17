@@ -191,13 +191,35 @@
         // 群聊：显示 # 标识，隐藏头像/预览/时间
         self.hashTagLbl.hidden = NO;
         self.avatarImgView.hidden = YES;
-        self.lastContentLbl.hidden = YES;
         self.lastMsgTimeLbl.hidden = YES;
         self.statusImgView.hidden = YES;
         self.typingIndicatorView.hidden = YES;
         [self.typingIndicatorView stopAnimating];
         self.onlineBadgeView.hidden = YES;
         self.autoDeleteView.hidden = YES;
+
+        // 检查是否有 @我 的提醒
+        BOOL hasMention = NO;
+        NSLog(@"[@mention] channel=%@, simpleReminders.count=%lu, reminders(raw).count=%lu, convAddr=%p",
+              model.channel.channelId,
+              (unsigned long)(model.simpleReminders ? model.simpleReminders.count : 0),
+              (unsigned long)([model getConversation].reminders ? [model getConversation].reminders.count : 0),
+              [model getConversation]);
+        if (model.simpleReminders && model.simpleReminders.count > 0) {
+            for (WKReminder *r in model.simpleReminders) {
+                NSLog(@"[@mention]   reminder type=%lu, text=%@, publisher=%@, done=%d",
+                      (unsigned long)r.type, r.text, r.publisher, r.done);
+                if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
+            }
+        }
+        if (hasMention) {
+            NSLog(@"[@mention] 显示@预览: %@", model.content);
+            self.lastContentLbl.hidden = NO;
+            self.lastContentLbl.attributedText = [self getLastContent:model];
+            self.lastContentLbl.lineBreakMode = NSLineBreakByTruncatingTail;
+        } else {
+            self.lastContentLbl.hidden = YES;
+        }
     } else {
         // 私聊：正常显示
         self.hashTagLbl.hidden = YES;
@@ -675,21 +697,38 @@
     BOOL isGroup = (self.model.channel.channelType == WK_GROUP);
 
     if(isGroup) {
-        // ========== 群聊布局（# + 标题 + 红点，单行） ==========
+        // ========== 群聊布局 ==========
+        BOOL showMention = !self.lastContentLbl.hidden;
         CGFloat hashSize = 36.0f;
-        self.hashTagLbl.frame = CGRectMake(15.0f, (self.lim_height - hashSize) / 2.0f, hashSize, hashSize);
-
-        CGFloat titleLeft = self.hashTagLbl.lim_right + 6.0f;
-        [self.titleLbl sizeToFit];
-
-        // 红点和免打扰在右侧
         CGFloat rightPadding = 15.0f;
-        CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f;
-        if(self.titleLbl.lim_width > titleMaxWidth) {
-            self.titleLbl.lim_width = titleMaxWidth;
+
+        if (showMention) {
+            // 有 @我：两行布局（标题 + 预览）
+            self.hashTagLbl.frame = CGRectMake(15.0f, 8.0f, hashSize, hashSize);
+
+            CGFloat titleLeft = self.hashTagLbl.lim_right + 6.0f;
+            [self.titleLbl sizeToFit];
+            CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f;
+            if(self.titleLbl.lim_width > titleMaxWidth) self.titleLbl.lim_width = titleMaxWidth;
+            self.titleLbl.lim_left = titleLeft;
+            self.titleLbl.lim_top = 10.0f;
+
+            // @预览消息
+            self.lastContentLbl.lim_left = titleLeft;
+            self.lastContentLbl.lim_width = self.lim_width - titleLeft - rightPadding - 40.0f;
+            self.lastContentLbl.lim_top = self.titleLbl.lim_bottom + 2.0f;
+            self.lastContentLbl.lim_height = 18.0f;
+        } else {
+            // 无 @我：单行居中
+            self.hashTagLbl.frame = CGRectMake(15.0f, (self.lim_height - hashSize) / 2.0f, hashSize, hashSize);
+
+            CGFloat titleLeft = self.hashTagLbl.lim_right + 6.0f;
+            [self.titleLbl sizeToFit];
+            CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f;
+            if(self.titleLbl.lim_width > titleMaxWidth) self.titleLbl.lim_width = titleMaxWidth;
+            self.titleLbl.lim_left = titleLeft;
+            self.titleLbl.lim_top = (self.lim_height - self.titleLbl.lim_height) / 2.0f;
         }
-        self.titleLbl.lim_left = titleLeft;
-        self.titleLbl.lim_top = (self.lim_height - self.titleLbl.lim_height) / 2.0f;
 
         // 红点 - 垂直居中
         self.badgeView.lim_left = self.lim_width - rightPadding - self.badgeView.lim_width;

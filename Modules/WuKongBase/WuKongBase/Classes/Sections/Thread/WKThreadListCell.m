@@ -59,18 +59,52 @@
                           (long)model.memberCount, LLang(@"位成员"),
                           timeStr];
 
-    // 最后消息预览
-    if (model.lastMessageContent.length > 0 && model.lastMessageSenderName.length > 0) {
-        self.previewLbl.text = [NSString stringWithFormat:@"%@: %@", model.lastMessageSenderName, model.lastMessageContent];
+    // 最后消息预览 + @提醒
+    WKChannel *threadChannel = [WKChannel channelID:model.channelId channelType:WK_COMMUNITY_TOPIC];
+    WKConversation *threadConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
+
+    // 检查@提醒
+    NSArray<WKReminder *> *reminders = [[WKReminderDB shared] getWaitDoneReminder:threadChannel];
+    BOOL hasMention = NO;
+    for (WKReminder *r in reminders) {
+        if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
+    }
+
+    // 获取最新的消息预览（优先从 SDK 会话获取）
+    NSString *lastContent = nil;
+    if (threadConv && threadConv.lastMessage && threadConv.lastMessage.content) {
+        NSString *digest = [threadConv.lastMessage.content conversationDigest];
+        if (digest.length > 0) {
+            WKChannelInfo *senderInfo = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:threadConv.lastMessage.fromUid]];
+            NSString *senderName = senderInfo ? senderInfo.displayName : threadConv.lastMessage.fromUid;
+            lastContent = senderName.length > 0 ? [NSString stringWithFormat:@"%@: %@", senderName, digest] : digest;
+        }
+    }
+    if (!lastContent && model.lastMessageContent.length > 0 && model.lastMessageSenderName.length > 0) {
+        lastContent = [NSString stringWithFormat:@"%@: %@", model.lastMessageSenderName, model.lastMessageContent];
+    }
+
+    if (hasMention) {
         self.previewLbl.hidden = NO;
+        NSString *mentionPrefix = LLang(@"[有人@我]");
+        NSString *fullText = lastContent.length > 0 ? [NSString stringWithFormat:@"%@ %@", mentionPrefix, lastContent] : mentionPrefix;
+        NSMutableAttributedString *attrText = [[NSMutableAttributedString alloc] initWithString:fullText];
+        [attrText addAttribute:NSForegroundColorAttributeName value:[UIColor orangeColor] range:NSMakeRange(0, mentionPrefix.length)];
+        if (fullText.length > mentionPrefix.length) {
+            [attrText addAttribute:NSForegroundColorAttributeName value:[UIColor lightGrayColor] range:NSMakeRange(mentionPrefix.length, fullText.length - mentionPrefix.length)];
+        }
+        self.previewLbl.attributedText = attrText;
+    } else if (lastContent.length > 0) {
+        self.previewLbl.hidden = NO;
+        self.previewLbl.attributedText = nil;
+        self.previewLbl.textColor = [UIColor lightGrayColor];
+        self.previewLbl.text = lastContent;
     } else {
         self.previewLbl.hidden = YES;
     }
 
     // 未读红点
     NSInteger unread = model.unreadCount;
-    WKChannel *threadChannel = [WKChannel channelID:model.channelId channelType:WK_COMMUNITY_TOPIC];
-    WKConversation *threadConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
     if (threadConv) unread = threadConv.unreadCount;
     if (unread > 0) {
         self.badgeLbl.hidden = NO;

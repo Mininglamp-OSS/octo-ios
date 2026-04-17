@@ -204,6 +204,13 @@
     __weak typeof(self) weakSelf = self;
     [self loadMessages:false firstLoad:YES complete:^{
         [weakSelf refreshNewMsgCount];
+        // 消息加载完成后检查可见区域的@提醒，标记已读
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            NSArray<WKReminder *> *reminders = weakSelf.reminders;
+            if (reminders && reminders.count > 0) {
+                [weakSelf updatePostionReminders:reminders force:YES];
+            }
+        });
     }];
 }
 
