@@ -64,6 +64,18 @@ static WKLocalNotificationManager *_instance = nil;
     // 会话列表通过 conversation/sync?space_id= 从服务端加载，已按空间过滤
     WKConversationWrapModel *existModel = [[WKConversationListVM shared] modelAtChannel:message.channel];
     if(!existModel) {
+        // 子区不在会话列表中，通过 groupNo 前缀匹配父群聊判断
+        if(message.channel.channelType == WK_COMMUNITY_TOPIC) {
+            NSRange sep = [channelId rangeOfString:@"____"];
+            if(sep.location != NSNotFound) {
+                NSString *groupNo = [channelId substringToIndex:sep.location];
+                WKChannel *parentChannel = [WKChannel channelID:groupNo channelType:WK_GROUP];
+                WKConversationWrapModel *parentModel = [[WKConversationListVM shared] modelAtChannel:parentChannel];
+                if(parentModel) {
+                    return YES; // 父群聊在当前空间，子区消息允许通知
+                }
+            }
+        }
         return NO; // 不在当前空间的会话列表中，不通知
     }
 

@@ -2155,10 +2155,23 @@
         if (hasMention) break;
     }
     // 检查子区（子区不在会话列表中，从 SDK 会话里查）
+    // 仅检查当前空间内群聊对应的子区，子区 channelId 格式为 {groupNo}____{threadId}
     if (!hasMention) {
+        // 收集当前空间内的群聊 channelId 作为白名单
+        NSMutableSet<NSString *> *spaceGroupIds = [NSMutableSet set];
+        for (WKConversationWrapModel *model in [_conversationListVM conversationList]) {
+            if (model.channel.channelType == WK_GROUP) {
+                [spaceGroupIds addObject:model.channel.channelId];
+            }
+        }
         NSArray<WKConversation *> *allConvs = [[WKSDK shared].conversationManager getConversationList];
         for (WKConversation *conv in allConvs) {
             if (conv.channel.channelType != WK_COMMUNITY_TOPIC) continue;
+            // 提取子区的 groupNo 前缀，检查是否属于当前空间
+            NSRange sep = [conv.channel.channelId rangeOfString:@"____"];
+            if (sep.location == NSNotFound) continue;
+            NSString *groupNo = [conv.channel.channelId substringToIndex:sep.location];
+            if (![spaceGroupIds containsObject:groupNo]) continue;
             NSArray<WKReminder *> *reminders = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
             for (WKReminder *r in reminders) {
                 if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
