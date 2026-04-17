@@ -8,11 +8,20 @@
 #import "WKApp.h"
 
 static const NSTimeInterval kConfigCacheTTL = 300.0;  // 5 分钟缓存
+static const NSTimeInterval kVoiceContextCacheTTL = 300.0; // 5 分钟缓存
+static const NSTimeInterval kVoiceContextTimeout = 3.0; // 3 秒超时
 static const NSTimeInterval kTranscribeTimeout = 30.0;
 
 @interface WKVoiceInputService ()
 @property (nonatomic, strong, nullable) WKVoiceInputConfig *cachedConfig;
 @property (nonatomic, assign) NSTimeInterval cachedAt;
+// voice context
+@property (nonatomic, copy, nullable) NSString *cachedVoiceContext;
+@property (nonatomic, assign) BOOL cachedVoiceContextHasValue;
+@property (nonatomic, assign) NSTimeInterval voiceContextCachedAt;
+@property (nonatomic, copy, nullable) NSString *voiceContextSpaceId;
+@property (nonatomic, assign) BOOL voiceContextInflight;
+@property (nonatomic, strong, nullable) NSMutableArray *voiceContextPendingCallbacks;
 @end
 
 @implementation WKVoiceInputConfig
@@ -70,6 +79,106 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
     self.cachedConfig = nil;
     self.cachedAt = 0;
 }
+
+#pragma mark - Voice Context
+
+- (void)prefetchVoiceContext {
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if (!spaceId || spaceId.length == 0) return;
+
+    // 检查缓存是否有效
+    if (self.cachedVoiceContextHasValue &&
+        [self.voiceContextSpaceId isEqualToString:spaceId] &&
+        ([[NSDate date] timeIntervalSince1970] - self.voiceContextCachedAt) < kVoiceContextCacheTTL) {
+        NSLog(@"[VoiceContext] 使用缓存 context (spaceId=%@)", spaceId);
+        return;
+    }
+
+    // 防重复请求
+    if (self.voiceContextInflight && [self.voiceContextSpaceId isEqualToString:spaceId]) {
+        NSLog(@"[VoiceContext] 请求进行中，跳过重复请求");
+        return;
+    }
+
+    self.voiceContextInflight = YES;
+    self.voiceContextSpaceId = spaceId;
+    NSLog(@"[VoiceContext] 开始预取 (spaceId=%@)", spaceId);
+
+    NSString *path = [NSString stringWithFormat:@"voice/context?space_id=%@", spaceId];
+
+    // 带超时的请求
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kVoiceContextTimeout * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (weakSelf.voiceContextInflight && [weakSelf.voiceContextSpaceId isEqualToString:spaceId]) {
+            NSLog(@"[VoiceContext] 请求超时");
+            weakSelf.voiceContextInflight = NO;
+            [weakSelf flushVoiceContextCallbacks:nil];
+        }
+    });
+
+    [[WKAPIClient sharedClient] GET:path parameters:nil].then(^(NSDictionary *resp) {
+        NSLog(@"[VoiceContext] 预取完成: has_context=%@, context=%@",
+              resp[@"has_context"], resp[@"context"] ?: @"(nil)");
+        weakSelf.voiceContextInflight = NO;
+        BOOL hasContext = [resp[@"has_context"] boolValue];
+        NSString *context = resp[@"context"];
+        if (hasContext && context && ![context isKindOfClass:[NSNull class]] && context.length > 0) {
+            weakSelf.cachedVoiceContext = context;
+        } else {
+            weakSelf.cachedVoiceContext = nil;
+        }
+        weakSelf.cachedVoiceContextHasValue = YES;
+        weakSelf.voiceContextCachedAt = [[NSDate date] timeIntervalSince1970];
+        [weakSelf flushVoiceContextCallbacks:weakSelf.cachedVoiceContext];
+    }).catch(^(NSError *error) {
+        NSLog(@"[VoiceContext] 预取失败: %@", error.localizedDescription);
+        weakSelf.voiceContextInflight = NO;
+        weakSelf.cachedVoiceContext = nil;
+        weakSelf.cachedVoiceContextHasValue = NO;
+        [weakSelf flushVoiceContextCallbacks:nil];
+    });
+}
+
+- (void)getVoiceContextWithCompletion:(void(^)(NSString *context))completion {
+    if (!completion) return;
+
+    // 已有缓存
+    if (self.cachedVoiceContextHasValue && !self.voiceContextInflight) {
+        completion(self.cachedVoiceContext);
+        return;
+    }
+
+    // 正在请求中，加入等待队列
+    if (self.voiceContextInflight) {
+        if (!self.voiceContextPendingCallbacks) {
+            self.voiceContextPendingCallbacks = [NSMutableArray array];
+        }
+        [self.voiceContextPendingCallbacks addObject:[completion copy]];
+        return;
+    }
+
+    // 无缓存且无请求，直接返回 nil
+    completion(nil);
+}
+
+- (void)flushVoiceContextCallbacks:(NSString *)context {
+    NSArray *callbacks = [self.voiceContextPendingCallbacks copy];
+    self.voiceContextPendingCallbacks = nil;
+    for (void(^cb)(NSString *) in callbacks) {
+        cb(context);
+    }
+}
+
+- (void)clearVoiceContextCache {
+    NSLog(@"[VoiceContext] 清除缓存");
+    self.cachedVoiceContext = nil;
+    self.cachedVoiceContextHasValue = NO;
+    self.voiceContextCachedAt = 0;
+    self.voiceContextInflight = NO;
+    self.voiceContextPendingCallbacks = nil;
+}
+
+#pragma mark - Transcribe
 
 - (void)transcribeAudio:(NSData *)audioData
             contextText:(NSString *)contextText

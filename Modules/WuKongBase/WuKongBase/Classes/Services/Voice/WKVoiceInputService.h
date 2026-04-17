@@ -36,6 +36,16 @@ NS_ASSUME_NONNULL_BEGIN
 /// 清除配置缓存
 - (void)clearConfigCache;
 
+/// 预取语音上下文（录音开始时调用，异步获取不阻塞）
+- (void)prefetchVoiceContext;
+
+/// 获取已缓存的语音上下文（录音结束时调用，如果预取完成则直接返回）
+/// @param completion 回调，context 为 nil 表示无上下文或未就绪
+- (void)getVoiceContextWithCompletion:(void(^)(NSString * _Nullable context))completion;
+
+/// 清除语音上下文缓存（切换 Space 时调用）
+- (void)clearVoiceContextCache;
+
 /// 语音转写（m4a/AAC 格式）
 /// @param audioData    音频数据（m4a/AAC 格式）
 /// @param contextText  输入框已有文本（可选，nil 为纯转写模式）

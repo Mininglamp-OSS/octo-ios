@@ -325,6 +325,9 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
 
     self.state = WKHTTStateRecording;
 
+    // 录音开始时预取语音上下文（异步，不阻塞录音）
+    [[WKVoiceInputService shared] prefetchVoiceContext];
+
     if (!isAppend) {
         self.transcribedText = nil;
         [self showRecordingOverlay];
@@ -426,30 +429,35 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
     // context_text: 仅使用当前已转写的文本（独立于外部输入框）
     NSString *contextText = self.transcribedText.length > 0 ? self.transcribedText : nil;
     BOOL hasContext = (contextText.length > 0);
-    // chat_context: 群成员/近期消息等聊天上下文
-    NSString *chatContext = nil;
-    if ([self.delegate respondsToSelector:@selector(holdToTalkManagerChatContext:)]) {
-        chatContext = [self.delegate holdToTalkManagerChatContext:self];
-    }
 
     __weak typeof(self) ws = self;
-    [[WKVoiceInputService shared] transcribeWavAudio:audioData contextText:contextText chatContext:chatContext
-                                       completion:^(WKVoiceInputResult *result, NSError *error) {
-        [ws cleanupRecordFile];
-        if (error || result.text.length == 0) {
-            [ws showHUD:LLang(@"语音识别失败，请重试")];
-            [ws hideOverlay]; ws.state = WKHTTStateIdle;
-            return;
+
+    // 等待预取的语音上下文完成，再发起转写
+    [[WKVoiceInputService shared] getVoiceContextWithCompletion:^(NSString *voiceContext) {
+        // chat_context: 优先使用服务端返回的 voice context，其次用本地聊天上下文
+        NSString *chatContext = voiceContext;
+        if (!chatContext && [ws.delegate respondsToSelector:@selector(holdToTalkManagerChatContext:)]) {
+            chatContext = [ws.delegate holdToTalkManagerChatContext:ws];
         }
-        // 当有 context_text 时，API 返回的是整合后的完整文本（shouldReplace）
-        if (hasContext) {
-            ws.transcribedText = result.text;
-        } else {
-            ws.transcribedText = ws.transcribedText.length > 0
-                ? [ws.transcribedText stringByAppendingString:result.text]
-                : result.text;
-        }
-        [ws finishThinkingAndShowText];
+        NSLog(@"[VoiceContext] transcribe chatContext: %@", chatContext ? @"(有值)" : @"(nil)");
+
+        [[WKVoiceInputService shared] transcribeWavAudio:audioData contextText:contextText chatContext:chatContext
+                                           completion:^(WKVoiceInputResult *result, NSError *error) {
+            [ws cleanupRecordFile];
+            if (error || result.text.length == 0) {
+                [ws showHUD:LLang(@"语音识别失败，请重试")];
+                [ws hideOverlay]; ws.state = WKHTTStateIdle;
+                return;
+            }
+            if (hasContext) {
+                ws.transcribedText = result.text;
+            } else {
+                ws.transcribedText = ws.transcribedText.length > 0
+                    ? [ws.transcribedText stringByAppendingString:result.text]
+                    : result.text;
+            }
+            [ws finishThinkingAndShowText];
+        }];
     }];
 }
 

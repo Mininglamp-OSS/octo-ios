@@ -564,6 +564,9 @@ static CGFloat const kCircleBaseSize = 80.0; // 基础圆形大小，会随音�
 
     self.state = WKVoiceInputStateRecording;
 
+    // 录音开始时预取语音上下文
+    [[WKVoiceInputService shared] prefetchVoiceContext];
+
     // 显示录音蒙层
     [self showRecordingOverlay];
 
@@ -602,14 +605,18 @@ static CGFloat const kCircleBaseSize = 80.0; // 基础圆形大小，会随音�
     if ([self.delegate respondsToSelector:@selector(voiceInputCurrentText)]) {
         contextText = [self.delegate voiceInputCurrentText];
     }
-    NSString *chatContext = nil;
-    if ([self.delegate respondsToSelector:@selector(voiceInputChatContext)]) {
-        chatContext = [self.delegate voiceInputChatContext];
-    }
 
     __weak typeof(self) weakSelf = self;
-    [[WKVoiceInputService shared] transcribeAudio:audioData contextText:contextText chatContext:chatContext
-                                       completion:^(WKVoiceInputResult *result, NSError *error) {
+
+    // 等待预取的语音上下文完成，再发起转写
+    [[WKVoiceInputService shared] getVoiceContextWithCompletion:^(NSString *voiceContext) {
+        NSString *chatContext = voiceContext;
+        if (!chatContext && [weakSelf.delegate respondsToSelector:@selector(voiceInputChatContext)]) {
+            chatContext = [weakSelf.delegate voiceInputChatContext];
+        }
+
+        [[WKVoiceInputService shared] transcribeAudio:audioData contextText:contextText chatContext:chatContext
+                                           completion:^(WKVoiceInputResult *result, NSError *error) {
         [weakSelf cleanupRecordFile];
         if (error || result.text.length == 0) {
             [weakSelf showHUDWithHide:LLang(@"语音识别失败，请重试")];
@@ -621,6 +628,7 @@ static CGFloat const kCircleBaseSize = 80.0; // 基础圆形大小，会随音�
         weakSelf.pendingTranscribeText = result.text;
         weakSelf.pendingTranscribeShouldReplace = shouldReplace;
         [weakSelf completeThinkingAnimation];
+        }];
     }];
 }
 
