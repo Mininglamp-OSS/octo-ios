@@ -12,6 +12,7 @@
 #import "WKConstant.h"
 #import "WKConversationVC.h"
 #import "WKNavigationManager.h"
+#import "WKLocalNotificationManager.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 #import "WKMessageRegistry.h"
 #import "WKTextMessageCell.h"
@@ -487,6 +488,9 @@ static WKApp *_instance;
      UIUserNotificationTypeBadge);
     UIUserNotificationSettings *settings;
     settings = [UIUserNotificationSettings settingsForTypes:types categories:nil];
+    // 注册本地通知点击处理
+    [[WKLocalNotificationManager shared] registerAsNotificationDelegate];
+
     if (@available(iOS 11.0, *)) {
         UNUserNotificationCenter *center =
         [UNUserNotificationCenter currentNotificationCenter];

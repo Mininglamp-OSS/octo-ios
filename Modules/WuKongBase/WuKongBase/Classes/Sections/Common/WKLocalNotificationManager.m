@@ -11,6 +11,7 @@
 #import "WKMySettingManager.h"
 #import "WuKongBase.h"
 #import "WKConversationListVM.h"
+#import "WKConversationVC.h"
 @implementation WKLocalNotificationManager
 
 static WKLocalNotificationManager *_instance = nil;
@@ -92,8 +93,19 @@ static WKLocalNotificationManager *_instance = nil;
 
 -(void) showLocalNotification:(WKMessage*)message {
     WKChannelInfo *channelInfo = message.channelInfo;
-    if(!channelInfo) { // 如果频道信息不存在，则不显示通知信息 TODO: 如果app从来没有收到过此频道的消息 第一次收到可能没本地通知。这里情况应该出现的概率非常小，先这样处理
-        return;
+    if(!channelInfo) {
+        // 子区可能还没有本地 channelInfo，用父群聊的信息兜底
+        if(message.channel.channelType == WK_COMMUNITY_TOPIC) {
+            NSRange sep = [message.channel.channelId rangeOfString:@"____"];
+            if(sep.location != NSNotFound) {
+                NSString *groupNo = [message.channel.channelId substringToIndex:sep.location];
+                WKChannel *parentChannel = [WKChannel channelID:groupNo channelType:WK_GROUP];
+                channelInfo = [[WKSDK shared].channelManager getChannelInfo:parentChannel];
+            }
+        }
+        if(!channelInfo) {
+            return;
+        }
     }
     if(channelInfo.mute) { // 免打扰不通知
         return;
@@ -146,6 +158,11 @@ static WKLocalNotificationManager *_instance = nil;
         }
         notifContent.categoryIdentifier = [NSString stringWithFormat:@"%llu",message.messageId];
         notifContent.body = content;
+        notifContent.userInfo = @{
+            @"channel_id": message.channel.channelId ?: @"",
+            @"channel_type": @(message.channel.channelType),
+            @"message_seq": @(message.messageSeq),
+        };
         UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:[NSString stringWithFormat:@"%llu",message.messageId] content:notifContent trigger:nil];
         [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:request withCompletionHandler:^(NSError * _Nullable error) {
             if(error) {
@@ -160,6 +177,40 @@ static WKLocalNotificationManager *_instance = nil;
         [[UIApplication sharedApplication] scheduleLocalNotification:localNotification];
     }
     
+}
+
+-(void) registerAsNotificationDelegate {
+    if (@available(iOS 10.0, *)) {
+        [UNUserNotificationCenter currentNotificationCenter].delegate = self;
+    }
+}
+
+#pragma mark - UNUserNotificationCenterDelegate
+
+// 点击通知时打开对应聊天窗口并定位到消息
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response withCompletionHandler:(void (^)(void))completionHandler API_AVAILABLE(ios(10.0)) {
+    NSDictionary *userInfo = response.notification.request.content.userInfo;
+    NSString *channelId = userInfo[@"channel_id"];
+    NSNumber *channelType = userInfo[@"channel_type"];
+    NSNumber *messageSeq = userInfo[@"message_seq"];
+
+    if (channelId.length > 0 && channelType) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            WKChannel *channel = [WKChannel channelID:channelId channelType:channelType.integerValue];
+            WKConversationVC *vc = [WKConversationVC new];
+            vc.channel = channel;
+            if (messageSeq && messageSeq.unsignedIntValue > 0) {
+                vc.locationAtOrderSeq = [[WKSDK shared].chatManager getOrderSeq:messageSeq.unsignedIntValue];
+            }
+            [[WKNavigationManager shared] pushViewController:vc animated:YES];
+        });
+    }
+    completionHandler();
+}
+
+// 前台收到通知时仍然显示横幅
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center willPresentNotification:(UNNotification *)notification withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler API_AVAILABLE(ios(10.0)) {
+    completionHandler(UNNotificationPresentationOptionBadge);
 }
 
 @end
