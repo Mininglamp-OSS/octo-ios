@@ -11,6 +11,7 @@
 @property (nonatomic, strong) UIImageView *arrowView;
 @property (nonatomic, strong) UILabel *titleLbl;
 @property (nonatomic, strong) UILabel *countLbl;
+@property (nonatomic, strong) UILabel *badgeLbl;
 @property (nonatomic, strong) UIView *topDivider;
 @end
 
@@ -47,6 +48,17 @@
         _countLbl.hidden = YES;
         [self.contentView addSubview:_countLbl];
 
+        // 未读红点（折叠时显示）
+        _badgeLbl = [[UILabel alloc] init];
+        _badgeLbl.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
+        _badgeLbl.textColor = [UIColor whiteColor];
+        _badgeLbl.backgroundColor = [UIColor redColor];
+        _badgeLbl.textAlignment = NSTextAlignmentCenter;
+        _badgeLbl.layer.cornerRadius = 9;
+        _badgeLbl.layer.masksToBounds = YES;
+        _badgeLbl.hidden = YES;
+        [self.contentView addSubview:_badgeLbl];
+
         // 点击
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTap)];
         [self.contentView addGestureRecognizer:tap];
@@ -80,6 +92,17 @@
         _countLbl.frame = CGRectMake(_titleLbl.lim_right + 4, 0, _countLbl.lim_width, h);
     } else {
         _countLbl.hidden = YES;
+    }
+
+    // 未读红点（折叠时显示在右侧）
+    if (self.collapsed && self.unreadCount > 0) {
+        _badgeLbl.hidden = NO;
+        _badgeLbl.text = self.unreadCount > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)self.unreadCount];
+        [_badgeLbl sizeToFit];
+        CGFloat badgeW = MAX(_badgeLbl.lim_width + 10, 18);
+        _badgeLbl.frame = CGRectMake(w - 15 - badgeW, (h - 18) / 2.0, badgeW, 18);
+    } else {
+        _badgeLbl.hidden = YES;
     }
 }
 

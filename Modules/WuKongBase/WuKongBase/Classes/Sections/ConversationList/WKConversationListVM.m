@@ -684,6 +684,19 @@ static WKConversationListVM *_instance;
     });
 }
 
+/// 计算指定群聊下所有子区的未读数总和
+-(NSInteger) threadUnreadForGroup:(NSString *)groupNo {
+    NSInteger total = 0;
+    NSArray<WKConversation *> *allConvs = [[WKSDK shared].conversationManager getConversationList];
+    NSString *prefix = [NSString stringWithFormat:@"%@____", groupNo];
+    for (WKConversation *conv in allConvs) {
+        if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
+            total += conv.unreadCount;
+        }
+    }
+    return total;
+}
+
 -(NSArray<WKConversationDisplayItem *> *) buildGroupDisplayList {
     // 1. 建立 channelId → WKConversationWrapModel 映射（仅群聊）
     NSMutableDictionary<NSString *, WKConversationWrapModel *> *channelMap = [NSMutableDictionary dictionary];
@@ -709,12 +722,20 @@ static WKConversationListVM *_instance;
     for (WKCategoryEntity *cat in self.categoryList) {
         if (cat.is_default) continue;
         WKConversationDisplayItem *header = [WKConversationDisplayItem sectionHeaderWithId:cat.category_id title:cat.name isDefault:NO];
-        // 统计分组内实际存在于会话列表的群聊数量
+        // 统计分组内群聊数量 + 群聊未读 + 子区未读
         NSInteger count = 0;
+        NSInteger totalUnread = 0;
         for (WKCategoryGroup *cg in cat.groups) {
-            if (channelMap[cg.group_no]) count++;
+            WKConversationWrapModel *m = channelMap[cg.group_no];
+            if (m) {
+                count++;
+                totalUnread += m.unreadCount;
+                // 累加该群聊下所有子区的未读
+                totalUnread += [self threadUnreadForGroup:cg.group_no];
+            }
         }
         header.groupCount = count;
+        header.unreadCount = totalUnread;
         [displayList addObject:header];
 
         if(![self.collapsedSections containsObject:cat.category_id]) {
@@ -776,6 +797,12 @@ static WKConversationListVM *_instance;
         NSString *sectionId = defaultCategory.category_id.length > 0 ? defaultCategory.category_id : @"uncategorized";
         WKConversationDisplayItem *header = [WKConversationDisplayItem sectionHeaderWithId:sectionId title:defaultCategory.name isDefault:YES];
         header.groupCount = defaultItems.count;
+        NSInteger defaultUnread = 0;
+        for (WKConversationWrapModel *m in defaultItems) {
+            defaultUnread += m.unreadCount;
+            defaultUnread += [self threadUnreadForGroup:m.channel.channelId];
+        }
+        header.unreadCount = defaultUnread;
         [displayList addObject:header];
         if (![self.collapsedSections containsObject:sectionId]) {
             for (WKConversationWrapModel *m in defaultItems) {

@@ -67,6 +67,7 @@
 @property (nonatomic, strong) UIView *threadContainer;
 @property (nonatomic, strong) WKThreadBranchView *branchView;
 @property (nonatomic, strong) UILabel *moreLbl;
+@property (nonatomic, strong) UILabel *moreBadgeLbl;
 @property (nonatomic, strong) UIView *separatorLine;
 
 // 预创建的 2 个固定预览行（不动态增删）
@@ -249,6 +250,17 @@
     self.moreLbl.textColor = [WKApp shared].config.themeColor;
     self.moreLbl.hidden = YES;
     [self.contentView addSubview:self.moreLbl];
+
+    // 更多行的未读红点
+    self.moreBadgeLbl = [[UILabel alloc] init];
+    self.moreBadgeLbl.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
+    self.moreBadgeLbl.textColor = [UIColor whiteColor];
+    self.moreBadgeLbl.backgroundColor = [UIColor redColor];
+    self.moreBadgeLbl.textAlignment = NSTextAlignmentCenter;
+    self.moreBadgeLbl.layer.cornerRadius = 9;
+    self.moreBadgeLbl.layer.masksToBounds = YES;
+    self.moreBadgeLbl.hidden = YES;
+    [self.contentView addSubview:self.moreBadgeLbl];
 }
 
 -(void) refreshWithModel:(WKConversationWrapModel *)model {
@@ -344,8 +356,32 @@
             UITapGestureRecognizer *moreTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onMoreTap)];
             [self.moreLbl addGestureRecognizer:moreTap];
         }
+
+        // 计算未预览子区的未读数：所有子区未读总和 - 已预览子区的未读
+        NSString *groupNo = self.model.channel.channelId;
+        NSString *prefix = [NSString stringWithFormat:@"%@____", groupNo];
+        NSMutableSet *previewedIds = [NSMutableSet set];
+        for (NSInteger i = 0; i < count; i++) {
+            [previewedIds addObject:previews[i].channelId];
+        }
+        NSInteger moreUnread = 0;
+        NSArray<WKConversation *> *allConvs = [[WKSDK shared].conversationManager getConversationList];
+        for (WKConversation *conv in allConvs) {
+            if (conv.channel.channelType == WK_COMMUNITY_TOPIC
+                && [conv.channel.channelId hasPrefix:prefix]
+                && ![previewedIds containsObject:conv.channel.channelId]) {
+                moreUnread += conv.unreadCount;
+            }
+        }
+        if (moreUnread > 0) {
+            self.moreBadgeLbl.hidden = NO;
+            self.moreBadgeLbl.text = moreUnread > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)moreUnread];
+        } else {
+            self.moreBadgeLbl.hidden = YES;
+        }
     } else {
         self.moreLbl.hidden = YES;
+        self.moreBadgeLbl.hidden = YES;
     }
 }
 
@@ -440,7 +476,13 @@
 
         // 更多
         if (!self.moreLbl.hidden) {
-            self.moreLbl.frame = CGRectMake(CONTENT_LEFT + 10, containerTop + containerHeight + 2, containerWidth, MORE_HEIGHT - 4);
+            self.moreLbl.frame = CGRectMake(CONTENT_LEFT + 10, containerTop + containerHeight + 2, containerWidth - 60, MORE_HEIGHT - 4);
+            // 红点
+            if (!self.moreBadgeLbl.hidden) {
+                [self.moreBadgeLbl sizeToFit];
+                CGFloat badgeW = MAX(self.moreBadgeLbl.lim_width + 8, 18);
+                self.moreBadgeLbl.frame = CGRectMake(w - RIGHT_PADDING - badgeW, self.moreLbl.lim_top + (MORE_HEIGHT - 4 - 18) / 2.0, badgeW, 18);
+            }
         }
     }
 }
@@ -453,6 +495,7 @@
     self.threadContainer.hidden = YES;
     self.branchView.hidden = YES;
     self.moreLbl.hidden = YES;
+    self.moreBadgeLbl.hidden = YES;
     self.onThreadPreviewTap = nil;
     self.onMoreThreadsTap = nil;
 }
