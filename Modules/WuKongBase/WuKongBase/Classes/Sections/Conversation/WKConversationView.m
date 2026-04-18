@@ -791,7 +791,7 @@
     NSArray *selectedMessages = [self.messageListView getSelectedMessages];
     __weak typeof(self) weakSelf = self;
     [vc setOnSingleConfirm:^(WKChannel *channel, NSString *extraText) {
-        [[WKNavigationManager shared] popToViewController:weakSelf.lim_viewController animated:YES];
+        // ForwardSelectVC 确认后会自动 pop，这里不再重复 pop
         for (WKMessageModel *messageModel in selectedMessages) {
             if([[WKApp shared] allowMessageForward:messageModel.contentType]) {
                 if([weakSelf.channel isEqual:channel]) {
@@ -831,7 +831,7 @@
     vc.singleSelectMode = YES;
     NSArray *selectedMessages = [self.messageListView getSelectedMessages];
     [vc setOnSingleConfirm:^(WKChannel *channel, NSString *extraText) {
-        [[WKNavigationManager shared] popToViewController:weakSelf.lim_viewController animated:YES];
+        // ForwardSelectVC 确认后会自动 pop，这里不再重复 pop
 
         NSMutableArray *msgs = [NSMutableArray array];
         NSMutableArray<NSDictionary*> *userDicts = [NSMutableArray array];

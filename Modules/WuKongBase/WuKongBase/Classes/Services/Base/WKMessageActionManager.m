@@ -35,10 +35,9 @@ static WKMessageActionManager *_instance;
     vc.title = LLang(@"选择聊天");
     vc.singleSelectMode = YES;
     [vc setOnSingleConfirm:^(WKChannel *channel, NSString *extraText) {
+        // ForwardSelectVC 确认后会自动 pop，这里不再重复 pop
         if(complete) {
             complete();
-        } else {
-            [[WKNavigationManager shared] popViewControllerAnimated:YES];
         }
         if([[WKApp shared] allowMessageForward:messageContent.realContentType]) {
             [[WKSDK shared].chatManager forwardMessage:messageContent channel:channel];
@@ -60,10 +59,9 @@ static WKMessageActionManager *_instance;
     vc.title = LLang(@"选择聊天");
     vc.singleSelectMode = YES;
     [vc setOnSingleConfirm:^(WKChannel *channel, NSString *extraText) {
+        // ForwardSelectVC 确认后会自动 pop，这里不再重复 pop
         if(complete) {
             complete();
-        } else {
-            [[WKNavigationManager shared] popViewControllerAnimated:YES];
         }
         [[WKSDK shared].chatManager sendMessage:messageContent channel:channel];
         if (extraText.length > 0) {
@@ -78,7 +76,7 @@ static WKMessageActionManager *_instance;
 #pragma mark - Helper
 
 -(void) doForwardMessages:(NSArray<WKMessage*>*)messages toChannel:(WKChannel *)channel extraText:(NSString *)extraText {
-    [[WKNavigationManager shared] popViewControllerAnimated:YES];
+    // ForwardSelectVC 确认后已经 pop 了自己，这里不再重复 pop
     for (WKMessage *message in messages) {
         if([[WKApp shared] allowMessageForward:message.contentType]) {
             [[WKSDK shared].chatManager forwardMessage:message.content channel:channel];

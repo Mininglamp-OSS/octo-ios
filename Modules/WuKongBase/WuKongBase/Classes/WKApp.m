@@ -1355,7 +1355,7 @@ static WKApp *_instance;
             vc.title = LLangW(@"选择聊天", weakSelf);
             vc.singleSelectMode = YES;
             [vc setOnSingleConfirm:^(WKChannel *channel, NSString *extraText) {
-                [[WKNavigationManager shared] popToViewControllerClass:WKConversationVC.class animated:YES];
+                // ForwardSelectVC 确认后会自动 pop，这里不再重复 pop
                 if([channel isEqual:context.channel]) {
                     [context forwardMessage:message.content];
                 } else {

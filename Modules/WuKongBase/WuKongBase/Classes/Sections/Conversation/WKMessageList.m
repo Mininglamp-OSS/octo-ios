@@ -20,18 +20,27 @@
 @implementation WKMessageList
 
 - (void)insertMessages:(NSArray<WKMessageModel *> *)messages {
+    [self.messagesLock lock];
     for(int i=0;i<messages.count;i++) {
-        [self insertMessage:messages[i]];
+        [self _insertMessageNoLock:messages[i]];
     }
+    [self.messagesLock unlock];
 }
 
 
 -(void) insertMessage:(WKMessageModel*)model {
+    [self.messagesLock lock];
+    [self _insertMessageNoLock:model];
+    [self.messagesLock unlock];
+}
+
+// 内部方法，调用前必须持有 messagesLock
+-(void) _insertMessageNoLock:(WKMessageModel*)model {
     if(model.contentType == WK_TEXT) {
        WKTextContent *content = (WKTextContent*)model.content;
         content.content = [WKProhibitwordsService.shared filter:content.content]; // 违禁词过滤
     }
-    
+
     NSString *date = [self formatMessageDate:model];
     NSMutableArray *messages = self.dateMessageGroups[date];
     if(!messages) {
@@ -45,7 +54,6 @@
         oldMessageModel.preMessageModel = model;
     }
     [messages insertObject:model atIndex:0];
-    
 }
 
 

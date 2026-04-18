@@ -30,6 +30,10 @@
 @property(nonatomic,assign) BOOL multipleOn;
 @property(nonatomic,strong,nullable) WKMessageModel *lastMessageInner;
 
+// pulldown 期间串行化新消息，防止并发修改导致布局错乱
+@property(nonatomic,assign) BOOL isPulldownInProgress;
+@property(nonatomic,strong) NSMutableArray<WKMessage*> *pendingRecvMessages;
+
 @end
 
 @implementation WKMessageListView
@@ -156,9 +160,41 @@
 
 -(void) sendMessage:(WKMessageModel*)message {
     [self updateLastMsgIfNeed:message];
+
+    // 快照 addMessage 前后的 section/row 数量，按实际变化增量更新
+    NSInteger oldSectionCount = [self.dataProvider dateCount];
+    NSInteger oldLastSectionRowCount = 0;
+    if (oldSectionCount > 0) {
+        oldLastSectionRowCount = [self.dataProvider messagesAtSection:oldSectionCount - 1].count;
+    }
+
     [self.dataProvider addMessage:message];
+
+    NSInteger newSectionCount = [self.dataProvider dateCount];
+    BOOL newSectionAdded = (newSectionCount > oldSectionCount);
+    NSInteger newLastSectionRowCount = (newSectionCount > 0) ? [self.dataProvider messagesAtSection:newSectionCount - 1].count : 0;
+
+    if (newSectionAdded) {
+        [UIView performWithoutAnimation:^{
+            [self.tableView insertSections:[NSIndexSet indexSetWithIndex:newSectionCount - 1] withRowAnimation:UITableViewRowAnimationNone];
+        }];
+    } else if (newLastSectionRowCount > oldLastSectionRowCount) {
+        NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
+        for (NSInteger row = oldLastSectionRowCount; row < newLastSectionRowCount; row++) {
+            [indexPaths addObject:[NSIndexPath indexPathForRow:row inSection:newSectionCount - 1]];
+        }
+        [UIView performWithoutAnimation:^{
+            [self.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
+        }];
+    } else {
+        // typing 替换等场景：刷新最后一行
+        if (newSectionCount > 0 && newLastSectionRowCount > 0) {
+            NSIndexPath *lastPath = [NSIndexPath indexPathForRow:newLastSectionRowCount - 1 inSection:newSectionCount - 1];
+            [self.tableView reloadRowsAtIndexPaths:@[lastPath] withRowAnimation:UITableViewRowAnimationNone];
+        }
+    }
+
     [self didAddMessageUI];
-    
 }
 
 -(void) removeMessage:(WKMessageModel*)message {
@@ -167,7 +203,7 @@
 }
 
 -(void) didAddMessageUI{
-    [self.tableView reloadData];
+    // 不再 reloadData，调用方已通过增量 insertRows 更新
     __weak typeof(self) weakSelf = self;
     
     if([self.dataProvider hasTyping]) {
@@ -461,6 +497,9 @@
 -(void) pulldown {
     __weak typeof(self) weakSelf = self;
 
+    // 标记 pulldown 进行中，阻止新消息并发修改 tableView
+    self.isPulldownInProgress = YES;
+
     // 记录旧状态，用于增量插入
     NSInteger oldSectionCount = [self.dataProvider dateCount];
     NSInteger oldFirstSectionRowCount = 0;
@@ -521,6 +560,10 @@
         }
 
         [weakSelf.tableView.mj_header endRefreshing];
+
+        // pulldown 完成，处理期间暂存的新消息
+        weakSelf.isPulldownInProgress = NO;
+        [weakSelf processPendingRecvMessages];
     }];
 
 }
@@ -1148,6 +1191,16 @@
     if(message.isDeleted) { // 已删除的消息不处理
         return;
     }
+
+    // pulldown 进行中，暂存新消息避免并发修改 tableView 导致布局错乱
+    if(self.isPulldownInProgress) {
+        if(!self.pendingRecvMessages) {
+            self.pendingRecvMessages = [NSMutableArray array];
+        }
+        [self.pendingRecvMessages addObject:message];
+        return;
+    }
+
     if(![message isSend]) {
         self.hasRecvMsg = true;
     }
@@ -1159,17 +1212,61 @@
         }
     } else {
         [self updateLastMsgIfNeed:messageModel];
+
+        // 快照 addMessage 前后的 section/row 数量，按实际变化增量更新
+        NSInteger oldSectionCount = [self.dataProvider dateCount];
+        NSInteger oldLastSectionRowCount = 0;
+        if (oldSectionCount > 0) {
+            oldLastSectionRowCount = [self.dataProvider messagesAtSection:oldSectionCount - 1].count;
+        }
+
         [self.dataProvider addMessage:messageModel];
-        [self.tableView reloadData];
+
+        NSInteger newSectionCount = [self.dataProvider dateCount];
+        BOOL newSectionAdded = (newSectionCount > oldSectionCount);
+        NSInteger newLastSectionRowCount = (newSectionCount > 0) ? [self.dataProvider messagesAtSection:newSectionCount - 1].count : 0;
+
+        if (newSectionAdded) {
+            // 新日期分组：插入整个 section
+            [UIView performWithoutAnimation:^{
+                [self.tableView insertSections:[NSIndexSet indexSetWithIndex:newSectionCount - 1] withRowAnimation:UITableViewRowAnimationNone];
+            }];
+        } else if (!newSectionAdded && newLastSectionRowCount > oldLastSectionRowCount) {
+            // 同日期且行数增加：在末尾插入新行
+            NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
+            for (NSInteger row = oldLastSectionRowCount; row < newLastSectionRowCount; row++) {
+                [indexPaths addObject:[NSIndexPath indexPathForRow:row inSection:newSectionCount - 1]];
+            }
+            [UIView performWithoutAnimation:^{
+                [self.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
+            }];
+        } else {
+            // typing 替换/丢弃等场景：行数不变，刷新最后一行即可
+            if (newSectionCount > 0 && newLastSectionRowCount > 0) {
+                NSIndexPath *lastPath = [NSIndexPath indexPathForRow:newLastSectionRowCount - 1 inSection:newSectionCount - 1];
+                [self.tableView reloadRowsAtIndexPaths:@[lastPath] withRowAnimation:UITableViewRowAnimationNone];
+            }
+        }
+
         if(self.positionAtBottom) {
             [self scrollToBottom:YES];
-           
         }else{
             if( [message isSend]) {
                 [self scrollToBottom:YES];
             }
-           
         }
+    }
+}
+
+// pulldown 完成后，统一处理暂存的新消息
+-(void) processPendingRecvMessages {
+    if(!self.pendingRecvMessages || self.pendingRecvMessages.count == 0) {
+        return;
+    }
+    NSArray<WKMessage*> *pending = [self.pendingRecvMessages copy];
+    [self.pendingRecvMessages removeAllObjects];
+    for(WKMessage *msg in pending) {
+        [self handleRecvMessage:msg];
     }
 }
 
