@@ -129,12 +129,9 @@
         return;
     }
 
-    // 数据过期（5秒）时重新拉取，确保新添加的好友/bot能及时显示
+    // 每次出现都后台静默同步，DB 写入在后台线程不阻塞 UI
     if (self.dataLoaded) {
-        NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-        if (now - self.lastLoadTime > 5.0) {
-            [self requestData];
-        }
+        [self requestData];
     }
 }
 
@@ -291,19 +288,12 @@
     return headerItems;
 }
 
-// 请求联系人数据（5秒节流 + 互斥保护）
+// 请求联系人数据（互斥保护，DB 写入在后台线程不阻塞 UI）
 -(void) requestData{
-    // 1. 互斥：更新管道正在执行中，拒绝新请求
+    // 互斥：更新管道正在执行中，拒绝新请求
     if (self.isUpdating) return;
 
-    // 2. 节流：5秒内重复调用直接跳过
-    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    if (self.lastLoadTime > 0 && (now - self.lastLoadTime) < 5.0) {
-        return;
-    }
-
     self.isUpdating = YES;
-    self.lastLoadTime = now; // 记录开始时间，开启5秒窗口
 
     // 确保 items 至少有 header section
     if (self.items.count == 0) {
@@ -484,6 +474,11 @@
                 groupCount = [(NSArray*)rawGroups count];
             }
 
+            // DB 写入在后台线程完成，避免阻塞主线程
+            weakSelf.isBatchUpdating = YES;
+            [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
+            weakSelf.isBatchUpdating = NO;
+
             // 回主线程更新 UI
             dispatch_async(dispatch_get_main_queue(), ^{
                 // 只有对应接口成功时才更新计数，失败时保留旧值
@@ -493,10 +488,6 @@
                 if (groupsOK) {
                     weakSelf.groupCount = groupCount;
                 }
-                // 批量写DB前设标志，屏蔽逐条 channelInfoUpdate 通知
-                weakSelf.isBatchUpdating = YES;
-                [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
-                weakSelf.isBatchUpdating = NO;
                 [weakSelf applyIncrementalUpdate:channelInfos];
                 weakSelf.dataLoaded = YES;
                 weakSelf.lastLoadTime = [[NSDate date] timeIntervalSince1970];
