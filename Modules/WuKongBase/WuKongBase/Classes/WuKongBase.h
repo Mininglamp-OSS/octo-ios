@@ -35,6 +35,7 @@
 #import "WKContactsSelectVC.h"
 #import "WKContactsSelectCell.h"
 #import "WKSystemMessageHandler.h"
+#import "WKLocalNotificationManager.h"
 #import "WKMessageLongMenusItem.h"
 #import "WKMessageManager.h"
 #import "WKAlertUtil.h"

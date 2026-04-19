@@ -8,6 +8,7 @@
 
 #import "AppDelegate.h"
 #import <WuKongBase/WuKongBase.h>
+#import <WuKongBase/WKLocalNotificationManager.h>
 #import "WKMainTabController.h"
 @import WuKongContacts;
 #import <WuKongBase/WKSyncService.h>
@@ -15,6 +16,10 @@
 
 #import "SELUpdateAlert.h"
 #import <Bugly/Bugly.h>
+
+#ifdef DEBUG
+#import <DoraemonKit/DoraemonManager.h>
+#endif
 
 
 #define SERVER_IP [WKServerConfig serverIP]
@@ -51,10 +56,20 @@
 
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    
-    // Bugly 崩溃采集初始化
+
+    // 必须在 didFinishLaunchingWithOptions 返回前设置，否则冷启动点击通知无法触发回调
+    [[WKLocalNotificationManager shared] registerAsNotificationDelegate];
+
+    // DoKit 性能监控（仅 Debug 模式）
+#ifdef DEBUG
+    [[DoraemonManager shareInstance] installWithPid:@""];
+#endif
+
+    // Bugly 崩溃 + 卡顿采集
     BuglyConfig *buglyConfig = [[BuglyConfig alloc] init];
     buglyConfig.channel = @"TestFlight";
+    buglyConfig.blockMonitorEnable = YES;       // 开启卡顿监控
+    buglyConfig.blockMonitorTimeout = 1.0;      // 主线程卡顿超过 1 秒上报堆栈
     [Bugly startWithAppId:@"a66cf95f92" config:buglyConfig];
 
     self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];

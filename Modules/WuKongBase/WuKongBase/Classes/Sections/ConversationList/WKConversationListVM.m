@@ -55,6 +55,7 @@ static WKConversationListVM *_instance;
 }
 
 - (void)reset {
+    NSLog(@"[ConvDebug] VM reset called! clearing %lu models, callStack=%@", (unsigned long)self.conversationWrapModels.count, [[NSThread callStackSymbols] subarrayWithRange:NSMakeRange(1, MIN(5, [NSThread callStackSymbols].count - 1))]);
     [self.conversationWrapModels removeAllObjects];
     self.filteredConversations = @[];
     self.syncedGroupChannelIds = nil; // 重置白名单
@@ -92,10 +93,13 @@ static WKConversationListVM *_instance;
 -(void) loadConversationList:(void(^)(void)) finished {
     NSMutableArray<WKConversationWrapModel*> *conversationWrapModels = [[NSMutableArray alloc] init];
     NSArray<WKConversation*> *conversations = [[[WKSDK shared] conversationManager] getConversationList];
+    NSLog(@"[ConvDebug] loadConversationList: DB returned %lu conversations, syncedGroupChannelIds=%@", (unsigned long)conversations.count, self.syncedGroupChannelIds ? [NSString stringWithFormat:@"%lu items", (unsigned long)self.syncedGroupChannelIds.count] : @"nil");
+    NSInteger filteredCount = 0;
     if(conversations) {
         for (WKConversation *conversation in conversations) {
             // 空间隔离：过滤不属于当前空间的会话
             if(![self shouldShowConversation:conversation]) {
+                filteredCount++;
                 continue;
             }
             // 子区完全不显示在会话列表
@@ -138,6 +142,7 @@ static WKConversationListVM *_instance;
         }
     }
 
+    NSLog(@"[ConvDebug] loadConversationList: filtered=%ld, final models=%lu", (long)filteredCount, (unsigned long)conversationWrapModels.count);
     self.conversationWrapModels = conversationWrapModels;
 
     // 从 DB 恢复每个会话的 reminders（@提醒等）
@@ -697,8 +702,8 @@ static WKConversationListVM *_instance;
     });
 }
 
-/// 检测指定群聊及其所有子区是否有未处理的@提醒
--(BOOL) hasMentionForGroup:(NSString *)groupNo model:(WKConversationWrapModel *)model {
+/// 检测指定群聊及其所有子区是否有未处理的@提醒（使用缓存的会话列表避免重复 DB 查询）
+-(BOOL) hasMentionForGroup:(NSString *)groupNo model:(WKConversationWrapModel *)model allConvs:(NSArray<WKConversation*>*)allConvs {
     // 检查群聊自身的 reminder
     if (model && model.simpleReminders.count > 0) {
         for (WKReminder *r in model.simpleReminders) {
@@ -706,7 +711,6 @@ static WKConversationListVM *_instance;
         }
     }
     // 检查该群聊下所有子区的 reminder
-    NSArray<WKConversation *> *allConvs = [[WKSDK shared].conversationManager getConversationList];
     NSString *prefix = [NSString stringWithFormat:@"%@____", groupNo];
     for (WKConversation *conv in allConvs) {
         if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
@@ -719,10 +723,9 @@ static WKConversationListVM *_instance;
     return NO;
 }
 
-/// 计算指定群聊下所有子区的未读数总和
--(NSInteger) threadUnreadForGroup:(NSString *)groupNo {
+/// 计算指定群聊下所有子区的未读数总和（使用缓存的会话列表避免重复 DB 查询）
+-(NSInteger) threadUnreadForGroup:(NSString *)groupNo allConvs:(NSArray<WKConversation*>*)allConvs {
     NSInteger total = 0;
-    NSArray<WKConversation *> *allConvs = [[WKSDK shared].conversationManager getConversationList];
     NSString *prefix = [NSString stringWithFormat:@"%@____", groupNo];
     for (WKConversation *conv in allConvs) {
         if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
@@ -743,6 +746,9 @@ static WKConversationListVM *_instance;
 
     NSMutableArray<WKConversationDisplayItem *> *displayList = [NSMutableArray array];
     NSMutableSet<NSString *> *groupedChannelIds = [NSMutableSet set];
+
+    // 缓存一次子区会话列表，避免在循环中重复从 DB 查询
+    NSArray<WKConversation *> *cachedAllConvs = [[WKSDK shared].conversationManager getConversationList];
 
     // 2. 收集已归组的 channelId，找到 is_default 分类
     WKCategoryEntity *defaultCategory = nil;
@@ -767,10 +773,10 @@ static WKConversationListVM *_instance;
                 count++;
                 totalUnread += m.unreadCount;
                 // 累加该群聊下所有子区的未读
-                totalUnread += [self threadUnreadForGroup:cg.group_no];
+                totalUnread += [self threadUnreadForGroup:cg.group_no allConvs:cachedAllConvs];
                 // 检测群聊及子区的@提醒
                 if (!sectionHasMention) {
-                    sectionHasMention = [self hasMentionForGroup:cg.group_no model:m];
+                    sectionHasMention = [self hasMentionForGroup:cg.group_no model:m allConvs:cachedAllConvs];
                 }
             }
         }
@@ -842,9 +848,9 @@ static WKConversationListVM *_instance;
         BOOL defaultHasMention = NO;
         for (WKConversationWrapModel *m in defaultItems) {
             defaultUnread += m.unreadCount;
-            defaultUnread += [self threadUnreadForGroup:m.channel.channelId];
+            defaultUnread += [self threadUnreadForGroup:m.channel.channelId allConvs:cachedAllConvs];
             if (!defaultHasMention) {
-                defaultHasMention = [self hasMentionForGroup:m.channel.channelId model:m];
+                defaultHasMention = [self hasMentionForGroup:m.channel.channelId model:m allConvs:cachedAllConvs];
             }
         }
         header.unreadCount = defaultUnread;

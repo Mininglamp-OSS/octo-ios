@@ -195,17 +195,30 @@ static WKLocalNotificationManager *_instance = nil;
     NSNumber *messageSeq = userInfo[@"message_seq"];
 
     if (channelId.length > 0 && channelType) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            WKChannel *channel = [WKChannel channelID:channelId channelType:channelType.integerValue];
-            WKConversationVC *vc = [WKConversationVC new];
-            vc.channel = channel;
-            if (messageSeq && messageSeq.unsignedIntValue > 0) {
-                vc.locationAtOrderSeq = [[WKSDK shared].chatManager getOrderSeq:messageSeq.unsignedIntValue];
-            }
-            [[WKNavigationManager shared] pushViewController:vc animated:YES];
-        });
+        [self navigateToChannel:channelId channelType:channelType messageSeq:messageSeq retryCount:0];
     }
     completionHandler();
+}
+
+// 跳转到聊天窗口，冷启动时导航栈未就绪则延迟重试
+-(void) navigateToChannel:(NSString *)channelId channelType:(NSNumber *)channelType messageSeq:(NSNumber *)messageSeq retryCount:(NSInteger)retryCount {
+    // 检查导航栈是否就绪（冷启动时可能还没初始化完成）
+    if (![WKNavigationManager shared].topViewController || retryCount > 0) {
+        if (retryCount >= 10) return; // 最多重试 10 次（5 秒）
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self navigateToChannel:channelId channelType:channelType messageSeq:messageSeq retryCount:retryCount + 1];
+        });
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        WKChannel *channel = [WKChannel channelID:channelId channelType:channelType.integerValue];
+        WKConversationVC *vc = [WKConversationVC new];
+        vc.channel = channel;
+        if (messageSeq && messageSeq.unsignedIntValue > 0) {
+            vc.locationAtOrderSeq = [[WKSDK shared].chatManager getOrderSeq:messageSeq.unsignedIntValue];
+        }
+        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+    });
 }
 
 // 前台收到通知时仍然显示横幅

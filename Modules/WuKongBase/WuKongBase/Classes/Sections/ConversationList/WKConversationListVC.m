@@ -180,9 +180,10 @@
         //       DB中可能积累了其他空间的群聊（通过实时消息推送写入），
         //       只有deleteAllConversation + sync才能确保DB只包含当前空间的会话
         // 使用hasCleanedConversationsOnStartup防止reconnect时重复清理
+        NSLog(@"[ConvDebug] loadCurrentSpace: hasCleanedOnStartup=%d, lastSpaceId=%@, currentSpaceId=%@", self.hasCleanedConversationsOnStartup, lastSpaceId, self.currentSpaceId);
         if (!self.hasCleanedConversationsOnStartup || !lastSpaceId || ![lastSpaceId isEqualToString:self.currentSpaceId]) {
             self.hasCleanedConversationsOnStartup = YES;
-            NSLog(@"🔄 清空会话数据 (上次Space: %@, 当前Space: %@)", lastSpaceId, self.currentSpaceId);
+            NSLog(@"[ConvDebug] 🔄 CLEARING all conversations for space switch!");
             [self.conversationListVM reset];
             [[WKConversationDB shared] deleteAllConversation];
             [self rebuildGroupDisplayAndReload];
@@ -883,6 +884,7 @@
 
     // 处理网络信号监控
     if (status == WKConnected) {
+        NSLog(@"[ConvDebug] onConnectStatus: WKConnected, calling loadCurrentSpace + sync");
         // 连接成功，重新加载 Space 信息
         [self loadCurrentSpace];
 
@@ -898,16 +900,16 @@
                     return;
                 }
                 if (model) {
+                    // handleSyncConversation 写入 DB 并通过 delegate 更新 UI
                     [[WKSDK shared].conversationManager handleSyncConversation:model];
                 }
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [weakSelf.conversationListVM loadConversationList:^{
-                        // sync完成后记录当前空间的合法群聊白名单
-                        [weakSelf.conversationListVM snapshotSyncedGroupIds];
-                        [weakSelf rebuildGroupDisplayAndReload];
-                        [weakSelf refreshBadge];
-                        [weakSelf loadCategories];
-                    }];
+                    // 不再从 DB 重新加载（handleSyncConversation 的 delegate 已更新内存数据）
+                    // 直接记录白名单并刷新分组
+                    [weakSelf.conversationListVM snapshotSyncedGroupIds];
+                    [weakSelf rebuildGroupDisplayAndReload];
+                    [weakSelf refreshBadge];
+                    [weakSelf loadCategories];
                 });
             });
         } else {
@@ -1357,6 +1359,7 @@
 }
 // 删除所有最近会话
 - (void)onConversationAllDelete {
+    NSLog(@"[ConvDebug] onConversationAllDelete called! callStack=%@", [[NSThread callStackSymbols] subarrayWithRange:NSMakeRange(1, MIN(5, [NSThread callStackSymbols].count - 1))]);
     [self.conversationListVM removeAll];
     [self refreshTable];
     [self refreshBadge];
@@ -2137,6 +2140,7 @@
 
 -(void) rebuildGroupDisplayAndReload {
     self.groupDisplayList = [_conversationListVM buildGroupDisplayList];
+    NSLog(@"[ConvDebug] rebuildGroupDisplayAndReload: filterType=%ld, groupDisplayList=%lu, conversationCount=%ld, callStack=%@", (long)_conversationListVM.filterType, (unsigned long)self.groupDisplayList.count, (long)[_conversationListVM conversationCount], [[NSThread callStackSymbols] subarrayWithRange:NSMakeRange(1, MIN(5, [NSThread callStackSymbols].count - 1))]);
     [self.tableView reloadData];
     [self updateGroupMentionBadge];
 }
