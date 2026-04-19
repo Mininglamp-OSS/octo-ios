@@ -326,7 +326,7 @@
     static WKMemoryCache *memoryCache;
     if(!memoryCache) {
         memoryCache = [[WKMemoryCache alloc] init];
-        memoryCache.maxCacheNum = 500; // TODO: 如果这里设置的过小 滑动会闪屏
+        memoryCache.maxCacheNum = 2000; // 增大缓存避免上翻时频繁淘汰重新解析
     }
     NSString *key = [NSString stringWithFormat:@"%llu%@",message.messageId,message.clientMsgNo];
     WKTextContent *textContent =  (WKTextContent*)[message content];
@@ -407,9 +407,6 @@
             NSAttributedString *mdAttr = nil;
             @try {
                 mdAttr = [WKMarkdownRenderer render:renderContent fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex dynamicTextColor:textColor];
-            } @catch (NSException *exception) {
-                mdAttr = nil;
-            }
             if (mdAttr && mdAttr.length > 0) {
                 useMarkdown = YES;
                 NSMutableAttributedString *mdMutable = [[NSMutableAttributedString alloc] initWithAttributedString:mdAttr];
@@ -519,6 +516,10 @@
                 mdMutable.tokens = clickableTokens;
 
                 return mdMutable;
+            }
+            } @catch (NSException *exception) {
+                NSLog(@"[Markdown] render exception caught, fallback to plain text: %@", exception);
+                // fallback 到纯文本渲染
             }
         }
     }
@@ -777,7 +778,7 @@
     static WKMemoryCache *segHeightCache;
     if (!segHeightCache) {
         segHeightCache = [[WKMemoryCache alloc] init];
-        segHeightCache.maxCacheNum = 100;
+        segHeightCache.maxCacheNum = 2000;
     }
 
     // 流式消息不缓存
@@ -869,7 +870,7 @@
     static WKMemoryCache *memoryCache;
     if(!memoryCache) {
         memoryCache = [[WKMemoryCache alloc] init];
-        memoryCache.maxCacheNum = 100;
+        memoryCache.maxCacheNum = 2000;
     }
     NSString  *sizeStr =  [memoryCache getCache:key];
     if(sizeStr) {
@@ -893,7 +894,7 @@
     static WKMemoryCache *memoryCache;
     if(!memoryCache) {
         memoryCache = [[WKMemoryCache alloc] init];
-        memoryCache.maxCacheNum = 100;
+        memoryCache.maxCacheNum = 2000;
     }
     NSNumber  *lastLineWidth =  [memoryCache getCache:key];
     if(lastLineWidth) {

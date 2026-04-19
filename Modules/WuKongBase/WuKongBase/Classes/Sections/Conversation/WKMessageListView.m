@@ -1354,12 +1354,42 @@
     return cell;
 }
 
+// 高度缓存：避免重复触发 Down 库 markdown 渲染
+static NSMutableDictionary<NSString*, NSNumber*> *_cellHeightCache;
++(NSMutableDictionary<NSString*, NSNumber*>*) cellHeightCache {
+    if (!_cellHeightCache) {
+        _cellHeightCache = [NSMutableDictionary dictionaryWithCapacity:5000];
+    }
+    return _cellHeightCache;
+}
+
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath{
     WKMessageModel *messageModel = [self.dataProvider messageAtIndexPath:indexPath];
+    if (!messageModel) return 0.1f;
+
+    // 流式消息不缓存高度（内容还在变化）
+    BOOL isStreaming = messageModel.streamOn && messageModel.streamFlag != WKStreamFlagEnd;
+    NSString *heightKey = nil;
+    if (!isStreaming && messageModel.clientMsgNo.length > 0) {
+        heightKey = messageModel.clientMsgNo;
+        // 编辑过的消息用不同 key
+        if (messageModel.remoteExtra.contentEdit) {
+            heightKey = [NSString stringWithFormat:@"%@-e%lu", heightKey, (unsigned long)messageModel.remoteExtra.editedAt];
+        }
+        NSNumber *cachedHeight = [[WKMessageListView cellHeightCache] objectForKey:heightKey];
+        if (cachedHeight) {
+            return cachedHeight.floatValue;
+        }
+    }
+
     Class messageCellClass = [self getMessageCellClass:messageModel];
-   
     CGSize cellSize = [messageCellClass sizeForMessage:messageModel];
-    return MAX(cellSize.height, 0.1f);
+    CGFloat height = MAX(cellSize.height, 0.1f);
+
+    if (heightKey) {
+        [[WKMessageListView cellHeightCache] setObject:@(height) forKey:heightKey];
+    }
+    return height;
 }
 
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
