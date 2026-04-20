@@ -525,54 +525,49 @@
         BOOL hasInsertions = (newSectionsAdded > 0 || newRowsInOldFirstSection > 0);
 
         if (hasInsertions) {
-            // 预计算所有新插入消息的高度，填充 cellHeightCache
-            // 这样 insertRows 时 heightForRowAtIndexPath 直接命中缓存，高度正确且无延迟
+            // 预计算所有新插入消息的高度，直接写入 cellHeightCache
             for (NSInteger s = 0; s < newSectionsAdded; s++) {
                 NSArray *msgs = [weakSelf.dataProvider messagesAtSection:s];
                 for (WKMessageModel *msg in msgs) {
-                    Class cellClass = [weakSelf getMessageCellClass:msg];
-                    CGSize size = [cellClass sizeForMessage:msg];
-                    // cellHeightCache 在 heightForRowAtIndexPath 中自动填充
-                    (void)size;
+                    [weakSelf precacheHeightForMessage:msg];
                 }
             }
             if (newRowsInOldFirstSection > 0) {
                 NSArray *msgs = [weakSelf.dataProvider messagesAtSection:newSectionsAdded];
                 for (NSInteger r = 0; r < newRowsInOldFirstSection && r < (NSInteger)msgs.count; r++) {
-                    WKMessageModel *msg = msgs[r];
-                    Class cellClass = [weakSelf getMessageCellClass:msg];
-                    [cellClass sizeForMessage:msg];
+                    [weakSelf precacheHeightForMessage:msgs[r]];
                 }
             }
 
-            // 增量插入 + offset 补偿，不用 reloadData 避免闪烁
-            CGFloat beforeHeight = weakSelf.tableView.contentSize.height;
-            CGFloat beforeOffset = weakSelf.tableView.contentOffset.y;
+            // 记录当前可见的第一条消息，用于 reloadData 后恢复位置
+            NSIndexPath *firstVisible = weakSelf.tableView.indexPathsForVisibleRows.firstObject;
+            CGFloat cellOffsetInView = 0;
+            if (firstVisible) {
+                CGRect cellRect = [weakSelf.tableView rectForRowAtIndexPath:firstVisible];
+                cellOffsetInView = cellRect.origin.y - weakSelf.tableView.contentOffset.y;
+            }
+            // 计算该 cell 在新数据中的 indexPath
+            NSIndexPath *targetAfterReload = nil;
+            if (firstVisible) {
+                NSInteger newSection = firstVisible.section + newSectionsAdded;
+                NSInteger newRow = firstVisible.row;
+                if (firstVisible.section == 0) {
+                    newRow += newRowsInOldFirstSection;
+                }
+                targetAfterReload = [NSIndexPath indexPathForRow:newRow inSection:newSection];
+            }
 
+            // reloadData 确保所有 cell（包含 WKWebView 表格）高度正确
+            // 因为高度已预缓存，reloadData 的 heightForRow 全部命中缓存，速度很快
             [UIView performWithoutAnimation:^{
-                [weakSelf.tableView beginUpdates];
-
-                if (newSectionsAdded > 0) {
-                    NSIndexSet *sectionIndexSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, newSectionsAdded)];
-                    [weakSelf.tableView insertSections:sectionIndexSet withRowAnimation:UITableViewRowAnimationNone];
-                }
-
-                if (newRowsInOldFirstSection > 0) {
-                    NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
-                    for (NSInteger row = 0; row < newRowsInOldFirstSection; row++) {
-                        [indexPaths addObject:[NSIndexPath indexPathForRow:row inSection:newSectionsAdded]];
-                    }
-                    [weakSelf.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
-                }
-
-                [weakSelf.tableView endUpdates];
+                [weakSelf.tableView reloadData];
+                [weakSelf.tableView layoutIfNeeded];
             }];
 
-            // 补偿 contentOffset：保持用户当前浏览位置不变
-            CGFloat afterHeight = weakSelf.tableView.contentSize.height;
-            CGFloat delta = afterHeight - beforeHeight;
-            if (delta > 0) {
-                weakSelf.tableView.contentOffset = CGPointMake(0, beforeOffset + delta);
+            // 恢复到之前可见的位置
+            if (targetAfterReload) {
+                CGRect targetRect = [weakSelf.tableView rectForRowAtIndexPath:targetAfterReload];
+                weakSelf.tableView.contentOffset = CGPointMake(0, targetRect.origin.y - cellOffsetInView);
             }
         }
 
@@ -1369,6 +1364,26 @@
         cell = [[messageCellClass alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:identifier];
     }
     return cell;
+}
+
+// 预计算消息高度并写入 cellHeightCache，确保 insertRows 时高度正确
+-(void) precacheHeightForMessage:(WKMessageModel *)msg {
+    if (!msg) return;
+    BOOL isStreaming = msg.streamOn && msg.streamFlag != WKStreamFlagEnd;
+    if (isStreaming) return;
+
+    NSString *heightKey = msg.clientMsgNo;
+    if (!heightKey || heightKey.length == 0) return;
+    if (msg.remoteExtra.contentEdit) {
+        heightKey = [NSString stringWithFormat:@"%@-e%lu", heightKey, (unsigned long)msg.remoteExtra.editedAt];
+    }
+    // 已缓存则跳过
+    if ([[WKMessageListView cellHeightCache] objectForKey:heightKey]) return;
+
+    Class cellClass = [self getMessageCellClass:msg];
+    CGSize size = [cellClass sizeForMessage:msg];
+    CGFloat height = MAX(size.height, 0.1f);
+    [[WKMessageListView cellHeightCache] setObject:@(height) forKey:heightKey];
 }
 
 // 高度缓存：避免重复触发 Down 库 markdown 渲染
