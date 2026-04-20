@@ -388,13 +388,19 @@
                 self.rowMsgLbls[i].hidden = YES;
             }
 
-            // 红点
+            // 红点（父群聊静音时用浅蓝色，否则红色）
             WKConversation *threadConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
             NSInteger unread = thread.unreadCount;
             if (threadConv) unread = threadConv.unreadCount;
             if (unread > 0) {
                 self.rowBadgeLbls[i].hidden = NO;
-                self.rowBadgeLbls[i].text = [NSString stringWithFormat:@"%ld", (long)unread];
+                self.rowBadgeLbls[i].text = unread > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)unread];
+                // 继承父群聊 mute 状态：静音时红点变浅蓝色
+                if (self.model.mute) {
+                    self.rowBadgeLbls[i].backgroundColor = [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f];
+                } else {
+                    self.rowBadgeLbls[i].backgroundColor = [UIColor redColor];
+                }
             } else {
                 self.rowBadgeLbls[i].hidden = YES;
             }
@@ -453,6 +459,7 @@
         if (moreUnread > 0) {
             self.moreBadgeLbl.hidden = NO;
             self.moreBadgeLbl.text = moreUnread > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)moreUnread];
+            self.moreBadgeLbl.backgroundColor = self.model.mute ? [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f] : [UIColor redColor];
         } else {
             self.moreBadgeLbl.hidden = YES;
         }

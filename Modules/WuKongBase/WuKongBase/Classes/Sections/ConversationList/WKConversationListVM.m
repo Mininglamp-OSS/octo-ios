@@ -446,6 +446,10 @@ static WKConversationListVM *_instance;
     return self.filteredConversations ?: @[];
 }
 
+-(NSArray<WKConversationWrapModel*> *) allConversations {
+    return self.conversationWrapModels ?: @[];
+}
+
 -(NSInteger) conversationCount {
     return self.filteredConversations.count;
 }

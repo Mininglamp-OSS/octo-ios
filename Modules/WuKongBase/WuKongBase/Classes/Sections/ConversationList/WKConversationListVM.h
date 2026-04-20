@@ -157,6 +157,9 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 重建过滤列表（filterType 变更或数据增删后调用）
 -(void) rebuildFilteredList;
 
+/// 全量会话列表（不受 tab 过滤影响，用于跨 tab 检测@提醒等）
+-(NSArray<WKConversationWrapModel*> *) allConversations;
+
 /// 获取群组类未读数
 -(NSInteger) getGroupUnreadCount;
 

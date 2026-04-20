@@ -987,6 +987,7 @@
         }
         [self refreshTable];
         [self refreshBadge];
+        [self updateGroupMentionBadge];
         // 批量更新后补拉子区数据（网络恢复等场景）
         [self.conversationListVM fetchThreadCountsForGroups];
         return;
@@ -995,6 +996,8 @@
    WKConversation *conversation = filtered[0];
     [self uiAddOrUpdateConversationForOne:conversation];
     [self refreshBadge];
+    // 无论当前在哪个 tab，都更新群聊 tab 的 @提醒标识
+    [self updateGroupMentionBadge];
 
 }
 /// 过滤不属于当前空间的会话更新（解决跨空间消息产生红点的问题）
@@ -1549,6 +1552,8 @@
         } else if ([cell isKindOfClass:[WKConversationListCell class]]) {
             [(WKConversationListCell *)cell refreshWithModel:conversationModel];
         }
+        // 群聊 tab 会话 cell 添加长按手势
+        [self addLongPressGestureToCell:cell forConversation:conversationModel];
         return;
     }
     // 私聊 tab
@@ -1556,6 +1561,8 @@
     if (!conversationModel) return;
     WKConversationListCell *conversationListCell = (WKConversationListCell *)cell;
     [conversationListCell refreshWithModel:conversationModel];
+    // 私聊 tab 添加长按手势
+    [self addLongPressGestureToCell:cell forConversation:conversationModel];
 }
 
 - (void)tableView:(UITableView *)tableView didEndDisplayingCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -1648,119 +1655,198 @@
  *  @param indexPath cell的位置
  */
 - (NSArray<SwipeButton *> *)tableView:(UITableView *)tableView rightSwipeButtonsAtIndexPath:(NSIndexPath *)indexPath {
-
-    // 群聊 tab: section header 不支持滑动
-    if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
-        if (indexPath.row >= (NSInteger)self.groupDisplayList.count) return @[];
-        WKConversationDisplayItem *item = self.groupDisplayList[indexPath.row];
-        if (item.isSectionHeader) return @[];
-    }
-
-    WKConversationWrapModel *conversationModel;
-    if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
-        conversationModel = self.groupDisplayList[indexPath.row].conversation;
-    } else {
-        conversationModel = [self.conversationListVM conversationAtIndex:indexPath.row];
-    }
-    
-    // ---------- 免打扰 ----------
-    NSString *muteTitle;
-    NSString *muteAnimationNamed;
-    if(conversationModel.mute) {
-        muteTitle = LLang(@"打开通知");
-        muteAnimationNamed = @"Other/list_icon_sound_on";
-    }else {
-        muteTitle = LLang(@"关闭通知");
-        muteAnimationNamed = @"Other/list_icon_sound_off";
-    }
-    
-    SwipeButton *muteBtn = [self swipeButton:muteTitle backgroundColor:[UIColor colorWithRed:252.0f/255.0f green:174.0f/255.0f blue:66.0f/255.0f alpha:1.0f] animationNamed:muteAnimationNamed touchBlock:^{
-        
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [[WKChannelSettingManager shared] channel:conversationModel.channel mute:!conversationModel.mute];
-        });
-    }];
-    
-    // ---------- 置顶 ----------
-    NSString *stickTitle;
-    NSString *stickAnimationNamed;
-    if(conversationModel.stick) {
-        stickTitle = LLang(@"取消置顶");
-        stickAnimationNamed = @"Other/list_icon_toppin";
-    }else {
-        stickTitle = LLang(@"置顶");
-        stickAnimationNamed = @"Other/list_icon_toppin";
-    }
-    
-    SwipeButton *stickBtn = [self swipeButton:stickTitle backgroundColor:[UIColor colorWithRed:37.0f/255.0f green:167.0f/255.0f blue:90.0f/255.0f alpha:1.0f] animationNamed:stickAnimationNamed touchBlock:^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [[WKChannelSettingManager shared] channel:conversationModel.channel stick:!conversationModel.stick];
-        });
-    }];
-    
-    // ---------- 删除 ----------
-    
-    __weak typeof(self) weakSelf =  self;
-    SwipeButton *deleteBtn = [self swipeButton:LLang(@"删除") backgroundColor:[UIColor redColor] animationNamed:@"Other/list_icon_delete" touchBlock:^{
-        WKActionSheetView2 *sheet = [WKActionSheetView2 initWithTip:nil];
-        [sheet addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"清空聊天记录") onClick:^{
-            WKConversationWrapModel *conversationModel = [weakSelf.conversationListVM conversationAtIndex:indexPath.row];
-            [[WKMessageManager shared] clearMessages:conversationModel.channel];
-        }]];
-        [sheet addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"确认删除") onClick:^{
-            WKConversationWrapModel *conversationModel = [weakSelf.conversationListVM conversationAtIndex:indexPath.row];
-            if(!conversationModel) return;
-
-            // BotFather空间隔离：不真正删除会话，只标记当前空间隐藏
-            NSString *botfatherUID = [WKApp shared].config.botfatherUID;
-            NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
-            if(botfatherUID && [conversationModel.channel.channelId isEqualToString:botfatherUID] && currentSpaceId.length > 0) {
-                // 标记当前空间隐藏
-                NSString *hiddenKey = [NSString stringWithFormat:@"WKBotFatherHidden_%@", currentSpaceId];
-                [[NSUserDefaults standardUserDefaults] setBool:YES forKey:hiddenKey];
-                // 从内存列表移除
-                [weakSelf.conversationListVM removeConversationAtIndex:indexPath.row];
-                [weakSelf.tableView deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationAutomatic];
-                // 清空当前空间的消息
-                [[WKMessageManager shared] clearMessages:conversationModel.channel];
-                return;
-            }
-
-            [weakSelf.conversationListVM removeConversationAtIndex:indexPath.row];
-            [weakSelf.tableView deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationAutomatic];
-            [[WKSDK shared].conversationManager deleteConversation:conversationModel.channel];
-        }]];
-        [sheet show];
-    }];
-    
-    
-    
-    // 群聊增加"移动到分组"
-    if (conversationModel.channel.channelType == WK_GROUP) {
-        __weak typeof(self) ws = self;
-        SwipeButton *categoryBtn = [self swipeButton:LLang(@"移动分组") backgroundColor:[UIColor colorWithRed:88/255.0 green:86/255.0 blue:214/255.0 alpha:1.0] animationNamed:@"Other/list_icon_toppin" touchBlock:^{
-            [ws showMoveToCategoryDialog:conversationModel.channel.channelId];
-        }];
-        return @[deleteBtn,categoryBtn,stickBtn,muteBtn];
-    }
-
-    return @[deleteBtn,stickBtn,muteBtn];
+    // 左滑已替换为长按弹窗菜单
+    return @[];
 }
 
 - (NSArray<SwipeButton *> *)tableView:(UITableView *)tableView leftSwipeButtonsAtIndexPath:(NSIndexPath *)indexPath {
     return nil;
 }
 
--(SwipeButton*) swipeButton:(NSString*)title backgroundColor:(UIColor*)backgroundColor animationNamed:(NSString*)animationNamed touchBlock:(void(^)(void))touchBlock {
-    SwipeButton *spBtn = [SwipeButton createSwipeButtonWithTitle:title font:14.0f textColor:[UIColor whiteColor] backgroundColor:backgroundColor image:[self imageName:@"ConversationList/Index/PlaceHo"] touchBlock:touchBlock];
-    
-    LOTAnimationView *spAnimationView = [LOTAnimationView animationNamed:animationNamed inBundle:[WKApp.shared resourceBundle:@"WuKongBase"]];
-    spAnimationView.loopAnimation = NO;
-    spAnimationView.contentMode = UIViewContentModeScaleAspectFit;
-    [spBtn.imageView addSubview:spAnimationView];
-    [spAnimationView play];
-    
-    return spBtn;
+#pragma mark - 会话长按弹窗菜单
+
+-(void) addLongPressGestureToCell:(UITableViewCell *)cell forConversation:(WKConversationWrapModel *)model {
+    // 移除旧的长按手势，避免重用导致重复添加
+    for (UIGestureRecognizer *g in cell.gestureRecognizers.copy) {
+        if ([g isKindOfClass:[UILongPressGestureRecognizer class]] && g.view == cell) {
+            [cell removeGestureRecognizer:g];
+        }
+    }
+    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(onConversationCellLongPress:)];
+    longPress.minimumPressDuration = 0.5;
+    [cell addGestureRecognizer:longPress];
+    objc_setAssociatedObject(cell, "conversationModel", model, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+-(void) onConversationCellLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan) return;
+    UITableViewCell *cell = (UITableViewCell *)gesture.view;
+    WKConversationWrapModel *model = objc_getAssociatedObject(cell, "conversationModel");
+    if (!model) return;
+
+    // 触觉反馈
+    UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    [feedback impactOccurred];
+
+    CGPoint ptInCell = [gesture locationInView:cell];
+    CGPoint ptInWindow = [cell convertPoint:ptInCell toView:nil];
+    [self showConversationMenuForModel:model atPoint:ptInWindow];
+}
+
+-(void) showConversationMenuForModel:(WKConversationWrapModel *)model atPoint:(CGPoint)point {
+    __weak typeof(self) weakSelf = self;
+    NSMutableArray<NSDictionary *> *menuItems = [NSMutableArray array];
+
+    // 1. 关闭/打开通知
+    NSString *muteTitle = model.mute ? LLang(@"打开通知") : LLang(@"关闭通知");
+    [menuItems addObject:@{
+        @"title": muteTitle,
+        @"icon": [WKConversationListVC iconMute:model.mute],
+        @"action": ^{
+            [[WKChannelSettingManager shared] channel:model.channel mute:!model.mute];
+        }
+    }];
+
+    // 2. 置顶/取消置顶
+    NSString *stickTitle = model.stick ? LLang(@"取消置顶") : LLang(@"置顶");
+    [menuItems addObject:@{
+        @"title": stickTitle,
+        @"icon": [WKConversationListVC iconStick],
+        @"action": ^{
+            [[WKChannelSettingManager shared] channel:model.channel stick:!model.stick];
+        }
+    }];
+
+    // 3. 移动分组（仅群聊）
+    if (model.channel.channelType == WK_GROUP) {
+        [menuItems addObject:@{
+            @"title": LLang(@"移动分组"),
+            @"icon": [WKConversationListVC iconMoveCategory],
+            @"action": ^{
+                [weakSelf showMoveToCategoryDialog:model.channel.channelId];
+            }
+        }];
+    }
+
+    // 4. 删除
+    [menuItems addObject:@{
+        @"title": LLang(@"删除"),
+        @"icon": [WKConversationListVC iconDelete],
+        @"isDestructive": @YES,
+        @"action": ^{
+            WKActionSheetView2 *sheet = [WKActionSheetView2 initWithTip:nil];
+            [sheet addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"清空聊天记录") onClick:^{
+                [[WKMessageManager shared] clearMessages:model.channel];
+            }]];
+            [sheet addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"确认删除") onClick:^{
+                NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+                NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+                if(botfatherUID && [model.channel.channelId isEqualToString:botfatherUID] && currentSpaceId.length > 0) {
+                    NSString *hiddenKey = [NSString stringWithFormat:@"WKBotFatherHidden_%@", currentSpaceId];
+                    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:hiddenKey];
+                    [[WKMessageManager shared] clearMessages:model.channel];
+                }
+                [[WKSDK shared].conversationManager deleteConversation:model.channel];
+                [weakSelf.conversationListVM loadConversationList:^{
+                    [weakSelf rebuildGroupDisplayAndReload];
+                }];
+            }]];
+            [sheet show];
+        }
+    }];
+
+    [self showFloatingMenu:menuItems atPoint:point];
+}
+
+#pragma mark - 会话菜单图标
+
++ (UIImage *)iconMute:(BOOL)isMuted {
+    CGSize s = CGSizeMake(20, 20);
+    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    [[UIColor colorWithWhite:0.3 alpha:1] setStroke];
+    CGContextSetLineWidth(ctx, 1.5);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+    // 喇叭
+    CGContextMoveToPoint(ctx, 4, 8);
+    CGContextAddLineToPoint(ctx, 7, 8);
+    CGContextAddLineToPoint(ctx, 11, 5);
+    CGContextAddLineToPoint(ctx, 11, 15);
+    CGContextAddLineToPoint(ctx, 7, 12);
+    CGContextAddLineToPoint(ctx, 4, 12);
+    CGContextClosePath(ctx);
+    CGContextStrokePath(ctx);
+    if (isMuted) {
+        // 斜线（已静音 → 显示取消静音图标）
+        CGContextMoveToPoint(ctx, 14, 7);
+        CGContextAddLineToPoint(ctx, 17, 13);
+        CGContextStrokePath(ctx);
+    } else {
+        // 声波（未静音 → 显示关闭通知图标）
+        CGContextAddArc(ctx, 11, 10, 4, -M_PI/4, M_PI/4, 0);
+        CGContextStrokePath(ctx);
+        CGContextAddArc(ctx, 11, 10, 7, -M_PI/4, M_PI/4, 0);
+        CGContextStrokePath(ctx);
+    }
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
++ (UIImage *)iconStick {
+    CGSize s = CGSizeMake(20, 20);
+    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    [[UIColor colorWithWhite:0.3 alpha:1] setStroke];
+    CGContextSetLineWidth(ctx, 1.5);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+    // 图钉
+    CGContextMoveToPoint(ctx, 7, 3);
+    CGContextAddLineToPoint(ctx, 13, 3);
+    CGContextAddLineToPoint(ctx, 12, 10);
+    CGContextAddLineToPoint(ctx, 15, 10);
+    CGContextMoveToPoint(ctx, 5, 10);
+    CGContextAddLineToPoint(ctx, 15, 10);
+    CGContextMoveToPoint(ctx, 8, 10);
+    CGContextAddLineToPoint(ctx, 7, 3);
+    CGContextMoveToPoint(ctx, 10, 10);
+    CGContextAddLineToPoint(ctx, 10, 17);
+    CGContextStrokePath(ctx);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
++ (UIImage *)iconMoveCategory {
+    CGSize s = CGSizeMake(20, 20);
+    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    [[UIColor colorWithWhite:0.3 alpha:1] setStroke];
+    CGContextSetLineWidth(ctx, 1.5);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+    // 文件夹
+    CGContextMoveToPoint(ctx, 3, 7);
+    CGContextAddLineToPoint(ctx, 3, 5);
+    CGContextAddLineToPoint(ctx, 8, 5);
+    CGContextAddLineToPoint(ctx, 9, 7);
+    CGContextAddLineToPoint(ctx, 17, 7);
+    CGContextAddLineToPoint(ctx, 17, 16);
+    CGContextAddLineToPoint(ctx, 3, 16);
+    CGContextAddLineToPoint(ctx, 3, 7);
+    CGContextStrokePath(ctx);
+    // 箭头
+    CGContextMoveToPoint(ctx, 10, 9);
+    CGContextAddLineToPoint(ctx, 10, 14);
+    CGContextMoveToPoint(ctx, 8, 12);
+    CGContextAddLineToPoint(ctx, 10, 14);
+    CGContextAddLineToPoint(ctx, 12, 12);
+    CGContextStrokePath(ctx);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
 }
 
 
@@ -2148,8 +2234,8 @@
 /// 检查群聊和子区中是否有未处理的@提醒，更新 tab 标识
 -(void) updateGroupMentionBadge {
     BOOL hasMention = NO;
-    // 检查群聊
-    for (WKConversationWrapModel *model in [_conversationListVM conversationList]) {
+    // 检查群聊（用全量列表，不受当前 tab 过滤影响）
+    for (WKConversationWrapModel *model in [_conversationListVM allConversations]) {
         if (model.channel.channelType != WK_GROUP) continue;
         if (model.simpleReminders.count > 0) {
             for (WKReminder *r in model.simpleReminders) {
@@ -2161,9 +2247,9 @@
     // 检查子区（子区不在会话列表中，从 SDK 会话里查）
     // 仅检查当前空间内群聊对应的子区，子区 channelId 格式为 {groupNo}____{threadId}
     if (!hasMention) {
-        // 收集当前空间内的群聊 channelId 作为白名单
+        // 收集当前空间内的群聊 channelId 作为白名单（用全量列表）
         NSMutableSet<NSString *> *spaceGroupIds = [NSMutableSet set];
-        for (WKConversationWrapModel *model in [_conversationListVM conversationList]) {
+        for (WKConversationWrapModel *model in [_conversationListVM allConversations]) {
             if (model.channel.channelType == WK_GROUP) {
                 [spaceGroupIds addObject:model.channel.channelId];
             }

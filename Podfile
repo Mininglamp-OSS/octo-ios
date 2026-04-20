@@ -132,6 +132,11 @@ abstract_target 'TangSengDaoDaoiOSBase' do
   pod 'WuKongContacts', :path => './Modules/WuKongContacts'  ## 联系人模块
   pod 'WuKongDataSource', :path => './Modules/WuKongDataSource'  ## 数据源
 # pod 'Bugly'  ## 已通过手动集成 Bugly.framework，无需 CocoaPods 管理
+
+  # 性能监控（仅 Debug 模式）
+  pod 'DoraemonKit/Core', '~> 3.1.2', :configurations => ['Debug']
+  pod 'DoraemonKit/WithGPS', '~> 3.1.2', :configurations => ['Debug']
+
   end
   
 end
