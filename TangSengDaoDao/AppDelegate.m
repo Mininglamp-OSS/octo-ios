@@ -16,6 +16,7 @@
 
 #import "SELUpdateAlert.h"
 #import <Bugly/Bugly.h>
+#import <WebKit/WebKit.h>
 
 #ifdef DEBUG
 #import <DoraemonKit/DoraemonManager.h>
@@ -71,6 +72,14 @@
     buglyConfig.blockMonitorEnable = YES;       // 开启卡顿监控
     buglyConfig.blockMonitorTimeout = 1.0;      // 主线程卡顿超过 1 秒上报堆栈
     [Bugly startWithAppId:@"a66cf95f92" config:buglyConfig];
+
+    // 预热 WKWebView：首次初始化会启动 WebKit 进程（~200-500ms），
+    // 提前在启动时完成，后续聊天中表格渲染不再卡顿
+    dispatch_async(dispatch_get_main_queue(), ^{
+        WKWebView *warmup = [[WKWebView alloc] initWithFrame:CGRectZero];
+        [warmup loadHTMLString:@"" baseURL:nil];
+        // warmup 会被 ARC 自动释放，WebKit 进程保持运行
+    });
 
     self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
     self.window.backgroundColor = [UIColor grayColor];
