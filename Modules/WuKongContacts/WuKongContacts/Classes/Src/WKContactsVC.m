@@ -249,10 +249,11 @@
     NSArray *headerItems = [self buildHeaderItemsWithCounts];
 
     if (cellModels.count == 0) {
-        // 无数据，直接同步更新
+        // 无数据，保留 section 0（header）+ section 1（空联系人，tab header view 需要显示）
         NSMutableArray *newItems = [NSMutableArray array];
         [newItems addObject:[NSMutableArray arrayWithArray:headerItems]];
-        self.sectionTitleArr = [NSMutableArray array];
+        [newItems addObject:[NSMutableArray array]]; // 空的联系人 section
+        self.sectionTitleArr = [NSMutableArray arrayWithObject:@""]; // 占位，确保 numberOfSections = 2
         self.items = newItems;
         [self.tableView reloadData];
         return;
@@ -848,7 +849,7 @@
 
 //
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView{
-    return self.sectionTitleArr.count+1;
+    return self.sectionTitleArr.count + 1;
 }
 -(void) tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath{
     [tableView deselectRowAtIndexPath:indexPath animated:YES];

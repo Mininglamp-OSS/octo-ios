@@ -525,28 +525,13 @@
         BOOL hasInsertions = (newSectionsAdded > 0 || newRowsInOldFirstSection > 0);
 
         if (hasInsertions) {
-            // 预计算所有新插入消息的高度，直接写入 cellHeightCache
-            for (NSInteger s = 0; s < newSectionsAdded; s++) {
-                NSArray *msgs = [weakSelf.dataProvider messagesAtSection:s];
-                for (WKMessageModel *msg in msgs) {
-                    [weakSelf precacheHeightForMessage:msg];
-                }
-            }
-            if (newRowsInOldFirstSection > 0) {
-                NSArray *msgs = [weakSelf.dataProvider messagesAtSection:newSectionsAdded];
-                for (NSInteger r = 0; r < newRowsInOldFirstSection && r < (NSInteger)msgs.count; r++) {
-                    [weakSelf precacheHeightForMessage:msgs[r]];
-                }
-            }
-
-            // 记录当前可见的第一条消息，用于 reloadData 后恢复位置
+            // 记录当前可见位置（在预计算之前，避免被 Down 嵌套 RunLoop 干扰）
             NSIndexPath *firstVisible = weakSelf.tableView.indexPathsForVisibleRows.firstObject;
             CGFloat cellOffsetInView = 0;
             if (firstVisible) {
                 CGRect cellRect = [weakSelf.tableView rectForRowAtIndexPath:firstVisible];
                 cellOffsetInView = cellRect.origin.y - weakSelf.tableView.contentOffset.y;
             }
-            // 计算该 cell 在新数据中的 indexPath
             NSIndexPath *targetAfterReload = nil;
             if (firstVisible) {
                 NSInteger newSection = firstVisible.section + newSectionsAdded;
@@ -557,17 +542,35 @@
                 targetAfterReload = [NSIndexPath indexPathForRow:newRow inSection:newSection];
             }
 
-            // reloadData 确保所有 cell（包含 WKWebView 表格）高度正确
-            // 因为高度已预缓存，reloadData 的 heightForRow 全部命中缓存，速度很快
+            // 收集需要预计算的消息
+            NSMutableArray<WKMessageModel*> *newMsgs = [NSMutableArray array];
+            for (NSInteger s = 0; s < newSectionsAdded; s++) {
+                NSArray *msgs = [weakSelf.dataProvider messagesAtSection:s];
+                [newMsgs addObjectsFromArray:msgs];
+            }
+            if (newRowsInOldFirstSection > 0) {
+                NSArray *msgs = [weakSelf.dataProvider messagesAtSection:newSectionsAdded];
+                for (NSInteger r = 0; r < newRowsInOldFirstSection && r < (NSInteger)msgs.count; r++) {
+                    [newMsgs addObject:msgs[r]];
+                }
+            }
+
+            // 在主线程预计算高度（Down 库必须在主线程），但菊花仍在转动给用户反馈
+            for (WKMessageModel *msg in newMsgs) {
+                [weakSelf precacheHeightForMessage:msg];
+            }
+
+            // 高度已就绪，reloadData + 恢复位置
             [UIView performWithoutAnimation:^{
                 [weakSelf.tableView reloadData];
                 [weakSelf.tableView layoutIfNeeded];
             }];
 
-            // 恢复到之前可见的位置
             if (targetAfterReload) {
-                CGRect targetRect = [weakSelf.tableView rectForRowAtIndexPath:targetAfterReload];
-                weakSelf.tableView.contentOffset = CGPointMake(0, targetRect.origin.y - cellOffsetInView);
+                [UIView performWithoutAnimation:^{
+                    CGRect targetRect = [weakSelf.tableView rectForRowAtIndexPath:targetAfterReload];
+                    weakSelf.tableView.contentOffset = CGPointMake(0, targetRect.origin.y - cellOffsetInView);
+                }];
             }
         }
 
@@ -1353,10 +1356,12 @@
     NSString *identifier = NSStringFromClass(messageCellClass);
     // 含表格的文本消息：用 messageId 做唯一 reuseIdentifier，不参与复用池
     if (messageCellClass == WKTextMessageCell.class && messageModel.contentType == WK_TEXT) {
-        WKTextContent *textContent = (WKTextContent*)[messageModel content];
-        NSString *rawText = textContent.content ?: @"";
-        if ([WKMarkdownRenderer containsTable:rawText]) {
-            identifier = [NSString stringWithFormat:@"%@_table_%llu", identifier, messageModel.messageId];
+        id contentObj = [messageModel content];
+        if ([contentObj isKindOfClass:[WKTextContent class]]) {
+            NSString *rawText = ((WKTextContent*)contentObj).content;
+            if ([rawText isKindOfClass:[NSString class]] && [WKMarkdownRenderer containsTable:rawText]) {
+                identifier = [NSString stringWithFormat:@"%@_table_%llu", identifier, messageModel.messageId];
+            }
         }
     }
     WKMessageBaseCell *cell = [self.tableView dequeueReusableCellWithIdentifier:identifier];
@@ -1512,19 +1517,11 @@ static NSMutableDictionary<NSString*, NSNumber*> *_cellHeightCache;
     [self updateBrowseToOrderSeq];
     [self scrollViewDidScrollOfPosition:scrollView];
 
-    // 滚到顶部自动加载历史消息，延迟到下一个 RunLoop 周期执行
-    // 避免 Down 库嵌套 RunLoop 导致 scrollViewDidScroll 重入引发竞态崩溃
+    // 滚到顶部自动触发 MJRefresh 加载历史消息（显示菊花）
     CGFloat offsetY = scrollView.contentOffset.y + scrollView.contentInset.top;
-    if (offsetY <= -1 && !self.isPulldownInProgress && !self.tableView.mj_header.hidden) {
-        self.isPulldownInProgress = YES; // 立即标记，防止重复调度
-        __weak typeof(self) weakSelf = self;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (weakSelf && !weakSelf.tableView.mj_header.hidden) {
-                [weakSelf pulldown];
-            } else {
-                weakSelf.isPulldownInProgress = NO;
-            }
-        });
+    if (offsetY <= -1 && !self.isPulldownInProgress && !self.tableView.mj_header.hidden
+        && self.tableView.mj_header.state != MJRefreshStateRefreshing) {
+        [self.tableView.mj_header beginRefreshing];
     }
 }
 

@@ -84,7 +84,14 @@
 @property(nonatomic,copy) NSString *approveCommand;
 @property(nonatomic,copy) NSString *rejectCommand;
 
+// ---------- 超长文本截断 ----------
+@property(nonatomic,strong) UIButton *viewFullTextBtn;
+
 @end
+
+static const NSInteger kTextTruncateThreshold = 3000; // 超过此长度截断
+static const NSInteger kTextPreviewLength = 2000;     // 预览显示的字符数
+static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高度
 
 
 @implementation WKTextMessageCell
@@ -158,8 +165,13 @@
         nicknameWidth = [self getNicknameRowWidth:model];
     }
 
+    // 超长文本截断时增加"查看全文"按钮高度
+    if ([self isLongText:model]) {
+        size.height += kViewFullTextBtnHeight;
+    }
+
     return CGSizeMake(MAX(size.width, nicknameWidth), size.height);
-   
+
 }
 
 
@@ -221,6 +233,24 @@
     [self.botActionView addSubview:self.approveBtn];
 
 
+}
+
+-(void) viewFullTextTapped {
+    NSString *fullText = [[self class] getFullRawContent:self.messageModel];
+    // 用简单的全文查看页面展示
+    UIViewController *vc = [[UIViewController alloc] init];
+    vc.title = LLang(@"查看全文");
+    vc.view.backgroundColor = [WKApp shared].config.backgroundColor;
+    UITextView *textView = [[UITextView alloc] initWithFrame:vc.view.bounds];
+    textView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    textView.text = fullText;
+    textView.editable = NO;
+    textView.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+    textView.textColor = [WKApp shared].config.defaultTextColor;
+    textView.backgroundColor = [UIColor clearColor];
+    textView.contentInset = UIEdgeInsetsMake(10, 10, 10, 10);
+    [vc.view addSubview:textView];
+    [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
 
 -(void) clearSegmentViews {
@@ -731,7 +761,36 @@
     return tokens;
 }
 
-/// 提取消息的原始文本内容（合并流式内容）
+/// 判断消息文本是否超长需要截断
++(BOOL) isLongText:(WKMessageModel*)message {
+    // 流式消息不截断（内容还在增长）
+    if (message.streamOn && message.streamFlag != WKStreamFlagEnd) return NO;
+    NSString *full = [self getFullRawContent:message];
+    return full.length > kTextTruncateThreshold;
+}
+
+/// 提取完整原始文本（不截断）
++(NSString*) getFullRawContent:(WKMessageModel*)message {
+    id rawContent = [message content];
+    if (message.remoteExtra.contentEdit) {
+        rawContent = message.remoteExtra.contentEdit;
+    }
+    if (![rawContent isKindOfClass:[WKTextContent class]]) {
+        return @"";
+    }
+    WKTextContent *textContent = (WKTextContent*)rawContent;
+    NSMutableString *content = [[NSMutableString alloc] initWithString:textContent.content ?: @""];
+    if (message.streams && message.streams.count > 0) {
+        for (WKStream *stream in message.streams) {
+            if ([stream.content isKindOfClass:WKTextContent.class]) {
+                [content appendString:((WKTextContent*)stream.content).content];
+            }
+        }
+    }
+    return content;
+}
+
+/// 提取消息的原始文本内容（合并流式内容，超长时截断）
 +(NSString*) getRawContent:(WKMessageModel*)message {
     id rawContent = [message content];
     if (message.remoteExtra.contentEdit) {
@@ -748,6 +807,13 @@
             if ([stream.content isKindOfClass:WKTextContent.class]) {
                 [content appendString:((WKTextContent*)stream.content).content];
             }
+        }
+    }
+    // 超长文本截断为预览长度，避免 Down 库渲染超长 Markdown 崩溃/卡顿
+    if (content.length > kTextTruncateThreshold) {
+        // 流式消息不截断
+        if (!(message.streamOn && message.streamFlag != WKStreamFlagEnd)) {
+            return [content substringToIndex:kTextPreviewLength];
         }
     }
     return content;
@@ -1131,6 +1197,21 @@
         self.segmentsBuilt = NO;
     }
 
+    // 超长文本：显示"查看全文"按钮
+    if ([[self class] isLongText:model]) {
+        if (!self.viewFullTextBtn) {
+            self.viewFullTextBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+            [self.viewFullTextBtn setTitle:LLang(@"查看全文") forState:UIControlStateNormal];
+            self.viewFullTextBtn.titleLabel.font = [[WKApp shared].config appFontOfSize:14.0f];
+            [self.viewFullTextBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
+            [self.viewFullTextBtn addTarget:self action:@selector(viewFullTextTapped) forControlEvents:UIControlEventTouchUpInside];
+            [self.messageContentView addSubview:self.viewFullTextBtn];
+        }
+        self.viewFullTextBtn.hidden = NO;
+    } else {
+        self.viewFullTextBtn.hidden = YES;
+    }
+
     self.replyBox.hidden = YES;
     if([[self class] hasReply:model]) {
         self.replyBox.hidden = NO;
@@ -1373,6 +1454,16 @@
         CGFloat btnW = (self.botActionView.lim_width - kBotActionBtnSpacing) / 2.0;
         self.rejectBtn.frame = CGRectMake(0, 0, btnW, kBotActionBtnHeight);
         self.approveBtn.frame = CGRectMake(btnW + kBotActionBtnSpacing, 0, btnW, kBotActionBtnHeight);
+    }
+
+    // "查看全文"按钮布局
+    if (self.viewFullTextBtn && !self.viewFullTextBtn.hidden) {
+        CGFloat btnTop = self.textLbl.lim_top + self.textLbl.lim_size.height;
+        if (self.segmentViews.count > 0) {
+            UIView *lastSeg = self.segmentViews.lastObject;
+            btnTop = CGRectGetMaxY(lastSeg.frame);
+        }
+        self.viewFullTextBtn.frame = CGRectMake(0, btnTop, self.messageContentView.lim_width, kViewFullTextBtnHeight);
     }
 
     self.securityTipLbl.lim_top = self.messageContentView.lim_bottom + securityTipTopSpace;
