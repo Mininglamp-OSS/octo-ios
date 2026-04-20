@@ -34,6 +34,10 @@
 
 
 - (NSString *)conversationDigest {
+    // 防护：content 可能是非 NSString 类型（服务端数据异常）
+    if (self.content && ![self.content isKindOfClass:[NSString class]]) {
+        return @"";
+    }
     if([self.format isEqualToString:@"html"]) {
         NSRegularExpression *regularExpretion=[NSRegularExpression regularExpressionWithPattern:@"<[^>]*>|\n"
                                                 options:0

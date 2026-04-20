@@ -17,6 +17,9 @@
 @implementation WKScreenshotCell
 
 + (CGSize)sizeForMessage:(WKMessageModel *)model {
+    if (![model.content isKindOfClass:[WKScreenshotContent class]]) {
+        return CGSizeMake(200, 30);
+    }
     WKScreenshotContent *content = (WKScreenshotContent*)model.content;
     CGSize contentSize = CGSizeMake(0.0f, 0.0f);
     if(content.tip) {

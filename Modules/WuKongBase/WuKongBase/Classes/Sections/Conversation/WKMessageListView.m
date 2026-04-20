@@ -1360,13 +1360,14 @@
         }
     }
     WKMessageBaseCell *cell = [self.tableView dequeueReusableCellWithIdentifier:identifier];
-    if(!cell) {
+    // 复用池中的 cell 类型可能与当前消息不匹配（reloadData 期间数据源变化），重新创建
+    if(!cell || ![cell isKindOfClass:messageCellClass]) {
         cell = [[messageCellClass alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:identifier];
     }
     return cell;
 }
 
-// 预计算消息高度并写入 cellHeightCache，确保 insertRows 时高度正确
+// 预计算消息高度并写入 cellHeightCache，确保 reloadData 时高度正确
 -(void) precacheHeightForMessage:(WKMessageModel *)msg {
     if (!msg) return;
     BOOL isStreaming = msg.streamOn && msg.streamFlag != WKStreamFlagEnd;
@@ -1380,10 +1381,15 @@
     // 已缓存则跳过
     if ([[WKMessageListView cellHeightCache] objectForKey:heightKey]) return;
 
-    Class cellClass = [self getMessageCellClass:msg];
-    CGSize size = [cellClass sizeForMessage:msg];
-    CGFloat height = MAX(size.height, 0.1f);
-    [[WKMessageListView cellHeightCache] setObject:@(height) forKey:heightKey];
+    @try {
+        Class cellClass = [self getMessageCellClass:msg];
+        CGSize size = [cellClass sizeForMessage:msg];
+        CGFloat height = MAX(size.height, 0.1f);
+        [[WKMessageListView cellHeightCache] setObject:@(height) forKey:heightKey];
+    } @catch (NSException *exception) {
+        // Down 库嵌套 RunLoop 可能导致数据源竞态，消息类型与 content 不匹配时跳过
+        NSLog(@"[HeightCache] precache exception for %@: %@", heightKey, exception);
+    }
 }
 
 // 高度缓存：避免重复触发 Down 库 markdown 渲染
@@ -1414,9 +1420,14 @@ static NSMutableDictionary<NSString*, NSNumber*> *_cellHeightCache;
         }
     }
 
-    Class messageCellClass = [self getMessageCellClass:messageModel];
-    CGSize cellSize = [messageCellClass sizeForMessage:messageModel];
-    CGFloat height = MAX(cellSize.height, 0.1f);
+    CGFloat height = 44.0f; // 默认高度兜底
+    @try {
+        Class messageCellClass = [self getMessageCellClass:messageModel];
+        CGSize cellSize = [messageCellClass sizeForMessage:messageModel];
+        height = MAX(cellSize.height, 0.1f);
+    } @catch (NSException *exception) {
+        NSLog(@"[HeightCache] heightForRow exception at %@: %@", indexPath, exception);
+    }
 
     if (heightKey) {
         [[WKMessageListView cellHeightCache] setObject:@(height) forKey:heightKey];
@@ -1426,13 +1437,19 @@ static NSMutableDictionary<NSString*, NSNumber*> *_cellHeightCache;
 
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
     WKMessageModel *messageModel = [self.dataProvider messageAtIndexPath:indexPath];
+    if (!messageModel) return;
     WKMessageBaseCell *baseCell = (WKMessageBaseCell*)cell;
     baseCell.conversationContext = [self.dataProvider conversationContext];
     messageModel.checkboxOn =self.multipleOn;
     if([baseCell isKindOfClass:[WKMessageCell class]]) {
         ((WKMessageCell*)baseCell).showNavigateToMessage = self.showNavigateToMessage;
     }
-    [baseCell refresh:messageModel];
+    @try {
+        [baseCell refresh:messageModel];
+    } @catch (NSException *exception) {
+        // 竞态下 cell class 与消息 content 类型不匹配时不崩溃
+        NSLog(@"[MessageList] refresh exception at %@: %@", indexPath, exception);
+    }
     [baseCell onWillDisplay];
 
     
@@ -1494,6 +1511,21 @@ static NSMutableDictionary<NSString*, NSNumber*> *_cellHeightCache;
     self.scrolling = true;
     [self updateBrowseToOrderSeq];
     [self scrollViewDidScrollOfPosition:scrollView];
+
+    // 滚到顶部自动加载历史消息，延迟到下一个 RunLoop 周期执行
+    // 避免 Down 库嵌套 RunLoop 导致 scrollViewDidScroll 重入引发竞态崩溃
+    CGFloat offsetY = scrollView.contentOffset.y + scrollView.contentInset.top;
+    if (offsetY <= -1 && !self.isPulldownInProgress && !self.tableView.mj_header.hidden) {
+        self.isPulldownInProgress = YES; // 立即标记，防止重复调度
+        __weak typeof(self) weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (weakSelf && !weakSelf.tableView.mj_header.hidden) {
+                [weakSelf pulldown];
+            } else {
+                weakSelf.isPulldownInProgress = NO;
+            }
+        });
+    }
 }
 
 

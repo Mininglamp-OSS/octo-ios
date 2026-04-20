@@ -38,6 +38,9 @@
 @implementation WKImageMessageCell
 
 + (CGSize)contentSizeForMessage:(WKMessageModel *)model {
+    if (![model.content isKindOfClass:[WKImageContent class]]) {
+        return CGSizeMake(100, 100); // 竞态兜底
+    }
     WKImageContent *imageContent = (WKImageContent*)model.content;
     
     if(imageContent.flame) {

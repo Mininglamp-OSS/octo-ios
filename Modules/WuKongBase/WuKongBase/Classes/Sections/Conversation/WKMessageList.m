@@ -209,13 +209,18 @@
 
 -(void) handleProhibitwords:(WKMessageModel*)messageModel {
     if(messageModel.contentType == WK_TEXT) {
-        if(messageModel.remoteExtra.isEdit) {
+        if(messageModel.remoteExtra.isEdit && [messageModel.remoteExtra.contentEdit isKindOfClass:[WKTextContent class]]) {
             WKTextContent *content = (WKTextContent*)messageModel.remoteExtra.contentEdit;
-            content.content =[WKProhibitwordsService.shared filter:content.content]; // 违禁词过滤
+            if ([content.content isKindOfClass:[NSString class]]) {
+                content.content = [WKProhibitwordsService.shared filter:content.content];
+            }
             return;
         }
+        if (![messageModel.content isKindOfClass:[WKTextContent class]]) return;
         WKTextContent *content = (WKTextContent*)messageModel.content;
-        content.content = [WKProhibitwordsService.shared filter:content.content]; // 违禁词过滤
+        if ([content.content isKindOfClass:[NSString class]]) {
+            content.content = [WKProhibitwordsService.shared filter:content.content];
+        }
     }
 }
 

@@ -326,14 +326,19 @@
     static WKMemoryCache *memoryCache;
     if(!memoryCache) {
         memoryCache = [[WKMemoryCache alloc] init];
-        memoryCache.maxCacheNum = 2000; // 增大缓存避免上翻时频繁淘汰重新解析
+        memoryCache.maxCacheNum = 5000; // AttributedString 缓存，每条 5-50KB
     }
     NSString *key = [NSString stringWithFormat:@"%llu%@",message.messageId,message.clientMsgNo];
-    WKTextContent *textContent =  (WKTextContent*)[message content];
+    id rawContent = [message content];
     if(message.remoteExtra.contentEdit) {
         key = [NSString stringWithFormat:@"%@-edit-%lu",message.clientMsgNo,message.remoteExtra.editedAt];
-        textContent = (WKTextContent*)message.remoteExtra.contentEdit;
+        rawContent = message.remoteExtra.contentEdit;
     }
+    // 类型保护：竞态下 content 可能不是 WKTextContent
+    if (![rawContent isKindOfClass:[WKTextContent class]]) {
+        return [[NSMutableAttributedString alloc] initWithString:@""];
+    }
+    WKTextContent *textContent = (WKTextContent*)rawContent;
     if([textContent.format isEqualToString:@"html"]) {
         key = [NSString stringWithFormat:@"%@-%lu",key,(unsigned long)WKApp.shared.config.style]; // 如果是html需要加上主题
     }
@@ -354,11 +359,17 @@
 }
 
 +(NSMutableAttributedString*) getContentAttrStr:(WKMessageModel*)message {
-    WKTextContent *textContent =  (WKTextContent*)[message content];
+    id rawObj = [message content];
     if(message.remoteExtra.contentEdit) {
-        textContent = (WKTextContent*)message.remoteExtra.contentEdit;
+        rawObj = message.remoteExtra.contentEdit;
     }
-    NSMutableString *content = [[NSMutableString alloc] initWithString:textContent.content];
+    // 类型保护：竞态下 content 可能不是 WKTextContent
+    if (![rawObj isKindOfClass:[WKTextContent class]]) {
+        NSMutableAttributedString *fallback = [[NSMutableAttributedString alloc] initWithString:@""];
+        return fallback;
+    }
+    WKTextContent *textContent = (WKTextContent*)rawObj;
+    NSMutableString *content = [[NSMutableString alloc] initWithString:textContent.content ?: @""];
     if(message.streams && message.streams.count>0) {
         for (WKStream *stream in message.streams) {
             if([stream.content isKindOfClass:WKTextContent.class]) {
@@ -722,10 +733,15 @@
 
 /// 提取消息的原始文本内容（合并流式内容）
 +(NSString*) getRawContent:(WKMessageModel*)message {
-    WKTextContent *textContent = (WKTextContent*)[message content];
+    id rawContent = [message content];
     if (message.remoteExtra.contentEdit) {
-        textContent = (WKTextContent*)message.remoteExtra.contentEdit;
+        rawContent = message.remoteExtra.contentEdit;
     }
+    // 类型保护：非 WKTextContent 时返回空字符串，避免崩溃
+    if (![rawContent isKindOfClass:[WKTextContent class]]) {
+        return @"";
+    }
+    WKTextContent *textContent = (WKTextContent*)rawContent;
     NSMutableString *content = [[NSMutableString alloc] initWithString:textContent.content ?: @""];
     if (message.streams && message.streams.count > 0) {
         for (WKStream *stream in message.streams) {
@@ -778,7 +794,7 @@
     static WKMemoryCache *segHeightCache;
     if (!segHeightCache) {
         segHeightCache = [[WKMemoryCache alloc] init];
-        segHeightCache.maxCacheNum = 2000;
+        segHeightCache.maxCacheNum = 0; // 数值缓存，内存极小，不设上限
     }
 
     // 流式消息不缓存
@@ -870,7 +886,7 @@
     static WKMemoryCache *memoryCache;
     if(!memoryCache) {
         memoryCache = [[WKMemoryCache alloc] init];
-        memoryCache.maxCacheNum = 2000;
+        memoryCache.maxCacheNum = 0; // 数值缓存，内存极小，不设上限
     }
     NSString  *sizeStr =  [memoryCache getCache:key];
     if(sizeStr) {
@@ -894,7 +910,7 @@
     static WKMemoryCache *memoryCache;
     if(!memoryCache) {
         memoryCache = [[WKMemoryCache alloc] init];
-        memoryCache.maxCacheNum = 2000;
+        memoryCache.maxCacheNum = 0; // 数值缓存，内存极小，不设上限
     }
     NSNumber  *lastLineWidth =  [memoryCache getCache:key];
     if(lastLineWidth) {

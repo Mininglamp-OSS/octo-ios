@@ -805,11 +805,17 @@ static NSMutableDictionary *flameNodeCacheDict;
     if(!self.messageModel) {
         return;
     }
-    
+
     Class cellClass = [self class];
     UIEdgeInsets contentInsets = [cellClass contentEdgeInsets:self.messageModel];
-    
-    CGSize contentSize = [cellClass contentSizeForMessage:self.messageModel];
+
+    CGSize contentSize;
+    @try {
+        contentSize = [cellClass contentSizeForMessage:self.messageModel];
+    } @catch (NSException *exception) {
+        // Down 库嵌套 RunLoop 期间 layoutSubviews 可能被重入，消息类型不匹配时安全兜底
+        contentSize = CGSizeMake(200, 44);
+    }
     self.messageContentView.lim_size = contentSize;
     self.messageContentView.lim_top = contentInsets.top;
     
