@@ -525,20 +525,38 @@
         BOOL hasInsertions = (newSectionsAdded > 0 || newRowsInOldFirstSection > 0);
 
         if (hasInsertions) {
-            CGFloat oldContentHeight = weakSelf.tableView.contentSize.height;
-            CGFloat oldOffsetY = weakSelf.tableView.contentOffset.y;
+            // 预计算所有新插入消息的高度，填充 cellHeightCache
+            // 这样 insertRows 时 heightForRowAtIndexPath 直接命中缓存，高度正确且无延迟
+            for (NSInteger s = 0; s < newSectionsAdded; s++) {
+                NSArray *msgs = [weakSelf.dataProvider messagesAtSection:s];
+                for (WKMessageModel *msg in msgs) {
+                    Class cellClass = [weakSelf getMessageCellClass:msg];
+                    CGSize size = [cellClass sizeForMessage:msg];
+                    // cellHeightCache 在 heightForRowAtIndexPath 中自动填充
+                    (void)size;
+                }
+            }
+            if (newRowsInOldFirstSection > 0) {
+                NSArray *msgs = [weakSelf.dataProvider messagesAtSection:newSectionsAdded];
+                for (NSInteger r = 0; r < newRowsInOldFirstSection && r < (NSInteger)msgs.count; r++) {
+                    WKMessageModel *msg = msgs[r];
+                    Class cellClass = [weakSelf getMessageCellClass:msg];
+                    [cellClass sizeForMessage:msg];
+                }
+            }
 
-            // 增量插入，不做全量 reloadData，避免闪烁
+            // 增量插入 + offset 补偿，不用 reloadData 避免闪烁
+            CGFloat beforeHeight = weakSelf.tableView.contentSize.height;
+            CGFloat beforeOffset = weakSelf.tableView.contentOffset.y;
+
             [UIView performWithoutAnimation:^{
                 [weakSelf.tableView beginUpdates];
 
-                // 插入新增的日期 section
                 if (newSectionsAdded > 0) {
                     NSIndexSet *sectionIndexSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, newSectionsAdded)];
                     [weakSelf.tableView insertSections:sectionIndexSet withRowAnimation:UITableViewRowAnimationNone];
                 }
 
-                // 在原来第一个 section 中插入新增的行（新消息插在 index 0 起始位置）
                 if (newRowsInOldFirstSection > 0) {
                     NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
                     for (NSInteger row = 0; row < newRowsInOldFirstSection; row++) {
@@ -548,15 +566,14 @@
                 }
 
                 [weakSelf.tableView endUpdates];
-                [weakSelf.tableView layoutIfNeeded];
-
-                // 补偿 contentOffset，让用户看到的内容纹丝不动
-                CGFloat newContentHeight = weakSelf.tableView.contentSize.height;
-                CGFloat delta = newContentHeight - oldContentHeight;
-                if (delta > 0) {
-                    weakSelf.tableView.contentOffset = CGPointMake(0, oldOffsetY + delta);
-                }
             }];
+
+            // 补偿 contentOffset：保持用户当前浏览位置不变
+            CGFloat afterHeight = weakSelf.tableView.contentSize.height;
+            CGFloat delta = afterHeight - beforeHeight;
+            if (delta > 0) {
+                weakSelf.tableView.contentOffset = CGPointMake(0, beforeOffset + delta);
+            }
         }
 
         [weakSelf.tableView.mj_header endRefreshing];
@@ -1462,8 +1479,6 @@ static NSMutableDictionary<NSString*, NSNumber*> *_cellHeightCache;
     self.scrolling = true;
     [self updateBrowseToOrderSeq];
     [self scrollViewDidScrollOfPosition:scrollView];
-    
-    CGFloat offset = self.tableView.contentSize.height - (self.tableView.contentOffset.y + self.tableView.lim_height);
 }
 
 

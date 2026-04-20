@@ -39,6 +39,14 @@ BLY_START_NONNULL
  */
 - (NSString * BLY_NULLABLE)attachmentForException:(NSException * BLY_NULLABLE)exception;
 
+/**
+ *  发生sigkill时回调
+ *
+ *  @param exception 异常信息
+ *
+ *  @return 返回需上报记录，随sigkill异常上报一起上报，返回值由app开发者决定
+ */
+- (NSString * BLY_NULLABLE)attachmentForSigkill;
 
 /**
  *  策略激活时回调
