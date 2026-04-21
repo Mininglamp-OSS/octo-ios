@@ -15,6 +15,8 @@
 #import "WKMeVC.h"
 
 #import "SELUpdateAlert.h"
+#import "WKDBRepairViewController.h"
+#import <WuKongIMSDK/WKDB.h>
 #import <Bugly/Bugly.h>
 #import <WebKit/WebKit.h>
 
@@ -61,10 +63,16 @@
     // 必须在 didFinishLaunchingWithOptions 返回前设置，否则冷启动点击通知无法触发回调
     [[WKLocalNotificationManager shared] registerAsNotificationDelegate];
 
+    // 监听 IM 数据库健康检查失败，在 UI 就绪后呈现修复页面
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(onIMDBHealthCheckFailed:)
+                                                 name:WKIMDBHealthCheckFailedNotification
+                                               object:nil];
+
     // DoKit 性能监控（仅 Debug 模式）
-#ifdef DEBUG
-    [[DoraemonManager shareInstance] installWithPid:@""];
-#endif
+//#ifdef DEBUG
+//    [[DoraemonManager shareInstance] installWithPid:@""];
+//#endif
 
     // Bugly 崩溃 + 卡顿采集
     BuglyConfig *buglyConfig = [[BuglyConfig alloc] init];
@@ -252,6 +260,50 @@
 /// 登录成功后立即更新 Bugly 用户标识（参考 Android LoginModel）
 - (void)onLoginInfoSaved {
     [self updateBuglyUserId];
+}
+
+/// IM 数据库健康检查失败 → 弹确认 Alert → 进入修复页面
+- (void)onIMDBHealthCheckFailed:(NSNotification *)notification {
+    NSString *imDBPath = notification.userInfo[@"imDBPath"] ?: @"";
+    NSString *uid      = notification.userInfo[@"uid"] ?: @"";
+
+    // 等待根 VC 就绪（switchDB 发生在 appInit 内，此时 window 刚建立）
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController
+            alertControllerWithTitle:@"数据库损坏"
+            message:@"本地数据库无法读取，历史消息暂时不可见。\n点击「立即修复」将自动清空重建，消息可在修复后从服务器同步恢复。"
+            preferredStyle:UIAlertControllerStyleAlert];
+
+        [alert addAction:[UIAlertAction actionWithTitle:@"立即修复"
+                                                 style:UIAlertActionStyleDestructive
+                                               handler:^(UIAlertAction *action) {
+            [self presentRepairVCWithIMDBPath:imDBPath uid:uid];
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"稍后再说"
+                                                 style:UIAlertActionStyleCancel
+                                               handler:nil]];
+
+        UIViewController *rootVC = self.window.rootViewController;
+        // 如果已有弹窗在展示，找到最顶层再 present
+        while (rootVC.presentedViewController) {
+            rootVC = rootVC.presentedViewController;
+        }
+        [rootVC presentViewController:alert animated:YES completion:nil];
+    });
+}
+
+- (void)presentRepairVCWithIMDBPath:(NSString *)imDBPath uid:(NSString *)uid {
+    WKDBRepairViewController *repairVC = [WKDBRepairViewController new];
+    repairVC.imDBPath = imDBPath;
+    repairVC.uid      = uid;
+    repairVC.modalPresentationStyle = UIModalPresentationFullScreen;
+    repairVC.modalTransitionStyle   = UIModalTransitionStyleCrossDissolve;
+
+    UIViewController *rootVC = self.window.rootViewController;
+    while (rootVC.presentedViewController) {
+        rootVC = rootVC.presentedViewController;
+    }
+    [rootVC presentViewController:repairVC animated:YES completion:nil];
 }
 
 /// 设置 Bugly 用户标识（参考 Android WKBaseApplication + LoginModel）

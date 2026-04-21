@@ -40,6 +40,8 @@
 		71D6961323926E3700D092BA /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 71D6961123926E3700D092BA /* LaunchScreen.storyboard */; };
 		71D6961623926E3700D092BA /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 71D6961523926E3700D092BA /* main.m */; };
 		71DB3FA6239B5DE700181E94 /* WKMainTabController.m in Sources */ = {isa = PBXBuildFile; fileRef = 71DB3FA5239B5DE700181E94 /* WKMainTabController.m */; };
+		AA110003239265E900D092BA /* WKDBRecoveryManager.m in Sources */ = {isa = PBXBuildFile; fileRef = AA110002239265E900D092BA /* WKDBRecoveryManager.m */; };
+		AA110006239265E900D092BA /* WKDBRepairViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = AA110005239265E900D092BA /* WKDBRepairViewController.m */; };
 		71F7E3DC2A47F66900E8D20D /* QUESTION.md in Resources */ = {isa = PBXBuildFile; fileRef = 71F7E3DB2A47F66900E8D20D /* QUESTION.md */; };
 		EE1BF60007AE888BBCD21EE8 /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5CA0841FAD4ACC73F9DC603F /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework */; };
 /* End PBXBuildFile section */
@@ -137,6 +139,10 @@
 		71D6961523926E3700D092BA /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
 		71DB3FA4239B5DE700181E94 /* WKMainTabController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WKMainTabController.h; sourceTree = "<group>"; };
 		71DB3FA5239B5DE700181E94 /* WKMainTabController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMainTabController.m; sourceTree = "<group>"; };
+		AA110001239265E900D092BA /* WKDBRecoveryManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WKDBRecoveryManager.h; sourceTree = "<group>"; };
+		AA110002239265E900D092BA /* WKDBRecoveryManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = WKDBRecoveryManager.m; sourceTree = "<group>"; };
+		AA110004239265E900D092BA /* WKDBRepairViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WKDBRepairViewController.h; sourceTree = "<group>"; };
+		AA110005239265E900D092BA /* WKDBRepairViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = WKDBRepairViewController.m; sourceTree = "<group>"; };
 		71F7E3DB2A47F66900E8D20D /* QUESTION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = QUESTION.md; sourceTree = "<group>"; };
 		DE5455F84CCB2C45ED689AA0 /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -314,6 +320,10 @@
 				71D6961523926E3700D092BA /* main.m */,
 				71DB3FA4239B5DE700181E94 /* WKMainTabController.h */,
 				71DB3FA5239B5DE700181E94 /* WKMainTabController.m */,
+				AA110001239265E900D092BA /* WKDBRecoveryManager.h */,
+				AA110002239265E900D092BA /* WKDBRecoveryManager.m */,
+				AA110004239265E900D092BA /* WKDBRepairViewController.h */,
+				AA110005239265E900D092BA /* WKDBRepairViewController.m */,
 				719FDA5F2595FBFC000C25D6 /* Localizable.strings */,
 			);
 			path = TangSengDaoDao;
@@ -347,8 +357,6 @@
 				4B5FF7422F908A62005CCF01 /* ShareExtension */,
 			);
 			name = ShareExtension;
-			packageProductDependencies = (
-			);
 			productName = ShareExtension;
 			productReference = 4B5FF7412F908A62005CCF01 /* ShareExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
@@ -387,9 +395,9 @@
 			productReference = 7130BFD224C6832F00B9E04B /* NotificationContent.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
-		71D6960223926E3500D092BA /* TangSengDaoDaoiOS */ = {
+		71D6960223926E3500D092BA /* OctoiOS */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 71D6962F23926E3700D092BA /* Build configuration list for PBXNativeTarget "TangSengDaoDaoiOS" */;
+			buildConfigurationList = 71D6962F23926E3700D092BA /* Build configuration list for PBXNativeTarget "OctoiOS" */;
 			buildPhases = (
 				05215A064B84F8912C5000D5 /* [CP] Check Pods Manifest.lock */,
 				71D695FF23926E3500D092BA /* Sources */,
@@ -405,7 +413,7 @@
 				7130BFE024C6832F00B9E04B /* PBXTargetDependency */,
 				4B5FF74B2F908A62005CCF01 /* PBXTargetDependency */,
 			);
-			name = TangSengDaoDaoiOS;
+			name = OctoiOS;
 			productName = LiMaoIMDemo;
 			productReference = 71D6960323926E3500D092BA /* TangSengDaoDao.app */;
 			productType = "com.apple.product-type.application";
@@ -450,7 +458,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				71D6960223926E3500D092BA /* TangSengDaoDaoiOS */,
+				71D6960223926E3500D092BA /* OctoiOS */,
 				7130BFC024C6817600B9E04B /* NotificationService */,
 				7130BFD124C6832F00B9E04B /* NotificationContent */,
 				4B5FF7402F908A62005CCF01 /* ShareExtension */,
@@ -576,6 +584,8 @@
 				71D6961623926E3700D092BA /* main.m in Sources */,
 				71D6960823926E3500D092BA /* AppDelegate.m in Sources */,
 				71DB3FA6239B5DE700181E94 /* WKMainTabController.m in Sources */,
+				AA110003239265E900D092BA /* WKDBRecoveryManager.m in Sources */,
+				AA110006239265E900D092BA /* WKDBRepairViewController.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -938,7 +948,7 @@
 				CODE_SIGN_ENTITLEMENTS = TangSengDaoDao/TangSengDaoDao.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 38;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = D5G47RYK64;
 				ENABLE_BITCODE = NO;
@@ -1049,7 +1059,7 @@
 				CODE_SIGN_ENTITLEMENTS = TangSengDaoDao/TangSengDaoDao.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 38;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = D5G47RYK64;
 				ENABLE_BITCODE = NO;
@@ -1188,7 +1198,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		71D6962F23926E3700D092BA /* Build configuration list for PBXNativeTarget "TangSengDaoDaoiOS" */ = {
+		71D6962F23926E3700D092BA /* Build configuration list for PBXNativeTarget "OctoiOS" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				71D6963023926E3700D092BA /* Debug */,
