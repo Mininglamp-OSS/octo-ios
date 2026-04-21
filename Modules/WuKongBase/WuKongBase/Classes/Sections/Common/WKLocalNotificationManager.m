@@ -202,9 +202,19 @@ static WKLocalNotificationManager *_instance = nil;
 // 点击通知时打开对应聊天窗口并定位到消息
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response withCompletionHandler:(void (^)(void))completionHandler API_AVAILABLE(ios(10.0)) {
     NSDictionary *userInfo = response.notification.request.content.userInfo;
+    NSLog(@"[PushDebug] didReceiveNotificationResponse userInfo=%@", userInfo);
+
+    // 本地通知：我们自己存的 channel_id/channel_type/message_seq
     NSString *channelId = userInfo[@"channel_id"];
     NSNumber *channelType = userInfo[@"channel_type"];
     NSNumber *messageSeq = userInfo[@"message_seq"];
+
+    // 远程推送（APNs）：服务端可能用不同的字段名
+    if (!channelId || channelId.length == 0) {
+        channelId = userInfo[@"channelID"] ?: userInfo[@"channel_ID"];
+        channelType = userInfo[@"channelType"] ?: userInfo[@"channel_Type"];
+        messageSeq = userInfo[@"messageSeq"] ?: userInfo[@"message_Seq"];
+    }
 
     if (channelId.length > 0 && channelType) {
         [self navigateToChannel:channelId channelType:channelType messageSeq:messageSeq retryCount:0];
@@ -214,9 +224,13 @@ static WKLocalNotificationManager *_instance = nil;
 
 // 跳转到聊天窗口，冷启动时导航栈未就绪则延迟重试
 -(void) navigateToChannel:(NSString *)channelId channelType:(NSNumber *)channelType messageSeq:(NSNumber *)messageSeq retryCount:(NSInteger)retryCount {
-    // 检查导航栈是否就绪（冷启动时可能还没初始化完成）
-    if (![WKNavigationManager shared].topViewController || retryCount > 0) {
-        if (retryCount >= 10) return; // 最多重试 10 次（5 秒）
+    // 检查是否已登录且导航栈就绪（冷启动时需要等登录+主页加载完成）
+    BOOL isReady = [WKNavigationManager shared].topViewController != nil
+                && [WKApp shared].loginInfo.uid.length > 0
+                && [WKApp shared].loginInfo.token.length > 0;
+
+    if (!isReady) {
+        if (retryCount >= 20) return; // 最多重试 20 次（10 秒）
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [self navigateToChannel:channelId channelType:channelType messageSeq:messageSeq retryCount:retryCount + 1];
         });
@@ -227,7 +241,12 @@ static WKLocalNotificationManager *_instance = nil;
         WKConversationVC *vc = [WKConversationVC new];
         vc.channel = channel;
         if (messageSeq && messageSeq.unsignedIntValue > 0) {
-            vc.locationAtOrderSeq = [[WKSDK shared].chatManager getOrderSeq:messageSeq.unsignedIntValue];
+            uint32_t orderSeq = [[WKSDK shared].chatManager getOrderSeq:messageSeq.unsignedIntValue];
+            if (orderSeq == 0) {
+                // DB 未加载该消息时 orderSeq 为 0，用 messageSeq 兜底
+                orderSeq = messageSeq.unsignedIntValue;
+            }
+            vc.locationAtOrderSeq = orderSeq;
         }
         [[WKNavigationManager shared] pushViewController:vc animated:YES];
     });
