@@ -560,6 +560,16 @@
                 [weakSelf precacheHeightForMessage:msg];
             }
 
+            // 清除边界消息的高度缓存（新消息加载后，原来的第一条消息的 bubblePosition 可能变化）
+            NSInteger boundarySection = newSectionsAdded;
+            NSArray *boundaryMsgs = [weakSelf.dataProvider messagesAtSection:boundarySection];
+            if (boundaryMsgs.count > (NSUInteger)newRowsInOldFirstSection) {
+                WKMessageModel *boundaryMsg = boundaryMsgs[newRowsInOldFirstSection];
+                if (boundaryMsg.clientMsgNo.length > 0) {
+                    [[WKMessageListView cellHeightCache] removeObjectForKey:boundaryMsg.clientMsgNo];
+                }
+            }
+
             // 高度已就绪，reloadData + 恢复位置
             [UIView performWithoutAnimation:^{
                 [weakSelf.tableView reloadData];

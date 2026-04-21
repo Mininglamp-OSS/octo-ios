@@ -969,29 +969,54 @@ static NSMutableDictionary *flameNodeCacheDict;
     WKBubblePostion bubblePosition = [[self class] bubblePosition:self.messageModel];
     UIImage *img;
     NSString *imgName;
+    BOOL needFlip = NO; // 是否需要垂直翻转（将底部三角翻到顶部）
     if(self.messageModel.isSend) {
-        if(bubblePosition == WKBubblePostionFirst) {
-            imgName = @"Conversation/Messages/MessageSendBubbleFirst";
+        if(bubblePosition == WKBubblePostionFirst || bubblePosition == WKBubblePostionSingle) {
+            // 第一条/单条消息：使用带三角的气泡，翻转后三角在右上角（对齐头像）
+            imgName = @"Conversation/Messages/MessageSendBubble";
+            needFlip = YES;
         }else  if(bubblePosition == WKBubblePostionMiddle){
             imgName = @"Conversation/Messages/MessageSendBubbleMiddle";
         }else {
-            imgName = @"Conversation/Messages/MessageSendBubble";
+            // Last：无三角气泡
+            imgName = @"Conversation/Messages/MessageSendBubbleFirst";
         }
         img = [self getImageNameForBaseModule:imgName] ;
+        if(needFlip) {
+            img = [self verticallyFlipImage:img];
+        }
         img = [img resizableImageWithCapInsets:UIEdgeInsetsMake(img.size.height/2.0f - 4.0f,img.size.width/2.0f - 4.0f, img.size.height/2.0f - 4.0f, img.size.width/2.0f - 4.0f) resizingMode:UIImageResizingModeStretch];
     }else {
-        if(bubblePosition == WKBubblePostionFirst) {
-            imgName = @"Conversation/Messages/MessageReceiverBubbleFirst";
+        if(bubblePosition == WKBubblePostionFirst || bubblePosition == WKBubblePostionSingle) {
+            // 第一条/单条消息：使用带三角的气泡，翻转后三角在左上角（对齐头像）
+            imgName = @"Conversation/Messages/MessageReceiverBubble";
+            needFlip = YES;
         }else  if(bubblePosition == WKBubblePostionMiddle){
             imgName = @"Conversation/Messages/MessageReceiverBubbleMiddle";
         }else {
-            imgName = @"Conversation/Messages/MessageReceiverBubble";
+            // Last：无三角气泡
+            imgName = @"Conversation/Messages/MessageReceiverBubbleFirst";
         }
         img = [self getImageNameForBaseModule:imgName] ;
+        if(needFlip) {
+            img = [self verticallyFlipImage:img];
+        }
         img = [img resizableImageWithCapInsets:UIEdgeInsetsMake(img.size.height/2.0f - 4.0f,img.size.width/2.0f - 4.0f, img.size.height/2.0f - 4.0f, img.size.width/2.0f - 4.0f) resizingMode:UIImageResizingModeStretch];
     }
     img = [img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
     return img;
+}
+
+// 垂直翻转图片：将底部三角翻转到顶部
+-(UIImage*) verticallyFlipImage:(UIImage*)image {
+    UIGraphicsBeginImageContextWithOptions(image.size, NO, image.scale);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    CGContextTranslateCTM(ctx, 0, image.size.height);
+    CGContextScaleCTM(ctx, 1.0, -1.0);
+    [image drawInRect:CGRectMake(0, 0, image.size.width, image.size.height)];
+    UIImage *flipped = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return flipped;
 }
 
 
