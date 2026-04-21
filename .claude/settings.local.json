@@ -81,7 +81,14 @@
       "Bash(cp /Users/wanglitao/Documents/octo-ios-jerry/Modules/WuKongBase/WuKongBase/Classes/Services/Voice/WKVoiceInputService.m /Users/wanglitao/Documents/octo-ios/Modules/WuKongBase/WuKongBase/Classes/Services/Voice/WKVoiceInputService.m)",
       "Bash(cp /Users/wanglitao/Documents/octo-ios-jerry/Modules/WuKongBase/WuKongBase/Classes/Vendor/CWVoiceClasses/WKVoiceInputView.h /Users/wanglitao/Documents/octo-ios/Modules/WuKongBase/WuKongBase/Classes/Vendor/CWVoiceClasses/WKVoiceInputView.h)",
       "Bash(cp /Users/wanglitao/Documents/octo-ios-jerry/Modules/WuKongBase/WuKongBase/Classes/Vendor/CWVoiceClasses/WKVoiceInputView.m /Users/wanglitao/Documents/octo-ios/Modules/WuKongBase/WuKongBase/Classes/Vendor/CWVoiceClasses/WKVoiceInputView.m)",
-      "Bash(cp /Users/wanglitao/Documents/octo-ios-jerry/Modules/WuKongBase/WuKongBase/Classes/Vendor/CWVoiceClasses/WKVoiceInputViewDelegate.h /Users/wanglitao/Documents/octo-ios/Modules/WuKongBase/WuKongBase/Classes/Vendor/CWVoiceClasses/WKVoiceInputViewDelegate.h)"
+      "Bash(cp /Users/wanglitao/Documents/octo-ios-jerry/Modules/WuKongBase/WuKongBase/Classes/Vendor/CWVoiceClasses/WKVoiceInputViewDelegate.h /Users/wanglitao/Documents/octo-ios/Modules/WuKongBase/WuKongBase/Classes/Vendor/CWVoiceClasses/WKVoiceInputViewDelegate.h)",
+      "Bash(base64 -i /Users/wanglitao/Documents/octo-ios/ziqu.png -o /Users/wanglitao/Documents/octo-ios/Modules/WuKongBase/WuKongBase/Assets/Images.xcassets/Conversation/Index/ThreadIcon.imageset/ziqu.b64)",
+      "Bash(base64 -d -o \"/Users/wanglitao/Documents/octo-ios/Modules/WuKongBase/WuKongBase/Assets/Images.xcassets/Conversation/Index/ThreadIcon.imageset/ziqu.png\")",
+      "Bash(sips -g pixelWidth -g pixelHeight /Users/wanglitao/Documents/octo-ios/Modules/WuKongBase/WuKongBase/Assets/Images.xcassets/Conversation/Emoji/custom_action.imageset/chongshangxingdong.jpg)",
+      "WebFetch(domain:api.example.com)",
+      "Bash(pod spec:*)",
+      "Bash(gem install *)",
+      "Bash(plutil -p Pods/Bugly/Bugly.framework/Info.plist)"
     ]
   }
 }

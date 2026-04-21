@@ -40,9 +40,9 @@
 		71D6961323926E3700D092BA /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 71D6961123926E3700D092BA /* LaunchScreen.storyboard */; };
 		71D6961623926E3700D092BA /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 71D6961523926E3700D092BA /* main.m */; };
 		71DB3FA6239B5DE700181E94 /* WKMainTabController.m in Sources */ = {isa = PBXBuildFile; fileRef = 71DB3FA5239B5DE700181E94 /* WKMainTabController.m */; };
+		71F7E3DC2A47F66900E8D20D /* QUESTION.md in Resources */ = {isa = PBXBuildFile; fileRef = 71F7E3DB2A47F66900E8D20D /* QUESTION.md */; };
 		AA110003239265E900D092BA /* WKDBRecoveryManager.m in Sources */ = {isa = PBXBuildFile; fileRef = AA110002239265E900D092BA /* WKDBRecoveryManager.m */; };
 		AA110006239265E900D092BA /* WKDBRepairViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = AA110005239265E900D092BA /* WKDBRepairViewController.m */; };
-		71F7E3DC2A47F66900E8D20D /* QUESTION.md in Resources */ = {isa = PBXBuildFile; fileRef = 71F7E3DB2A47F66900E8D20D /* QUESTION.md */; };
 		EE1BF60007AE888BBCD21EE8 /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5CA0841FAD4ACC73F9DC603F /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework */; };
 /* End PBXBuildFile section */
 
@@ -139,11 +139,11 @@
 		71D6961523926E3700D092BA /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
 		71DB3FA4239B5DE700181E94 /* WKMainTabController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WKMainTabController.h; sourceTree = "<group>"; };
 		71DB3FA5239B5DE700181E94 /* WKMainTabController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMainTabController.m; sourceTree = "<group>"; };
+		71F7E3DB2A47F66900E8D20D /* QUESTION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = QUESTION.md; sourceTree = "<group>"; };
 		AA110001239265E900D092BA /* WKDBRecoveryManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WKDBRecoveryManager.h; sourceTree = "<group>"; };
 		AA110002239265E900D092BA /* WKDBRecoveryManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = WKDBRecoveryManager.m; sourceTree = "<group>"; };
 		AA110004239265E900D092BA /* WKDBRepairViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WKDBRepairViewController.h; sourceTree = "<group>"; };
 		AA110005239265E900D092BA /* WKDBRepairViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = WKDBRepairViewController.m; sourceTree = "<group>"; };
-		71F7E3DB2A47F66900E8D20D /* QUESTION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = QUESTION.md; sourceTree = "<group>"; };
 		DE5455F84CCB2C45ED689AA0 /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -948,7 +948,7 @@
 				CODE_SIGN_ENTITLEMENTS = TangSengDaoDao/TangSengDaoDao.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 38;
+				CURRENT_PROJECT_VERSION = 39;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = D5G47RYK64;
 				ENABLE_BITCODE = NO;
@@ -1059,7 +1059,7 @@
 				CODE_SIGN_ENTITLEMENTS = TangSengDaoDao/TangSengDaoDao.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 38;
+				CURRENT_PROJECT_VERSION = 39;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = D5G47RYK64;
 				ENABLE_BITCODE = NO;

@@ -87,15 +87,17 @@
 	<string>“Octo”需要您的同意,才能访问相册﻿﻿，用于聊天图片的发送</string>
 	<key>UIBackgroundModes</key>
 	<array>
-		<string>audio</string>
 		<string>fetch</string>
 		<string>remote-notification</string>
 		<string>voip</string>
 	</array>
 	<key>UIFileSharingEnabled</key>
 	<false/>
-	<key>UILaunchStoryboardName</key>
-	<string>LaunchScreen.storyboard</string>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>SystemBackgroundColor</string>
+	</dict>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
 	<key>UIRequiredDeviceCapabilities</key>

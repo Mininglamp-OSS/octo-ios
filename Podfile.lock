@@ -23,12 +23,30 @@ PODS:
     - CocoaLumberjack/Core (= 3.9.0)
   - CocoaLumberjack/Core (3.9.0)
   - DGActivityIndicatorView (2.1.1)
+  - DoraemonKit/Core (3.1.7):
+    - FMDB
+    - GCDWebServer
+    - GCDWebServer/WebDAV
+    - GCDWebServer/WebUploader
+  - DoraemonKit/WithGPS (3.1.7):
+    - DoraemonKit/Core
   - Down (0.11.0)
+  - FMDB (2.7.12):
+    - FMDB/standard (= 2.7.12)
   - FMDB/Core (2.7.12)
   - FMDB/SQLCipher (2.7.12):
     - FMDB/Core
     - SQLCipher (~> 4.6)
+  - FMDB/standard (2.7.12):
+    - FMDB/Core
   - FPSCounter (4.1.0)
+  - GCDWebServer (3.5.4):
+    - GCDWebServer/Core (= 3.5.4)
+  - GCDWebServer/Core (3.5.4)
+  - GCDWebServer/WebDAV (3.5.4):
+    - GCDWebServer/Core
+  - GCDWebServer/WebUploader (3.5.4):
+    - GCDWebServer/Core
   - GZIP (1.3.2)
   - LBXScan/LBXNative (2.5.1):
     - LBXScan/Types (~> 2.2)
@@ -145,6 +163,8 @@ PODS:
 DEPENDENCIES:
   - Aspects
   - AsyncDisplayKit (from `https://github.com/tangtaoit/AsyncDisplayKit.git`)
+  - DoraemonKit/Core (~> 3.1.2)
+  - DoraemonKit/WithGPS (~> 3.1.2)
   - Down (from `https://github.com/johnxnguyen/Down.git`, tag `v0.11.0`)
   - librlottie (from `https://github.com/tangtaoit/librlottie.git`)
   - ReactiveObjC
@@ -168,8 +188,10 @@ SPEC REPOS:
     - CocoaAsyncSocket
     - CocoaLumberjack
     - DGActivityIndicatorView
+    - DoraemonKit
     - FMDB
     - FPSCounter
+    - GCDWebServer
     - GZIP
     - LBXScan
     - libwebp
@@ -243,9 +265,11 @@ SPEC CHECKSUMS:
   CocoaAsyncSocket: 065fd1e645c7abab64f7a6a2007a48038fdc6a99
   CocoaLumberjack: 5644158777912b7de7469fa881f8a3f259c2512a
   DGActivityIndicatorView: ff2c76073d79692f724863c8dd38685866a03cb6
+  DoraemonKit: 0b45c9dc6ab34bd426a2782ee1bf7ab13492a60b
   Down: b6ba1bc985c9d2f4e15e3b293d2207766fa12612
   FMDB: 728731dd336af3936ce00f91d9d8495f5718a0e6
   FPSCounter: 884afec377de66637808c4f52ecc3b85a404732b
+  GCDWebServer: 2c156a56c8226e2d5c0c3f208a3621ccffbe3ce4
   GZIP: 3c0abf794bfce8c7cb34ea05a1837752416c8868
   LBXScan: 90ca10d0c38fb4a5a6980d7782354f3f69f50093
   librlottie: b1439ecf2d19dc5db01b9fe94975548863c56cc7
@@ -278,6 +302,6 @@ SPEC CHECKSUMS:
   ZLImageEditor: ee86f044fb7c5dec6b5de49eb7bb6fd42286f2ae
   ZLPhotoBrowser: 6fb0eff03c8269001e29ef233e7bdab0691e05fe
 
-PODFILE CHECKSUM: 928b0853dd8f17e65754b57837e94427d908e167
+PODFILE CHECKSUM: 73480cceb8454e7f70a3206b03042b5ee4d8e375
 
 COCOAPODS: 1.16.2
