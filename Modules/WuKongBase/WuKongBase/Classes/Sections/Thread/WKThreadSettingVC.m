@@ -24,6 +24,8 @@
 @property (nonatomic, copy) NSString *groupNo;
 @property (nonatomic, copy) NSString *shortId;
 @property (nonatomic, copy) NSString *threadName;
+@property (nonatomic, strong) WKThreadModel *thread;
+@property (nonatomic, assign) BOOL isCreator;  // 当前用户是否是子区创建者
 
 @property (nonatomic, strong) NSArray *members; // API 返回的成员字典数组
 @property (nonatomic, assign) BOOL isMember;   // 当前用户是否在子区成员中
@@ -69,7 +71,10 @@
     if (!self.groupNo || !self.shortId) return;
     __weak typeof(self) weakSelf = self;
     [[WKThreadService shared] getThread:self.groupNo shortId:self.shortId].then(^(WKThreadModel *thread) {
+        weakSelf.thread = thread;
         weakSelf.threadName = thread.name;
+        NSString *myUid = [WKSDK shared].options.connectInfo.uid;
+        weakSelf.isCreator = (myUid.length > 0 && [thread.creatorUid isEqualToString:myUid]);
         [weakSelf.tableView reloadData];
     }).catch(^(NSError *error) {
         // 从 channelInfo 获取名称作为备选
@@ -211,7 +216,7 @@
             cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"LeaveCell"];
             cell.textLabel.textAlignment = NSTextAlignmentCenter;
         }
-        cell.textLabel.text = LLang(@"退出子区");
+        cell.textLabel.text = self.isCreator ? LLang(@"关闭子区") : LLang(@"退出子区");
         cell.textLabel.font = [[WKApp shared].config appFontOfSize:16.0f];
         cell.textLabel.textColor = [UIColor redColor];
         cell.backgroundColor = [WKApp shared].config.cellBackgroundColor;
@@ -238,11 +243,37 @@
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     if (indexPath.section == 1) {
-        [self confirmLeaveThread];
+        if (self.isCreator) {
+            [self confirmCloseThread];
+        } else {
+            [self confirmLeaveThread];
+        }
     }
 }
 
 #pragma mark - Actions
+
+- (void)confirmCloseThread {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"关闭子区")
+                                                                  message:LLang(@"确定关闭该子区？关闭后所有成员将无法再访问。")
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"关闭") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        [[WKThreadService shared] deleteThread:weakSelf.groupNo shortId:weakSelf.shortId].then(^(id result) {
+            UINavigationController *nav = [WKNavigationManager shared].topViewController.navigationController;
+            NSArray *vcs = nav.viewControllers;
+            if (vcs.count >= 3) {
+                [nav popToViewController:vcs[vcs.count - 3] animated:YES];
+            } else {
+                [nav popToRootViewControllerAnimated:YES];
+            }
+        }).catch(^(NSError *error) {
+            [weakSelf.view showMsg:error.domain];
+        });
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
 
 - (void)confirmLeaveThread {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"退出子区")

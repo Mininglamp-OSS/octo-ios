@@ -28,6 +28,7 @@ typedef NS_ENUM(NSInteger, WKThreadStatus) {
 @property (nonatomic, assign) NSInteger messageCount;
 @property (nonatomic, assign) NSInteger unreadCount;
 @property (nonatomic, assign) BOOL      isMember;
+@property (nonatomic, assign) BOOL      isDeleted;
 @property (nonatomic, copy, nullable) NSString *lastMessageContent;
 @property (nonatomic, copy, nullable) NSString *lastMessageSenderName;
 @property (nonatomic, copy, nullable) NSString *sourceMessageId;

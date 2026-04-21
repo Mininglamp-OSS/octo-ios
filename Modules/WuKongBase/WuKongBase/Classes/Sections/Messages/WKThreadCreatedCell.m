@@ -11,6 +11,8 @@
 #import "WKUserAvatar.h"
 #import "WKAvatarUtil.h"
 #import "WKTimeTool.h"
+#import "WKThreadService.h"
+#import "WKThreadModel.h"
 #import <WuKongIMSDK/WKMessageDB.h>
 
 @interface WKThreadCurveLineView : UIView
@@ -246,10 +248,43 @@
 
 - (void)onCardTap {
     WKThreadCreatedContent *content = (WKThreadCreatedContent *)self.model.content;
-    if (content.threadChannelId.length > 0) {
+    if (content.threadChannelId.length == 0) return;
+
+    // 解析 groupNo 和 shortId
+    NSRange sep = [content.threadChannelId rangeOfString:@"____"];
+    if (sep.location == NSNotFound) {
         WKChannel *channel = [WKChannel channelID:content.threadChannelId channelType:content.threadChannelType];
         [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:channel];
+        return;
     }
+    NSString *groupNo = [content.threadChannelId substringToIndex:sep.location];
+    NSString *shortId = [content.threadChannelId substringFromIndex:sep.location + sep.length];
+
+    // 先查询子区状态，防止打开已关闭的子区
+    [[WKThreadService shared] getThread:groupNo shortId:shortId].then(^(WKThreadModel *thread) {
+        if (thread.isDeleted || thread.status == WKThreadStatusDeleted) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                UIAlertController *alert = [UIAlertController
+                    alertControllerWithTitle:LLang(@"子区已关闭")
+                    message:LLang(@"该子区已被关闭，无法进入。")
+                    preferredStyle:UIAlertControllerStyleAlert];
+                [alert addAction:[UIAlertAction actionWithTitle:LLang(@"确定") style:UIAlertActionStyleDefault handler:nil]];
+                UIViewController *topVC = [WKNavigationManager shared].topViewController;
+                [topVC presentViewController:alert animated:YES completion:nil];
+            });
+        } else {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                WKChannel *channel = [WKChannel channelID:content.threadChannelId channelType:content.threadChannelType];
+                [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:channel];
+            });
+        }
+    }).catch(^(NSError *error) {
+        // 接口失败时降级直接打开，避免卡死
+        dispatch_async(dispatch_get_main_queue(), ^{
+            WKChannel *channel = [WKChannel channelID:content.threadChannelId channelType:content.threadChannelType];
+            [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:channel];
+        });
+    });
 }
 
 - (void)onQuoteTap {

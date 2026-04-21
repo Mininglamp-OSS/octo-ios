@@ -22,6 +22,7 @@
     model.messageCount         = [dict[@"message_count"] integerValue];
     model.unreadCount          = [dict[@"unread_count"] integerValue];
     model.isMember             = [dict[@"is_member"] boolValue];
+    model.isDeleted            = [dict[@"is_deleted"] boolValue];
     model.lastMessageContent   = dict[@"last_message_content"];
     model.lastMessageSenderName = dict[@"last_message_sender_name"];
     model.sourceMessageId      = dict[@"source_message_id"] ? [NSString stringWithFormat:@"%@", dict[@"source_message_id"]] : nil;

@@ -477,7 +477,7 @@
     self.badgeView.hidden = YES;
     if(model.unreadCount>0) {
         self.badgeView.hidden = NO;
-        self.badgeView.badgeValue = [NSString stringWithFormat:@"%ld",(long)self.model.unreadCount];
+        self.badgeView.badgeValue = self.model.unreadCount > 99 ? @"99+" : [NSString stringWithFormat:@"%ld",(long)self.model.unreadCount];
         self.badgeView.lim_left = self.lim_width - 15.0f - self.badgeView.lim_width; // 这里强行执行下lim_left 因为杀掉app收离线，从无红点到有红点会向左漂移，因为layoutSubviews后执行
     }
 }
