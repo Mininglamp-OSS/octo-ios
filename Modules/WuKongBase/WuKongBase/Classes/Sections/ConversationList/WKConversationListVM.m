@@ -20,6 +20,7 @@
 @property(nonatomic,strong) NSArray<WKConversationWrapModel*> *filteredConversations; // 过滤后的列表
 @property(nonatomic,strong) NSRecursiveLock *conversationsLock;
 @property(nonatomic,strong) NSSet<NSString*> *syncedGroupChannelIds; // 当前空间的合法群聊白名单
+@property(nonatomic,assign) NSTimeInterval lastThreadCountFetchTime; // 上次全量拉取子区数据的时间戳
 
 @end
 
@@ -183,8 +184,16 @@ static WKConversationListVM *_instance;
 }
 
 /// 通过 API 获取每个群组的子区真实数量（带完成回调）
+/// - 5 分钟内重复触发（WebSocket 重连等场景）直接复用缓存，不发网络请求
+/// - 并发限流：最多同时 3 个请求，避免启动时瞬间打出 N 个并发
 -(void) fetchThreadCountsForGroupsWithCompletion:(void(^)(void))completion {
-    // 收集需要请求的群组
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (self.lastThreadCountFetchTime > 0 && (now - self.lastThreadCountFetchTime) < 300) {
+        if (completion) completion();
+        return;
+    }
+    self.lastThreadCountFetchTime = now;
+
     NSMutableArray<WKConversationWrapModel *> *groupModels = [NSMutableArray array];
     for (WKConversationWrapModel *model in self.conversationWrapModels) {
         if (model.channel.channelType == WK_GROUP) {
@@ -197,35 +206,35 @@ static WKConversationListVM *_instance;
     }
 
     dispatch_group_t group = dispatch_group_create();
-    __weak typeof(self) weakSelf = self;
+    dispatch_semaphore_t rateLimiter = dispatch_semaphore_create(3);
 
-    for (WKConversationWrapModel *model in groupModels) {
-        NSString *groupNo = model.channel.channelId;
-        dispatch_group_enter(group);
-        [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
-            NSArray *sorted = [threads sortedArrayUsingComparator:^NSComparisonResult(WKThreadModel *a, WKThreadModel *b) {
-                return [b.updatedAt compare:a.updatedAt];
-            }];
-            NSMutableArray *activePreviews = [NSMutableArray array];
-            for (WKThreadModel *t in sorted) {
-                if (t.status == WKThreadStatusActive) {
-                    [activePreviews addObject:t];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        for (WKConversationWrapModel *model in groupModels) {
+            NSString *groupNo = model.channel.channelId;
+            dispatch_semaphore_wait(rateLimiter, DISPATCH_TIME_FOREVER);
+            dispatch_group_enter(group);
+            [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
+                NSArray *sorted = [threads sortedArrayUsingComparator:^NSComparisonResult(WKThreadModel *a, WKThreadModel *b) {
+                    return [b.updatedAt compare:a.updatedAt];
+                }];
+                NSMutableArray *activePreviews = [NSMutableArray array];
+                for (WKThreadModel *t in sorted) {
+                    if (t.status == WKThreadStatusActive) [activePreviews addObject:t];
                 }
-            }
-            model.threadCount = activePreviews.count;
-            if (activePreviews.count > 2) {
-                model.threadPreviews = [activePreviews subarrayWithRange:NSMakeRange(0, 2)];
-            } else {
-                model.threadPreviews = [activePreviews copy];
-            }
-            dispatch_group_leave(group);
-        }).catch(^(NSError *error) {
-            dispatch_group_leave(group);
+                model.threadCount = activePreviews.count;
+                model.threadPreviews = activePreviews.count > 2
+                    ? [activePreviews subarrayWithRange:NSMakeRange(0, 2)]
+                    : [activePreviews copy];
+                dispatch_semaphore_signal(rateLimiter);
+                dispatch_group_leave(group);
+            }).catch(^(NSError *error) {
+                dispatch_semaphore_signal(rateLimiter);
+                dispatch_group_leave(group);
+            });
+        }
+        dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+            if (completion) completion();
         });
-    }
-
-    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-        if (completion) completion();
     });
 }
 
@@ -237,44 +246,51 @@ static WKConversationListVM *_instance;
     }];
 }
 
-/// 刷新指定群组的子区数量（批量请求，统一刷新）
+/// 刷新指定群组的子区数量（批量请求，统一刷新，最多 3 个并发）
 -(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos {
-    dispatch_group_t batchGroup = dispatch_group_create();
+    NSMutableArray<WKConversationWrapModel *> *models = [NSMutableArray array];
     for (NSString *groupNo in groupNos) {
-        WKChannel *groupChannel = [WKChannel groupWithChannelID:groupNo];
-        WKConversationWrapModel *model = [self getConversationWrap:groupChannel conversations:self.conversationWrapModels];
-        if (!model) continue;
-        dispatch_group_enter(batchGroup);
-        [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
-            NSArray *sorted = [threads sortedArrayUsingComparator:^NSComparisonResult(WKThreadModel *a, WKThreadModel *b) {
-                return [b.updatedAt compare:a.updatedAt];
-            }];
-            NSMutableArray *activePreviews = [NSMutableArray array];
-            for (WKThreadModel *t in sorted) {
-                if(t.status == WKThreadStatusActive) {
-                    [activePreviews addObject:t];
-                }
-            }
-            model.threadCount = activePreviews.count;
-            if (activePreviews.count > 2) {
-                model.threadPreviews = [activePreviews subarrayWithRange:NSMakeRange(0, 2)];
-            } else {
-                model.threadPreviews = [activePreviews copy];
-            }
-            for (WKThreadModel *t in activePreviews) {
-                if (t.channelId.length > 0) {
-                    [WKThreadCreatedContent messageCountCache][t.channelId] = @(t.messageCount);
-                }
-            }
-            dispatch_group_leave(batchGroup);
-        }).catch(^(NSError *error) {
-            dispatch_group_leave(batchGroup);
-        });
+        WKConversationWrapModel *model = [self modelAtChannel:[WKChannel groupWithChannelID:groupNo]];
+        if (model) [models addObject:model];
     }
-    // 所有请求完成后统一通知刷新
-    dispatch_group_notify(batchGroup, dispatch_get_main_queue(), ^{
-        [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountBatchUpdated" object:nil];
-        [[NSNotificationCenter defaultCenter] postNotificationName:WKThreadMessageCountUpdatedNotification object:nil];
+    if (models.count == 0) return;
+
+    dispatch_group_t batchGroup = dispatch_group_create();
+    dispatch_semaphore_t rateLimiter = dispatch_semaphore_create(3);
+
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        for (WKConversationWrapModel *model in models) {
+            NSString *groupNo = model.channel.channelId;
+            dispatch_semaphore_wait(rateLimiter, DISPATCH_TIME_FOREVER);
+            dispatch_group_enter(batchGroup);
+            [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
+                NSArray *sorted = [threads sortedArrayUsingComparator:^NSComparisonResult(WKThreadModel *a, WKThreadModel *b) {
+                    return [b.updatedAt compare:a.updatedAt];
+                }];
+                NSMutableArray *activePreviews = [NSMutableArray array];
+                for (WKThreadModel *t in sorted) {
+                    if (t.status == WKThreadStatusActive) [activePreviews addObject:t];
+                }
+                model.threadCount = activePreviews.count;
+                model.threadPreviews = activePreviews.count > 2
+                    ? [activePreviews subarrayWithRange:NSMakeRange(0, 2)]
+                    : [activePreviews copy];
+                for (WKThreadModel *t in activePreviews) {
+                    if (t.channelId.length > 0) {
+                        [WKThreadCreatedContent messageCountCache][t.channelId] = @(t.messageCount);
+                    }
+                }
+                dispatch_semaphore_signal(rateLimiter);
+                dispatch_group_leave(batchGroup);
+            }).catch(^(NSError *error) {
+                dispatch_semaphore_signal(rateLimiter);
+                dispatch_group_leave(batchGroup);
+            });
+        }
+        dispatch_group_notify(batchGroup, dispatch_get_main_queue(), ^{
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountBatchUpdated" object:nil];
+            [[NSNotificationCenter defaultCenter] postNotificationName:WKThreadMessageCountUpdatedNotification object:nil];
+        });
     });
 }
 
@@ -716,6 +732,30 @@ static WKConversationListVM *_instance;
     });
 }
 
+/// O(子区数) — 使用预建索引计算子区未读数（替代 O(N) 全量遍历版本）
+-(NSInteger) threadUnreadForGroup:(NSString *)groupNo topicsByGroup:(NSDictionary<NSString*, NSArray<WKConversation*>*>*)topicsByGroup {
+    NSInteger total = 0;
+    for (WKConversation *conv in topicsByGroup[groupNo]) {
+        total += conv.unreadCount;
+    }
+    return total;
+}
+
+/// O(子区数) — 使用预建索引和 reminder 缓存检测@提醒（替代 O(N) 全量遍历 + 逐个 DB 查询版本）
+-(BOOL) hasMentionForGroup:(NSString *)groupNo model:(WKConversationWrapModel *)model topicsByGroup:(NSDictionary<NSString*, NSArray<WKConversation*>*>*)topicsByGroup remindersByChannelId:(NSDictionary<NSString*, NSArray<WKReminder*>*>*)remindersByChannelId {
+    if (model && model.simpleReminders.count > 0) {
+        for (WKReminder *r in model.simpleReminders) {
+            if (r.type == WKReminderTypeMentionMe) return YES;
+        }
+    }
+    for (WKConversation *conv in topicsByGroup[groupNo]) {
+        for (WKReminder *r in remindersByChannelId[conv.channel.channelId]) {
+            if (r.type == WKReminderTypeMentionMe) return YES;
+        }
+    }
+    return NO;
+}
+
 /// 检测指定群聊及其所有子区是否有未处理的@提醒（使用缓存的会话列表避免重复 DB 查询）
 -(BOOL) hasMentionForGroup:(NSString *)groupNo model:(WKConversationWrapModel *)model allConvs:(NSArray<WKConversation*>*)allConvs {
     // 检查群聊自身的 reminder
@@ -764,6 +804,24 @@ static WKConversationListVM *_instance;
     // 缓存一次子区会话列表，避免在循环中重复从 DB 查询
     NSArray<WKConversation *> *cachedAllConvs = [[WKSDK shared].conversationManager getConversationList];
 
+    // 预建索引：O(总会话数) 一次遍历，把 O(群聊数×总会话数) 的嵌套遍历降为 O(子区数) 查找
+    // topicsByGroup:        groupId → [WKConversation*]（该群下所有子区会话）
+    // remindersByChannelId: channelId → [WKReminder*]（子区的 reminder，一次性批量 DB 查询）
+    NSMutableDictionary<NSString*, NSMutableArray<WKConversation*>*> *topicsByGroup = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString*, NSArray<WKReminder*>*> *remindersByChannelId = [NSMutableDictionary dictionary];
+    for (WKConversation *conv in cachedAllConvs) {
+        if (conv.channel.channelType != WK_COMMUNITY_TOPIC) continue;
+        NSString *channelId = conv.channel.channelId;
+        NSRange sep = [channelId rangeOfString:@"____"];
+        if (sep.location == NSNotFound) continue;
+        NSString *groupId = [channelId substringToIndex:sep.location];
+        NSMutableArray *topics = topicsByGroup[groupId];
+        if (!topics) { topics = [NSMutableArray array]; topicsByGroup[groupId] = topics; }
+        [topics addObject:conv];
+        NSArray<WKReminder*> *reminders = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
+        if (reminders.count > 0) remindersByChannelId[channelId] = reminders;
+    }
+
     // 2. 收集已归组的 channelId，找到 is_default 分类
     WKCategoryEntity *defaultCategory = nil;
     for (WKCategoryEntity *cat in self.categoryList) {
@@ -787,10 +845,10 @@ static WKConversationListVM *_instance;
                 count++;
                 totalUnread += m.unreadCount;
                 // 累加该群聊下所有子区的未读
-                totalUnread += [self threadUnreadForGroup:cg.group_no allConvs:cachedAllConvs];
+                totalUnread += [self threadUnreadForGroup:cg.group_no topicsByGroup:topicsByGroup];
                 // 检测群聊及子区的@提醒
                 if (!sectionHasMention) {
-                    sectionHasMention = [self hasMentionForGroup:cg.group_no model:m allConvs:cachedAllConvs];
+                    sectionHasMention = [self hasMentionForGroup:cg.group_no model:m topicsByGroup:topicsByGroup remindersByChannelId:remindersByChannelId];
                 }
             }
         }
@@ -862,9 +920,9 @@ static WKConversationListVM *_instance;
         BOOL defaultHasMention = NO;
         for (WKConversationWrapModel *m in defaultItems) {
             defaultUnread += m.unreadCount;
-            defaultUnread += [self threadUnreadForGroup:m.channel.channelId allConvs:cachedAllConvs];
+            defaultUnread += [self threadUnreadForGroup:m.channel.channelId topicsByGroup:topicsByGroup];
             if (!defaultHasMention) {
-                defaultHasMention = [self hasMentionForGroup:m.channel.channelId model:m allConvs:cachedAllConvs];
+                defaultHasMention = [self hasMentionForGroup:m.channel.channelId model:m topicsByGroup:topicsByGroup remindersByChannelId:remindersByChannelId];
             }
         }
         header.unreadCount = defaultUnread;
