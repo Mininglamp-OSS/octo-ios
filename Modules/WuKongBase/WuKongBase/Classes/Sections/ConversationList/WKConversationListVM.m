@@ -20,7 +20,6 @@
 @property(nonatomic,strong) NSArray<WKConversationWrapModel*> *filteredConversations; // 过滤后的列表
 @property(nonatomic,strong) NSRecursiveLock *conversationsLock;
 @property(nonatomic,strong) NSSet<NSString*> *syncedGroupChannelIds; // 当前空间的合法群聊白名单
-@property(nonatomic,assign) NSTimeInterval lastThreadCountFetchTime; // 上次全量拉取子区数据的时间戳
 
 @end
 
@@ -184,16 +183,8 @@ static WKConversationListVM *_instance;
 }
 
 /// 通过 API 获取每个群组的子区真实数量（带完成回调）
-/// - 5 分钟内重复触发（WebSocket 重连等场景）直接复用缓存，不发网络请求
-/// - 并发限流：最多同时 3 个请求，避免启动时瞬间打出 N 个并发
+/// 并发限流：最多同时 3 个请求，避免启动时瞬间打出 N 个并发
 -(void) fetchThreadCountsForGroupsWithCompletion:(void(^)(void))completion {
-    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    if (self.lastThreadCountFetchTime > 0 && (now - self.lastThreadCountFetchTime) < 300) {
-        if (completion) completion();
-        return;
-    }
-    self.lastThreadCountFetchTime = now;
-
     NSMutableArray<WKConversationWrapModel *> *groupModels = [NSMutableArray array];
     for (WKConversationWrapModel *model in self.conversationWrapModels) {
         if (model.channel.channelType == WK_GROUP) {
