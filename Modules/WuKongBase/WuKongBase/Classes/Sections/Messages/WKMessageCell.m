@@ -220,6 +220,8 @@ static NSMutableDictionary *flameNodeCacheDict;
     self.botBadgeLbl.textAlignment = NSTextAlignmentCenter;
     self.botBadgeLbl.layer.cornerRadius = 4.0f;
     self.botBadgeLbl.layer.masksToBounds = YES;
+    self.botBadgeLbl.layer.shouldRasterize = YES;
+    self.botBadgeLbl.layer.rasterizationScale = [UIScreen mainScreen].scale;
     self.botBadgeLbl.hidden = YES;
     [self.bubbleBackgroundView addSubview:self.botBadgeLbl];
 

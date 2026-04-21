@@ -1507,9 +1507,13 @@ static NSMutableDictionary<NSString*, NSNumber*> *_cellHeightCache;
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
    WKTimeHeaderView *headerView = [tableView dequeueReusableHeaderFooterViewWithIdentifier:[WKTimeHeaderView reuseId]];
-    NSDateFormatter *dateFormatter = [[NSDateFormatter alloc] init];
-    [dateFormatter setDateFormat:@"yyyy-MM-dd"];
-    NSDate *date = [dateFormatter dateFromString:[self.dataProvider dateWithSection:section]];
+    static NSDateFormatter *sectionDateFormatter;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        sectionDateFormatter = [[NSDateFormatter alloc] init];
+        [sectionDateFormatter setDateFormat:@"yyyy-MM-dd"];
+    });
+    NSDate *date = [sectionDateFormatter dateFromString:[self.dataProvider dateWithSection:section]];
     headerView.dateLbl.text = [WKTimeTool formatDateStyle1:date];
 //    [headerView.dateLbl sizeToFit];
     return headerView;

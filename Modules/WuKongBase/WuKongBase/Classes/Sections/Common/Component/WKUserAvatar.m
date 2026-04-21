@@ -36,6 +36,8 @@
 -(void) setupUI {
     [self addSubview:self.avatarBox];
     [self.avatarBox addSubview:self.avatarImgView];
+    self.layer.shouldRasterize = YES;
+    self.layer.rasterizationScale = [UIScreen mainScreen].scale;
 }
 
 - (UIImageView *)avatarImgView {
