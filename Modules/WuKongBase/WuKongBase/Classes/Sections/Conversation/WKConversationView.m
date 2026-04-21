@@ -318,12 +318,22 @@
     if(self.messageListView.lastMessage) {
         messageSeq = self.messageListView.lastMessage.messageSeq;
     }
-    if(self.messageListView.browseToOrderSeq == 0 && self.messageListView.newMsgCount>0) { // lastMessageSeq为0 要么就是自己发送中的消息，要么就是本地插入的消息，此时
-        [[WKMessageManager shared] conversationSetUnread:self.channel unread:0 messageSeq:messageSeq complete:nil];
-    }else if(conversation.unreadCount != self.messageListView.newMsgCount) {
-        [[WKMessageManager shared] conversationSetUnread:self.channel unread:self.messageListView.newMsgCount messageSeq:messageSeq complete:nil];
-    }else if(self.messageListView.hasRecvMsg) {
-        [[WKMessageManager shared] conversationSetUnread:self.channel unread:self.messageListView.newMsgCount messageSeq:messageSeq complete:nil];
+    NSInteger newUnread = self.messageListView.newMsgCount;
+    NSInteger targetUnread = -1;
+    if(self.messageListView.browseToOrderSeq == 0 && newUnread > 0) {
+        targetUnread = 0;
+    } else if(conversation.unreadCount != newUnread) {
+        targetUnread = newUnread;
+    } else if(self.messageListView.hasRecvMsg) {
+        targetUnread = newUnread;
+    }
+    if(targetUnread >= 0) {
+        [[WKMessageManager shared] conversationSetUnread:self.channel unread:targetUnread messageSeq:messageSeq complete:nil];
+        // 同步更新本地 DB，防止 loadConversationList: 从 DB 重新加载时覆盖内存中已清零的未读数
+        // 根因：大量机器人消息（如 100 条子区创建消息）造成 unreadCount=100，
+        // 用户进入会话已阅读，但 WebSocket 重连等场景触发 loadConversationList: 从旧 DB 重载，
+        // 导致会话列表红点复现并无法消除
+        [[WKSDK shared].conversationManager setConversationUnreadCount:self.channel unread:targetUnread];
     }
 }
 
