@@ -7,6 +7,7 @@
 
 #import "WKLocalNotificationManager.h"
 #import <UserNotifications/UserNotifications.h>
+#import <objc/runtime.h>
 #import "WKLogs.h"
 #import "WKMySettingManager.h"
 #import "WuKongBase.h"
@@ -199,10 +200,95 @@ static WKLocalNotificationManager *_instance = nil;
 
 #pragma mark - UNUserNotificationCenterDelegate
 
+// 临时调试：悬浮展示 APNs userInfo，用于在 Release 包中确认服务端推送的字段名
+// 排查完成后删除此方法和调用处
+- (void)showPushDebugPanel:(NSDictionary *)userInfo API_AVAILABLE(ios(10.0)) {
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:userInfo
+                                                       options:NSJSONWritingPrettyPrinted
+                                                         error:nil];
+    NSString *jsonStr = jsonData
+        ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding]
+        : [userInfo description];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // 用独立 UIWindow 浮在最顶层，不影响正常导航
+        UIWindowScene *scene = nil;
+        for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+            if ([s isKindOfClass:[UIWindowScene class]]) { scene = (UIWindowScene *)s; break; }
+        }
+        UIWindow *panel = scene
+            ? [[UIWindow alloc] initWithWindowScene:scene]
+            : [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        panel.windowLevel = UIWindowLevelStatusBar + 100;
+        panel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.88];
+        panel.layer.cornerRadius = 12;
+        panel.clipsToBounds = YES;
+
+        CGRect screen = [UIScreen mainScreen].bounds;
+        panel.frame = CGRectMake(16, 80, screen.size.width - 32, screen.size.height * 0.55);
+
+        // 标题
+        UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(12, 10, panel.bounds.size.width - 60, 24)];
+        title.text = @"[PushDebug] APNs userInfo";
+        title.font = [UIFont boldSystemFontOfSize:13];
+        title.textColor = [UIColor colorWithRed:1 green:0.8 blue:0 alpha:1];
+        [panel addSubview:title];
+
+        // 关闭按钮
+        UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        closeBtn.frame = CGRectMake(panel.bounds.size.width - 44, 4, 40, 36);
+        [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
+        [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        closeBtn.titleLabel.font = [UIFont boldSystemFontOfSize:18];
+        [panel addSubview:closeBtn];
+
+        // 可滚动内容
+        UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 40, panel.bounds.size.width, panel.bounds.size.height - 40)];
+        UILabel *content = [[UILabel alloc] init];
+        content.text = jsonStr;
+        content.font = [UIFont fontWithName:@"Menlo" size:11] ?: [UIFont systemFontOfSize:11];
+        content.textColor = [UIColor colorWithRed:0.6 green:1.0 blue:0.6 alpha:1];
+        content.numberOfLines = 0;
+        content.lineBreakMode = NSLineBreakByCharWrapping;
+        CGSize size = [content sizeThatFits:CGSizeMake(panel.bounds.size.width - 16, CGFLOAT_MAX)];
+        content.frame = CGRectMake(8, 4, panel.bounds.size.width - 16, size.height);
+        scroll.contentSize = CGSizeMake(panel.bounds.size.width, size.height + 8);
+        [scroll addSubview:content];
+        [panel addSubview:scroll];
+
+        [panel makeKeyAndVisible];
+
+        // 关闭时隐藏 window（需要持有引用避免被释放）
+        static NSMutableArray *debugWindows;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{ debugWindows = [NSMutableArray array]; });
+        [debugWindows addObject:panel];
+
+        void(^dismiss)(void) = ^{
+            panel.hidden = YES;
+            [debugWindows removeObject:panel];
+        };
+        objc_setAssociatedObject(closeBtn, "dismissBlock", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        [closeBtn addTarget:self action:@selector(onDebugPanelClose:) forControlEvents:UIControlEventTouchUpInside];
+
+        // 60 秒后自动消失
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), dismiss);
+    });
+}
+
+- (void)onDebugPanelClose:(UIButton *)sender {
+    void(^dismiss)(void) = objc_getAssociatedObject(sender, "dismissBlock");
+    if (dismiss) dismiss();
+}
+
 // 点击通知时打开对应聊天窗口并定位到消息
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response withCompletionHandler:(void (^)(void))completionHandler API_AVAILABLE(ios(10.0)) {
     NSDictionary *userInfo = response.notification.request.content.userInfo;
     NSLog(@"[PushDebug] didReceiveNotificationResponse userInfo=%@", userInfo);
+
+    // 临时：展示 APNs payload 面板，排查 Release 包字段名后删除
+    [self showPushDebugPanel:userInfo];
 
     // 本地通知：我们自己存的 channel_id/channel_type/message_seq
     NSString *channelId = userInfo[@"channel_id"];

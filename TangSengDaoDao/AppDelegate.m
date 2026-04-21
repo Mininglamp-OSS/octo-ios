@@ -70,9 +70,9 @@
                                                object:nil];
 
     // DoKit 性能监控（仅 Debug 模式）
-//#ifdef DEBUG
-//    [[DoraemonManager shareInstance] installWithPid:@""];
-//#endif
+#ifdef DEBUG
+    [[DoraemonManager shareInstance] installWithPid:@""];
+#endif
 
     // Bugly 崩溃 + 卡顿采集
     BuglyConfig *buglyConfig = [[BuglyConfig alloc] init];
