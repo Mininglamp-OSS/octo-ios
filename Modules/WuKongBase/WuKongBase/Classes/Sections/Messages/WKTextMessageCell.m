@@ -2035,6 +2035,7 @@ static const char kSelectionVisibleKey = 4; // NSValue<CGRect>：可见区域，
 static const char kSelectionTouchTimer = 5; // dispatch_block_t：touch 松手后延迟重显菜单
 static const char kScrollTableKey     = 6; // NSArray：需还原 clipsToBounds 的祖先 view 列表
 static const char kScrollVisibleKey   = 7; // 弱引用 UITableView（KVO 滚动检测）
+static const char kWindowTapGRKey    = 8; // UITapGestureRecognizer：单击非选区即关闭选择
 static void *kScrollKVOCtx            = &kScrollKVOCtx;
 
 -(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems {
@@ -2108,15 +2109,24 @@ static void *kScrollKVOCtx            = &kScrollKVOCtx;
         objc_setAssociatedObject(self, &kScrollVisibleKey, v, OBJC_ASSOCIATION_ASSIGN);
     }
 
-    // 问题3修复：延迟激活，确保 UITextView 已完成布局后再 becomeFirstResponder/selectAll
+    // 问题3修复：延迟激活，确保 UITextView 完成布局后再 becomeFirstResponder/selectAll
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (!objc_getAssociatedObject(self, &kSelectionTVKey)) return; // 已退出则跳过
+        if (!objc_getAssociatedObject(self, &kSelectionTVKey)) return;
         [tv becomeFirstResponder];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             if (!objc_getAssociatedObject(self, &kSelectionTVKey)) return;
             [tv selectAll:nil];
         });
     });
+
+    // 单击非选区位置 → 关闭选区（scroll 不触发，因为 tap 不识别 pan）
+    // cancelsTouchesInView = NO：不拦截 UITableView 的 scroll 事件
+    UITapGestureRecognizer *windowTap = [[UITapGestureRecognizer alloc] initWithTarget:self
+                                                                                action:@selector(wk_windowTapToDismiss:)];
+    windowTap.cancelsTouchesInView = NO;
+    windowTap.delegate = self;
+    [window addGestureRecognizer:windowTap];
+    objc_setAssociatedObject(self, &kWindowTapGRKey, windowTap, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 -(void) endInBubbleTextSelection {
@@ -2138,12 +2148,29 @@ static void *kScrollKVOCtx            = &kScrollKVOCtx;
 
     [self wk_hideSelectionPopup];
 
+    // 移除 window tap 手势
+    UITapGestureRecognizer *tap = objc_getAssociatedObject(self, &kWindowTapGRKey);
+    if (tap) {
+        [tap.view removeGestureRecognizer:tap];
+        objc_setAssociatedObject(self, &kWindowTapGRKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
     UITextView *tv = objc_getAssociatedObject(self, &kSelectionTVKey);
     [tv removeFromSuperview];
     objc_setAssociatedObject(self, &kSelectionTVKey,      nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelectionMenusKey,   nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelectionVisibleKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     self.textLbl.hidden = NO;
+}
+
+// 单击 window 上非 UITextView 区域 → 退出选择
+-(void) wk_windowTapToDismiss:(UITapGestureRecognizer *)gr {
+    UITextView *tv = objc_getAssociatedObject(self, &kSelectionTVKey);
+    if (!tv) return;
+    CGPoint pt = [gr locationInView:tv];
+    // 点在 UITextView 内部 → 不处理（让 UITextView 自己响应文字选择）
+    if (CGRectContainsPoint(tv.bounds, pt)) return;
+    [self endInBubbleTextSelection];
 }
 
 #pragma mark - UITextViewDelegate（选区变化 → 动态切换菜单）

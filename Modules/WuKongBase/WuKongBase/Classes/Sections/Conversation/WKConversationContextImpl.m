@@ -615,6 +615,8 @@
     CGFloat cardH       = rowCount * cellH + 8.0f; // 8pt top/bottom padding
     CGFloat cornerR     = 14.0f;
 
+    // __block 前向引用：dismiss block 里捕获 card，card 需先声明
+    __block UIView *card = nil;
     __block BOOL dismissed = NO;
     void(^dismiss)(void) = ^{
         if (dismissed) return;
@@ -630,7 +632,7 @@
     objc_setAssociatedObject(overlay, "dismiss", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
     [overlay addTarget:self action:@selector(wk_inlineMenuOverlayTapped:) forControlEvents:UIControlEventTouchUpInside];
 
-    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardW, cardH)];
+    card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardW, cardH)];
     card.layer.cornerRadius = cornerR;
     card.clipsToBounds = NO;
     card.layer.shadowColor  = [UIColor blackColor].CGColor;
