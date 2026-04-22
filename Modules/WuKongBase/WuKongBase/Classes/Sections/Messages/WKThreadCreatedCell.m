@@ -264,9 +264,7 @@
     [[WKThreadService shared] getThread:groupNo shortId:shortId].then(^(WKThreadModel *thread) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (thread.isDeleted || thread.status == WKThreadStatusDeleted) {
-                UIView *topView = [WKNavigationManager shared].topViewController.view;
-                [topView showHUD];
-                [topView switchHUDError:LLang(@"该子区已被关闭")];
+                [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"该子区已被关闭")];
             } else {
                 WKChannel *channel = [WKChannel channelID:content.threadChannelId channelType:content.threadChannelType];
                 [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:channel];
@@ -276,9 +274,7 @@
         dispatch_async(dispatch_get_main_queue(), ^{
             NSString *errMsg = error.domain ?: @"";
             if ([errMsg containsString:@"deleted"] || [errMsg containsString:@"已关闭"]) {
-                UIView *topView = [WKNavigationManager shared].topViewController.view;
-                [topView showHUD];
-                [topView switchHUDError:LLang(@"该子区已被关闭")];
+                [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"该子区已被关闭")];
             } else {
                 // 其他网络错误降级直接打开
                 WKChannel *channel = [WKChannel channelID:content.threadChannelId channelType:content.threadChannelType];
