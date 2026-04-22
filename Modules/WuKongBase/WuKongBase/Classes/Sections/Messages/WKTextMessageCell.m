@@ -285,7 +285,27 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     sv.bounces = NO;
     sv.directionalLockEnabled = YES;
     sv.delegate = self;
+    // tap 手势：将点击透传到 WebView，通过 JS 找到链接并触发导航
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTableLinkTap:)];
+    [sv addGestureRecognizer:tap];
     return sv;
+}
+
+- (void)handleTableLinkTap:(UITapGestureRecognizer *)gr {
+    NSInteger idx = [self.tableOverlays indexOfObject:gr.view];
+    if (idx == NSNotFound || idx >= self.tableWebViews.count) return;
+    WKWebView *wv = self.tableWebViews[idx];
+    CGPoint pt = [gr locationInView:gr.view];
+    // overlay 从 toolbar 底部开始覆盖 WebView，tap 坐标 = CSS client 坐标（无需补偿）
+    // elementFromPoint 使用 client 坐标，WebView 内部处理 scrollOffset
+    NSString *js = [NSString stringWithFormat:
+        @"(function(){"
+        @"var el=document.elementFromPoint(%f,%f);"
+        @"if(!el)return;"
+        @"var a=el.tagName==='A'?el:(el.closest?el.closest('a'):null);"
+        @"if(a&&a.href)window.location.href=a.href;"
+        @"})()", pt.x, pt.y];
+    [wv evaluateJavaScript:js completionHandler:nil];
 }
 
 -(UIView*) createTableToolbar:(NSInteger)tableIndex {
@@ -1764,7 +1784,10 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 
 -(void) webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     NSURL *url = navigationAction.request.URL;
-    if (navigationAction.navigationType == WKNavigationTypeLinkActivated && url) {
+    NSString *scheme = url.scheme.lowercaseString;
+    // 拦截所有 http/https 导航（包括 JS window.location.href 触发的），用系统浏览器打开
+    // about:blank 是 loadHTMLString 的初始加载，需要放行
+    if (url && ([scheme isEqualToString:@"https"] || [scheme isEqualToString:@"http"])) {
         [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
         decisionHandler(WKNavigationActionPolicyCancel);
         return;

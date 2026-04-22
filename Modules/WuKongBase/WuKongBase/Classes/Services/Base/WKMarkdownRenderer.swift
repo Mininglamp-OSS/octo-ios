@@ -638,6 +638,7 @@ import Down
     private static func buildTableWebViewCSS(fontSize: CGFloat, textColorHex: String, isDark: Bool) -> String {
         let borderColor = isDark ? "#444444" : "#E0E0E0"
         let thBg = isDark ? "rgba(255,255,255,0.08)" : "#F5F5F5"
+        let linkColor = isDark ? "#64B5F6" : "#5979F0"  // 与 buildCSS 和文字消息链接色一致
 
         return """
         * {
@@ -660,6 +661,7 @@ import Down
             padding: 10px 14px;
             border: 1px solid \(borderColor);
         }
+        a { color: \(linkColor); text-decoration: underline; }
         """
     }
 
