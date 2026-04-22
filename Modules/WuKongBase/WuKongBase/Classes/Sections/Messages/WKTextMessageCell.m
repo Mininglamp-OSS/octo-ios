@@ -2023,13 +2023,21 @@ static const char kSelectionTimerKey = 3;
         self.contentView.transform = CGAffineTransformIdentity;
     }];
 
+    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
     CGRect frameInWindow = [self.textLbl convertRect:self.textLbl.bounds toView:nil];
     if (frameInWindow.size.width < 1) return;
 
-    // Fix3: 不扩展高度，严格使用 textLbl 的实际 frame 避免溢出气泡
-    // (textLbl 本身已是正确高度；sizeThatFits: 因字体细微差异会过高)
-
-    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+    // 参考 Android SelectTextHelper：选中区域只覆盖屏幕可见部分
+    // 输入栏高度约 80pt，为其留出空间
+    CGFloat bottomMargin = 80.0f + window.safeAreaInsets.bottom;
+    CGRect visibleArea = CGRectMake(
+        0,
+        window.safeAreaInsets.top,
+        window.frame.size.width,
+        window.frame.size.height - window.safeAreaInsets.top - bottomMargin
+    );
+    CGRect clippedFrame = CGRectIntersection(frameInWindow, visibleArea);
+    if (CGRectIsNull(clippedFrame) || clippedFrame.size.height < 4) return;
 
     UIButton *dimBtn = [[UIButton alloc] initWithFrame:window.bounds];
     dimBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.12f];
@@ -2037,7 +2045,8 @@ static const char kSelectionTimerKey = 3;
     [window addSubview:dimBtn];
     [dimBtn addTarget:self action:@selector(endInBubbleTextSelection) forControlEvents:UIControlEventTouchUpInside];
 
-    WKSelectionOnlyTextView *tv = [[WKSelectionOnlyTextView alloc] initWithFrame:frameInWindow];
+    // UITextView 只覆盖可见区域，文字不撑出屏幕
+    WKSelectionOnlyTextView *tv = [[WKSelectionOnlyTextView alloc] initWithFrame:clippedFrame];
     tv.text = rawText;
     tv.font = self.textLbl.font;
     tv.textColor = self.textLbl.textColor;
@@ -2241,13 +2250,18 @@ static const NSInteger kSelectionPopupTag = 0x574B5350; // 'WKSP'
     card.frame     = CGRectMake(0, 0, cardW, cardH);
     clipView.frame = CGRectMake(0, 0, cardW, cardH);
 
-    // Fix5: 定位在选区附近（上方优先）
-    CGRect selRect = [self wk_selectionRectInWindowForTextView:tv];
+    // 参考 Android：菜单出现在气泡可见区域的中部，不跟随选区句柄跑到屏幕外
+    // tv.frame 已经是 clipped 到可见区域的 frame
+    CGRect tvFrame = tv.frame;
     CGFloat safeTop = window.safeAreaInsets.top + 8;
-    CGFloat cardX = CGRectGetMidX(selRect) - cardW / 2.0f;
-    cardX = MAX(8, MIN(cardX, window.frame.size.width - cardW - 8));
-    CGFloat cardY = selRect.origin.y - cardH - 10.0f;
-    if (cardY < safeTop) cardY = selRect.origin.y + selRect.size.height + 10.0f;
+    // 优先放在可见文字区域的中间位置（参考 Android showChatPopup 的定位逻辑）
+    CGFloat centerY = CGRectGetMidY(tvFrame);
+    CGFloat cardX = tvFrame.origin.x + 8.0f; // 与气泡左边对齐，给一点缩进
+    if (cardX + cardW > window.frame.size.width - 8) {
+        cardX = window.frame.size.width - cardW - 8;
+    }
+    CGFloat cardY = centerY - cardH / 2.0f;
+    cardY = MAX(safeTop, MIN(cardY, window.frame.size.height - cardH - 80 - window.safeAreaInsets.bottom));
     card.frame = CGRectMake(cardX, cardY, cardW, cardH);
     clipView.frame = CGRectMake(0, 0, cardW, cardH);
 

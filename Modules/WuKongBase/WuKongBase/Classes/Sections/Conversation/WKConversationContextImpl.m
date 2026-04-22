@@ -685,14 +685,21 @@
     card.frame = CGRectMake(0, 0, cardW, cardH);
     clipView.frame = CGRectMake(0, 0, cardW, cardH);
 
-    // Fix5: 以手指位置为锚点定位菜单（上方优先，不够时放下方）
-    CGFloat safeTop = window.safeAreaInsets.top + 8;
-    CGFloat cardX = touchInWindow.x - cardW / 2.0f;
-    cardX = MAX(8, MIN(cardX, window.frame.size.width - cardW - 8));
-    CGFloat cardY = touchInWindow.y - cardH - 12.0f;
-    if (cardY < safeTop) {
-        cardY = touchInWindow.y + 12.0f;
+    // 参考 Android ActionBarPopupWindow 定位策略：
+    // 菜单出现在气泡可见区域的中部（而非气泡边缘，防止超出屏幕）
+    CGFloat safeTop    = window.safeAreaInsets.top + 8;
+    CGFloat safeBottom = window.frame.size.height - window.safeAreaInsets.bottom - 80;
+    // 水平：与气泡左/右边对齐，靠气泡所在侧
+    CGFloat cardX = bubbleRect.origin.x + 8;
+    if (cardX + cardW > window.frame.size.width - 8) {
+        cardX = window.frame.size.width - cardW - 8;
     }
+    // 垂直：定位在气泡可见区域的中部
+    CGFloat visibleTop    = MAX(bubbleRect.origin.y, safeTop);
+    CGFloat visibleBottom = MIN(bubbleRect.origin.y + bubbleRect.size.height, safeBottom);
+    CGFloat visibleMidY   = (visibleTop + visibleBottom) / 2.0f;
+    CGFloat cardY = visibleMidY - cardH / 2.0f;
+    cardY = MAX(safeTop, MIN(cardY, safeBottom - cardH));
     // 下方也放不下时，强制挤在气泡上方（允许部分超出）
     CGFloat safeBottom = window.frame.size.height - [UIApplication sharedApplication].windows.firstObject.safeAreaInsets.bottom - 8;
     if (cardY + cardH > safeBottom) {
