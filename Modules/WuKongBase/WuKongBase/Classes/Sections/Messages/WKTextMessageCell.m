@@ -1416,19 +1416,19 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
         self.replyAvatarIcon.lim_width = replyAvatarSize;
         self.replyAvatarIcon.lim_height = replyAvatarSize;
 
-        // 名字（右侧紧邻头像）
+        // 名字（右侧紧邻头像）：给满可用宽度，由 label 的 lineBreakMode 决定是否截断
         CGFloat nameLeft = contentLeft + replyAvatarSize + 4.0f;
         CGFloat nameMaxW = self.replyBox.lim_width - nameLeft - replyBoxPadH;
-        self.replyNameLbl.lim_left = nameLeft;
-        self.replyNameLbl.lim_top  = replyBoxPadV + (replyRow1H - replyNameSize.height) / 2.0f;
-        self.replyNameLbl.lim_width  = MIN(replyNameSize.width, nameMaxW);
+        self.replyNameLbl.lim_left   = nameLeft;
+        self.replyNameLbl.lim_top    = replyBoxPadV + (replyRow1H - replyNameSize.height) / 2.0f;
+        self.replyNameLbl.lim_width  = MAX(0, nameMaxW);  // 全部可用宽度
         self.replyNameLbl.lim_height = replyNameSize.height;
 
-        // 内容（第二行，与头像左对齐）
+        // 内容（第二行，与头像左对齐）：同理给满可用宽度
         CGFloat contentMaxW = self.replyBox.lim_width - contentLeft - replyBoxPadH;
-        self.replyContentLbl.lim_left  = contentLeft;
-        self.replyContentLbl.lim_top   = replyBoxPadV + replyRow1H + replyItemSpacing;
-        self.replyContentLbl.lim_width  = MIN(replyContentSize.width, contentMaxW);
+        self.replyContentLbl.lim_left   = contentLeft;
+        self.replyContentLbl.lim_top    = replyBoxPadV + replyRow1H + replyItemSpacing;
+        self.replyContentLbl.lim_width  = MAX(0, contentMaxW);
         self.replyContentLbl.lim_height = replyContentSize.height;
 
         replyBoxBottom = self.replyBox.lim_bottom + textTopSpace;
@@ -1649,7 +1649,7 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     CGFloat maxW = [WKApp shared].config.messageContentMaxWidth
         - splitWidth - replyBoxPadH - replyAvatarSize - 4.0f - replyBoxPadH;
     NSString *name = message.content.reply.fromName;
-    if (!name.length) name = @"...";
+    if (!name.length) name = LLang(@"未知用户");  // 与 refreshModel: 显示值一致
     return [self getTextSize:name maxWidth:maxW fontSize:replyNameFontSize];
 }
 
