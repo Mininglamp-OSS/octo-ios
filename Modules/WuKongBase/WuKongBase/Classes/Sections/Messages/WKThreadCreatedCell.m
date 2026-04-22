@@ -262,33 +262,23 @@
 
     // 先查询子区状态，防止打开已关闭的子区
     [[WKThreadService shared] getThread:groupNo shortId:shortId].then(^(WKThreadModel *thread) {
-        if (thread.isDeleted || thread.status == WKThreadStatusDeleted) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                UIAlertController *alert = [UIAlertController
-                    alertControllerWithTitle:LLang(@"子区已关闭")
-                    message:LLang(@"该子区已被关闭，无法进入。")
-                    preferredStyle:UIAlertControllerStyleAlert];
-                [alert addAction:[UIAlertAction actionWithTitle:LLang(@"确定") style:UIAlertActionStyleDefault handler:nil]];
-                UIViewController *topVC = [WKNavigationManager shared].topViewController;
-                [topVC presentViewController:alert animated:YES completion:nil];
-            });
-        } else {
-            dispatch_async(dispatch_get_main_queue(), ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (thread.isDeleted || thread.status == WKThreadStatusDeleted) {
+                UIView *topView = [WKNavigationManager shared].topViewController.view;
+                [topView showHUD];
+                [topView switchHUDError:LLang(@"该子区已被关闭")];
+            } else {
                 WKChannel *channel = [WKChannel channelID:content.threadChannelId channelType:content.threadChannelType];
                 [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:channel];
-            });
-        }
+            }
+        });
     }).catch(^(NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            // 服务端明确返回"已删除"时弹提示，不降级打开
             NSString *errMsg = error.domain ?: @"";
             if ([errMsg containsString:@"deleted"] || [errMsg containsString:@"已关闭"]) {
-                UIAlertController *alert = [UIAlertController
-                    alertControllerWithTitle:LLang(@"子区已关闭")
-                    message:LLang(@"该子区已被关闭，无法进入。")
-                    preferredStyle:UIAlertControllerStyleAlert];
-                [alert addAction:[UIAlertAction actionWithTitle:LLang(@"确定") style:UIAlertActionStyleDefault handler:nil]];
-                [[WKNavigationManager shared].topViewController presentViewController:alert animated:YES completion:nil];
+                UIView *topView = [WKNavigationManager shared].topViewController.view;
+                [topView showHUD];
+                [topView switchHUDError:LLang(@"该子区已被关闭")];
             } else {
                 // 其他网络错误降级直接打开
                 WKChannel *channel = [WKChannel channelID:content.threadChannelId channelType:content.threadChannelType];
