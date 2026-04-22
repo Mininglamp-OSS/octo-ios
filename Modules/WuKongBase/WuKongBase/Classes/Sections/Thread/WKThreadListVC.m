@@ -15,6 +15,7 @@
 #import <WuKongIMSDK/WuKongIMSDK.h>
 
 static NSString *const kCellIdentifier = @"WKThreadListCell";
+static const NSInteger kPageSize = 15;
 
 @interface WKThreadListVC () <UITableViewDataSource, UITableViewDelegate, WKConversationManagerDelegate, WKReminderManagerDelegate>
 
@@ -23,9 +24,18 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
 @property (nonatomic, strong) UIButton *createBtn;
 @property (nonatomic, strong) UILabel *emptyLbl;
 @property (nonatomic, strong) UIRefreshControl *refreshControl;
+@property (nonatomic, strong) UIView *tableFooterView;
+@property (nonatomic, strong) UIActivityIndicatorView *footerSpinner;
 
+// 当前展示的线程（按当前 tab 过滤后）
 @property (nonatomic, strong) NSArray<WKThreadModel *> *threads;
+// 所有已加载的原始线程（跨页累积）
+@property (nonatomic, strong) NSMutableArray<WKThreadModel *> *allLoadedThreads;
+
 @property (nonatomic, assign) BOOL loading;
+@property (nonatomic, assign) BOOL isLoadingMore;
+@property (nonatomic, assign) NSInteger currentPage;
+@property (nonatomic, assign) NSInteger totalCount;
 
 @end
 
@@ -43,16 +53,15 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
     [self.view addSubview:self.emptyLbl];
 
     self.threads = @[];
+    self.allLoadedThreads = [NSMutableArray array];
     [self loadThreads];
 
-    // 监听会话更新和@提醒变化，实时刷新红点和预览
     [[WKSDK shared].conversationManager addDelegate:self];
     [[WKReminderManager shared] addDelegate:self];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-    // 从子区聊天/设置页返回时刷新列表
     [self loadThreads];
 }
 
@@ -65,7 +74,7 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
     self.segmentControl.frame = CGRectMake(padding, navBottom + 12, self.view.lim_width - padding * 2, 32);
 
     CGFloat tableTop = self.segmentControl.lim_bottom + 10;
-    CGFloat tableBottom = 80; // 为创建按钮留空间
+    CGFloat tableBottom = 80;
     self.tableView.frame = CGRectMake(0, tableTop, self.view.lim_width, self.view.lim_height - tableTop - tableBottom);
 
     CGFloat btnWidth = self.view.lim_width - padding * 2;
@@ -80,12 +89,20 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
 #pragma mark - Data
 
 - (void)loadThreads {
+    if (self.loading) return;
     self.loading = YES;
+    self.currentPage = 1;
+    [self.allLoadedThreads removeAllObjects];
+
     __weak typeof(self) weakSelf = self;
-    [[WKThreadService shared] listThreads:self.groupNo].then(^(NSArray<WKThreadModel *> *threads) {
+    [[WKThreadService shared] listThreads:self.groupNo pageIndex:1 pageSize:kPageSize].then(^(NSDictionary *result) {
         weakSelf.loading = NO;
         [weakSelf.refreshControl endRefreshing];
-        [weakSelf filterAndReload:threads];
+        weakSelf.totalCount = [result[@"count"] integerValue];
+        NSArray<WKThreadModel *> *list = result[@"list"] ?: @[];
+        [weakSelf.allLoadedThreads addObjectsFromArray:list];
+        [weakSelf filterAndReload];
+        [weakSelf updateFooterVisibility];
     }).catch(^(NSError *error) {
         weakSelf.loading = NO;
         [weakSelf.refreshControl endRefreshing];
@@ -93,13 +110,41 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
     });
 }
 
-- (void)filterAndReload:(NSArray<WKThreadModel *> *)allThreads {
+- (void)loadMoreThreads {
+    if (self.isLoadingMore || self.loading) return;
+    // 只对活跃 tab 分页（服务端只返回活跃子区）
+    if (self.segmentControl.selectedSegmentIndex != 0) return;
+    // 已加载全部
+    if (self.allLoadedThreads.count >= (NSUInteger)self.totalCount) return;
+
+    self.isLoadingMore = YES;
+    [self.footerSpinner startAnimating];
+    NSInteger nextPage = self.currentPage + 1;
+
+    __weak typeof(self) weakSelf = self;
+    [[WKThreadService shared] listThreads:self.groupNo pageIndex:nextPage pageSize:kPageSize].then(^(NSDictionary *result) {
+        weakSelf.isLoadingMore = NO;
+        [weakSelf.footerSpinner stopAnimating];
+        weakSelf.totalCount = [result[@"count"] integerValue];
+        NSArray<WKThreadModel *> *newItems = result[@"list"] ?: @[];
+        if (newItems.count == 0) return;
+        weakSelf.currentPage = nextPage;
+        [weakSelf.allLoadedThreads addObjectsFromArray:newItems];
+        [weakSelf filterAndReload];
+        [weakSelf updateFooterVisibility];
+    }).catch(^(NSError *error) {
+        weakSelf.isLoadingMore = NO;
+        [weakSelf.footerSpinner stopAnimating];
+    });
+}
+
+- (void)filterAndReload {
     NSInteger selectedStatus = (self.segmentControl.selectedSegmentIndex == 0)
         ? WKThreadStatusActive
         : WKThreadStatusArchived;
 
     NSMutableArray *filtered = [NSMutableArray array];
-    for (WKThreadModel *t in allThreads) {
+    for (WKThreadModel *t in self.allLoadedThreads) {
         if (t.status == selectedStatus) {
             [filtered addObject:t];
         }
@@ -109,10 +154,29 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
     self.emptyLbl.hidden = (self.threads.count > 0);
 }
 
+- (void)updateFooterVisibility {
+    BOOL hasMore = (self.allLoadedThreads.count < (NSUInteger)self.totalCount)
+                   && (self.segmentControl.selectedSegmentIndex == 0);
+    self.tableView.tableFooterView = hasMore ? self.tableFooterView : [[UIView alloc] init];
+}
+
+#pragma mark - UIScrollViewDelegate (load more on scroll)
+
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+    CGFloat offsetY = scrollView.contentOffset.y;
+    CGFloat contentHeight = scrollView.contentSize.height;
+    CGFloat frameHeight = scrollView.frame.size.height;
+    if (contentHeight > frameHeight && offsetY > contentHeight - frameHeight - 80) {
+        [self loadMoreThreads];
+    }
+}
+
 #pragma mark - Actions
 
 - (void)onSegmentChanged:(UISegmentedControl *)sender {
-    [self loadThreads];
+    // 切换 tab 时先用已加载数据过滤展示，不重新请求
+    [self filterAndReload];
+    [self updateFooterVisibility];
 }
 
 - (void)onRefresh {
@@ -146,11 +210,9 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
 - (void)doCreateThread:(NSString *)name sourceMessageId:(NSString *)sourceMessageId {
     __weak typeof(self) weakSelf = self;
     [[WKThreadService shared] createThread:self.groupNo name:name sourceMessageId:sourceMessageId sourceMessagePayload:nil].then(^(WKThreadModel *thread) {
-        // 自动加入并打开子区会话
         [[WKThreadService shared] joinThread:thread.shortId].then(^(id result) {
             [weakSelf openThread:thread];
         }).catch(^(NSError *error) {
-            // 即使 join 失败也打开会话
             [weakSelf openThread:thread];
         });
     }).catch(^(NSError *error) {
@@ -180,15 +242,12 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
     WKThreadModel *thread = self.threads[indexPath.row];
-    // 判断是否会显示 previewLbl（需要与 cell 的显示逻辑一致）
     BOOL hasPreview = NO;
     WKChannel *threadChannel = [WKChannel channelID:thread.channelId channelType:WK_COMMUNITY_TOPIC];
-    // 检查@提醒
     NSArray<WKReminder *> *reminders = [[WKReminderDB shared] getWaitDoneReminder:threadChannel];
     for (WKReminder *r in reminders) {
         if (r.type == WKReminderTypeMentionMe) { hasPreview = YES; break; }
     }
-    // 检查 SDK 会话的最后消息（如 [图片]、[语音] 等）
     if (!hasPreview) {
         WKConversation *threadConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
         if (threadConv && threadConv.lastMessage && threadConv.lastMessage.content) {
@@ -196,7 +255,6 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
             if (digest.length > 0) hasPreview = YES;
         }
     }
-    // 检查服务端返回的最后消息
     if (!hasPreview && thread.lastMessageContent.length > 0) {
         hasPreview = YES;
     }
@@ -209,7 +267,6 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
 
     __weak typeof(self) weakSelf = self;
     if (!thread.isMember) {
-        // 自动加入再打开
         [[WKThreadService shared] joinThread:thread.shortId].then(^(id result) {
             [weakSelf openThread:thread];
         }).catch(^(NSError *error) {
@@ -229,7 +286,6 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
     NSMutableArray *actions = [NSMutableArray array];
 
     if (isCreator) {
-        // 删除
         UIContextualAction *deleteAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive
                                                                                   title:LLang(@"删除")
                                                                                 handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
@@ -238,7 +294,6 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
         }];
         [actions addObject:deleteAction];
 
-        // 归档/取消归档
         if (thread.status == WKThreadStatusActive) {
             UIContextualAction *archiveAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal
                                                                                        title:LLang(@"归档")
@@ -259,7 +314,6 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
             [actions addObject:unarchiveAction];
         }
     } else if (thread.isMember) {
-        // 非创建者但已加入：退出子区
         UIContextualAction *leaveAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal
                                                                                   title:LLang(@"退出")
                                                                                 handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
@@ -351,6 +405,16 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
     return _refreshControl;
 }
 
+- (UIView *)tableFooterView {
+    if (!_tableFooterView) {
+        _tableFooterView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 0, 52)];
+        _footerSpinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+        _footerSpinner.center = CGPointMake(UIScreen.mainScreen.bounds.size.width / 2, 26);
+        [_tableFooterView addSubview:_footerSpinner];
+    }
+    return _tableFooterView;
+}
+
 - (UIButton *)createBtn {
     if (!_createBtn) {
         _createBtn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -386,11 +450,9 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
 #pragma mark - WKConversationManagerDelegate
 
 - (void)onConversationUpdate:(NSArray<WKConversation *> *)conversations {
-    // 检查是否有本群的子区会话更新
     NSString *prefix = [NSString stringWithFormat:@"%@____", self.groupNo];
     for (WKConversation *conv in conversations) {
         if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
-            // 子区有新消息，刷新列表
             [self.tableView reloadData];
             return;
         }
@@ -400,7 +462,6 @@ static NSString *const kCellIdentifier = @"WKThreadListCell";
 #pragma mark - WKReminderManagerDelegate
 
 - (void)reminderManager:(WKReminderManager *)manager didChange:(WKChannel *)channel reminders:(NSArray<WKReminder *> *)reminders {
-    // 子区@提醒变化，刷新列表
     NSString *prefix = [NSString stringWithFormat:@"%@____", self.groupNo];
     if (channel.channelType == WK_COMMUNITY_TOPIC && [channel.channelId hasPrefix:prefix]) {
         [self.tableView reloadData];

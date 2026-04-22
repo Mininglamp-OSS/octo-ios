@@ -33,8 +33,10 @@
 
 + (NSArray<WKThreadModel *> *)fromDictArray:(NSArray<NSDictionary *> *)array {
     NSMutableArray *results = [NSMutableArray arrayWithCapacity:array.count];
-    for (NSDictionary *dict in array) {
-        [results addObject:[WKThreadModel fromDict:dict]];
+    for (id item in array) {
+        if ([item isKindOfClass:[NSDictionary class]]) {
+            [results addObject:[WKThreadModel fromDict:item]];
+        }
     }
     return [results copy];
 }

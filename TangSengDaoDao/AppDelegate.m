@@ -136,14 +136,8 @@
 }
 
 -(void) applicationWillEnterForeground:(UIApplication *)application {
-    // 更新 Bugly 用户标识（覆盖登录后首次回前台的场景）
     [self updateBuglyUserId];
-    NSInteger lastCheckUpdateTime = [[NSUserDefaults standardUserDefaults] integerForKey:@"lastCheckUpdateTime"];
-    if(lastCheckUpdateTime == 0) {
-        [self checkAppVersionOrUpdate];
-    }else if ([[NSDate date] timeIntervalSince1970] - lastCheckUpdateTime > 60.0f * 30.0f){
-        [self checkAppVersionOrUpdate];
-    }
+    [self checkAppVersionOrUpdate];
 }
 
 - (void)applicationDidReceiveMemoryWarning:(UIApplication *)application {
@@ -155,10 +149,8 @@
     NSString *appVersion = [infoDictionary objectForKey:@"CFBundleShortVersionString"];
     NSString *appBuild = [infoDictionary objectForKey:@"CFBundleVersion"];
     [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"common/appversion/iOS/%@",appVersion] parameters:nil].then(^(NSDictionary *resultDict){
-        [[NSUserDefaults standardUserDefaults] setInteger:[[NSDate date] timeIntervalSince1970] forKey:@"lastCheckUpdateTime"];
         NSString *rawVersion = resultDict[@"app_version"];
         if(!rawVersion || [rawVersion isEqualToString:@""]) {
-            [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:@"lastAlertUpdateTime"];
             return;
         }
 
