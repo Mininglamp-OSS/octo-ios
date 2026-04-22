@@ -24,9 +24,16 @@ NS_ASSUME_NONNULL_BEGIN
              sourceMessageId:(nullable NSString *)sourceMessageId
         sourceMessagePayload:(nullable NSDictionary *)sourceMessagePayload;
 
-/// 获取子区列表
+/// 获取子区列表（全量，最多100条，向后兼容）
 /// @param groupNo 父群编号
 - (AnyPromise *)listThreads:(NSString *)groupNo;
+
+/// 获取子区列表（分页）
+/// @param groupNo 父群编号
+/// @param pageIndex 页码（从 1 开始）
+/// @param pageSize 每页数量（最大 100）
+/// Promise resolves with NSDictionary: {@"count": NSNumber, @"list": NSArray<WKThreadModel *>}
+- (AnyPromise *)listThreads:(NSString *)groupNo pageIndex:(NSInteger)pageIndex pageSize:(NSInteger)pageSize;
 
 /// 获取子区详情
 /// @param groupNo 父群编号

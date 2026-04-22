@@ -39,9 +39,26 @@
 }
 
 - (AnyPromise *)listThreads:(NSString *)groupNo {
+    return [self listThreads:groupNo pageIndex:1 pageSize:100].then(^(NSDictionary *result) {
+        return result[@"list"] ?: @[];
+    });
+}
+
+- (AnyPromise *)listThreads:(NSString *)groupNo pageIndex:(NSInteger)pageIndex pageSize:(NSInteger)pageSize {
     NSString *path = [NSString stringWithFormat:@"groups/%@/threads", groupNo];
-    return [[WKAPIClient sharedClient] GET:path parameters:@{}].then(^(NSArray *results) {
-        return [WKThreadModel fromDictArray:results];
+    NSDictionary *params = @{@"page_index": @(pageIndex), @"page_size": @(pageSize)};
+    return [[WKAPIClient sharedClient] GET:path parameters:params].then(^(id result) {
+        NSArray *rawList = nil;
+        NSInteger count = 0;
+        if ([result isKindOfClass:[NSDictionary class]]) {
+            rawList = result[@"list"];
+            count = [result[@"count"] integerValue];
+        } else if ([result isKindOfClass:[NSArray class]]) {
+            rawList = result;
+            count = ((NSArray *)result).count;
+        }
+        NSArray<WKThreadModel *> *models = [WKThreadModel fromDictArray:rawList ?: @[]];
+        return @{@"count": @(count), @"list": models};
     });
 }
 

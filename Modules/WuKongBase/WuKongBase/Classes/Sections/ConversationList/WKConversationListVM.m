@@ -204,18 +204,10 @@ static WKConversationListVM *_instance;
             NSString *groupNo = model.channel.channelId;
             dispatch_semaphore_wait(rateLimiter, DISPATCH_TIME_FOREVER);
             dispatch_group_enter(group);
-            [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
-                NSArray *sorted = [threads sortedArrayUsingComparator:^NSComparisonResult(WKThreadModel *a, WKThreadModel *b) {
-                    return [b.updatedAt compare:a.updatedAt];
-                }];
-                NSMutableArray *activePreviews = [NSMutableArray array];
-                for (WKThreadModel *t in sorted) {
-                    if (t.status == WKThreadStatusActive) [activePreviews addObject:t];
-                }
-                model.threadCount = activePreviews.count;
-                model.threadPreviews = activePreviews.count > 2
-                    ? [activePreviews subarrayWithRange:NSMakeRange(0, 2)]
-                    : [activePreviews copy];
+            [[WKThreadService shared] listThreads:groupNo pageIndex:1 pageSize:2].then(^(NSDictionary *result) {
+                model.threadCount = [result[@"count"] integerValue];
+                NSArray *list = result[@"list"] ?: @[];
+                model.threadPreviews = list.count > 2 ? [list subarrayWithRange:NSMakeRange(0, 2)] : list;
                 dispatch_semaphore_signal(rateLimiter);
                 dispatch_group_leave(group);
             }).catch(^(NSError *error) {
@@ -254,19 +246,12 @@ static WKConversationListVM *_instance;
             NSString *groupNo = model.channel.channelId;
             dispatch_semaphore_wait(rateLimiter, DISPATCH_TIME_FOREVER);
             dispatch_group_enter(batchGroup);
-            [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
-                NSArray *sorted = [threads sortedArrayUsingComparator:^NSComparisonResult(WKThreadModel *a, WKThreadModel *b) {
-                    return [b.updatedAt compare:a.updatedAt];
-                }];
-                NSMutableArray *activePreviews = [NSMutableArray array];
-                for (WKThreadModel *t in sorted) {
-                    if (t.status == WKThreadStatusActive) [activePreviews addObject:t];
-                }
-                model.threadCount = activePreviews.count;
-                model.threadPreviews = activePreviews.count > 2
-                    ? [activePreviews subarrayWithRange:NSMakeRange(0, 2)]
-                    : [activePreviews copy];
-                for (WKThreadModel *t in activePreviews) {
+            [[WKThreadService shared] listThreads:groupNo pageIndex:1 pageSize:2].then(^(NSDictionary *result) {
+                model.threadCount = [result[@"count"] integerValue];
+                NSArray<WKThreadModel *> *all = result[@"list"] ?: @[];
+                NSArray<WKThreadModel *> *previews = all.count > 2 ? [all subarrayWithRange:NSMakeRange(0, 2)] : all;
+                model.threadPreviews = previews;
+                for (WKThreadModel *t in previews) {
                     if (t.channelId.length > 0) {
                         [WKThreadCreatedContent messageCountCache][t.channelId] = @(t.messageCount);
                     }
