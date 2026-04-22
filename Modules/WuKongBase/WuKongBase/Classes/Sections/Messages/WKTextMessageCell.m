@@ -1997,6 +1997,13 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     return img;
 }
 
+// ── UITextView 子类：屏蔽系统复制/粘贴菜单，只保留我们自定义菜单 ──
+@interface WKSelectionOnlyTextView : UITextView @end
+@implementation WKSelectionOnlyTextView
+- (BOOL)canPerformAction:(SEL)action withSender:(id)sender { return NO; }
+- (BOOL)canBecomeFirstResponder { return YES; }
+@end
+
 #pragma mark - 气泡内文字选择（透明 UITextView 原位叠加，UIKit 提供拖动句柄）
 
 static const char kSelectionTVKey    = 0;
@@ -2010,20 +2017,21 @@ static const char kSelectionTimerKey = 3;
     NSString *rawText = [[self class] getFullRawContent:self.messageModel];
     if (!rawText.length) return;
 
+    // 以 textLbl 为基准定位，但宽度取消息内容区宽度保证准确
     CGRect frameInWindow = [self.textLbl convertRect:self.textLbl.bounds toView:nil];
-    if (frameInWindow.size.width < 1 || frameInWindow.size.height < 1) return;
+    if (frameInWindow.size.width < 1) return;
 
     UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
 
-    // 半透明遮罩（点击退出选择模式）
+    // 半透明遮罩
     UIButton *dimBtn = [[UIButton alloc] initWithFrame:window.bounds];
     dimBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.15f];
     dimBtn.alpha = 0;
     [window addSubview:dimBtn];
     [dimBtn addTarget:self action:@selector(endInBubbleTextSelection) forControlEvents:UIControlEventTouchUpInside];
 
-    // 透明 UITextView，精确叠加在 textLbl 位置
-    UITextView *tv = [[UITextView alloc] initWithFrame:frameInWindow];
+    // 子类 UITextView（屏蔽系统菜单），透明叠加在气泡文字区域
+    WKSelectionOnlyTextView *tv = [[WKSelectionOnlyTextView alloc] initWithFrame:frameInWindow];
     tv.text = rawText;
     tv.font = self.textLbl.font;
     tv.textColor = self.textLbl.textColor;
@@ -2034,17 +2042,23 @@ static const char kSelectionTimerKey = 3;
     tv.textContainerInset = UIEdgeInsetsZero;
     tv.textContainer.lineFragmentPadding = 0;
     tv.delegate = self;
-    [window addSubview:tv];
 
+    // Fix 4: 动态撑高，确保含超链接/多行文本时内容完整显示
+    CGFloat neededH = [tv sizeThatFits:CGSizeMake(frameInWindow.size.width, CGFLOAT_MAX)].height;
+    if (neededH > frameInWindow.size.height) {
+        tv.frame = CGRectMake(frameInWindow.origin.x, frameInWindow.origin.y,
+                              frameInWindow.size.width, neededH);
+    }
+
+    [window addSubview:tv];
     self.textLbl.hidden = YES;
 
-    objc_setAssociatedObject(self, &kSelectionTVKey,    tv,                               OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, &kSelectionDimKey,   dimBtn,                           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, &kSelectionMenusKey, menuItems ?: @[],                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionTVKey,    tv,             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionDimKey,   dimBtn,         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionMenusKey, menuItems ?: @[], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     [tv becomeFirstResponder];
     [tv selectAll:nil];
-    // 全选后立即显示完整菜单（textViewDidChangeSelection 会在 selectAll 后触发）
     [UIView animateWithDuration:0.18 animations:^{ dimBtn.alpha = 1; }];
 }
 
@@ -2177,19 +2191,33 @@ static const NSInteger kSelectionPopupTag = 0x574B5350; // 'WKSP'
 
     if (!btns.count) return;
 
-    // --- 渲染弹出卡片 ---
+    // --- 渲染：可横向滚动的深色卡片 ---
     CGFloat btnH = 36.0f, padH = 16.0f;
     UIFont *btnFont = [UIFont systemFontOfSize:14.0f weight:UIFontWeightRegular];
 
+    // 外层容器（圆角 + 阴影）
     UIView *card = [[UIView alloc] init];
     card.tag = kSelectionPopupTag;
-    card.backgroundColor = [UIColor colorWithRed:0.10 green:0.10 blue:0.10 alpha:0.92f];
     card.layer.cornerRadius = 8.0f;
-    card.clipsToBounds = YES;
-    card.layer.shadowColor = [UIColor blackColor].CGColor;
-    card.layer.shadowOpacity = 0.2f;
-    card.layer.shadowRadius = 6.0f;
-    card.layer.shadowOffset = CGSizeMake(0, 2);
+    card.clipsToBounds = NO;
+    card.layer.shadowColor  = [UIColor blackColor].CGColor;
+    card.layer.shadowOpacity = 0.25f;
+    card.layer.shadowRadius  = 6.0f;
+    card.layer.shadowOffset  = CGSizeMake(0, 2);
+
+    // 内层 clipView（让圆角剪掉按钮高亮溢出）
+    UIView *clipView = [[UIView alloc] init];
+    clipView.backgroundColor = [UIColor colorWithRed:0.10 green:0.10 blue:0.10 alpha:0.92f];
+    clipView.layer.cornerRadius = 8.0f;
+    clipView.clipsToBounds = YES;
+    [card addSubview:clipView];
+
+    // 横向可滚动内容层
+    UIScrollView *scrollView = [[UIScrollView alloc] init];
+    scrollView.showsHorizontalScrollIndicator = NO;
+    scrollView.showsVerticalScrollIndicator   = NO;
+    scrollView.bounces = YES;
+    [clipView addSubview:scrollView];
 
     CGFloat x = 0;
     for (NSInteger i = 0; i < (NSInteger)btns.count; i++) {
@@ -2206,31 +2234,33 @@ static const NSInteger kSelectionPopupTag = 0x574B5350; // 'WKSP'
         [btn setBackgroundImage:[self wk_imageWithColor:[UIColor colorWithWhite:1 alpha:0.15f]] forState:UIControlStateHighlighted];
         objc_setAssociatedObject(btn, "tapBlock", action, OBJC_ASSOCIATION_COPY_NONATOMIC);
         [btn addTarget:self action:@selector(wk_selectionMenuItemTapped:) forControlEvents:UIControlEventTouchUpInside];
-        [card addSubview:btn];
+        [scrollView addSubview:btn];
 
         if (i < (NSInteger)btns.count - 1) {
             UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(x + w - 0.5f, 8, 0.5f, btnH - 16)];
             sep.backgroundColor = [UIColor colorWithWhite:1 alpha:0.2f];
-            [card addSubview:sep];
+            [scrollView addSubview:sep];
         }
         x += w;
     }
-    card.frame = CGRectMake(0, 0, x, btnH);
+    scrollView.contentSize = CGSizeMake(x, btnH);
 
-    // --- 定位：优先在选区上方，上方不够则放下方 ---
+    // --- 定位：最大宽度 = 屏幕宽 - 32，超出则可滚动 ---
     CGRect selRect = [self wk_selectionRectInWindowForTextView:tv];
-    CGFloat cardW = card.frame.size.width;
-    CGFloat cardX = CGRectGetMidX(selRect) - cardW / 2.0f;
-    cardX = MAX(8, MIN(cardX, window.frame.size.width - cardW - 8));
+    CGFloat maxCardW = window.frame.size.width - 32.0f;
+    CGFloat cardW    = MIN(x, maxCardW);
+    CGFloat cardX    = CGRectGetMidX(selRect) - cardW / 2.0f;
+    cardX = MAX(16, MIN(cardX, window.frame.size.width - cardW - 16));
     CGFloat cardY = selRect.origin.y - btnH - 10.0f;
     if (cardY < 60) cardY = selRect.origin.y + selRect.size.height + 10.0f;
-    card.frame = CGRectMake(cardX, cardY, cardW, btnH);
 
-    // 插入在 dimBtn 上方、遮罩下方
+    card.frame     = CGRectMake(cardX, cardY, cardW, btnH);
+    clipView.frame = CGRectMake(0, 0, cardW, btnH);
+    scrollView.frame = CGRectMake(0, 0, cardW, btnH);
+
     UIButton *dimBtn = objc_getAssociatedObject(self, &kSelectionDimKey);
     [window insertSubview:card aboveSubview:dimBtn ?: tv];
 
-    // 入场动画
     card.alpha = 0;
     card.transform = CGAffineTransformMakeScale(0.9, 0.9);
     [UIView animateWithDuration:0.15 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{

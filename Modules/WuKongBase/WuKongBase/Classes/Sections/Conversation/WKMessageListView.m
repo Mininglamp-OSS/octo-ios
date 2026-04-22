@@ -1273,11 +1273,15 @@
             }
         }
 
-        if(self.positionAtBottom) {
-            [self scrollToBottom:YES];
-        }else{
-            if( [message isSend]) {
+        // 截屏通知消息不触发滚底（用户截屏时不应打断当前阅读位置）
+        BOOL isScreenshot = (message.contentType == WK_SCREENSHOT);
+        if (!isScreenshot) {
+            if(self.positionAtBottom) {
                 [self scrollToBottom:YES];
+            }else{
+                if( [message isSend]) {
+                    [self scrollToBottom:YES];
+                }
             }
         }
     }

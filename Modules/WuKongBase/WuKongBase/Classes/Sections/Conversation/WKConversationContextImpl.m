@@ -564,26 +564,16 @@
         toolbarMenus = [[WKApp shared] invokes:WKPOINT_CATEGORY_MESSAGE_LONGMENUS param:@{@"message":contextMessage}];
     }
 
-    // 文本消息额外增加「选择文字」项，支持选取部分文字复制
+    __weak typeof(messageCell) weakCell = messageCell;
+
+    // 文本消息：长按直接进入全选模式，菜单在选区上方显示，无需单独「选择文字」按钮
     if (contextMessage.contentType == WK_TEXT) {
-        WKMessageLongMenusItem *selectItem = [[WKMessageLongMenusItem alloc] init];
-        selectItem.title = LLang(@"选择文字");
-        if (@available(iOS 13.0, *)) {
-            selectItem.icon = [UIImage systemImageNamed:@"text.cursor"];
-        }
-        __weak typeof(messageCell) weakCell = messageCell;
-        NSArray *capturedMenus = [toolbarMenus copy]; // 捕获当前完整菜单项（全选时显示）
-        selectItem.onTap = ^(id<WKConversationContext> ctx) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [weakCell startInBubbleTextSelectionWithMenuItems:capturedMenus];
-            });
-        };
-        NSMutableArray *mutable = [NSMutableArray arrayWithArray:toolbarMenus ?: @[]];
-        [mutable addObject:selectItem];
-        toolbarMenus = [mutable copy];
+        NSArray *capturedMenus = [toolbarMenus copy];
+        [messageCell startInBubbleTextSelectionWithMenuItems:capturedMenus];
+        return;
     }
 
-    __weak typeof(messageCell) weakCell = messageCell;
+    // 非文本消息：显示常规内联菜单
     [self showInlineMenuForCell:messageCell menuItems:toolbarMenus];
 }
 
