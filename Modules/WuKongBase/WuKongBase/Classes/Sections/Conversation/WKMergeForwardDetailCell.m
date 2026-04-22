@@ -703,7 +703,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 
 #pragma mark - M80AttributedLabelDelegate
 
-- (void)attributedLabel:(M80AttributedLabel *)attributedLabel clickedOnLink:(id)linkData {
+- (void)m80AttributedLabel:(M80AttributedLabel *)label clickedOnLink:(id)linkData {
     NSURL *url = nil;
     if ([linkData isKindOfClass:[NSURL class]]) {
         url = (NSURL *)linkData;
