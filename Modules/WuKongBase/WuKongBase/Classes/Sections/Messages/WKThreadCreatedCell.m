@@ -279,10 +279,21 @@
             });
         }
     }).catch(^(NSError *error) {
-        // 接口失败时降级直接打开，避免卡死
         dispatch_async(dispatch_get_main_queue(), ^{
-            WKChannel *channel = [WKChannel channelID:content.threadChannelId channelType:content.threadChannelType];
-            [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:channel];
+            // 服务端明确返回"已删除"时弹提示，不降级打开
+            NSString *errMsg = error.domain ?: @"";
+            if ([errMsg containsString:@"deleted"] || [errMsg containsString:@"已关闭"]) {
+                UIAlertController *alert = [UIAlertController
+                    alertControllerWithTitle:LLang(@"子区已关闭")
+                    message:LLang(@"该子区已被关闭，无法进入。")
+                    preferredStyle:UIAlertControllerStyleAlert];
+                [alert addAction:[UIAlertAction actionWithTitle:LLang(@"确定") style:UIAlertActionStyleDefault handler:nil]];
+                [[WKNavigationManager shared].topViewController presentViewController:alert animated:YES completion:nil];
+            } else {
+                // 其他网络错误降级直接打开
+                WKChannel *channel = [WKChannel channelID:content.threadChannelId channelType:content.threadChannelType];
+                [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:channel];
+            }
         });
     });
 }
