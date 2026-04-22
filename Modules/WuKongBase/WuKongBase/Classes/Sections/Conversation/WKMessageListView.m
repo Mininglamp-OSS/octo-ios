@@ -1408,10 +1408,16 @@
 }
 
 // 高度缓存：避免重复触发 Down 库 markdown 渲染
-static NSMutableDictionary<NSString*, NSNumber*> *_cellHeightCache;
-+(NSMutableDictionary<NSString*, NSNumber*>*) cellHeightCache {
+// 使用 NSCache 替代 NSMutableDictionary：
+//   1. countLimit=2000 防止跨会话无限积累（原方案无上限，活跃用户可达数万条）
+//   2. 系统内存压力时自动淘汰，无需手动清理
+//   3. NSCache 本身线程安全，无需外部加锁
+static NSCache<NSString*, NSNumber*> *_cellHeightCache;
++(NSCache<NSString*, NSNumber*>*) cellHeightCache {
     if (!_cellHeightCache) {
-        _cellHeightCache = [NSMutableDictionary dictionaryWithCapacity:5000];
+        _cellHeightCache = [[NSCache alloc] init];
+        _cellHeightCache.countLimit = 2000;
+        _cellHeightCache.name = @"WKMessageListViewCellHeightCache";
     }
     return _cellHeightCache;
 }
