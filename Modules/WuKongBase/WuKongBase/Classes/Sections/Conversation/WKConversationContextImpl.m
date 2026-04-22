@@ -700,11 +700,6 @@
     CGFloat visibleMidY   = (visibleTop + visibleBottom) / 2.0f;
     CGFloat cardY = visibleMidY - cardH / 2.0f;
     cardY = MAX(safeTop, MIN(cardY, safeBottom - cardH));
-    // 下方也放不下时，强制挤在气泡上方（允许部分超出）
-    CGFloat safeBottom = window.frame.size.height - [UIApplication sharedApplication].windows.firstObject.safeAreaInsets.bottom - 8;
-    if (cardY + cardH > safeBottom) {
-        cardY = safeBottom - cardH;
-    }
     card.frame = CGRectMake(cardX, cardY, cardW, cardH);
 
     [window addSubview:card];
