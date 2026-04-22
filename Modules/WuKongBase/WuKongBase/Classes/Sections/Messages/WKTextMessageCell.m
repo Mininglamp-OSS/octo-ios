@@ -22,14 +22,15 @@
 #import <WebKit/WebKit.h>
 #import <WuKongBase/WuKongBase-Swift.h>
 
-#define replyNameFontSize 13.0f
+#define replyNameFontSize    13.0f
+#define replyContentFontSize 13.0f
+#define replyAvatarSize      22.0f   // 头像从 16→22，更清晰
 
+#define splitWidth      3.0f    // 左侧彩色竖线宽度（原来是 0 且被隐藏）
+#define replyBoxPadH    8.0f    // 引用块水平内边距
+#define replyBoxPadV    6.0f    // 引用块垂直内边距
+#define replyItemSpacing 3.0f  // 头像/名称行 与 内容行之间的间距
 
-#define replyContentFontSize 14.0f
-
-#define replyAvatarSize 16.0f
-
-#define splitWidth 0.0f
 #define replyNameLeftSpace 10.0f
 
 #define textTopSpace 8.0f // 消息内容顶部距离
@@ -131,7 +132,11 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
         if([self isShowName:model]) {
             nameTopSpace = replyToNameSpace;
         }
-        size = CGSizeMake(MAX(MAX(messageTextSize.width, replyNameSize.width+replyNameLeftSpace+replyAvatarSize+splitWidth), replyContentSize.width) , messageTextSize.height + replyNameSize.height+replyContentSize.height+textTopSpace + nameTopSpace);
+        // 引用块高度 = 上下内边距 + max(头像,名字行) + 行间距 + 内容行
+        CGFloat replyRow1H = MAX(replyAvatarSize, replyNameSize.height);
+        CGFloat replyBoxH  = replyBoxPadV + replyRow1H + replyItemSpacing + replyContentSize.height + replyBoxPadV;
+        size = CGSizeMake(MAX(MAX(messageTextSize.width, replyNameSize.width + replyAvatarSize + 4.0f + splitWidth + replyBoxPadH * 2), replyContentSize.width + splitWidth + replyBoxPadH * 2),
+                          messageTextSize.height + replyBoxH + textTopSpace + nameTopSpace);
     }
 
 
@@ -1235,7 +1240,8 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     self.replyBox.hidden = YES;
     if([[self class] hasReply:model]) {
         self.replyBox.hidden = NO;
-        self.replyNameLbl.text = model.content.reply.fromName;
+        self.replyNameLbl.text = model.content.reply.fromName.length > 0
+            ? model.content.reply.fromName : LLang(@"未知用户");
         self.replyAvatarIcon.url = [WKAvatarUtil getAvatar:model.content.reply.fromUID];
         if(model.content.reply.revoke) {
             self.replyContentLbl.text = LLang(@"消息已被撤回");
@@ -1383,33 +1389,49 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
             replyContentSize.height = replyContentFontSize+1;
             replyContentSize.width = self.messageContentView.lim_width;
         }
-        self.replyNameLbl.lim_size = replyNameSize;
-        self.replyContentLbl.lim_size = replyContentSize;
-        
-        self.replyBox.lim_top = 0.0f;
-        if(!self.nameLbl.hidden) {
-            self.replyBox.lim_top = replyToNameSpace;
+        // 引用块：背景色随发送/接收方向调整
+        if (self.messageModel.isSend) {
+            self.replyBox.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.18f];
+        } else {
+            self.replyBox.backgroundColor = [UIColor colorWithRed:0.93f green:0.93f blue:0.95f alpha:1.0f];
         }
+
+        CGFloat replyRow1H = MAX(replyAvatarSize, replyNameSize.height);
+        CGFloat replyBoxH  = replyBoxPadV + replyRow1H + replyItemSpacing + replyContentSize.height + replyBoxPadV;
+
+        self.replyBox.lim_top = !self.nameLbl.hidden ? replyToNameSpace : 0.0f;
         self.replyBox.lim_width = self.messageContentView.lim_width;
-        self.replyBox.lim_height = replyNameSize.height + replyContentSize.height;
-        
+        self.replyBox.lim_height = replyBoxH;
+
+        // 左侧彩色竖线
         self.splitView.lim_left = 0.0f;
         self.splitView.lim_top = 0.0f;
-        self.splitView.lim_height = self.replyBox.lim_height;
         self.splitView.lim_width = splitWidth;
-        
-        self.replyAvatarIcon.lim_left = self.splitView.lim_right;
-        self.replyAvatarIcon.lim_top = self.splitView.lim_top;
-        self.replyAvatarIcon.lim_centerY_parent = self.replyNameLbl;
-        
-        self.replyNameLbl.lim_left = self.replyAvatarIcon.lim_right+4.0f;
-        self.replyNameLbl.lim_top = self.splitView.lim_top;
-        
-        
-        self.replyContentLbl.lim_top = self.replyNameLbl.lim_bottom+2.0f;
-        self.replyContentLbl.lim_left = self.replyAvatarIcon.lim_left;
-       
-        replyBoxBottom = self.replyBox.lim_bottom+textTopSpace;
+        self.splitView.lim_height = replyBoxH;
+
+        // 头像（22×22）
+        CGFloat contentLeft = splitWidth + replyBoxPadH;
+        self.replyAvatarIcon.lim_left = contentLeft;
+        self.replyAvatarIcon.lim_top = replyBoxPadV + (replyRow1H - replyAvatarSize) / 2.0f;
+        self.replyAvatarIcon.lim_width = replyAvatarSize;
+        self.replyAvatarIcon.lim_height = replyAvatarSize;
+
+        // 名字（右侧紧邻头像）
+        CGFloat nameLeft = contentLeft + replyAvatarSize + 4.0f;
+        CGFloat nameMaxW = self.replyBox.lim_width - nameLeft - replyBoxPadH;
+        self.replyNameLbl.lim_left = nameLeft;
+        self.replyNameLbl.lim_top  = replyBoxPadV + (replyRow1H - replyNameSize.height) / 2.0f;
+        self.replyNameLbl.lim_width  = MIN(replyNameSize.width, nameMaxW);
+        self.replyNameLbl.lim_height = replyNameSize.height;
+
+        // 内容（第二行，与头像左对齐）
+        CGFloat contentMaxW = self.replyBox.lim_width - contentLeft - replyBoxPadH;
+        self.replyContentLbl.lim_left  = contentLeft;
+        self.replyContentLbl.lim_top   = replyBoxPadV + replyRow1H + replyItemSpacing;
+        self.replyContentLbl.lim_width  = MIN(replyContentSize.width, contentMaxW);
+        self.replyContentLbl.lim_height = replyContentSize.height;
+
+        replyBoxBottom = self.replyBox.lim_bottom + textTopSpace;
     }
     
     self.textLbl.lim_left = 0.0f;
@@ -1553,6 +1575,8 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 - (UIView *)replyBox {
     if(!_replyBox) {
         _replyBox = [[UIView alloc] init];
+        _replyBox.layer.cornerRadius = 6.0f;
+        _replyBox.clipsToBounds = YES;
     }
     return _replyBox;
 }
@@ -1574,25 +1598,28 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 - (UIView *)splitView {
     if(!_splitView) {
         _splitView = [[UIView alloc] init];
-        [_splitView setHidden:YES];
         _splitView.backgroundColor = [WKApp shared].config.themeColor;
+        // 不再隐藏：作为左侧彩色竖线显示（原设计是 hidden=YES 且 width=0）
     }
     return _splitView;
 }
 
 - (UILabel *)replyNameLbl {
     if(!_replyNameLbl) {
-        _replyNameLbl = [[UILabel alloc] initWithFrame:CGRectMake(0.0f, 0.0f, [WKApp shared].config.messageContentMaxWidth - 20*2, 0.0f)];
-        _replyNameLbl.font = [[WKApp shared].config appFontOfSize:replyNameFontSize];
+        _replyNameLbl = [[UILabel alloc] init];
+        _replyNameLbl.font = [[WKApp shared].config appFontOfSizeMedium:replyNameFontSize];
+        _replyNameLbl.numberOfLines = 1;
+        _replyNameLbl.lineBreakMode = NSLineBreakByTruncatingTail;
     }
     return _replyNameLbl;
 }
 
 - (UILabel *)replyContentLbl {
     if(!_replyContentLbl) {
-        _replyContentLbl = [[UILabel alloc] initWithFrame:CGRectMake(0.0f, 0.0f, [WKApp shared].config.messageContentMaxWidth - 20*2, 0.0f)];
+        _replyContentLbl = [[UILabel alloc] init];
         _replyContentLbl.font = [[WKApp shared].config appFontOfSize:replyContentFontSize];
         _replyContentLbl.numberOfLines = 1;
+        _replyContentLbl.lineBreakMode = NSLineBreakByTruncatingTail;
         [_replyContentLbl setTextColor:[WKApp shared].config.messageTipColor];
     }
     return _replyContentLbl;
@@ -1618,11 +1645,19 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 
 
 +(CGSize) getReplyNameSize:(WKMessageModel *)message {
-    return [self getTextSize:message.content.reply.fromName?:@"" maxWidth:[WKApp shared].config.messageContentMaxWidth - 20*2 fontSize:replyNameFontSize];
+    // 可用宽度 = 最大宽度 - 竖线 - 左右内边距 - 头像 - 头像右间距
+    CGFloat maxW = [WKApp shared].config.messageContentMaxWidth
+        - splitWidth - replyBoxPadH - replyAvatarSize - 4.0f - replyBoxPadH;
+    NSString *name = message.content.reply.fromName;
+    if (!name.length) name = @"...";
+    return [self getTextSize:name maxWidth:maxW fontSize:replyNameFontSize];
 }
 
 +(CGSize) getReplyContentSize:(WKMessageModel *)message {
-    return [self getTextSize:[message.content.reply.content conversationDigest] maxWidth:[WKApp shared].config.messageContentMaxWidth - 20*2 fontSize:replyContentFontSize];
+    // 可用宽度 = 最大宽度 - 竖线 - 左右内边距
+    CGFloat maxW = [WKApp shared].config.messageContentMaxWidth
+        - splitWidth - replyBoxPadH * 2;
+    return [self getTextSize:[message.content.reply.content conversationDigest] maxWidth:maxW fontSize:replyContentFontSize];
 }
 
 +(CGFloat)getWidthWithText:(NSString*)text height:(CGFloat)height font:(CGFloat)font{
