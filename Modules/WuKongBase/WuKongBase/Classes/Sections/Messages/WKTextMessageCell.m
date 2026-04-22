@@ -2042,38 +2042,21 @@ static void *kScrollKVOCtx            = &kScrollKVOCtx;
     NSString *rawText = [[self class] getFullRawContent:self.messageModel];
     if (!rawText.length) return;
 
-    // ContextGesture 缩放在 onLongTap: 里已经重置，这里只做安全兜底
     self.transform = CGAffineTransformIdentity;
 
-    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
-
-    // textLbl 完整 frame（含屏幕外部分）
-    CGRect frameInWindow = [self.textLbl convertRect:self.textLbl.bounds toView:nil];
-    if (frameInWindow.size.width < 1) return;
-
-    // 可见区域（用于菜单定位，输入栏约 80pt）
-    CGFloat bottomMargin = 80.0f + window.safeAreaInsets.bottom;
-    CGRect visibleArea = CGRectMake(
-        0, window.safeAreaInsets.top,
-        window.frame.size.width,
-        window.frame.size.height - window.safeAreaInsets.top - bottomMargin
-    );
-    CGRect visibleFrame = CGRectIntersection(frameInWindow, visibleArea);
-    if (CGRectIsNull(visibleFrame) || visibleFrame.size.height < 4) return;
-
-    UIButton *dimBtn = [[UIButton alloc] initWithFrame:window.bounds];
-    dimBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.12f];
-    dimBtn.alpha = 0;
-    [window addSubview:dimBtn];
-    [dimBtn addTarget:self action:@selector(endInBubbleTextSelection) forControlEvents:UIControlEventTouchUpInside];
-
-    // 关键修复（参考 Android SelectTextHelper 直接操作原始 TextView）：
-    // UITextView 使用完整的 textLbl frame（含屏幕外部分），确保超链接+普通文字全部显示。
-    // 菜单位置单独用 visibleFrame 计算，避免跑到屏幕外。
-    WKSelectionOnlyTextView *tv = [[WKSelectionOnlyTextView alloc] initWithFrame:frameInWindow];
+    // ── 核心修复：UITextView 放入 messageContentView（与 textLbl 同级）──
+    // 原因：放 window 会导致：
+    //   1) dimBtn 拦截所有触摸，UITableView 无法滚动
+    //   2) scroll 时 UITextView 不跟着 bubble 移动，文字错位
+    //   3) 超出 bubble/cell 区域的文字无法被自然裁剪
+    // 放入 messageContentView 后，所有问题天然解决：
+    //   - scroll 事件穿透到 UITableView（UITextView scrollEnabled=NO，不消费 pan）
+    //   - UITextView 随 cell 一起移动，无需手动更新位置
+    //   - cell/bubble 的 clipsToBounds 自然裁剪多余区域
+    WKSelectionOnlyTextView *tv = [[WKSelectionOnlyTextView alloc] initWithFrame:self.textLbl.frame];
     tv.text = rawText;
     tv.font = self.textLbl.font;
-    tv.textColor = [WKApp shared].config.defaultTextColor; // 使用全局默认色，确保普通文字可见
+    tv.textColor = [WKApp shared].config.defaultTextColor;
     tv.backgroundColor = [UIColor clearColor];
     tv.editable = NO;
     tv.selectable = YES;
@@ -2081,18 +2064,29 @@ static void *kScrollKVOCtx            = &kScrollKVOCtx;
     tv.textContainerInset = UIEdgeInsetsZero;
     tv.textContainer.lineFragmentPadding = 0;
     tv.delegate    = self;
-    tv.selDelegate = self; // touch delegate
-
-    [window addSubview:tv];
+    tv.selDelegate = self;
+    [self.messageContentView addSubview:tv];
     self.textLbl.hidden = YES;
 
+    // 计算菜单定位用的可见区域（tv 在 window 中的 frame 与可见屏幕的交集）
+    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+    CGFloat bottomMargin = 80.0f + window.safeAreaInsets.bottom;
+    CGRect visibleArea = CGRectMake(0, window.safeAreaInsets.top, window.frame.size.width,
+                                    window.frame.size.height - window.safeAreaInsets.top - bottomMargin);
+    CGRect tvInWindow = [tv convertRect:tv.bounds toView:nil];
+    CGRect visibleFrame = CGRectIntersection(tvInWindow, visibleArea);
+    if (CGRectIsNull(visibleFrame) || visibleFrame.size.height < 4) {
+        self.textLbl.hidden = NO;
+        [tv removeFromSuperview];
+        return;
+    }
+
     objc_setAssociatedObject(self, &kSelectionTVKey,      tv,               OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, &kSelectionDimKey,     dimBtn,           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelectionMenusKey,   menuItems ?: @[], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelectionVisibleKey, [NSValue valueWithCGRect:visibleFrame],
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 参考 Android OnScrollChangedListener：监听父 UITableView 滚动，滚动时隐藏菜单
+    // KVO 监听父 UITableView 滚动（参考 Android OnScrollChangedListener）
     UIView *v = self.superview;
     while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
     if ([v isKindOfClass:[UITableView class]]) {
@@ -2102,34 +2096,28 @@ static void *kScrollKVOCtx            = &kScrollKVOCtx;
 
     [tv becomeFirstResponder];
     [tv selectAll:nil];
-    [UIView animateWithDuration:0.15 animations:^{ dimBtn.alpha = 1; }];
 }
 
 -(void) endInBubbleTextSelection {
-    // 移除滚动 KVO 监听
     UIView *tableView = objc_getAssociatedObject(self, &kScrollTableKey);
     if (tableView) {
         @try { [tableView removeObserver:self forKeyPath:@"contentOffset" context:kScrollKVOCtx]; } @catch (...) {}
         objc_setAssociatedObject(self, &kScrollTableKey, nil, OBJC_ASSOCIATION_ASSIGN);
     }
-    // 取消所有待执行 timer
     dispatch_block_t t1 = objc_getAssociatedObject(self, &kSelectionTimerKey);
     if (t1) { dispatch_block_cancel(t1); objc_setAssociatedObject(self, &kSelectionTimerKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC); }
     dispatch_block_t t2 = objc_getAssociatedObject(self, &kSelectionTouchTimer);
     if (t2) { dispatch_block_cancel(t2); objc_setAssociatedObject(self, &kSelectionTouchTimer, nil, OBJC_ASSOCIATION_COPY_NONATOMIC); }
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(wk_reshowAfterScroll) object:nil];
 
     [self wk_hideSelectionPopup];
 
-    UITextView *tv     = objc_getAssociatedObject(self, &kSelectionTVKey);
-    UIButton   *dimBtn = objc_getAssociatedObject(self, &kSelectionDimKey);
-    [UIView animateWithDuration:0.15 animations:^{ dimBtn.alpha = 0; } completion:^(BOOL f) {
-        [tv removeFromSuperview];
-        [dimBtn removeFromSuperview];
-        objc_setAssociatedObject(self, &kSelectionTVKey,    nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        objc_setAssociatedObject(self, &kSelectionDimKey,   nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        objc_setAssociatedObject(self, &kSelectionMenusKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        self.textLbl.hidden = NO;
-    }];
+    UITextView *tv = objc_getAssociatedObject(self, &kSelectionTVKey);
+    [tv removeFromSuperview];
+    objc_setAssociatedObject(self, &kSelectionTVKey,      nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionMenusKey,   nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionVisibleKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    self.textLbl.hidden = NO;
 }
 
 #pragma mark - UITextViewDelegate（选区变化 → 动态切换菜单）
@@ -2195,21 +2183,19 @@ static void *kScrollKVOCtx            = &kScrollKVOCtx;
     UITextView *tv = objc_getAssociatedObject(self, &kSelectionTVKey);
     if (!tv) return;
 
-    // 隐藏菜单（滚动中）
     [self wk_hideSelectionPopup];
 
-    // 检查选区是否已完全离开屏幕 → 取消选择（Android reset()）
+    // UITextView 已在 messageContentView 中，随 cell 移动，这里重新计算当前可见区域
     UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
-    CGRect frameInWindow = tv.frame;
     CGFloat bottomMargin = 80.0f + window.safeAreaInsets.bottom;
     CGRect visibleArea = CGRectMake(0, window.safeAreaInsets.top, window.frame.size.width,
                                     window.frame.size.height - window.safeAreaInsets.top - bottomMargin);
-    CGRect intersection = CGRectIntersection(frameInWindow, visibleArea);
+    CGRect tvInWindow = [tv convertRect:tv.bounds toView:nil]; // 每次滚动后重新转换
+    CGRect intersection = CGRectIntersection(tvInWindow, visibleArea);
     if (CGRectIsNull(intersection) || intersection.size.height < 4) {
         [self endInBubbleTextSelection];
         return;
     }
-    // 更新可见区域缓存
     objc_setAssociatedObject(self, &kSelectionVisibleKey, [NSValue valueWithCGRect:intersection],
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
