@@ -1762,6 +1762,16 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 
 #pragma mark -- WKNavigationDelegate & UIScrollViewDelegate (表格滑动)
 
+-(void) webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    NSURL *url = navigationAction.request.URL;
+    if (navigationAction.navigationType == WKNavigationTypeLinkActivated && url) {
+        [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+        decisionHandler(WKNavigationActionPolicyCancel);
+        return;
+    }
+    decisionHandler(WKNavigationActionPolicyAllow);
+}
+
 -(void) webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     // 找到对应的 overlay，设置 contentSize
     NSUInteger idx = [self.tableWebViews indexOfObject:webView];

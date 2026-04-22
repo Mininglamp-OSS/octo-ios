@@ -174,6 +174,35 @@ import Down
         return trimmed.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
+    /// 将 cell 内容里的 Markdown 行内链接 [text](url) 转成 <a> 标签，其余部分 HTML 转义
+    private static func renderInlineCellContent(_ text: String) -> String {
+        let nsText = text as NSString
+        guard let regex = try? NSRegularExpression(pattern: #"\[([^\]]+)\]\(([^)]+)\)"#) else {
+            return escapeHTML(text)
+        }
+        let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+        guard !matches.isEmpty else { return escapeHTML(text) }
+
+        var result = ""
+        var lastEnd = 0
+        for match in matches {
+            // 链接前的普通文本
+            let preLen = match.range.location - lastEnd
+            if preLen > 0 {
+                result += escapeHTML(nsText.substring(with: NSRange(location: lastEnd, length: preLen)))
+            }
+            // [linkText](url) → <a href="url">linkText</a>
+            let linkText = escapeHTML(nsText.substring(with: match.range(at: 1)))
+            let url     = escapeHTML(nsText.substring(with: match.range(at: 2)))
+            result += "<a href=\"\(url)\">\(linkText)</a>"
+            lastEnd = match.range.location + match.range.length
+        }
+        if lastEnd < nsText.length {
+            result += escapeHTML(nsText.substring(from: lastEnd))
+        }
+        return result
+    }
+
     private static func convertTableToHTML(_ lines: [String]) -> String {
         guard lines.count >= 2 else { return lines.joined(separator: "\n") }
 
@@ -190,7 +219,8 @@ import Down
 
             html += "<tr>"
             for cell in cells {
-                html += "<\(tag)>\(escapeHTML(cell))</\(tag)>"
+                // 解析 cell 内 Markdown 行内链接，不能直接 escapeHTML 整个 cell
+                html += "<\(tag)>\(renderInlineCellContent(cell))</\(tag)>"
             }
             html += "</tr>"
         }
