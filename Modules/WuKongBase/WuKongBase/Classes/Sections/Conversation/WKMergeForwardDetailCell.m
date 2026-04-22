@@ -379,7 +379,7 @@ static const CGFloat kMFTableExtraPadding = 10.0f;
 static const CGFloat kMFTableTopSpace = 8.0f;
 static const CGFloat kMFTableToolbarHeight = 36.0f;
 
-@interface WKMergeForwardDetailTextCell () <WKNavigationDelegate, UIScrollViewDelegate>
+@interface WKMergeForwardDetailTextCell () <WKNavigationDelegate, UIScrollViewDelegate, M80AttributedLabelDelegate>
 
 @property(nonatomic,strong) M80AttributedLabel *textLbl;
 @property(nonatomic,strong) UILabel *markdownLbl;
@@ -449,7 +449,24 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
     sv.bounces = NO;
     sv.directionalLockEnabled = YES;
     sv.delegate = self;
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTableLinkTap:)];
+    [sv addGestureRecognizer:tap];
     return sv;
+}
+
+- (void)handleTableLinkTap:(UITapGestureRecognizer *)gr {
+    NSInteger idx = [self.tableOverlays indexOfObject:gr.view];
+    if (idx == NSNotFound || idx >= (NSInteger)self.tableWebViews.count) return;
+    WKWebView *wv = self.tableWebViews[idx];
+    CGPoint pt = [gr locationInView:gr.view];
+    NSString *js = [NSString stringWithFormat:
+        @"(function(){"
+        @"var el=document.elementFromPoint(%f,%f);"
+        @"if(!el)return;"
+        @"var a=el.tagName==='A'?el:(el.closest?el.closest('a'):null);"
+        @"if(a&&a.href)window.location.href=a.href;"
+        @"})()", pt.x, pt.y];
+    [wv evaluateJavaScript:js completionHandler:nil];
 }
 
 - (UIView *)createTableToolbar:(NSInteger)tableIndex {
@@ -648,7 +665,18 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
     }
 }
 
-#pragma mark - WKNavigationDelegate (WebView 加载完成后同步 contentSize 到遮罩层)
+#pragma mark - WKNavigationDelegate
+
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    NSURL *url = navigationAction.request.URL;
+    NSString *scheme = url.scheme.lowercaseString;
+    if (url && ([scheme isEqualToString:@"https"] || [scheme isEqualToString:@"http"])) {
+        [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+        decisionHandler(WKNavigationActionPolicyCancel);
+        return;
+    }
+    decisionHandler(WKNavigationActionPolicyAllow);
+}
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     NSUInteger idx = [self.tableWebViews indexOfObject:webView];
@@ -673,12 +701,26 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
     }
 }
 
+#pragma mark - M80AttributedLabelDelegate
+
+- (void)attributedLabel:(M80AttributedLabel *)attributedLabel clickedOnLink:(id)linkData {
+    NSURL *url = nil;
+    if ([linkData isKindOfClass:[NSURL class]]) {
+        url = (NSURL *)linkData;
+    } else if ([linkData isKindOfClass:[NSString class]]) {
+        url = [NSURL URLWithString:(NSString *)linkData];
+    }
+    if (url && ([@[@"http", @"https"] containsObject:url.scheme.lowercaseString])) {
+        [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+    }
+}
+
 
 - (M80AttributedLabel *)textLbl {
     if(!_textLbl) {
         _textLbl = [[M80AttributedLabel alloc] init];
         _textLbl.underLineForLink = false;
-//        _textLbl.delegate = self;
+        _textLbl.delegate = self;
         [_textLbl setFont:[UIFont systemFontOfSize:[WKApp shared].config.messageTextFontSize]];
         [_textLbl setBackgroundColor:[UIColor clearColor]];
         [_textLbl setTextColor:[WKApp shared].config.defaultTextColor];
