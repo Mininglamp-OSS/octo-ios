@@ -2080,7 +2080,6 @@ static void *kScrollKVOCtx            = &kScrollKVOCtx;
     tv.scrollEnabled = NO;
     tv.textContainerInset = UIEdgeInsetsZero;
     tv.textContainer.lineFragmentPadding = 0;
-    tv.textInputDelegate = nil;
     tv.delegate    = self;
     tv.selDelegate = self; // touch delegate
 
