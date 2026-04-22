@@ -467,6 +467,7 @@ static NSMutableDictionary *flameNodeCacheDict;
             }
         }
     }
+    BOOL badgeWasHidden = self.botBadgeLbl.hidden;
     self.botBadgeLbl.hidden = !isBot || self.nameLbl.hidden;
     if (!self.botBadgeLbl.hidden) {
         [self.botBadgeLbl sizeToFit];
@@ -475,8 +476,12 @@ static NSMutableDictionary *flameNodeCacheDict;
         badgeFrame.size.height += 4.0f;
         self.botBadgeLbl.frame = badgeFrame;
     }
-    // channel info 异步加载后会再次调用 refreshModel:，触发 layoutSubviews 重新定位
-    [self setNeedsLayout];
+    // 仅在 badge 显隐状态真正改变时触发 layout（channel info 异步加载场景）
+    // 无条件 setNeedsLayout 会经 layoutMainContextSourceNode→AsyncDisplayKit→takeView
+    // 形成无限回调循环，导致长按菜单卡死
+    if (badgeWasHidden != self.botBadgeLbl.hidden) {
+        [self setNeedsLayout];
+    }
 
     if(model.isSend) {
         NSString *myUid = [WKApp shared].loginInfo.uid;
