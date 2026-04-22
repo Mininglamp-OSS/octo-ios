@@ -6,6 +6,7 @@
 //
 
 #import "WKConversationContextImpl.h"
+#import <objc/runtime.h>
 #import "WKUserHandleVC.h"
 #import "WKMentionUserCell.h"
 #import "WKInputMentionCache.h"
@@ -548,16 +549,11 @@
 }
 
 -(void) longPressMessageCell:(WKMessageCell*)messageCell gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer{
-//    if (self.messageActionsVCIsShow) {
-//         return;
-//     }
-//    return;
-    
     __weak typeof(self) weakSelf = self;
     [self endEditing];
 
     WKMessageModel *contextMessage = messageCell.messageModel;
-    
+
     NSArray<WKMessageLongMenusItem*> *toolbarMenus;
     if(contextMessage.content.flame) {
         WKMessageLongMenusItem *revokeToolbarMenus = [[WKApp shared] invoke:WKPOINT_LONGMENUS_REVOKE param:@{@"message":contextMessage}];
@@ -567,13 +563,27 @@
     }else{
         toolbarMenus = [[WKApp shared] invokes:WKPOINT_CATEGORY_MESSAGE_LONGMENUS param:@{@"message":contextMessage}];
     }
-    
+
+    // 文本消息额外增加「选择文字」项，支持选取部分文字复制
+    if (contextMessage.contentType == WK_TEXT) {
+        WKMessageLongMenusItem *selectItem = [[WKMessageLongMenusItem alloc] init];
+        selectItem.title = LLang(@"选择文字");
+        if (@available(iOS 13.0, *)) {
+            selectItem.icon = [UIImage systemImageNamed:@"text.cursor"];
+        }
+        __weak typeof(messageCell) weakCell = messageCell;
+        selectItem.onTap = ^(id<WKConversationContext> ctx) {
+            [weakSelf showTextSelectionForMessage:contextMessage fromCell:weakCell];
+        };
+        NSMutableArray *mutable = [NSMutableArray arrayWithArray:toolbarMenus ?: @[]];
+        [mutable addObject:selectItem];
+        toolbarMenus = [mutable copy];
+    }
+
+    __weak typeof(messageCell) weakCell = messageCell;
     WKMessageContextController *messageContextController = [[WKMessageContextController alloc] initWithMessage:messageCell.messageModel context:self menusItems:toolbarMenus gesture:(ContextGesture*)gestureRecognizer];
     messageContextController.onDismissed = ^{
-//        if(weakSelf.conversationView.keepKeyboard) {
-//            weakSelf.conversationView.keepKeyboard = false;
-//            [self.conversationView.input becomeFirstResponder];
-//        }
+        [weakCell hideLongPressHighlight];
     };
     __weak typeof(messageContextController) weakController = messageContextController;
     messageContextController.reactionSelected = ^(WKReactionContextItem * item, BOOL isLarge) {
@@ -583,6 +593,78 @@
     };
     [messageContextController setup];
     [messageContextController show];
+}
+
+/// 弹出文字选择界面，支持选取部分文字复制
+-(void) showTextSelectionForMessage:(WKMessageModel *)model fromCell:(WKMessageCell *)cell {
+    WKTextContent *textContent = nil;
+    if ([model.content isKindOfClass:[WKTextContent class]]) {
+        textContent = (WKTextContent *)model.content;
+    }
+    NSString *rawText = textContent.content;
+    if (!rawText.length) return;
+
+    UIViewController *topVC = [WKNavigationManager shared].topViewController;
+
+    // 背景遮罩
+    UIView *dimView = [[UIView alloc] initWithFrame:topVC.view.bounds];
+    dimView.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35f];
+    dimView.alpha = 0;
+
+    // 文字选择容器
+    CGFloat padding = 16.0f;
+    CGFloat maxW = topVC.view.bounds.size.width - padding * 2;
+    UITextView *tv = [[UITextView alloc] init];
+    tv.text = rawText;
+    tv.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+    tv.textColor = [WKApp shared].config.defaultTextColor;
+    tv.backgroundColor = [WKApp shared].config.cellBackgroundColor;
+    tv.layer.cornerRadius = 12.0f;
+    tv.clipsToBounds = YES;
+    tv.editable = NO;
+    tv.selectable = YES;
+    tv.scrollEnabled = YES;
+    tv.contentInset = UIEdgeInsetsMake(8, 8, 8, 8);
+    tv.textContainerInset = UIEdgeInsetsMake(12, 12, 12, 12);
+    CGFloat tvMaxH = topVC.view.bounds.size.height * 0.5f;
+    CGFloat tvH = MIN([tv sizeThatFits:CGSizeMake(maxW, CGFLOAT_MAX)].height + 24.0f, tvMaxH);
+    tv.frame = CGRectMake(padding, topVC.view.bounds.size.height - tvH - 60.0f, maxW, tvH);
+
+    // 「完成」按钮
+    UIButton *doneBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [doneBtn setTitle:LLang(@"完成") forState:UIControlStateNormal];
+    doneBtn.titleLabel.font = [[WKApp shared].config appFontOfSizeMedium:16.0f];
+    doneBtn.backgroundColor = [WKApp shared].config.themeColor;
+    [doneBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    doneBtn.layer.cornerRadius = 10.0f;
+    doneBtn.clipsToBounds = YES;
+    doneBtn.frame = CGRectMake(padding, tv.frame.origin.y + tv.frame.size.height + 10.0f, maxW, 44.0f);
+
+    [dimView addSubview:tv];
+    [dimView addSubview:doneBtn];
+    [topVC.view addSubview:dimView];
+
+    void(^dismiss)(void) = ^{
+        [UIView animateWithDuration:0.2 animations:^{ dimView.alpha = 0; } completion:^(BOOL f) { [dimView removeFromSuperview]; }];
+    };
+    objc_setAssociatedObject(doneBtn, "dismissBlock", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    [doneBtn addTarget:self action:@selector(onTextSelectionDone:) forControlEvents:UIControlEventTouchUpInside];
+    UITapGestureRecognizer *bgTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTextSelectionBgTap:)];
+    objc_setAssociatedObject(bgTap, "dismissBlock", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    [dimView addGestureRecognizer:bgTap];
+
+    [UIView animateWithDuration:0.2 animations:^{ dimView.alpha = 1; }];
+    [tv selectAll:nil]; // 默认全选，用户可拖动调整范围
+}
+
+-(void) onTextSelectionDone:(UIButton *)btn {
+    void(^dismiss)(void) = objc_getAssociatedObject(btn, "dismissBlock");
+    if (dismiss) dismiss();
+}
+
+-(void) onTextSelectionBgTap:(UITapGestureRecognizer *)gr {
+    void(^dismiss)(void) = objc_getAssociatedObject(gr, "dismissBlock");
+    if (dismiss) dismiss();
 }
 
 -(void) addMentionUserHandleVCIfNeed {

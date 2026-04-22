@@ -381,8 +381,33 @@ static NSMutableDictionary *flameNodeCacheDict;
     if(self.messageModel.contentType == WK_TYPING) {
         return;
     }
+    [self showLongPressHighlight];
     [self.conversationContext longPressMessageCell:self gestureRecognizer:gestureRecognizer];
-    
+}
+
+-(void) showLongPressHighlight {
+    const NSInteger kHighlightTag = 0x4C505348; // 'LPSH'
+    if ([self.bubbleBackgroundView viewWithTag:kHighlightTag]) return;
+    UIView *overlay = [[UIView alloc] initWithFrame:self.bubbleBackgroundView.bounds];
+    overlay.tag = kHighlightTag;
+    overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.10f];
+    overlay.layer.cornerRadius = self.bubbleBackgroundView.layer.cornerRadius;
+    overlay.clipsToBounds = YES;
+    overlay.userInteractionEnabled = NO;
+    overlay.alpha = 0;
+    [self.bubbleBackgroundView addSubview:overlay];
+    [UIView animateWithDuration:0.15 animations:^{ overlay.alpha = 1; }];
+}
+
+-(void) hideLongPressHighlight {
+    const NSInteger kHighlightTag = 0x4C505348;
+    UIView *overlay = [self.bubbleBackgroundView viewWithTag:kHighlightTag];
+    if (!overlay) return;
+    [UIView animateWithDuration:0.25 animations:^{
+        overlay.alpha = 0;
+    } completion:^(BOOL finished) {
+        [overlay removeFromSuperview];
+    }];
 }
 
 

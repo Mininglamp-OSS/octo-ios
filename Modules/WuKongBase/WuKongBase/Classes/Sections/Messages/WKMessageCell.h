@@ -152,6 +152,11 @@ typedef enum :NSUInteger {
 /// 长按上下文手势是否应该在该点开始（子类可重写以排除特定区域）
 -(BOOL) shouldBeginContextGestureAtPoint:(CGPoint)point;
 
+/// 长按时高亮气泡（叠加半透明遮罩层）
+-(void) showLongPressHighlight;
+/// 取消气泡高亮（淡出遮罩层）
+-(void) hideLongPressHighlight;
+
 
 
 @end
