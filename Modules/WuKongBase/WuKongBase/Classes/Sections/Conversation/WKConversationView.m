@@ -304,8 +304,9 @@
 }
 
 
-// 用户截屏
+// 用户截屏：抑制本次 scrollToBottom，不打断用户阅读位置
 -(void) userDidTakeScreenshot {
+    [self.messageListView suppressScrollOnce];
     [self.conversationContext sendMessage:WKScreenshotContent.new];
 }
 

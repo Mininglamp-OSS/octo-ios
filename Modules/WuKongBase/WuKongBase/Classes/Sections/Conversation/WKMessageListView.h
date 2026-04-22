@@ -46,6 +46,8 @@ NS_ASSUME_NONNULL_BEGIN
 // --------------------------------- 共享属性 ---------------------------------
 
 @property(nonatomic,assign) BOOL positionAtBottom; // 当前滑动位置是否在最底部
+@property(nonatomic,assign) BOOL suppressNextScrollToBottom; // 抑制下一次 scrollToBottom
+-(void) suppressScrollOnce; // 截屏等场景调用，下一次 scrollToBottom 被跳过
 
 @property(nonatomic,assign) BOOL scrolling; // 消息列表是否正在滚动
 

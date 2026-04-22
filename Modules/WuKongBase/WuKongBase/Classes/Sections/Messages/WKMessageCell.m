@@ -381,6 +381,9 @@ static NSMutableDictionary *flameNodeCacheDict;
     if(self.messageModel.contentType == WK_TYPING) {
         return;
     }
+    // Fix4: 立刻重置 ContextGesture 的缩放动画，只保留颜色高亮
+    self.transform = CGAffineTransformIdentity;
+    self.contentView.transform = CGAffineTransformIdentity;
     [self showLongPressHighlight];
     [self.conversationContext longPressMessageCell:self gestureRecognizer:gestureRecognizer];
 }

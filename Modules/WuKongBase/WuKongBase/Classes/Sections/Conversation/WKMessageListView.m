@@ -323,9 +323,16 @@
   
 }
 
+- (void)suppressScrollOnce {
+    self.suppressNextScrollToBottom = YES;
+}
+
 - (void)scrollToBottom:(BOOL)animation {
-   
-    if(self.tableView.contentSize.height<= [self visiableTableHeight]) { // 如果内容高度小于或等于table的可示区域则不滚动
+    if (self.suppressNextScrollToBottom) {
+        self.suppressNextScrollToBottom = NO;
+        return;
+    }
+    if(self.tableView.contentSize.height<= [self visiableTableHeight]) {
         return;
     }
     CGFloat adjustOffset = 0.01f; // TODO: 这里默认需要给个0.01f不能给0 要不然滚动条距离顶部有距离，这个不清楚原因
@@ -1273,15 +1280,11 @@
             }
         }
 
-        // 截屏通知消息不触发滚底（用户截屏时不应打断当前阅读位置）
-        BOOL isScreenshot = (message.contentType == WK_SCREENSHOT);
-        if (!isScreenshot) {
-            if(self.positionAtBottom) {
+        if(self.positionAtBottom) {
+            [self scrollToBottom:YES];
+        }else{
+            if( [message isSend]) {
                 [self scrollToBottom:YES];
-            }else{
-                if( [message isSend]) {
-                    [self scrollToBottom:YES];
-                }
             }
         }
     }

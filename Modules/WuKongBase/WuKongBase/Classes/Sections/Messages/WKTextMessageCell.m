@@ -2017,20 +2017,26 @@ static const char kSelectionTimerKey = 3;
     NSString *rawText = [[self class] getFullRawContent:self.messageModel];
     if (!rawText.length) return;
 
-    // 以 textLbl 为基准定位，但宽度取消息内容区宽度保证准确
+    // Fix4: 立刻重置 ContextGesture 带来的缩放动画（不允许气泡缩放）
+    [UIView animateWithDuration:0.1 animations:^{
+        self.transform = CGAffineTransformIdentity;
+        self.contentView.transform = CGAffineTransformIdentity;
+    }];
+
     CGRect frameInWindow = [self.textLbl convertRect:self.textLbl.bounds toView:nil];
     if (frameInWindow.size.width < 1) return;
 
+    // Fix3: 不扩展高度，严格使用 textLbl 的实际 frame 避免溢出气泡
+    // (textLbl 本身已是正确高度；sizeThatFits: 因字体细微差异会过高)
+
     UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
 
-    // 半透明遮罩
     UIButton *dimBtn = [[UIButton alloc] initWithFrame:window.bounds];
-    dimBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.15f];
+    dimBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.12f];
     dimBtn.alpha = 0;
     [window addSubview:dimBtn];
     [dimBtn addTarget:self action:@selector(endInBubbleTextSelection) forControlEvents:UIControlEventTouchUpInside];
 
-    // 子类 UITextView（屏蔽系统菜单），透明叠加在气泡文字区域
     WKSelectionOnlyTextView *tv = [[WKSelectionOnlyTextView alloc] initWithFrame:frameInWindow];
     tv.text = rawText;
     tv.font = self.textLbl.font;
@@ -2043,28 +2049,22 @@ static const char kSelectionTimerKey = 3;
     tv.textContainer.lineFragmentPadding = 0;
     tv.delegate = self;
 
-    // Fix 4: 动态撑高，确保含超链接/多行文本时内容完整显示
-    CGFloat neededH = [tv sizeThatFits:CGSizeMake(frameInWindow.size.width, CGFLOAT_MAX)].height;
-    if (neededH > frameInWindow.size.height) {
-        tv.frame = CGRectMake(frameInWindow.origin.x, frameInWindow.origin.y,
-                              frameInWindow.size.width, neededH);
-    }
-
     [window addSubview:tv];
     self.textLbl.hidden = YES;
 
-    objc_setAssociatedObject(self, &kSelectionTVKey,    tv,             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, &kSelectionDimKey,   dimBtn,         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionTVKey,    tv,               OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionDimKey,   dimBtn,           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelectionMenusKey, menuItems ?: @[], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     [tv becomeFirstResponder];
     [tv selectAll:nil];
-    [UIView animateWithDuration:0.18 animations:^{ dimBtn.alpha = 1; }];
+    [UIView animateWithDuration:0.15 animations:^{ dimBtn.alpha = 1; }];
 }
 
 -(void) endInBubbleTextSelection {
     [self wk_cancelSelectionDebounce];
     [self wk_hideSelectionPopup];
+    [self hideLongPressHighlight]; // Fix3: 清除气泡高亮遮罩
 
     UITextView *tv     = objc_getAssociatedObject(self, &kSelectionTVKey);
     UIButton   *dimBtn = objc_getAssociatedObject(self, &kSelectionDimKey);
@@ -2191,72 +2191,65 @@ static const NSInteger kSelectionPopupTag = 0x574B5350; // 'WKSP'
 
     if (!btns.count) return;
 
-    // --- 渲染：可横向滚动的深色卡片 ---
-    CGFloat btnH = 36.0f, padH = 16.0f;
-    UIFont *btnFont = [UIFont systemFontOfSize:14.0f weight:UIFontWeightRegular];
+    // Fix2: 白色竖向卡片，与主菜单（showInlineMenuForCell:）风格一致
+    CGFloat itemH  = 48.0f;
+    CGFloat cardW  = 200.0f;
+    CGFloat cornerR = 12.0f;
+    UIFont *itemFont = [UIFont systemFontOfSize:16.0f];
 
-    // 外层容器（圆角 + 阴影）
     UIView *card = [[UIView alloc] init];
     card.tag = kSelectionPopupTag;
-    card.layer.cornerRadius = 8.0f;
+    card.layer.cornerRadius = cornerR;
     card.clipsToBounds = NO;
     card.layer.shadowColor  = [UIColor blackColor].CGColor;
-    card.layer.shadowOpacity = 0.25f;
-    card.layer.shadowRadius  = 6.0f;
-    card.layer.shadowOffset  = CGSizeMake(0, 2);
+    card.layer.shadowOpacity = 0.18f;
+    card.layer.shadowRadius  = 10.0f;
+    card.layer.shadowOffset  = CGSizeMake(0, 3);
 
-    // 内层 clipView（让圆角剪掉按钮高亮溢出）
-    UIView *clipView = [[UIView alloc] init];
-    clipView.backgroundColor = [UIColor colorWithRed:0.10 green:0.10 blue:0.10 alpha:0.92f];
-    clipView.layer.cornerRadius = 8.0f;
+    UIView *clipView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardW, itemH * btns.count)];
+    clipView.layer.cornerRadius = cornerR;
     clipView.clipsToBounds = YES;
+    clipView.backgroundColor = [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1.0];
     [card addSubview:clipView];
 
-    // 横向可滚动内容层
-    UIScrollView *scrollView = [[UIScrollView alloc] init];
-    scrollView.showsHorizontalScrollIndicator = NO;
-    scrollView.showsVerticalScrollIndicator   = NO;
-    scrollView.bounces = YES;
-    [clipView addSubview:scrollView];
-
-    CGFloat x = 0;
+    UIColor *sepColor = [UIColor colorWithWhite:0.80 alpha:1.0];
     for (NSInteger i = 0; i < (NSInteger)btns.count; i++) {
         NSDictionary *info = btns[i];
         NSString *title = info[@"title"];
         void(^action)(void) = info[@"action"];
-        CGFloat w = ceil([title sizeWithAttributes:@{NSFontAttributeName:btnFont}].width) + padH * 2;
 
-        UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
-        btn.frame = CGRectMake(x, 0, w, btnH);
-        [btn setTitle:title forState:UIControlStateNormal];
-        [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        btn.titleLabel.font = btnFont;
-        [btn setBackgroundImage:[self wk_imageWithColor:[UIColor colorWithWhite:1 alpha:0.15f]] forState:UIControlStateHighlighted];
+        UIButton *btn = [[UIButton alloc] initWithFrame:CGRectMake(0, i * itemH, cardW, itemH)];
+        btn.backgroundColor = [UIColor clearColor];
+        [btn setBackgroundImage:[self wk_imageWithColor:[UIColor colorWithWhite:0.88 alpha:1.0]] forState:UIControlStateHighlighted];
+        UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, cardW - 32, itemH)];
+        lbl.text  = title;
+        lbl.font  = itemFont;
+        lbl.textColor = [WKApp shared].config.defaultTextColor;
+        [btn addSubview:lbl];
         objc_setAssociatedObject(btn, "tapBlock", action, OBJC_ASSOCIATION_COPY_NONATOMIC);
         [btn addTarget:self action:@selector(wk_selectionMenuItemTapped:) forControlEvents:UIControlEventTouchUpInside];
-        [scrollView addSubview:btn];
+        [clipView addSubview:btn];
 
         if (i < (NSInteger)btns.count - 1) {
-            UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(x + w - 0.5f, 8, 0.5f, btnH - 16)];
-            sep.backgroundColor = [UIColor colorWithWhite:1 alpha:0.2f];
-            [scrollView addSubview:sep];
+            UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(16, (i+1)*itemH - 0.5f, cardW - 16, 0.5f)];
+            sep.backgroundColor = sepColor;
+            [clipView addSubview:sep];
         }
-        x += w;
     }
-    scrollView.contentSize = CGSizeMake(x, btnH);
 
-    // --- 定位：最大宽度 = 屏幕宽 - 32，超出则可滚动 ---
+    CGFloat cardH = itemH * btns.count;
+    card.frame     = CGRectMake(0, 0, cardW, cardH);
+    clipView.frame = CGRectMake(0, 0, cardW, cardH);
+
+    // Fix5: 定位在选区附近（上方优先）
     CGRect selRect = [self wk_selectionRectInWindowForTextView:tv];
-    CGFloat maxCardW = window.frame.size.width - 32.0f;
-    CGFloat cardW    = MIN(x, maxCardW);
-    CGFloat cardX    = CGRectGetMidX(selRect) - cardW / 2.0f;
-    cardX = MAX(16, MIN(cardX, window.frame.size.width - cardW - 16));
-    CGFloat cardY = selRect.origin.y - btnH - 10.0f;
-    if (cardY < 60) cardY = selRect.origin.y + selRect.size.height + 10.0f;
-
-    card.frame     = CGRectMake(cardX, cardY, cardW, btnH);
-    clipView.frame = CGRectMake(0, 0, cardW, btnH);
-    scrollView.frame = CGRectMake(0, 0, cardW, btnH);
+    CGFloat safeTop = window.safeAreaInsets.top + 8;
+    CGFloat cardX = CGRectGetMidX(selRect) - cardW / 2.0f;
+    cardX = MAX(8, MIN(cardX, window.frame.size.width - cardW - 8));
+    CGFloat cardY = selRect.origin.y - cardH - 10.0f;
+    if (cardY < safeTop) cardY = selRect.origin.y + selRect.size.height + 10.0f;
+    card.frame = CGRectMake(cardX, cardY, cardW, cardH);
+    clipView.frame = CGRectMake(0, 0, cardW, cardH);
 
     UIButton *dimBtn = objc_getAssociatedObject(self, &kSelectionDimKey);
     [window insertSubview:card aboveSubview:dimBtn ?: tv];

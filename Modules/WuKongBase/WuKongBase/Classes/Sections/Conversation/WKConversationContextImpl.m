@@ -564,6 +564,8 @@
         toolbarMenus = [[WKApp shared] invokes:WKPOINT_CATEGORY_MESSAGE_LONGMENUS param:@{@"message":contextMessage}];
     }
 
+    // Fix5: 获取手指触摸的 window 坐标，用于精准定位菜单
+    CGPoint touchInWindow = [gestureRecognizer locationInView:nil];
     __weak typeof(messageCell) weakCell = messageCell;
 
     // 文本消息：长按直接进入全选模式，菜单在选区上方显示，无需单独「选择文字」按钮
@@ -573,13 +575,19 @@
         return;
     }
 
-    // 非文本消息：显示常规内联菜单
-    [self showInlineMenuForCell:messageCell menuItems:toolbarMenus];
+    // 非文本消息：显示常规内联菜单（定位在手指位置附近）
+    [self showInlineMenuForCell:messageCell menuItems:toolbarMenus atTouchPoint:touchInWindow];
 }
 
 // ─── 自定义气泡内联菜单（替代 Telegram ContextController，避免黑屏） ───
 
 -(void) showInlineMenuForCell:(WKMessageCell*)cell menuItems:(NSArray<WKMessageLongMenusItem*>*)items {
+    CGPoint touch = [cell.bubbleBackgroundView convertRect:cell.bubbleBackgroundView.bounds toView:nil].origin;
+    touch.y += cell.bubbleBackgroundView.bounds.size.height / 2.0f;
+    [self showInlineMenuForCell:cell menuItems:items atTouchPoint:touch];
+}
+
+-(void) showInlineMenuForCell:(WKMessageCell*)cell menuItems:(NSArray<WKMessageLongMenusItem*>*)items atTouchPoint:(CGPoint)touchInWindow {
     if (!items.count) return;
 
     UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
@@ -677,13 +685,13 @@
     card.frame = CGRectMake(0, 0, cardW, cardH);
     clipView.frame = CGRectMake(0, 0, cardW, cardH);
 
-    // ── 定位：优先气泡上方，不够时放下方；水平居中于气泡，超出屏幕则夹拢
-    CGFloat safeTop = [UIApplication sharedApplication].windows.firstObject.safeAreaInsets.top + 8;
-    CGFloat cardX = CGRectGetMidX(bubbleRect) - cardW / 2.0f;
+    // Fix5: 以手指位置为锚点定位菜单（上方优先，不够时放下方）
+    CGFloat safeTop = window.safeAreaInsets.top + 8;
+    CGFloat cardX = touchInWindow.x - cardW / 2.0f;
     cardX = MAX(8, MIN(cardX, window.frame.size.width - cardW - 8));
-    CGFloat cardY = bubbleRect.origin.y - cardH - 10.0f;
+    CGFloat cardY = touchInWindow.y - cardH - 12.0f;
     if (cardY < safeTop) {
-        cardY = bubbleRect.origin.y + bubbleRect.size.height + 10.0f;
+        cardY = touchInWindow.y + 12.0f;
     }
     // 下方也放不下时，强制挤在气泡上方（允许部分超出）
     CGFloat safeBottom = window.frame.size.height - [UIApplication sharedApplication].windows.firstObject.safeAreaInsets.bottom - 8;
