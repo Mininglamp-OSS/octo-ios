@@ -604,27 +604,17 @@
     [window addSubview:overlay];
 
     // ── 菜单卡片
-    CGFloat itemH  = 48.0f;
-    CGFloat cardW  = 200.0f;
-    CGFloat cornerR = 12.0f;
+    // ── 网格菜单：图标在上、文字在下、每行 4 个、最多 3 行（参考微信长按菜单）
+    NSInteger colCount  = MIN(4, (NSInteger)items.count);
+    NSInteger rowCount  = (items.count + colCount - 1) / colCount;
+    CGFloat hPad        = 12.0f;
+    CGFloat cardW       = MIN(window.frame.size.width - 24.0f, 380.0f);
+    CGFloat cellW       = (cardW - hPad * 2) / colCount;
+    CGFloat iconSz      = 24.0f;
+    CGFloat cellH       = 12.0f + iconSz + 4.0f + 13.0f + 10.0f; // top+icon+gap+text+bottom
+    CGFloat cardH       = rowCount * cellH + 8.0f; // 8pt top/bottom padding
+    CGFloat cornerR     = 14.0f;
 
-    UIView *card = [[UIView alloc] init];
-    card.backgroundColor = [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1.0];
-    card.layer.cornerRadius = cornerR;
-    card.clipsToBounds = NO;
-    card.layer.shadowColor  = [UIColor blackColor].CGColor;
-    card.layer.shadowOpacity = 0.18f;
-    card.layer.shadowRadius  = 10.0f;
-    card.layer.shadowOffset  = CGSizeMake(0, 3);
-
-    // 内容用圆角 clipView（让分割线不超出圆角）
-    UIView *clipView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardW, itemH * items.count)];
-    clipView.layer.cornerRadius = cornerR;
-    clipView.clipsToBounds = YES;
-    clipView.backgroundColor = [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1.0];
-    [card addSubview:clipView];
-
-    // 关闭逻辑（dismiss block）
     __block BOOL dismissed = NO;
     void(^dismiss)(void) = ^{
         if (dismissed) return;
@@ -635,86 +625,99 @@
         } completion:^(BOOL f) {
             [card removeFromSuperview];
             [overlay removeFromSuperview];
-            [weakCell hideLongPressHighlight];
         }];
     };
     objc_setAssociatedObject(overlay, "dismiss", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
     [overlay addTarget:self action:@selector(wk_inlineMenuOverlayTapped:) forControlEvents:UIControlEventTouchUpInside];
 
-    // 填充菜单项
-    UIFont *itemFont = [UIFont systemFontOfSize:16.0f];
-    UIColor *sepColor = [UIColor colorWithWhite:0.80 alpha:1.0];
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardW, cardH)];
+    card.layer.cornerRadius = cornerR;
+    card.clipsToBounds = NO;
+    card.layer.shadowColor  = [UIColor blackColor].CGColor;
+    card.layer.shadowOpacity = 0.18f;
+    card.layer.shadowRadius  = 12.0f;
+    card.layer.shadowOffset  = CGSizeMake(0, 4);
+
+    UIView *clipView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardW, cardH)];
+    clipView.backgroundColor = [WKApp shared].config.style == WKSystemStyleDark
+        ? [UIColor colorWithRed:0.18 green:0.18 blue:0.20 alpha:1.0]
+        : [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1.0];
+    clipView.layer.cornerRadius = cornerR;
+    clipView.clipsToBounds = YES;
+    [card addSubview:clipView];
+
+    UIFont *textFont  = [UIFont systemFontOfSize:11.0f];
+    UIColor *textColor = [WKApp shared].config.defaultTextColor;
+    UIColor *iconTint  = textColor;
+
     for (NSInteger i = 0; i < (NSInteger)items.count; i++) {
         WKMessageLongMenusItem *item = items[i];
+        NSInteger col = i % colCount;
+        NSInteger row = i / colCount;
+        CGFloat cellX = hPad + col * cellW;
+        CGFloat cellY = 4.0f + row * cellH; // 4pt top padding
 
-        UIButton *btn = [[UIButton alloc] initWithFrame:CGRectMake(0, i * itemH, cardW, itemH)];
+        UIButton *btn = [[UIButton alloc] initWithFrame:CGRectMake(cellX, cellY, cellW, cellH)];
         btn.backgroundColor = [UIColor clearColor];
-        [btn setBackgroundImage:[self wk_solidColorImage:[UIColor colorWithWhite:0.88 alpha:1.0]] forState:UIControlStateHighlighted];
+        [btn setBackgroundImage:[self wk_solidColorImage:[UIColor colorWithWhite:0.5 alpha:0.15]] forState:UIControlStateHighlighted];
 
-        // 图标
-        if (item.icon) {
-            UIImageView *iconView = [[UIImageView alloc] initWithFrame:CGRectMake(16, (itemH - 20)/2, 20, 20)];
-            iconView.image = item.icon;
-            iconView.tintColor = [WKApp shared].config.defaultTextColor;
-            iconView.contentMode = UIViewContentModeScaleAspectFit;
-            [btn addSubview:iconView];
-        }
-        // 标题
-        UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(item.icon ? 46 : 16, 0, cardW - (item.icon ? 62 : 32), itemH)];
-        titleLbl.text = item.title;
-        titleLbl.font = itemFont;
-        titleLbl.textColor = [WKApp shared].config.defaultTextColor;
-        [btn addSubview:titleLbl];
+        // 图标（居中，上方）
+        UIImageView *iconView = [[UIImageView alloc] initWithFrame:CGRectMake((cellW - iconSz)/2, 12.0f, iconSz, iconSz)];
+        iconView.image = item.icon ?: [UIImage systemImageNamed:@"ellipsis"];
+        iconView.tintColor = iconTint;
+        iconView.contentMode = UIViewContentModeScaleAspectFit;
+        [btn addSubview:iconView];
 
-        // 点击
+        // 文字（居中，图标下方）
+        UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(2, 12.0f + iconSz + 4.0f, cellW - 4, 13.0f)];
+        lbl.text = item.title;
+        lbl.font = textFont;
+        lbl.textColor = textColor;
+        lbl.textAlignment = NSTextAlignmentCenter;
+        lbl.adjustsFontSizeToFitWidth = YES;
+        lbl.minimumScaleFactor = 0.8f;
+        [btn addSubview:lbl];
+
         WKMessageLongMenusItem *captured = item;
         objc_setAssociatedObject(btn, "itemDismiss", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
         objc_setAssociatedObject(btn, "itemAction", captured.onTap, OBJC_ASSOCIATION_COPY_NONATOMIC);
         [btn addTarget:self action:@selector(wk_inlineMenuItemTapped:) forControlEvents:UIControlEventTouchUpInside];
         [clipView addSubview:btn];
 
-        // 分割线（不在最后一项后）
-        if (i < (NSInteger)items.count - 1) {
-            UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(16, (i+1)*itemH - 0.5, cardW - 16, 0.5)];
-            sep.backgroundColor = sepColor;
-            [clipView addSubview:sep];
+        // 列分割线
+        if (col < colCount - 1 && i < (NSInteger)items.count - 1) {
+            UIView *vSep = [[UIView alloc] initWithFrame:CGRectMake(cellX + cellW - 0.25f, cellY + 8, 0.5f, cellH - 16)];
+            vSep.backgroundColor = [UIColor colorWithWhite:0.6 alpha:0.3];
+            [clipView addSubview:vSep];
+        }
+        // 行分割线
+        if (row < rowCount - 1 && i + colCount < (NSInteger)items.count) {
+            CGFloat rowY = cellY + cellH - 0.25f;
+            UIView *hSep = [[UIView alloc] initWithFrame:CGRectMake(hPad, rowY, cardW - hPad*2, 0.5f)];
+            hSep.backgroundColor = [UIColor colorWithWhite:0.6 alpha:0.3];
+            [clipView addSubview:hSep];
         }
     }
 
-    CGFloat cardH = itemH * items.count;
-    card.frame = CGRectMake(0, 0, cardW, cardH);
-    clipView.frame = CGRectMake(0, 0, cardW, cardH);
-
-    // 参考 Android ActionBarPopupWindow 定位策略：
-    // 菜单出现在气泡可见区域的中部（而非气泡边缘，防止超出屏幕）
+    // ── 定位：上方优先（不遮挡已选中文字），空间不足则放下方 ──
     CGFloat safeTop    = window.safeAreaInsets.top + 8;
     CGFloat safeBottom = window.frame.size.height - window.safeAreaInsets.bottom - 80;
-    // 水平：与气泡左/右边对齐，靠气泡所在侧
-    CGFloat cardX = bubbleRect.origin.x + 8;
-    if (cardX + cardW > window.frame.size.width - 8) {
-        cardX = window.frame.size.width - cardW - 8;
-    }
-    // 垂直：定位在气泡可见区域的中部
-    CGFloat visibleTop    = MAX(bubbleRect.origin.y, safeTop);
-    CGFloat visibleBottom = MIN(bubbleRect.origin.y + bubbleRect.size.height, safeBottom);
-    CGFloat visibleMidY   = (visibleTop + visibleBottom) / 2.0f;
-    CGFloat cardY = visibleMidY - cardH / 2.0f;
+    CGFloat cardX = bubbleRect.origin.x;
+    if (cardX + cardW > window.frame.size.width - 8) cardX = window.frame.size.width - cardW - 8;
+    cardX = MAX(8, cardX);
+    // 气泡上方是否有足够空间
+    CGFloat aboveY = touchInWindow.y - cardH - 12;
+    CGFloat belowY = touchInWindow.y + 12;
+    CGFloat cardY  = (aboveY >= safeTop) ? aboveY : belowY;
     cardY = MAX(safeTop, MIN(cardY, safeBottom - cardH));
     card.frame = CGRectMake(cardX, cardY, cardW, cardH);
+    clipView.frame = CGRectMake(0, 0, cardW, cardH);
 
     [window addSubview:card];
 
-    // ── 入场动画（从气泡中心缩放展开）
-    CGPoint anchor = CGPointMake(
-        (CGRectGetMidX(bubbleRect) - cardX) / cardW,
-        cardY > bubbleRect.origin.y ? 0.0f : 1.0f  // 从气泡方向的那一端展开
-    );
-    card.layer.anchorPoint = anchor;
-    card.center = CGPointMake(cardX + anchor.x * cardW, cardY + anchor.y * cardH);
     card.alpha = 0;
-    card.transform = CGAffineTransformMakeScale(0.85, 0.85);
-
-    [UIView animateWithDuration:0.2 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.5 options:0 animations:^{
+    card.transform = CGAffineTransformMakeScale(0.88, 0.88);
+    [UIView animateWithDuration:0.18 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0 options:0 animations:^{
         card.alpha = 1;
         card.transform = CGAffineTransformIdentity;
         overlay.alpha = 1;

@@ -2033,7 +2033,8 @@ static const char kSelectionMenusKey   = 2;
 static const char kSelectionTimerKey   = 3; // dispatch_block_t：textViewDidChangeSelection 防抖
 static const char kSelectionVisibleKey = 4; // NSValue<CGRect>：可见区域，用于菜单定位
 static const char kSelectionTouchTimer = 5; // dispatch_block_t：touch 松手后延迟重显菜单
-static const char kScrollTableKey     = 6; // 父 UITableView 弱引用（用于 KVO 滚动检测）
+static const char kScrollTableKey     = 6; // NSArray：需还原 clipsToBounds 的祖先 view 列表
+static const char kScrollVisibleKey   = 7; // 弱引用 UITableView（KVO 滚动检测）
 static void *kScrollKVOCtx            = &kScrollKVOCtx;
 
 -(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems {
@@ -2068,6 +2069,19 @@ static void *kScrollKVOCtx            = &kScrollKVOCtx;
     [self.messageContentView addSubview:tv];
     self.textLbl.hidden = YES;
 
+    // 问题3修复：临时关闭祖先 clipsToBounds，让 UIKit 的选区句柄能显示在 bubble 圆角外
+    NSMutableArray *clippedViews = [NSMutableArray array];
+    UIView *ancestor = self.messageContentView.superview;
+    while (ancestor && ![ancestor isKindOfClass:[UIWindow class]]) {
+        if (ancestor.clipsToBounds || ancestor.layer.masksToBounds) {
+            [clippedViews addObject:ancestor];
+            ancestor.clipsToBounds = NO;
+            ancestor.layer.masksToBounds = NO;
+        }
+        ancestor = ancestor.superview;
+    }
+    objc_setAssociatedObject(self, &kScrollTableKey, clippedViews, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
     // 计算菜单定位用的可见区域（tv 在 window 中的 frame 与可见屏幕的交集）
     UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
     CGFloat bottomMargin = 80.0f + window.safeAreaInsets.bottom;
@@ -2091,18 +2105,30 @@ static void *kScrollKVOCtx            = &kScrollKVOCtx;
     while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
     if ([v isKindOfClass:[UITableView class]]) {
         [v addObserver:self forKeyPath:@"contentOffset" options:NSKeyValueObservingOptionNew context:kScrollKVOCtx];
-        objc_setAssociatedObject(self, &kScrollTableKey, v, OBJC_ASSOCIATION_ASSIGN);
+        objc_setAssociatedObject(self, &kScrollVisibleKey, v, OBJC_ASSOCIATION_ASSIGN);
     }
 
-    [tv becomeFirstResponder];
-    [tv selectAll:nil];
+    // 问题3修复：延迟激活，确保 UITextView 已完成布局后再 becomeFirstResponder/selectAll
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (!objc_getAssociatedObject(self, &kSelectionTVKey)) return; // 已退出则跳过
+        [tv becomeFirstResponder];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (!objc_getAssociatedObject(self, &kSelectionTVKey)) return;
+            [tv selectAll:nil];
+        });
+    });
 }
 
 -(void) endInBubbleTextSelection {
-    UIView *tableView = objc_getAssociatedObject(self, &kScrollTableKey);
+    // 还原 clipsToBounds
+    NSArray *clippedViews = objc_getAssociatedObject(self, &kScrollTableKey);
+    for (UIView *v in clippedViews) { v.clipsToBounds = YES; v.layer.masksToBounds = YES; }
+    objc_setAssociatedObject(self, &kScrollTableKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    UIView *tableView = objc_getAssociatedObject(self, &kScrollVisibleKey);
     if (tableView) {
         @try { [tableView removeObserver:self forKeyPath:@"contentOffset" context:kScrollKVOCtx]; } @catch (...) {}
-        objc_setAssociatedObject(self, &kScrollTableKey, nil, OBJC_ASSOCIATION_ASSIGN);
+        objc_setAssociatedObject(self, &kScrollVisibleKey, nil, OBJC_ASSOCIATION_ASSIGN);
     }
     dispatch_block_t t1 = objc_getAssociatedObject(self, &kSelectionTimerKey);
     if (t1) { dispatch_block_cancel(t1); objc_setAssociatedObject(self, &kSelectionTimerKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC); }
@@ -2185,7 +2211,7 @@ static void *kScrollKVOCtx            = &kScrollKVOCtx;
 
     [self wk_hideSelectionPopup];
 
-    // UITextView 已在 messageContentView 中，随 cell 移动，这里重新计算当前可见区域
+    // UITextView 已在 messageContentView 中，随 cell 移动，重新计算当前可见区域
     UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
     CGFloat bottomMargin = 80.0f + window.safeAreaInsets.bottom;
     CGRect visibleArea = CGRectMake(0, window.safeAreaInsets.top, window.frame.size.width,
@@ -2290,68 +2316,94 @@ static const NSInteger kSelectionPopupTag = 0x574B5350; // 'WKSP'
 
     if (!btns.count) return;
 
-    // Fix2: 白色竖向卡片，与主菜单（showInlineMenuForCell:）风格一致
-    CGFloat itemH  = 48.0f;
-    CGFloat cardW  = 200.0f;
-    CGFloat cornerR = 12.0f;
-    UIFont *itemFont = [UIFont systemFontOfSize:16.0f];
+    // 与主菜单相同的网格风格（图标上方、文字下方、横向排列）
+    UIWindow *window2 = [UIApplication sharedApplication].windows.firstObject;
+    NSInteger colCount  = MIN(4, (NSInteger)btns.count);
+    NSInteger rowCount  = (btns.count + colCount - 1) / colCount;
+    CGFloat hPad        = 12.0f;
+    CGFloat cardW       = MIN(window2.frame.size.width - 24.0f, 380.0f);
+    CGFloat cellW       = (cardW - hPad * 2) / colCount;
+    CGFloat iconSz      = 22.0f;
+    CGFloat cellH       = 12.0f + iconSz + 4.0f + 13.0f + 10.0f;
+    CGFloat cardH       = rowCount * cellH + 8.0f;
+    CGFloat cornerR     = 14.0f;
 
-    UIView *card = [[UIView alloc] init];
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardW, cardH)];
     card.tag = kSelectionPopupTag;
     card.layer.cornerRadius = cornerR;
     card.clipsToBounds = NO;
     card.layer.shadowColor  = [UIColor blackColor].CGColor;
     card.layer.shadowOpacity = 0.18f;
-    card.layer.shadowRadius  = 10.0f;
-    card.layer.shadowOffset  = CGSizeMake(0, 3);
+    card.layer.shadowRadius  = 12.0f;
+    card.layer.shadowOffset  = CGSizeMake(0, 4);
 
-    UIView *clipView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardW, itemH * btns.count)];
+    UIView *clipView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardW, cardH)];
+    clipView.backgroundColor = [WKApp shared].config.style == WKSystemStyleDark
+        ? [UIColor colorWithRed:0.18 green:0.18 blue:0.20 alpha:1.0]
+        : [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1.0];
     clipView.layer.cornerRadius = cornerR;
     clipView.clipsToBounds = YES;
-    clipView.backgroundColor = [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1.0];
     [card addSubview:clipView];
 
-    UIColor *sepColor = [UIColor colorWithWhite:0.80 alpha:1.0];
+    UIFont *textFont = [UIFont systemFontOfSize:11.0f];
+    UIColor *textColor = [WKApp shared].config.defaultTextColor;
     for (NSInteger i = 0; i < (NSInteger)btns.count; i++) {
         NSDictionary *info = btns[i];
         NSString *title = info[@"title"];
         void(^action)(void) = info[@"action"];
+        NSInteger col = i % colCount;
+        NSInteger row = i / colCount;
+        CGFloat cellX = hPad + col * cellW;
+        CGFloat cellY = 4.0f + row * cellH;
 
-        UIButton *btn = [[UIButton alloc] initWithFrame:CGRectMake(0, i * itemH, cardW, itemH)];
+        UIButton *btn = [[UIButton alloc] initWithFrame:CGRectMake(cellX, cellY, cellW, cellH)];
         btn.backgroundColor = [UIColor clearColor];
-        [btn setBackgroundImage:[self wk_imageWithColor:[UIColor colorWithWhite:0.88 alpha:1.0]] forState:UIControlStateHighlighted];
-        UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, cardW - 32, itemH)];
-        lbl.text  = title;
-        lbl.font  = itemFont;
-        lbl.textColor = [WKApp shared].config.defaultTextColor;
+        [btn setBackgroundImage:[self wk_imageWithColor:[UIColor colorWithWhite:0.5 alpha:0.15]] forState:UIControlStateHighlighted];
+
+        // 图标（上）
+        UIImageView *iconView = [[UIImageView alloc] initWithFrame:CGRectMake((cellW-iconSz)/2, 12.0f, iconSz, iconSz)];
+        iconView.contentMode = UIViewContentModeScaleAspectFit;
+        iconView.tintColor = textColor;
+        if (i == 0) {
+            iconView.image = [UIImage systemImageNamed:@"doc.on.doc"];
+        } else {
+            iconView.image = [UIImage systemImageNamed:@"text.alignleft"];
+        }
+        [btn addSubview:iconView];
+
+        // 文字（下）
+        UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(2, 12.0f+iconSz+4.0f, cellW-4, 13.0f)];
+        lbl.text = title; lbl.font = textFont; lbl.textColor = textColor;
+        lbl.textAlignment = NSTextAlignmentCenter; lbl.adjustsFontSizeToFitWidth = YES;
         [btn addSubview:lbl];
+
         objc_setAssociatedObject(btn, "tapBlock", action, OBJC_ASSOCIATION_COPY_NONATOMIC);
         [btn addTarget:self action:@selector(wk_selectionMenuItemTapped:) forControlEvents:UIControlEventTouchUpInside];
         [clipView addSubview:btn];
 
-        if (i < (NSInteger)btns.count - 1) {
-            UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(16, (i+1)*itemH - 0.5f, cardW - 16, 0.5f)];
-            sep.backgroundColor = sepColor;
-            [clipView addSubview:sep];
+        if (col < colCount - 1 && i < (NSInteger)btns.count - 1) {
+            UIView *vSep = [[UIView alloc] initWithFrame:CGRectMake(cellX+cellW-0.25f, cellY+8, 0.5f, cellH-16)];
+            vSep.backgroundColor = [UIColor colorWithWhite:0.6 alpha:0.3];
+            [clipView addSubview:vSep];
         }
     }
-
-    CGFloat cardH = itemH * btns.count;
-    card.frame     = CGRectMake(0, 0, cardW, cardH);
     clipView.frame = CGRectMake(0, 0, cardW, cardH);
 
-    // 菜单定位用存储的可见区域（visibleFrame），而非 tv.frame（tv 可能超出屏幕）
+    // 菜单定位：上方优先（不遮挡选中文字），空间不足放选区末尾下方
     NSValue *visibleVal = objc_getAssociatedObject(self, &kSelectionVisibleKey);
-    CGRect tvFrame = visibleVal ? [visibleVal CGRectValue] : tv.frame;
+    CGRect visFrame = visibleVal ? [visibleVal CGRectValue] : [tv convertRect:tv.bounds toView:nil];
+    CGRect selRect  = [self wk_selectionRectInWindowForTextView:tv];
     CGFloat safeTop = window.safeAreaInsets.top + 8;
-    // 优先放在可见文字区域的中间位置（参考 Android showChatPopup 的定位逻辑）
-    CGFloat centerY = CGRectGetMidY(tvFrame);
-    CGFloat cardX = tvFrame.origin.x + 8.0f; // 与气泡左边对齐，给一点缩进
-    if (cardX + cardW > window.frame.size.width - 8) {
-        cardX = window.frame.size.width - cardW - 8;
-    }
-    CGFloat cardY = centerY - cardH / 2.0f;
-    cardY = MAX(safeTop, MIN(cardY, window.frame.size.height - cardH - 80 - window.safeAreaInsets.bottom));
+    CGFloat safeBot = window.frame.size.height - window.safeAreaInsets.bottom - 80;
+    CGFloat cardX   = visFrame.origin.x;
+    if (cardX + cardW > window.frame.size.width - 8) cardX = window.frame.size.width - cardW - 8;
+    cardX = MAX(8, cardX);
+    CGFloat selTop = CGRectIsEmpty(selRect) ? visFrame.origin.y            : selRect.origin.y;
+    CGFloat selBot = CGRectIsEmpty(selRect) ? visFrame.origin.y+visFrame.size.height : selRect.origin.y+selRect.size.height;
+    CGFloat aboveY = selTop - cardH - 8;
+    CGFloat belowY = selBot + 8;
+    CGFloat cardY  = (aboveY >= safeTop) ? aboveY : belowY;
+    cardY = MAX(safeTop, MIN(cardY, safeBot - cardH));
     card.frame = CGRectMake(cardX, cardY, cardW, cardH);
     clipView.frame = CGRectMake(0, 0, cardW, cardH);
 
