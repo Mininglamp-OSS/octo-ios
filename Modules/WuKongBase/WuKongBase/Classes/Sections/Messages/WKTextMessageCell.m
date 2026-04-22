@@ -50,6 +50,11 @@
 #define kBotActionTopSpace 10.0f
 #define kBotActionBtnSpacing 10.0f
 
+// 前向声明（WKSelectionOnlyTextView 的 delegate 协议，需在 @interface 之前定义）
+@protocol WKSelectionTVDelegate <NSObject>
+- (void)selectionTVTouchBegan;
+- (void)selectionTVTouchEnded;
+@end
 
 @interface WKTextMessageCell ()<CNContactViewControllerDelegate,CNContactPickerDelegate,WKNavigationDelegate,UIScrollViewDelegate,UITextViewDelegate,WKSelectionTVDelegate>
 
@@ -98,11 +103,6 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 // UITextView 子类：屏蔽系统复制/粘贴菜单，只保留自定义菜单
 // 参考 Android SelectTextHelper CursorHandle.onTouchEvent：
 // ACTION_MOVE → dismiss popup；ACTION_UP → show popup
-@protocol WKSelectionTVDelegate <NSObject>
-- (void)selectionTVTouchBegan; // 拖动句柄开始，隐藏菜单
-- (void)selectionTVTouchEnded; // 松手，延迟 100ms 重显菜单
-@end
-
 @interface WKSelectionOnlyTextView : UITextView
 @property (nonatomic, weak) id<WKSelectionTVDelegate> selDelegate;
 @end
