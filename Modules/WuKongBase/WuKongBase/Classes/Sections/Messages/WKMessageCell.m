@@ -386,7 +386,7 @@ static NSMutableDictionary *flameNodeCacheDict;
 }
 
 // 基类空实现，WKTextMessageCell 重写
--(void) startInBubbleTextSelection {}
+-(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems {}
 -(void) endInBubbleTextSelection {}
 
 -(void) showLongPressHighlight {

@@ -156,8 +156,8 @@ typedef enum :NSUInteger {
 -(void) showLongPressHighlight;
 /// 取消气泡高亮（淡出遮罩层）
 -(void) hideLongPressHighlight;
-/// 在气泡原位启动文字选择模式（UITextView 透明叠加在 textLbl 上，UIKit 提供拖动句柄）
--(void) startInBubbleTextSelection;
+/// 在气泡原位启动文字选择模式，menuItems 是长按原始菜单项（全选时显示完整菜单）
+-(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems;
 /// 退出气泡文字选择模式，恢复正常显示
 -(void) endInBubbleTextSelection;
 

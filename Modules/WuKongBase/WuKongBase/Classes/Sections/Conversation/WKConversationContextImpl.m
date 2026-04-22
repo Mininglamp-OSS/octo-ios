@@ -572,10 +572,10 @@
             selectItem.icon = [UIImage systemImageNamed:@"text.cursor"];
         }
         __weak typeof(messageCell) weakCell = messageCell;
+        NSArray *capturedMenus = [toolbarMenus copy]; // 捕获当前完整菜单项（全选时显示）
         selectItem.onTap = ^(id<WKConversationContext> ctx) {
-            // 菜单关闭动画完成后，在气泡原位启动文字选择（透明 UITextView + UIKit 原生句柄）
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [weakCell startInBubbleTextSelection];
+                [weakCell startInBubbleTextSelectionWithMenuItems:capturedMenus];
             });
         };
         NSMutableArray *mutable = [NSMutableArray arrayWithArray:toolbarMenus ?: @[]];
@@ -584,18 +584,166 @@
     }
 
     __weak typeof(messageCell) weakCell = messageCell;
-    WKMessageContextController *messageContextController = [[WKMessageContextController alloc] initWithMessage:messageCell.messageModel context:self menusItems:toolbarMenus gesture:(ContextGesture*)gestureRecognizer];
-    messageContextController.onDismissed = ^{
-        [weakCell hideLongPressHighlight];
-    };
-    __weak typeof(messageContextController) weakController = messageContextController;
-    messageContextController.reactionSelected = ^(WKReactionContextItem * item, BOOL isLarge) {
-        [[WKSDK shared].reactionManager addOrCancelReaction:item.reaction messageID:messageCell.messageModel.messageId complete:^(NSError * _Nullable error) {
-            [weakController dismiss];
+    [self showInlineMenuForCell:messageCell menuItems:toolbarMenus];
+}
+
+// ─── 自定义气泡内联菜单（替代 Telegram ContextController，避免黑屏） ───
+
+-(void) showInlineMenuForCell:(WKMessageCell*)cell menuItems:(NSArray<WKMessageLongMenusItem*>*)items {
+    if (!items.count) return;
+
+    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+    __weak typeof(self) weakSelf = self;
+    __weak typeof(cell)  weakCell = cell;
+
+    // 气泡在 window 中的绝对位置
+    CGRect bubbleRect = [cell.bubbleBackgroundView convertRect:cell.bubbleBackgroundView.bounds toView:nil];
+
+    // ── 遮罩层（轻微暗色，点击即关闭）
+    UIButton *overlay = [[UIButton alloc] initWithFrame:window.bounds];
+    overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.08f];
+    overlay.alpha = 0;
+    [window addSubview:overlay];
+
+    // ── 菜单卡片
+    CGFloat itemH  = 48.0f;
+    CGFloat cardW  = 200.0f;
+    CGFloat cornerR = 12.0f;
+
+    UIView *card = [[UIView alloc] init];
+    card.backgroundColor = [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1.0];
+    card.layer.cornerRadius = cornerR;
+    card.clipsToBounds = NO;
+    card.layer.shadowColor  = [UIColor blackColor].CGColor;
+    card.layer.shadowOpacity = 0.18f;
+    card.layer.shadowRadius  = 10.0f;
+    card.layer.shadowOffset  = CGSizeMake(0, 3);
+
+    // 内容用圆角 clipView（让分割线不超出圆角）
+    UIView *clipView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardW, itemH * items.count)];
+    clipView.layer.cornerRadius = cornerR;
+    clipView.clipsToBounds = YES;
+    clipView.backgroundColor = [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1.0];
+    [card addSubview:clipView];
+
+    // 关闭逻辑（dismiss block）
+    __block BOOL dismissed = NO;
+    void(^dismiss)(void) = ^{
+        if (dismissed) return;
+        dismissed = YES;
+        [UIView animateWithDuration:0.15 animations:^{
+            card.alpha    = 0;
+            overlay.alpha = 0;
+        } completion:^(BOOL f) {
+            [card removeFromSuperview];
+            [overlay removeFromSuperview];
+            [weakCell hideLongPressHighlight];
         }];
     };
-    [messageContextController setup];
-    [messageContextController show];
+    objc_setAssociatedObject(overlay, "dismiss", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    [overlay addTarget:self action:@selector(wk_inlineMenuOverlayTapped:) forControlEvents:UIControlEventTouchUpInside];
+
+    // 填充菜单项
+    UIFont *itemFont = [UIFont systemFontOfSize:16.0f];
+    UIColor *sepColor = [UIColor colorWithWhite:0.80 alpha:1.0];
+    for (NSInteger i = 0; i < (NSInteger)items.count; i++) {
+        WKMessageLongMenusItem *item = items[i];
+
+        UIButton *btn = [[UIButton alloc] initWithFrame:CGRectMake(0, i * itemH, cardW, itemH)];
+        btn.backgroundColor = [UIColor clearColor];
+        [btn setBackgroundImage:[self wk_solidColorImage:[UIColor colorWithWhite:0.88 alpha:1.0]] forState:UIControlStateHighlighted];
+
+        // 图标
+        if (item.icon) {
+            UIImageView *iconView = [[UIImageView alloc] initWithFrame:CGRectMake(16, (itemH - 20)/2, 20, 20)];
+            iconView.image = item.icon;
+            iconView.tintColor = [WKApp shared].config.defaultTextColor;
+            iconView.contentMode = UIViewContentModeScaleAspectFit;
+            [btn addSubview:iconView];
+        }
+        // 标题
+        UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(item.icon ? 46 : 16, 0, cardW - (item.icon ? 62 : 32), itemH)];
+        titleLbl.text = item.title;
+        titleLbl.font = itemFont;
+        titleLbl.textColor = [WKApp shared].config.defaultTextColor;
+        [btn addSubview:titleLbl];
+
+        // 点击
+        WKMessageLongMenusItem *captured = item;
+        objc_setAssociatedObject(btn, "itemDismiss", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        objc_setAssociatedObject(btn, "itemAction", captured.onTap, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        [btn addTarget:self action:@selector(wk_inlineMenuItemTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [clipView addSubview:btn];
+
+        // 分割线（不在最后一项后）
+        if (i < (NSInteger)items.count - 1) {
+            UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(16, (i+1)*itemH - 0.5, cardW - 16, 0.5)];
+            sep.backgroundColor = sepColor;
+            [clipView addSubview:sep];
+        }
+    }
+
+    CGFloat cardH = itemH * items.count;
+    card.frame = CGRectMake(0, 0, cardW, cardH);
+    clipView.frame = CGRectMake(0, 0, cardW, cardH);
+
+    // ── 定位：优先气泡上方，不够时放下方；水平居中于气泡，超出屏幕则夹拢
+    CGFloat safeTop = [UIApplication sharedApplication].windows.firstObject.safeAreaInsets.top + 8;
+    CGFloat cardX = CGRectGetMidX(bubbleRect) - cardW / 2.0f;
+    cardX = MAX(8, MIN(cardX, window.frame.size.width - cardW - 8));
+    CGFloat cardY = bubbleRect.origin.y - cardH - 10.0f;
+    if (cardY < safeTop) {
+        cardY = bubbleRect.origin.y + bubbleRect.size.height + 10.0f;
+    }
+    // 下方也放不下时，强制挤在气泡上方（允许部分超出）
+    CGFloat safeBottom = window.frame.size.height - [UIApplication sharedApplication].windows.firstObject.safeAreaInsets.bottom - 8;
+    if (cardY + cardH > safeBottom) {
+        cardY = safeBottom - cardH;
+    }
+    card.frame = CGRectMake(cardX, cardY, cardW, cardH);
+
+    [window addSubview:card];
+
+    // ── 入场动画（从气泡中心缩放展开）
+    CGPoint anchor = CGPointMake(
+        (CGRectGetMidX(bubbleRect) - cardX) / cardW,
+        cardY > bubbleRect.origin.y ? 0.0f : 1.0f  // 从气泡方向的那一端展开
+    );
+    card.layer.anchorPoint = anchor;
+    card.center = CGPointMake(cardX + anchor.x * cardW, cardY + anchor.y * cardH);
+    card.alpha = 0;
+    card.transform = CGAffineTransformMakeScale(0.85, 0.85);
+
+    [UIView animateWithDuration:0.2 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.5 options:0 animations:^{
+        card.alpha = 1;
+        card.transform = CGAffineTransformIdentity;
+        overlay.alpha = 1;
+    } completion:nil];
+}
+
+-(void) wk_inlineMenuOverlayTapped:(UIButton *)btn {
+    void(^dismiss)(void) = objc_getAssociatedObject(btn, "dismiss");
+    if (dismiss) dismiss();
+}
+
+-(void) wk_inlineMenuItemTapped:(UIButton *)btn {
+    void(^dismiss)(void) = objc_getAssociatedObject(btn, "itemDismiss");
+    void(^action)(id) = objc_getAssociatedObject(btn, "itemAction");
+    if (dismiss) dismiss();
+    if (action) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            action(self);
+        });
+    }
+}
+
+-(UIImage *) wk_solidColorImage:(UIColor *)color {
+    CGRect r = CGRectMake(0,0,1,1);
+    UIGraphicsBeginImageContextWithOptions(r.size, NO, 0);
+    [color setFill]; UIRectFill(r);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
 }
 
 /// 弹出文字选择界面，支持选取部分文字复制

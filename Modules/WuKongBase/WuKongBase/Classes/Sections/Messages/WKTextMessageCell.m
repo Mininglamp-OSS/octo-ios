@@ -51,7 +51,7 @@
 #define kBotActionBtnSpacing 10.0f
 
 
-@interface WKTextMessageCell ()<CNContactViewControllerDelegate,CNContactPickerDelegate,WKNavigationDelegate,UIScrollViewDelegate>
+@interface WKTextMessageCell ()<CNContactViewControllerDelegate,CNContactPickerDelegate,WKNavigationDelegate,UIScrollViewDelegate,UITextViewDelegate>
 
 @property(nonatomic,strong) UILabel *textLbl;
 @property(nonatomic,strong) id selectLinkData;
@@ -1999,72 +1999,257 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 
 #pragma mark - 气泡内文字选择（透明 UITextView 原位叠加，UIKit 提供拖动句柄）
 
-static const char kSelectionTVKey  = 0;
-static const char kSelectionBtnKey = 1;
+static const char kSelectionTVKey    = 0;
+static const char kSelectionDimKey   = 1;
+static const char kSelectionMenusKey = 2;
+static const char kSelectionTimerKey = 3;
 
--(void) startInBubbleTextSelection {
-    // 已在选择模式则忽略
+-(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems {
     if (objc_getAssociatedObject(self, &kSelectionTVKey)) return;
 
-    // 获取要显示的文字（优先用编辑后内容）
     NSString *rawText = [[self class] getFullRawContent:self.messageModel];
     if (!rawText.length) return;
 
-    // textLbl 在 window 坐标系中的位置
     CGRect frameInWindow = [self.textLbl convertRect:self.textLbl.bounds toView:nil];
     if (frameInWindow.size.width < 1 || frameInWindow.size.height < 1) return;
 
     UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
 
-    // 1. 半透明背景遮罩（点击即退出），比气泡低一层
+    // 半透明遮罩（点击退出选择模式）
     UIButton *dimBtn = [[UIButton alloc] initWithFrame:window.bounds];
     dimBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.15f];
     dimBtn.alpha = 0;
     [window addSubview:dimBtn];
-    __weak typeof(self) weakSelf = self;
     [dimBtn addTarget:self action:@selector(endInBubbleTextSelection) forControlEvents:UIControlEventTouchUpInside];
 
-    // 2. 透明 UITextView，精确覆盖在 textLbl 上方
+    // 透明 UITextView，精确叠加在 textLbl 位置
     UITextView *tv = [[UITextView alloc] initWithFrame:frameInWindow];
     tv.text = rawText;
     tv.font = self.textLbl.font;
     tv.textColor = self.textLbl.textColor;
-    tv.backgroundColor = [UIColor clearColor];  // 透明：气泡在下方仍可见
+    tv.backgroundColor = [UIColor clearColor];
     tv.editable = NO;
     tv.selectable = YES;
     tv.scrollEnabled = NO;
     tv.textContainerInset = UIEdgeInsetsZero;
     tv.textContainer.lineFragmentPadding = 0;
-
+    tv.delegate = self;
     [window addSubview:tv];
 
-    // 隐藏原始 label（避免文字重叠显示两遍）
     self.textLbl.hidden = YES;
 
-    // 保存引用
-    objc_setAssociatedObject(self, &kSelectionTVKey,  tv,     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, &kSelectionBtnKey, dimBtn, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionTVKey,    tv,                               OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionDimKey,   dimBtn,                           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionMenusKey, menuItems ?: @[],                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 获取焦点并全选，之后用户可拖动句柄缩小选区
     [tv becomeFirstResponder];
     [tv selectAll:nil];
-
+    // 全选后立即显示完整菜单（textViewDidChangeSelection 会在 selectAll 后触发）
     [UIView animateWithDuration:0.18 animations:^{ dimBtn.alpha = 1; }];
 }
 
 -(void) endInBubbleTextSelection {
-    UITextView *tv     = objc_getAssociatedObject(self, &kSelectionTVKey);
-    UIButton   *dimBtn = objc_getAssociatedObject(self, &kSelectionBtnKey);
+    [self wk_cancelSelectionDebounce];
+    [self wk_hideSelectionPopup];
 
-    [UIView animateWithDuration:0.15 animations:^{
-        dimBtn.alpha = 0;
-    } completion:^(BOOL finished) {
-        [tv     removeFromSuperview];
+    UITextView *tv     = objc_getAssociatedObject(self, &kSelectionTVKey);
+    UIButton   *dimBtn = objc_getAssociatedObject(self, &kSelectionDimKey);
+    [UIView animateWithDuration:0.15 animations:^{ dimBtn.alpha = 0; } completion:^(BOOL f) {
+        [tv removeFromSuperview];
         [dimBtn removeFromSuperview];
-        objc_setAssociatedObject(self, &kSelectionTVKey,  nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        objc_setAssociatedObject(self, &kSelectionBtnKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(self, &kSelectionTVKey,    nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(self, &kSelectionDimKey,   nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(self, &kSelectionMenusKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         self.textLbl.hidden = NO;
     }];
+}
+
+#pragma mark - UITextViewDelegate（选区变化 → 动态切换菜单）
+
+-(void) textViewDidChangeSelection:(UITextView *)textView {
+    [self wk_cancelSelectionDebounce];
+    [self wk_hideSelectionPopup]; // 拖动期间隐藏菜单
+
+    NSRange sel = textView.selectedRange;
+    BOOL isAll = (sel.location == 0 && sel.length == textView.text.length && sel.length > 0);
+
+    if (isAll) {
+        // 全选：立即显示完整菜单
+        [self wk_showSelectionPopupForTextView:textView isAllSelected:YES];
+    } else if (sel.length > 0) {
+        // 部分选中：0.25s 防抖后显示 [复制, 全选]
+        __weak typeof(self) weakSelf = self;
+        dispatch_block_t block = dispatch_block_create(0, ^{
+            UITextView *tv = objc_getAssociatedObject(weakSelf, &kSelectionTVKey);
+            if (tv && tv.selectedRange.length > 0) {
+                [weakSelf wk_showSelectionPopupForTextView:tv isAllSelected:NO];
+            }
+        });
+        objc_setAssociatedObject(self, &kSelectionTimerKey, block, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), block);
+    }
+}
+
+-(void) wk_cancelSelectionDebounce {
+    dispatch_block_t block = objc_getAssociatedObject(self, &kSelectionTimerKey);
+    if (block) {
+        dispatch_block_cancel(block);
+        objc_setAssociatedObject(self, &kSelectionTimerKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    }
+}
+
+#pragma mark - 选区菜单浮层（深色圆角卡片，定位在选区上方）
+
+static const NSInteger kSelectionPopupTag = 0x574B5350; // 'WKSP'
+
+-(void) wk_hideSelectionPopup {
+    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+    [[window viewWithTag:kSelectionPopupTag] removeFromSuperview];
+}
+
+// 根据选中范围计算选区在 window 中的矩形（取首行到尾行的合并 rect）
+-(CGRect) wk_selectionRectInWindowForTextView:(UITextView *)tv {
+    UITextRange *range = tv.selectedTextRange;
+    if (!range) return CGRectZero;
+    NSArray<UITextSelectionRect*> *rects = [tv selectionRectsForRange:range];
+    CGRect merged = CGRectNull;
+    for (UITextSelectionRect *r in rects) {
+        if (r.rect.size.width < 1) continue;
+        merged = CGRectIsNull(merged) ? r.rect : CGRectUnion(merged, r.rect);
+    }
+    if (CGRectIsNull(merged)) {
+        merged = [tv caretRectForPosition:range.start];
+    }
+    return [tv convertRect:merged toView:nil];
+}
+
+-(void) wk_showSelectionPopupForTextView:(UITextView *)tv isAllSelected:(BOOL)isAll {
+    [self wk_hideSelectionPopup];
+
+    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+    NSArray *menuItems = objc_getAssociatedObject(self, &kSelectionMenusKey) ?: @[];
+
+    // 构建按钮列表
+    NSMutableArray<NSDictionary*> *btns = [NSMutableArray array];
+
+    if (isAll) {
+        // 全选：原始菜单项全部显示
+        for (WKMessageLongMenusItem *item in menuItems) {
+            __weak typeof(self) weakSelf = self;
+            WKMessageLongMenusItem *captured = item;
+            [btns addObject:@{
+                @"title": item.title ?: @"",
+                @"action": ^{ [weakSelf endInBubbleTextSelection]; if(captured.onTap) captured.onTap(weakSelf.conversationContext); }
+            }];
+        }
+        // 末尾补「复制」（复制全部文字）
+        __weak typeof(self) weakSelf = self;
+        [btns addObject:@{
+            @"title": LLang(@"复制"),
+            @"action": ^{
+                UITextView *t = objc_getAssociatedObject(weakSelf, &kSelectionTVKey);
+                [[UIPasteboard generalPasteboard] setString:t.text ?: @""];
+                [weakSelf endInBubbleTextSelection];
+            }
+        }];
+    } else {
+        // 部分选中：仅「复制」+「全选」
+        __weak typeof(self) weakSelf = self;
+        [btns addObject:@{
+            @"title": LLang(@"复制"),
+            @"action": ^{
+                UITextView *t = objc_getAssociatedObject(weakSelf, &kSelectionTVKey);
+                NSRange sel = t.selectedRange;
+                if (sel.length > 0 && NSMaxRange(sel) <= t.text.length) {
+                    [[UIPasteboard generalPasteboard] setString:[t.text substringWithRange:sel]];
+                }
+                [weakSelf endInBubbleTextSelection];
+            }
+        }];
+        [btns addObject:@{
+            @"title": LLang(@"全选"),
+            @"action": ^{
+                UITextView *t = objc_getAssociatedObject(weakSelf, &kSelectionTVKey);
+                [t selectAll:nil]; // 触发 textViewDidChangeSelection → 显示完整菜单
+            }
+        }];
+    }
+
+    if (!btns.count) return;
+
+    // --- 渲染弹出卡片 ---
+    CGFloat btnH = 36.0f, padH = 16.0f;
+    UIFont *btnFont = [UIFont systemFontOfSize:14.0f weight:UIFontWeightRegular];
+
+    UIView *card = [[UIView alloc] init];
+    card.tag = kSelectionPopupTag;
+    card.backgroundColor = [UIColor colorWithRed:0.10 green:0.10 blue:0.10 alpha:0.92f];
+    card.layer.cornerRadius = 8.0f;
+    card.clipsToBounds = YES;
+    card.layer.shadowColor = [UIColor blackColor].CGColor;
+    card.layer.shadowOpacity = 0.2f;
+    card.layer.shadowRadius = 6.0f;
+    card.layer.shadowOffset = CGSizeMake(0, 2);
+
+    CGFloat x = 0;
+    for (NSInteger i = 0; i < (NSInteger)btns.count; i++) {
+        NSDictionary *info = btns[i];
+        NSString *title = info[@"title"];
+        void(^action)(void) = info[@"action"];
+        CGFloat w = ceil([title sizeWithAttributes:@{NSFontAttributeName:btnFont}].width) + padH * 2;
+
+        UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
+        btn.frame = CGRectMake(x, 0, w, btnH);
+        [btn setTitle:title forState:UIControlStateNormal];
+        [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        btn.titleLabel.font = btnFont;
+        [btn setBackgroundImage:[self wk_imageWithColor:[UIColor colorWithWhite:1 alpha:0.15f]] forState:UIControlStateHighlighted];
+        objc_setAssociatedObject(btn, "tapBlock", action, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        [btn addTarget:self action:@selector(wk_selectionMenuItemTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [card addSubview:btn];
+
+        if (i < (NSInteger)btns.count - 1) {
+            UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(x + w - 0.5f, 8, 0.5f, btnH - 16)];
+            sep.backgroundColor = [UIColor colorWithWhite:1 alpha:0.2f];
+            [card addSubview:sep];
+        }
+        x += w;
+    }
+    card.frame = CGRectMake(0, 0, x, btnH);
+
+    // --- 定位：优先在选区上方，上方不够则放下方 ---
+    CGRect selRect = [self wk_selectionRectInWindowForTextView:tv];
+    CGFloat cardW = card.frame.size.width;
+    CGFloat cardX = CGRectGetMidX(selRect) - cardW / 2.0f;
+    cardX = MAX(8, MIN(cardX, window.frame.size.width - cardW - 8));
+    CGFloat cardY = selRect.origin.y - btnH - 10.0f;
+    if (cardY < 60) cardY = selRect.origin.y + selRect.size.height + 10.0f;
+    card.frame = CGRectMake(cardX, cardY, cardW, btnH);
+
+    // 插入在 dimBtn 上方、遮罩下方
+    UIButton *dimBtn = objc_getAssociatedObject(self, &kSelectionDimKey);
+    [window insertSubview:card aboveSubview:dimBtn ?: tv];
+
+    // 入场动画
+    card.alpha = 0;
+    card.transform = CGAffineTransformMakeScale(0.9, 0.9);
+    [UIView animateWithDuration:0.15 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        card.alpha = 1; card.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+
+-(void) wk_selectionMenuItemTapped:(UIButton *)sender {
+    void(^block)(void) = objc_getAssociatedObject(sender, "tapBlock");
+    if (block) block();
+}
+
+-(UIImage *) wk_imageWithColor:(UIColor *)color {
+    CGRect r = CGRectMake(0,0,1,1);
+    UIGraphicsBeginImageContextWithOptions(r.size, NO, 0);
+    [color setFill]; UIRectFill(r);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
 }
 
 @end
