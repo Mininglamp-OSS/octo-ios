@@ -51,7 +51,7 @@
 #define kBotActionBtnSpacing 10.0f
 
 
-@interface WKTextMessageCell ()<CNContactViewControllerDelegate,CNContactPickerDelegate,WKNavigationDelegate,UIScrollViewDelegate,UITextViewDelegate>
+@interface WKTextMessageCell ()<CNContactViewControllerDelegate,CNContactPickerDelegate,WKNavigationDelegate,UIScrollViewDelegate,UITextViewDelegate,WKSelectionTVDelegate>
 
 @property(nonatomic,strong) UILabel *textLbl;
 @property(nonatomic,strong) id selectLinkData;
@@ -96,10 +96,31 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 
 
 // UITextView 子类：屏蔽系统复制/粘贴菜单，只保留自定义菜单
-@interface WKSelectionOnlyTextView : UITextView @end
+// 参考 Android SelectTextHelper CursorHandle.onTouchEvent：
+// ACTION_MOVE → dismiss popup；ACTION_UP → show popup
+@protocol WKSelectionTVDelegate <NSObject>
+- (void)selectionTVTouchBegan; // 拖动句柄开始，隐藏菜单
+- (void)selectionTVTouchEnded; // 松手，延迟 100ms 重显菜单
+@end
+
+@interface WKSelectionOnlyTextView : UITextView
+@property (nonatomic, weak) id<WKSelectionTVDelegate> selDelegate;
+@end
 @implementation WKSelectionOnlyTextView
 - (BOOL)canPerformAction:(SEL)action withSender:(id)sender { return NO; }
 - (BOOL)canBecomeFirstResponder { return YES; }
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesBegan:touches withEvent:event];
+    [self.selDelegate selectionTVTouchBegan];
+}
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesEnded:touches withEvent:event];
+    [self.selDelegate selectionTVTouchEnded];
+}
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesCancelled:touches withEvent:event];
+    [self.selDelegate selectionTVTouchEnded];
+}
 @end
 
 @implementation WKTextMessageCell
@@ -2006,10 +2027,14 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 
 #pragma mark - 气泡内文字选择（透明 UITextView 原位叠加，UIKit 提供拖动句柄）
 
-static const char kSelectionTVKey    = 0;
-static const char kSelectionDimKey   = 1;
-static const char kSelectionMenusKey = 2;
-static const char kSelectionTimerKey = 3;
+static const char kSelectionTVKey      = 0;
+static const char kSelectionDimKey     = 1;
+static const char kSelectionMenusKey   = 2;
+static const char kSelectionTimerKey   = 3; // dispatch_block_t：textViewDidChangeSelection 防抖
+static const char kSelectionVisibleKey = 4; // NSValue<CGRect>：可见区域，用于菜单定位
+static const char kSelectionTouchTimer = 5; // dispatch_block_t：touch 松手后延迟重显菜单
+static const char kScrollTableKey     = 6; // 父 UITableView 弱引用（用于 KVO 滚动检测）
+static void *kScrollKVOCtx            = &kScrollKVOCtx;
 
 -(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems {
     if (objc_getAssociatedObject(self, &kSelectionTVKey)) return;
@@ -2017,11 +2042,8 @@ static const char kSelectionTimerKey = 3;
     NSString *rawText = [[self class] getFullRawContent:self.messageModel];
     if (!rawText.length) return;
 
-    // Fix4: 立刻重置 ContextGesture 带来的缩放动画（不允许气泡缩放）
-    [UIView animateWithDuration:0.1 animations:^{
-        self.transform = CGAffineTransformIdentity;
-        self.contentView.transform = CGAffineTransformIdentity;
-    }];
+    // ContextGesture 缩放在 onLongTap: 里已经重置，这里只做安全兜底
+    self.transform = CGAffineTransformIdentity;
 
     UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
 
@@ -2058,18 +2080,26 @@ static const char kSelectionTimerKey = 3;
     tv.scrollEnabled = NO;
     tv.textContainerInset = UIEdgeInsetsZero;
     tv.textContainer.lineFragmentPadding = 0;
-    tv.delegate = self;
+    tv.textInputDelegate = nil;
+    tv.delegate    = self;
+    tv.selDelegate = self; // touch delegate
 
     [window addSubview:tv];
     self.textLbl.hidden = YES;
 
-    // visibleFrame 存为关联对象，供菜单定位用
-    objc_setAssociatedObject(self, &kSelectionTVKey,    tv,               OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, &kSelectionDimKey,   dimBtn,           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, &kSelectionMenusKey, menuItems ?: @[], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    // 把可见区域存进去（NSValue 包裹 CGRect）
-    objc_setAssociatedObject(self, &kSelectionTimerKey, [NSValue valueWithCGRect:visibleFrame],
+    objc_setAssociatedObject(self, &kSelectionTVKey,      tv,               OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionDimKey,     dimBtn,           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionMenusKey,   menuItems ?: @[], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionVisibleKey, [NSValue valueWithCGRect:visibleFrame],
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 参考 Android OnScrollChangedListener：监听父 UITableView 滚动，滚动时隐藏菜单
+    UIView *v = self.superview;
+    while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
+    if ([v isKindOfClass:[UITableView class]]) {
+        [v addObserver:self forKeyPath:@"contentOffset" options:NSKeyValueObservingOptionNew context:kScrollKVOCtx];
+        objc_setAssociatedObject(self, &kScrollTableKey, v, OBJC_ASSOCIATION_ASSIGN);
+    }
 
     [tv becomeFirstResponder];
     [tv selectAll:nil];
@@ -2077,9 +2107,19 @@ static const char kSelectionTimerKey = 3;
 }
 
 -(void) endInBubbleTextSelection {
-    [self wk_cancelSelectionDebounce];
+    // 移除滚动 KVO 监听
+    UIView *tableView = objc_getAssociatedObject(self, &kScrollTableKey);
+    if (tableView) {
+        @try { [tableView removeObserver:self forKeyPath:@"contentOffset" context:kScrollKVOCtx]; } @catch (...) {}
+        objc_setAssociatedObject(self, &kScrollTableKey, nil, OBJC_ASSOCIATION_ASSIGN);
+    }
+    // 取消所有待执行 timer
+    dispatch_block_t t1 = objc_getAssociatedObject(self, &kSelectionTimerKey);
+    if (t1) { dispatch_block_cancel(t1); objc_setAssociatedObject(self, &kSelectionTimerKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC); }
+    dispatch_block_t t2 = objc_getAssociatedObject(self, &kSelectionTouchTimer);
+    if (t2) { dispatch_block_cancel(t2); objc_setAssociatedObject(self, &kSelectionTouchTimer, nil, OBJC_ASSOCIATION_COPY_NONATOMIC); }
+
     [self wk_hideSelectionPopup];
-    [self hideLongPressHighlight]; // Fix3: 清除气泡高亮遮罩
 
     UITextView *tv     = objc_getAssociatedObject(self, &kSelectionTVKey);
     UIButton   *dimBtn = objc_getAssociatedObject(self, &kSelectionDimKey);
@@ -2120,11 +2160,70 @@ static const char kSelectionTimerKey = 3;
 }
 
 -(void) wk_cancelSelectionDebounce {
-    dispatch_block_t block = objc_getAssociatedObject(self, &kSelectionTimerKey);
+    dispatch_block_t block = objc_getAssociatedObject(self, &kSelectionTimerKey); // textViewDidChangeSelection 防抖
     if (block) {
         dispatch_block_cancel(block);
         objc_setAssociatedObject(self, &kSelectionTimerKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
     }
+}
+
+// WKSelectionTVDelegate - 参考 Android CursorHandle.onTouchEvent ACTION_MOVE/UP
+-(void) selectionTVTouchBegan {
+    // 开始拖动句柄：立即隐藏菜单（对应 Android mOperateWindow.dismiss()）
+    dispatch_block_t t = objc_getAssociatedObject(self, &kSelectionTouchTimer);
+    if (t) { dispatch_block_cancel(t); objc_setAssociatedObject(self, &kSelectionTouchTimer, nil, OBJC_ASSOCIATION_COPY_NONATOMIC); }
+    [self wk_hideSelectionPopup];
+}
+
+-(void) selectionTVTouchEnded {
+    // 松手：100ms 后重显菜单（对应 Android postShowSelectView(mPopDelay=100)）
+    __weak typeof(self) weakSelf = self;
+    dispatch_block_t block = dispatch_block_create(0, ^{
+        UITextView *tv = objc_getAssociatedObject(weakSelf, &kSelectionTVKey);
+        if (tv && tv.selectedRange.length > 0) {
+            BOOL isAll = (tv.selectedRange.location == 0 && tv.selectedRange.length == tv.text.length);
+            [weakSelf wk_showSelectionPopupForTextView:tv isAllSelected:isAll];
+        }
+    });
+    objc_setAssociatedObject(self, &kSelectionTouchTimer, block, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), block);
+}
+
+// 参考 Android OnScrollChangedListener + OnPreDrawListener（滚动隐藏，停止后重显）
+-(void) observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    if (context != kScrollKVOCtx) { [super observeValueForKeyPath:keyPath ofObject:object change:change context:context]; return; }
+
+    UITextView *tv = objc_getAssociatedObject(self, &kSelectionTVKey);
+    if (!tv) return;
+
+    // 隐藏菜单（滚动中）
+    [self wk_hideSelectionPopup];
+
+    // 检查选区是否已完全离开屏幕 → 取消选择（Android reset()）
+    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+    CGRect frameInWindow = tv.frame;
+    CGFloat bottomMargin = 80.0f + window.safeAreaInsets.bottom;
+    CGRect visibleArea = CGRectMake(0, window.safeAreaInsets.top, window.frame.size.width,
+                                    window.frame.size.height - window.safeAreaInsets.top - bottomMargin);
+    CGRect intersection = CGRectIntersection(frameInWindow, visibleArea);
+    if (CGRectIsNull(intersection) || intersection.size.height < 4) {
+        [self endInBubbleTextSelection];
+        return;
+    }
+    // 更新可见区域缓存
+    objc_setAssociatedObject(self, &kSelectionVisibleKey, [NSValue valueWithCGRect:intersection],
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 滚动停止后延迟 100ms 重显（对应 Android postShowSelectView(mPopDelay)）
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(wk_reshowAfterScroll) object:nil];
+    [self performSelector:@selector(wk_reshowAfterScroll) withObject:nil afterDelay:0.15];
+}
+
+-(void) wk_reshowAfterScroll {
+    UITextView *tv = objc_getAssociatedObject(self, &kSelectionTVKey);
+    if (!tv || tv.selectedRange.length == 0) return;
+    BOOL isAll = (tv.selectedRange.location == 0 && tv.selectedRange.length == tv.text.length);
+    [self wk_showSelectionPopupForTextView:tv isAllSelected:isAll];
 }
 
 #pragma mark - 选区菜单浮层（深色圆角卡片，定位在选区上方）
@@ -2257,7 +2356,7 @@ static const NSInteger kSelectionPopupTag = 0x574B5350; // 'WKSP'
     clipView.frame = CGRectMake(0, 0, cardW, cardH);
 
     // 菜单定位用存储的可见区域（visibleFrame），而非 tv.frame（tv 可能超出屏幕）
-    NSValue *visibleVal = objc_getAssociatedObject(self, &kSelectionTimerKey);
+    NSValue *visibleVal = objc_getAssociatedObject(self, &kSelectionVisibleKey);
     CGRect tvFrame = visibleVal ? [visibleVal CGRectValue] : tv.frame;
     CGFloat safeTop = window.safeAreaInsets.top + 8;
     // 优先放在可见文字区域的中间位置（参考 Android showChatPopup 的定位逻辑）
