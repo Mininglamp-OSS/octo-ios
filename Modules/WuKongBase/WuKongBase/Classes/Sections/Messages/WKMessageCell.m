@@ -468,8 +468,14 @@ static NSMutableDictionary *flameNodeCacheDict;
         }
     }
     self.botBadgeLbl.hidden = !isBot || self.nameLbl.hidden;
-    // sizeToFit 移至 layoutName 中执行，此处仅控制显隐
-    // channel info 异步加载后会再次调用 refreshModel:，需触发 layoutSubviews 重新定位
+    if (!self.botBadgeLbl.hidden) {
+        [self.botBadgeLbl sizeToFit];
+        CGRect badgeFrame = self.botBadgeLbl.frame;
+        badgeFrame.size.width += 8.0f;
+        badgeFrame.size.height += 4.0f;
+        self.botBadgeLbl.frame = badgeFrame;
+    }
+    // channel info 异步加载后会再次调用 refreshModel:，触发 layoutSubviews 重新定位
     [self setNeedsLayout];
 
     if(model.isSend) {
