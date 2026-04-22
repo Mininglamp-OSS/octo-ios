@@ -468,13 +468,9 @@ static NSMutableDictionary *flameNodeCacheDict;
         }
     }
     self.botBadgeLbl.hidden = !isBot || self.nameLbl.hidden;
-    if (!self.botBadgeLbl.hidden) {
-        [self.botBadgeLbl sizeToFit];
-        CGRect badgeFrame = self.botBadgeLbl.frame;
-        badgeFrame.size.width += 8.0f;
-        badgeFrame.size.height += 4.0f;
-        self.botBadgeLbl.frame = badgeFrame;
-    }
+    // sizeToFit 移至 layoutName 中执行，此处仅控制显隐
+    // channel info 异步加载后会再次调用 refreshModel:，需触发 layoutSubviews 重新定位
+    [self setNeedsLayout];
 
     if(model.isSend) {
         NSString *myUid = [WKApp shared].loginInfo.uid;
@@ -1038,7 +1034,15 @@ static NSMutableDictionary *flameNodeCacheDict;
         self.nameLbl.lim_width = MIN(fitSize.width, WK_NICKNAME_MAX_WIDTH);
     }
 
-    // Bot标识布局：始终定位（不判断hidden，确保layoutSubviews后位置正确）
+    // Bot标识布局：在 layoutName 中计算尺寸再定位，避免 channel info 异步加载时
+    // refreshModel: 已设 hidden=NO 但 layoutSubviews 尚未执行导致 lim_height=0 的时序问题
+    if (!self.botBadgeLbl.hidden) {
+        [self.botBadgeLbl sizeToFit];
+        CGRect badgeFrame = self.botBadgeLbl.frame;
+        badgeFrame.size.width += 8.0f;
+        badgeFrame.size.height += 4.0f;
+        self.botBadgeLbl.frame = badgeFrame;
+    }
     self.botBadgeLbl.lim_left = self.nameLbl.lim_left + self.nameLbl.lim_width + 6.0f;
     self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
 }
