@@ -1607,7 +1607,7 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 - (UILabel *)replyNameLbl {
     if(!_replyNameLbl) {
         _replyNameLbl = [[UILabel alloc] init];
-        _replyNameLbl.font = [[WKApp shared].config appFontOfSizeMedium:replyNameFontSize];
+        _replyNameLbl.font = [[WKApp shared].config appFontOfSize:replyNameFontSize];
         _replyNameLbl.numberOfLines = 1;
         _replyNameLbl.lineBreakMode = NSLineBreakByTruncatingTail;
     }
