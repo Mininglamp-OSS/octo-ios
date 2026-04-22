@@ -1997,4 +1997,74 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     return img;
 }
 
+#pragma mark - 气泡内文字选择（透明 UITextView 原位叠加，UIKit 提供拖动句柄）
+
+static const char kSelectionTVKey  = 0;
+static const char kSelectionBtnKey = 1;
+
+-(void) startInBubbleTextSelection {
+    // 已在选择模式则忽略
+    if (objc_getAssociatedObject(self, &kSelectionTVKey)) return;
+
+    // 获取要显示的文字（优先用编辑后内容）
+    NSString *rawText = [[self class] getFullRawContent:self.messageModel];
+    if (!rawText.length) return;
+
+    // textLbl 在 window 坐标系中的位置
+    CGRect frameInWindow = [self.textLbl convertRect:self.textLbl.bounds toView:nil];
+    if (frameInWindow.size.width < 1 || frameInWindow.size.height < 1) return;
+
+    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+
+    // 1. 半透明背景遮罩（点击即退出），比气泡低一层
+    UIButton *dimBtn = [[UIButton alloc] initWithFrame:window.bounds];
+    dimBtn.backgroundColor = [UIColor colorWithWhite:0 alpha:0.15f];
+    dimBtn.alpha = 0;
+    [window addSubview:dimBtn];
+    __weak typeof(self) weakSelf = self;
+    [dimBtn addTarget:self action:@selector(endInBubbleTextSelection) forControlEvents:UIControlEventTouchUpInside];
+
+    // 2. 透明 UITextView，精确覆盖在 textLbl 上方
+    UITextView *tv = [[UITextView alloc] initWithFrame:frameInWindow];
+    tv.text = rawText;
+    tv.font = self.textLbl.font;
+    tv.textColor = self.textLbl.textColor;
+    tv.backgroundColor = [UIColor clearColor];  // 透明：气泡在下方仍可见
+    tv.editable = NO;
+    tv.selectable = YES;
+    tv.scrollEnabled = NO;
+    tv.textContainerInset = UIEdgeInsetsZero;
+    tv.textContainer.lineFragmentPadding = 0;
+
+    [window addSubview:tv];
+
+    // 隐藏原始 label（避免文字重叠显示两遍）
+    self.textLbl.hidden = YES;
+
+    // 保存引用
+    objc_setAssociatedObject(self, &kSelectionTVKey,  tv,     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionBtnKey, dimBtn, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 获取焦点并全选，之后用户可拖动句柄缩小选区
+    [tv becomeFirstResponder];
+    [tv selectAll:nil];
+
+    [UIView animateWithDuration:0.18 animations:^{ dimBtn.alpha = 1; }];
+}
+
+-(void) endInBubbleTextSelection {
+    UITextView *tv     = objc_getAssociatedObject(self, &kSelectionTVKey);
+    UIButton   *dimBtn = objc_getAssociatedObject(self, &kSelectionBtnKey);
+
+    [UIView animateWithDuration:0.15 animations:^{
+        dimBtn.alpha = 0;
+    } completion:^(BOOL finished) {
+        [tv     removeFromSuperview];
+        [dimBtn removeFromSuperview];
+        objc_setAssociatedObject(self, &kSelectionTVKey,  nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(self, &kSelectionBtnKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        self.textLbl.hidden = NO;
+    }];
+}
+
 @end

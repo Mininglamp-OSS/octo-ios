@@ -78,7 +78,7 @@ public typealias OnDismissed = () -> Void
     
     @objc public func setup() {
         var contextMenu = PresentationThemeContextMenu(
-            dimColor: UIColor(rgb: 0x000000, alpha: 0.08),  // 轻微遮罩，不遮挡对话内容
+            dimColor: UIColor(rgb: 0x000000, alpha: 0.02),  // 几乎透明，不遮挡对话内容
             backgroundColor: UIColor(rgb: 0xf9f9f9, alpha: 0.78),
             itemSeparatorColor: UIColor(rgb: 0x3c3c43, alpha: 0.2),
             sectionSeparatorColor: UIColor(rgb: 0x8a8a8a, alpha: 0.2),

@@ -573,7 +573,10 @@
         }
         __weak typeof(messageCell) weakCell = messageCell;
         selectItem.onTap = ^(id<WKConversationContext> ctx) {
-            [weakSelf showTextSelectionForMessage:contextMessage fromCell:weakCell];
+            // 菜单关闭动画完成后，在气泡原位启动文字选择（透明 UITextView + UIKit 原生句柄）
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [weakCell startInBubbleTextSelection];
+            });
         };
         NSMutableArray *mutable = [NSMutableArray arrayWithArray:toolbarMenus ?: @[]];
         [mutable addObject:selectItem];

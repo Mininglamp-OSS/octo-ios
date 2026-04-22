@@ -385,6 +385,10 @@ static NSMutableDictionary *flameNodeCacheDict;
     [self.conversationContext longPressMessageCell:self gestureRecognizer:gestureRecognizer];
 }
 
+// 基类空实现，WKTextMessageCell 重写
+-(void) startInBubbleTextSelection {}
+-(void) endInBubbleTextSelection {}
+
 -(void) showLongPressHighlight {
     const NSInteger kHighlightTag = 0x4C505348; // 'LPSH'
     if ([self.bubbleBackgroundView viewWithTag:kHighlightTag]) return;
