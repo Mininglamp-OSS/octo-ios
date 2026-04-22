@@ -95,6 +95,13 @@ static const NSInteger kTextPreviewLength = 2000;     // 预览显示的字符�
 static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高度
 
 
+// UITextView 子类：屏蔽系统复制/粘贴菜单，只保留自定义菜单
+@interface WKSelectionOnlyTextView : UITextView @end
+@implementation WKSelectionOnlyTextView
+- (BOOL)canPerformAction:(SEL)action withSender:(id)sender { return NO; }
+- (BOOL)canBecomeFirstResponder { return YES; }
+@end
+
 @implementation WKTextMessageCell
 
 -(void) invalidateSegments {
@@ -1996,13 +2003,6 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     UIGraphicsEndImageContext();
     return img;
 }
-
-// ── UITextView 子类：屏蔽系统复制/粘贴菜单，只保留我们自定义菜单 ──
-@interface WKSelectionOnlyTextView : UITextView @end
-@implementation WKSelectionOnlyTextView
-- (BOOL)canPerformAction:(SEL)action withSender:(id)sender { return NO; }
-- (BOOL)canBecomeFirstResponder { return YES; }
-@end
 
 #pragma mark - 气泡内文字选择（透明 UITextView 原位叠加，UIKit 提供拖动句柄）
 
