@@ -728,86 +728,98 @@ static NSMutableDictionary *_jsTableHeights;
 }
 
 /// 自动检测文本中的 @mention（匹配群成员或联系人）
+/// 思路：收集所有可能的成员名/备注，在文本中搜索 "@名字"，支持含空格的名字（如 "Octo 产品管家"）。
+/// 按名字长度降序匹配，优先匹配最长的名字，避免 "@Octo 产品管家" 被短名 "@Octo" 抢先匹配。
 +(NSArray<id<WKMatchToken>>*) detectMentionsInText:(NSString*)text channel:(WKChannel*)channel existingTokens:(NSArray<id<WKMatchToken>>*)existingTokens {
-    if (!text || text.length == 0) return @[];
+    if (!text || text.length == 0 || ![text containsString:@"@"]) return @[];
 
-    NSMutableArray<id<WKMatchToken>> *result = [NSMutableArray array];
+    // 1. 收集所有候选名字 → uid 映射
+    NSMutableDictionary<NSString*, NSString*> *nameToUID = [NSMutableDictionary dictionary];
 
-    // 用正则找出所有 @xxx 片段（@后跟非空白字符）
-    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"@(\\S+)" options:0 error:nil];
-    if (!regex) return @[];
-
-    NSArray<NSTextCheckingResult*> *matches = [regex matchesInString:text options:0 range:NSMakeRange(0, text.length)];
-    if (matches.count == 0) return @[];
-
-    // 获取可匹配的成员/联系人列表
-    NSArray<WKChannelMember*> *members = nil;
+    // 群成员
     if (channel.channelType == WK_GROUP) {
-        members = [[WKSDK shared].channelManager getMembersWithChannel:channel];
+        NSArray<WKChannelMember*> *members = [[WKSDK shared].channelManager getMembersWithChannel:channel];
+        for (WKChannelMember *member in members) {
+            WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:member.memberUid]];
+            if (info) {
+                if (info.name.length > 0) nameToUID[info.name] = member.memberUid;
+                if (info.remark.length > 0) nameToUID[info.remark] = member.memberUid;
+                if (info.displayName.length > 0) nameToUID[info.displayName] = member.memberUid;
+            }
+            if (member.memberName.length > 0) nameToUID[member.memberName] = member.memberUid;
+            if (member.memberUid.length > 0) nameToUID[member.memberUid] = member.memberUid;
+        }
     }
 
-    for (NSTextCheckingResult *match in matches) {
-        NSRange fullRange = [match range];           // @xxx 的完整范围
-        NSRange nameRange = [match rangeAtIndex:1];  // xxx 部分
+    // 联系人
+    NSArray<WKChannelInfo*> *contacts = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
+    for (WKChannelInfo *info in contacts) {
+        NSString *uid = info.channel.channelId;
+        if (info.name.length > 0 && !nameToUID[info.name]) nameToUID[info.name] = uid;
+        if (info.remark.length > 0 && !nameToUID[info.remark]) nameToUID[info.remark] = uid;
+        if (info.displayName.length > 0 && !nameToUID[info.displayName]) nameToUID[info.displayName] = uid;
+    }
 
-        // 检查是否与已有 token 重叠，避免重复
-        BOOL overlaps = NO;
-        for (id<WKMatchToken> token in existingTokens) {
-            if (token.type != WKatchTokenTypeMetion) continue;
-            NSRange tr = token.range;
-            if (fullRange.location < tr.location + tr.length && tr.location < fullRange.location + fullRange.length) {
-                overlaps = YES;
-                break;
-            }
-        }
-        if (overlaps) continue;
+    if (nameToUID.count == 0) return @[];
 
-        NSString *mentionName = [text substringWithRange:nameRange];
-        NSString *matchedUID = nil;
+    // 2. 按名字长度降序排列，优先匹配最长名字
+    NSArray<NSString*> *sortedNames = [nameToUID.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+        return b.length > a.length ? NSOrderedDescending : (b.length < a.length ? NSOrderedAscending : NSOrderedSame);
+    }];
 
-        // 在群成员中匹配（名字/备注/uid）
-        if (members) {
-            for (WKChannelMember *member in members) {
-                WKChannelInfo *memberInfo = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:member.memberUid]];
-                if (memberInfo) {
-                    if (([memberInfo.name isEqualToString:mentionName]) ||
-                        (memberInfo.remark && [memberInfo.remark isEqualToString:mentionName]) ||
-                        ([memberInfo.displayName isEqualToString:mentionName]) ||
-                        ([member.memberUid isEqualToString:mentionName])) {
-                        matchedUID = member.memberUid;
-                        break;
-                    }
-                } else if ([member.memberUid isEqualToString:mentionName] ||
-                           (member.memberName && [member.memberName isEqualToString:mentionName])) {
-                    matchedUID = member.memberUid;
+    // 3. 在文本中搜索 "@名字"
+    NSMutableArray<id<WKMatchToken>> *result = [NSMutableArray array];
+    NSMutableIndexSet *usedPositions = [NSMutableIndexSet indexSet];
+
+    for (NSString *name in sortedNames) {
+        NSString *mentionStr = [NSString stringWithFormat:@"@%@", name];
+        NSRange searchRange = NSMakeRange(0, text.length);
+
+        while (searchRange.location + mentionStr.length <= text.length) {
+            NSRange found = [text rangeOfString:mentionStr options:0 range:searchRange];
+            if (found.location == NSNotFound) break;
+
+            // 推进搜索起点
+            searchRange.location = found.location + found.length;
+            searchRange.length = text.length - searchRange.location;
+
+            // 检查是否与已用位置重叠
+            if ([usedPositions intersectsIndexesInRange:found]) continue;
+
+            // 检查是否与已有 entity token 重叠
+            BOOL overlaps = NO;
+            for (id<WKMatchToken> token in existingTokens) {
+                if (token.type != WKatchTokenTypeMetion) continue;
+                NSRange tr = token.range;
+                if (found.location < tr.location + tr.length && tr.location < found.location + found.length) {
+                    overlaps = YES;
                     break;
                 }
             }
-        }
+            if (overlaps) continue;
 
-        // 群成员没匹配到，尝试从联系人缓存中按名字匹配
-        if (!matchedUID) {
-            NSArray<WKChannelInfo*> *allContacts = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
-            for (WKChannelInfo *info in allContacts) {
-                if (([info.name isEqualToString:mentionName]) ||
-                    (info.remark && [info.remark isEqualToString:mentionName]) ||
-                    ([info.displayName isEqualToString:mentionName])) {
-                    matchedUID = info.channel.channelId;
+            // 检查是否与本轮已检测到的 token 重叠
+            for (id<WKMatchToken> token in result) {
+                NSRange tr = token.range;
+                if (found.location < tr.location + tr.length && tr.location < found.location + found.length) {
+                    overlaps = YES;
                     break;
                 }
             }
-        }
+            if (overlaps) continue;
 
-        if (matchedUID) {
+            [usedPositions addIndexesInRange:found];
             WKMetionToken *token = [WKMetionToken new];
-            token.range = fullRange;
-            token.uid = matchedUID;
-            token.text = [text substringWithRange:fullRange];
+            token.range = found;
+            token.uid = nameToUID[name];
+            token.text = [text substringWithRange:found];
             [result addObject:token];
-            NSLog(@"[Mention] autoDetect ✅ \"%@\" → uid=%@", token.text, matchedUID);
-        } else {
-            NSLog(@"[Mention] autoDetect ❌ \"@%@\" 未匹配到群成员或联系人", mentionName);
+            NSLog(@"[Mention] autoDetect ✅ \"%@\" → uid=%@", token.text, token.uid);
         }
+    }
+
+    if (result.count == 0 && [text containsString:@"@"]) {
+        NSLog(@"[Mention] autoDetect: 文本含@但无匹配 (候选名%lu个)", (unsigned long)sortedNames.count);
     }
 
     return result;
