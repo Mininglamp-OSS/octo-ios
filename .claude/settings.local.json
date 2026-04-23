@@ -88,7 +88,14 @@
       "WebFetch(domain:api.example.com)",
       "Bash(pod spec:*)",
       "Bash(gem install *)",
-      "Bash(plutil -p Pods/Bugly/Bugly.framework/Info.plist)"
+      "Bash(plutil -p Pods/Bugly/Bugly.framework/Info.plist)",
+      "Bash(awk -F: '{print $1\": \"$2}')",
+      "Bash(git *)",
+      "Bash(gem list *)",
+      "Bash(pod --version)",
+      "Bash(sudo gem *)",
+      "Bash(xxd /Users/wanglitao/Documents/octo-ios/Modules/WuKongBase/WuKongBase/Classes/Sections/Messages/WKTextMessageCell.m)",
+      "Bash(xxd)"
     ]
   }
 }

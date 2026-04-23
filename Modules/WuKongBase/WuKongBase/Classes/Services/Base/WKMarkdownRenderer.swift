@@ -644,9 +644,11 @@ import Down
         * {
             font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
             font-size: \(fontSize)px;
+            line-height: 1.2;
             color: \(textColorHex);
             margin: 0;
             padding: 0;
+            box-sizing: border-box;
         }
         body { margin: 0; padding: 0; -webkit-text-size-adjust: none; background-color: transparent; }
         table { border-collapse: collapse; width: max-content; white-space: nowrap; }
