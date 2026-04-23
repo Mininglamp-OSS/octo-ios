@@ -599,20 +599,82 @@
 
 -(void) pullup:(void(^)(bool more))complete {
     __weak typeof(self) weakSelf = self;
+
+    NSInteger oldSectionCount = [self.dataProvider dateCount];
+    NSInteger oldLastSectionRowCount = 0;
+    if (oldSectionCount > 0) {
+        oldLastSectionRowCount = [self.dataProvider messagesAtSection:oldSectionCount - 1].count;
+    }
+
     [self.dataProvider pullup:^(bool hasMore) {
         if(!hasMore) {
             [weakSelf pullupFinished];
         }else {
             [weakSelf enablePullup:YES];
         }
-        [weakSelf.tableView reloadData];
+
+        NSInteger newSectionCount = [weakSelf.dataProvider dateCount];
+        NSInteger newSectionsAdded = newSectionCount - oldSectionCount;
+
+        NSMutableArray<WKMessageModel *> *newMsgs = [NSMutableArray array];
+        if (newSectionsAdded > 0) {
+            if (oldSectionCount > 0) {
+                NSInteger oldSectionNewRowCount = [weakSelf.dataProvider messagesAtSection:oldSectionCount - 1].count;
+                for (NSInteger r = oldLastSectionRowCount; r < oldSectionNewRowCount; r++) {
+                    [newMsgs addObject:[weakSelf.dataProvider messagesAtSection:oldSectionCount - 1][r]];
+                }
+            }
+            for (NSInteger s = oldSectionCount; s < newSectionCount; s++) {
+                [newMsgs addObjectsFromArray:[weakSelf.dataProvider messagesAtSection:s]];
+            }
+        } else if (newSectionCount > 0) {
+            NSInteger newLastSectionRowCount = [weakSelf.dataProvider messagesAtSection:newSectionCount - 1].count;
+            for (NSInteger r = oldLastSectionRowCount; r < newLastSectionRowCount; r++) {
+                [newMsgs addObject:[weakSelf.dataProvider messagesAtSection:newSectionCount - 1][r]];
+            }
+        }
+
+        if (newMsgs.count > 0) {
+            for (WKMessageModel *msg in newMsgs) {
+                [weakSelf precacheHeightForMessage:msg];
+            }
+
+            [UIView performWithoutAnimation:^{
+                [weakSelf.tableView beginUpdates];
+
+                if (newSectionsAdded > 0) {
+                    if (oldSectionCount > 0) {
+                        NSInteger oldSectionNewRowCount = [weakSelf.dataProvider messagesAtSection:oldSectionCount - 1].count;
+                        if (oldSectionNewRowCount > oldLastSectionRowCount) {
+                            NSMutableArray<NSIndexPath *> *rowPaths = [NSMutableArray array];
+                            for (NSInteger r = oldLastSectionRowCount; r < oldSectionNewRowCount; r++) {
+                                [rowPaths addObject:[NSIndexPath indexPathForRow:r inSection:oldSectionCount - 1]];
+                            }
+                            [weakSelf.tableView insertRowsAtIndexPaths:rowPaths withRowAnimation:UITableViewRowAnimationNone];
+                        }
+                    }
+                    NSIndexSet *sectionSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(oldSectionCount, newSectionsAdded)];
+                    [weakSelf.tableView insertSections:sectionSet withRowAnimation:UITableViewRowAnimationNone];
+                } else {
+                    NSInteger newLastSectionRowCount = [weakSelf.dataProvider messagesAtSection:newSectionCount - 1].count;
+                    if (newLastSectionRowCount > oldLastSectionRowCount) {
+                        NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
+                        for (NSInteger r = oldLastSectionRowCount; r < newLastSectionRowCount; r++) {
+                            [indexPaths addObject:[NSIndexPath indexPathForRow:r inSection:newSectionCount - 1]];
+                        }
+                        [weakSelf.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
+                    }
+                }
+
+                [weakSelf.tableView endUpdates];
+            }];
+        }
+
         [weakSelf.tableView.mj_footer endRefreshing];
-        
+
         if(complete) {
             complete(hasMore);
         }
-        
-//        [weakSelf insertHistoryMsgSplitIfNeed]; // 插入历史消息分割线
     }];
 }
 
