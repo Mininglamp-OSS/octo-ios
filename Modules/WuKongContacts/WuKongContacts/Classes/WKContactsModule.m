@@ -72,32 +72,38 @@
     
     // 新朋友item
     [self setMethod:@"contacts.header.newFriend" handler:^id _Nullable(id  _Nonnull param) {
-        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:WK_CONTACTS_HEADER_ITEM_NEWFRIEND title:LLangW(@"新的朋友",weakSelf) icon:@"Contacts/Index/FriendNew" moduleID:[weakSelf moduleId] onClick:^{
+        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:WK_CONTACTS_HEADER_ITEM_NEWFRIEND title:LLangW(@"新朋友",weakSelf) icon:@"Contacts/Index/FriendNew" moduleID:[weakSelf moduleId] onClick:^{
             [[WKContactsManager shared] markAllFriendRequestToReaded]; // 好友请求标记为已读
             // 跳转
             [[WKNavigationManager shared] pushViewController:[WKContactsFriendRequestVC new] animated:YES];
         }];
+        item.svgIconName = @"person-plus";
+        item.gradientKind = @"friend";
         int count = [[WKContactsManager shared] getFriendRequestUnreadCount];
         if(count>0) {
             item.badgeValue = [NSString stringWithFormat:@"%d", [[WKContactsManager shared] getFriendRequestUnreadCount]];
         }
-        
+
         return item;
     } category:WKPOINT_CATEGORY_CONTACTSITEM sort:9000];
     
     // 群聊item（原我的群组，改名并前移）
     [self setMethod:@"contacts.header.groups" handler:^id _Nullable(id  _Nonnull param) {
-        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"groups" title:LLangW(@"群聊",weakSelf) icon:@"Contacts/Index/AllGroups" moduleID:[weakSelf moduleId] onClick:^{
+        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"groups" title:LLangW(@"我的群聊",weakSelf) icon:@"Contacts/Index/AllGroups" moduleID:[weakSelf moduleId] onClick:^{
             [[WKNavigationManager shared] pushViewController:[WKAllGroupListVC new] animated:YES];
         }];
+        item.svgIconName = @"users";
+        item.gradientKind = @"group";
         return item;
     } category:WKPOINT_CATEGORY_CONTACTSITEM sort:8500];
 
     // 已添加AI item（原我的AI，改名）
     [self setMethod:@"contacts.header.bot" handler:^id _Nullable(id  _Nonnull param) {
-        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"bot" title:LLangW(@"已添加AI",weakSelf) icon:@"Contacts/Index/Bot" moduleID:[weakSelf moduleId] onClick:^{
+        WKContactsHeaderItem *item = [WKContactsHeaderItem initWithSid:@"bot" title:LLangW(@"已添加 AI",weakSelf) icon:@"Contacts/Index/Bot" moduleID:[weakSelf moduleId] onClick:^{
             [[WKNavigationManager shared] pushViewController:[WKBotListVC new] animated:YES];
         }];
+        item.svgIconName = @"bot";
+        item.gradientKind = @"ai";
         return item;
     } category:WKPOINT_CATEGORY_CONTACTSITEM sort:8000];
 

@@ -37,14 +37,14 @@ static CGFloat const kHorizontalPadding = 16.0f;
 }
 
 - (void)setupUI {
-    UIColor *themeColor = [WKApp shared].config.themeColor;
-    UIColor *normalColor = [UIColor colorWithWhite:0.5 alpha:1.0];
-    UIFont *selectedFont = [[WKApp shared].config appFontOfSizeMedium:17.0f];
-    UIFont *normalFont = [[WKApp shared].config appFontOfSize:17.0f];
+    UIColor *selectedColor = [WKApp shared].config.navBarTitleColor ?: [UIColor blackColor];
+    UIColor *normalColor = [UIColor colorWithWhite:0.6 alpha:1.0];
+    UIFont *selectedFont = [UIFont systemFontOfSize:16 weight:UIFontWeightBold];
+    UIFont *normalFont = [UIFont systemFontOfSize:16 weight:UIFontWeightRegular];
 
     _groupBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    [_groupBtn setTitle:LLang(@"群聊") forState:UIControlStateNormal];
-    [_groupBtn setTitleColor:themeColor forState:UIControlStateNormal];
+    [_groupBtn setTitle:LLang(@"群组") forState:UIControlStateNormal];
+    [_groupBtn setTitleColor:selectedColor forState:UIControlStateNormal];
     _groupBtn.titleLabel.font = selectedFont;
     [_groupBtn addTarget:self action:@selector(onGroupTap) forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:_groupBtn];
@@ -57,7 +57,7 @@ static CGFloat const kHorizontalPadding = 16.0f;
     [self addSubview:_privateBtn];
 
     _indicator = [[UIView alloc] init];
-    _indicator.backgroundColor = themeColor;
+    _indicator.backgroundColor = [WKApp shared].config.themeColor;
     _indicator.layer.cornerRadius = kIndicatorHeight / 2.0f;
     [self addSubview:_indicator];
 
@@ -68,17 +68,20 @@ static CGFloat const kHorizontalPadding = 16.0f;
     [self addSubview:_privateBadge];
 
     _bottomLine = [[UIView alloc] init];
-    _bottomLine.backgroundColor = [UIColor colorWithWhite:0.88 alpha:1.0];
+    if (@available(iOS 13.0, *)) {
+        _bottomLine.backgroundColor = [UIColor separatorColor];
+    } else {
+        _bottomLine.backgroundColor = [UIColor colorWithWhite:0.88 alpha:1.0];
+    }
     [self addSubview:_bottomLine];
 
-    // @提醒标识
     _mentionLbl = [[UILabel alloc] init];
-    _mentionLbl.text = LLang(@"有人@我");
-    _mentionLbl.font = [UIFont systemFontOfSize:9 weight:UIFontWeightMedium];
+    _mentionLbl.text = @"@";
+    _mentionLbl.font = [UIFont systemFontOfSize:10 weight:UIFontWeightBold];
     _mentionLbl.textColor = [UIColor whiteColor];
     _mentionLbl.backgroundColor = [UIColor orangeColor];
     _mentionLbl.textAlignment = NSTextAlignmentCenter;
-    _mentionLbl.layer.cornerRadius = 8;
+    _mentionLbl.layer.cornerRadius = 7;
     _mentionLbl.layer.masksToBounds = YES;
     _mentionLbl.hidden = YES;
     [self addSubview:_mentionLbl];
@@ -101,30 +104,31 @@ static CGFloat const kHorizontalPadding = 16.0f;
 
     CGFloat w = self.bounds.size.width;
     CGFloat h = self.bounds.size.height;
-    CGFloat contentW = w - kHorizontalPadding * 2;
-    CGFloat halfW = contentW / 2.0f;
     CGFloat btnH = h - kIndicatorHeight;
+    CGFloat tabGap = 24.0f;
 
-    // 两个按钮平分宽度，居中排列
-    _groupBtn.frame = CGRectMake(kHorizontalPadding, 0, halfW, btnH);
-    _privateBtn.frame = CGRectMake(kHorizontalPadding + halfW, 0, halfW, btnH);
+    [_groupBtn sizeToFit];
+    [_privateBtn sizeToFit];
+    CGFloat groupW = _groupBtn.intrinsicContentSize.width + 4;
+    CGFloat privateW = _privateBtn.intrinsicContentSize.width + 4;
+
+    _groupBtn.frame = CGRectMake(kHorizontalPadding, 0, groupW, btnH);
+    _privateBtn.frame = CGRectMake(_groupBtn.lim_right + tabGap, 0, privateW, btnH);
 
     [self layoutIndicatorAnimated:NO];
     [self layoutBadges];
     [self layoutMentionLabel];
 
-    // 底部分隔线
-    _bottomLine.frame = CGRectMake(0, h - 0.5, w, 0.5);
+    _bottomLine.frame = CGRectMake(kHorizontalPadding, h - 0.5, w - kHorizontalPadding * 2, 0.5);
 }
 
 - (void)layoutIndicatorAnimated:(BOOL)animated {
     UIButton *btn = (_selectedIndex == 0) ? _groupBtn : _privateBtn;
 
-    // 指示线宽度 = 文字宽度 + 20pt
     NSString *title = btn.titleLabel.text ?: @"";
     UIFont *font = btn.titleLabel.font;
     CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-    CGFloat indicatorW = textW + 80;
+    CGFloat indicatorW = textW + 4;
     CGFloat indicatorX = CGRectGetMidX(btn.frame) - indicatorW / 2.0f;
     CGFloat indicatorY = self.bounds.size.height - kIndicatorHeight;
 
@@ -189,20 +193,22 @@ static CGFloat const kHorizontalPadding = 16.0f;
 }
 
 - (void)updateButtonStyles {
-    UIColor *themeColor = [WKApp shared].config.themeColor;
-    UIColor *normalColor = [UIColor colorWithWhite:0.5 alpha:1.0];
-    UIFont *selectedFont = [[WKApp shared].config appFontOfSizeMedium:17.0f];
-    UIFont *normalFont = [[WKApp shared].config appFontOfSize:17.0f];
+    UIColor *selectedColor = [WKApp shared].config.navBarTitleColor ?: [UIColor blackColor];
+    UIColor *normalColor = [UIColor colorWithWhite:0.6 alpha:1.0];
+    UIFont *selectedFont = [UIFont systemFontOfSize:16 weight:UIFontWeightBold];
+    UIFont *normalFont = [UIFont systemFontOfSize:16 weight:UIFontWeightRegular];
+
+    _indicator.backgroundColor = [WKApp shared].config.themeColor;
 
     if (_selectedIndex == 0) {
-        [_groupBtn setTitleColor:themeColor forState:UIControlStateNormal];
+        [_groupBtn setTitleColor:selectedColor forState:UIControlStateNormal];
         _groupBtn.titleLabel.font = selectedFont;
         [_privateBtn setTitleColor:normalColor forState:UIControlStateNormal];
         _privateBtn.titleLabel.font = normalFont;
     } else {
         [_groupBtn setTitleColor:normalColor forState:UIControlStateNormal];
         _groupBtn.titleLabel.font = normalFont;
-        [_privateBtn setTitleColor:themeColor forState:UIControlStateNormal];
+        [_privateBtn setTitleColor:selectedColor forState:UIControlStateNormal];
         _privateBtn.titleLabel.font = selectedFont;
     }
 }
@@ -211,15 +217,9 @@ static CGFloat const kHorizontalPadding = 16.0f;
 
 - (void)layoutMentionLabel {
     if (_mentionLbl.hidden) return;
-    NSString *title = _groupBtn.titleLabel.text ?: @"";
-    UIFont *font = _groupBtn.titleLabel.font;
-    CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-    CGFloat textRight = CGRectGetMidX(_groupBtn.frame) + textW / 2.0f;
-    CGFloat btnCenterY = CGRectGetMidY(_groupBtn.frame);
-    [_mentionLbl sizeToFit];
-    CGFloat lblW = _mentionLbl.lim_width + 10;
-    CGFloat lblH = 16;
-    _mentionLbl.frame = CGRectMake(textRight + 4, btnCenterY - lblH / 2.0, lblW, lblH);
+    CGFloat lblSize = 14;
+    CGFloat btnTop = CGRectGetMinY(_groupBtn.frame);
+    _mentionLbl.frame = CGRectMake(_groupBtn.lim_right + 2, btnTop + 4, lblSize, lblSize);
 }
 
 - (void)setGroupHasMention:(BOOL)hasMention {

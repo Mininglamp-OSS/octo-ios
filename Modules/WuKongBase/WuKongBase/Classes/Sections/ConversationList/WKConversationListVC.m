@@ -82,6 +82,11 @@
 @property(nonatomic,strong) UIImageView *spaceArrowView; // Space标题右侧折叠箭头
 @property(nonatomic,assign) BOOL hasCleanedConversationsOnStartup; // 本次启动是否已清理会话数据
 @property(nonatomic,strong) WKConversationTabView *conversationTabView; // 群组/私聊 tab
+@property(nonatomic,strong) UIView *navLeftView;
+@property(nonatomic,strong) UIView *avatarView;
+@property(nonatomic,strong) UILabel *avatarLabel;
+@property(nonatomic,strong) UILabel *spaceNameLabel;
+@property(nonatomic,strong) UIImageView *chevronView;
 @property(nonatomic,strong) UIView *fixedHeaderContainer; // 固定在顶部的搜索栏+tab容器
 @property(nonatomic,strong) NSArray<WKConversationDisplayItem *> *groupDisplayList; // 群聊 tab 展示列表
 
@@ -151,21 +156,70 @@
 
 // 给标题添加点击手势
 - (void)setupTitleTapGesture {
-    // 给 titleLabel 添加点击手势
-    self.navigationBar.titleLabel.userInteractionEnabled = YES;
-    UITapGestureRecognizer *tapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(spaceButtonTapped)];
-    [self.navigationBar.titleLabel addGestureRecognizer:tapGesture];
+    CGFloat avatarSize = 32.0f;
+    CGFloat hPad = 4.0f;
+    CGFloat gap = 6.0f;
+    CGFloat chevronSize = 14.0f;
+    CGFloat viewH = avatarSize + hPad * 2;
 
-    // 在导航栏上添加折叠箭头（标题右侧，默认向右，展开时向下）
-    UIImage *arrowImg = [[WKApp shared] loadImage:@"arrow_right" moduleID:@"WuKongLogin"];
-    _spaceArrowView = [[UIImageView alloc] initWithImage:arrowImg];
-    _spaceArrowView.contentMode = UIViewContentModeScaleAspectFit;
-    _spaceArrowView.frame = CGRectMake(0, 0, 12, 12);
-    _spaceArrowView.hidden = NO;
-    _spaceArrowView.userInteractionEnabled = YES;
-    UITapGestureRecognizer *arrowTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(spaceButtonTapped)];
-    [_spaceArrowView addGestureRecognizer:arrowTap];
-    [self.navigationBar addSubview:_spaceArrowView];
+    _avatarView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, avatarSize, avatarSize)];
+    _avatarView.backgroundColor = [UIColor colorWithRed:0x8B/255.0 green:0x5C/255.0 blue:0xF6/255.0 alpha:1.0];
+    _avatarView.layer.cornerRadius = avatarSize / 2.0f;
+    _avatarView.layer.masksToBounds = YES;
+
+    _avatarLabel = [[UILabel alloc] initWithFrame:_avatarView.bounds];
+    _avatarLabel.textAlignment = NSTextAlignmentCenter;
+    _avatarLabel.textColor = [UIColor whiteColor];
+    _avatarLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    [_avatarView addSubview:_avatarLabel];
+
+    _spaceNameLabel = [[UILabel alloc] init];
+    _spaceNameLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    _spaceNameLabel.textColor = [WKApp shared].config.navBarTitleColor;
+    _spaceNameLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+
+    _chevronView = [[UIImageView alloc] initWithImage:[self createChevronDownImage]];
+    _chevronView.contentMode = UIViewContentModeScaleAspectFit;
+    _chevronView.frame = CGRectMake(0, 0, chevronSize, chevronSize);
+
+    CGFloat maxNameWidth = WKScreenWidth - 16 - avatarSize - gap * 2 - chevronSize - hPad * 2 - 120;
+    _spaceNameLabel.text = self._title ?: [WKApp shared].config.appName;
+    [_spaceNameLabel sizeToFit];
+    if (_spaceNameLabel.lim_width > maxNameWidth) {
+        _spaceNameLabel.lim_width = maxNameWidth;
+    }
+
+    CGFloat rightPad = 10.0f;
+    CGFloat totalW = hPad + avatarSize + gap + _spaceNameLabel.lim_width + 4 + chevronSize + rightPad;
+    _navLeftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, totalW, viewH)];
+
+    // 胶囊背景：浅色模式白色，深色模式深灰
+    if (@available(iOS 13.0, *)) {
+        _navLeftView.backgroundColor = [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *tc) {
+            return tc.userInterfaceStyle == UIUserInterfaceStyleDark
+                ? [UIColor colorWithWhite:0.18 alpha:1.0]
+                : [UIColor whiteColor];
+        }];
+    } else {
+        _navLeftView.backgroundColor = [UIColor whiteColor];
+    }
+    _navLeftView.layer.cornerRadius = viewH / 2.0f;
+    _navLeftView.layer.masksToBounds = YES;
+
+    _avatarView.frame = CGRectMake(hPad, hPad, avatarSize, avatarSize);
+    _spaceNameLabel.frame = CGRectMake(_avatarView.lim_right + gap, (viewH - _spaceNameLabel.lim_height) / 2.0, _spaceNameLabel.lim_width, _spaceNameLabel.lim_height);
+    _chevronView.frame = CGRectMake(_spaceNameLabel.lim_right + 4, (viewH - chevronSize) / 2.0, chevronSize, chevronSize);
+
+    [_navLeftView addSubview:_avatarView];
+    [_navLeftView addSubview:_spaceNameLabel];
+    [_navLeftView addSubview:_chevronView];
+
+    _navLeftView.userInteractionEnabled = YES;
+    UITapGestureRecognizer *tapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(spaceButtonTapped)];
+    [_navLeftView addGestureRecognizer:tapGesture];
+
+    self.navigationBar.leftView = _navLeftView;
+    _spaceArrowView = _chevronView;
 }
 
 // 加载当前 Space 信息
@@ -218,7 +272,7 @@
 
 // 开启大标题模式
 - (BOOL)largeTitle {
-    return true;
+    return NO;
 }
 
 -(void) viewWillLayoutSubviews {
@@ -343,9 +397,10 @@
     if (!_rightAddItem) {
         CGFloat itemH = 32.0f;
         CGFloat iconSize = 20.0f;
-        CGFloat gap = 12.0f;
+        CGFloat btnSize = 24.0f;
+        CGFloat gap = 14.0f;
 
-        // 信号容器（图标+延迟文字）
+        // 信号容器（图标+延迟文字）— 保留全部信号监控逻辑
         self.signalContainerView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 60, itemH)];
         UITapGestureRecognizer *tapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(signalTapped)];
         [self.signalContainerView addGestureRecognizer:tapGesture];
@@ -360,50 +415,29 @@
         self.latencyLabel.textAlignment = NSTextAlignmentLeft;
         [self.signalContainerView addSubview:self.latencyLabel];
 
-        // PC 在线图标（默认隐藏）
+        // PC/Web 在线图标（默认隐藏）— SVG monitor + green dot
         self.pcOnlineBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         self.pcOnlineBtn.frame = CGRectMake(0, 0, iconSize, iconSize);
-        UIImage *pcImg = [self imageName:@"ConversationList/Index/PCOnline"];
-        if (pcImg) {
-            pcImg = [pcImg imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-            [self.pcOnlineBtn setImage:pcImg forState:UIControlStateNormal];
-            [self.pcOnlineBtn setTintColor:[UIColor grayColor]];
-        }
+        [self.pcOnlineBtn setImage:[self createMonitorOnlineImage] forState:UIControlStateNormal];
         [self.pcOnlineBtn addTarget:self action:@selector(pcOnlineIconTapped) forControlEvents:UIControlEventTouchUpInside];
         self.pcOnlineBtn.hidden = YES;
 
         // 加号按钮
         UIButton *addBtn = [UIButton buttonWithType:UIButtonTypeCustom];
         addBtn.tag = 8888;
-        addBtn.frame = CGRectMake(0, 0, 24, 24);
-        UIImage *addImg = [self imageName:@"ConversationList/Index/Add"];
-        addImg = [addImg imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        [addBtn setImage:addImg forState:UIControlStateNormal];
-        [addBtn setTintColor:WKApp.shared.config.navBarButtonColor];
+        addBtn.frame = CGRectMake(0, 0, btnSize, btnSize);
+        [addBtn setImage:[self createPlusImage] forState:UIControlStateNormal];
+        addBtn.tintColor = [WKApp shared].config.navBarButtonColor;
         [addBtn addTarget:self action:@selector(rightAddPressed) forControlEvents:UIControlEventTouchUpInside];
 
-        // 水平排列：信号 | PC图标 | 加号，所有元素垂直居中
-        CGFloat x = 0;
-        self.signalContainerView.frame = CGRectMake(x, 0, 60, itemH);
-        x += 60 + gap;
-
-        self.pcOnlineBtn.frame = CGRectMake(x, (itemH - iconSize) / 2, iconSize, iconSize);
-        x += iconSize + gap;
-
-        addBtn.frame = CGRectMake(x, (itemH - 24) / 2, 24, 24);
-        x += 24;
-
-        _rightAddItem = [[UIView alloc] initWithFrame:CGRectMake(0, 0, x, itemH)];
+        _rightAddItem = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, itemH)];
         [_rightAddItem addSubview:self.signalContainerView];
         [_rightAddItem addSubview:self.pcOnlineBtn];
         [_rightAddItem addSubview:addBtn];
 
         [self updateSignalViewForStatus:[WKSDK shared].connectionManager.connectStatus];
-
-        // 初始化时默认隐藏，等 API 轮询或 CMD 推送更新
         self.pcOnlineBtn.hidden = YES;
 
-        // 动态排列
         [self relayoutRightItems];
     }
     return _rightAddItem;
@@ -439,8 +473,8 @@
 - (void)relayoutRightItems {
     if (!_rightAddItem) return;
     CGFloat itemH = 32.0f;
-    CGFloat gap = 12.0f;
-    CGFloat addBtnSize = 24.0f;
+    CGFloat gap = 14.0f;
+    CGFloat btnSize = 24.0f;
     CGFloat pcIconSize = 20.0f;
 
     UIView *addBtn = [_rightAddItem viewWithTag:8888];
@@ -455,8 +489,8 @@
     }
 
     if (addBtn) {
-        addBtn.frame = CGRectMake(x, (itemH - addBtnSize) / 2, addBtnSize, addBtnSize);
-        x += addBtnSize;
+        addBtn.frame = CGRectMake(x, (itemH - btnSize) / 2, btnSize, btnSize);
+        x += btnSize;
     }
 
     _rightAddItem.frame = CGRectMake(0, 0, x, itemH);
@@ -500,38 +534,48 @@
 }
 
 -(void) refreshTitle{
-    WKConnectStatus status = [WKSDK shared].connectionManager.connectStatus;
     [self.connectLock lock];
 
-    // 参考 Web 端：优先显示 Space 名称，状态通过右侧信号图标展示
     if (self.currentSpaceName && self.currentSpaceName.length > 0) {
         self._title = self.currentSpaceName;
     } else {
         self._title = [WKApp shared].config.appName;
     }
 
-    [self setCustomTitle:self._title];
+    if (_spaceNameLabel) {
+        CGFloat hPad = 4.0f;
+        CGFloat avatarSize = 32.0f;
+        CGFloat gap = 6.0f;
+        CGFloat chevronSize = 14.0f;
+        CGFloat rightPad = 10.0f;
+        CGFloat viewH = avatarSize + hPad * 2;
 
-    // 更新折叠箭头位置（始终显示）
-    if (self.spaceArrowView) {
-        self.spaceArrowView.hidden = NO;
-        UILabel *titleLabel = self.navigationBar.titleLabel;
-        CGFloat arrowX = titleLabel.lim_left + titleLabel.lim_width + 4;
-        CGFloat arrowY = titleLabel.lim_top + (titleLabel.lim_height - 12) / 2.0;
-        self.spaceArrowView.frame = CGRectMake(arrowX, arrowY, 12, 12);
+        _spaceNameLabel.text = self._title;
+        [_spaceNameLabel sizeToFit];
+        CGFloat maxNameWidth = WKScreenWidth - 16 - avatarSize - gap * 2 - chevronSize - hPad * 2 - 120;
+        if (_spaceNameLabel.lim_width > maxNameWidth) {
+            _spaceNameLabel.lim_width = maxNameWidth;
+        }
+        _spaceNameLabel.frame = CGRectMake(_avatarView.lim_right + gap, (viewH - _spaceNameLabel.lim_height) / 2.0, _spaceNameLabel.lim_width, _spaceNameLabel.lim_height);
+        _chevronView.frame = CGRectMake(_spaceNameLabel.lim_right + 4, (viewH - chevronSize) / 2.0, chevronSize, chevronSize);
+        _navLeftView.lim_width = _chevronView.lim_right + rightPad;
+        self.navigationBar.leftView = _navLeftView;
+    } else {
+        [self setCustomTitle:self._title];
+    }
+
+    if (_avatarLabel && self._title.length > 0) {
+        _avatarLabel.text = [self._title substringToIndex:1];
     }
 
     [self.connectLock unlock];
 }
 
-// 切换箭头方向（展开=向下，收起=向右）
 - (void)setSpaceArrowExpanded:(BOOL)expanded {
-    if (!self.spaceArrowView || self.spaceArrowView.hidden) return;
-    NSString *imgName = expanded ? @"ArrowDown" : @"arrow_right";
-    UIImage *img = [[WKApp shared] loadImage:imgName moduleID:@"WuKongLogin"];
-    [UIView transitionWithView:self.spaceArrowView duration:0.2 options:UIViewAnimationOptionTransitionCrossDissolve animations:^{
-        self.spaceArrowView.image = img;
-    } completion:nil];
+    if (!_chevronView) return;
+    [UIView animateWithDuration:0.2 animations:^{
+        self->_chevronView.transform = expanded ? CGAffineTransformMakeRotation(M_PI) : CGAffineTransformIdentity;
+    }];
 }
 
 // 标题点击事件 - 通过导航栏标题触发
@@ -658,7 +702,7 @@
         }];
     };
 
-    [popupView showFromView:self.navigationBar.titleLabel];
+    [popupView showFromView:_navLeftView ?: self.navigationBar.titleLabel];
 }
 
 /// 创建固定在顶部的搜索栏容器（不随 tableView 滚动）
@@ -667,10 +711,8 @@
     _fixedHeaderContainer = [[UIView alloc] initWithFrame:CGRectMake(0, navBottom, WKScreenWidth, 0)];
     _fixedHeaderContainer.backgroundColor = [WKApp shared].config.backgroundColor;
 
-    // 搜索栏（与原来 WKConversationListHeaderView 中的保持一致：左右 15pt 间距，圆角 4pt）
     WKSearchbarView *searchbar = [[WKSearchbarView alloc] initWithFrame:CGRectMake(15, 6, WKScreenWidth - 30, 36)];
     searchbar.placeholder = LLang(@"搜索");
-    searchbar.layer.cornerRadius = 4.0f;
     searchbar.layer.masksToBounds = YES;
     searchbar.onClick = ^{
         WKGlobalSearchResultController *vc = [WKGlobalSearchResultController new];
@@ -1938,7 +1980,112 @@
 
 #pragma mark - 网络信号监控
 
-// 创建信号条图标
+- (UIImage *)createChevronDownImage {
+    CGSize size = CGSizeMake(14, 14);
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    UIColor *color = [UIColor colorWithWhite:0.5 alpha:1.0];
+    CGContextSetStrokeColorWithColor(ctx, color.CGColor);
+    CGContextSetLineWidth(ctx, 1.8);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+    CGContextMoveToPoint(ctx, 2.5, 5);
+    CGContextAddLineToPoint(ctx, 7, 9.5);
+    CGContextAddLineToPoint(ctx, 11.5, 5);
+    CGContextStrokePath(ctx);
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return image;
+}
+
+- (UIImage *)createChatBubblesImage {
+    CGSize size = CGSizeMake(24, 24);
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    [[UIColor blackColor] setStroke];
+    CGContextSetLineWidth(ctx, 1.6);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+
+    UIBezierPath *backBubble = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(8, 2, 14, 11) cornerRadius:3];
+    CGContextAddPath(ctx, backBubble.CGPath);
+    CGContextStrokePath(ctx);
+
+    UIBezierPath *frontBubble = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(2, 8, 14, 11) cornerRadius:3];
+    CGContextAddPath(ctx, frontBubble.CGPath);
+    CGContextStrokePath(ctx);
+
+    CGContextMoveToPoint(ctx, 4, 19);
+    CGContextAddLineToPoint(ctx, 2, 22);
+    CGContextAddLineToPoint(ctx, 7, 19);
+    CGContextStrokePath(ctx);
+
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+}
+
+- (UIImage *)createPlusImage {
+    CGSize size = CGSizeMake(24, 24);
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    [[UIColor blackColor] setStroke];
+    CGContextSetLineWidth(ctx, 2.0);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextMoveToPoint(ctx, 5, 12);
+    CGContextAddLineToPoint(ctx, 19, 12);
+    CGContextMoveToPoint(ctx, 12, 5);
+    CGContextAddLineToPoint(ctx, 12, 19);
+    CGContextStrokePath(ctx);
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+}
+
+// SVG monitor icon + green online dot (matches prototype)
+- (UIImage *)createMonitorOnlineImage {
+    CGFloat sz = 20.0f;
+    CGFloat s = sz / 24.0f;
+    UIGraphicsBeginImageContextWithOptions(CGSizeMake(sz, sz), NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+
+    UIColor *strokeColor = [UIColor colorWithRed:20/255.0f green:20/255.0f blue:30/255.0f alpha:0.60f];
+    if (@available(iOS 13.0, *)) {
+        if (UITraitCollection.currentTraitCollection.userInterfaceStyle == UIUserInterfaceStyleDark || WKApp.shared.config.style == WKSystemStyleDark) {
+            strokeColor = [UIColor colorWithRed:242/255.0f green:243/255.0f blue:245/255.0f alpha:0.62f];
+        }
+    }
+    CGContextSetStrokeColorWithColor(ctx, strokeColor.CGColor);
+    CGContextSetLineWidth(ctx, 1.8f * s);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+
+    UIBezierPath *rect = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(2*s, 3*s, 20*s, 14*s) cornerRadius:2*s];
+    [rect stroke];
+
+    CGContextMoveToPoint(ctx, 12*s, 17*s);
+    CGContextAddLineToPoint(ctx, 12*s, 21*s);
+    CGContextStrokePath(ctx);
+
+    CGContextMoveToPoint(ctx, 8*s, 21*s);
+    CGContextAddLineToPoint(ctx, 16*s, 21*s);
+    CGContextStrokePath(ctx);
+
+    CGFloat dotR = 3.0f;
+    CGFloat dotX = sz - dotR - 0.5f;
+    CGFloat dotY = 3*s - 0.5f;
+    UIBezierPath *dot = [UIBezierPath bezierPathWithArcCenter:CGPointMake(dotX, dotY) radius:dotR startAngle:0 endAngle:M_PI*2 clockwise:YES];
+    [[UIColor colorWithRed:11/255.0f green:135/255.0f blue:125/255.0f alpha:1.0f] setFill];
+    [dot fill];
+    [[UIColor whiteColor] setStroke];
+    CGContextSetLineWidth(ctx, 1.5f);
+    [dot stroke];
+
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return [image imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+}
+
 - (UIImage *)createSignalBarsImage {
     CGSize size = CGSizeMake(16, 14);
     UIGraphicsBeginImageContextWithOptions(size, NO, 0);

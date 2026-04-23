@@ -88,7 +88,13 @@
       "WebFetch(domain:api.example.com)",
       "Bash(pod spec:*)",
       "Bash(gem install *)",
-      "Bash(plutil -p Pods/Bugly/Bugly.framework/Info.plist)"
+      "Bash(plutil -p Pods/Bugly/Bugly.framework/Info.plist)",
+      "Bash(git cherry-pick *)",
+      "WebFetch(domain:localhost)",
+      "WebFetch(domain:127.0.0.1)",
+      "Bash(gh issue *)",
+      "Bash(gh api *)",
+      "Bash(gh auth *)"
     ]
   }
 }

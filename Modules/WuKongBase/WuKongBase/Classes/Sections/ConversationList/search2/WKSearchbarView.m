@@ -67,19 +67,19 @@
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    
+
     [self setBackgroundColor:[WKApp shared].config.cellBackgroundColor];
-    CGFloat searchIconRightSpace = 5.0f;
-    CGFloat contentWidth = self.searchIconImgView.lim_width + self.placeholderLbl.lim_width + searchIconRightSpace;
-    
-    CGFloat searchIconLeft = self.lim_width/2.0f - contentWidth/2.0f;
-    
-    self.searchIconImgView.lim_left = searchIconLeft;
-    self.searchIconImgView.lim_top = self.lim_height/2.0f - self.searchIconImgView.lim_height/2.0f;
-    
-    self.placeholderLbl.lim_left = self.searchIconImgView.lim_right +searchIconRightSpace;
-    self.placeholderLbl.lim_top = self.lim_height/2.0f - self.placeholderLbl.lim_height/2.0f;
-    
+    self.layer.cornerRadius = self.lim_height / 2.0f;
+
+    CGFloat leftPadding = 12.0f;
+    CGFloat iconTextGap = 6.0f;
+
+    self.searchIconImgView.lim_left = leftPadding;
+    self.searchIconImgView.lim_top = self.lim_height / 2.0f - self.searchIconImgView.lim_height / 2.0f;
+
+    self.placeholderLbl.lim_left = self.searchIconImgView.lim_right + iconTextGap;
+    self.placeholderLbl.lim_top = self.lim_height / 2.0f - self.placeholderLbl.lim_height / 2.0f;
+
 }
 
 -(UIImage*) imageName:(NSString*)name {

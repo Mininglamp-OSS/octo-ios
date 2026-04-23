@@ -114,7 +114,7 @@ abstract_target 'TangSengDaoDaoiOSBase' do
   pod 'Aspects'
   pod 'ReactiveObjC'
 
-  target 'TangSengDaoDaoiOS' do
+  target 'OctoiOS' do
     project 'TangSengDaoDaoiOS.xcodeproj'
     
   use_frameworks!

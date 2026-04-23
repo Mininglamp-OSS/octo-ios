@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		16C552F232D5A008552410EA /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 69A72504AD69BFBD2705F757 /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework */; };
 		4B5FF74C2F908A62005CCF01 /* ShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 4B5FF7412F908A62005CCF01 /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7130BFC524C6817600B9E04B /* NotificationService.m in Sources */ = {isa = PBXBuildFile; fileRef = 7130BFC424C6817600B9E04B /* NotificationService.m */; };
 		7130BFC924C6817600B9E04B /* NotificationService.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 7130BFC124C6817600B9E04B /* NotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -43,7 +44,6 @@
 		71F7E3DC2A47F66900E8D20D /* QUESTION.md in Resources */ = {isa = PBXBuildFile; fileRef = 71F7E3DB2A47F66900E8D20D /* QUESTION.md */; };
 		AA110003239265E900D092BA /* WKDBRecoveryManager.m in Sources */ = {isa = PBXBuildFile; fileRef = AA110002239265E900D092BA /* WKDBRecoveryManager.m */; };
 		AA110006239265E900D092BA /* WKDBRepairViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = AA110005239265E900D092BA /* WKDBRepairViewController.m */; };
-		EE1BF60007AE888BBCD21EE8 /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5CA0841FAD4ACC73F9DC603F /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -87,8 +87,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		0C771557D3DDC04A6AE9B613 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig"; sourceTree = "<group>"; };
 		4B5FF7412F908A62005CCF01 /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
-		5CA0841FAD4ACC73F9DC603F /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		69A72504AD69BFBD2705F757 /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_TangSengDaoDaoiOSBase_OctoiOS.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		71018ED405ABC6ED8448075E /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig"; sourceTree = "<group>"; };
 		71275E7D240A7BD600A7502C /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		71275E7F240A7BDB00A7502C /* MapKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MapKit.framework; path = System/Library/Frameworks/MapKit.framework; sourceTree = SDKROOT; };
@@ -145,10 +146,11 @@
 		AA110004239265E900D092BA /* WKDBRepairViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WKDBRepairViewController.h; sourceTree = "<group>"; };
 		AA110005239265E900D092BA /* WKDBRepairViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = WKDBRepairViewController.m; sourceTree = "<group>"; };
 		DE5455F84CCB2C45ED689AA0 /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; sourceTree = "<group>"; };
+		E0C47A5DA8752F76B27D6B91 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		4B5FF74D2F908A62005CCF01 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+		4B5FF74D2F908A62005CCF01 /* Exceptions for "ShareExtension" folder in "ShareExtension" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -158,7 +160,18 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		4B5FF7422F908A62005CCF01 /* ShareExtension */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (4B5FF74D2F908A62005CCF01 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = ShareExtension; sourceTree = "<group>"; };
+		4B5FF7422F908A62005CCF01 /* ShareExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				4B5FF74D2F908A62005CCF01 /* Exceptions for "ShareExtension" folder in "ShareExtension" target */,
+			);
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = ShareExtension;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -203,7 +216,7 @@
 				71D140B6251EEAF00000137A /* libz.tbd in Frameworks */,
 				7132A163240ABB92007F9BE2 /* libc.tbd in Frameworks */,
 				7132A15C240AB4B8007F9BE2 /* libc++.tbd in Frameworks */,
-				EE1BF60007AE888BBCD21EE8 /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework in Frameworks */,
+				16C552F232D5A008552410EA /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -232,7 +245,7 @@
 				71275E7D240A7BD600A7502C /* UIKit.framework */,
 				7130BFD324C6832F00B9E04B /* UserNotifications.framework */,
 				7130BFD524C6832F00B9E04B /* UserNotificationsUI.framework */,
-				5CA0841FAD4ACC73F9DC603F /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework */,
+				69A72504AD69BFBD2705F757 /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -334,6 +347,8 @@
 			children = (
 				DE5455F84CCB2C45ED689AA0 /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig */,
 				71018ED405ABC6ED8448075E /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig */,
+				0C771557D3DDC04A6AE9B613 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig */,
+				E0C47A5DA8752F76B27D6B91 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig */,
 			);
 			path = Pods;
 			sourceTree = "<group>";
@@ -520,7 +535,7 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(DERIVED_FILE_DIR)/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS-checkManifestLockResult.txt",
+				"$(DERIVED_FILE_DIR)/Pods-TangSengDaoDaoiOSBase-OctoiOS-checkManifestLockResult.txt",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -533,19 +548,15 @@
 			files = (
 			);
 			inputFileListPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS-frameworks-${CONFIGURATION}-input-files.xcfilelist",
-			);
-			inputPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS-frameworks-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS-frameworks-${CONFIGURATION}-output-files.xcfilelist",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS-frameworks.sh\"\n";
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS-frameworks.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
@@ -940,7 +951,7 @@
 		};
 		71D6963023926E3700D092BA /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = DE5455F84CCB2C45ED689AA0 /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig */;
+			baseConfigurationReference = 0C771557D3DDC04A6AE9B613 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
@@ -1051,7 +1062,7 @@
 		};
 		71D6963123926E3700D092BA /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 71018ED405ABC6ED8448075E /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig */;
+			baseConfigurationReference = E0C47A5DA8752F76B27D6B91 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;

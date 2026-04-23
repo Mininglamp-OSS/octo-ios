@@ -224,10 +224,7 @@
     // ########## 存储所有会话 ##########
     NSMutableArray<WKConversation*> *conversations = [NSMutableArray array];
     for (WKSyncConversationModel *syncConversationModel in syncConversations) {
-        if(syncConversationModel.recents && syncConversationModel.recents.count>0) {
-            [conversations addObject:syncConversationModel.conversation];
-        }
-        
+        [conversations addObject:syncConversationModel.conversation];
     }
 
     if(conversations.count>0) {

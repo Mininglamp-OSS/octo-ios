@@ -153,8 +153,8 @@
 
 - (WKSearchbarView *)searchbarView {
     if(!_searchbarView) {
-        _searchbarView = [[WKSearchbarView alloc] initWithFrame:CGRectMake(15.0f, 10.0f, WKScreenWidth - 30.0f, 36.0f)];
-        _searchbarView.placeholder = LLang(@"搜索");
+        _searchbarView = [[WKSearchbarView alloc] initWithFrame:CGRectMake(14.0f, 10.0f, WKScreenWidth - 28.0f, 36.0f)];
+        _searchbarView.placeholder = LLang(@"搜索联系人、AI、群聊");
         _searchbarView.onClick = ^{
             WKGlobalSearchResultController *vc = [WKGlobalSearchResultController new];
             [[WKNavigationManager shared] pushViewController:vc animated:NO];
@@ -239,7 +239,8 @@
     NSInteger currentGeneration = self.sortGeneration;
 
     NSArray<WKChannelInfo*> *filtered = [self filteredContactInfos];
-    self.contactsCountLbl.text = [NSString stringWithFormat:LLang(@"%ld个联系人"),(long)filtered.count];
+    NSString *suffix = (self.contactsFilter == 1) ? @" AI" : LLang(@"联系人");
+    self.contactsCountLbl.text = [NSString stringWithFormat:@"%@ %ld %@%@", LLang(@"共"), (long)filtered.count, LLang(@"位"), suffix];
 
     NSMutableArray *cellModels = [NSMutableArray array];
     for (WKChannelInfo *info in filtered) {
@@ -573,16 +574,11 @@
 
 -(UIView*) tableHeader {
     if(!_tableHeader) {
-        CGFloat emptyHeight = 15.0f;
-        CGFloat emptyToSearchbarSpace = 10.0f;
-        CGFloat searchbarViewTopSpace = 10.0f;
-        _tableHeader = [[UIView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, WKScreenWidth, self.searchbarView.frame.size.height+emptyHeight + emptyToSearchbarSpace + searchbarViewTopSpace)];
+        CGFloat topPad = 8.0f;
+        CGFloat bottomPad = 10.0f;
+        _tableHeader = [[UIView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, WKScreenWidth, self.searchbarView.frame.size.height + topPad + bottomPad)];
+        self.searchbarView.frame = CGRectMake(14.0f, topPad, WKScreenWidth - 28.0f, 36.0f);
         [_tableHeader addSubview:self.searchbarView];
-        
-        
-        UIView *bottomEmptyView = [[UIView alloc] initWithFrame:CGRectMake(0.0f, self.searchbarView.lim_bottom + emptyToSearchbarSpace, WKScreenWidth, emptyHeight)];
-        [bottomEmptyView setBackgroundColor:WKApp.shared.config.cellBackgroundColor];
-        [_tableHeader addSubview:bottomEmptyView];
     }
     return _tableHeader;
 }
@@ -663,22 +659,13 @@
 
 // 头部字母部分
 -(UIView*) headView:(NSString*)title headHeight:(CGFloat)headHheght color:(UIColor*)color{
-    
-    UIView *headView =[[UIView alloc] initWithFrame:CGRectMake(0, 0, WKScreenWidth, headHheght)];
-    [headView setBackgroundColor: WKApp.shared.config.cellBackgroundColor];
-    UILabel  *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(20, 0, headView.lim_width, headView.lim_height)];
-    [titleLbl setFont:[[WKApp shared].config appFontOfSize:12.0f]];
-    [titleLbl setTextColor:color];
+    UIView *headView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, WKScreenWidth, headHheght)];
+    [headView setBackgroundColor:[self bgElevColor]];
+    UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, headView.lim_width - 16, headView.lim_height)];
+    [titleLbl setFont:[UIFont systemFontOfSize:12.0f weight:UIFontWeightSemibold]];
+    [titleLbl setTextColor:WKApp.shared.config.tipColor];
     [titleLbl setText:title];
     [headView addSubview:titleLbl];
-
-//    UIView *lineView = [[UIView alloc] init];
-//    lineView.lim_left = 15.0f;
-//    lineView.lim_height = 1.0f;
-//    lineView.lim_width = self.view.lim_width-15.0f;
-//    [lineView setBackgroundColor:[UIColor colorWithRed:248.0f/255.0f green:248.0f/255.0f blue:248.0f/255.0f alpha:1.0f]];
-//    lineView.lim_top = headHheght - 1;
-//    [headView addSubview:lineView];
     return headView;
 }
 
@@ -714,49 +701,34 @@
 }
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath{
     if(indexPath.section == 0) {
-        return 70.0f;
+        return 56.0f;
     }
-    
-    return  70.0;
+    return 52.0f;
 }
 
 -(CGFloat) tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
     if(section == 0) {
-        return 0.0f;
+        return 50.0f;
     }
-    if(section == 1) {
-        return 80.0f; // 全部联系人 + tab 按钮
-    }
-    return 20.0f;
+    return 24.0f;
 }
 -(UIView*) tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section{
     if(section == 0) {
-        return nil;
-    }
-    if(section == 1) {
         return [self contactsFilterHeaderView];
     }
     if (!self.sectionTitleArr || self.sectionTitleArr.count == 0) {
         return nil;
     }
     NSString *title = [self.sectionTitleArr objectAtIndex:section-1];
-    return [self headView:title headHeight:20.0f color:WKApp.shared.config.themeColor];
+    return [self headView:title headHeight:24.0f color:WKApp.shared.config.tipColor];
 }
 
-// 全部联系人 section header（含 tab 过滤按钮）
+// 全部联系人 section header — iOS-style segment control
 -(UIView*) contactsFilterHeaderView {
-    UIView *container = [[UIView alloc] initWithFrame:CGRectMake(0, 0, WKScreenWidth, 80.0f)];
+    UIView *container = [[UIView alloc] initWithFrame:CGRectMake(0, 0, WKScreenWidth, 50.0f)];
     container.backgroundColor = WKApp.shared.config.cellBackgroundColor;
 
-    // 全部联系人标题和数量
     NSInteger totalCount = self.allContactInfos ? self.allContactInfos.count : 0;
-    UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(15, 8, WKScreenWidth - 30, 20)];
-    titleLbl.text = [NSString stringWithFormat:@"%@  (%ld)", LLang(@"全部联系人"), (long)totalCount];
-    titleLbl.font = [[WKApp shared].config appFontOfSizeMedium:14.0f];
-    titleLbl.textColor = [UIColor grayColor];
-    [container addSubview:titleLbl];
-
-    // Tab 按钮
     NSInteger aiCount = 0;
     NSInteger humanCount = 0;
     for (WKChannelInfo *info in self.allContactInfos) {
@@ -764,43 +736,66 @@
     }
 
     NSArray *titles = @[
-        [NSString stringWithFormat:@"%@ %ld", LLang(@"全部"), (long)totalCount],
-        [NSString stringWithFormat:@"AI %ld", (long)aiCount],
-        [NSString stringWithFormat:@"%@ %ld", LLang(@"人类"), (long)humanCount]
+        [NSString stringWithFormat:@"%@ · %ld", LLang(@"全部"), (long)totalCount],
+        [NSString stringWithFormat:@"AI · %ld", (long)aiCount],
+        [NSString stringWithFormat:@"%@ · %ld", LLang(@"人类"), (long)humanCount]
     ];
 
-    CGFloat tabY = 36.0f;
-    CGFloat tabX = 15.0f;
-    CGFloat tabH = 30.0f;
-    CGFloat tabSpacing = 8.0f;
+    CGFloat hPad = 14.0f;
+    CGFloat pillH = 34.0f;
+    CGFloat pillY = (50.0f - pillH) / 2.0f;
+
+    // Pill background
+    UIColor *bgElevColor = [self bgElevColor];
+    UIView *pillBg = [[UIView alloc] initWithFrame:CGRectMake(hPad, pillY, WKScreenWidth - hPad * 2, pillH)];
+    pillBg.backgroundColor = bgElevColor;
+    pillBg.layer.cornerRadius = 10.0f;
+    [container addSubview:pillBg];
+
+    CGFloat segPad = 2.0f;
+    CGFloat segW = (pillBg.lim_width - segPad * 2) / 3.0f;
+    CGFloat segH = pillH - segPad * 2;
 
     for (NSInteger i = 0; i < 3; i++) {
         UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
         [btn setTitle:titles[i] forState:UIControlStateNormal];
-        btn.titleLabel.font = [UIFont systemFontOfSize:13.0f weight:UIFontWeightMedium];
-        btn.layer.cornerRadius = tabH / 2.0f;
-        btn.layer.borderWidth = 1.0f;
         btn.tag = i;
         [btn addTarget:self action:@selector(filterTabTapped:) forControlEvents:UIControlEventTouchUpInside];
 
-        if(self.contactsFilter == i) {
-            btn.backgroundColor = [WKApp.shared.config.themeColor colorWithAlphaComponent:0.1f];
-            btn.layer.borderColor = WKApp.shared.config.themeColor.CGColor;
-            [btn setTitleColor:WKApp.shared.config.themeColor forState:UIControlStateNormal];
+        btn.frame = CGRectMake(segPad + segW * i, segPad, segW, segH);
+        btn.layer.cornerRadius = 8.0f;
+
+        if (self.contactsFilter == i) {
+            btn.backgroundColor = WKApp.shared.config.cellBackgroundColor;
+            btn.titleLabel.font = [UIFont systemFontOfSize:13.0f weight:UIFontWeightBold];
+            [btn setTitleColor:WKApp.shared.config.defaultTextColor forState:UIControlStateNormal];
+            btn.layer.shadowColor = [UIColor blackColor].CGColor;
+            btn.layer.shadowOpacity = 0.08f;
+            btn.layer.shadowOffset = CGSizeMake(0, 1);
+            btn.layer.shadowRadius = 3.0f;
         } else {
             btn.backgroundColor = [UIColor clearColor];
-            btn.layer.borderColor = [UIColor colorWithWhite:0.8f alpha:1.0f].CGColor;
-            [btn setTitleColor:[UIColor grayColor] forState:UIControlStateNormal];
+            btn.titleLabel.font = [UIFont systemFontOfSize:13.0f weight:UIFontWeightMedium];
+            [btn setTitleColor:WKApp.shared.config.tipColor forState:UIControlStateNormal];
+            btn.layer.shadowOpacity = 0;
         }
 
-        [btn sizeToFit];
-        CGFloat btnW = btn.lim_width + 24.0f;
-        btn.frame = CGRectMake(tabX, tabY, btnW, tabH);
-        tabX += btnW + tabSpacing;
-        [container addSubview:btn];
+        [pillBg addSubview:btn];
     }
 
     return container;
+}
+
+-(UIColor*) bgElevColor {
+    if (@available(iOS 13.0, *)) {
+        return [UIColor colorWithDynamicProvider:^UIColor * _Nonnull(UITraitCollection * _Nonnull traitCollection) {
+            if (traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark || WKApp.shared.config.style == WKSystemStyleDark) {
+                return [UIColor colorWithRed:23/255.0f green:24/255.0f blue:29/255.0f alpha:1.0f];
+            }
+            return [UIColor colorWithRed:245/255.0f green:246/255.0f blue:248/255.0f alpha:1.0f];
+        }];
+    }
+    return [UIColor colorWithRed:245/255.0f green:246/255.0f blue:248/255.0f alpha:1.0f];
 }
 
 -(void) filterTabTapped:(UIButton*)sender {
@@ -810,17 +805,9 @@
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
-   if(section == 0) {
-       return 10.0f;
-    }
     return 0.0f;
 }
 - (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
-    if(section == 0) {
-       UIView *footer = [[UIView alloc] init];
-        [footer setBackgroundColor:[WKApp shared].config.cellBackgroundColor];
-       return footer;
-    }
     return nil;
 }
 
@@ -1468,7 +1455,8 @@
 
     // 更新 footer 联系人数量文字
     NSArray<WKChannelInfo*> *filtered = [self filteredContactInfos];
-    self.contactsCountLbl.text = [NSString stringWithFormat:LLang(@"%ld个联系人"), (long)filtered.count];
+    NSString *fSuffix = (self.contactsFilter == 1) ? @" AI" : LLang(@"联系人");
+    self.contactsCountLbl.text = [NSString stringWithFormat:@"%@ %ld %@%@", LLang(@"共"), (long)filtered.count, LLang(@"位"), fSuffix];
 
     [self refreshTaBarItemBadgeValue:self.tabBarItem];
 }

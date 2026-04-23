@@ -14,6 +14,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,copy) NSString *title;
 // icon图像
 @property(nonatomic,strong) UIImage *icon;
+// 右侧详情文字
+@property(nonatomic,copy) NSString *detail;
 
 @end
 
