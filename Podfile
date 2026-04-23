@@ -106,7 +106,7 @@ end
 
 
 abstract_target 'TangSengDaoDaoiOSBase' do
-  
+
 #  pod 'lottie-ios', '~> 2.5.3'
   pod 'Socket.IO-Client-Swift'
   pod 'SSZipArchive', '~> 2.2.3'
@@ -114,7 +114,7 @@ abstract_target 'TangSengDaoDaoiOSBase' do
   pod 'Aspects'
   pod 'ReactiveObjC'
 
-  target 'TangSengDaoDaoiOS' do
+  target 'OctoiOS' do
     project 'TangSengDaoDaoiOS.xcodeproj'
     
   use_frameworks!
