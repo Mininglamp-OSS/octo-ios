@@ -78,6 +78,9 @@ static void *kWKMTVTokens = &kWKMTVTokens;
     self.scrollEnabled    = NO;
     self.backgroundColor  = [UIColor clearColor];
     self.textContainerInset = UIEdgeInsetsZero;
+    // 强制切换到 TextKit 1：iOS 16+ 默认 TextKit 2，访问 layoutManager 触发切换。
+    // 必须在所有实例上统一，否则测量（TextKit 1）和显示（TextKit 2）高度不一致。
+    (void)self.layoutManager;
     self.textContainer.lineFragmentPadding    = 0;
     self.textContainer.maximumNumberOfLines   = 0;  // 对应 UILabel.numberOfLines = 0
     self.textContainer.lineBreakMode          = NSLineBreakByWordWrapping;

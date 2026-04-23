@@ -42,7 +42,6 @@
 
 #define replyToNameSpace 4.0f // 回复离名字的距离
 
-#define kTableRowHeight 44.0f
 #define kTableTopSpace 8.0f
 #define kTableExtraPadding 10.0f
 #define kTableToolbarHeight 36.0f
@@ -101,6 +100,67 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 // ACTION_MOVE → dismiss popup；ACTION_UP → show popup
 
 @implementation WKTextMessageCell
+
+/// WebView 加载完成后 JS 返回的实际表格内容高度（key = "clientMsgNo-tableIdx"）
+static NSMutableDictionary *_jsTableHeights;
++ (NSMutableDictionary *)jsTableHeights {
+    if (!_jsTableHeights) _jsTableHeights = [NSMutableDictionary dictionary];
+    return _jsTableHeights;
+}
+
+/// 与 CSS buildTableWebViewCSS 中行高保持一致：padding(10+10) + lineHeight(fontSize*1.2) + border(~2)
++ (CGFloat)tableRowHeight {
+    return ceil([WKApp shared].config.messageTextFontSize * 1.2 + 22.0f);
+}
+
++ (WKMessageTextView *)sharedMeasureTV {
+    static WKMessageTextView *tv;
+    if (!tv) {
+        tv = [[WKMessageTextView alloc] init];
+    }
+    tv.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+    return tv;
+}
+
+/// 宽度：NSLayoutManager usedRect（实际最宽行，用于气泡宽度）
+/// 高度：取 MAX(sizeThatFits, boundingRect)
+///   - sizeThatFits：UITextView 排版高度（NSLayoutManager），防止 UITextView 截断
+///   - boundingRect：CoreText 高度（UILabel 时代的测量方式），通常比 sizeThatFits 略大，
+///     这个"多出来的"底部空间刚好吸收时间戳(trailingView)对最后一行文字的视觉叠加。
+///     UILabel 时代一直依赖这个隐式 padding，换成 UITextView 后如果只用精确的
+///     sizeThatFits 高度，时间戳会覆盖最后一行。
++ (CGSize)measureTextViewSize:(NSAttributedString *)attrStr maxWidth:(CGFloat)maxWidth {
+    WKMessageTextView *tv = [[self class] sharedMeasureTV];
+    tv.frame = CGRectMake(0, 0, maxWidth, 10000);
+    tv.attributedText = attrStr;
+    NSAttributedString *normalizedAttr = tv.attributedText;
+
+    CGFloat tvH = [tv sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)].height;
+    CGFloat brH = [normalizedAttr boundingRectWithSize:CGSizeMake(maxWidth, CGFLOAT_MAX)
+                                        options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                        context:nil].size.height;
+    CGFloat h = MAX(ceil(tvH), ceil(brH));
+
+    NSLayoutManager *lm = tv.layoutManager;
+    NSTextContainer *tc = tv.textContainer;
+    [lm ensureLayoutForTextContainer:tc];
+    CGRect usedRect = [lm usedRectForTextContainer:tc];
+    CGFloat w = MIN(ceil(usedRect.size.width), maxWidth);
+
+    // --- 诊断日志 ---
+    NSString *textPreview = attrStr.string.length > 30
+        ? [NSString stringWithFormat:@"%@...", [attrStr.string substringToIndex:30]]
+        : attrStr.string;
+    textPreview = [textPreview stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
+    NSLog(@"[BubbleHeight] measure: text=\"%@\" len=%lu maxW=%.1f | tvH=%.2f brH=%.2f → h=%.0f w=%.0f",
+          textPreview, (unsigned long)attrStr.string.length, maxWidth, tvH, brH, h, w);
+
+    return CGSizeMake(w, h);
+}
+
++ (CGFloat)measureTextViewHeight:(NSAttributedString *)attrStr maxWidth:(CGFloat)maxWidth {
+    return [[self class] measureTextViewSize:attrStr maxWidth:maxWidth].height;
+}
 
 -(void) invalidateSegments {
     self.segmentsBuilt = NO;
@@ -514,28 +574,39 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
                 if (message.remoteExtra.contentEdit) {
                     entities = message.remoteExtra.contentEdit.entities;
                 }
+                NSLog(@"[Mention] markdown路径: msgNo=%@ entities=%lu rawLen=%lu mdLen=%lu",
+                      message.clientMsgNo, (unsigned long)(entities ? entities.count : 0),
+                      (unsigned long)content.length, (unsigned long)mdMutable.string.length);
                 if (entities) {
                     NSString *renderedText = mdMutable.string;
                     NSMutableIndexSet *usedRanges = [NSMutableIndexSet indexSet];
                     for (WKMessageEntity *entity in entities) {
-                        if (![entity.type isEqualToString:WKMentionRichTextStyle]) continue;
-                        // 从原文中取出 @xxx 文本
-                        if (entity.range.location + entity.range.length > content.length) continue;
+                        NSLog(@"[Mention]   entity: type=%@ range=(%lu,%lu) value=%@",
+                              entity.type, (unsigned long)entity.range.location, (unsigned long)entity.range.length, entity.value ?: @"(nil)");
+                        if (![entity.type isEqualToString:WKMentionRichTextStyle]) {
+                            NSLog(@"[Mention]     → 跳过(非mention类型)");
+                            continue;
+                        }
+                        if (entity.range.location + entity.range.length > content.length) {
+                            NSLog(@"[Mention]     → 跳过(range越界: %lu+%lu > %lu)",
+                                  (unsigned long)entity.range.location, (unsigned long)entity.range.length, (unsigned long)content.length);
+                            continue;
+                        }
                         NSString *mentionText = [content substringWithRange:entity.range];
                         if ([mentionText hasSuffix:@" "]) {
                             mentionText = [mentionText substringToIndex:mentionText.length - 1];
                         }
-                        // 验证提取的文本确实以 @ 开头（防止 entity range 偏移导致匹配错误文本）
-                        if (![mentionText hasPrefix:@"@"]) continue;
+                        if (![mentionText hasPrefix:@"@"]) {
+                            NSLog(@"[Mention]     → 跳过(非@开头: \"%@\")", mentionText);
+                            continue;
+                        }
                         // 在渲染后的文本中查找这段 @xxx（跳过已使用的位置，避免重复匹配）
                         NSRange searchRange = NSMakeRange(0, renderedText.length);
                         NSRange foundRange = NSMakeRange(NSNotFound, 0);
                         while (searchRange.location < renderedText.length) {
                             foundRange = [renderedText rangeOfString:mentionText options:0 range:searchRange];
                             if (foundRange.location == NSNotFound) break;
-                            // 检查是否已被其他 entity 使用
                             if (![usedRanges containsIndexesInRange:foundRange]) break;
-                            // 已被使用，继续往后搜索
                             searchRange.location = foundRange.location + foundRange.length;
                             searchRange.length = renderedText.length - searchRange.location;
                             foundRange.location = NSNotFound;
@@ -550,8 +621,21 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
                             UIColor *mentionColor = message.isSend ? [UIColor whiteColor] : [WKApp shared].config.themeColor;
                             [mdMutable addAttribute:NSForegroundColorAttributeName value:mentionColor range:foundRange];
                             [mdMutable addAttribute:NSUnderlineStyleAttributeName value:@1 range:foundRange];
+                            NSLog(@"[Mention]     ✅ 找到: \"%@\" → rendered位置(%lu,%lu) uid=%@",
+                                  mentionText, (unsigned long)foundRange.location, (unsigned long)foundRange.length, entity.value ?: @"");
+                        } else {
+                            NSLog(@"[Mention]     ❌ 未找到: \"%@\" 在rendered文本中不存在", mentionText);
+                            // 打印渲染文本中所有包含@的位置，帮助排查
+                            NSRange atRange = [renderedText rangeOfString:@"@"];
+                            if (atRange.location != NSNotFound) {
+                                NSUInteger start = atRange.location;
+                                NSUInteger end = MIN(start + 20, renderedText.length);
+                                NSLog(@"[Mention]       rendered文本中@附近: \"%@\"", [renderedText substringWithRange:NSMakeRange(start, end - start)]);
+                            }
                         }
                     }
+                } else {
+                    NSLog(@"[Mention]   无entities");
                 }
 
                 // 3. Auto-detect pure URLs not covered by markdown [text](url) links
@@ -621,6 +705,20 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
         NSArray<id<WKMatchToken>> *autoMentionTokens = [self detectMentionsInText:textForRender channel:message.message.channel existingTokens:tokens];
         if (autoMentionTokens.count > 0) {
             [tokens addObjectsFromArray:autoMentionTokens];
+        }
+
+        // --- @mention 诊断日志 ---
+        {
+            NSInteger mentionCount = 0;
+            for (id<WKMatchToken> t in tokens) {
+                if (t.type == WKatchTokenTypeMetion) mentionCount++;
+            }
+            if ([textForRender containsString:@"@"]) {
+                NSLog(@"[Mention] 非markdown路径: msgNo=%@ entityMentions=%lu autoMentions=%lu totalMentions=%ld text前30=\"%@\"",
+                      message.clientMsgNo,
+                      (unsigned long)entityTokens.count, (unsigned long)autoMentionTokens.count, (long)mentionCount,
+                      textForRender.length > 30 ? [textForRender substringToIndex:30] : textForRender);
+            }
         }
 
         [attrStr lim_render:textForRender tokens:tokens];
@@ -706,6 +804,9 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
             token.uid = matchedUID;
             token.text = [text substringWithRange:fullRange];
             [result addObject:token];
+            NSLog(@"[Mention] autoDetect ✅ \"%@\" → uid=%@", token.text, matchedUID);
+        } else {
+            NSLog(@"[Mention] autoDetect ❌ \"@%@\" 未匹配到群成员或联系人", mentionName);
         }
     }
 
@@ -876,18 +977,22 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     if (![WKMarkdownRenderer containsTable:content]) return 0;
     NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
     if (rowCount <= 0) return 0;
-    return kTableToolbarHeight + rowCount * kTableRowHeight + kTableExtraPadding;
+    return kTableToolbarHeight + rowCount * [[self class] tableRowHeight] + kTableExtraPadding;
 }
 
 /// 分段计算内容高度（与 layoutSubviews 中逐段布局逻辑完全一致）
-/// 使用静态 UILabel.sizeThatFits: 测量文本高度，与 layoutSubviews 使用相同的测量方式，
-/// 避免 boundingRectWithSize: 对长文本+复杂属性字符串的高度低估。
-+(CGFloat) segmentedContentHeightForMessage:(WKMessageModel*)model {
-    static WKMemoryCache *segHeightCache;
-    if (!segHeightCache) {
-        segHeightCache = [[WKMemoryCache alloc] init];
-        segHeightCache.maxCacheNum = 0; // 数值缓存，内存极小，不设上限
+/// 使用 measureTextViewHeight: 测量（与 layoutSubviews 中 UITextView.sizeThatFits: 一致）
++ (WKMemoryCache *)segHeightCache {
+    static WKMemoryCache *cache;
+    if (!cache) {
+        cache = [[WKMemoryCache alloc] init];
+        cache.maxCacheNum = 0;
     }
+    return cache;
+}
+
++(CGFloat) segmentedContentHeightForMessage:(WKMessageModel*)model {
+    WKMemoryCache *segHeightCache = [[self class] segHeightCache];
 
     // 流式消息不缓存
     BOOL isStreaming = model.streamOn && model.streamFlag != WKStreamFlagEnd;
@@ -909,15 +1014,7 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     UIColor *textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
     NSString *colorHex = [textColor toHexRGB];
     CGFloat totalHeight = 0;
-
-    // 用静态 UILabel 测量文本段高度（与 layoutSubviews 中 sizeThatFits: 一致）
-    static UILabel *measureLabel;
-    if (!measureLabel) {
-        measureLabel = [[UILabel alloc] init];
-        measureLabel.numberOfLines = 0;
-        measureLabel.lineBreakMode = NSLineBreakByWordWrapping;
-    }
-    measureLabel.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+    NSInteger tableSegIdx = 0;
 
     for (NSUInteger i = 0; i < segments.count; i++) {
         NSDictionary *seg = segments[i];
@@ -926,36 +1023,33 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
         CGFloat spacing = (i < segments.count - 1) ? kTableTopSpace : 0;
 
         if ([type isEqualToString:@"text"]) {
-            // markdown 文本走 WKMarkdownRenderer，非 markdown 走 lim_render
-            // 交互式转场期间跳过 Down 渲染（避免嵌套 RunLoop 死锁）
+            NSAttributedString *segAttr = nil;
             BOOL skipMarkdown = [WKNavigationManager shared].topViewController.navigationController.transitionCoordinator.isInteractive;
             if (!skipMarkdown && [WKMarkdownRenderer containsMarkdown:content]) {
-                NSAttributedString *mdAttr = nil;
                 @try {
-                    mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
-                } @catch (NSException *e) {
-                    mdAttr = nil;
-                }
-                if (mdAttr) {
-                    measureLabel.attributedText = mdAttr;
-                } else {
-                    measureLabel.text = content;
-                }
-            } else {
-                // 非 markdown：用 lim_render 渲染（带段落样式），与 refresh: 中一致
+                    segAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+                } @catch (NSException *e) { segAttr = nil; }
+            }
+            if (!segAttr) {
                 NSMutableAttributedString *plainAttr = [[NSMutableAttributedString alloc] init];
                 plainAttr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
                 plainAttr.textColor = textColor;
                 [plainAttr lim_render:content tokens:nil];
-                measureLabel.attributedText = plainAttr;
+                segAttr = plainAttr;
             }
-            // 用 sizeThatFits: 测量（与 layoutSubviews 中完全一致）
-            CGSize fitSize = [measureLabel sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
-            totalHeight += ceil(fitSize.height) + spacing;
+            CGFloat segH = [[self class] measureTextViewHeight:segAttr maxWidth:maxWidth];
+            totalHeight += ceil(segH) + spacing;
         } else {
-            // 表格段：工具栏 + 表格行高 + 额外 padding
-            NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
-            totalHeight += kTableToolbarHeight + rowCount * kTableRowHeight + kTableExtraPadding + spacing;
+            // 表格段：优先使用 JS 返回的实际内容高度，否则用公式估算
+            NSString *jsKey = [NSString stringWithFormat:@"%@-%ld", model.clientMsgNo, (long)tableSegIdx];
+            NSNumber *jsHeight = [[self class] jsTableHeights][jsKey];
+            if (jsHeight) {
+                totalHeight += [jsHeight floatValue] + spacing;
+            } else {
+                NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
+                totalHeight += kTableToolbarHeight + rowCount * [[self class] tableRowHeight] + kTableExtraPadding + spacing;
+            }
+            tableSegIdx++;
         }
     }
 
@@ -966,11 +1060,12 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 }
 
 +(CGSize) textSize:(NSMutableAttributedString*)attrStr messageModel:(WKMessageModel*)model{
-    
+    CGFloat maxWidth = [WKApp shared].config.messageContentMaxWidth;
+
     if(model.streamOn && model.streamFlag!=WKStreamFlagEnd) { // 流式消息不缓存
-        return [attrStr size:[WKApp shared].config.messageContentMaxWidth];
+        return [[self class] measureTextViewSize:attrStr maxWidth:maxWidth];
     }
-    
+
     NSString *key = [NSString stringWithFormat:@"%@-size",model.clientMsgNo];
     if(model.remoteExtra.contentEdit) {
         key = [NSString stringWithFormat:@"%@-size-edit-%lu",model.clientMsgNo,model.remoteExtra.editedAt];
@@ -984,17 +1079,32 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     if(sizeStr) {
         return CGSizeFromString(sizeStr);
     }
-    CGSize size = [attrStr size:[WKApp shared].config.messageContentMaxWidth];
+    CGSize size = [[self class] measureTextViewSize:attrStr maxWidth:maxWidth];
     [memoryCache setCache:NSStringFromCGSize(size) forKey:key];
     return size;
 }
 
+/// 用 sharedMeasureTV 的 layoutManager 测量最后一行宽度（与 textSize: 使用同一排版引擎）
++ (CGFloat)measureLastLineWidth:(NSAttributedString *)attrStr maxWidth:(CGFloat)maxWidth {
+    WKMessageTextView *tv = [[self class] sharedMeasureTV];
+    tv.frame = CGRectMake(0, 0, maxWidth, 10000);
+    tv.attributedText = attrStr;
+    NSLayoutManager *lm = tv.layoutManager;
+    NSTextContainer *tc = tv.textContainer;
+    [lm ensureLayoutForTextContainer:tc];
+    if (attrStr.length == 0) return 0;
+    NSUInteger lastGlyphIdx = [lm glyphIndexForCharacterAtIndex:attrStr.length - 1];
+    CGRect lastLineRect = [lm lineFragmentUsedRectForGlyphAtIndex:lastGlyphIdx effectiveRange:nil];
+    return lastLineRect.size.width;
+}
+
 +(CGFloat) textLastlineWidth:(NSMutableAttributedString*)attrStr messageModel:(WKMessageModel*)model{
-    
+    CGFloat maxWidth = [WKApp shared].config.messageContentMaxWidth;
+
     if(model.streamOn && model.streamFlag!=WKStreamFlagEnd) { // 流式消息不缓存
-        return [attrStr lastlineWidth:[WKApp shared].config.messageContentMaxWidth];
+        return [[self class] measureLastLineWidth:attrStr maxWidth:maxWidth];
     }
-    
+
     NSString *key = [NSString stringWithFormat:@"%@-lastLine",model.clientMsgNo];
     if(model.remoteExtra.contentEdit) {
         key = [NSString stringWithFormat:@"%@-lastLine-edit-%lu",model.clientMsgNo,model.remoteExtra.editedAt];
@@ -1008,7 +1118,7 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     if(lastLineWidth) {
         return lastLineWidth.floatValue;
     }
-    CGFloat lastLineWidthF = [attrStr lastlineWidth:[WKApp shared].config.messageContentMaxWidth];
+    CGFloat lastLineWidthF = [[self class] measureLastLineWidth:attrStr maxWidth:maxWidth];
     [memoryCache setCache:@(lastLineWidthF) forKey:key];
     return lastLineWidthF;
 }
@@ -1064,6 +1174,15 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
         self.textLbl.attributedText = attrStr;
         self.textLbl.tokens = attrStr.tokens;
         self.textLbl.lim_size =[[self class] textSize:attrStr messageModel:model];
+        // --- 诊断日志 ---
+        {
+            CGSize ts = self.textLbl.lim_size;
+            CGFloat fitH = [self.textLbl sizeThatFits:CGSizeMake(ts.width, CGFLOAT_MAX)].height;
+            if (fitH > ts.height + 1.0) {
+                NSLog(@"[BubbleHeight] ⚠️ refresh溢出: msgNo=%@ lim_size=(%.1f,%.1f) fitH=%.1f Δ=%.1f textLbl.frame.w=%.1f",
+                      model.clientMsgNo, ts.width, ts.height, fitH, fitH - ts.height, self.textLbl.frame.size.width);
+            }
+        }
     } else if (!self.segmentsBuilt) {
         // 有表格且首次构建：仅设置内容，不设 lim_size 为全文尺寸
         // lim_size 会在段落构建完成后根据第一段文本正确设置
@@ -1194,7 +1313,7 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
                     [container addSubview:wv];
 
                     NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
-                    container.tag = (NSInteger)(kTableToolbarHeight + rowCount * kTableRowHeight + kTableExtraPadding);
+                    container.tag = (NSInteger)(kTableToolbarHeight + rowCount * [[self class] tableRowHeight] + kTableExtraPadding);
 
                     [self.messageContentView addSubview:container];
                     [self.segmentViews addObject:container];
@@ -1437,7 +1556,25 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     
     self.textLbl.lim_left = 0.0f;
     self.textLbl.lim_top = replyBoxBottom;
-
+    // 非分段模式：textLbl 渲染宽度必须 = 测量宽度（maxWidth），
+    // lim_size.width 来自 usedRect（最宽行，可能 < maxWidth），
+    // 但高度是在 maxWidth 下计算的，所以渲染宽度也必须用 messageContentView 宽度。
+    if (self.segmentViews.count == 0) {
+        CGFloat renderW = self.messageContentView.lim_width;
+        if (renderW > self.textLbl.lim_width) {
+            self.textLbl.lim_width = renderW;
+        }
+        // --- 诊断日志 ---
+        {
+            CGFloat fitH = [self.textLbl sizeThatFits:CGSizeMake(self.textLbl.lim_width, CGFLOAT_MAX)].height;
+            if (fitH > self.textLbl.lim_height + 1.0) {
+                NSLog(@"[BubbleHeight] ⚠️ layout溢出: textLbl=(%.1f,%.1f,%.1f,%.1f) fitH=%.1f Δ=%.1f contentView=(%.1f,%.1f)",
+                      self.textLbl.lim_left, self.textLbl.lim_top, self.textLbl.lim_width, self.textLbl.lim_height,
+                      fitH, fitH - self.textLbl.lim_height,
+                      self.messageContentView.lim_width, self.messageContentView.lim_height);
+            }
+        }
+    }
     // 分段布局：按顺序排列文本段和表格段
     if (self.segmentViews.count > 0) {
         CGFloat segTop = replyBoxBottom;
@@ -1446,13 +1583,13 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
         for (NSUInteger i = 0; i < self.segmentViews.count; i++) {
             UIView *v = self.segmentViews[i];
             CGFloat spacing = (i < self.segmentViews.count - 1) ? kTableTopSpace : 0;
-            if ([v isKindOfClass:[UILabel class]]) {
+            if ([v isKindOfClass:[UILabel class]] || [v isKindOfClass:[UITextView class]]) {
                 CGSize fitSize = [v sizeThatFits:CGSizeMake(contentW, CGFLOAT_MAX)];
                 v.frame = CGRectMake(0, segTop, contentW, fitSize.height);
                 segTop += fitSize.height + spacing;
             } else {
                 // 表格容器布局（容器内含 toolbar + webview）
-                CGFloat tableH = v.tag > 0 ? v.tag : (kTableToolbarHeight + kTableRowHeight + kTableExtraPadding);
+                CGFloat tableH = v.tag > 0 ? v.tag : (kTableToolbarHeight + [[self class] tableRowHeight] + kTableExtraPadding);
                 v.frame = CGRectMake(0, segTop, contentW, tableH);
 
                 // 容器内部布局：toolbar 在顶部，webview 紧跟其下
@@ -1832,17 +1969,53 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 }
 
 -(void) webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-    // 找到对应的 overlay，设置 contentSize
     NSUInteger idx = [self.tableWebViews indexOfObject:webView];
-    if (idx == NSNotFound || idx >= self.tableOverlays.count) return;
-    UIScrollView *overlay = self.tableOverlays[idx];
-    [webView evaluateJavaScript:@"Math.max(document.body.scrollWidth, document.documentElement.scrollWidth)" completionHandler:^(id result, NSError *error) {
+    if (idx == NSNotFound) return;
+
+    NSString *js = @"JSON.stringify({w:Math.max(document.body.scrollWidth,document.documentElement.scrollWidth),h:Math.max(document.body.scrollHeight,document.documentElement.scrollHeight)})";
+    [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
         if (!result || error) return;
-        CGFloat contentWidth = [result floatValue];
-        CGFloat frameWidth = overlay.frame.size.width;
-        if (contentWidth > frameWidth && frameWidth > 0) {
-            overlay.contentSize = CGSizeMake(contentWidth, overlay.frame.size.height);
-        }
+        NSData *data = [(NSString *)result dataUsingEncoding:NSUTF8StringEncoding];
+        NSDictionary *dims = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (!dims) return;
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            CGFloat contentWidth  = [dims[@"w"] floatValue];
+            CGFloat contentHeight = [dims[@"h"] floatValue];
+
+            // 水平滚动 overlay
+            if (idx < self.tableOverlays.count) {
+                UIScrollView *overlay = self.tableOverlays[idx];
+                if (contentWidth > overlay.frame.size.width && overlay.frame.size.width > 0) {
+                    overlay.contentSize = CGSizeMake(contentWidth, overlay.frame.size.height);
+                }
+            }
+
+            // 动态高度修正：用 JS 实际高度替换公式估算
+            UIView *container = webView.superview;
+            if (!container || !self.messageModel) return;
+            CGFloat actualContainerH = kTableToolbarHeight + ceil(contentHeight);
+            CGFloat currentH = (CGFloat)container.tag;
+            if (fabs(actualContainerH - currentH) < 2.0) return; // 误差 <2px 无需修正
+
+            container.tag = (NSInteger)actualContainerH;
+            NSString *jsKey = [NSString stringWithFormat:@"%@-%lu", self.messageModel.clientMsgNo, (unsigned long)idx];
+            [[WKTextMessageCell jsTableHeights] setObject:@(actualContainerH) forKey:jsKey];
+
+            // 清除分段高度缓存（让 segmentedContentHeightForMessage: 使用 JS 实际高度重新计算）
+            NSString *modeTag = ([WKApp shared].config.style == WKSystemStyleDark) ? @"d" : @"l";
+            NSString *cacheKey = [NSString stringWithFormat:@"%@-segH-%@", self.messageModel.clientMsgNo, modeTag];
+            [[[self class] segHeightCache] setCache:nil forKey:cacheKey];
+
+            // 触发 UITableView 重新计算 cell 高度
+            UIView *v = self.superview;
+            while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
+            if ([v isKindOfClass:[UITableView class]]) {
+                UITableView *tv = (UITableView *)v;
+                [tv beginUpdates];
+                [tv endUpdates];
+            }
+        });
     }];
 }
 
