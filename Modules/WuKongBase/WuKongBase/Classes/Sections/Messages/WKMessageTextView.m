@@ -35,6 +35,43 @@ static void *kWKMTVTokens = &kWKMTVTokens;
 }
 
 /// display-only 配置：外观与 UILabel 一致，默认不可选/不可编辑
+/// UILabel(numberOfLines=0) 会忽略段落样式的 lineBreakMode 强制显示全部行；
+/// UITextView 的 NSLayoutManager 会遵守段落样式的 lineBreakMode，
+/// 导致 Down/markdown 渲染出的 TruncatingTail 段落被截断。
+/// 重写 setAttributedText: 将所有段落样式归一化为 WordWrapping。
+- (void)setAttributedText:(NSAttributedString *)attributedText {
+    if (!attributedText || attributedText.length == 0) {
+        [super setAttributedText:attributedText];
+        return;
+    }
+    __block BOOL needsNormalize = NO;
+    [attributedText enumerateAttribute:NSParagraphStyleAttributeName
+                               inRange:NSMakeRange(0, attributedText.length)
+                               options:0
+                            usingBlock:^(NSParagraphStyle *style, NSRange range, BOOL *stop) {
+        if (style && style.lineBreakMode != NSLineBreakByWordWrapping) {
+            needsNormalize = YES;
+            *stop = YES;
+        }
+    }];
+    if (!needsNormalize) {
+        [super setAttributedText:attributedText];
+        return;
+    }
+    NSMutableAttributedString *normalized = [attributedText mutableCopy];
+    [normalized enumerateAttribute:NSParagraphStyleAttributeName
+                           inRange:NSMakeRange(0, normalized.length)
+                           options:0
+                        usingBlock:^(NSParagraphStyle *style, NSRange range, BOOL *stop) {
+        if (style && style.lineBreakMode != NSLineBreakByWordWrapping) {
+            NSMutableParagraphStyle *newStyle = [style mutableCopy];
+            newStyle.lineBreakMode = NSLineBreakByWordWrapping;
+            [normalized addAttribute:NSParagraphStyleAttributeName value:newStyle range:range];
+        }
+    }];
+    [super setAttributedText:normalized];
+}
+
 - (void)wk_configureDisplayOnly {
     self.editable         = NO;
     self.selectable       = NO;   // 默认不可选，等同 UILabel；长按时按需开启
