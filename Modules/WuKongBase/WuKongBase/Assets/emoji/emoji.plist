@@ -23,6 +23,14 @@
 			</dict>
 			<dict>
 				<key>file</key>
+				<string>custom_mission</string>
+				<key>id</key>
+				<string>custom_mission</string>
+				<key>tag</key>
+				<string>[使命必达]</string>
+			</dict>
+			<dict>
+				<key>file</key>
 				<string>0_0</string>
 				<key>id</key>
 				<string>emoticon_0_0</string>
