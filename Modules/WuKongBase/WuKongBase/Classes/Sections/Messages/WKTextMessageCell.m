@@ -258,9 +258,36 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
 
+static const NSUInteger kWebViewPoolLimit = 4;
+static NSMutableArray<WKWebView*> *_webViewPool;
+static WKWebViewConfiguration *_sharedWebViewConfig;
+
++(NSMutableArray<WKWebView*>*) webViewPool {
+    if (!_webViewPool) {
+        _webViewPool = [NSMutableArray array];
+    }
+    return _webViewPool;
+}
+
++(WKWebViewConfiguration*) sharedWebViewConfig {
+    if (!_sharedWebViewConfig) {
+        _sharedWebViewConfig = [[WKWebViewConfiguration alloc] init];
+    }
+    return _sharedWebViewConfig;
+}
+
 -(void) clearSegmentViews {
+    // 回收 WKWebView 到复用池
+    for (WKWebView *wv in self.tableWebViews) {
+        wv.navigationDelegate = nil;
+        [wv stopLoading];
+        [wv loadHTMLString:@"" baseURL:nil];
+        NSMutableArray *pool = [WKTextMessageCell webViewPool];
+        if (pool.count < kWebViewPoolLimit) {
+            [pool addObject:wv];
+        }
+    }
     for (UIView *v in self.segmentViews) {
-        // 不移除 textLbl（它是 initUI 创建的持久视图，移除后复用会空白）
         if (v != self.textLbl) { [v removeFromSuperview]; }
     }
     [self.segmentViews removeAllObjects];
@@ -272,8 +299,15 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 }
 
 -(WKWebView*) createSegmentWebView {
-    WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-    WKWebView *wv = [[WKWebView alloc] initWithFrame:CGRectZero configuration:config];
+    NSMutableArray *pool = [WKTextMessageCell webViewPool];
+    WKWebView *wv = nil;
+    if (pool.count > 0) {
+        wv = pool.lastObject;
+        [pool removeLastObject];
+        wv.frame = CGRectZero;
+    } else {
+        wv = [[WKWebView alloc] initWithFrame:CGRectZero configuration:[WKTextMessageCell sharedWebViewConfig]];
+    }
     wv.scrollView.scrollEnabled = NO;
     wv.backgroundColor = [UIColor clearColor];
     wv.opaque = NO;
@@ -381,7 +415,7 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     static WKMemoryCache *memoryCache;
     if(!memoryCache) {
         memoryCache = [[WKMemoryCache alloc] init];
-        memoryCache.maxCacheNum = 5000; // AttributedString 缓存，每条 5-50KB
+        memoryCache.maxCacheNum = 500;
     }
     NSString *key = [NSString stringWithFormat:@"%llu%@",message.messageId,message.clientMsgNo];
     id rawContent = [message content];
@@ -628,82 +662,99 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     return attrStr;
 }
 
-/// 自动检测文本中的 @mention（匹配群成员或联系人）
+/// 自动检测文本中的 @mention（用已知成员/联系人名字反向匹配，支持名字含空格）
 +(NSArray<id<WKMatchToken>>*) detectMentionsInText:(NSString*)text channel:(WKChannel*)channel existingTokens:(NSArray<id<WKMatchToken>>*)existingTokens {
     if (!text || text.length == 0) return @[];
 
     NSMutableArray<id<WKMatchToken>> *result = [NSMutableArray array];
 
-    // 用正则找出所有 @xxx 片段（@后跟非空白字符）
-    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"@(\\S+)" options:0 error:nil];
-    if (!regex) return @[];
+    // 收集所有候选名字 -> uid 的映射（名字按长度降序，优先匹配长名字）
+    NSMutableArray<NSDictionary*> *candidates = [NSMutableArray array];
 
-    NSArray<NSTextCheckingResult*> *matches = [regex matchesInString:text options:0 range:NSMakeRange(0, text.length)];
-    if (matches.count == 0) return @[];
-
-    // 获取可匹配的成员/联系人列表
     NSArray<WKChannelMember*> *members = nil;
     if (channel.channelType == WK_GROUP) {
         members = [[WKSDK shared].channelManager getMembersWithChannel:channel];
     }
-
-    for (NSTextCheckingResult *match in matches) {
-        NSRange fullRange = [match range];           // @xxx 的完整范围
-        NSRange nameRange = [match rangeAtIndex:1];  // xxx 部分
-
-        // 检查是否与已有 token 重叠，避免重复
-        BOOL overlaps = NO;
-        for (id<WKMatchToken> token in existingTokens) {
-            if (token.type != WKatchTokenTypeMetion) continue;
-            NSRange tr = token.range;
-            if (fullRange.location < tr.location + tr.length && tr.location < fullRange.location + fullRange.length) {
-                overlaps = YES;
-                break;
+    if (members) {
+        for (WKChannelMember *member in members) {
+            NSString *uid = member.memberUid;
+            WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:uid]];
+            NSMutableSet *names = [NSMutableSet set];
+            if (info) {
+                if (info.name.length > 0) [names addObject:info.name];
+                if (info.remark.length > 0) [names addObject:info.remark];
+                if (info.displayName.length > 0) [names addObject:info.displayName];
+            }
+            if (member.memberName.length > 0) [names addObject:member.memberName];
+            if (uid.length > 0) [names addObject:uid];
+            for (NSString *name in names) {
+                [candidates addObject:@{@"name": name, @"uid": uid}];
             }
         }
-        if (overlaps) continue;
+    }
 
-        NSString *mentionName = [text substringWithRange:nameRange];
-        NSString *matchedUID = nil;
+    // 补充联系人
+    NSArray<WKChannelInfo*> *allContacts = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
+    NSMutableSet *memberUids = [NSMutableSet set];
+    for (NSDictionary *c in candidates) [memberUids addObject:c[@"uid"]];
+    for (WKChannelInfo *info in allContacts) {
+        if ([memberUids containsObject:info.channel.channelId]) continue;
+        NSMutableSet *names = [NSMutableSet set];
+        if (info.name.length > 0) [names addObject:info.name];
+        if (info.remark.length > 0) [names addObject:info.remark];
+        if (info.displayName.length > 0) [names addObject:info.displayName];
+        for (NSString *name in names) {
+            [candidates addObject:@{@"name": name, @"uid": info.channel.channelId}];
+        }
+    }
 
-        // 在群成员中匹配（名字/备注/uid）
-        if (members) {
-            for (WKChannelMember *member in members) {
-                WKChannelInfo *memberInfo = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:member.memberUid]];
-                if (memberInfo) {
-                    if (([memberInfo.name isEqualToString:mentionName]) ||
-                        (memberInfo.remark && [memberInfo.remark isEqualToString:mentionName]) ||
-                        ([memberInfo.displayName isEqualToString:mentionName]) ||
-                        ([member.memberUid isEqualToString:mentionName])) {
-                        matchedUID = member.memberUid;
-                        break;
+    // 按名字长度降序排列，优先匹配长名字（避免短前缀误匹配）
+    [candidates sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [@([b[@"name"] length]) compare:@([a[@"name"] length])];
+    }];
+
+    // 已匹配的范围（防止重叠）
+    NSMutableArray<NSValue*> *matchedRanges = [NSMutableArray array];
+
+    for (NSDictionary *candidate in candidates) {
+        NSString *name = candidate[@"name"];
+        NSString *uid = candidate[@"uid"];
+        NSString *pattern = [NSString stringWithFormat:@"@%@", name];
+
+        NSRange searchRange = NSMakeRange(0, text.length);
+        while (searchRange.location < text.length) {
+            NSRange found = [text rangeOfString:pattern options:0 range:searchRange];
+            if (found.location == NSNotFound) break;
+
+            // 推进搜索范围
+            searchRange.location = found.location + found.length;
+            searchRange.length = text.length - searchRange.location;
+
+            // 检查与已有 token 和已匹配范围是否重叠
+            BOOL overlaps = NO;
+            for (id<WKMatchToken> token in existingTokens) {
+                if (token.type != WKatchTokenTypeMetion) continue;
+                NSRange tr = token.range;
+                if (found.location < tr.location + tr.length && tr.location < found.location + found.length) {
+                    overlaps = YES; break;
+                }
+            }
+            if (!overlaps) {
+                for (NSValue *v in matchedRanges) {
+                    NSRange mr = [v rangeValue];
+                    if (found.location < mr.location + mr.length && mr.location < found.location + found.length) {
+                        overlaps = YES; break;
                     }
-                } else if ([member.memberUid isEqualToString:mentionName] ||
-                           (member.memberName && [member.memberName isEqualToString:mentionName])) {
-                    matchedUID = member.memberUid;
-                    break;
                 }
             }
-        }
+            if (overlaps) continue;
 
-        // 群成员没匹配到，尝试从联系人缓存中按名字匹配
-        if (!matchedUID) {
-            NSArray<WKChannelInfo*> *allContacts = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
-            for (WKChannelInfo *info in allContacts) {
-                if (([info.name isEqualToString:mentionName]) ||
-                    (info.remark && [info.remark isEqualToString:mentionName]) ||
-                    ([info.displayName isEqualToString:mentionName])) {
-                    matchedUID = info.channel.channelId;
-                    break;
-                }
-            }
-        }
+            [matchedRanges addObject:[NSValue valueWithRange:found]];
 
-        if (matchedUID) {
             WKMetionToken *token = [WKMetionToken new];
-            token.range = fullRange;
-            token.uid = matchedUID;
-            token.text = [text substringWithRange:fullRange];
+            token.range = found;
+            token.uid = uid;
+            token.text = [text substringWithRange:found];
             [result addObject:token];
         }
     }
