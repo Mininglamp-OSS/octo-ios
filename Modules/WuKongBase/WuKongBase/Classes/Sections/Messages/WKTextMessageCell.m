@@ -149,16 +149,7 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     if ([checkContent hasPrefix:@"[链接]"]) {
         return CGSizeMake(220, 70);
     }
-    NSMutableAttributedString *attrStr;
-    NSString *cacheKey = [self textAttrCacheKey:model];
-    NSMutableAttributedString *cached = [[self textAttrCache] getCache:cacheKey];
-    if (cached) {
-        attrStr = cached;
-    } else if ([WKMarkdownRenderer containsMarkdown:checkContent]) {
-        attrStr = [[self class] plainTextAttrStr:model];
-    } else {
-        attrStr = [[self class] parseAndCacheTextMessage:model];
-    }
+    NSMutableAttributedString *attrStr = [[self class] parseAndCacheTextMessage:model];
     CGSize  messageTextSize =  [[self class] textSize:attrStr messageModel:model];
     CGSize size = messageTextSize;
     if([self hasReply:model]) {

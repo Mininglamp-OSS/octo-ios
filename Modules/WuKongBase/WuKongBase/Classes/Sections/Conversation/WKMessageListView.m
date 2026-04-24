@@ -490,8 +490,8 @@
 }
 -(void) adjustTableWithOffset:(CGFloat)offset {
     self.tableView.lim_top = -offset;
-    self.tableView.contentInset = UIEdgeInsetsMake(offset, 0, offset, 0);
-    self.tableView.scrollIndicatorInsets = UIEdgeInsetsMake(offset, 0, 0, 0);
+    self.tableView.contentInset = UIEdgeInsetsMake(offset, 0, 0, 0);
+    self.tableView.scrollIndicatorInsets = self.tableView.contentInset;
 }
 
 -(void) enablePullup:(BOOL) enable {
