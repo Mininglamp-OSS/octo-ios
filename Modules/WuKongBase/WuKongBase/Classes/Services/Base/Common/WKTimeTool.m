@@ -19,20 +19,26 @@
 }
 
 +(NSString*) formatTimeByAutoAMPM:(NSDate*)dt {
-    static NSDateFormatter *autoAMPMFormatter;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        autoAMPMFormatter = [[NSDateFormatter alloc] init];
-        autoAMPMFormatter.AMSymbol = LLang(@"上午");
-        autoAMPMFormatter.PMSymbol = LLang(@"下午");
-        if([self is12HourFormat]) {
-            NSString *lang = [WKApp shared].config.langue;
-            [autoAMPMFormatter setDateFormat:[lang isEqualToString:@"zh-Hans"] ? @"aaa hh:mm" : @"hh:mm aaa"];
-        } else {
-            [autoAMPMFormatter setDateFormat:@"HH:mm"];
-        }
-    });
-    return [autoAMPMFormatter stringFromDate:dt];
+    NSCalendar *calendar = [NSCalendar currentCalendar];
+    NSDate *now = [NSDate date];
+    NSDateComponents *nowComp = [calendar components:NSCalendarUnitYear|NSCalendarUnitMonth|NSCalendarUnitDay fromDate:now];
+    NSDateComponents *dtComp = [calendar components:NSCalendarUnitYear|NSCalendarUnitMonth|NSCalendarUnitDay fromDate:dt];
+
+    NSString *timePart;
+    if ([self is12HourFormat]) {
+        NSString *lang = [WKApp shared].config.langue;
+        timePart = [self getTimeString:dt format:[lang isEqualToString:@"zh-Hans"] ? @"aaa hh:mm" : @"hh:mm aaa"];
+    } else {
+        timePart = [self getTimeString:dt format:@"HH:mm"];
+    }
+
+    if (nowComp.year != dtComp.year) {
+        return [NSString stringWithFormat:@"%@ %@", [self getTimeString:dt format:@"yyyy/M/d"], timePart];
+    }
+    if (nowComp.month != dtComp.month || nowComp.day != dtComp.day) {
+        return [NSString stringWithFormat:@"%@ %@", [self getTimeString:dt format:@"M/d"], timePart];
+    }
+    return timePart;
 }
 
 +(NSString*) formatDateStyle1:(NSDate*)dt {

@@ -1296,12 +1296,7 @@
         }
         // 消息没有 space_id 标记
         if(!msgSpaceId || [msgSpaceId isEqual:[NSNull null]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0)) {
-            // Bot 消息无 space_id 时不放行（避免跨空间泄漏）
-            WKChannelInfo *chInfo = [[WKSDK shared].channelManager getChannelInfo:conversation.channel];
-            if (chInfo && chInfo.robot) {
-                return NO;
-            }
-            return YES; // 普通人聊天兼容旧消息
+            return YES; // 消息无 space_id（含 Bot），视为当前空间
         }
         // 消息有 space_id 但不匹配当前空间
         return NO;
