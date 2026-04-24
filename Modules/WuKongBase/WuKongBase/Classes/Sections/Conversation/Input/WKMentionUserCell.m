@@ -67,6 +67,8 @@
     [self.avatarImgView setUrl:model.avatarURL.absoluteString];
     if([model.uid isEqualToString:@"all"]) {
         self.avatarImgView.avatarImgView.image = [self imageName:@"Conversation/Panel/MentionAll"];
+    } else if([model.uid isEqualToString:@"all_ai"]) {
+        self.avatarImgView.avatarImgView.image = [self imageName:@"Common/Index/IconRobot"];
     }
     self.robotIdentityImgView.hidden = !model.robot;
 }

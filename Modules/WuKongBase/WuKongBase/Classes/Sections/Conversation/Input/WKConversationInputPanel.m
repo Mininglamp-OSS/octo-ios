@@ -467,7 +467,7 @@ CGFloat itemSpace = 10.0f;
     if(!self.disableAutoTop) {
         self.lim_top =  [self currentMessageToolBarY];
     }
-   
+
     
     if(self.panelHeight<=0) {
         [self unSelectedFuncItems];
@@ -1484,14 +1484,14 @@ CGFloat itemSpace = 10.0f;
     [self removeKeyboardListen];
 }
 
-// iphoneX安全距离
 - (CGFloat) safeBottom {
     CGFloat safeNum = 0;
-    //判断版本
     if (@available(iOS 11.0, *)) {
-        //通过系统方法keyWindow来获取safeAreaInsets
-        UIEdgeInsets safeArea = [[UIApplication sharedApplication] keyWindow].safeAreaInsets;
-        safeNum = safeArea.bottom;
+        UIWindow *window = self.window;
+        if (!window) {
+            window = [UIApplication sharedApplication].keyWindow;
+        }
+        safeNum = window.safeAreaInsets.bottom;
     }
     return safeNum;
 }

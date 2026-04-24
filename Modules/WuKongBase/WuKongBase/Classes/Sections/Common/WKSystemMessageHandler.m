@@ -126,7 +126,6 @@ bool needRemind = false; // 是否需要提醒
         }
     }
 
-    // 按需显示本地通知
     [[WKLocalNotificationManager shared] showLocalNotificationIfNeed:message];
     
     

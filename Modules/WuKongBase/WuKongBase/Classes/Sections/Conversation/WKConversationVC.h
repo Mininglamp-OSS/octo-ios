@@ -20,6 +20,9 @@ NS_ASSUME_NONNULL_BEGIN
 // 显示最近会话的顶部视图
 -(void) showTopView:(BOOL)show;
 
+/// 定位到指定 messageSeq 的消息（通知点击复用已有窗口时调用）
+-(void) locateToMessageSeq:(uint32_t)messageSeq;
+
 @end
 
 NS_ASSUME_NONNULL_END

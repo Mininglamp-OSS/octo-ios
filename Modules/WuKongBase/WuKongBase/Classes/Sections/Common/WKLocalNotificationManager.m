@@ -324,12 +324,25 @@ static WKLocalNotificationManager *_instance = nil;
     }
     dispatch_async(dispatch_get_main_queue(), ^{
         WKChannel *channel = [WKChannel channelID:channelId channelType:channelType.integerValue];
+
+        // 如果当前已经在相同 channel 的聊天窗口，直接定位消息，不再 push 新页面
+        UIViewController *topVC = [WKNavigationManager shared].topViewController;
+        if ([topVC isKindOfClass:[WKConversationVC class]]) {
+            WKConversationVC *existingVC = (WKConversationVC *)topVC;
+            if ([existingVC.channel.channelId isEqualToString:channel.channelId]
+                && existingVC.channel.channelType == channel.channelType) {
+                if (messageSeq && messageSeq.unsignedIntValue > 0) {
+                    [existingVC locateToMessageSeq:messageSeq.unsignedIntValue];
+                }
+                return;
+            }
+        }
+
         WKConversationVC *vc = [WKConversationVC new];
         vc.channel = channel;
         if (messageSeq && messageSeq.unsignedIntValue > 0) {
             uint32_t orderSeq = [[WKSDK shared].chatManager getOrderSeq:messageSeq.unsignedIntValue];
             if (orderSeq == 0) {
-                // DB 未加载该消息时 orderSeq 为 0，用 messageSeq 兜底
                 orderSeq = messageSeq.unsignedIntValue;
             }
             vc.locationAtOrderSeq = orderSeq;
