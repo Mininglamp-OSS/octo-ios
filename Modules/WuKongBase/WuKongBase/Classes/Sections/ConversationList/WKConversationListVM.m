@@ -205,9 +205,7 @@ static WKConversationListVM *_instance;
             dispatch_semaphore_wait(rateLimiter, DISPATCH_TIME_FOREVER);
             dispatch_group_enter(group);
             [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
-                NSArray *sorted = [threads sortedArrayUsingComparator:^NSComparisonResult(WKThreadModel *a, WKThreadModel *b) {
-                    return [b.updatedAt compare:a.updatedAt];
-                }];
+                NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
                 NSMutableArray *activePreviews = [NSMutableArray array];
                 for (WKThreadModel *t in sorted) {
                     if (t.status == WKThreadStatusActive) [activePreviews addObject:t];
@@ -255,15 +253,15 @@ static WKConversationListVM *_instance;
             dispatch_semaphore_wait(rateLimiter, DISPATCH_TIME_FOREVER);
             dispatch_group_enter(batchGroup);
             [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
-                NSArray *sorted = [threads sortedArrayUsingComparator:^NSComparisonResult(WKThreadModel *a, WKThreadModel *b) {
-                    return [b.updatedAt compare:a.updatedAt];
-                }];
+                NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
                 NSMutableArray *activePreviews = [NSMutableArray array];
                 for (WKThreadModel *t in sorted) {
                     if (t.status == WKThreadStatusActive) [activePreviews addObject:t];
                 }
-                model.threadCount = activePreviews.count;
-                model.threadPreviews = activePreviews.count > 2
+                WKConversationWrapModel *currentModel = [self modelAtChannel:[WKChannel groupWithChannelID:groupNo]];
+                if (!currentModel) currentModel = model;
+                currentModel.threadCount = activePreviews.count;
+                currentModel.threadPreviews = activePreviews.count > 2
                     ? [activePreviews subarrayWithRange:NSMakeRange(0, 2)]
                     : [activePreviews copy];
                 for (WKThreadModel *t in activePreviews) {
@@ -283,6 +281,23 @@ static WKConversationListVM *_instance;
             [[NSNotificationCenter defaultCenter] postNotificationName:WKThreadMessageCountUpdatedNotification object:nil];
         });
     });
+}
+
+/// 用本地会话时间戳排序子区（解决服务端 updated_at 延迟导致首条消息排序不更新）
+-(NSArray<WKThreadModel*>*) sortThreadsByLocalTimestamp:(NSArray<WKThreadModel*>*)threads {
+    NSMutableDictionary<NSString*, NSNumber*> *tsMap = [NSMutableDictionary dictionaryWithCapacity:threads.count];
+    for (WKThreadModel *t in threads) {
+        if (t.channelId.length == 0) continue;
+        WKConversation *conv = [[WKSDK shared].conversationManager getConversation:
+                                [WKChannel channelID:t.channelId channelType:WK_COMMUNITY_TOPIC]];
+        tsMap[t.channelId] = @(conv ? conv.lastMsgTimestamp : 0);
+    }
+    return [threads sortedArrayUsingComparator:^NSComparisonResult(WKThreadModel *a, WKThreadModel *b) {
+        double tsA = [tsMap[a.channelId] doubleValue];
+        double tsB = [tsMap[b.channelId] doubleValue];
+        if (tsA != tsB) return tsA > tsB ? NSOrderedAscending : NSOrderedDescending;
+        return [b.updatedAt compare:a.updatedAt];
+    }];
 }
 
 /// 判断会话是否应在当前空间显示

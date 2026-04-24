@@ -81,6 +81,11 @@
 
 - (void)layoutSubviews {
     [super layoutSubviews];
+    self.avatarBox.frame = self.bounds;
+    self.avatarBox.layer.cornerRadius = self.bounds.size.width * 0.4;
+    CGFloat bw = self.borderWidth;
+    self.avatarImgView.frame = CGRectMake(bw/2.0f, bw/2.0f, self.bounds.size.width - bw, self.bounds.size.height - bw);
+    self.avatarImgView.layer.cornerRadius = self.avatarImgView.frame.size.width * 0.4;
     [self.avatarBox setBackgroundColor:[WKApp shared].config.cellBackgroundColor];
 }
 

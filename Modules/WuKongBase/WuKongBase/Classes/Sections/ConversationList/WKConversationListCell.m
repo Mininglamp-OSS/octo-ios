@@ -188,9 +188,10 @@
     }
 
     if(isGroup) {
-        // 群聊：显示 # 标识，隐藏头像/预览/时间
-        self.hashTagLbl.hidden = NO;
-        self.avatarImgView.hidden = YES;
+        // 群聊：显示头像，隐藏预览/时间
+        self.hashTagLbl.hidden = YES;
+        self.avatarImgView.hidden = NO;
+        [self refreshAvatar:model];
         self.lastMsgTimeLbl.hidden = YES;
         self.statusImgView.hidden = YES;
         self.typingIndicatorView.hidden = YES;
@@ -699,14 +700,14 @@
     if(isGroup) {
         // ========== 群聊布局 ==========
         BOOL showMention = !self.lastContentLbl.hidden;
-        CGFloat hashSize = 36.0f;
+        CGFloat avatarSize = 36.0f;
         CGFloat rightPadding = 15.0f;
 
         if (showMention) {
             // 有 @我：两行布局（标题 + 预览）
-            self.hashTagLbl.frame = CGRectMake(15.0f, 8.0f, hashSize, hashSize);
+            self.avatarImgView.frame = CGRectMake(15.0f, 8.0f, avatarSize, avatarSize);
 
-            CGFloat titleLeft = self.hashTagLbl.lim_right + 6.0f;
+            CGFloat titleLeft = self.avatarImgView.lim_right + 6.0f;
             [self.titleLbl sizeToFit];
             CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f;
             if(self.titleLbl.lim_width > titleMaxWidth) self.titleLbl.lim_width = titleMaxWidth;
@@ -720,9 +721,9 @@
             self.lastContentLbl.lim_height = 18.0f;
         } else {
             // 无 @我：单行居中
-            self.hashTagLbl.frame = CGRectMake(15.0f, (self.lim_height - hashSize) / 2.0f, hashSize, hashSize);
+            self.avatarImgView.frame = CGRectMake(15.0f, (self.lim_height - avatarSize) / 2.0f, avatarSize, avatarSize);
 
-            CGFloat titleLeft = self.hashTagLbl.lim_right + 6.0f;
+            CGFloat titleLeft = self.avatarImgView.lim_right + 6.0f;
             [self.titleLbl sizeToFit];
             CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f;
             if(self.titleLbl.lim_width > titleMaxWidth) self.titleLbl.lim_width = titleMaxWidth;
@@ -767,8 +768,9 @@
     } else {
         // ========== 私聊布局（保持原样） ==========
 
-        // 头像
-        self.avatarImgView.lim_left = 15.0f;
+        // 头像（复用时可能被群聊分支改过尺寸，这里重置）
+        CGSize avatarOrigSize = [WKApp shared].config.messageListAvatarSize;
+        self.avatarImgView.frame = CGRectMake(15.0f, 0, avatarOrigSize.width, avatarOrigSize.height);
         self.avatarImgView.lim_top = self.lim_height/2.0f - self.avatarImgView.lim_height/2.0f;
 
         // 在线标记

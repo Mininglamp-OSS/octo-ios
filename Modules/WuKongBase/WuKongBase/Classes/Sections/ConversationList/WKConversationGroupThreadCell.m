@@ -56,7 +56,6 @@
 
 // 顶部区域（群组信息）
 @property (nonatomic, strong) WKUserAvatar *avatarView;
-@property (nonatomic, strong) UILabel *hashTagLbl; // 群组 # 标识（替代头像）
 @property (nonatomic, strong) UILabel *titleLbl;
 @property (nonatomic, strong) UILabel *timeLbl;
 @property (nonatomic, strong) UILabel *subtitleLbl;
@@ -130,18 +129,9 @@
 }
 
 - (void)setupUI {
-    // 头像（保留但隐藏）
-    self.avatarView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, 50, 50)];
-    self.avatarView.hidden = YES;
+    // 群头像
+    self.avatarView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, HASH_TAG_SIZE, HASH_TAG_SIZE)];
     [self.contentView addSubview:self.avatarView];
-
-    // 群组 # 标识（替代头像）
-    self.hashTagLbl = [[UILabel alloc] init];
-    self.hashTagLbl.text = @"#";
-    self.hashTagLbl.font = [UIFont systemFontOfSize:26 weight:UIFontWeightBold];
-    self.hashTagLbl.textColor = [UIColor colorWithRed:148.0f/255.0f green:152.0f/255.0f blue:168.0f/255.0f alpha:1.0f];
-    self.hashTagLbl.textAlignment = NSTextAlignmentCenter;
-    [self.contentView addSubview:self.hashTagLbl];
 
     // 标题
     self.titleLbl = [[UILabel alloc] init];
@@ -285,9 +275,8 @@
         [model startChannelRequest];
     }
 
-    // 隐藏头像，显示 # 标识
-    self.avatarView.hidden = YES;
-    self.hashTagLbl.hidden = NO;
+    // 加载群头像
+    [self refreshAvatar:model];
 
     // 隐藏时间
     self.timeLbl.hidden = YES;
@@ -487,6 +476,25 @@
     }
 }
 
+-(void) refreshAvatar:(WKConversationWrapModel*)model {
+    UIImage *placeholder = [WKApp.shared loadImage:@"Common/Index/DefaultAvatar" moduleID:@"WuKongBase"];
+    self.avatarView.avatarImgView.image = placeholder;
+    if (model.channelInfo) {
+        NSString *avatarURL;
+        if ([model.channelInfo.logo hasPrefix:@"http"]) {
+            NSString *key = (model.channelInfo.avatarCacheKey.length > 0) ? model.channelInfo.avatarCacheKey : @"0";
+            NSString *sep = [model.channelInfo.logo containsString:@"?"] ? @"&" : @"?";
+            avatarURL = [NSString stringWithFormat:@"%@%@v=%@", model.channelInfo.logo, sep, key];
+        } else {
+            avatarURL = [WKAvatarUtil getGroupAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
+        }
+        [self.avatarView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL]
+                                          placeholderImage:placeholder
+                                                   options:0
+                                                   context:@{SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll)}];
+    }
+}
+
 - (void)layoutSubviews {
     [super layoutSubviews];
 
@@ -495,8 +503,8 @@
     BOOL showMention = !self.subtitleLbl.hidden;
     CGFloat topH = showMention ? (TOP_HEIGHT + 10) : TOP_HEIGHT;
 
-    // # 标识
-    self.hashTagLbl.frame = CGRectMake(HASH_TAG_LEFT, showMention ? 8.0f : (topH - HASH_TAG_SIZE) / 2.0f, HASH_TAG_SIZE, HASH_TAG_SIZE);
+    // 群头像
+    self.avatarView.frame = CGRectMake(HASH_TAG_LEFT, showMention ? 8.0f : (topH - HASH_TAG_SIZE) / 2.0f, HASH_TAG_SIZE, HASH_TAG_SIZE);
 
     // 标题
     CGFloat titleRight = w - RIGHT_PADDING - 50.0f;
@@ -572,7 +580,7 @@
         // 弧线
         CGFloat hashCenterX = HASH_TAG_LEFT + HASH_TAG_SIZE / 2.0f;
         CGFloat branchWidth = CONTENT_LEFT - hashCenterX;
-        CGFloat hashBottom = self.hashTagLbl.lim_top + HASH_TAG_SIZE;
+        CGFloat hashBottom = self.avatarView.lim_top + HASH_TAG_SIZE;
         CGFloat branchHeight = containerTop + containerHeight - hashBottom;
 
         self.branchView.frame = CGRectMake(hashCenterX - branchWidth / 2.0f, hashBottom, branchWidth, branchHeight);
