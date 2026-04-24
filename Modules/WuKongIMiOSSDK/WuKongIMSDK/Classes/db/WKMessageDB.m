@@ -194,61 +194,143 @@ static WKMessageDB *_instance;
 
 -(NSArray<WKMessage*>*) saveMessages:(NSArray<WKMessage*>*)messages {
     __block NSMutableArray<WKMessage*> *newMessages = [NSMutableArray array];
-    @synchronized(self) {
-        [[WKDB sharedDB].dbQueue inTransaction:^(FMDatabase * _Nonnull db, BOOL * _Nonnull rollback) {
-            for(WKMessage *message in messages) {
-                WKMessage *existMessage = [self getMessageWithMessageIdOrClientMsgNo:message.messageId clientMsgNo:message.clientMsgNo db:db];
-                if(existMessage) {
-                    if(existMessage.messageSeq==message.messageSeq) {
-                        if([WKSDK shared].isDebug) {
-                            NSLog(@"消息已存在 -> %llu messageSeq: %u",message.messageId,message.messageSeq);
-                        }
-                    }else {
-                        [self insertMessage:message db:db clientMsgNo:[NSString stringWithFormat:@"%@-%u",message.clientMsgNo,message.messageSeq] isDeleted:1];
-                        message.isDeleted = 1;
-                    }
-                    continue;
-                }
-                
-                [newMessages addObject:message];
-                NSString *searchableWord = @"";
-                if(message.content && message.content.searchableWord) {
-                    searchableWord =message.content.searchableWord;
-                }
-                if(message.remoteExtra.contentEdit && message.remoteExtra.contentEdit.searchableWord) { // 如果有编辑的内容 则以编辑的内容搜索关键字为准
-                    searchableWord =message.remoteExtra.contentEdit.searchableWord;
-                }
-                uint32_t orderSeq = 0;
-                if(message.messageSeq!=0) {
-                    orderSeq = message.messageSeq*WKOrderSeqFactor;
-                }else{
-                    orderSeq = [self getMaxOrderSeqWithChannel:db channel:message.channel]+1;
-                }
-                NSInteger expireAt = 0;
-                if(message.expireAt) {
-                    expireAt = [message.expireAt timeIntervalSince1970];
-                }
-                bool success =  [db executeUpdate:SQL_MESSAGE_SAVE,@(message.messageId),@(message.messageSeq),@(orderSeq),message.clientMsgNo?:@"",message.streamNo?:@"",@(message.timestamp),message.fromUid?:@"",message.toUid?:@"",message.channel.channelId?:@"",@(message.channel.channelType),@(message.contentType),message.contentData?:@"",searchableWord?:@"",@(message.voiceReaded),@(message.status),@(message.reasonCode),[self extraToStr:message.extra],@([message.setting toUint8]),@(message.content.flame),@(message.content.flameSecond),@(message.viewed),@(message.viewedAt),@(message.expire),@(expireAt),@(message.isDeleted)];
-                
-                if(success) {
-                    message.clientSeq = (uint32_t)db.lastInsertRowId;
-                    message.orderSeq = orderSeq;
-                }
-                if(message.hasRemoteExtra) { // 添加扩展消息
-                    [[WKMessageExtraDB shared] addOrUpdateMessageExtra:message.remoteExtra db:db];
-                }
-                if(message.reactions && message.reactions.count>0) {
-                    [[WKReactionDB shared] insertOrUpdateReactions:message.reactions db:db];
-                }
-                if(message.streams && message.streams.count>0) {
-                    [self saveOrUpdateStreams:message.streams db:db];
-                }
-                
+    [[WKDB sharedDB].dbQueue inTransaction:^(FMDatabase * _Nonnull db, BOOL * _Nonnull rollback) {
+        // 批量查询已存在的消息 (message_id -> message_seq, client_msg_no -> message_seq)
+        NSMutableDictionary<NSString*, NSNumber*> *existMap = [self batchCheckExistingMessages:messages db:db];
+        // 缓存每个 channel 的 maxOrderSeq，避免重复 SELECT max()
+        NSMutableDictionary<NSString*, NSNumber*> *maxOrderSeqCache = [NSMutableDictionary dictionary];
+
+        for(WKMessage *message in messages) {
+            // 用 message_id 或 client_msg_no 在批量查询结果中查找
+            NSNumber *existSeq = nil;
+            if(message.messageId != 0) {
+                NSString *midKey = [NSString stringWithFormat:@"mid_%llu", message.messageId];
+                existSeq = existMap[midKey];
             }
-        }];
-    }
-    
+            if(!existSeq && message.clientMsgNo.length > 0) {
+                NSString *cmnKey = [NSString stringWithFormat:@"cmn_%@", message.clientMsgNo];
+                existSeq = existMap[cmnKey];
+            }
+
+            if(existSeq) {
+                if(existSeq.unsignedIntValue == message.messageSeq) {
+                    if([WKSDK shared].isDebug) {
+                        NSLog(@"消息已存在 -> %llu messageSeq: %u",message.messageId,message.messageSeq);
+                    }
+                }else {
+                    [self insertMessage:message db:db clientMsgNo:[NSString stringWithFormat:@"%@-%u",message.clientMsgNo,message.messageSeq] isDeleted:1];
+                    message.isDeleted = 1;
+                }
+                continue;
+            }
+
+            [newMessages addObject:message];
+            NSString *searchableWord = @"";
+            if(message.content && message.content.searchableWord) {
+                searchableWord =message.content.searchableWord;
+            }
+            if(message.remoteExtra.contentEdit && message.remoteExtra.contentEdit.searchableWord) {
+                searchableWord =message.remoteExtra.contentEdit.searchableWord;
+            }
+            uint32_t orderSeq = 0;
+            if(message.messageSeq!=0) {
+                orderSeq = message.messageSeq*WKOrderSeqFactor;
+            }else{
+                NSString *channelKey = [NSString stringWithFormat:@"%@_%d", message.channel.channelId, message.channel.channelType];
+                NSNumber *cachedMax = maxOrderSeqCache[channelKey];
+                if(!cachedMax) {
+                    cachedMax = @([self getMaxOrderSeqWithChannel:db channel:message.channel]);
+                }
+                uint32_t nextOrderSeq = cachedMax.unsignedIntValue + 1;
+                maxOrderSeqCache[channelKey] = @(nextOrderSeq);
+                orderSeq = nextOrderSeq;
+            }
+            NSInteger expireAt = 0;
+            if(message.expireAt) {
+                expireAt = [message.expireAt timeIntervalSince1970];
+            }
+            bool success =  [db executeUpdate:SQL_MESSAGE_SAVE,@(message.messageId),@(message.messageSeq),@(orderSeq),message.clientMsgNo?:@"",message.streamNo?:@"",@(message.timestamp),message.fromUid?:@"",message.toUid?:@"",message.channel.channelId?:@"",@(message.channel.channelType),@(message.contentType),message.contentData?:@"",searchableWord?:@"",@(message.voiceReaded),@(message.status),@(message.reasonCode),[self extraToStr:message.extra],@([message.setting toUint8]),@(message.content.flame),@(message.content.flameSecond),@(message.viewed),@(message.viewedAt),@(message.expire),@(expireAt),@(message.isDeleted)];
+
+            if(success) {
+                message.clientSeq = (uint32_t)db.lastInsertRowId;
+                message.orderSeq = orderSeq;
+                // 同批次后续消息可能有相同 messageId/clientMsgNo，补入 existMap 防止重复插入
+                if(message.messageId != 0) {
+                    existMap[[NSString stringWithFormat:@"mid_%llu", message.messageId]] = @(message.messageSeq);
+                }
+                if(message.clientMsgNo.length > 0) {
+                    existMap[[NSString stringWithFormat:@"cmn_%@", message.clientMsgNo]] = @(message.messageSeq);
+                }
+            }
+            if(message.hasRemoteExtra) {
+                [[WKMessageExtraDB shared] addOrUpdateMessageExtra:message.remoteExtra db:db];
+            }
+            if(message.reactions && message.reactions.count>0) {
+                [[WKReactionDB shared] insertOrUpdateReactions:message.reactions db:db];
+            }
+            if(message.streams && message.streams.count>0) {
+                [self saveOrUpdateStreams:message.streams db:db];
+            }
+
+        }
+    }];
+
     return newMessages;
+}
+
+-(NSMutableDictionary<NSString*, NSNumber*>*) batchCheckExistingMessages:(NSArray<WKMessage*>*)messages db:(FMDatabase*)db {
+    NSMutableDictionary<NSString*, NSNumber*> *result = [NSMutableDictionary dictionary];
+    if(!messages || messages.count == 0) return result;
+
+    NSMutableArray<NSNumber*> *messageIds = [NSMutableArray array];
+    NSMutableArray<NSString*> *clientMsgNos = [NSMutableArray array];
+    for(WKMessage *msg in messages) {
+        if(msg.messageId != 0) {
+            [messageIds addObject:@(msg.messageId)];
+        }
+        if(msg.clientMsgNo.length > 0) {
+            [clientMsgNos addObject:msg.clientMsgNo];
+        }
+    }
+    if(messageIds.count == 0 && clientMsgNos.count == 0) return result;
+
+    NSMutableString *sql = [NSMutableString stringWithFormat:@"SELECT message_id, message_seq, client_msg_no FROM %@ WHERE ", TB_MESSAGE];
+    NSMutableArray *args = [NSMutableArray array];
+    BOOL hasMidClause = NO;
+
+    if(messageIds.count > 0) {
+        NSMutableArray *placeholders = [NSMutableArray array];
+        for(NSNumber *mid in messageIds) {
+            [placeholders addObject:@"?"];
+            [args addObject:mid];
+        }
+        [sql appendFormat:@"(message_id<>0 AND message_id IN (%@))", [placeholders componentsJoinedByString:@","]];
+        hasMidClause = YES;
+    }
+    if(clientMsgNos.count > 0) {
+        if(hasMidClause) [sql appendString:@" OR "];
+        NSMutableArray *placeholders = [NSMutableArray array];
+        for(NSString *cmn in clientMsgNos) {
+            [placeholders addObject:@"?"];
+            [args addObject:cmn];
+        }
+        [sql appendFormat:@"(client_msg_no<>'' AND client_msg_no IN (%@))", [placeholders componentsJoinedByString:@","]];
+    }
+
+    FMResultSet *rs = [db executeQuery:sql withArgumentsInArray:args];
+    while([rs next]) {
+        uint64_t mid = [rs unsignedLongLongIntForColumn:@"message_id"];
+        uint32_t mseq = (uint32_t)[rs unsignedLongLongIntForColumn:@"message_seq"];
+        NSString *cmn = [rs stringForColumn:@"client_msg_no"];
+        if(mid != 0) {
+            result[[NSString stringWithFormat:@"mid_%llu", mid]] = @(mseq);
+        }
+        if(cmn.length > 0) {
+            result[[NSString stringWithFormat:@"cmn_%@", cmn]] = @(mseq);
+        }
+    }
+    [rs close];
+    return result;
 }
 
 -(NSArray<WKMessage*>*) replaceMessages:(NSArray<WKMessage*>*)messages {
@@ -1148,11 +1230,14 @@ static WKMessageDB *_instance;
     return message;
 }
 - (NSDate *)dateFromString:(NSString *)str {
-    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-    [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
-    [formatter setTimeZone:[NSTimeZone timeZoneWithName:@"Asia/Shanghai"]];
-    NSDate *date = [formatter dateFromString:str];
-    return date;
+    static NSDateFormatter *formatter;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        formatter = [[NSDateFormatter alloc] init];
+        [formatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+        [formatter setTimeZone:[NSTimeZone timeZoneWithName:@"Asia/Shanghai"]];
+    });
+    return [formatter dateFromString:str];
 }
 
 
