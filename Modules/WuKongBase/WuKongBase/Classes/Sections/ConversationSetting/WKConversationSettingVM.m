@@ -21,6 +21,7 @@
 #import "WKGlobalSearchResultController.h"
 #import "WKThreadListVC.h"
 #import "WKThreadService.h"
+#import "WKGroupMdVC.h"
 
 @interface WKConversationSettingVM ()<WKChannelManagerDelegate>
 
@@ -254,8 +255,41 @@
             ]
         };
     } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89700];
-    
-    
+
+    // GROUP.md
+    [[WKApp shared] setMethod:@"channelsetting.groupmd" handler:^id _Nullable(id  _Nonnull param) {
+        WKChannel *channel = param[@"channel"];
+        if(channel.channelType != WK_GROUP) {
+            return nil;
+        }
+        BOOL hasGroupMd = NO;
+        NSInteger mdVersion = 0;
+        if(self.channelInfo && self.channelInfo.extra[@"has_group_md"]) {
+            hasGroupMd = [self.channelInfo.extra[@"has_group_md"] boolValue];
+        }
+        if(self.channelInfo && self.channelInfo.extra[@"group_md_version"]) {
+            mdVersion = [self.channelInfo.extra[@"group_md_version"] integerValue];
+        }
+        NSString *statusText = hasGroupMd ? [NSString stringWithFormat:@"%@ v%ld", LLang(@"已配置"), (long)mdVersion] : LLang(@"未配置");
+        return @{
+            @"height":@(0.0f),
+            @"items": @[
+                @{
+                    @"class": WKLabelItemModel.class,
+                    @"label": @"GROUP.md",
+                    @"value": statusText,
+                    @"showBottomLine":@(NO),
+                    @"onClick":^{
+                        WKGroupMdVC *vc = [WKGroupMdVC new];
+                        vc.channel = weakSelf.channel;
+                        vc.canEdit = [weakSelf isManagerOrCreatorForMe];
+                        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+                    }
+                }
+            ]
+        };
+    } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89650];
+
     [[WKApp shared] setMethod:@"channelsetting.hsitory" handler:^id _Nullable(id  _Nonnull param) {
         return @{
             @"height":WKSectionHeight,

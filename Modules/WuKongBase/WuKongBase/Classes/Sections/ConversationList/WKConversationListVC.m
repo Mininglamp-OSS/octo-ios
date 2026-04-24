@@ -1221,13 +1221,10 @@
 #pragma mark - WKReminderManagerDelegate
 
 - (void)reminderManager:(WKReminderManager *)manager didChange:(WKChannel *)channel reminders:(NSArray<WKReminder *> *)reminders {
-    NSLog(@"[@mention] reminderDidChange channel=%@_%d, reminders.count=%lu", channel.channelId, channel.channelType, (unsigned long)reminders.count);
-    // 群聊：直接更新 model 的 reminders
     WKConversationWrapModel *model = [self.conversationListVM modelAtChannel:channel];
     if (model) {
         WKConversation *conv = [model getConversation];
         conv.reminders = reminders;
-        NSLog(@"[@mention] 已更新 model reminders, simpleReminders.count=%lu", (unsigned long)model.simpleReminders.count);
     }
     // 子区：reminder 变化也需要刷新（子区的@提醒显示在父群组的预览行上）
     [self rebuildGroupDisplayAndReload];

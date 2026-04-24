@@ -201,20 +201,12 @@
 
         // 检查是否有 @我 的提醒
         BOOL hasMention = NO;
-        NSLog(@"[@mention] channel=%@, simpleReminders.count=%lu, reminders(raw).count=%lu, convAddr=%p",
-              model.channel.channelId,
-              (unsigned long)(model.simpleReminders ? model.simpleReminders.count : 0),
-              (unsigned long)([model getConversation].reminders ? [model getConversation].reminders.count : 0),
-              [model getConversation]);
         if (model.simpleReminders && model.simpleReminders.count > 0) {
             for (WKReminder *r in model.simpleReminders) {
-                NSLog(@"[@mention]   reminder type=%lu, text=%@, publisher=%@, done=%d",
-                      (unsigned long)r.type, r.text, r.publisher, r.done);
                 if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
             }
         }
         if (hasMention) {
-            NSLog(@"[@mention] 显示@预览: %@", model.content);
             self.lastContentLbl.hidden = NO;
             self.lastContentLbl.attributedText = [self getLastContent:model];
             self.lastContentLbl.lineBreakMode = NSLineBreakByTruncatingTail;
