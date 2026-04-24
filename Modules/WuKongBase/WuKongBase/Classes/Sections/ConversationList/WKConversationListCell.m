@@ -732,12 +732,21 @@
             self.titleLbl.lim_top = (self.lim_height - self.titleLbl.lim_height) / 2.0f;
         }
 
-        // 红点 - 垂直居中
-        self.badgeView.lim_left = self.lim_width - rightPadding - self.badgeView.lim_width;
+        // 右侧元素从右往左排列：toggle → 红点/免打扰
+        CGFloat rightEdge = self.lim_width - rightPadding;
+
+        // 子区展开按钮 - 最右侧固定位置
+        if (!self.threadToggleBtn.hidden) {
+            self.threadToggleBtn.frame = CGRectMake(rightEdge - 36, (self.lim_height - 36) / 2.0f, 36, 36);
+            rightEdge = self.threadToggleBtn.lim_left - 2;
+        }
+
+        // 红点
+        self.badgeView.lim_left = rightEdge - self.badgeView.lim_width;
         self.badgeView.lim_top = (self.lim_height - self.badgeView.lim_height) / 2.0f;
 
-        // 免打扰图标 - 垂直居中
-        self.muteIcon.lim_left = self.lim_width - self.muteIcon.lim_width - rightPadding;
+        // 免打扰图标
+        self.muteIcon.lim_left = rightEdge - self.muteIcon.lim_width;
         self.muteIcon.lim_top = (self.lim_height - self.muteIcon.lim_height) / 2.0f;
 
         // 官方标签
@@ -764,19 +773,6 @@
             }
             self.threadCountLbl.lim_left = tcLeft;
             self.threadCountLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.threadCountLbl.lim_height) / 2.0f;
-        }
-
-        // 子区展开按钮（群名后最右侧的标签再右边）
-        if (!self.threadToggleBtn.hidden) {
-            CGFloat toggleLeft = self.titleLbl.lim_right + 4.0f;
-            if (!self.threadCountLbl.hidden) {
-                toggleLeft = self.threadCountLbl.lim_right + 4.0f;
-            } else if (!self.botBadgeLbl.hidden) {
-                toggleLeft = self.botBadgeLbl.lim_right + 4.0f;
-            } else if (!self.officialTag.hidden) {
-                toggleLeft = self.officialTag.lim_right + 4.0f;
-            }
-            self.threadToggleBtn.frame = CGRectMake(toggleLeft - 8, self.titleLbl.lim_top + (self.titleLbl.lim_height - 36) / 2.0f, 36, 36);
         }
 
     } else {

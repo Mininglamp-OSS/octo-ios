@@ -73,6 +73,16 @@
 // 内部方法，调用前必须持有 messagesLock
 -(void) _insertMessageNoLock:(WKMessageModel*)model {
     if(model.clientMsgNo.length > 0 && self.clientMsgNoIndex[model.clientMsgNo]) {
+        WKMessageModel *existing = self.clientMsgNoIndex[model.clientMsgNo];
+        if(model.orderSeq > 0 && model.orderSeq != existing.orderSeq) {
+            if(existing.orderSeq > 0) {
+                [self.orderSeqIndex removeObjectForKey:@(existing.orderSeq)];
+            }
+            existing.message.orderSeq = model.message.orderSeq;
+            if(existing.orderSeq > 0) {
+                self.orderSeqIndex[@(existing.orderSeq)] = existing;
+            }
+        }
         return;
     }
     if(model.contentType == WK_TEXT) {
@@ -247,6 +257,16 @@
 
 -(void) addMessageOnly:(WKMessageModel *)message {
     if(message.clientMsgNo.length > 0 && self.clientMsgNoIndex[message.clientMsgNo]) {
+        WKMessageModel *existing = self.clientMsgNoIndex[message.clientMsgNo];
+        if(message.orderSeq > existing.orderSeq) {
+            if(existing.orderSeq > 0) {
+                [self.orderSeqIndex removeObjectForKey:@(existing.orderSeq)];
+            }
+            existing.message.orderSeq = message.message.orderSeq;
+            if(existing.orderSeq > 0) {
+                self.orderSeqIndex[@(existing.orderSeq)] = existing;
+            }
+        }
         return;
     }
 

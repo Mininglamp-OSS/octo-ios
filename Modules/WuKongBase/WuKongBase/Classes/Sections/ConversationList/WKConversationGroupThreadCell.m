@@ -530,17 +530,19 @@
         self.titleLbl.frame = CGRectMake(CONTENT_LEFT, (topH - 20) / 2.0f, titleRight - CONTENT_LEFT, 20);
     }
 
-    // 折叠按钮（标题右侧）
-    [self.titleLbl sizeToFit];
-    if (self.titleLbl.lim_width > titleRight - CONTENT_LEFT) self.titleLbl.lim_width = titleRight - CONTENT_LEFT;
-    self.threadToggleBtn.frame = CGRectMake(self.titleLbl.lim_right - 4, self.titleLbl.lim_top + (self.titleLbl.lim_height - 36) / 2.0f, 36, 36);
+    // 右侧元素从右往左：toggle → 红点/免打扰
+    CGFloat rightEdge = w - RIGHT_PADDING;
 
-    // 红点 - 垂直居中在顶部区域
-    self.badgeView.lim_left = w - RIGHT_PADDING - self.badgeView.lim_width;
+    // 折叠按钮 - 最右侧固定
+    self.threadToggleBtn.frame = CGRectMake(rightEdge - 36, (topH - 36) / 2.0f, 36, 36);
+    rightEdge = self.threadToggleBtn.lim_left - 2;
+
+    // 红点
+    self.badgeView.lim_left = rightEdge - self.badgeView.lim_width;
     self.badgeView.lim_top = (topH - self.badgeView.lim_height) / 2.0f;
 
     // 免打扰
-    self.muteIcon.lim_left = w - RIGHT_PADDING - self.muteIcon.lim_width;
+    self.muteIcon.lim_left = rightEdge - self.muteIcon.lim_width;
     self.muteIcon.lim_top = (topH - self.muteIcon.lim_height) / 2.0f;
 
     // 子区预览区域

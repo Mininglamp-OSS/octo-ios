@@ -113,13 +113,52 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
     return CGSizeMake(size.width, size.height + securityTipHeight);
 }
 
++(WKMemoryCache*) textAttrCache {
+    static WKMemoryCache *cache;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        cache = [[WKMemoryCache alloc] init];
+        cache.maxCacheNum = 500;
+    });
+    return cache;
+}
+
++(NSString*) textAttrCacheKey:(WKMessageModel*)message {
+    NSString *key = [NSString stringWithFormat:@"%llu%@",message.messageId,message.clientMsgNo];
+    if(message.remoteExtra.contentEdit) {
+        key = [NSString stringWithFormat:@"%@-edit-%lu",message.clientMsgNo,message.remoteExtra.editedAt];
+    }
+    id rawContent = message.remoteExtra.contentEdit ?: [message content];
+    if ([rawContent isKindOfClass:[WKTextContent class]] && [((WKTextContent*)rawContent).format isEqualToString:@"html"]) {
+        key = [NSString stringWithFormat:@"%@-%lu",key,(unsigned long)WKApp.shared.config.style];
+    }
+    return key;
+}
+
++(NSMutableAttributedString*) plainTextAttrStr:(WKMessageModel*)model {
+    NSString *content = [self getRawContent:model];
+    NSMutableAttributedString *attrStr = [[NSMutableAttributedString alloc] initWithString:content ?: @""];
+    attrStr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+    UIColor *textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
+    [attrStr addAttribute:NSForegroundColorAttributeName value:textColor range:NSMakeRange(0, attrStr.length)];
+    return attrStr;
+}
+
 + (CGSize)contentSizeForMessage:(WKMessageModel *)model {
-    // 链接卡片固定大小
     NSString *checkContent = [self getRawContent:model];
     if ([checkContent hasPrefix:@"[链接]"]) {
         return CGSizeMake(220, 70);
     }
-    NSMutableAttributedString *attrStr = [[self class] parseAndCacheTextMessage:model];
+    NSMutableAttributedString *attrStr;
+    NSString *cacheKey = [self textAttrCacheKey:model];
+    NSMutableAttributedString *cached = [[self textAttrCache] getCache:cacheKey];
+    if (cached) {
+        attrStr = cached;
+    } else if ([WKMarkdownRenderer containsMarkdown:checkContent]) {
+        attrStr = [[self class] plainTextAttrStr:model];
+    } else {
+        attrStr = [[self class] parseAndCacheTextMessage:model];
+    }
     CGSize  messageTextSize =  [[self class] textSize:attrStr messageModel:model];
     CGSize size = messageTextSize;
     if([self hasReply:model]) {
@@ -406,44 +445,27 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
 
 
 +(NSMutableAttributedString*) parseAndCacheTextMessage:(WKMessageModel*)message {
-    
-    
-    if(message.streamOn && message.streamFlag!=WKStreamFlagEnd) { // 流式消息不缓存
+    if(message.streamOn && message.streamFlag!=WKStreamFlagEnd) {
         return [self getContentAttrStr:message];
     }
-    
-    static WKMemoryCache *memoryCache;
-    if(!memoryCache) {
-        memoryCache = [[WKMemoryCache alloc] init];
-        memoryCache.maxCacheNum = 500;
-    }
-    NSString *key = [NSString stringWithFormat:@"%llu%@",message.messageId,message.clientMsgNo];
+
+    NSString *key = [self textAttrCacheKey:message];
     id rawContent = [message content];
     if(message.remoteExtra.contentEdit) {
-        key = [NSString stringWithFormat:@"%@-edit-%lu",message.clientMsgNo,message.remoteExtra.editedAt];
         rawContent = message.remoteExtra.contentEdit;
     }
-    // 类型保护：竞态下 content 可能不是 WKTextContent
     if (![rawContent isKindOfClass:[WKTextContent class]]) {
         return [[NSMutableAttributedString alloc] initWithString:@""];
     }
-    WKTextContent *textContent = (WKTextContent*)rawContent;
-    if([textContent.format isEqualToString:@"html"]) {
-        key = [NSString stringWithFormat:@"%@-%lu",key,(unsigned long)WKApp.shared.config.style]; // 如果是html需要加上主题
-    }
-    NSMutableAttributedString *attrStr =  [memoryCache getCache:key];
+    NSMutableAttributedString *attrStr = [[self textAttrCache] getCache:key];
     if(attrStr) {
         return attrStr;
     }
-    
+
     attrStr = [self getContentAttrStr:message];
-    
-//    attrStr = [[self class] parseText:textContent isSend:message.isSend parseBefore:nil];
     if(key) {
-        [memoryCache setCache:attrStr forKey:key];
+        [[self textAttrCache] setCache:attrStr forKey:key];
     }
-  
-    
     return attrStr;
 }
 

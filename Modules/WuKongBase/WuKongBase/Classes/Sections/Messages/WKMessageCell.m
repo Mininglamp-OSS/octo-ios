@@ -971,23 +971,31 @@ static NSMutableDictionary *flameNodeCacheDict;
     self.reactionView.lim_top = self.bubbleBackgroundView.lim_bottom  -  self.reactionView.lim_height - 10.0f;
 }
 
+static NSMutableDictionary<NSString*, UIImage*> *_bubbleImageCache;
+
 -(UIImage*) bubbleImage {
     if([[self class] hiddenBubble]) {
         return nil;
     }
     WKBubblePostion bubblePosition = [[self class] bubblePosition:self.messageModel];
+    NSString *cacheKey = [NSString stringWithFormat:@"%d_%d", (int)bubblePosition, self.messageModel.isSend ? 1 : 0];
+
+    if (!_bubbleImageCache) {
+        _bubbleImageCache = [NSMutableDictionary dictionary];
+    }
+    UIImage *cached = _bubbleImageCache[cacheKey];
+    if (cached) return cached;
+
     UIImage *img;
     NSString *imgName;
-    BOOL needFlip = NO; // 是否需要垂直翻转（将底部三角翻到顶部）
+    BOOL needFlip = NO;
     if(self.messageModel.isSend) {
         if(bubblePosition == WKBubblePostionFirst || bubblePosition == WKBubblePostionSingle) {
-            // 第一条/单条消息：使用带三角的气泡，翻转后三角在右上角（对齐头像）
             imgName = @"Conversation/Messages/MessageSendBubble";
             needFlip = YES;
         }else  if(bubblePosition == WKBubblePostionMiddle){
             imgName = @"Conversation/Messages/MessageSendBubbleMiddle";
         }else {
-            // Last：无三角气泡
             imgName = @"Conversation/Messages/MessageSendBubbleFirst";
         }
         img = [self getImageNameForBaseModule:imgName] ;
@@ -997,13 +1005,11 @@ static NSMutableDictionary *flameNodeCacheDict;
         img = [img resizableImageWithCapInsets:UIEdgeInsetsMake(img.size.height/2.0f - 4.0f,img.size.width/2.0f - 4.0f, img.size.height/2.0f - 4.0f, img.size.width/2.0f - 4.0f) resizingMode:UIImageResizingModeStretch];
     }else {
         if(bubblePosition == WKBubblePostionFirst || bubblePosition == WKBubblePostionSingle) {
-            // 第一条/单条消息：使用带三角的气泡，翻转后三角在左上角（对齐头像）
             imgName = @"Conversation/Messages/MessageReceiverBubble";
             needFlip = YES;
         }else  if(bubblePosition == WKBubblePostionMiddle){
             imgName = @"Conversation/Messages/MessageReceiverBubbleMiddle";
         }else {
-            // Last：无三角气泡
             imgName = @"Conversation/Messages/MessageReceiverBubbleFirst";
         }
         img = [self getImageNameForBaseModule:imgName] ;
@@ -1013,6 +1019,7 @@ static NSMutableDictionary *flameNodeCacheDict;
         img = [img resizableImageWithCapInsets:UIEdgeInsetsMake(img.size.height/2.0f - 4.0f,img.size.width/2.0f - 4.0f, img.size.height/2.0f - 4.0f, img.size.width/2.0f - 4.0f) resizingMode:UIImageResizingModeStretch];
     }
     img = [img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    _bubbleImageCache[cacheKey] = img;
     return img;
 }
 
