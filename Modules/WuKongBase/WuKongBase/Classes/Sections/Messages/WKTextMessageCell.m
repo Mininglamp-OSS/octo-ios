@@ -90,8 +90,8 @@
 
 @end
 
-static const NSInteger kTextTruncateThreshold = 3000; // 超过此长度截断
-static const NSInteger kTextPreviewLength = 2000;     // 预览显示的字符数
+static const NSInteger kTextTruncateThreshold = 10000; // 超过此长度截断
+static const NSInteger kTextPreviewLength = 8000;      // 预览显示的字符数
 static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高度
 
 
@@ -1286,14 +1286,16 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         self.segmentsBuilt = NO;
     }
 
-    // 超长文本：显示"查看全文"按钮
+    // 超长文本：显示"查看全文"按钮（样式参考 bot 审批按钮）
     if ([[self class] isLongText:model]) {
         if (!self.viewFullTextBtn) {
-            self.viewFullTextBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+            self.viewFullTextBtn = [UIButton buttonWithType:UIButtonTypeCustom];
             [self.viewFullTextBtn setTitle:LLang(@"查看全文") forState:UIControlStateNormal];
-            self.viewFullTextBtn.titleLabel.font = [[WKApp shared].config appFontOfSize:14.0f];
             [self.viewFullTextBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
-            [self.viewFullTextBtn addTarget:self action:@selector(viewFullTextTapped) forControlEvents:UIControlEventTouchUpInside];
+            self.viewFullTextBtn.titleLabel.font = [[WKApp shared].config appFontOfSize:14.0f];
+            self.viewFullTextBtn.backgroundColor = [[WKApp shared].config.themeColor colorWithAlphaComponent:0.1];
+            self.viewFullTextBtn.layer.cornerRadius = 4.0f;
+            self.viewFullTextBtn.layer.masksToBounds = YES;
             [self.messageContentView addSubview:self.viewFullTextBtn];
         }
         self.viewFullTextBtn.hidden = NO;
@@ -1355,6 +1357,14 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                 [self copyTableTapped:(UIButton*)sub];
                 return;
             }
+        }
+    }
+    // "查看全文"按钮点击检测
+    if (self.viewFullTextBtn && !self.viewFullTextBtn.hidden) {
+        CGPoint pointInContent = [self.messageContentView convertPoint:gesture.tapPoint fromView:self.contentView];
+        if (CGRectContainsPoint(self.viewFullTextBtn.frame, pointInContent)) {
+            [self viewFullTextTapped];
+            return;
         }
     }
     // BotFather 审批按钮点击检测

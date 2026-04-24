@@ -282,7 +282,7 @@ static NSMutableDictionary *flameNodeCacheDict;
 
 -(WKTapLongTapOrDoubleTapGestureRecognizerEvent*) tapActionAtPoint:(CGPoint)point {
     CGRect rectInContentView = [self.contentView convertRect:self.messageContentView.frame fromView:self.messageContentView.superview];
-    
+
     WKTapLongTapOrDoubleTapGestureRecognizerEvent *event;
     if([self respondContentSingleTap] && CGRectContainsPoint(rectInContentView, point)) {
         event = [WKTapLongTapOrDoubleTapGestureRecognizerEvent action:(WKTapLongTapOrDoubleTapGestureRecognizerActionWaitForSingleTap)];
