@@ -621,25 +621,11 @@
 -(NSArray<WKMentionUserCellModel*>*) membersToMentionUsers:(NSArray<WKChannelMember*>*)members role:(WKMemberRole)role keyword:(NSString*)keyword{
 
     NSMutableArray<WKMentionUserCellModel*> *users = [NSMutableArray array];
+    // @所有人 对所有群成员可见，对齐 Web 端行为（移除管理员角色限制）
     NSString *allStr = LLang(@"所有人");
     if(!keyword || [keyword isEqualToString:@""] || [allStr containsString:keyword]) {
         [users addObject:[WKMentionUserCellModel uid:@"all" name:allStr]];
     }
-
-    BOOL hasRobot = NO;
-    if(members && members.count > 0) {
-        for (WKChannelMember *m in members) {
-            if(m.robot && ![m.memberUid isEqualToString:[WKApp shared].loginInfo.uid]) {
-                hasRobot = YES;
-                break;
-            }
-        }
-    }
-    NSString *allAiStr = LLang(@"所有AI");
-    if(hasRobot && (!keyword || [keyword isEqualToString:@""] || [allAiStr containsString:keyword])) {
-        [users addObject:[WKMentionUserCellModel uid:@"all_ai" name:allAiStr]];
-    }
-
     if(members && members.count>0) {
         for (WKChannelMember *member in members) {
             if([member.memberUid isEqualToString:[WKApp shared].loginInfo.uid]) {
@@ -726,11 +712,7 @@
         return @"";
     }
 
-    if(uids.count == 1 && [uids.firstObject isEqualToString:@"all_ai"]) {
-        return [self addAllAiMentionToCache];
-    }
-
-    NSArray<WKChannelMember*> *mentionMembers = [[WKChannelMemberDB shared] getMembersWithChannel:self.channel uids:[uids filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"NOT (SELF in %@)",@[@"all",@"all_ai"]]]];
+    NSArray<WKChannelMember*> *mentionMembers = [[WKChannelMemberDB shared] getMembersWithChannel:self.channel uids:[uids filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"NOT (SELF in %@)",@[@"all"]]]];
     NSMutableString *str = [[NSMutableString alloc] initWithString:@""];
 
     NSMutableDictionary *memberDict = [NSMutableDictionary dictionary];
@@ -770,20 +752,6 @@
         [str appendString:WKInputAtEndChar];
     }
     return str;
-}
-
--(NSString*) addAllAiMentionToCache {
-    NSArray<WKChannelMember*> *allMembers = [[WKChannelMemberDB shared] getMembersWithChannel:self.channel];
-    NSMutableArray<NSString*> *robotUids = [NSMutableArray array];
-    for (WKChannelMember *member in allMembers) {
-        if(member.robot && ![member.memberUid isEqualToString:[WKApp shared].loginInfo.uid]) {
-            [robotUids addObject:member.memberUid];
-        }
-    }
-    if(robotUids.count == 0) {
-        return @"";
-    }
-    return [self addMentionToCache:robotUids];
 }
 
 -(NSString*) handleMentionName:(NSString*)oldName {

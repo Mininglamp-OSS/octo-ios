@@ -287,8 +287,8 @@ static WKLocalNotificationManager *_instance = nil;
     NSDictionary *userInfo = response.notification.request.content.userInfo;
     NSLog(@"[PushDebug] didReceiveNotificationResponse userInfo=%@", userInfo);
 
-    // 临时：展示 APNs payload 面板，排查 Release 包字段名后删除
-    [self showPushDebugPanel:userInfo];
+    // Debug 面板已关闭
+    // [self showPushDebugPanel:userInfo];
 
     // 本地通知：我们自己存的 channel_id/channel_type/message_seq
     NSString *channelId = userInfo[@"channel_id"];
