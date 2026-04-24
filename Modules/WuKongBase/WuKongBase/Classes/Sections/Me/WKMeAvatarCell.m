@@ -41,9 +41,22 @@
 
 - (void)refresh:(WKMeAvatarModel*)cellModel {
     [super refresh:cellModel];
-    NSLog(@"[Avatar] WKMeAvatarCell refresh");
-    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:[WKApp shared].loginInfo.uid]];
-    [_avatarImgView setUrl:[WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid cacheKey:info.avatarCacheKey]];
+    WKChannel *channel = cellModel.extra;
+    if (channel && [channel isKindOfClass:[WKChannel class]] && channel.channelType == WK_GROUP) {
+        WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:channel];
+        NSString *avatarURL;
+        if (info.logo && [info.logo hasPrefix:@"http"]) {
+            NSString *key = (info.avatarCacheKey.length > 0) ? info.avatarCacheKey : @"0";
+            NSString *sep = [info.logo containsString:@"?"] ? @"&" : @"?";
+            avatarURL = [NSString stringWithFormat:@"%@%@v=%@", info.logo, sep, key];
+        } else {
+            avatarURL = [WKAvatarUtil getGroupAvatar:channel.channelId cacheKey:info.avatarCacheKey];
+        }
+        [_avatarImgView setUrl:avatarURL];
+    } else {
+        WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:[WKApp shared].loginInfo.uid]];
+        [_avatarImgView setUrl:[WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid cacheKey:info.avatarCacheKey]];
+    }
 }
 
 - (void)layoutSubviews {

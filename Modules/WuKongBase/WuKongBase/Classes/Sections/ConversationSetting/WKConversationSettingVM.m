@@ -12,6 +12,7 @@
 #import "WKLabelItemCell.h"
 #import "WKSwitchItemCell.h"
 #import "WKIconItemCell.h"
+#import "WKMeAvatarCell.h"
 #import "WKResource.h"
 #import "WKGroupManager.h"
 #import "WKButtonItemCell.h"
@@ -179,8 +180,34 @@
             ],
         };
     } category:WKPOINT_CATEGORY_CHANNELSETTING sort:90000];
-    
-    
+
+    // 群头像（仅群主/管理员可见）
+    [[WKApp shared] setMethod:@"channelsetting.groupavatar" handler:^id _Nullable(id  _Nonnull param) {
+        WKChannel *channel = param[@"channel"];
+        BOOL isCreatorOrManager = [param[@"is_creator_or_manager"] boolValue];
+        if(channel.channelType != WK_GROUP || !isCreatorOrManager) {
+            return nil;
+        }
+        return @{
+            @"height":@(0.0f),
+            @"items": @[
+                @{
+                    @"class":WKMeAvatarModel.class,
+                    @"label":LLang(@"群头像"),
+                    @"extra":channel,
+                    @"showBottomLine":@(NO),
+                    @"showTopLine":@(NO),
+                    @"onClick":^{
+                        if(weakSelf.delegate && [weakSelf.delegate respondsToSelector:@selector(settingOnGroupAvatarClick:)]) {
+                            [weakSelf.delegate settingOnGroupAvatarClick:weakSelf];
+                        }
+                    }
+                }
+            ],
+        };
+    } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89900];
+
+
     [[WKApp shared] setMethod:@"channelsetting.groupqrcode" handler:^id _Nullable(id  _Nonnull param) {
         WKChannel *channel = param[@"channel"];
         if(channel.channelType != WK_GROUP) {

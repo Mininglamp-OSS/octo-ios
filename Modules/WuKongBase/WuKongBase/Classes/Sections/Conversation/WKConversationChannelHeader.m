@@ -183,6 +183,7 @@
     if(channel.channelType == WK_COMMUNITY_TOPIC) {
         self.avatarImgView.avatarImgView.image = [self imageName:@"Conversation/Index/ThreadIcon"];
         self.titleLbl.text = channelInfo.displayName;
+        self.subtitleLbl.hidden = YES;
         self.autoDeleteView.hidden = YES;
         self.officialTag.hidden = YES;
         self.botBadgeLbl.hidden = YES;
@@ -285,6 +286,7 @@
         self.subtitleLbl.text = subtitleText;
         self.subtitleLbl.hidden = NO;
         [self.subtitleLbl sizeToFit];
+        [self setNeedsLayout];
     }
 }
 
