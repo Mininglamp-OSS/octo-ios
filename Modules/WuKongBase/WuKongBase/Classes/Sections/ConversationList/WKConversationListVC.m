@@ -127,6 +127,7 @@
     NSInteger savedTab = [[NSUserDefaults standardUserDefaults] integerForKey:@"WKConversationTabIndex"];
     _conversationListVM.filterType = savedTab;
     [_conversationListVM restoreCollapsedSections];
+    [_conversationListVM restoreExpandedThreadGroups];
     [self setupConversationTabView];
 
     // 加载当前 Space 信息
@@ -1489,7 +1490,7 @@
         WKConversationDisplayItem *item = self.groupDisplayList[indexPath.row];
         if (item.isSectionHeader) return 36.0f;
         WKConversationWrapModel *model = item.conversation;
-        if (model && model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn) {
+        if (model && model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn && [_conversationListVM isThreadExpanded:model.channel.channelId]) {
             return [WKConversationGroupThreadCell heightForModel:model];
         }
         // 有 @我 提醒时需要更高的行来显示预览
@@ -1524,7 +1525,7 @@
             return cell;
         }
         WKConversationWrapModel *model = item.conversation;
-        if (model && model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn) {
+        if (model && model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn && [_conversationListVM isThreadExpanded:model.channel.channelId]) {
             WKConversationGroupThreadCell *cell = [tableView dequeueReusableCellWithIdentifier:@"WKConversationGroupThreadCell" forIndexPath:indexPath];
             cell.swipeDelegate = self;
             return cell;
@@ -1571,6 +1572,7 @@
         }
         WKConversationWrapModel *conversationModel = item.conversation;
         if (!conversationModel) return;
+        __weak typeof(self) weakSelf = self;
         if ([cell isKindOfClass:[WKConversationGroupThreadCell class]]) {
             WKConversationGroupThreadCell *threadCell = (WKConversationGroupThreadCell *)cell;
             [threadCell refreshWithModel:conversationModel];
@@ -1583,8 +1585,17 @@
                 vc.groupNo = groupNo;
                 [[WKNavigationManager shared] pushViewController:vc animated:YES];
             }];
+            [threadCell setOnToggleThreadPreview:^(NSString *channelId) {
+                [weakSelf.conversationListVM toggleThreadExpanded:channelId];
+                [weakSelf rebuildGroupDisplayAndReload];
+            }];
         } else if ([cell isKindOfClass:[WKConversationListCell class]]) {
-            [(WKConversationListCell *)cell refreshWithModel:conversationModel];
+            WKConversationListCell *listCell = (WKConversationListCell *)cell;
+            [listCell refreshWithModel:conversationModel];
+            [listCell setOnToggleThreadPreview:^(NSString *channelId) {
+                [weakSelf.conversationListVM toggleThreadExpanded:channelId];
+                [weakSelf rebuildGroupDisplayAndReload];
+            }];
         }
         // 群聊 tab 会话 cell 添加长按手势
         [self addLongPressGestureToCell:cell forConversation:conversationModel];

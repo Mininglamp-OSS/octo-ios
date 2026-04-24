@@ -20,6 +20,7 @@
 @property(nonatomic,strong) NSArray<WKConversationWrapModel*> *filteredConversations; // 过滤后的列表
 @property(nonatomic,strong) NSRecursiveLock *conversationsLock;
 @property(nonatomic,strong) NSSet<NSString*> *syncedGroupChannelIds; // 当前空间的合法群聊白名单
+@property(nonatomic,strong) NSMutableSet<NSString*> *expandedThreadGroups; // 子区预览展开的群 channelId
 
 @end
 
@@ -51,6 +52,7 @@ static WKConversationListVM *_instance;
         self.conversationsLock = [[NSRecursiveLock alloc] init];
         self.channelIndex = [NSMutableDictionary dictionary];
         self.collapsedSections = [NSMutableSet set];
+        self.expandedThreadGroups = [NSMutableSet set];
         self.categoryList = @[];
     }
     return self;
@@ -971,6 +973,45 @@ static NSString *const kCollapsedSectionsKey = @"collapsed_sections";
             if(sectionId.length > 0) {
                 [self.collapsedSections addObject:sectionId];
             }
+        }
+    }
+}
+
+#pragma mark - Thread Expand
+
+static NSString *const kExpandedThreadGroupsKey = @"expanded_thread_groups";
+
+-(BOOL) isThreadExpanded:(NSString*)channelId {
+    return [self.expandedThreadGroups containsObject:channelId];
+}
+
+-(void) toggleThreadExpanded:(NSString*)channelId {
+    if ([self.expandedThreadGroups containsObject:channelId]) {
+        [self.expandedThreadGroups removeObject:channelId];
+    } else {
+        [self.expandedThreadGroups addObject:channelId];
+    }
+    [self saveExpandedThreadGroups];
+}
+
+-(void) saveExpandedThreadGroups {
+    NSString *uid = [WKApp shared].loginInfo.uid;
+    NSString *key = [NSString stringWithFormat:@"%@_%@", uid, kExpandedThreadGroupsKey];
+    NSString *value = [[self.expandedThreadGroups allObjects] componentsJoinedByString:@","];
+    [[NSUserDefaults standardUserDefaults] setObject:value forKey:key];
+}
+
+-(void) restoreExpandedThreadGroups {
+    if (!self.expandedThreadGroups) {
+        self.expandedThreadGroups = [NSMutableSet set];
+    }
+    NSString *uid = [WKApp shared].loginInfo.uid;
+    NSString *key = [NSString stringWithFormat:@"%@_%@", uid, kExpandedThreadGroupsKey];
+    NSString *saved = [[NSUserDefaults standardUserDefaults] objectForKey:key];
+    if (saved && saved.length > 0) {
+        NSArray *ids = [saved componentsSeparatedByString:@","];
+        for (NSString *cid in ids) {
+            if (cid.length > 0) [self.expandedThreadGroups addObject:cid];
         }
     }
 }

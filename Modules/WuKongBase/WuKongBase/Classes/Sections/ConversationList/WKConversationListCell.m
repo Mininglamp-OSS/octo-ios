@@ -27,6 +27,7 @@
 #import "WKUserAvatar.h"
 #import "WKAutoDeleteView.h"
 #import "WKThreadModel.h"
+#import "WKConversationGroupThreadCell.h"
 //#define avatarSize 56.0f
 @interface WKConversationListCell ()
 
@@ -58,6 +59,8 @@
 @property(nonatomic,strong) UILabel *threadCountLbl; // 子区数量提示
 
 @property(nonatomic,strong) UILabel *hashTagLbl; // 群组 # 标识（替代头像）
+
+@property(nonatomic,strong) UIButton *threadToggleBtn; // 子区预览展开按钮
 
 @end
 
@@ -109,6 +112,8 @@
         [self.contextContainerView addSubview:self.threadCountLbl];
         // 群组 # 标识
         [self.contextContainerView addSubview:self.hashTagLbl];
+        // 子区展开按钮
+        [self.contextContainerView addSubview:self.threadToggleBtn];
 
     }
     return self;
@@ -171,6 +176,8 @@
     [super prepareForReuse];
     self.avatarImgView.avatarImgView.image = nil;
     self.hashTagLbl.hidden = YES;
+    self.threadToggleBtn.hidden = YES;
+    self.onToggleThreadPreview = nil;
     self.avatarImgView.hidden = NO;
     self.lastContentLbl.hidden = NO;
     self.lastMsgTimeLbl.hidden = NO;
@@ -198,6 +205,7 @@
         [self.typingIndicatorView stopAnimating];
         self.onlineBadgeView.hidden = YES;
         self.autoDeleteView.hidden = YES;
+        self.threadToggleBtn.hidden = !(model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn);
 
         // 检查是否有 @我 的提醒
         BOOL hasMention = NO;
@@ -217,6 +225,7 @@
         // 私聊：正常显示
         self.hashTagLbl.hidden = YES;
         self.avatarImgView.hidden = NO;
+        self.threadToggleBtn.hidden = YES;
         self.lastContentLbl.hidden = NO;
         self.lastMsgTimeLbl.hidden = NO;
         [self refreshAvatar:model];
@@ -757,6 +766,19 @@
             self.threadCountLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.threadCountLbl.lim_height) / 2.0f;
         }
 
+        // 子区展开按钮（群名后最右侧的标签再右边）
+        if (!self.threadToggleBtn.hidden) {
+            CGFloat toggleLeft = self.titleLbl.lim_right + 4.0f;
+            if (!self.threadCountLbl.hidden) {
+                toggleLeft = self.threadCountLbl.lim_right + 4.0f;
+            } else if (!self.botBadgeLbl.hidden) {
+                toggleLeft = self.botBadgeLbl.lim_right + 4.0f;
+            } else if (!self.officialTag.hidden) {
+                toggleLeft = self.officialTag.lim_right + 4.0f;
+            }
+            self.threadToggleBtn.frame = CGRectMake(toggleLeft - 8, self.titleLbl.lim_top + (self.titleLbl.lim_height - 36) / 2.0f, 36, 36);
+        }
+
     } else {
         // ========== 私聊布局（保持原样） ==========
 
@@ -879,8 +901,25 @@
     return _threadCountLbl;
 }
 
+- (UIButton *)threadToggleBtn {
+    if (!_threadToggleBtn) {
+        _threadToggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        UIImage *icon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(14, 14) color:[WKApp shared].config.themeColor];
+        [_threadToggleBtn setImage:icon forState:UIControlStateNormal];
+        _threadToggleBtn.contentEdgeInsets = UIEdgeInsetsMake(11, 11, 11, 11);
+        _threadToggleBtn.hidden = YES;
+        [_threadToggleBtn addTarget:self action:@selector(onThreadToggleTap) forControlEvents:UIControlEventTouchUpInside];
+    }
+    return _threadToggleBtn;
+}
+
+-(void) onThreadToggleTap {
+    if (self.onToggleThreadPreview && self.model.channel.channelId.length > 0) {
+        self.onToggleThreadPreview(self.model.channel.channelId);
+    }
+}
+
 -(UIImage*) imageName:(NSString*)name {
     return [WKApp.shared loadImage:name moduleID:@"WuKongBase"];
-//    return [[WKResource shared] resourceForImage:name podName:@"WuKongBase_images"];
 }
 @end

@@ -79,6 +79,7 @@
 @property (nonatomic, strong) NSArray<UILabel *> *rowBadgeLbls;
 
 @property (nonatomic, strong) WKConversationWrapModel *model;
+@property (nonatomic, strong) UIButton *threadToggleBtn;
 
 @end
 
@@ -139,6 +140,14 @@
     self.titleLbl.textColor = [WKApp shared].config.defaultTextColor;
     self.titleLbl.lineBreakMode = NSLineBreakByTruncatingTail;
     [self.contentView addSubview:self.titleLbl];
+
+    // 折叠按钮
+    self.threadToggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    UIImage *toggleIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(14, 14) color:[WKApp shared].config.themeColor];
+    [self.threadToggleBtn setImage:toggleIcon forState:UIControlStateNormal];
+    self.threadToggleBtn.contentEdgeInsets = UIEdgeInsetsMake(11, 11, 11, 11);
+    [self.threadToggleBtn addTarget:self action:@selector(onToggleTap) forControlEvents:UIControlEventTouchUpInside];
+    [self.contentView addSubview:self.threadToggleBtn];
 
     // 时间（保留但隐藏）
     self.timeLbl = [[UILabel alloc] init];
@@ -476,6 +485,12 @@
     }
 }
 
+-(void) onToggleTap {
+    if (self.onToggleThreadPreview && self.model.channel.channelId.length > 0) {
+        self.onToggleThreadPreview(self.model.channel.channelId);
+    }
+}
+
 -(void) refreshAvatar:(WKConversationWrapModel*)model {
     UIImage *placeholder = [WKApp.shared loadImage:@"Common/Index/DefaultAvatar" moduleID:@"WuKongBase"];
     self.avatarView.avatarImgView.image = placeholder;
@@ -514,6 +529,11 @@
     } else {
         self.titleLbl.frame = CGRectMake(CONTENT_LEFT, (topH - 20) / 2.0f, titleRight - CONTENT_LEFT, 20);
     }
+
+    // 折叠按钮（标题右侧）
+    [self.titleLbl sizeToFit];
+    if (self.titleLbl.lim_width > titleRight - CONTENT_LEFT) self.titleLbl.lim_width = titleRight - CONTENT_LEFT;
+    self.threadToggleBtn.frame = CGRectMake(self.titleLbl.lim_right - 4, self.titleLbl.lim_top + (self.titleLbl.lim_height - 36) / 2.0f, 36, 36);
 
     // 红点 - 垂直居中在顶部区域
     self.badgeView.lim_left = w - RIGHT_PADDING - self.badgeView.lim_width;
@@ -613,6 +633,7 @@
     self.moreBadgeLbl.hidden = YES;
     self.onThreadPreviewTap = nil;
     self.onMoreThreadsTap = nil;
+    self.onToggleThreadPreview = nil;
 }
 
 /// Convert SVG arc endpoint parameterization to center parameterization,
