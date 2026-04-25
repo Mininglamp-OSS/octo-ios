@@ -816,6 +816,10 @@
         model.unreadCount = self.newMsgCount;
         [[WKSDK shared].conversationManager callOnConversationUpdateDelegate:[model getConversation]];
     }
+    // 立即同步到服务器和本地 DB，防止用户按 Home 键或杀 app 时未读状态丢失
+    uint32_t messageSeq = self.lastMessage ? self.lastMessage.messageSeq : 0;
+    [[WKMessageManager shared] conversationSetUnread:self.channel unread:self.newMsgCount messageSeq:messageSeq complete:nil];
+    [[WKSDK shared].conversationManager setConversationUnreadCount:self.channel unread:self.newMsgCount];
 }
 
 
