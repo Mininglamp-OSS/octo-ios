@@ -85,12 +85,12 @@
 
 @implementation WKConversationGroupThreadCell
 
-#define TOP_HEIGHT 48.0f
+#define TOP_HEIGHT 64.0f
 #define THREAD_ROW_HEIGHT 32.0f
 #define MORE_HEIGHT 26.0f
-#define HASH_TAG_SIZE 36.0f
+#define HASH_TAG_SIZE 52.0f
 #define HASH_TAG_LEFT 15.0f
-#define CONTENT_LEFT 57.0f
+#define CONTENT_LEFT 77.0f
 #define RIGHT_PADDING 15.0f
 
 +(CGFloat) heightForModel:(WKConversationWrapModel *)model {

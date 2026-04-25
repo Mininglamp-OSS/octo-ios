@@ -44,7 +44,7 @@
     if(!_avatarImgView) {
         _avatarImgView = [[WKImageView alloc] initWithFrame:CGRectMake(self.borderWidth/2.0f, self.borderWidth/2.0f, self.frame.size.width -self.borderWidth, self.frame.size.height - self.borderWidth)];
         _avatarImgView.layer.masksToBounds = YES;
-        _avatarImgView.layer.cornerRadius = _avatarImgView.frame.size.width*0.4;
+        _avatarImgView.layer.cornerRadius = _avatarImgView.frame.size.width*0.5;
     }
     return _avatarImgView;
 }
@@ -82,11 +82,15 @@
 - (void)layoutSubviews {
     [super layoutSubviews];
     self.avatarBox.frame = self.bounds;
-    self.avatarBox.layer.cornerRadius = self.bounds.size.width * 0.4;
+    self.avatarBox.layer.cornerRadius = self.bounds.size.width * 0.5;
     CGFloat bw = self.borderWidth;
     self.avatarImgView.frame = CGRectMake(bw/2.0f, bw/2.0f, self.bounds.size.width - bw, self.bounds.size.height - bw);
-    self.avatarImgView.layer.cornerRadius = self.avatarImgView.frame.size.width * 0.4;
+    self.avatarImgView.layer.cornerRadius = self.avatarImgView.frame.size.width * 0.5;
     [self.avatarBox setBackgroundColor:[WKApp shared].config.cellBackgroundColor];
+    NSLog(@"[AvatarDebug] layoutSubviews bounds=%.1f x %.1f, imgView=%.1f x %.1f, cornerRadius=%.1f",
+          self.bounds.size.width, self.bounds.size.height,
+          self.avatarImgView.frame.size.width, self.avatarImgView.frame.size.height,
+          self.avatarImgView.layer.cornerRadius);
 }
 
 
@@ -94,7 +98,7 @@
     if(!_avatarBox) {
         _avatarBox = [[UIView alloc] initWithFrame:self.bounds];
         _avatarBox.layer.masksToBounds = YES;
-        _avatarBox.layer.cornerRadius = _avatarBox.frame.size.width*0.4;
+        _avatarBox.layer.cornerRadius = _avatarBox.frame.size.width*0.5;
     }
     return _avatarBox;
 }

@@ -1486,7 +1486,7 @@
 -(CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath{
     // 群聊 tab：使用分组展示列表
     if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
-        if (indexPath.row >= (NSInteger)self.groupDisplayList.count) return 48.0f;
+        if (indexPath.row >= (NSInteger)self.groupDisplayList.count) return 64.0f;
         WKConversationDisplayItem *item = self.groupDisplayList[indexPath.row];
         if (item.isSectionHeader) return 36.0f;
         WKConversationWrapModel *model = item.conversation;
@@ -1496,14 +1496,14 @@
         // 有 @我 提醒时需要更高的行来显示预览
         if (model && model.simpleReminders.count > 0) {
             for (WKReminder *r in model.simpleReminders) {
-                if (r.type == WKReminderTypeMentionMe) return 58.0f;
+                if (r.type == WKReminderTypeMentionMe) return 74.0f;
             }
         }
-        return 48.0f;
+        return 64.0f;
     }
     // 私聊 tab
     WKConversationWrapModel *model = [_conversationListVM conversationAtIndex:indexPath.row];
-    return 88.0f;
+    return 76.0f;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section{

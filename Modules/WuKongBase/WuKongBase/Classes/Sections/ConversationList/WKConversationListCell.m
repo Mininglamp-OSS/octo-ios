@@ -77,7 +77,7 @@
         [self.contextContainerView addSubview:self.titleLbl];
         
         
-        self.avatarImgView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, [WKApp shared].config.messageListAvatarSize.width,  [WKApp shared].config.messageListAvatarSize.height)];
+        self.avatarImgView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, 52.0f, 52.0f)];
         [self.contextContainerView addSubview:self.avatarImgView];
         // 最后一条消息内容
         self.lastContentLbl = [[UILabel alloc] init];
@@ -730,14 +730,14 @@
     if(isGroup) {
         // ========== 群聊布局 ==========
         BOOL showMention = !self.lastContentLbl.hidden;
-        CGFloat avatarSize = 36.0f;
+        CGFloat avatarSize = 52.0f;
         CGFloat rightPadding = 15.0f;
 
         if (showMention) {
             // 有 @我：两行布局（标题 + 预览）
             self.avatarImgView.frame = CGRectMake(15.0f, 8.0f, avatarSize, avatarSize);
 
-            CGFloat titleLeft = self.avatarImgView.lim_right + 6.0f;
+            CGFloat titleLeft = self.avatarImgView.lim_right + 10.0f;
             [self.titleLbl sizeToFit];
             CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f;
             if(self.titleLbl.lim_width > titleMaxWidth) self.titleLbl.lim_width = titleMaxWidth;
@@ -753,13 +753,15 @@
             // 无 @我：单行居中
             self.avatarImgView.frame = CGRectMake(15.0f, (self.lim_height - avatarSize) / 2.0f, avatarSize, avatarSize);
 
-            CGFloat titleLeft = self.avatarImgView.lim_right + 6.0f;
+            CGFloat titleLeft = self.avatarImgView.lim_right + 10.0f;
             [self.titleLbl sizeToFit];
             CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f;
             if(self.titleLbl.lim_width > titleMaxWidth) self.titleLbl.lim_width = titleMaxWidth;
             self.titleLbl.lim_left = titleLeft;
             self.titleLbl.lim_top = (self.lim_height - self.titleLbl.lim_height) / 2.0f;
         }
+        NSLog(@"[CellDebug] 群聊 avatar frame=%.1f x %.1f, cellHeight=%.1f, channelId=%@",
+              self.avatarImgView.lim_width, self.avatarImgView.lim_height, self.lim_height, self.model.channel.channelId);
 
         // 右侧元素从右往左排列：toggle → 红点/免打扰
         CGFloat rightEdge = self.lim_width - rightPadding;
@@ -807,10 +809,12 @@
     } else {
         // ========== 私聊布局（保持原样） ==========
 
-        // 头像（复用时可能被群聊分支改过尺寸，这里重置）
-        CGSize avatarOrigSize = [WKApp shared].config.messageListAvatarSize;
-        self.avatarImgView.frame = CGRectMake(15.0f, 0, avatarOrigSize.width, avatarOrigSize.height);
+        // 头像（统一尺寸 42x42）
+        CGFloat avatarSize = 52.0f;
+        self.avatarImgView.frame = CGRectMake(15.0f, 0, avatarSize, avatarSize);
         self.avatarImgView.lim_top = self.lim_height/2.0f - self.avatarImgView.lim_height/2.0f;
+        NSLog(@"[CellDebug] 私聊 avatar frame=%.1f x %.1f, cellHeight=%.1f, channelId=%@",
+              self.avatarImgView.lim_width, self.avatarImgView.lim_height, self.lim_height, self.model.channel.channelId);
 
         // 在线标记
         if(self.model.channelInfo && self.model.channelInfo.online) {
@@ -827,7 +831,9 @@
 
         CGFloat titleLeftToAvatarSpace = 10.0f;
         self.titleLbl.lim_left = self.avatarImgView.lim_right + titleLeftToAvatarSpace;
-        self.titleLbl.lim_top = self.avatarImgView.lim_top + 4.0f ;
+        CGFloat textBlockH = 20.0f + 3.0f + 24.0f; // title + gap + content
+        CGFloat textBlockTop = (self.lim_height - textBlockH) / 2.0f;
+        self.titleLbl.lim_top = textBlockTop;
 
         [self.lastMsgTimeLbl sizeToFit];
         CGFloat titleMaxWidth = self.lim_width - (self.avatarImgView.lim_right + 5.0f) - (self.lastMsgTimeLbl.lim_width+5.0f + 20.0f)  - 20.0f;
