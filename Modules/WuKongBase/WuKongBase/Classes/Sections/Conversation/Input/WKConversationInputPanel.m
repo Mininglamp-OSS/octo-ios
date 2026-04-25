@@ -1248,7 +1248,16 @@ CGFloat itemSpace = 10.0f;
 
 - (NSArray *)holdToTalkManagerChannelMembers:(WKHoldToTalkManager *)manager {
     if (![self.conversationContext respondsToSelector:@selector(channel)]) return @[];
-    return [[WKChannelMemberDB shared] getMembersWithChannel:self.conversationContext.channel];
+    WKChannel *channel = self.conversationContext.channel;
+    // 子区成员在父群上
+    if (channel.channelType == WK_COMMUNITY_TOPIC) {
+        NSRange sep = [channel.channelId rangeOfString:@"____"];
+        if (sep.location != NSNotFound) {
+            NSString *groupNo = [channel.channelId substringToIndex:sep.location];
+            return [[WKChannelMemberDB shared] getMembersWithChannel:[WKChannel groupWithChannelID:groupNo]];
+        }
+    }
+    return [[WKChannelMemberDB shared] getMembersWithChannel:channel];
 }
 
 - (void)holdToTalkManagerDidStartRecording:(WKHoldToTalkManager *)manager {
@@ -1275,8 +1284,15 @@ CGFloat itemSpace = 10.0f;
     NSMutableArray<NSString*> *memberNames = [NSMutableArray array];
     NSMutableSet<NSString*> *uniqueNames = [NSMutableSet set];
 
-    if (channel.channelType == WK_GROUP) {
-        NSArray<WKChannelMember*> *members = [[WKChannelMemberDB shared] getMembersWithChannel:channel];
+    if (channel.channelType == WK_GROUP || channel.channelType == WK_COMMUNITY_TOPIC) {
+        WKChannel *memberChannel = channel;
+        if (channel.channelType == WK_COMMUNITY_TOPIC) {
+            NSRange sep = [channel.channelId rangeOfString:@"____"];
+            if (sep.location != NSNotFound) {
+                memberChannel = [WKChannel groupWithChannelID:[channel.channelId substringToIndex:sep.location]];
+            }
+        }
+        NSArray<WKChannelMember*> *members = [[WKChannelMemberDB shared] getMembersWithChannel:memberChannel];
         NSInteger limit = MIN(members.count, 100);
         for (NSInteger i = 0; i < limit; i++) {
             WKChannelMember *member = members[i];

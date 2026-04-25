@@ -169,9 +169,14 @@
     NSMutableArray<NSString*> *memberNames = [NSMutableArray array];
     NSMutableSet<NSString*> *uniqueNames = [NSMutableSet set];
 
-    if (channel.channelType == WK_GROUP) {
-        // 群聊：从DB读取群成员
-        NSArray<WKChannelMember*> *members = [[WKChannelMemberDB shared] getMembersWithChannel:channel];
+    if (channel.channelType == WK_GROUP || channel.channelType == WK_COMMUNITY_TOPIC) {
+        // 群聊/子区：从DB读取群成员（子区用父群的成员）
+        WKChannel *memberChannel = channel;
+        if (channel.channelType == WK_COMMUNITY_TOPIC) {
+            WKChannel *parent = [self parentGroupChannel:channel];
+            if (parent) memberChannel = parent;
+        }
+        NSArray<WKChannelMember*> *members = [[WKChannelMemberDB shared] getMembersWithChannel:memberChannel];
         if (members.count <= 100) {
             // 小群：收集所有成员
             for (WKChannelMember *member in members) {
@@ -309,7 +314,22 @@
 
 - (NSArray<WKChannelMember *> *)voiceInputChannelMembers {
     if (![self.context respondsToSelector:@selector(channel)]) return @[];
-    return [[WKChannelMemberDB shared] getMembersWithChannel:self.context.channel];
+    WKChannel *channel = self.context.channel;
+    // 子区成员在父群上
+    if (channel.channelType == WK_COMMUNITY_TOPIC) {
+        WKChannel *parentChannel = [self parentGroupChannel:channel];
+        if (parentChannel) return [[WKChannelMemberDB shared] getMembersWithChannel:parentChannel];
+    }
+    return [[WKChannelMemberDB shared] getMembersWithChannel:channel];
+}
+
+- (WKChannel *)parentGroupChannel:(WKChannel *)channel {
+    NSRange sep = [channel.channelId rangeOfString:@"____"];
+    if (sep.location != NSNotFound) {
+        NSString *groupNo = [channel.channelId substringToIndex:sep.location];
+        return [WKChannel groupWithChannelID:groupNo];
+    }
+    return nil;
 }
 
 - (void)voiceInputDidTranscribe:(NSString *)text
