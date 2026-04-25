@@ -707,6 +707,12 @@
 }
 
 
+-(void) addMentionItems:(NSArray<WKInputMentionItem *> *)items {
+    for (WKInputMentionItem *item in items) {
+        [self.mentionCache addMentionItem:item];
+    }
+}
+
 -(NSString*) addMentionToCache:(NSArray<NSString*>*)uids {
     if(!uids || uids.count==0) {
         return @"";

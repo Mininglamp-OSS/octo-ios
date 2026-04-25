@@ -11,6 +11,7 @@
 #import "WKNavigationManager.h"
 #import "UIView+WKCommon.h"
 #import "WKResource.h"
+#import "WKInputMentionCache.h"
 
 NSNotificationName const WKVoiceInputCancelRecordingNotification = @"WKVoiceInputCancelRecordingNotification";
 
@@ -384,8 +385,33 @@ static CGFloat const kCircleBaseSize = 80.0; // 基础圆形大小，会随音�
         BOOL shouldReplace = self.pendingTranscribeShouldReplace;
         self.pendingTranscribeText = nil;
         self.pendingTranscribeShouldReplace = NO;
-        if ([self.delegate respondsToSelector:@selector(voiceInputDidTranscribe:shouldReplace:)]) {
-            [self.delegate voiceInputDidTranscribe:text shouldReplace:shouldReplace];
+
+        // 解析 @mention 标记
+        NSArray<WKChannelMember *> *members = nil;
+        if ([self.delegate respondsToSelector:@selector(voiceInputChannelMembers)]) {
+            members = [self.delegate voiceInputChannelMembers];
+        }
+
+        if (members.count > 0) {
+            NSMutableArray<WKInputMentionItem *> *mentions = [NSMutableArray array];
+            NSString *parsed = [self parseMentionMarkers:text members:members mentions:mentions];
+
+            NSLog(@"[VoiceInput] @mention parsing: found %lu mentions in \"%@\"",
+                  (unsigned long)mentions.count, text);
+            for (WKInputMentionItem *m in mentions) {
+                NSLog(@"[VoiceInput] mention: uid=%@, name=%@", m.uid, m.name);
+            }
+
+            if (mentions.count > 0 &&
+                [self.delegate respondsToSelector:@selector(voiceInputDidTranscribe:mentions:shouldReplace:)]) {
+                [self.delegate voiceInputDidTranscribe:parsed mentions:mentions shouldReplace:shouldReplace];
+            } else if ([self.delegate respondsToSelector:@selector(voiceInputDidTranscribe:shouldReplace:)]) {
+                [self.delegate voiceInputDidTranscribe:text shouldReplace:shouldReplace];
+            }
+        } else {
+            if ([self.delegate respondsToSelector:@selector(voiceInputDidTranscribe:shouldReplace:)]) {
+                [self.delegate voiceInputDidTranscribe:text shouldReplace:shouldReplace];
+            }
         }
     }
 }
@@ -610,12 +636,35 @@ static CGFloat const kCircleBaseSize = 80.0; // 基础圆形大小，会随音�
 
     // 等待预取的语音上下文完成，再发起转写
     [[WKVoiceInputService shared] getVoiceContextWithCompletion:^(NSString *voiceContext) {
-        NSString *chatContext = voiceContext;
-        if (!chatContext && [weakSelf.delegate respondsToSelector:@selector(voiceInputChatContext)]) {
-            chatContext = [weakSelf.delegate voiceInputChatContext];
+        // 拆分上下文：personalContext 来自预取，chatContext 来自 delegate
+        NSString *personalContext = voiceContext;
+        NSString *chatContext = nil;
+        NSString *memberContext = nil;
+        if ([weakSelf.delegate respondsToSelector:@selector(voiceInputChatContext)]) {
+            NSString *fullContext = [weakSelf.delegate voiceInputChatContext];
+            if (fullContext) {
+                // voiceInputChatContext 返回的格式：聊天成员：xxx\n[发送者]: yyy
+                // 拆分成 memberContext 和 chatContext
+                NSRange memberRange = [fullContext rangeOfString:@"聊天成员："];
+                if (memberRange.location != NSNotFound) {
+                    NSRange newlineRange = [fullContext rangeOfString:@"\n"];
+                    if (newlineRange.location != NSNotFound) {
+                        memberContext = [fullContext substringToIndex:newlineRange.location];
+                        chatContext = [fullContext substringFromIndex:newlineRange.location + 1];
+                    } else {
+                        memberContext = fullContext;
+                    }
+                } else {
+                    chatContext = fullContext;
+                }
+            }
         }
 
-        [[WKVoiceInputService shared] transcribeAudio:audioData contextText:contextText chatContext:chatContext
+        [[WKVoiceInputService shared] transcribeAudio:audioData
+                                          contextText:contextText
+                                          chatContext:chatContext
+                                      personalContext:personalContext
+                                        memberContext:memberContext
                                            completion:^(WKVoiceInputResult *result, NSError *error) {
         [weakSelf cleanupRecordFile];
         if (error || result.text.length == 0) {
@@ -1177,6 +1226,99 @@ static NSInteger const kOverlayWaveBarCount = 40;
         [self hideRecordingOverlay];
         [self cancelRecording];
     }
+}
+
+#pragma mark - @Mention Parsing (Longest Prefix Match)
+
+- (NSString *)parseMentionMarkers:(NSString *)text
+                          members:(NSArray<WKChannelMember *> *)members
+                         mentions:(NSMutableArray<WKInputMentionItem *> *)mentions {
+    if (text.length == 0) return text;
+
+    NSString *loginUID = [WKApp shared].loginInfo.uid;
+
+    NSMutableArray<NSDictionary *> *nameEntries = [NSMutableArray array];
+    for (WKChannelMember *member in members) {
+        if ([member.memberUid isEqualToString:loginUID]) continue;
+        if (member.isDeleted) continue;
+        NSString *displayName = member.memberRemark.length > 0 ? member.memberRemark : member.memberName;
+        if (displayName.length > 0) {
+            [nameEntries addObject:@{@"name": displayName, @"uid": member.memberUid}];
+        }
+        if (member.memberRemark.length > 0 && member.memberName.length > 0 &&
+            ![member.memberRemark isEqualToString:member.memberName]) {
+            [nameEntries addObject:@{@"name": member.memberName, @"uid": member.memberUid}];
+        }
+    }
+    [nameEntries sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        NSUInteger lenA = [a[@"name"] length];
+        NSUInteger lenB = [b[@"name"] length];
+        if (lenB > lenA) return NSOrderedDescending;
+        if (lenB < lenA) return NSOrderedAscending;
+        return NSOrderedSame;
+    }];
+
+    NSString *allName = LLang(@"所有人");
+    NSMutableString *result = [NSMutableString string];
+    NSUInteger i = 0;
+    NSUInteger len = text.length;
+
+    while (i < len) {
+        unichar ch = [text characterAtIndex:i];
+        if (ch != '@') {
+            [result appendFormat:@"%C", ch];
+            i++;
+            continue;
+        }
+
+        NSString *rest = [text substringFromIndex:i + 1];
+
+        if ([rest hasPrefix:allName]) {
+            WKInputMentionItem *item = [[WKInputMentionItem alloc] init];
+            item.uid = @"all";
+            item.name = allName;
+            [mentions addObject:item];
+            [result appendFormat:@"@%@%@", allName, WKInputAtEndChar];
+            i += 1 + allName.length;
+            if (i < len && [text characterAtIndex:i] == ' ') i++;
+            continue;
+        }
+        if ([rest.lowercaseString hasPrefix:@"all"] &&
+            (rest.length == 3 || (i + 4 < len && [text characterAtIndex:i + 4] == ' '))) {
+            WKInputMentionItem *item = [[WKInputMentionItem alloc] init];
+            item.uid = @"all";
+            item.name = allName;
+            [mentions addObject:item];
+            [result appendFormat:@"@%@%@", allName, WKInputAtEndChar];
+            i += 1 + 3;
+            if (i < len && [text characterAtIndex:i] == ' ') i++;
+            continue;
+        }
+
+        BOOL matched = NO;
+        for (NSDictionary *entry in nameEntries) {
+            NSString *name = entry[@"name"];
+            if (rest.length >= name.length &&
+                [[rest substringToIndex:name.length] caseInsensitiveCompare:name] == NSOrderedSame) {
+                WKInputMentionItem *item = [[WKInputMentionItem alloc] init];
+                item.uid = entry[@"uid"];
+                item.name = name;
+                [mentions addObject:item];
+                [result appendFormat:@"@%@%@", name, WKInputAtEndChar];
+                i += 1 + name.length;
+                if (i < len && [text characterAtIndex:i] == ' ') i++;
+                matched = YES;
+                break;
+            }
+        }
+
+        if (!matched) {
+            [result appendString:@"@"];
+            i++;
+        }
+    }
+
+    return [result copy];
 }
 
 @end

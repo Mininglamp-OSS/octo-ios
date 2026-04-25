@@ -5,6 +5,8 @@
 
 #import <UIKit/UIKit.h>
 
+@class WKInputMentionItem;
+
 NS_ASSUME_NONNULL_BEGIN
 
 @class WKHoldToTalkManager;
@@ -20,6 +22,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 发送文字消息
 - (void)holdToTalkManager:(WKHoldToTalkManager *)manager sendText:(NSString *)text;
 
+/// 发送文字消息（带 @mention 实体）
+- (void)holdToTalkManager:(WKHoldToTalkManager *)manager sendText:(NSString *)text mentions:(NSArray<WKInputMentionItem *> *)mentions;
+
 /// 录音开始（通知外层停止其他音频）
 - (void)holdToTalkManagerDidStartRecording:(WKHoldToTalkManager *)manager;
 
@@ -31,6 +36,11 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// 获取聊天上下文（用于 chat_context）
 - (nullable NSString *)holdToTalkManagerChatContext:(WKHoldToTalkManager *)manager;
+
+@optional
+
+/// 获取群成员列表（用于 @mention 解析）
+- (NSArray *)holdToTalkManagerChannelMembers:(WKHoldToTalkManager *)manager;
 
 @end
 

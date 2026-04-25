@@ -1235,6 +1235,22 @@ CGFloat itemSpace = 10.0f;
     }
 }
 
+- (void)holdToTalkManager:(WKHoldToTalkManager *)manager sendText:(NSString *)text mentions:(NSArray<WKInputMentionItem *> *)mentions {
+    // 先写入 mentionCache
+    if (mentions.count > 0 && [self.conversationContext respondsToSelector:@selector(addMentionItems:)]) {
+        [self.conversationContext addMentionItems:mentions];
+    }
+    // 再走正常发送流程（sendTextMessage 会从 mentionCache 生成 entity）
+    if (self.delegate && [self.delegate respondsToSelector:@selector(inputPanelSend:text:)]) {
+        [self.delegate inputPanelSend:self text:text];
+    }
+}
+
+- (NSArray *)holdToTalkManagerChannelMembers:(WKHoldToTalkManager *)manager {
+    if (![self.conversationContext respondsToSelector:@selector(channel)]) return @[];
+    return [[WKChannelMemberDB shared] getMembersWithChannel:self.conversationContext.channel];
+}
+
 - (void)holdToTalkManagerDidStartRecording:(WKHoldToTalkManager *)manager {
     if ([self.conversationContext respondsToSelector:@selector(startRecordingVoiceMessage)]) {
         [self.conversationContext startRecordingVoiceMessage];

@@ -47,12 +47,16 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)clearVoiceContextCache;
 
 /// 语音转写（m4a/AAC 格式）
-/// @param audioData    音频数据（m4a/AAC 格式）
-/// @param contextText  输入框已有文本（可选，nil 为纯转写模式）
-/// @param chatContext  最近聊天记录（v1 传 nil，deferred）
+/// @param audioData        音频数据（m4a/AAC 格式）
+/// @param contextText      输入框已有文本（可选）
+/// @param chatContext      最近聊天记录（可选）
+/// @param personalContext  个人纠错上下文（可选）
+/// @param memberContext    聊天成员名（可选）
 - (void)transcribeAudio:(NSData *)audioData
             contextText:(nullable NSString *)contextText
             chatContext:(nullable NSString *)chatContext
+        personalContext:(nullable NSString *)personalContext
+          memberContext:(nullable NSString *)memberContext
              completion:(void(^)(WKVoiceInputResult * _Nullable result,
                                  NSError * _Nullable error))completion;
 
@@ -60,6 +64,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)transcribeWavAudio:(NSData *)audioData
                contextText:(nullable NSString *)contextText
                chatContext:(nullable NSString *)chatContext
+           personalContext:(nullable NSString *)personalContext
+             memberContext:(nullable NSString *)memberContext
                 completion:(void(^)(WKVoiceInputResult * _Nullable result,
                                     NSError * _Nullable error))completion;
 @end

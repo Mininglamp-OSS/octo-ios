@@ -17,6 +17,7 @@
 #import "WKVoiceInputView.h"
 #import "WKVoiceInputViewDelegate.h"
 #import "WKVoiceInputService.h"
+#import "WKInputMentionCache.h"
 
 #define MAXWaveformNum 30
 
@@ -296,6 +297,40 @@
 - (void)voiceInputRequestCursor {
     if ([self.context respondsToSelector:@selector(inputBecomeFirstResponder)]) {
         [self.context inputBecomeFirstResponder];
+    }
+}
+
+- (WKChannel *)voiceInputChannel {
+    if ([self.context respondsToSelector:@selector(channel)]) {
+        return self.context.channel;
+    }
+    return nil;
+}
+
+- (NSArray<WKChannelMember *> *)voiceInputChannelMembers {
+    if (![self.context respondsToSelector:@selector(channel)]) return @[];
+    return [[WKChannelMemberDB shared] getMembersWithChannel:self.context.channel];
+}
+
+- (void)voiceInputDidTranscribe:(NSString *)text
+                       mentions:(NSArray<WKInputMentionItem *> *)mentions
+                  shouldReplace:(BOOL)shouldReplace {
+    NSLog(@"[VoicePanel] voiceInputDidTranscribe:mentions: mentions=%lu, shouldReplace=%d",
+          (unsigned long)mentions.count, shouldReplace);
+
+    if (mentions.count > 0 && [self.context respondsToSelector:@selector(addMentionItems:)]) {
+        NSLog(@"[VoicePanel] writing %lu mentions to mentionCache", (unsigned long)mentions.count);
+        [self.context addMentionItems:mentions];
+    }
+
+    if (shouldReplace) {
+        if ([self.context respondsToSelector:@selector(inputSetText:)]) {
+            [self.context inputSetText:text];
+        }
+    } else {
+        if ([self.context respondsToSelector:@selector(inputInsertText:)]) {
+            [self.context inputInsertText:text];
+        }
     }
 }
 

@@ -183,6 +183,8 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
 - (void)transcribeAudio:(NSData *)audioData
             contextText:(NSString *)contextText
             chatContext:(NSString *)chatContext
+        personalContext:(NSString *)personalContext
+          memberContext:(NSString *)memberContext
              completion:(void(^)(WKVoiceInputResult *, NSError *))completion {
 
     // 检查文件大小（max 5MB）
@@ -203,10 +205,18 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
     if (chatContext.length > 0) {
         formFields[@"chat_context"] = chatContext;
     }
+    if (personalContext.length > 0) {
+        formFields[@"personal_context"] = personalContext;
+    }
+    if (memberContext.length > 0) {
+        formFields[@"member_context"] = memberContext;
+    }
 
     NSLog(@"[VoiceInput] ===== 语音转写请求 =====");
     NSLog(@"[VoiceInput] context_text: %@", contextText ?: @"(nil)");
     NSLog(@"[VoiceInput] chat_context: %@", chatContext ?: @"(nil)");
+    NSLog(@"[VoiceInput] personal_context: %@", personalContext ?: @"(nil)");
+    NSLog(@"[VoiceInput] member_context: %@", memberContext ?: @"(nil)");
     NSLog(@"[VoiceInput] audio size: %lu bytes", (unsigned long)audioData.length);
 
     [[WKAPIClient sharedClient] fileUpload:@"voice/transcribe"
@@ -252,6 +262,8 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
 - (void)transcribeWavAudio:(NSData *)audioData
                contextText:(NSString *)contextText
                chatContext:(NSString *)chatContext
+           personalContext:(NSString *)personalContext
+             memberContext:(NSString *)memberContext
                 completion:(void(^)(WKVoiceInputResult *, NSError *))completion {
 
     if (audioData.length > 10 * 1024 * 1024) {
@@ -265,6 +277,8 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
     NSMutableDictionary *formFields = [NSMutableDictionary dictionary];
     if (contextText.length > 0) formFields[@"context_text"] = contextText;
     if (chatContext.length > 0) formFields[@"chat_context"] = chatContext;
+    if (personalContext.length > 0) formFields[@"personal_context"] = personalContext;
+    if (memberContext.length > 0) formFields[@"member_context"] = memberContext;
 
     NSLog(@"[VoiceInput] ===== WAV 语音转写请求 =====");
     NSLog(@"[VoiceInput] audio size: %lu bytes", (unsigned long)audioData.length);
