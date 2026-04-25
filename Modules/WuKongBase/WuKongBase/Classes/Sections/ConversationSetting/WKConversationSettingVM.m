@@ -163,8 +163,9 @@
             return nil;
         }
         BOOL isExternalGroup = NO;
-        if(self.channelInfo && self.channelInfo.extra[@"is_external_group"]) {
-            isExternalGroup = [self.channelInfo.extra[@"is_external_group"] integerValue] == 1;
+        id externalGroupFlag = self.channelInfo ? self.channelInfo.extra[@"is_external_group"] : nil;
+        if([externalGroupFlag isKindOfClass:[NSNumber class]] || [externalGroupFlag isKindOfClass:[NSString class]]) {
+            isExternalGroup = [externalGroupFlag integerValue] == 1;
         }
         NSMutableDictionary *groupNameItem = [NSMutableDictionary dictionaryWithDictionary:@{
             @"class":WKLabelItemModel.class,

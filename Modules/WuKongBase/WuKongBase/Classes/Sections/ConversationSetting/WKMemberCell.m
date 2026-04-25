@@ -68,10 +68,11 @@
         self.botBadgeLbl.frame = frame;
     }
 
-    // 外部成员标识 + 来源 space
+    // 外部成员标识 + 来源 space（NSNull/类型异常防御）
     BOOL isExternal = NO;
-    if(member.extra && member.extra[@"is_external"]) {
-        isExternal = [member.extra[@"is_external"] integerValue] == 1;
+    id isExternalFlag = member.extra ? member.extra[@"is_external"] : nil;
+    if([isExternalFlag isKindOfClass:[NSNumber class]] || [isExternalFlag isKindOfClass:[NSString class]]) {
+        isExternal = [isExternalFlag integerValue] == 1;
     }
     self.externalBadgeLbl.hidden = !isExternal;
     if(isExternal) {
@@ -82,8 +83,11 @@
         self.externalBadgeLbl.frame = frame;
     }
     NSString *sourceSpaceName = nil;
-    if(isExternal && member.extra && member.extra[@"source_space_name"]) {
-        sourceSpaceName = member.extra[@"source_space_name"];
+    if(isExternal && member.extra) {
+        id sourceSpaceNameRaw = member.extra[@"source_space_name"];
+        if([sourceSpaceNameRaw isKindOfClass:[NSString class]]) {
+            sourceSpaceName = sourceSpaceNameRaw;
+        }
     }
     if(sourceSpaceName && sourceSpaceName.length > 0) {
         self.sourceSpaceLbl.hidden = NO;
