@@ -516,8 +516,15 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 - (void)refresh:(WKMergeForwardDetailTextModel *)model {
     [super refresh:model];
 
+    if(![model.message.content isKindOfClass:[WKTextContent class]]) {
+        self.textLbl.hidden = NO;
+        self.markdownLbl.hidden = YES;
+        [self clearSegmentViews];
+        self.textLbl.text = @"[未知消息]";
+        return;
+    }
     WKTextContent *textContent = (WKTextContent *)[model.message content];
-    NSString *content = textContent.content;
+    NSString *content = textContent.content ?: @"";
     UIColor *textColor = [WKApp shared].config.defaultTextColor;
     NSString *colorHex = [textColor toHexRGB];
     BOOL hasTable = [WKMarkdownRenderer containsTable:content];
@@ -792,8 +799,11 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
     if(cacheSizeStr) {
         return CGSizeFromString(cacheSizeStr);
     }
+    if(![message.content isKindOfClass:[WKTextContent class]]) {
+        return CGSizeMake(maxWidth, 20.0f);
+    }
     WKTextContent *textContent = (WKTextContent *)message.content;
-    NSString *content = textContent.content;
+    NSString *content = textContent.content ?: @"";
     CGSize textSize;
 
     BOOL hasTable = [WKMarkdownRenderer containsTable:content];
@@ -914,7 +924,9 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 @implementation WKMergeForwardDetailImageCell
 
 + (CGFloat)contentHeightForModel:(WKMergeForwardDetailImageModel *)model maxWidth:(CGFloat)maxWidth{
+    if(![model.message.content isKindOfClass:[WKImageContent class]]) return 80.0f;
     WKImageContent *imageContent = (WKImageContent*)model.message.content;
+    if(imageContent.width <= 0 || imageContent.height <= 0) return 80.0f;
     return [UIImage lim_sizeWithImageOriginSize:CGSizeMake(imageContent.width, imageContent.height) maxLength:maxWidth].height;
 }
 
@@ -931,8 +943,8 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 
 - (void)refresh:(WKMergeForwardDetailImageModel *)model {
     [super refresh:model];
+    if(![model.message.content isKindOfClass:[WKImageContent class]]) return;
     WKImageContent *imageContent = (WKImageContent*)model.message.content;
-    
     NSURL *url = [[WKApp shared] getImageFullUrl:imageContent.remoteUrl];
     [self.messageImgView lim_setImageWithURL:url placeholderImage:[WKApp shared].config.defaultPlaceholder];
 }
@@ -1062,6 +1074,11 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 
 - (void)refresh:(WKMergeForwardDetailFileModel *)model {
     [super refresh:model];
+    if(![model.message.content isKindOfClass:[WKFileContent class]]) {
+        self.fileNameLbl.text = @"[未知文件]";
+        self.fileSizeLbl.text = @"";
+        return;
+    }
     WKFileContent *fileContent = (WKFileContent *)model.message.content;
     self.fileNameLbl.text = fileContent.name ?: @"";
     self.fileSizeLbl.text = [self formatFileSize:fileContent.fileSize];
@@ -1391,6 +1408,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 @implementation WKMergeForwardDetailVideoCell
 
 + (CGFloat)contentHeightForModel:(WKMergeForwardDetailVideoModel *)model maxWidth:(CGFloat)maxWidth {
+    if(![model.message.content isKindOfClass:[WKImageContent class]]) return 150.0f;
     WKImageContent *imageContent = (WKImageContent *)model.message.content;
     if (imageContent.width > 0 && imageContent.height > 0) {
         return [UIImage lim_sizeWithImageOriginSize:CGSizeMake(imageContent.width, imageContent.height) maxLength:maxWidth].height;
@@ -1548,6 +1566,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 @implementation WKMergeForwardDetailNestedCell
 
 + (CGFloat)contentHeightForModel:(WKMergeForwardDetailNestedModel *)model maxWidth:(CGFloat)maxWidth {
+    if(![model.message.content isKindOfClass:[WKMergeForwardContent class]]) return 80.0f;
     WKMergeForwardContent *content = (WKMergeForwardContent *)model.message.content;
     NSInteger msgCount = content.msgs.count > 4 ? 4 : content.msgs.count;
     return nestedTitleTop + nestedTitleHeight + nestedMsgBoxTop + nestedMsgHeight * msgCount + nestedLineTop + 1.0f + nestedDescHeight;
