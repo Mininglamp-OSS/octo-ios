@@ -1428,8 +1428,8 @@
 }
 
 -(void) refreshBadge {
-    // 不再显示 tabbar 和 tab 未读红点
     self.tabBarItem.badgeValue = nil;
+    [self updateTabUnreadCounts];
 }
 
 #pragma mark - WKNetworkListenerDelegate

@@ -248,7 +248,8 @@ static CGFloat const kBadgeSize = 16.0f;
 }
 
 - (void)setPrivateUnreadCount:(NSInteger)count {
-    // 不再显示未读红点
+    [self updateBadge:_privateBadge count:count];
+    [self layoutBadges];
 }
 
 - (void)updateBadge:(UILabel *)badge count:(NSInteger)count {

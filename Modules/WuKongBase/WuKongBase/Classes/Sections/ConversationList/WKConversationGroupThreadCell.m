@@ -320,7 +320,7 @@
     self.badgeView.hidden = YES;
     if (model.unreadCount > 0) {
         self.badgeView.hidden = NO;
-        self.badgeView.badgeValue = [NSString stringWithFormat:@"%ld", (long)model.unreadCount];
+        self.badgeView.badgeValue = model.unreadCount > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)model.unreadCount];
         self.badgeView.lim_left = self.contentView.lim_width - RIGHT_PADDING - self.badgeView.lim_width;
     }
 
