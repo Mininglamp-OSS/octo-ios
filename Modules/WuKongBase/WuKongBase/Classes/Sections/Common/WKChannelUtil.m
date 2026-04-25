@@ -76,6 +76,10 @@
     if (resultDict[@"thread_md_version"]) {
         channelInfo.extra[@"thread_md_version"] = resultDict[@"thread_md_version"];
     }
+    // 外部群标识：来自 GroupResp.is_external_group（与 Web 端对齐）
+    if (resultDict[@"is_external_group"]) {
+        channelInfo.extra[@"is_external_group"] = resultDict[@"is_external_group"];
+    }
 
     return channelInfo;
 }
