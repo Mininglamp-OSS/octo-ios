@@ -76,6 +76,11 @@
     if (resultDict[@"thread_md_version"]) {
         channelInfo.extra[@"thread_md_version"] = resultDict[@"thread_md_version"];
     }
+    // 外部群标识：来自 GroupResp.is_external_group（与 Web 端对齐）。NSNull 防御：仅接受 NSNumber/NSString。
+    id externalGroupRaw = resultDict[@"is_external_group"];
+    if([externalGroupRaw isKindOfClass:[NSNumber class]] || [externalGroupRaw isKindOfClass:[NSString class]]) {
+        channelInfo.extra[@"is_external_group"] = @([externalGroupRaw integerValue]);
+    }
 
     return channelInfo;
 }

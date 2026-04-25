@@ -19,6 +19,8 @@
 @property(nonatomic,strong) WKOnlineBadgeView *onlineBadgeView;
 
 @property(nonatomic,strong) UILabel *botBadgeLbl; // AI标识
+@property(nonatomic,strong) UILabel *externalBadgeLbl; // 外部成员标识
+@property(nonatomic,strong) UILabel *sourceSpaceLbl; // 来自 {source_space_name}
 
 @property(nonatomic,strong) WKUserOnlineResp *online;
 
@@ -28,11 +30,13 @@
 
 - (void)setupUI {
     [super setupUI];
-    
+
     [self.contentView addSubview:self.checkBox];
     [self.contentView addSubview:self.avatar];
     [self.contentView addSubview:self.nameLbl];
     [self.contentView addSubview:self.botBadgeLbl];
+    [self.contentView addSubview:self.externalBadgeLbl];
+    [self.contentView addSubview:self.sourceSpaceLbl];
     [self.avatar addSubview:self.onlineBadgeView];
 }
 
@@ -62,6 +66,35 @@
         frame.size.width += 8.0f;
         frame.size.height += 4.0f;
         self.botBadgeLbl.frame = frame;
+    }
+
+    // 外部成员标识 + 来源 space（NSNull/类型异常防御）
+    BOOL isExternal = NO;
+    id isExternalFlag = member.extra ? member.extra[@"is_external"] : nil;
+    if([isExternalFlag isKindOfClass:[NSNumber class]] || [isExternalFlag isKindOfClass:[NSString class]]) {
+        isExternal = [isExternalFlag integerValue] == 1;
+    }
+    self.externalBadgeLbl.hidden = !isExternal;
+    if(isExternal) {
+        [self.externalBadgeLbl sizeToFit];
+        CGRect frame = self.externalBadgeLbl.frame;
+        frame.size.width += 8.0f;
+        frame.size.height += 4.0f;
+        self.externalBadgeLbl.frame = frame;
+    }
+    NSString *sourceSpaceName = nil;
+    if(isExternal && member.extra) {
+        id sourceSpaceNameRaw = member.extra[@"source_space_name"];
+        if([sourceSpaceNameRaw isKindOfClass:[NSString class]]) {
+            sourceSpaceName = sourceSpaceNameRaw;
+        }
+    }
+    if(sourceSpaceName && sourceSpaceName.length > 0) {
+        self.sourceSpaceLbl.hidden = NO;
+        self.sourceSpaceLbl.text = [NSString stringWithFormat:LLang(@"来自 %@"), sourceSpaceName];
+    } else {
+        self.sourceSpaceLbl.hidden = YES;
+        self.sourceSpaceLbl.text = nil;
     }
 
     self.onlineBadgeView.hidden = YES;
@@ -101,7 +134,7 @@
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    
+
     CGFloat leftSpace = 15.0f;
     CGFloat checkBoxRight = 0.0f;
     if(!self.checkBox.hidden) {
@@ -112,16 +145,47 @@
 
     self.avatar.lim_left = checkBoxRight + leftSpace;
     self.avatar.lim_centerY_parent = self.contentView;
-    
+
+    BOOL hasSourceSpace = !self.sourceSpaceLbl.hidden && self.sourceSpaceLbl.text.length > 0;
+
     self.nameLbl.lim_left = self.avatar.lim_right + leftSpace;
-    self.nameLbl.lim_height = self.contentView.lim_height;
+    if(hasSourceSpace) {
+        // 双行布局：name 在上半区，sourceSpace 在下半区
+        CGFloat nameH = 22.0f;
+        CGFloat sourceH = 16.0f;
+        CGFloat totalH = nameH + sourceH + 2.0f;
+        CGFloat topPadding = MAX((self.contentView.lim_height - totalH) / 2.0f, 0.0f);
+        self.nameLbl.lim_height = nameH;
+        self.nameLbl.lim_top = topPadding;
+    } else {
+        self.nameLbl.lim_height = self.contentView.lim_height;
+        self.nameLbl.lim_top = 0.0f;
+    }
     self.nameLbl.lim_width = self.contentView.lim_width - self.nameLbl.lim_left - 40.0f;
 
-    // AI标识
+    // 名字右侧的 badge：AI / 外部，可能同时存在，依次排列
+    CGFloat textWidth = 0.0f;
+    if(self.nameLbl.text.length > 0 && self.nameLbl.font) {
+        textWidth = [self.nameLbl.text sizeWithAttributes:@{NSFontAttributeName: self.nameLbl.font}].width;
+    }
+    CGFloat badgeLeft = self.nameLbl.lim_left + MIN(textWidth, self.nameLbl.lim_width) + 6.0f;
+    CGFloat badgeCenterY = hasSourceSpace ? (self.nameLbl.lim_top + self.nameLbl.lim_height / 2.0f) : (self.contentView.lim_height / 2.0f);
     if(!self.botBadgeLbl.hidden) {
-        CGFloat textWidth = [self.nameLbl.text sizeWithAttributes:@{NSFontAttributeName: self.nameLbl.font}].width;
-        self.botBadgeLbl.lim_left = self.nameLbl.lim_left + textWidth + 6.0f;
-        self.botBadgeLbl.lim_centerY_parent = self.contentView;
+        self.botBadgeLbl.lim_left = badgeLeft;
+        self.botBadgeLbl.lim_top = badgeCenterY - self.botBadgeLbl.lim_height / 2.0f;
+        badgeLeft = self.botBadgeLbl.lim_right + 4.0f;
+    }
+    if(!self.externalBadgeLbl.hidden) {
+        self.externalBadgeLbl.lim_left = badgeLeft;
+        self.externalBadgeLbl.lim_top = badgeCenterY - self.externalBadgeLbl.lim_height / 2.0f;
+    }
+
+    // 来源 space 子标题
+    if(hasSourceSpace) {
+        self.sourceSpaceLbl.lim_left = self.nameLbl.lim_left;
+        self.sourceSpaceLbl.lim_top = self.nameLbl.lim_bottom + 2.0f;
+        self.sourceSpaceLbl.lim_width = self.nameLbl.lim_width;
+        self.sourceSpaceLbl.lim_height = 16.0f;
     }
 
     // 在线标记
@@ -168,6 +232,31 @@
         _botBadgeLbl.hidden = YES;
     }
     return _botBadgeLbl;
+}
+
+- (UILabel *)externalBadgeLbl {
+    if(!_externalBadgeLbl) {
+        _externalBadgeLbl = [[UILabel alloc] init];
+        _externalBadgeLbl.text = LLang(@"外部");
+        _externalBadgeLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
+        _externalBadgeLbl.textColor = [UIColor whiteColor];
+        _externalBadgeLbl.backgroundColor = [UIColor colorWithRed:136.0f/255.0f green:84.0f/255.0f blue:208.0f/255.0f alpha:1.0f];
+        _externalBadgeLbl.textAlignment = NSTextAlignmentCenter;
+        _externalBadgeLbl.layer.cornerRadius = 4.0f;
+        _externalBadgeLbl.layer.masksToBounds = YES;
+        _externalBadgeLbl.hidden = YES;
+    }
+    return _externalBadgeLbl;
+}
+
+- (UILabel *)sourceSpaceLbl {
+    if(!_sourceSpaceLbl) {
+        _sourceSpaceLbl = [[UILabel alloc] init];
+        _sourceSpaceLbl.font = [[WKApp shared].config appFontOfSize:12.0f];
+        _sourceSpaceLbl.textColor = [UIColor colorWithRed:153.0f/255.0f green:153.0f/255.0f blue:153.0f/255.0f alpha:1.0f];
+        _sourceSpaceLbl.hidden = YES;
+    }
+    return _sourceSpaceLbl;
 }
 
 - (WKCheckBox *)checkBox {

@@ -172,8 +172,12 @@
 }
 
 -(void) updateChannelInfoByGroupModel:(WKGroupModel*)groupModel {
+    WKChannel *channel = [[WKChannel alloc] initWith:groupModel.groupNo channelType:WK_GROUP];
+    // 先保留旧 extra 中由其他接口写入的标志位（如 is_external_group / has_group_md / member_count），
+    // 否则 group/{groupNo} 同步会清空 channels/{id}/{type} 写入的扩展字段。
+    WKChannelInfo *existing = [[WKSDK shared].channelManager getChannelInfo:channel];
     WKChannelInfo *channelInfo = [[WKChannelInfo alloc] init];
-    channelInfo.channel = [[WKChannel alloc] initWith:groupModel.groupNo channelType:WK_GROUP];
+    channelInfo.channel = channel;
     channelInfo.name = groupModel.name;
     channelInfo.notice = groupModel.notice;
     channelInfo.mute = groupModel.mute;
@@ -188,13 +192,20 @@
     }else {
         channelInfo.logo = [NSString stringWithFormat:@"groups/%@/avatar",groupModel.groupNo];
     }
+    if(existing.extra) {
+        [channelInfo.extra addEntriesFromDictionary:existing.extra];
+    }
     [channelInfo setSettingValue:groupModel.forbiddenAddFriend forKey:WKChannelExtraKeyForbiddenAddFriend];
     [channelInfo setSettingValue:groupModel.screenshot forKey:WKChannelExtraKeyScreenshot];
     [channelInfo setSettingValue:groupModel.joinGroupRemind forKey:WKChannelExtraKeyJoinGroupRemind];
     [channelInfo setSettingValue:groupModel.revokeRemind forKey:WKChannelExtraKeyRevokeRemind];
     [channelInfo setSettingValue:groupModel.chatPwdOn forKey:WKChannelExtraKeyChatPwd];
     [channelInfo setSettingValue:groupModel.allowViewHistoryMsg forKey:WKChannelExtraKeyAllowViewHistoryMsg];
-    
+    // groups/{groupNo} 也会返回 is_external_group，仅在后端显式返回该字段时覆盖（nil 表示未返回，保留旧值）
+    if(groupModel.isExternalGroup != nil) {
+        channelInfo.extra[@"is_external_group"] = groupModel.isExternalGroup;
+    }
+
     [[WKSDK shared].channelManager addOrUpdateChannelInfo:channelInfo];
 }
 

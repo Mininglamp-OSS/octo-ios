@@ -162,22 +162,32 @@
         if(channel.channelType != WK_GROUP) {
             return nil;
         }
+        BOOL isExternalGroup = NO;
+        id externalGroupFlag = self.channelInfo ? self.channelInfo.extra[@"is_external_group"] : nil;
+        if([externalGroupFlag isKindOfClass:[NSNumber class]] || [externalGroupFlag isKindOfClass:[NSString class]]) {
+            isExternalGroup = [externalGroupFlag integerValue] == 1;
+        }
+        NSMutableDictionary *groupNameItem = [NSMutableDictionary dictionaryWithDictionary:@{
+            @"class":WKLabelItemModel.class,
+            @"label":LLang(@"群聊名称"),
+            @"value":self.channelInfo&&self.channelInfo.name?self.channelInfo.name:@"",
+            @"showBottomLine":@(NO),
+            @"showTopLine":@(NO),
+            @"onClick":^{
+                if(weakSelf.delegate && [weakSelf.delegate respondsToSelector:@selector(settingOnGroupNameClick:)]) {
+                    [weakSelf.delegate settingOnGroupNameClick:weakSelf];
+                }
+            }
+        }];
+        if(isExternalGroup) {
+            groupNameItem[@"tagText"] = LLang(@"外部群");
+            // 与 Web 端保持一致：橙色填充、白色文字
+            groupNameItem[@"tagBackgroundColor"] = [UIColor colorWithRed:255.0f/255.0f green:149.0f/255.0f blue:0.0f/255.0f alpha:1.0f];
+            groupNameItem[@"tagTextColor"] = [UIColor whiteColor];
+        }
         return @{
             @"height":WKSectionHeight,
-            @"items": @[
-                @{
-                    @"class":WKLabelItemModel.class,
-                    @"label":LLang(@"群聊名称"),
-                    @"value":self.channelInfo&&self.channelInfo.name?self.channelInfo.name:@"",
-                    @"showBottomLine":@(NO),
-                    @"showTopLine":@(NO),
-                    @"onClick":^{
-                        if(weakSelf.delegate && [weakSelf.delegate respondsToSelector:@selector(settingOnGroupNameClick:)]) {
-                            [weakSelf.delegate settingOnGroupNameClick:weakSelf];
-                        }
-                    }
-                }
-            ],
+            @"items": @[groupNameItem],
         };
     } category:WKPOINT_CATEGORY_CHANNELSETTING sort:90000];
 
