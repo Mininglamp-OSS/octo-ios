@@ -143,9 +143,9 @@
 
     // 折叠按钮
     self.threadToggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    UIImage *toggleIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(18, 18) color:[WKApp shared].config.themeColor];
+    UIImage *toggleIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(28, 28) color:[WKApp shared].config.themeColor];
     [self.threadToggleBtn setImage:toggleIcon forState:UIControlStateNormal];
-    self.threadToggleBtn.contentEdgeInsets = UIEdgeInsetsMake(13, 13, 13, 13);
+    self.threadToggleBtn.contentEdgeInsets = UIEdgeInsetsMake(9, 9, 9, 9);
     [self.threadToggleBtn addTarget:self action:@selector(onToggleTap) forControlEvents:UIControlEventTouchUpInside];
     [self.contentView addSubview:self.threadToggleBtn];
 
@@ -348,17 +348,21 @@
             }
         }
     }
-    UIColor *toggleColor;
+    NSInteger indicatorType = 0;
+    UIColor *indicatorColor = nil;
     if (threadHasMention) {
-        toggleColor = [UIColor orangeColor];
+        indicatorType = 2;
+        indicatorColor = [UIColor orangeColor];
     } else if (threadUnread > 0) {
-        toggleColor = model.mute
+        indicatorType = 1;
+        indicatorColor = model.mute
             ? [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f]
             : [UIColor redColor];
-    } else {
-        toggleColor = [WKApp shared].config.themeColor;
     }
-    UIImage *toggleIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(18, 18) color:toggleColor];
+    UIImage *toggleIcon = [WKConversationGroupThreadCell threadToggleIconWithSize:CGSizeMake(28, 28)
+                                                                       baseColor:[WKApp shared].config.themeColor
+                                                                   indicatorType:indicatorType
+                                                                  indicatorColor:indicatorColor];
     [self.threadToggleBtn setImage:toggleIcon forState:UIControlStateNormal];
 
     // 子区预览：只更新固定视图的数据，不增删视图
@@ -815,6 +819,59 @@
     UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
     return image;
+}
+
++ (UIImage *)threadToggleIconWithSize:(CGSize)size
+                            baseColor:(UIColor *)baseColor
+                        indicatorType:(NSInteger)type
+                       indicatorColor:(UIColor *)indicatorColor {
+    CGFloat padding = 8.0f;
+    CGSize canvasSize = CGSizeMake(size.width + padding, size.height + padding);
+
+    UIGraphicsBeginImageContextWithOptions(canvasSize, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    if (!ctx) return nil;
+
+    UIImage *baseIcon = [self channelHashIconWithSize:size color:baseColor];
+    [baseIcon drawAtPoint:CGPointMake(0, 0)];
+
+    if (type == 2) {
+        // @符号
+        CGFloat atSize = 22.0f;
+        CGFloat atX = canvasSize.width - atSize;
+        CGFloat atY = canvasSize.height - atSize;
+        // 白色背景圆
+        [[UIColor whiteColor] setFill];
+        UIBezierPath *bgCircle = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(atX - 1, atY - 1, atSize + 2, atSize + 2)];
+        [bgCircle fill];
+        // @文字
+        NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
+        style.alignment = NSTextAlignmentCenter;
+        NSDictionary *attrs = @{
+            NSFontAttributeName: [UIFont systemFontOfSize:17 weight:UIFontWeightBold],
+            NSForegroundColorAttributeName: indicatorColor,
+            NSParagraphStyleAttributeName: style
+        };
+        CGRect textRect = CGRectMake(atX, atY + 0.5f, atSize, atSize);
+        [@"@" drawInRect:textRect withAttributes:attrs];
+    } else if (type == 1) {
+        // 小红点
+        CGFloat dotSize = 12.0f;
+        CGFloat dotX = canvasSize.width - dotSize;
+        CGFloat dotY = canvasSize.height - dotSize;
+        // 白色描边
+        [[UIColor whiteColor] setFill];
+        UIBezierPath *bgDot = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(dotX - 1, dotY - 1, dotSize + 2, dotSize + 2)];
+        [bgDot fill];
+        // 红点
+        [indicatorColor setFill];
+        UIBezierPath *dot = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(dotX, dotY, dotSize, dotSize)];
+        [dot fill];
+    }
+
+    UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return result;
 }
 
 @end

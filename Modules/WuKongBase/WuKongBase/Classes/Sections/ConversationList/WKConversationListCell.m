@@ -222,17 +222,21 @@
                     }
                 }
             }
-            UIColor *iconColor;
+            NSInteger indicatorType = 0;
+            UIColor *indicatorColor = nil;
             if (threadHasMention) {
-                iconColor = [UIColor orangeColor];
+                indicatorType = 2;
+                indicatorColor = [UIColor orangeColor];
             } else if (threadUnread > 0) {
-                iconColor = model.mute
+                indicatorType = 1;
+                indicatorColor = model.mute
                     ? [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f]
                     : [UIColor redColor];
-            } else {
-                iconColor = [WKApp shared].config.themeColor;
             }
-            UIImage *icon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(18, 18) color:iconColor];
+            UIImage *icon = [WKConversationGroupThreadCell threadToggleIconWithSize:CGSizeMake(28, 28)
+                                                                         baseColor:[WKApp shared].config.themeColor
+                                                                     indicatorType:indicatorType
+                                                                    indicatorColor:indicatorColor];
             [self.threadToggleBtn setImage:icon forState:UIControlStateNormal];
         }
 
@@ -935,9 +939,9 @@
 - (UIButton *)threadToggleBtn {
     if (!_threadToggleBtn) {
         _threadToggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-        UIImage *icon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(18, 18) color:[WKApp shared].config.themeColor];
+        UIImage *icon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(28, 28) color:[WKApp shared].config.themeColor];
         [_threadToggleBtn setImage:icon forState:UIControlStateNormal];
-        _threadToggleBtn.contentEdgeInsets = UIEdgeInsetsMake(13, 13, 13, 13);
+        _threadToggleBtn.contentEdgeInsets = UIEdgeInsetsMake(9, 9, 9, 9);
         _threadToggleBtn.hidden = YES;
         [_threadToggleBtn addTarget:self action:@selector(onThreadToggleTap) forControlEvents:UIControlEventTouchUpInside];
     }
