@@ -11,6 +11,12 @@ import Down
 
 @objc public class WKMarkdownRenderer: NSObject {
 
+    // Down 库的 toAttributedString 内部使用 WebKit (NSHTMLReader) 渲染 HTML，
+    // 会在主线程启动嵌套 RunLoop。如果在 UITableView 布局回调中触发，嵌套 RunLoop
+    // 会处理待执行的动画完成回调，导致 UITableView 重入更新并越界崩溃。
+    // 用静态标志位防止重入：正在渲染时再次调用直接返回 nil，由调用方降级为纯文本。
+    private static var isRendering = false
+
     @objc public static func render(_ text: String,
                                      fontSize: CGFloat,
                                      textColorHex: String) -> NSAttributedString? {
@@ -24,6 +30,7 @@ import Down
                                      textColorHex: String,
                                      dynamicTextColor: UIColor?) -> NSAttributedString? {
         guard !text.isEmpty else { return nil }
+        guard !isRendering else { return nil }
 
         // Pre-process: convert GFM extensions (tables, task lists, strikethrough) to HTML
         let preprocessed = preprocessGFM(text)
@@ -31,6 +38,9 @@ import Down
         let down = Down(markdownString: preprocessed)
         let isDark = WKApp.shared().config.style == WKSystemStyleDark
         let css = buildCSS(fontSize: fontSize, textColorHex: textColorHex, isDark: isDark)
+
+        isRendering = true
+        defer { isRendering = false }
 
         do {
             let attributed = try down.toAttributedString(.unsafe, stylesheet: css)

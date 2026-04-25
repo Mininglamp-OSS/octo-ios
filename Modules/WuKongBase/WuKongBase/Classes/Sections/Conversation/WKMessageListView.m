@@ -161,6 +161,10 @@
 -(void) sendMessage:(WKMessageModel*)message {
     [self updateLastMsgIfNeed:message];
 
+    // 预缓存高度（触发 markdown 渲染），避免在 UITableView 布局回调中首次渲染
+    // Down 库的 WebKit 渲染会启动嵌套 RunLoop，在布局回调中会导致 UITableView 重入崩溃
+    [self precacheHeightForMessage:message];
+
     // 快照 addMessage 前后的 section/row 数量，按实际变化增量更新
     NSInteger oldSectionCount = [self.dataProvider dateCount];
     NSInteger oldLastSectionRowCount = 0;
@@ -1299,6 +1303,9 @@
         }
     } else {
         [self updateLastMsgIfNeed:messageModel];
+
+        // 预缓存高度（触发 markdown 渲染），避免在 UITableView 布局回调中首次渲染
+        [self precacheHeightForMessage:messageModel];
 
         // 快照 addMessage 前后的 section/row 数量，按实际变化增量更新
         NSInteger oldSectionCount = [self.dataProvider dateCount];
