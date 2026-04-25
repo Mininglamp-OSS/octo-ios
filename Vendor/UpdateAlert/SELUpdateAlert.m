@@ -39,7 +39,10 @@
     if (!descriptions || descriptions.count == 0) {
         return;
     }
-    
+    if ([self isAlreadyShowing]) {
+        return;
+    }
+
     //数组转换字符串，动态添加换行符\n
     NSString *description = @"";
     for (NSInteger i = 0;  i < descriptions.count; ++i) {
@@ -66,9 +69,23 @@ description 格式如 @"1.xxxxxx\n2.xxxxxx"
  */
 + (void)showUpdateAlertWithVersion:(NSString *)version Description:(NSString *)description  downloadURL:(NSString*)downloadURL forceUpdate:(BOOL)forceUpdate
 {
+    if ([self isAlreadyShowing]) {
+        return;
+    }
     SELUpdateAlert *updateAlert = [[SELUpdateAlert alloc]initVersion:version description:description downloadURL:downloadURL forceUpdate:forceUpdate];
     [[UIApplication sharedApplication].delegate.window addSubview:updateAlert];
 }
+
++ (BOOL)isAlreadyShowing {
+    UIWindow *window = [UIApplication sharedApplication].delegate.window;
+    for (UIView *subview in window.subviews) {
+        if ([subview isKindOfClass:[SELUpdateAlert class]]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
 
 - (instancetype)initVersion:(NSString *)version description:(NSString *)description downloadURL:(NSString*)downloadURL forceUpdate:(BOOL)forceUpdate
 {
