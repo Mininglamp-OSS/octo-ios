@@ -159,22 +159,70 @@ static CGFloat const kBadgeSize = 16.0f;
 }
 
 - (void)layoutBadges {
-    [self layoutBadge:_groupBadge forButton:_groupBtn];
-    [self layoutBadge:_privateBadge forButton:_privateBtn];
+    [self layoutGroupContent];
+    [self layoutPrivateContent];
 }
 
-- (void)layoutBadge:(UILabel *)badge forButton:(UIButton *)btn {
-    if (badge.hidden) return;
-    [badge sizeToFit];
+- (CGFloat)extraWidthForGroup {
+    CGFloat extra = 0;
+    if (!_mentionLbl.hidden) {
+        [_mentionLbl sizeToFit];
+        extra += 2 + _mentionLbl.bounds.size.width + 2;
+    }
+    if (!_groupBadge.hidden) {
+        [_groupBadge sizeToFit];
+        extra += 2 + MAX(_groupBadge.bounds.size.width + 6, kBadgeSize);
+    }
+    return extra;
+}
 
-    NSString *title = btn.titleLabel.text ?: @"";
-    UIFont *font = btn.titleLabel.font;
+- (CGFloat)extraWidthForPrivate {
+    if (_privateBadge.hidden) return 0;
+    [_privateBadge sizeToFit];
+    return 2 + MAX(_privateBadge.bounds.size.width + 6, kBadgeSize);
+}
+
+- (void)layoutGroupContent {
+    CGFloat extra = [self extraWidthForGroup];
+    CGFloat offset = -extra / 2.0f;
+    _groupBtn.titleEdgeInsets = UIEdgeInsetsMake(0, offset, 0, -offset);
+    [_groupBtn layoutIfNeeded];
+
+    NSString *title = _groupBtn.titleLabel.text ?: @"";
+    UIFont *font = _groupBtn.titleLabel.font;
     CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-    CGFloat textRight = CGRectGetMidX(btn.frame) + textW / 2.0f;
-    CGFloat btnCenterY = CGRectGetMidY(btn.frame);
+    CGFloat titleRight = CGRectGetMidX(_groupBtn.frame) + offset + textW / 2.0f;
+    CGFloat btnCenterY = CGRectGetMidY(_groupBtn.frame);
 
-    CGFloat badgeW = MAX(badge.bounds.size.width + 6, kBadgeSize);
-    badge.frame = CGRectMake(textRight + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
+    CGFloat x = titleRight;
+    if (!_mentionLbl.hidden) {
+        CGFloat lblW = _mentionLbl.bounds.size.width + 2;
+        CGFloat lblH = _mentionLbl.bounds.size.height;
+        _mentionLbl.frame = CGRectMake(x + 2, btnCenterY - lblH / 2.0f + 1, lblW, lblH);
+        x += 2 + lblW;
+    }
+    if (!_groupBadge.hidden) {
+        CGFloat badgeW = MAX(_groupBadge.bounds.size.width + 6, kBadgeSize);
+        _groupBadge.frame = CGRectMake(x + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
+    }
+}
+
+- (void)layoutPrivateContent {
+    CGFloat extra = [self extraWidthForPrivate];
+    CGFloat offset = -extra / 2.0f;
+    _privateBtn.titleEdgeInsets = UIEdgeInsetsMake(0, offset, 0, -offset);
+    [_privateBtn layoutIfNeeded];
+
+    if (_privateBadge.hidden) return;
+
+    NSString *title = _privateBtn.titleLabel.text ?: @"";
+    UIFont *font = _privateBtn.titleLabel.font;
+    CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
+    CGFloat titleRight = CGRectGetMidX(_privateBtn.frame) + offset + textW / 2.0f;
+    CGFloat btnCenterY = CGRectGetMidY(_privateBtn.frame);
+
+    CGFloat badgeW = MAX(_privateBadge.bounds.size.width + 6, kBadgeSize);
+    _privateBadge.frame = CGRectMake(titleRight + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
 }
 
 #pragma mark - Actions
@@ -224,18 +272,7 @@ static CGFloat const kBadgeSize = 16.0f;
 #pragma mark - Badge
 
 - (void)layoutMentionLabel {
-    if (_mentionLbl.hidden) return;
-    [_mentionLbl sizeToFit];
-    CGFloat lblW = _mentionLbl.bounds.size.width + 2;
-    CGFloat lblH = _mentionLbl.bounds.size.height;
-
-    NSString *title = _groupBtn.titleLabel.text ?: @"";
-    UIFont *font = _groupBtn.titleLabel.font;
-    CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-    CGFloat textRight = CGRectGetMidX(_groupBtn.frame) + textW / 2.0f;
-    CGFloat btnCenterY = CGRectGetMidY(_groupBtn.frame);
-
-    _mentionLbl.frame = CGRectMake(textRight + 2, btnCenterY - lblH / 2.0f + 1, lblW, lblH);
+    [self layoutGroupContent];
 }
 
 - (void)setGroupHasMention:(BOOL)hasMention {
