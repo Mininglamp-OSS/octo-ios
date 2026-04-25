@@ -143,9 +143,9 @@
 
     // 折叠按钮
     self.threadToggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    UIImage *toggleIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(14, 14) color:[WKApp shared].config.themeColor];
+    UIImage *toggleIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(18, 18) color:[WKApp shared].config.themeColor];
     [self.threadToggleBtn setImage:toggleIcon forState:UIControlStateNormal];
-    self.threadToggleBtn.contentEdgeInsets = UIEdgeInsetsMake(11, 11, 11, 11);
+    self.threadToggleBtn.contentEdgeInsets = UIEdgeInsetsMake(13, 13, 13, 13);
     [self.threadToggleBtn addTarget:self action:@selector(onToggleTap) forControlEvents:UIControlEventTouchUpInside];
     [self.contentView addSubview:self.threadToggleBtn];
 
@@ -332,6 +332,34 @@
         self.muteIcon.hidden = YES;
         [self.badgeView setBadgeBackgroundColor:[UIColor redColor]];
     }
+
+    // 子区折叠图标颜色
+    NSString *prefix = [NSString stringWithFormat:@"%@____", model.channel.channelId];
+    NSInteger threadUnread = 0;
+    BOOL threadHasMention = NO;
+    for (WKConversation *conv in [[WKSDK shared].conversationManager getConversationList]) {
+        if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
+            threadUnread += conv.unreadCount;
+            if (!threadHasMention) {
+                NSArray<WKReminder *> *rems = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
+                for (WKReminder *r in rems) {
+                    if (r.type == WKReminderTypeMentionMe) { threadHasMention = YES; break; }
+                }
+            }
+        }
+    }
+    UIColor *toggleColor;
+    if (threadHasMention) {
+        toggleColor = [UIColor orangeColor];
+    } else if (threadUnread > 0) {
+        toggleColor = model.mute
+            ? [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f]
+            : [UIColor redColor];
+    } else {
+        toggleColor = [WKApp shared].config.themeColor;
+    }
+    UIImage *toggleIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(18, 18) color:toggleColor];
+    [self.threadToggleBtn setImage:toggleIcon forState:UIControlStateNormal];
 
     // 子区预览：只更新固定视图的数据，不增删视图
     [self updateThreadPreviews];
@@ -534,7 +562,7 @@
     CGFloat rightEdge = w - RIGHT_PADDING;
 
     // 折叠按钮 - 最右侧固定
-    self.threadToggleBtn.frame = CGRectMake(rightEdge - 36, (topH - 36) / 2.0f, 36, 36);
+    self.threadToggleBtn.frame = CGRectMake(rightEdge - 44, (topH - 44) / 2.0f, 44, 44);
     rightEdge = self.threadToggleBtn.lim_left - 2;
 
     // 红点

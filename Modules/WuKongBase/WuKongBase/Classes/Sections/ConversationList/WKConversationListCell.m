@@ -205,7 +205,36 @@
         [self.typingIndicatorView stopAnimating];
         self.onlineBadgeView.hidden = YES;
         self.autoDeleteView.hidden = YES;
-        self.threadToggleBtn.hidden = !(model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn);
+        BOOL showToggle = (model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn);
+        self.threadToggleBtn.hidden = !showToggle;
+        if (showToggle) {
+            NSString *prefix = [NSString stringWithFormat:@"%@____", model.channel.channelId];
+            NSInteger threadUnread = 0;
+            BOOL threadHasMention = NO;
+            for (WKConversation *conv in [[WKSDK shared].conversationManager getConversationList]) {
+                if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
+                    threadUnread += conv.unreadCount;
+                    if (!threadHasMention) {
+                        NSArray<WKReminder *> *rems = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
+                        for (WKReminder *r in rems) {
+                            if (r.type == WKReminderTypeMentionMe) { threadHasMention = YES; break; }
+                        }
+                    }
+                }
+            }
+            UIColor *iconColor;
+            if (threadHasMention) {
+                iconColor = [UIColor orangeColor];
+            } else if (threadUnread > 0) {
+                iconColor = model.mute
+                    ? [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f]
+                    : [UIColor redColor];
+            } else {
+                iconColor = [WKApp shared].config.themeColor;
+            }
+            UIImage *icon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(18, 18) color:iconColor];
+            [self.threadToggleBtn setImage:icon forState:UIControlStateNormal];
+        }
 
         // 检查是否有 @我 的提醒
         BOOL hasMention = NO;
@@ -737,7 +766,7 @@
 
         // 子区展开按钮 - 最右侧固定位置
         if (!self.threadToggleBtn.hidden) {
-            self.threadToggleBtn.frame = CGRectMake(rightEdge - 36, (self.lim_height - 36) / 2.0f, 36, 36);
+            self.threadToggleBtn.frame = CGRectMake(rightEdge - 44, (self.lim_height - 44) / 2.0f, 44, 44);
             rightEdge = self.threadToggleBtn.lim_left - 2;
         }
 
@@ -900,9 +929,9 @@
 - (UIButton *)threadToggleBtn {
     if (!_threadToggleBtn) {
         _threadToggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-        UIImage *icon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(14, 14) color:[WKApp shared].config.themeColor];
+        UIImage *icon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(18, 18) color:[WKApp shared].config.themeColor];
         [_threadToggleBtn setImage:icon forState:UIControlStateNormal];
-        _threadToggleBtn.contentEdgeInsets = UIEdgeInsetsMake(11, 11, 11, 11);
+        _threadToggleBtn.contentEdgeInsets = UIEdgeInsetsMake(13, 13, 13, 13);
         _threadToggleBtn.hidden = YES;
         [_threadToggleBtn addTarget:self action:@selector(onThreadToggleTap) forControlEvents:UIControlEventTouchUpInside];
     }
