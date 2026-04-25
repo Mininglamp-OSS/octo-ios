@@ -739,7 +739,7 @@
 
     // tab 栏
     if (_conversationTabView) {
-        _conversationTabView.frame = CGRectMake(0, y, WKScreenWidth, 36);
+        _conversationTabView.frame = CGRectMake(0, y, WKScreenWidth, 44);
         y = _conversationTabView.lim_bottom;
     }
 
@@ -1405,7 +1405,7 @@
 
 
 -(void) setupConversationTabView {
-    _conversationTabView = [[WKConversationTabView alloc] initWithFrame:CGRectMake(0, 0, WKScreenWidth, 36)];
+    _conversationTabView = [[WKConversationTabView alloc] initWithFrame:CGRectMake(0, 0, WKScreenWidth, 44)];
     _conversationTabView.selectedIndex = _conversationListVM.filterType;
 
     __weak typeof(self) weakSelf = self;
