@@ -644,33 +644,37 @@
             }
 
             [UIView performWithoutAnimation:^{
-                [weakSelf.tableView beginUpdates];
+                @try {
+                    [weakSelf.tableView beginUpdates];
 
-                if (newSectionsAdded > 0) {
-                    if (oldSectionCount > 0) {
-                        NSInteger oldSectionNewRowCount = [weakSelf.dataProvider messagesAtSection:oldSectionCount - 1].count;
-                        if (oldSectionNewRowCount > oldLastSectionRowCount) {
-                            NSMutableArray<NSIndexPath *> *rowPaths = [NSMutableArray array];
-                            for (NSInteger r = oldLastSectionRowCount; r < oldSectionNewRowCount; r++) {
-                                [rowPaths addObject:[NSIndexPath indexPathForRow:r inSection:oldSectionCount - 1]];
+                    if (newSectionsAdded > 0) {
+                        if (oldSectionCount > 0) {
+                            NSInteger oldSectionNewRowCount = [weakSelf.dataProvider messagesAtSection:oldSectionCount - 1].count;
+                            if (oldSectionNewRowCount > oldLastSectionRowCount) {
+                                NSMutableArray<NSIndexPath *> *rowPaths = [NSMutableArray array];
+                                for (NSInteger r = oldLastSectionRowCount; r < oldSectionNewRowCount; r++) {
+                                    [rowPaths addObject:[NSIndexPath indexPathForRow:r inSection:oldSectionCount - 1]];
+                                }
+                                [weakSelf.tableView insertRowsAtIndexPaths:rowPaths withRowAnimation:UITableViewRowAnimationNone];
                             }
-                            [weakSelf.tableView insertRowsAtIndexPaths:rowPaths withRowAnimation:UITableViewRowAnimationNone];
+                        }
+                        NSIndexSet *sectionSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(oldSectionCount, newSectionsAdded)];
+                        [weakSelf.tableView insertSections:sectionSet withRowAnimation:UITableViewRowAnimationNone];
+                    } else {
+                        NSInteger newLastSectionRowCount = [weakSelf.dataProvider messagesAtSection:newSectionCount - 1].count;
+                        if (newLastSectionRowCount > oldLastSectionRowCount) {
+                            NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
+                            for (NSInteger r = oldLastSectionRowCount; r < newLastSectionRowCount; r++) {
+                                [indexPaths addObject:[NSIndexPath indexPathForRow:r inSection:newSectionCount - 1]];
+                            }
+                            [weakSelf.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
                         }
                     }
-                    NSIndexSet *sectionSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(oldSectionCount, newSectionsAdded)];
-                    [weakSelf.tableView insertSections:sectionSet withRowAnimation:UITableViewRowAnimationNone];
-                } else {
-                    NSInteger newLastSectionRowCount = [weakSelf.dataProvider messagesAtSection:newSectionCount - 1].count;
-                    if (newLastSectionRowCount > oldLastSectionRowCount) {
-                        NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
-                        for (NSInteger r = oldLastSectionRowCount; r < newLastSectionRowCount; r++) {
-                            [indexPaths addObject:[NSIndexPath indexPathForRow:r inSection:newSectionCount - 1]];
-                        }
-                        [weakSelf.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
-                    }
-                }
 
-                [weakSelf.tableView endUpdates];
+                    [weakSelf.tableView endUpdates];
+                } @catch (NSException *exception) {
+                    [weakSelf.tableView reloadData];
+                }
             }];
         }
 
