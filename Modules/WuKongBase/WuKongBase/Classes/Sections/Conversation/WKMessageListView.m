@@ -562,7 +562,7 @@
 
             // 清除边界消息的高度缓存（新消息加载后，原来的第一条消息的 bubblePosition 可能变化）
             NSInteger boundarySection = newSectionsAdded;
-            NSArray *boundaryMsgs = [weakSelf.dataProvider messagesAtSection:boundarySection];
+            NSArray *boundaryMsgs = (boundarySection < newSectionCount) ? [weakSelf.dataProvider messagesAtSection:boundarySection] : @[];
             if (boundaryMsgs.count > (NSUInteger)newRowsInOldFirstSection) {
                 WKMessageModel *boundaryMsg = boundaryMsgs[newRowsInOldFirstSection];
                 if (boundaryMsg.clientMsgNo.length > 0) {
