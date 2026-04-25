@@ -62,7 +62,21 @@
     if(extra && extra != [NSNull null]) {
         channelInfo.extra = [NSMutableDictionary dictionaryWithDictionary:extra];
     }
-    
+
+    // GROUP.md 状态：优先顶层字段，兜底 extra（与 Web 端对齐）
+    if (resultDict[@"has_group_md"]) {
+        channelInfo.extra[@"has_group_md"] = resultDict[@"has_group_md"];
+    }
+    if (resultDict[@"group_md_version"]) {
+        channelInfo.extra[@"group_md_version"] = resultDict[@"group_md_version"];
+    }
+    if (resultDict[@"has_thread_md"]) {
+        channelInfo.extra[@"has_thread_md"] = resultDict[@"has_thread_md"];
+    }
+    if (resultDict[@"thread_md_version"]) {
+        channelInfo.extra[@"thread_md_version"] = resultDict[@"thread_md_version"];
+    }
+
     return channelInfo;
 }
 

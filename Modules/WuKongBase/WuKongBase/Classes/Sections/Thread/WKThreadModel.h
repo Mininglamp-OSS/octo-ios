@@ -34,6 +34,8 @@ typedef NS_ENUM(NSInteger, WKThreadStatus) {
 @property (nonatomic, copy, nullable) NSString *sourceMessageId;
 @property (nonatomic, copy)   NSString *createdAt;
 @property (nonatomic, copy)   NSString *updatedAt;
+@property (nonatomic, assign) BOOL hasThreadMd;
+@property (nonatomic, assign) NSInteger threadMdVersion;
 
 + (instancetype)fromDict:(NSDictionary *)dict;
 + (NSArray<WKThreadModel *> *)fromDictArray:(NSArray<NSDictionary *> *)array;

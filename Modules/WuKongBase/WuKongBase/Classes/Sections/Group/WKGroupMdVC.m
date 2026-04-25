@@ -113,9 +113,21 @@ static NSString * const kPlaceholderText = @"# 群组说明\n\n## 简介\n描述
 
 #pragma mark - Load Content
 
+-(NSString*) apiBasePath {
+    if (self.channel.channelType == WK_COMMUNITY_TOPIC) {
+        NSRange sep = [self.channel.channelId rangeOfString:@"____"];
+        if (sep.location != NSNotFound) {
+            NSString *groupNo = [self.channel.channelId substringToIndex:sep.location];
+            NSString *shortId = [self.channel.channelId substringFromIndex:sep.location + sep.length];
+            return [NSString stringWithFormat:@"groups/%@/threads/%@/md", groupNo, shortId];
+        }
+    }
+    return [NSString stringWithFormat:@"groups/%@/md", self.channel.channelId];
+}
+
 -(void) loadContent {
     MBProgressHUD *hud = [self.view showHUD];
-    NSString *path = [NSString stringWithFormat:@"groups/%@/md", self.channel.channelId];
+    NSString *path = [self apiBasePath];
     [[WKAPIClient sharedClient] GET:path parameters:nil].then(^(NSDictionary *resp) {
         [hud hideAnimated:YES];
         NSString *c = resp[@"content"] ?: @"";
@@ -163,7 +175,7 @@ static NSString * const kPlaceholderText = @"# 群组说明\n\n## 简介\n描述
     self.saveBtn.enabled = NO;
     self.saveBtn.alpha = 0.6f;
 
-    NSString *path = [NSString stringWithFormat:@"groups/%@/md", self.channel.channelId];
+    NSString *path = [self apiBasePath];
     [[WKAPIClient sharedClient] PUT:path parameters:@{@"content": content}].then(^(NSDictionary *resp) {
         self.saving = NO;
         self.saveBtn.enabled = YES;
@@ -185,8 +197,13 @@ static NSString * const kPlaceholderText = @"# 群组说明\n\n## 简介\n描述
     WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:self.channel];
     if(info) {
         BOOL hasContent = self.originalContent && ![self.originalContent isEqualToString:@""];
-        info.extra[@"has_group_md"] = @(hasContent);
-        info.extra[@"group_md_version"] = @(self.version);
+        if (self.channel.channelType == WK_COMMUNITY_TOPIC) {
+            info.extra[@"has_thread_md"] = @(hasContent);
+            info.extra[@"thread_md_version"] = @(self.version);
+        } else {
+            info.extra[@"has_group_md"] = @(hasContent);
+            info.extra[@"group_md_version"] = @(self.version);
+        }
         [[WKSDK shared].channelManager updateChannelInfo:info];
     }
 }

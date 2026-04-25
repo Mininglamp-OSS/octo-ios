@@ -28,6 +28,8 @@
     model.sourceMessageId      = dict[@"source_message_id"] ? [NSString stringWithFormat:@"%@", dict[@"source_message_id"]] : nil;
     model.createdAt            = dict[@"created_at"] ?: @"";
     model.updatedAt            = dict[@"updated_at"] ?: @"";
+    model.hasThreadMd          = [dict[@"has_thread_md"] boolValue];
+    model.threadMdVersion      = [dict[@"thread_md_version"] integerValue];
     return model;
 }
 
