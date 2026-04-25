@@ -2,20 +2,14 @@
 //  WKMarkdownRenderer.swift
 //  WuKongBase
 //
-//  Markdown rendering using Down library (cmark).
-//  Tables and task lists are pre-processed to HTML since cmark doesn't support GFM extensions.
+//  Markdown rendering using cmark-gfm (pure C parser, no WebKit dependency).
+//  Tables are still rendered via WKWebView; text portions use NSAttributedString built from AST.
 //
 
 import UIKit
-import Down
+import libcmark_gfm
 
 @objc public class WKMarkdownRenderer: NSObject {
-
-    // Down 库的 toAttributedString 内部使用 WebKit (NSHTMLReader) 渲染 HTML，
-    // 会在主线程启动嵌套 RunLoop。如果在 UITableView 布局回调中触发，嵌套 RunLoop
-    // 会处理待执行的动画完成回调，导致 UITableView 重入更新并越界崩溃。
-    // 用静态标志位防止重入：正在渲染时再次调用直接返回 nil，由调用方降级为纯文本。
-    private static var isRendering = false
 
     @objc public static func render(_ text: String,
                                      fontSize: CGFloat,
@@ -23,58 +17,363 @@ import Down
         return render(text, fontSize: fontSize, textColorHex: textColorHex, dynamicTextColor: nil)
     }
 
-    /// 带动态颜色的渲染方法，dynamicTextColor 会被设置到 attributed string 中，
-    /// 使文本颜色能跟随系统深浅色模式实时变化。
     @objc public static func render(_ text: String,
                                      fontSize: CGFloat,
                                      textColorHex: String,
                                      dynamicTextColor: UIColor?) -> NSAttributedString? {
         guard !text.isEmpty else { return nil }
-        guard !isRendering else { return nil }
 
-        // Pre-process: convert GFM extensions (tables, task lists, strikethrough) to HTML
-        let preprocessed = preprocessGFM(text)
-
-        let down = Down(markdownString: preprocessed)
         let isDark = WKApp.shared().config.style == WKSystemStyleDark
-        let css = buildCSS(fontSize: fontSize, textColorHex: textColorHex, isDark: isDark)
+        let textColor = dynamicTextColor ?? UIColor.wk_fromHex(textColorHex)
+        let linkColor: UIColor
+        if #available(iOS 13.0, *) {
+            linkColor = UIColor { tc in
+                tc.userInterfaceStyle == .dark
+                    ? UIColor(red: 100/255, green: 181/255, blue: 246/255, alpha: 1)
+                    : UIColor(red: 89/255, green: 121/255, blue: 240/255, alpha: 1)
+            }
+        } else {
+            linkColor = isDark
+                ? UIColor(red: 100/255, green: 181/255, blue: 246/255, alpha: 1)
+                : UIColor(red: 89/255, green: 121/255, blue: 240/255, alpha: 1)
+        }
 
-        isRendering = true
-        defer { isRendering = false }
+        let codeBg: UIColor = isDark
+            ? UIColor(white: 1, alpha: 0.1)
+            : UIColor(white: 0, alpha: 0.06)
+        let blockquoteColor: UIColor = isDark
+            ? UIColor(red: 170/255, green: 170/255, blue: 170/255, alpha: 1)
+            : UIColor.gray
 
-        do {
-            let attributed = try down.toAttributedString(.unsafe, stylesheet: css)
+        let baseFont = WKApp.shared().config.appFont(ofSize: fontSize) ?? UIFont.systemFont(ofSize: fontSize)
+        let boldFont = UIFont(descriptor: baseFont.fontDescriptor.withSymbolicTraits(.traitBold) ?? baseFont.fontDescriptor, size: fontSize)
+        let italicFont = UIFont(descriptor: baseFont.fontDescriptor.withSymbolicTraits(.traitItalic) ?? baseFont.fontDescriptor, size: fontSize)
+        let boldItalicFont = UIFont(descriptor: baseFont.fontDescriptor.withSymbolicTraits([.traitBold, .traitItalic]) ?? baseFont.fontDescriptor, size: fontSize)
+        let codeFont = UIFont(name: "Menlo", size: fontSize - 1) ?? UIFont(name: "Courier", size: fontSize - 1) ?? UIFont.systemFont(ofSize: fontSize - 1)
 
-            // Trim trailing newlines
-            let mutable = NSMutableAttributedString(attributedString: attributed)
-            while mutable.length > 0 {
-                let lastChar = mutable.attributedSubstring(from: NSRange(location: mutable.length - 1, length: 1)).string
-                if lastChar == "\n" || lastChar == "\r" {
-                    mutable.deleteCharacters(in: NSRange(location: mutable.length - 1, length: 1))
-                } else {
-                    break
+        // Register GFM extensions
+        cmark_gfm_core_extensions_ensure_registered()
+
+        guard let parser = cmark_parser_new(CMARK_OPT_DEFAULT) else { return nil }
+        defer { cmark_parser_free(parser) }
+
+        // Attach GFM extensions: strikethrough, table, autolink, tagfilter
+        let extNames = ["strikethrough", "table", "autolink", "tagfilter"]
+        for name in extNames {
+            if let ext = cmark_find_syntax_extension(name) {
+                cmark_parser_attach_syntax_extension(parser, ext)
+            }
+        }
+
+        cmark_parser_feed(parser, text, text.utf8.count)
+        guard let doc = cmark_parser_finish(parser) else { return nil }
+        defer { cmark_node_free(doc) }
+
+        // Context for recursive rendering
+        struct RenderContext {
+            let fontSize: CGFloat
+            let textColor: UIColor
+            let linkColor: UIColor
+            let codeBg: UIColor
+            let blockquoteColor: UIColor
+            let baseFont: UIFont
+            let boldFont: UIFont
+            let italicFont: UIFont
+            let boldItalicFont: UIFont
+            let codeFont: UIFont
+            var isBold = false
+            var isItalic = false
+            var isCode = false
+            var isBlockquote = false
+            var isStrikethrough = false
+            var linkURL: String? = nil
+            var listType: cmark_list_type = CMARK_NO_LIST
+            var listItemIndex: Int = 0
+            var listDepth: Int = 0
+            var headingLevel: Int = 0
+        }
+
+        var ctx = RenderContext(
+            fontSize: fontSize,
+            textColor: textColor,
+            linkColor: linkColor,
+            codeBg: codeBg,
+            blockquoteColor: blockquoteColor,
+            baseFont: baseFont,
+            boldFont: boldFont,
+            italicFont: italicFont,
+            boldItalicFont: boldItalicFont,
+            codeFont: codeFont
+        )
+
+        let result = NSMutableAttributedString()
+
+        func currentFont(_ ctx: RenderContext) -> UIFont {
+            if ctx.isCode { return ctx.codeFont }
+            if ctx.headingLevel > 0 {
+                let scale: CGFloat = ctx.headingLevel == 1 ? 1.5 : ctx.headingLevel == 2 ? 1.3 : 1.15
+                let hSize = ctx.fontSize * scale
+                let desc = ctx.baseFont.fontDescriptor.withSymbolicTraits(.traitBold) ?? ctx.baseFont.fontDescriptor
+                return UIFont(descriptor: desc, size: hSize)
+            }
+            if ctx.isBold && ctx.isItalic { return ctx.boldItalicFont }
+            if ctx.isBold { return ctx.boldFont }
+            if ctx.isItalic { return ctx.italicFont }
+            return ctx.baseFont
+        }
+
+        func currentColor(_ ctx: RenderContext) -> UIColor {
+            if ctx.linkURL != nil { return ctx.linkColor }
+            if ctx.isBlockquote { return ctx.blockquoteColor }
+            return ctx.textColor
+        }
+
+        func renderNode(_ node: UnsafeMutablePointer<cmark_node>, ctx: inout RenderContext) {
+            let nodeType = cmark_node_get_type(node)
+            let nodeTypeStr = cmark_node_get_type_string(node)
+            let typeStr = nodeTypeStr != nil ? String(cString: nodeTypeStr!) : ""
+
+            switch nodeType {
+            case CMARK_NODE_TEXT:
+                if let literal = cmark_node_get_literal(node) {
+                    let text = String(cString: literal)
+                    var attrs: [NSAttributedString.Key: Any] = [
+                        .font: currentFont(ctx),
+                        .foregroundColor: currentColor(ctx)
+                    ]
+                    if ctx.isCode {
+                        attrs[.backgroundColor] = ctx.codeBg
+                    }
+                    if ctx.isStrikethrough {
+                        attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                    }
+                    if let url = ctx.linkURL {
+                        attrs[.link] = url
+                        attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                    }
+                    result.append(NSAttributedString(string: text, attributes: attrs))
                 }
+                return
+
+            case CMARK_NODE_SOFTBREAK:
+                result.append(NSAttributedString(string: "\n", attributes: [.font: currentFont(ctx), .foregroundColor: currentColor(ctx)]))
+                return
+
+            case CMARK_NODE_LINEBREAK:
+                result.append(NSAttributedString(string: "\n", attributes: [.font: currentFont(ctx), .foregroundColor: currentColor(ctx)]))
+                return
+
+            case CMARK_NODE_CODE:
+                if let literal = cmark_node_get_literal(node) {
+                    let text = String(cString: literal)
+                    let attrs: [NSAttributedString.Key: Any] = [
+                        .font: ctx.codeFont,
+                        .foregroundColor: currentColor(ctx),
+                        .backgroundColor: ctx.codeBg
+                    ]
+                    result.append(NSAttributedString(string: text, attributes: attrs))
+                }
+                return
+
+            case CMARK_NODE_CODE_BLOCK:
+                if let literal = cmark_node_get_literal(node) {
+                    var text = String(cString: literal)
+                    if text.hasSuffix("\n") { text = String(text.dropLast()) }
+                    let style = NSMutableParagraphStyle()
+                    style.firstLineHeadIndent = 8
+                    style.headIndent = 8
+                    style.tailIndent = -8
+                    let attrs: [NSAttributedString.Key: Any] = [
+                        .font: ctx.codeFont,
+                        .foregroundColor: currentColor(ctx),
+                        .backgroundColor: ctx.codeBg,
+                        .paragraphStyle: style
+                    ]
+                    if result.length > 0 {
+                        result.append(NSAttributedString(string: "\n", attributes: [.font: ctx.baseFont]))
+                    }
+                    result.append(NSAttributedString(string: text, attributes: attrs))
+                    result.append(NSAttributedString(string: "\n", attributes: [.font: ctx.baseFont]))
+                }
+                return
+
+            case CMARK_NODE_THEMATIC_BREAK:
+                result.append(NSAttributedString(string: "\n─────────\n", attributes: [
+                    .font: ctx.baseFont,
+                    .foregroundColor: UIColor.gray
+                ]))
+                return
+
+            default:
+                break
             }
 
-            // 用动态 UIColor 替换 WebKit 渲染的静态颜色，使文本能跟随深浅色实时变化
-            let replaceColor = dynamicTextColor ?? UIColor.wk_fromHex(textColorHex)
-            fixForegroundColors(in: mutable, replaceColor: replaceColor, isDark: isDark)
+            // GFM strikethrough extension node
+            if typeStr == "strikethrough" {
+                let wasST = ctx.isStrikethrough
+                ctx.isStrikethrough = true
+                renderChildren(node, ctx: &ctx)
+                ctx.isStrikethrough = wasST
+                return
+            }
 
-            return mutable
-        } catch {
-            return nil
+            // Handle enter/exit for container nodes
+            switch nodeType {
+            case CMARK_NODE_PARAGRAPH:
+                if result.length > 0 {
+                    let last = result.string.last
+                    if last != nil && last != "\n" {
+                        result.append(NSAttributedString(string: "\n", attributes: [.font: ctx.baseFont]))
+                    }
+                }
+                renderChildren(node, ctx: &ctx)
+                return
+
+            case CMARK_NODE_HEADING:
+                let level = Int(cmark_node_get_heading_level(node))
+                if result.length > 0 {
+                    result.append(NSAttributedString(string: "\n", attributes: [.font: ctx.baseFont]))
+                }
+                let oldLevel = ctx.headingLevel
+                ctx.headingLevel = level
+                renderChildren(node, ctx: &ctx)
+                ctx.headingLevel = oldLevel
+                return
+
+            case CMARK_NODE_STRONG:
+                let was = ctx.isBold
+                ctx.isBold = true
+                renderChildren(node, ctx: &ctx)
+                ctx.isBold = was
+                return
+
+            case CMARK_NODE_EMPH:
+                let was = ctx.isItalic
+                ctx.isItalic = true
+                renderChildren(node, ctx: &ctx)
+                ctx.isItalic = was
+                return
+
+            case CMARK_NODE_LINK:
+                if let urlC = cmark_node_get_url(node) {
+                    let url = String(cString: urlC)
+                    let oldURL = ctx.linkURL
+                    ctx.linkURL = url
+                    renderChildren(node, ctx: &ctx)
+                    ctx.linkURL = oldURL
+                } else {
+                    renderChildren(node, ctx: &ctx)
+                }
+                return
+
+            case CMARK_NODE_BLOCK_QUOTE:
+                let was = ctx.isBlockquote
+                ctx.isBlockquote = true
+                if result.length > 0 {
+                    result.append(NSAttributedString(string: "\n", attributes: [.font: ctx.baseFont]))
+                }
+                renderChildren(node, ctx: &ctx)
+                ctx.isBlockquote = was
+                return
+
+            case CMARK_NODE_LIST:
+                let oldType = ctx.listType
+                let oldIdx = ctx.listItemIndex
+                ctx.listType = cmark_node_get_list_type(node)
+                ctx.listItemIndex = 0
+                ctx.listDepth += 1
+                renderChildren(node, ctx: &ctx)
+                ctx.listDepth -= 1
+                ctx.listType = oldType
+                ctx.listItemIndex = oldIdx
+                return
+
+            case CMARK_NODE_ITEM:
+                ctx.listItemIndex += 1
+                if result.length > 0 {
+                    let last = result.string.last
+                    if last != nil && last != "\n" {
+                        result.append(NSAttributedString(string: "\n", attributes: [.font: ctx.baseFont]))
+                    }
+                }
+                let indent = String(repeating: "  ", count: max(0, ctx.listDepth - 1))
+                let bullet: String
+                if ctx.listType == CMARK_ORDERED_LIST {
+                    bullet = "\(indent)\(ctx.listItemIndex). "
+                } else {
+                    bullet = "\(indent)• "
+                }
+                result.append(NSAttributedString(string: bullet, attributes: [
+                    .font: ctx.baseFont,
+                    .foregroundColor: currentColor(ctx)
+                ]))
+                renderChildren(node, ctx: &ctx)
+                return
+
+            case CMARK_NODE_IMAGE:
+                if let urlC = cmark_node_get_url(node) {
+                    let url = String(cString: urlC)
+                    let altText = cmark_node_get_literal(cmark_node_first_child(node)).flatMap { String(cString: $0) } ?? "image"
+                    result.append(NSAttributedString(string: "[\(altText)]", attributes: [
+                        .font: ctx.baseFont,
+                        .foregroundColor: ctx.linkColor,
+                        .link: url
+                    ]))
+                }
+                return
+
+            case CMARK_NODE_HTML_BLOCK, CMARK_NODE_HTML_INLINE:
+                if let literal = cmark_node_get_literal(node) {
+                    let html = String(cString: literal)
+                    // Handle <del>text</del> from GFM
+                    let stripped = html.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                    if !stripped.isEmpty {
+                        result.append(NSAttributedString(string: stripped, attributes: [
+                            .font: ctx.baseFont,
+                            .foregroundColor: currentColor(ctx)
+                        ]))
+                    }
+                }
+                return
+
+            default:
+                renderChildren(node, ctx: &ctx)
+                return
+            }
         }
+
+        func renderChildren(_ node: UnsafeMutablePointer<cmark_node>, ctx: inout RenderContext) {
+            var child = cmark_node_first_child(node)
+            while let c = child {
+                renderNode(c, ctx: &ctx)
+                child = cmark_node_next(c)
+            }
+        }
+
+        renderChildren(doc, ctx: &ctx)
+
+        // Trim trailing newlines
+        while result.length > 0 {
+            let last = result.attributedSubstring(from: NSRange(location: result.length - 1, length: 1)).string
+            if last == "\n" || last == "\r" {
+                result.deleteCharacters(in: NSRange(location: result.length - 1, length: 1))
+            } else {
+                break
+            }
+        }
+
+        return result.length > 0 ? result : nil
     }
 
     @objc public static func containsMarkdown(_ text: String) -> Bool {
         if text.isEmpty { return false }
 
-        if text.contains("**") { NSLog("[Markdown] matched: **"); return true }
-        if text.contains("```") { NSLog("[Markdown] matched: ```"); return true }
-        if text.contains("~~") { NSLog("[Markdown] matched: ~~"); return true }
-        if text.range(of: "^#{1,3} ", options: .regularExpression) != nil { NSLog("[Markdown] matched: heading"); return true }
-        if text.range(of: "`[^`]+`", options: .regularExpression) != nil { NSLog("[Markdown] matched: inline code"); return true }
-        if text.range(of: "\\[.+\\]\\(.+\\)", options: .regularExpression) != nil { NSLog("[Markdown] matched: link [%@]", String(text.prefix(30))); return true }
+        if text.contains("**") { return true }
+        if text.contains("```") { return true }
+        if text.contains("~~") { return true }
+        if text.range(of: "^#{1,3} ", options: .regularExpression) != nil { return true }
+        if text.range(of: "`[^`]+`", options: .regularExpression) != nil { return true }
+        if text.range(of: "\\[.+\\]\\(.+\\)", options: .regularExpression) != nil { return true }
 
         let multilinePatterns = [
             "^- \\[[xX ]\\] ",
@@ -95,75 +394,7 @@ import Down
         return false
     }
 
-    // MARK: - GFM Pre-processing
-
-    /// Pre-process GFM extensions that cmark doesn't support:
-    /// tables, task lists, strikethrough → convert to raw HTML blocks
-    private static func preprocessGFM(_ text: String) -> String {
-        var lines = text.components(separatedBy: "\n")
-        var result: [String] = []
-        var i = 0
-        var inCodeBlock = false
-
-        while i < lines.count {
-            let line = lines[i]
-
-            // Track code fences — don't process anything inside
-            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
-                inCodeBlock = !inCodeBlock
-                result.append(line)
-                i += 1
-                continue
-            }
-            if inCodeBlock {
-                result.append(line)
-                i += 1
-                continue
-            }
-
-            // Table: consecutive lines starting and ending with |
-            if isTableLine(line) {
-                var tableLines: [String] = [line]
-                var j = i + 1
-                while j < lines.count && isTableLine(lines[j]) {
-                    tableLines.append(lines[j])
-                    j += 1
-                }
-                if tableLines.count >= 2 {
-                    let html = convertTableToHTML(tableLines)
-                    result.append("")  // blank line before HTML block
-                    result.append(html)
-                    result.append("")  // blank line after HTML block
-                    i = j
-                    continue
-                }
-            }
-
-            // Task list item: - [x] or - [ ]
-            if isTaskListLine(line) {
-                // Collect consecutive task list items
-                var taskLines: [String] = [line]
-                var j = i + 1
-                while j < lines.count && isTaskListLine(lines[j]) {
-                    taskLines.append(lines[j])
-                    j += 1
-                }
-                let html = convertTaskListToHTML(taskLines)
-                result.append("")
-                result.append(html)
-                result.append("")
-                i = j
-                continue
-            }
-
-            // Strikethrough: ~~text~~ → <del>text</del>
-            let processed = processStrikethrough(line)
-            result.append(processed)
-            i += 1
-        }
-
-        return result.joined(separator: "\n")
-    }
+    // MARK: - Table helpers (unchanged — used by WKWebView table rendering)
 
     private static func isTableLine(_ line: String) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -184,7 +415,6 @@ import Down
         return trimmed.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
-    /// 将 cell 内容里的 Markdown 行内链接 [text](url) 转成 <a> 标签，其余部分 HTML 转义
     private static func renderInlineCellContent(_ text: String) -> String {
         let nsText = text as NSString
         guard let regex = try? NSRegularExpression(pattern: #"\[([^\]]+)\]\(([^)]+)\)"#) else {
@@ -196,12 +426,10 @@ import Down
         var result = ""
         var lastEnd = 0
         for match in matches {
-            // 链接前的普通文本
             let preLen = match.range.location - lastEnd
             if preLen > 0 {
                 result += escapeHTML(nsText.substring(with: NSRange(location: lastEnd, length: preLen)))
             }
-            // [linkText](url) → <a href="url">linkText</a>
             let linkText = escapeHTML(nsText.substring(with: match.range(at: 1)))
             let url     = escapeHTML(nsText.substring(with: match.range(at: 2)))
             result += "<a href=\"\(url)\">\(linkText)</a>"
@@ -215,66 +443,21 @@ import Down
 
     private static func convertTableToHTML(_ lines: [String]) -> String {
         guard lines.count >= 2 else { return lines.joined(separator: "\n") }
-
         let hasSeparator = lines.count >= 2 && isTableSeparator(lines[1])
-
         var html = "<table>"
-
         for (idx, line) in lines.enumerated() {
-            if hasSeparator && idx == 1 { continue }  // skip separator row
-
+            if hasSeparator && idx == 1 { continue }
             let cells = parseTableCells(line)
             let isHeader = hasSeparator && idx == 0
             let tag = isHeader ? "th" : "td"
-
             html += "<tr>"
             for cell in cells {
-                // 解析 cell 内 Markdown 行内链接，不能直接 escapeHTML 整个 cell
                 html += "<\(tag)>\(renderInlineCellContent(cell))</\(tag)>"
             }
             html += "</tr>"
         }
-
         html += "</table>"
         return html
-    }
-
-    private static func isTaskListLine(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        return trimmed.hasPrefix("- [x] ") || trimmed.hasPrefix("- [X] ") || trimmed.hasPrefix("- [ ] ")
-    }
-
-    private static func convertTaskListToHTML(_ lines: [String]) -> String {
-        var html = "<ul style=\"list-style:none;padding-left:4px;\">"
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            let checked = trimmed.hasPrefix("- [x] ") || trimmed.hasPrefix("- [X] ")
-            let text = String(trimmed.dropFirst(6))  // drop "- [x] " or "- [ ] "
-
-            let checkbox = checked ? "☑" : "☐"
-            let style = checked ? "color:gray;text-decoration:line-through;" : ""
-            html += "<li>\(checkbox) <span style=\"\(style)\">\(escapeHTML(text))</span></li>"
-        }
-        html += "</ul>"
-        return html
-    }
-
-    private static func processStrikethrough(_ line: String) -> String {
-        guard line.contains("~~") else { return line }
-        // Replace ~~text~~ with <del>text</del>
-        var result = line
-        while let openRange = result.range(of: "~~") {
-            let afterOpen = openRange.upperBound
-            guard let closeRange = result.range(of: "~~", range: afterOpen..<result.endIndex) else { break }
-            let content = String(result[afterOpen..<closeRange.lowerBound])
-            if content.isEmpty {
-                // Skip empty
-                break
-            }
-            result = result.replacingCharacters(in: openRange.lowerBound..<closeRange.upperBound,
-                                                 with: "<del>\(escapeHTML(content))</del>")
-        }
-        return result
     }
 
     private static func escapeHTML(_ text: String) -> String {
@@ -286,12 +469,10 @@ import Down
 
     // MARK: - Table extraction for WKWebView rendering
 
-    /// Check if markdown text contains a valid table (at least 2 consecutive | lines)
     @objc public static func containsTable(_ text: String) -> Bool {
         let lines = text.components(separatedBy: "\n")
         var inCodeBlock = false
         var consecutiveTableLines = 0
-
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("```") {
@@ -299,10 +480,7 @@ import Down
                 consecutiveTableLines = 0
                 continue
             }
-            if inCodeBlock {
-                consecutiveTableLines = 0
-                continue
-            }
+            if inCodeBlock { consecutiveTableLines = 0; continue }
             if isTableLine(line) {
                 consecutiveTableLines += 1
                 if consecutiveTableLines >= 2 { return true }
@@ -313,61 +491,41 @@ import Down
         return false
     }
 
-    /// Split content into ordered segments of text and table blocks
     @objc public static func splitContentSegments(_ text: String) -> NSArray {
         let lines = text.components(separatedBy: "\n")
         var segments: [[String: String]] = []
         var currentTextLines: [String] = []
         var inCodeBlock = false
         var i = 0
-
         while i < lines.count {
             let line = lines[i]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-
             if trimmed.hasPrefix("```") {
                 inCodeBlock = !inCodeBlock
                 currentTextLines.append(line)
-                i += 1
-                continue
+                i += 1; continue
             }
-            if inCodeBlock {
-                currentTextLines.append(line)
-                i += 1
-                continue
-            }
-
+            if inCodeBlock { currentTextLines.append(line); i += 1; continue }
             if isTableLine(line) {
                 var j = i
                 while j < lines.count && isTableLine(lines[j]) { j += 1 }
                 if j - i >= 2 {
-                    // Flush accumulated text
                     let txt = currentTextLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !txt.isEmpty {
-                        segments.append(["type": "text", "content": txt])
-                    }
+                    if !txt.isEmpty { segments.append(["type": "text", "content": txt]) }
                     currentTextLines = []
-                    // Add table segment
                     let tableContent = Array(lines[i..<j]).joined(separator: "\n")
                     segments.append(["type": "table", "content": tableContent])
-                    i = j
-                    continue
+                    i = j; continue
                 }
             }
-
             currentTextLines.append(line)
             i += 1
         }
-
         let remaining = currentTextLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !remaining.isEmpty {
-            segments.append(["type": "text", "content": remaining])
-        }
-
+        if !remaining.isEmpty { segments.append(["type": "text", "content": remaining]) }
         return segments as NSArray
     }
 
-    /// Extract table portions from markdown and return a full HTML document for WKWebView rendering
     @objc public static func extractTableHTML(_ text: String,
                                                fontSize: CGFloat,
                                                textColorHex: String) -> String? {
@@ -375,20 +533,16 @@ import Down
         var tableGroups: [[String]] = []
         var currentTable: [String] = []
         var inCodeBlock = false
-
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("```") {
                 inCodeBlock = !inCodeBlock
                 if currentTable.count >= 2 { tableGroups.append(currentTable) }
-                currentTable = []
-                continue
+                currentTable = []; continue
             }
             if inCodeBlock { continue }
-
-            if isTableLine(line) {
-                currentTable.append(line)
-            } else {
+            if isTableLine(line) { currentTable.append(line) }
+            else {
                 if currentTable.count >= 2 { tableGroups.append(currentTable) }
                 currentTable = []
             }
@@ -397,9 +551,7 @@ import Down
         if tableGroups.isEmpty { return nil }
 
         var tablesHTML = ""
-        for tableLines in tableGroups {
-            tablesHTML += convertTableToHTML(tableLines)
-        }
+        for tableLines in tableGroups { tablesHTML += convertTableToHTML(tableLines) }
 
         let isDark = WKApp.shared().config.style == WKSystemStyleDark
         let css = buildTableWebViewCSS(fontSize: fontSize, textColorHex: textColorHex, isDark: isDark)
@@ -412,7 +564,6 @@ import Down
         """
     }
 
-    /// Render full content (text + tables) as HTML, preserving original order
     @objc public static func renderFullContentHTML(_ text: String,
                                                     fontSize: CGFloat,
                                                     textColorHex: String) -> String? {
@@ -421,49 +572,27 @@ import Down
         var inCodeBlock = false
         var i = 0
         var currentTextLines: [String] = []
-
         while i < lines.count {
             let line = lines[i]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-
             if trimmed.hasPrefix("```") {
                 inCodeBlock = !inCodeBlock
-                currentTextLines.append(line)
-                i += 1
-                continue
+                currentTextLines.append(line); i += 1; continue
             }
-            if inCodeBlock {
-                currentTextLines.append(line)
-                i += 1
-                continue
-            }
-
+            if inCodeBlock { currentTextLines.append(line); i += 1; continue }
             if isTableLine(line) {
                 var j = i
                 while j < lines.count && isTableLine(lines[j]) { j += 1 }
                 if j - i >= 2 {
-                    // Flush accumulated text
-                    if !currentTextLines.isEmpty {
-                        html += textLinesToHTML(currentTextLines)
-                        currentTextLines = []
-                    }
-                    let tableLines = Array(lines[i..<j])
-                    html += convertTableToHTML(tableLines)
-                    i = j
-                    continue
+                    if !currentTextLines.isEmpty { html += textLinesToHTML(currentTextLines); currentTextLines = [] }
+                    html += convertTableToHTML(Array(lines[i..<j]))
+                    i = j; continue
                 }
             }
-
-            currentTextLines.append(line)
-            i += 1
+            currentTextLines.append(line); i += 1
         }
-        // Flush remaining text
-        if !currentTextLines.isEmpty {
-            html += textLinesToHTML(currentTextLines)
-        }
-
+        if !currentTextLines.isEmpty { html += textLinesToHTML(currentTextLines) }
         if html.isEmpty { return nil }
-
         let isDark = WKApp.shared().config.style == WKSystemStyleDark
         let css = buildFullContentCSS(fontSize: fontSize, textColorHex: textColorHex, isDark: isDark)
         return """
@@ -475,51 +604,111 @@ import Down
         """
     }
 
-    /// Estimate total content height (text lines + table rows)
     @objc public static func fullContentHeight(_ text: String, fontSize: CGFloat) -> CGFloat {
         let lines = text.components(separatedBy: "\n")
         let lineHeight = fontSize * 1.4
         var height: CGFloat = 0
         var inCodeBlock = false
         var i = 0
-
         while i < lines.count {
             let line = lines[i]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-
-            if trimmed.hasPrefix("```") {
-                inCodeBlock = !inCodeBlock
-                height += lineHeight
-                i += 1
-                continue
-            }
-            if inCodeBlock {
-                height += lineHeight
-                i += 1
-                continue
-            }
-
+            if trimmed.hasPrefix("```") { inCodeBlock = !inCodeBlock; height += lineHeight; i += 1; continue }
+            if inCodeBlock { height += lineHeight; i += 1; continue }
             if isTableLine(line) {
                 var j = i
                 while j < lines.count && isTableLine(lines[j]) { j += 1 }
                 if j - i >= 2 {
-                    let hasSep = j - i >= 2 && isTableSeparator(lines[i + 1])
+                    let hasSep = isTableSeparator(lines[i + 1])
                     let visibleRows = hasSep ? j - i - 1 : j - i
                     height += CGFloat(visibleRows) * 32.0 + 4.0
-                    i = j
-                    continue
+                    i = j; continue
                 }
             }
-
-            if line.isEmpty {
-                height += lineHeight * 0.5
-            } else {
-                height += lineHeight
-            }
+            height += line.isEmpty ? lineHeight * 0.5 : lineHeight
             i += 1
         }
-
         return height
+    }
+
+    @objc public static func removeTableMarkdown(_ text: String) -> String {
+        let lines = text.components(separatedBy: "\n")
+        var result: [String] = []
+        var inCodeBlock = false
+        var i = 0
+        while i < lines.count {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") { inCodeBlock = !inCodeBlock; result.append(line); i += 1; continue }
+            if inCodeBlock { result.append(line); i += 1; continue }
+            if isTableLine(line) {
+                var j = i
+                while j < lines.count && isTableLine(lines[j]) { j += 1 }
+                if j - i >= 2 { i = j; continue }
+            }
+            result.append(line); i += 1
+        }
+        return result.joined(separator: "\n")
+    }
+
+    @objc public static func tableRowCount(_ text: String) -> Int {
+        let lines = text.components(separatedBy: "\n")
+        var count = 0
+        var inCodeBlock = false
+        var currentTableLines: [String] = []
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                inCodeBlock = !inCodeBlock
+                if currentTableLines.count >= 2 {
+                    for tl in currentTableLines { if !isTableSeparator(tl) { count += 1 } }
+                }
+                currentTableLines = []; continue
+            }
+            if inCodeBlock { continue }
+            if isTableLine(line) { currentTableLines.append(line) }
+            else {
+                if currentTableLines.count >= 2 {
+                    for tl in currentTableLines { if !isTableSeparator(tl) { count += 1 } }
+                }
+                currentTableLines = []
+            }
+        }
+        if currentTableLines.count >= 2 {
+            for tl in currentTableLines { if !isTableSeparator(tl) { count += 1 } }
+        }
+        return count
+    }
+
+    // MARK: - CSS (for WKWebView table rendering only)
+
+    private static func buildTableWebViewCSS(fontSize: CGFloat, textColorHex: String, isDark: Bool) -> String {
+        let borderColor = isDark ? "#444444" : "#E0E0E0"
+        let thBg = isDark ? "rgba(255,255,255,0.08)" : "#F5F5F5"
+        let linkColor = isDark ? "#64B5F6" : "#5979F0"
+        return """
+        * { font-family: -apple-system, 'PingFang SC', sans-serif; font-size: \(fontSize)px; color: \(textColorHex); margin: 0; padding: 0; }
+        body { margin: 0; padding: 0; -webkit-text-size-adjust: none; background-color: transparent; }
+        table { border-collapse: collapse; width: max-content; white-space: nowrap; }
+        th { font-weight: 600; padding: 10px 14px; border: 1px solid \(borderColor); text-align: left; background-color: \(thBg); }
+        td { padding: 10px 14px; border: 1px solid \(borderColor); }
+        a { color: \(linkColor); text-decoration: underline; }
+        """
+    }
+
+    private static func buildFullContentCSS(fontSize: CGFloat, textColorHex: String, isDark: Bool) -> String {
+        let thBorder = isDark ? "#666666" : "#999"
+        let thBg = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)"
+        let tdBorder = isDark ? "#444444" : "#E0E0E0"
+        return """
+        * { font-family: -apple-system, 'PingFang SC', sans-serif; font-size: \(fontSize)px; color: \(textColorHex); margin: 0; padding: 0; }
+        body { margin: 0; padding: 0; -webkit-text-size-adjust: none; }
+        .text-block { white-space: pre-wrap; line-height: 1.4; padding: 2px 0; }
+        table { border-collapse: collapse; width: max-content; white-space: nowrap; margin: 4px 0; }
+        th { font-weight: 600; padding: 6px 12px; border-bottom: 2px solid \(thBorder); text-align: left; background-color: \(thBg); }
+        td { padding: 6px 12px; border-bottom: 1px solid \(tdBorder); }
+        tr:last-child td { border-bottom: none; }
+        """
     }
 
     private static func textLinesToHTML(_ lines: [String]) -> String {
@@ -527,269 +716,31 @@ import Down
         let trimmed = joined.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return "" }
         var escaped = escapeHTML(trimmed)
-        // Basic markdown: **bold**
         if let boldRegex = try? NSRegularExpression(pattern: "\\*\\*(.+?)\\*\\*", options: []) {
             escaped = boldRegex.stringByReplacingMatches(in: escaped, options: [], range: NSRange(escaped.startIndex..., in: escaped), withTemplate: "<strong>$1</strong>")
         }
         return "<div class=\"text-block\">\(escaped.replacingOccurrences(of: "\n", with: "<br>"))</div>"
     }
 
-    private static func buildFullContentCSS(fontSize: CGFloat, textColorHex: String, isDark: Bool) -> String {
-        let thBorder = isDark ? "#666666" : "#999"
-        let thBg = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)"
-        let tdBorder = isDark ? "#444444" : "#E0E0E0"
+    // MARK: - Task list helpers (for WKWebView rendering path)
 
-        return """
-        * {
-            font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
-            font-size: \(fontSize)px;
-            color: \(textColorHex);
-            margin: 0;
-            padding: 0;
-        }
-        body { margin: 0; padding: 0; -webkit-text-size-adjust: none; }
-        .text-block { white-space: pre-wrap; line-height: 1.4; padding: 2px 0; }
-        table { border-collapse: collapse; width: max-content; white-space: nowrap; margin: 4px 0; }
-        th {
-            font-weight: 600;
-            padding: 6px 12px;
-            border-bottom: 2px solid \(thBorder);
-            text-align: left;
-            background-color: \(thBg);
-        }
-        td {
-            padding: 6px 12px;
-            border-bottom: 1px solid \(tdBorder);
-        }
-        tr:last-child td { border-bottom: none; }
-        """
+    private static func isTaskListLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.hasPrefix("- [x] ") || trimmed.hasPrefix("- [X] ") || trimmed.hasPrefix("- [ ] ")
     }
 
-    /// Remove table markdown lines from text, keeping the rest
-    @objc public static func removeTableMarkdown(_ text: String) -> String {
-        let lines = text.components(separatedBy: "\n")
-        var result: [String] = []
-        var inCodeBlock = false
-        var i = 0
-
-        while i < lines.count {
-            let line = lines[i]
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-
-            if trimmed.hasPrefix("```") {
-                inCodeBlock = !inCodeBlock
-                result.append(line)
-                i += 1
-                continue
-            }
-            if inCodeBlock {
-                result.append(line)
-                i += 1
-                continue
-            }
-
-            if isTableLine(line) {
-                var j = i
-                while j < lines.count && isTableLine(lines[j]) { j += 1 }
-                if j - i >= 2 {
-                    i = j   // skip valid table block
-                    continue
-                }
-            }
-
-            result.append(line)
-            i += 1
-        }
-
-        return result.joined(separator: "\n")
-    }
-
-    /// Count visible table rows (excluding separator rows) for height estimation
-    @objc public static func tableRowCount(_ text: String) -> Int {
-        let lines = text.components(separatedBy: "\n")
-        var count = 0
-        var inCodeBlock = false
-        var currentTableLines: [String] = []
-
+    private static func convertTaskListToHTML(_ lines: [String]) -> String {
+        var html = "<ul style=\"list-style:none;padding-left:4px;\">"
         for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("```") {
-                inCodeBlock = !inCodeBlock
-                if currentTableLines.count >= 2 {
-                    for tl in currentTableLines {
-                        if !isTableSeparator(tl) { count += 1 }
-                    }
-                }
-                currentTableLines = []
-                continue
-            }
-            if inCodeBlock { continue }
-
-            if isTableLine(line) {
-                currentTableLines.append(line)
-            } else {
-                if currentTableLines.count >= 2 {
-                    for tl in currentTableLines {
-                        if !isTableSeparator(tl) { count += 1 }
-                    }
-                }
-                currentTableLines = []
-            }
+            let checked = trimmed.hasPrefix("- [x] ") || trimmed.hasPrefix("- [X] ")
+            let text = String(trimmed.dropFirst(6))
+            let checkbox = checked ? "☑" : "☐"
+            let style = checked ? "color:gray;text-decoration:line-through;" : ""
+            html += "<li>\(checkbox) <span style=\"\(style)\">\(escapeHTML(text))</span></li>"
         }
-        if currentTableLines.count >= 2 {
-            for tl in currentTableLines {
-                if !isTableSeparator(tl) { count += 1 }
-            }
-        }
-
-        return count
-    }
-
-    private static func buildTableWebViewCSS(fontSize: CGFloat, textColorHex: String, isDark: Bool) -> String {
-        let borderColor = isDark ? "#444444" : "#E0E0E0"
-        let thBg = isDark ? "rgba(255,255,255,0.08)" : "#F5F5F5"
-        let linkColor = isDark ? "#64B5F6" : "#5979F0"  // 与 buildCSS 和文字消息链接色一致
-
-        return """
-        * {
-            font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
-            font-size: \(fontSize)px;
-            color: \(textColorHex);
-            margin: 0;
-            padding: 0;
-        }
-        body { margin: 0; padding: 0; -webkit-text-size-adjust: none; background-color: transparent; }
-        table { border-collapse: collapse; width: max-content; white-space: nowrap; }
-        th {
-            font-weight: 600;
-            padding: 10px 14px;
-            border: 1px solid \(borderColor);
-            text-align: left;
-            background-color: \(thBg);
-        }
-        td {
-            padding: 10px 14px;
-            border: 1px solid \(borderColor);
-        }
-        a { color: \(linkColor); text-decoration: underline; }
-        """
-    }
-
-    // MARK: - CSS
-
-    private static func buildCSS(fontSize: CGFloat, textColorHex: String, isDark: Bool) -> String {
-        let h1 = fontSize * 1.5
-        let h2 = fontSize * 1.3
-        let h3 = fontSize * 1.15
-        let codeFontSize = fontSize - 1.0
-
-        let codeBg = isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)"
-        let blockquoteColor = isDark ? "#aaaaaa" : "gray"
-        let blockquoteBorder = isDark ? "#555555" : "#ccc"
-        let linkColor = isDark ? "#64B5F6" : "#5979F0"
-        let thBorder = isDark ? "#666666" : "#999"
-        let tdBorder = isDark ? "#444444" : "#E0E0E0"
-        let hrColor = isDark ? "#555555" : "#ccc"
-
-        return """
-        * {
-            font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
-            font-size: \(fontSize)px;
-            color: \(textColorHex);
-            line-height: 1.4;
-        }
-        h1 { font-size: \(h1)px; font-weight: 600; margin: 4px 0; }
-        h2 { font-size: \(h2)px; font-weight: 600; margin: 3px 0; }
-        h3 { font-size: \(h3)px; font-weight: 600; margin: 2px 0; }
-        p { margin: 2px 0; }
-        code {
-            font-family: Menlo, monospace;
-            font-size: \(codeFontSize)px;
-            background-color: \(codeBg);
-            padding: 1px 4px;
-            border-radius: 3px;
-        }
-        pre {
-            background-color: \(codeBg);
-            padding: 8px;
-            border-radius: 6px;
-            margin: 4px 0;
-            overflow-x: auto;
-        }
-        pre code { background-color: transparent; padding: 0; }
-        blockquote {
-            color: \(blockquoteColor);
-            margin: 2px 0;
-            padding-left: 12px;
-            border-left: 3px solid \(blockquoteBorder);
-        }
-        a { color: \(linkColor); text-decoration: underline; }
-        table { border-collapse: collapse; margin: 4px 0; width: auto; }
-        th {
-            font-weight: 600;
-            padding: 4px 8px;
-            border-bottom: 2px solid \(thBorder);
-            text-align: left;
-        }
-        td {
-            padding: 4px 8px;
-            border-bottom: 1px solid \(tdBorder);
-        }
-        ul, ol { padding-left: 20px; margin: 2px 0; }
-        li { margin: 1px 0; }
-        hr { border: none; border-top: 1px solid \(hrColor); margin: 6px 0; }
-        del, s { text-decoration: line-through; }
-        """
-    }
-
-    // MARK: - 颜色修正
-
-    /// 修正文本颜色：将 WebKit 渲染产生的静态颜色替换为动态 UIColor，
-    /// 使 UILabel 在深浅色模式切换时能自动更新颜色，无需手动 reloadData。
-    /// 保留链接、blockquote 等特殊颜色不变。
-    /// replaceColor: 传入动态 UIColor（如 messageRecvTextColor），UILabel 在 trait 变化时自动更新
-    private static func fixForegroundColors(in attrStr: NSMutableAttributedString, replaceColor: UIColor, isDark: Bool) {
-        // 动态链接颜色
-        let dynamicLinkColor: UIColor
-        if #available(iOS 13.0, *) {
-            dynamicLinkColor = UIColor { traitCollection in
-                let dark = traitCollection.userInterfaceStyle == .dark
-                return dark ? UIColor(red: 100/255, green: 181/255, blue: 246/255, alpha: 1)
-                            : UIColor(red: 89/255, green: 121/255, blue: 240/255, alpha: 1)
-            }
-        } else {
-            dynamicLinkColor = isDark ? UIColor(red: 100/255, green: 181/255, blue: 246/255, alpha: 1)
-                                      : UIColor(red: 89/255, green: 121/255, blue: 240/255, alpha: 1)
-        }
-
-        // 当前模式下的链接色和引用色，用于识别不应替换的特殊颜色
-        let curLinkColor = isDark ? UIColor(red: 100/255, green: 181/255, blue: 246/255, alpha: 1)
-                                  : UIColor(red: 89/255, green: 121/255, blue: 240/255, alpha: 1)
-        let curBlockquoteColor = isDark ? UIColor(red: 170/255, green: 170/255, blue: 170/255, alpha: 1)
-                                        : UIColor.gray
-
-        let fullRange = NSRange(location: 0, length: attrStr.length)
-        attrStr.enumerateAttribute(.foregroundColor, in: fullRange, options: []) { value, range, _ in
-            guard let color = value as? UIColor else {
-                attrStr.addAttribute(.foregroundColor, value: replaceColor, range: range)
-                return
-            }
-            if isColorSimilar(color, curLinkColor) {
-                attrStr.addAttribute(.foregroundColor, value: dynamicLinkColor, range: range)
-            } else if !isColorSimilar(color, curBlockquoteColor) {
-                attrStr.addAttribute(.foregroundColor, value: replaceColor, range: range)
-            }
-        }
-    }
-
-    /// 判断两个颜色是否相近（容差 0.1）
-    private static func isColorSimilar(_ c1: UIColor, _ c2: UIColor) -> Bool {
-        var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
-        var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
-        c1.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
-        c2.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
-        let threshold: CGFloat = 0.1
-        return abs(r1 - r2) < threshold && abs(g1 - g2) < threshold && abs(b1 - b2) < threshold
+        html += "</ul>"
+        return html
     }
 }
 

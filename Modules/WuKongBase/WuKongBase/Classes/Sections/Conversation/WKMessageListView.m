@@ -529,7 +529,7 @@
         BOOL hasInsertions = (newSectionsAdded > 0 || newRowsInOldFirstSection > 0);
 
         if (hasInsertions) {
-            // 记录当前可见位置（在预计算之前，避免被 Down 嵌套 RunLoop 干扰）
+            // 记录当前可见位置
             NSIndexPath *firstVisible = weakSelf.tableView.indexPathsForVisibleRows.firstObject;
             CGFloat cellOffsetInView = 0;
             if (firstVisible) {
@@ -559,12 +559,7 @@
                 }
             }
 
-            // 在主线程预计算高度（Down 库必须在主线程），但菊花仍在转动给用户反馈
-            for (WKMessageModel *msg in newMsgs) {
-                [weakSelf precacheHeightForMessage:msg];
-            }
-
-            // 清除边界消息的高度缓存（新消息加载后，原来的第一条消息的 bubblePosition 可能变化）
+            // 清除边界消息的高度缓存
             NSInteger boundarySection = newSectionsAdded;
             NSArray *boundaryMsgs = (boundarySection < newSectionCount) ? [weakSelf.dataProvider messagesAtSection:boundarySection] : @[];
             if (boundaryMsgs.count > (NSUInteger)newRowsInOldFirstSection) {
@@ -574,25 +569,42 @@
                 }
             }
 
-            // 高度已就绪，reloadData + 恢复位置
-            [UIView performWithoutAnimation:^{
-                [weakSelf.tableView reloadData];
-                [weakSelf.tableView layoutIfNeeded];
-            }];
+            // 后台线程预计算高度，完成后回主线程刷新 UI
+            NSIndexPath *targetCopy = targetAfterReload;
+            CGFloat offsetCopy = cellOffsetInView;
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                CFAbsoluteTime t_precache = CFAbsoluteTimeGetCurrent();
+                for (WKMessageModel *msg in newMsgs) {
+                    [weakSelf precacheHeightForMessage:msg];
+                }
+                CGFloat precacheMs = (CFAbsoluteTimeGetCurrent() - t_precache) * 1000;
 
-            if (targetAfterReload) {
-                [UIView performWithoutAnimation:^{
-                    CGRect targetRect = [weakSelf.tableView rectForRowAtIndexPath:targetAfterReload];
-                    weakSelf.tableView.contentOffset = CGPointMake(0, targetRect.origin.y - cellOffsetInView);
-                }];
-            }
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    CFAbsoluteTime t_reload = CFAbsoluteTimeGetCurrent();
+                    [UIView performWithoutAnimation:^{
+                        [weakSelf.tableView reloadData];
+                        [weakSelf.tableView layoutIfNeeded];
+                    }];
+
+                    if (targetCopy) {
+                        [UIView performWithoutAnimation:^{
+                            CGRect targetRect = [weakSelf.tableView rectForRowAtIndexPath:targetCopy];
+                            weakSelf.tableView.contentOffset = CGPointMake(0, targetRect.origin.y - offsetCopy);
+                        }];
+                    }
+                    CGFloat reloadMs = (CFAbsoluteTimeGetCurrent() - t_reload) * 1000;
+                    NSLog(@"[Perf] pulldown: %lu msgs | precache=%.1fms(bg) reload=%.1fms(main)", (unsigned long)newMsgs.count, precacheMs, reloadMs);
+
+                    [weakSelf.tableView.mj_header endRefreshing];
+                    weakSelf.isPulldownInProgress = NO;
+                    [weakSelf processPendingRecvMessages];
+                });
+            });
+        } else {
+            [weakSelf.tableView.mj_header endRefreshing];
+            weakSelf.isPulldownInProgress = NO;
+            [weakSelf processPendingRecvMessages];
         }
-
-        [weakSelf.tableView.mj_header endRefreshing];
-
-        // pulldown 完成，处理期间暂存的新消息
-        weakSelf.isPulldownInProgress = NO;
-        [weakSelf processPendingRecvMessages];
     }];
 
 }
@@ -639,49 +651,78 @@
         }
 
         if (newMsgs.count > 0) {
-            for (WKMessageModel *msg in newMsgs) {
-                [weakSelf precacheHeightForMessage:msg];
+            // 后台预计算高度，完成后回主线程插入行
+            NSInteger newSectionsAddedCopy = newSectionsAdded;
+            NSInteger oldSectionCountCopy = oldSectionCount;
+            NSInteger oldLastSectionRowCountCopy = oldLastSectionRowCount;
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                CFAbsoluteTime t_precache = CFAbsoluteTimeGetCurrent();
+                for (WKMessageModel *msg in newMsgs) {
+                    [weakSelf precacheHeightForMessage:msg];
+                }
+                CGFloat precacheMs = (CFAbsoluteTimeGetCurrent() - t_precache) * 1000;
+
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    CFAbsoluteTime t_insert = CFAbsoluteTimeGetCurrent();
+                    [UIView performWithoutAnimation:^{
+                        @try {
+                            [weakSelf.tableView beginUpdates];
+
+                            if (newSectionsAddedCopy > 0) {
+                                if (oldSectionCountCopy > 0) {
+                                    NSInteger oldSectionNewRowCount = [weakSelf.dataProvider messagesAtSection:oldSectionCountCopy - 1].count;
+                                    if (oldSectionNewRowCount > oldLastSectionRowCountCopy) {
+                                        NSMutableArray<NSIndexPath *> *rowPaths = [NSMutableArray array];
+                                        for (NSInteger r = oldLastSectionRowCountCopy; r < oldSectionNewRowCount; r++) {
+                                            [rowPaths addObject:[NSIndexPath indexPathForRow:r inSection:oldSectionCountCopy - 1]];
+                                        }
+                                        [weakSelf.tableView insertRowsAtIndexPaths:rowPaths withRowAnimation:UITableViewRowAnimationNone];
+                                    }
+                                }
+                                NSIndexSet *sectionSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(oldSectionCountCopy, newSectionsAddedCopy)];
+                                [weakSelf.tableView insertSections:sectionSet withRowAnimation:UITableViewRowAnimationNone];
+                            } else {
+                                NSInteger newSC = [weakSelf.dataProvider dateCount];
+                                if (newSC > 0) {
+                                    NSInteger newLastSectionRowCount = [weakSelf.dataProvider messagesAtSection:newSC - 1].count;
+                                    if (newLastSectionRowCount > oldLastSectionRowCountCopy) {
+                                        NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
+                                        for (NSInteger r = oldLastSectionRowCountCopy; r < newLastSectionRowCount; r++) {
+                                            [indexPaths addObject:[NSIndexPath indexPathForRow:r inSection:newSC - 1]];
+                                        }
+                                        [weakSelf.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
+                                    }
+                                }
+                            }
+
+                            [weakSelf.tableView endUpdates];
+                        } @catch (NSException *exception) {
+                            [weakSelf.tableView reloadData];
+                        }
+                    }];
+                    CGFloat insertMs = (CFAbsoluteTimeGetCurrent() - t_insert) * 1000;
+                    NSLog(@"[Perf] pullup: %lu msgs | precache=%.1fms(bg) insert=%.1fms(main)", (unsigned long)newMsgs.count, precacheMs, insertMs);
+
+                    [weakSelf.tableView.mj_footer endRefreshing];
+                    if(complete) {
+                        complete(hasMore);
+                    }
+                });
+            });
+        } else {
+            [weakSelf.tableView.mj_footer endRefreshing];
+
+            // 去重跳过后重试
+            if(hasMore && newMsgs.count == 0) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [weakSelf pullup:complete];
+                });
+                return;
             }
 
-            [UIView performWithoutAnimation:^{
-                @try {
-                    [weakSelf.tableView beginUpdates];
-
-                    if (newSectionsAdded > 0) {
-                        if (oldSectionCount > 0) {
-                            NSInteger oldSectionNewRowCount = [weakSelf.dataProvider messagesAtSection:oldSectionCount - 1].count;
-                            if (oldSectionNewRowCount > oldLastSectionRowCount) {
-                                NSMutableArray<NSIndexPath *> *rowPaths = [NSMutableArray array];
-                                for (NSInteger r = oldLastSectionRowCount; r < oldSectionNewRowCount; r++) {
-                                    [rowPaths addObject:[NSIndexPath indexPathForRow:r inSection:oldSectionCount - 1]];
-                                }
-                                [weakSelf.tableView insertRowsAtIndexPaths:rowPaths withRowAnimation:UITableViewRowAnimationNone];
-                            }
-                        }
-                        NSIndexSet *sectionSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(oldSectionCount, newSectionsAdded)];
-                        [weakSelf.tableView insertSections:sectionSet withRowAnimation:UITableViewRowAnimationNone];
-                    } else {
-                        NSInteger newLastSectionRowCount = [weakSelf.dataProvider messagesAtSection:newSectionCount - 1].count;
-                        if (newLastSectionRowCount > oldLastSectionRowCount) {
-                            NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
-                            for (NSInteger r = oldLastSectionRowCount; r < newLastSectionRowCount; r++) {
-                                [indexPaths addObject:[NSIndexPath indexPathForRow:r inSection:newSectionCount - 1]];
-                            }
-                            [weakSelf.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
-                        }
-                    }
-
-                    [weakSelf.tableView endUpdates];
-                } @catch (NSException *exception) {
-                    [weakSelf.tableView reloadData];
-                }
-            }];
-        }
-
-        [weakSelf.tableView.mj_footer endRefreshing];
-
-        if(complete) {
-            complete(hasMore);
+            if(complete) {
+                complete(hasMore);
+            }
         }
     }];
 }
@@ -1474,12 +1515,27 @@
     if ([[WKMessageListView cellHeightCache] objectForKey:heightKey]) return;
 
     @try {
+        CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
         Class cellClass = [self getMessageCellClass:msg];
         CGSize size = [cellClass sizeForMessage:msg];
         CGFloat height = MAX(size.height, 0.1f);
         [[WKMessageListView cellHeightCache] setObject:@(height) forKey:heightKey];
+        CGFloat ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000;
+        if (ms > 10) {
+            NSString *preview = @"";
+            if (msg.contentType == 1 && [msg.content isKindOfClass:NSClassFromString(@"WKTextContent")]) {
+                NSString *text = [(id)msg.content content];
+                if ([text isKindOfClass:[NSString class]]) {
+                    preview = text.length > 60 ? [text substringToIndex:60] : text;
+                    preview = [preview stringByReplacingOccurrencesOfString:@"\n" withString:@"↵"];
+                }
+            }
+            NSLog(@"[Perf] precache SLOW: %.1fms type=%ld len=%lu key=%@ content=[%@]",
+                  ms, (long)msg.contentType,
+                  (unsigned long)(msg.contentType == 1 ? [(NSString*)[(id)msg.content content] length] : 0),
+                  heightKey, preview);
+        }
     } @catch (NSException *exception) {
-        // Down 库嵌套 RunLoop 可能导致数据源竞态，消息类型与 content 不匹配时跳过
         NSLog(@"[HeightCache] precache exception for %@: %@", heightKey, exception);
     }
 }

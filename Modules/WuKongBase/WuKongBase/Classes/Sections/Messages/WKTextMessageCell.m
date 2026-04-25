@@ -508,12 +508,8 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         renderContent = [[WKMarkdownRenderer removeTableMarkdown:content] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     }
 
-    // 尝试使用 Down 库进行 markdown 渲染
-    // Down 库内部使用 WebKit (NSHTMLReader) 运行嵌套 RunLoop，
-    // 在交互式转场（手势返回）期间会导致主线程死锁，跳过 markdown 渲染
-    BOOL isInteractiveTransition = [WKNavigationManager shared].topViewController.navigationController.transitionCoordinator.isInteractive;
     BOOL useMarkdown = NO;
-    if (!isInteractiveTransition && ![textContent.format isEqualToString:@"html"]) {
+    if (![textContent.format isEqualToString:@"html"]) {
         if (renderContent.length > 0 && [WKMarkdownRenderer containsMarkdown:renderContent]) {
             UIColor *textColor = message.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
             NSString *colorHex = [textColor toHexRGB];
@@ -972,15 +968,7 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
     UIColor *textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
     NSString *colorHex = [textColor toHexRGB];
     CGFloat totalHeight = 0;
-
-    // 用静态 UILabel 测量文本段高度（与 layoutSubviews 中 sizeThatFits: 一致）
-    static UILabel *measureLabel;
-    if (!measureLabel) {
-        measureLabel = [[UILabel alloc] init];
-        measureLabel.numberOfLines = 0;
-        measureLabel.lineBreakMode = NSLineBreakByWordWrapping;
-    }
-    measureLabel.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+    UIFont *baseFont = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
 
     for (NSUInteger i = 0; i < segments.count; i++) {
         NSDictionary *seg = segments[i];
@@ -989,32 +977,27 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         CGFloat spacing = (i < segments.count - 1) ? kTableTopSpace : 0;
 
         if ([type isEqualToString:@"text"]) {
-            // markdown 文本走 WKMarkdownRenderer，非 markdown 走 lim_render
-            // 交互式转场期间跳过 Down 渲染（避免嵌套 RunLoop 死锁）
-            BOOL skipMarkdown = [WKNavigationManager shared].topViewController.navigationController.transitionCoordinator.isInteractive;
-            if (!skipMarkdown && [WKMarkdownRenderer containsMarkdown:content]) {
-                NSAttributedString *mdAttr = nil;
+            NSAttributedString *attrForMeasure = nil;
+            if ([WKMarkdownRenderer containsMarkdown:content]) {
                 @try {
-                    mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+                    attrForMeasure = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
                 } @catch (NSException *e) {
-                    mdAttr = nil;
+                    attrForMeasure = nil;
                 }
-                if (mdAttr) {
-                    measureLabel.attributedText = mdAttr;
-                } else {
-                    measureLabel.text = content;
-                }
-            } else {
-                // 非 markdown：用 lim_render 渲染（带段落样式），与 refresh: 中一致
+            }
+            if (!attrForMeasure) {
                 NSMutableAttributedString *plainAttr = [[NSMutableAttributedString alloc] init];
-                plainAttr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+                plainAttr.font = baseFont;
                 plainAttr.textColor = textColor;
                 [plainAttr lim_render:content tokens:nil];
-                measureLabel.attributedText = plainAttr;
+                attrForMeasure = plainAttr;
             }
-            // 用 sizeThatFits: 测量（与 layoutSubviews 中完全一致）
-            CGSize fitSize = [measureLabel sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
-            totalHeight += ceil(fitSize.height) + spacing;
+            // boundingRect 是线程安全的，可在后台线程调用
+            // +4 补偿 boundingRect 与 UILabel.sizeThatFits 的测量偏差
+            CGRect rect = [attrForMeasure boundingRectWithSize:CGSizeMake(maxWidth, CGFLOAT_MAX)
+                                                       options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                                       context:nil];
+            totalHeight += ceil(rect.size.height) + 4.0f + spacing;
         } else {
             // 表格段：工具栏 + 表格行高 + 额外 padding
             NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
@@ -1162,9 +1145,7 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                         lbl.backgroundColor = [UIColor clearColor];
                         [self.messageContentView addSubview:lbl];
                     }
-                    // markdown 渲染 + 链接提取（交互式转场期间跳过，避免死锁）
-                    BOOL skipMd = [WKNavigationManager shared].topViewController.navigationController.transitionCoordinator.isInteractive;
-                    if (!skipMd && [WKMarkdownRenderer containsMarkdown:content]) {
+                    if ([WKMarkdownRenderer containsMarkdown:content]) {
                         NSAttributedString *mdAttr = nil;
                         @try {
                             mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex dynamicTextColor:textColor];
