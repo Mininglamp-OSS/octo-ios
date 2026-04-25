@@ -34,7 +34,10 @@
     if(dictory[@"version"]) {
         groupModel.version = [dictory[@"version"] longValue];
     }
-    
+    if(dictory[@"is_external_group"]) {
+        groupModel.isExternalGroup = @([dictory[@"is_external_group"] integerValue] == 1);
+    }
+
     return groupModel;
 }
 

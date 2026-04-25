@@ -30,6 +30,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,assign) BOOL chatPwdOn; // 聊天密码开关
 @property(nonatomic,assign) BOOL allowViewHistoryMsg; //允许新成员查看历史消息
 @property(nonatomic,assign) long version; // 群版本号
+@property(nonatomic,strong,nullable) NSNumber *isExternalGroup; // 外部群标识；nil 表示后端未返回，下游应保留旧值
 @end
 
 @interface WKGroupMemberModel : WKModel
