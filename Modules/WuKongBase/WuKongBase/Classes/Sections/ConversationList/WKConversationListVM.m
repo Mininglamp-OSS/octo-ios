@@ -142,9 +142,9 @@ static WKConversationListVM *_instance;
     if (self.conversationWrapModels.count > 0) {
         NSMutableDictionary *oldThreadData = [NSMutableDictionary dictionary];
         for (WKConversationWrapModel *old in self.conversationWrapModels) {
-            if (old.threadPreviews.count > 0) {
+            if (old.threadCount > 0) {
                 oldThreadData[old.channel.channelId] = @{
-                    @"previews": old.threadPreviews,
+                    @"previews": old.threadPreviews ?: @[],
                     @"count": @(old.threadCount)
                 };
             }
@@ -208,14 +208,21 @@ static WKConversationListVM *_instance;
             dispatch_group_enter(group);
             [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
                 NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
-                NSMutableArray *activePreviews = [NSMutableArray array];
+                NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
+                NSMutableArray *recentPreviews = [NSMutableArray array];
+                NSInteger inactiveCount = 0;
                 for (WKThreadModel *t in sorted) {
-                    if (t.status == WKThreadStatusActive) [activePreviews addObject:t];
+                    if (t.status != WKThreadStatusActive) continue;
+                    WKConversation *conv = [[WKSDK shared].conversationManager getConversation:[t toChannel]];
+                    NSTimeInterval ts = conv ? conv.lastMsgTimestamp : 0;
+                    if (ts > threeDaysAgo) {
+                        [recentPreviews addObject:t];
+                    } else {
+                        inactiveCount++;
+                    }
                 }
-                model.threadCount = activePreviews.count;
-                model.threadPreviews = activePreviews.count > 2
-                    ? [activePreviews subarrayWithRange:NSMakeRange(0, 2)]
-                    : [activePreviews copy];
+                model.threadPreviews = [recentPreviews copy];
+                model.threadCount = (NSInteger)recentPreviews.count + inactiveCount;
                 dispatch_semaphore_signal(rateLimiter);
                 dispatch_group_leave(group);
             }).catch(^(NSError *error) {
@@ -256,17 +263,24 @@ static WKConversationListVM *_instance;
             dispatch_group_enter(batchGroup);
             [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
                 NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
-                NSMutableArray *activePreviews = [NSMutableArray array];
+                NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
+                NSMutableArray *recentPreviews = [NSMutableArray array];
+                NSInteger inactiveCount = 0;
                 for (WKThreadModel *t in sorted) {
-                    if (t.status == WKThreadStatusActive) [activePreviews addObject:t];
+                    if (t.status != WKThreadStatusActive) continue;
+                    WKConversation *conv = [[WKSDK shared].conversationManager getConversation:[t toChannel]];
+                    NSTimeInterval ts = conv ? conv.lastMsgTimestamp : 0;
+                    if (ts > threeDaysAgo) {
+                        [recentPreviews addObject:t];
+                    } else {
+                        inactiveCount++;
+                    }
                 }
                 WKConversationWrapModel *currentModel = [self modelAtChannel:[WKChannel groupWithChannelID:groupNo]];
                 if (!currentModel) currentModel = model;
-                currentModel.threadCount = activePreviews.count;
-                currentModel.threadPreviews = activePreviews.count > 2
-                    ? [activePreviews subarrayWithRange:NSMakeRange(0, 2)]
-                    : [activePreviews copy];
-                for (WKThreadModel *t in activePreviews) {
+                currentModel.threadPreviews = [recentPreviews copy];
+                currentModel.threadCount = (NSInteger)recentPreviews.count + inactiveCount;
+                for (WKThreadModel *t in recentPreviews) {
                     if (t.channelId.length > 0) {
                         [WKThreadCreatedContent messageCountCache][t.channelId] = @(t.messageCount);
                     }

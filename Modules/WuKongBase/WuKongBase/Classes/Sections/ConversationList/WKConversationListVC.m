@@ -10,6 +10,7 @@
 #import "WKThreadCreatedContent.h"
 #import "WKConversationListCell.h"
 #import "WKConversationGroupThreadCell.h"
+#import "WKConversationGroupThreadOnlyCell.h"
 #import "WKThreadListVC.h"
 #import "WKCategoryEntity.h"
 #import "WKCategoryService.h"
@@ -778,6 +779,7 @@
 
         [_tableView registerClass:[WKConversationListCell class] forCellReuseIdentifier:@"WKConversationListCell"];
         [_tableView registerClass:[WKConversationGroupThreadCell class] forCellReuseIdentifier:@"WKConversationGroupThreadCell"];
+        [_tableView registerClass:[WKConversationGroupThreadOnlyCell class] forCellReuseIdentifier:@"WKConversationGroupThreadOnlyCell"];
         [_tableView registerClass:[WKCategorySectionCell class] forCellReuseIdentifier:@"WKCategorySectionCell"];
     }
     return _tableView;
@@ -1490,8 +1492,12 @@
         WKConversationDisplayItem *item = self.groupDisplayList[indexPath.row];
         if (item.isSectionHeader) return 36.0f;
         WKConversationWrapModel *model = item.conversation;
-        if (model && model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn && [_conversationListVM isThreadExpanded:model.channel.channelId]) {
-            return [WKConversationGroupThreadCell heightForModel:model];
+        if (model && model.threadCount > 0 && [WKApp shared].remoteConfig.threadOn && [_conversationListVM isThreadExpanded:model.channel.channelId]) {
+            if (model.threadPreviews.count > 0) {
+                return [WKConversationGroupThreadCell heightForModel:model];
+            } else {
+                return [WKConversationGroupThreadOnlyCell heightForModel:model];
+            }
         }
         // 有 @我 提醒时需要更高的行来显示预览
         if (model && model.simpleReminders.count > 0) {
@@ -1525,10 +1531,16 @@
             return cell;
         }
         WKConversationWrapModel *model = item.conversation;
-        if (model && model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn && [_conversationListVM isThreadExpanded:model.channel.channelId]) {
-            WKConversationGroupThreadCell *cell = [tableView dequeueReusableCellWithIdentifier:@"WKConversationGroupThreadCell" forIndexPath:indexPath];
-            cell.swipeDelegate = self;
-            return cell;
+        if (model && model.threadCount > 0 && [WKApp shared].remoteConfig.threadOn && [_conversationListVM isThreadExpanded:model.channel.channelId]) {
+            if (model.threadPreviews.count > 0) {
+                WKConversationGroupThreadCell *cell = [tableView dequeueReusableCellWithIdentifier:@"WKConversationGroupThreadCell" forIndexPath:indexPath];
+                cell.swipeDelegate = self;
+                return cell;
+            } else {
+                WKConversationGroupThreadOnlyCell *cell = [tableView dequeueReusableCellWithIdentifier:@"WKConversationGroupThreadOnlyCell" forIndexPath:indexPath];
+                cell.swipeDelegate = self;
+                return cell;
+            }
         }
         WKConversationListCell *cell = [tableView dequeueReusableCellWithIdentifier:@"WKConversationListCell" forIndexPath:indexPath];
         cell.swipeDelegate = self;
@@ -1586,6 +1598,18 @@
                 [[WKNavigationManager shared] pushViewController:vc animated:YES];
             }];
             [threadCell setOnToggleThreadPreview:^(NSString *channelId) {
+                [weakSelf.conversationListVM toggleThreadExpanded:channelId];
+                [weakSelf rebuildGroupDisplayAndReload];
+            }];
+        } else if ([cell isKindOfClass:[WKConversationGroupThreadOnlyCell class]]) {
+            WKConversationGroupThreadOnlyCell *threadOnlyCell = (WKConversationGroupThreadOnlyCell *)cell;
+            [threadOnlyCell refreshWithModel:conversationModel];
+            [threadOnlyCell setOnMoreThreadsTap:^(NSString *groupNo) {
+                WKThreadListVC *vc = [WKThreadListVC new];
+                vc.groupNo = groupNo;
+                [[WKNavigationManager shared] pushViewController:vc animated:YES];
+            }];
+            [threadOnlyCell setOnToggleThreadPreview:^(NSString *channelId) {
                 [weakSelf.conversationListVM toggleThreadExpanded:channelId];
                 [weakSelf rebuildGroupDisplayAndReload];
             }];

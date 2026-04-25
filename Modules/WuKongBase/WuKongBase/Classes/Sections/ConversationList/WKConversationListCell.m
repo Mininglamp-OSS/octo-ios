@@ -205,7 +205,7 @@
         [self.typingIndicatorView stopAnimating];
         self.onlineBadgeView.hidden = YES;
         self.autoDeleteView.hidden = YES;
-        BOOL showToggle = (model.threadPreviews.count > 0 && [WKApp shared].remoteConfig.threadOn);
+        BOOL showToggle = (model.threadCount > 0 && [WKApp shared].remoteConfig.threadOn);
         self.threadToggleBtn.hidden = !showToggle;
         if (showToggle) {
             NSString *prefix = [NSString stringWithFormat:@"%@____", model.channel.channelId];
@@ -392,19 +392,8 @@
         self.botBadgeLbl.frame = frame;
     }
 
-    // 子区数量提示（无预览时显示）
-    NSInteger threadCount = model.threadCount;
-    if(threadCount > 0 && [WKApp shared].remoteConfig.threadOn && (!model.threadPreviews || model.threadPreviews.count == 0)) {
-        self.threadCountLbl.hidden = NO;
-        self.threadCountLbl.text = [NSString stringWithFormat:@"+%ld%@", (long)threadCount, LLang(@"个子区")];
-        [self.threadCountLbl sizeToFit];
-        CGRect tcFrame = self.threadCountLbl.frame;
-        tcFrame.size.width += 8.0f;
-        tcFrame.size.height += 2.0f;
-        self.threadCountLbl.frame = tcFrame;
-    } else {
-        self.threadCountLbl.hidden = YES;
-    }
+    // 子区数量提示已统一由 threadToggleBtn 展示，不再内联显示
+    self.threadCountLbl.hidden = YES;
 }
 
 -(void) refreshAvatar:(WKConversationWrapModel*)model {
@@ -764,9 +753,6 @@
             self.titleLbl.lim_left = titleLeft;
             self.titleLbl.lim_top = (self.lim_height - self.titleLbl.lim_height) / 2.0f;
         }
-        NSLog(@"[CellDebug] 群聊 avatar frame=%.1f x %.1f, cellHeight=%.1f, channelId=%@",
-              self.avatarImgView.lim_width, self.avatarImgView.lim_height, self.lim_height, self.model.channel.channelId);
-
         // 右侧元素从右往左排列：toggle → 红点/免打扰
         CGFloat rightEdge = self.lim_width - rightPadding;
 
@@ -817,9 +803,6 @@
         CGFloat avatarSize = 52.0f;
         self.avatarImgView.frame = CGRectMake(15.0f, 0, avatarSize, avatarSize);
         self.avatarImgView.lim_top = self.lim_height/2.0f - self.avatarImgView.lim_height/2.0f;
-        NSLog(@"[CellDebug] 私聊 avatar frame=%.1f x %.1f, cellHeight=%.1f, channelId=%@",
-              self.avatarImgView.lim_width, self.avatarImgView.lim_height, self.lim_height, self.model.channel.channelId);
-
         // 在线标记
         if(self.model.channelInfo && self.model.channelInfo.online) {
             self.onlineBadgeView.lim_left = self.avatarImgView.lim_right - self.onlineBadgeView.lim_width;
