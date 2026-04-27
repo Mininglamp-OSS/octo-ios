@@ -1016,6 +1016,18 @@
         return;
     }
 
+    // 交互式转场期间暂存更新，转场完成后再处理，避免主线程阻塞导致动画卡顿
+    id<UIViewControllerTransitionCoordinator> coordinator = self.transitionCoordinator;
+    if (coordinator && coordinator.isInteractive) {
+        __weak typeof(self) weakSelf = self;
+        [coordinator animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+            if (!context.isCancelled) {
+                [weakSelf onConversationUpdate:conversations];
+            }
+        }];
+        return;
+    }
+
     // 空间隔离：过滤掉不属于当前空间的会话更新
     NSArray<WKConversation*> *filtered = [self filterConversationsBySpace:conversations];
     // 过滤子区：子区不独立显示在会话列表，但触发父群子区数量刷新 + 消息计数更新

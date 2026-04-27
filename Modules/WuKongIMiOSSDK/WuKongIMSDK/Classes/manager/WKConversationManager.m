@@ -192,6 +192,20 @@
 //}
 
 -(NSArray<WKConversation*>*) getConversationList {
+    if ([NSThread isMainThread]) {
+        NSArray *stack = [[NSThread callStackSymbols] subarrayWithRange:NSMakeRange(1, MIN(8, [NSThread callStackSymbols].count - 1))];
+        CFAbsoluteTime start = CFAbsoluteTimeGetCurrent();
+        NSArray<WKConversation*> *result = [self _getConversationListInternal];
+        CFAbsoluteTime elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000;
+        if (elapsed > 30) {
+            NSLog(@"[ANR-Trace] getConversationList on MAIN thread took %.0fms, count=%lu, stack:\n%@", elapsed, (unsigned long)result.count, [stack componentsJoinedByString:@"\n"]);
+        }
+        return result;
+    }
+    return [self _getConversationListInternal];
+}
+
+-(NSArray<WKConversation*>*) _getConversationListInternal {
    NSArray<WKConversation*> *conversations =  [[WKConversationDB shared] getConversationList];
     if(conversations && conversations.count>0) {
        NSDictionary<WKChannel*,NSArray<WKReminder*>*> *reminderDict = [[WKReminderDB shared] getAllWaitDoneReminders];
@@ -205,64 +219,72 @@
 }
 
 -(void) handleSyncConversation:(WKSyncConversationWrapModel*)model {
-    
     NSArray<WKSyncConversationModel*> *syncConversations = model.conversations;
-    // ########## 存储会话所有消息 ##########
-    NSMutableArray *messages = [NSMutableArray array];
-    if(syncConversations && syncConversations.count>0) {
+
+    // DB 密集操作移到后台线程，避免阻塞主线程动画
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        CFAbsoluteTime syncStart = CFAbsoluteTimeGetCurrent();
+
+        // ########## 存储会话所有消息 ##########
+        NSMutableArray *messages = [NSMutableArray array];
+        if(syncConversations && syncConversations.count>0) {
+            for (WKSyncConversationModel *syncConversationModel in syncConversations) {
+                if(syncConversationModel.recents && syncConversationModel.recents.count>0) {
+                    [messages addObjectsFromArray:syncConversationModel.recents];
+                }
+            }
+        }
+        if(messages.count>0) {
+            [[WKMessageDB shared] replaceMessages:messages];
+        }
+
+        // ########## 存储所有会话 ##########
+        NSMutableArray<WKConversation*> *conversations = [NSMutableArray array];
         for (WKSyncConversationModel *syncConversationModel in syncConversations) {
-            if(syncConversationModel.recents && syncConversationModel.recents.count>0) {
-                [messages addObjectsFromArray:syncConversationModel.recents];
-            }
-
+            [conversations addObject:syncConversationModel.conversation];
         }
-    }
-    if(messages.count>0) {
-        [[WKMessageDB shared] replaceMessages:messages];
-    }
-   
-    // ########## 存储所有会话 ##########
-    NSMutableArray<WKConversation*> *conversations = [NSMutableArray array];
-    for (WKSyncConversationModel *syncConversationModel in syncConversations) {
-        [conversations addObject:syncConversationModel.conversation];
-    }
 
-    if(conversations.count>0) {
-        NSMutableArray<WKChannel*> *channels = [NSMutableArray array];
-        for (WKConversation *conversation in conversations) {
-            [channels addObject:conversation.channel];
-        }
-        NSDictionary *reminderDict = [[WKReminderDB shared] getWaitDoneReminders:channels];
-        if(reminderDict) {
+        if(conversations.count>0) {
+            NSMutableArray<WKChannel*> *channels = [NSMutableArray array];
             for (WKConversation *conversation in conversations) {
-                conversation.reminders = reminderDict[conversation.channel];
+                [channels addObject:conversation.channel];
             }
-        }
-        [[WKConversationDB shared] replaceConversations:conversations];
-
-        // 将同步的 stick/mute 状态写入 channel 表，解决 Web 端置顶/免打扰不同步到 iOS 的问题
-        for (WKSyncConversationModel *syncModel in syncConversations) {
-            WKChannelInfo *channelInfo = [[WKSDK shared].channelManager getChannelInfo:syncModel.channel];
-            if (channelInfo) {
-                BOOL needUpdate = NO;
-                if (channelInfo.stick != syncModel.stick) {
-                    channelInfo.stick = syncModel.stick;
-                    needUpdate = YES;
-                }
-                if (channelInfo.mute != syncModel.mute) {
-                    channelInfo.mute = syncModel.mute;
-                    needUpdate = YES;
-                }
-                if (needUpdate) {
-                    [[WKSDK shared].channelManager updateChannelInfo:channelInfo];
+            NSDictionary *reminderDict = [[WKReminderDB shared] getWaitDoneReminders:channels];
+            if(reminderDict) {
+                for (WKConversation *conversation in conversations) {
+                    conversation.reminders = reminderDict[conversation.channel];
                 }
             }
+            [[WKConversationDB shared] replaceConversations:conversations];
+
+            // 将同步的 stick/mute 状态写入 channel 表
+            for (WKSyncConversationModel *syncModel in syncConversations) {
+                WKChannelInfo *channelInfo = [[WKSDK shared].channelManager getChannelInfo:syncModel.channel];
+                if (channelInfo) {
+                    BOOL needUpdate = NO;
+                    if (channelInfo.stick != syncModel.stick) {
+                        channelInfo.stick = syncModel.stick;
+                        needUpdate = YES;
+                    }
+                    if (channelInfo.mute != syncModel.mute) {
+                        channelInfo.mute = syncModel.mute;
+                        needUpdate = YES;
+                    }
+                    if (needUpdate) {
+                        [[WKSDK shared].channelManager updateChannelInfo:channelInfo];
+                    }
+                }
+            }
+
+            // UI 通知回主线程
+            [self callOnConversationUpdateDelegates:conversations];
         }
 
-        [self callOnConversationUpdateDelegates:conversations];
-    }
-    
-    
+        CFAbsoluteTime syncElapsed = (CFAbsoluteTimeGetCurrent() - syncStart) * 1000;
+        if (syncElapsed > 30) {
+            NSLog(@"[ANR-Trace] handleSyncConversation took %.0fms (background), syncCount=%lu, msgCount=%lu", syncElapsed, (unsigned long)syncConversations.count, (unsigned long)messages.count);
+        }
+    });
 }
 
 -(void) syncExtra {
@@ -380,16 +402,21 @@
     [self.delegateLock lock];
     NSHashTable *copyDelegates =  [self.delegates copy];
     [self.delegateLock unlock];
-    for (id delegate in copyDelegates) {//遍历delegates ，call delegate
+    NSArray *callerStack = [[NSThread callStackSymbols] subarrayWithRange:NSMakeRange(1, MIN(5, [NSThread callStackSymbols].count - 1))];
+    for (id delegate in copyDelegates) {
         if (delegate && [delegate respondsToSelector:@selector(onConversationUpdate:)]) {
             if (![NSThread isMainThread]) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                   [delegate onConversationUpdate:conversations];
+                    CFAbsoluteTime start = CFAbsoluteTimeGetCurrent();
+                    [delegate onConversationUpdate:conversations];
+                    CFAbsoluteTime elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000;
+                    if (elapsed > 30) {
+                        NSLog(@"[ANR-Trace] onConversationUpdate delegate=%@ took %.0fms, convCount=%lu, callerStack:\n%@", NSStringFromClass([delegate class]), elapsed, (unsigned long)conversations.count, [callerStack componentsJoinedByString:@"\n"]);
+                    }
                 });
             }else {
                 [delegate onConversationUpdate:conversations];
             }
-            
         }
     }
 }
