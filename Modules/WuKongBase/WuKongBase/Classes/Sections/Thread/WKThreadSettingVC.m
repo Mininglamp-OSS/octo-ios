@@ -27,6 +27,7 @@
 @property (nonatomic, copy) NSString *threadName;
 @property (nonatomic, strong) WKThreadModel *thread;
 @property (nonatomic, assign) BOOL isCreator;  // 当前用户是否是子区创建者
+@property (nonatomic, assign) BOOL isBotOwner; // 当前用户是否是创建者bot的所有者
 
 @property (nonatomic, strong) NSArray *members; // API 返回的成员字典数组
 @property (nonatomic, assign) BOOL isMember;   // 当前用户是否在子区成员中
@@ -89,12 +90,32 @@
             [[WKSDK shared].channelManager updateChannelInfo:info];
         }
         [weakSelf.tableView reloadData];
+
+        if (!weakSelf.isCreator && thread.creatorUid.length > 0) {
+            [weakSelf checkBotOwnership:thread.creatorUid];
+        }
     }).catch(^(NSError *error) {
         // 从 channelInfo 获取名称作为备选
         WKChannelInfo *info = [[WKChannelManager shared] getChannelInfo:weakSelf.channel];
         if (info) {
             weakSelf.threadName = info.displayName;
             [weakSelf.tableView reloadData];
+        }
+    });
+}
+
+- (void)checkBotOwnership:(NSString *)creatorUid {
+    __weak typeof(self) weakSelf = self;
+    [[WKAPIClient sharedClient] GET:@"robot/my_bots" parameters:nil].then(^(NSArray *bots) {
+        if (![bots isKindOfClass:[NSArray class]]) return;
+        for (NSDictionary *bot in bots) {
+            if (![bot isKindOfClass:[NSDictionary class]]) continue;
+            NSString *botUid = bot[@"uid"] ?: @"";
+            if ([botUid isEqualToString:creatorUid]) {
+                weakSelf.isBotOwner = YES;
+                [weakSelf.tableView reloadData];
+                break;
+            }
         }
     });
 }
@@ -274,7 +295,7 @@
     if (indexPath.section == 0 && indexPath.row == 1) {
         WKGroupMdVC *vc = [WKGroupMdVC new];
         vc.channel = self.channel;
-        vc.canEdit = self.isCreator;
+        vc.canEdit = self.isCreator || self.isBotOwner;
         [[WKNavigationManager shared] pushViewController:vc animated:YES];
     } else if (indexPath.section == 1) {
         if (self.isCreator) {
