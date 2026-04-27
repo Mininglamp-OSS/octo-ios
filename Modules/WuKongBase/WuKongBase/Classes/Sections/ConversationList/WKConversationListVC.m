@@ -40,6 +40,7 @@
 #import "WKSyncService.h"
 #import "WKSpaceConversationCache.h"
 #import "WKPCOnlineVC.h"
+#import "WKPixelParticleHint.h"
 @interface WKConversationListVC ()<UITableViewDelegate,UITableViewDataSource,UISearchControllerDelegate,WKConnectionManagerDelegate,WKChannelManagerDelegate,WKConversationManagerDelegate,WKNetworkListenerDelegate,WKChatManagerDelegate,WKTypingManagerDelegate,SwipeTableViewCellDelegate,WKOnlineStatusManagerDelegate,WKReminderManagerDelegate>
 @property(nonatomic,copy) NSString *_title;
 @property(nonatomic,strong)  WKConversationListTableView *tableView;
@@ -1041,6 +1042,9 @@
                 NSString *groupNo = [threadChannelId substringToIndex:range.location];
                 [refreshGroupNos addObject:groupNo];
             }
+            if (conv.unreadCount > 0) {
+                [self showPixelHintForChannel:conv.channel];
+            }
         } else {
             [nonThreadFiltered addObject:conv];
         }
@@ -1082,6 +1086,9 @@
     }
 
    WKConversation *conversation = filtered[0];
+    if (conversation.channel.channelType == WK_GROUP && conversation.unreadCount > 0) {
+        [self showPixelHintForChannel:conversation.channel];
+    }
     [self uiAddOrUpdateConversationForOne:conversation];
     [self refreshBadge];
     // 无论当前在哪个 tab，都更新群聊 tab 的 @提醒标识
@@ -2929,6 +2936,42 @@
     NSLog(@"WKConversationListVC dealloc ....");
     [self removeDelegates];
     [self stopPingMonitoring];
+}
+
+#pragma mark - Pixel Particle Hint
+
+-(void) showPixelHintForChannel:(WKChannel *)channel {
+    if (_conversationListVM.filterType != WKConversationFilterGroup) return;
+    if (!self.view.window) return;
+
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:channel];
+    if (!info) return;
+    if (info.mute) return;
+
+    NSString *avatarURL = nil;
+    NSString *name = info.displayName ?: @"";
+    if (channel.channelType == WK_GROUP) {
+        if ([info.logo hasPrefix:@"http"]) {
+            avatarURL = info.logo;
+        } else {
+            avatarURL = [WKAvatarUtil getGroupAvatar:channel.channelId cacheKey:info.avatarCacheKey];
+        }
+    }
+
+    NSString *content = nil;
+    WKConversation *conv = [[WKSDK shared].conversationManager getConversation:channel];
+    if (conv && conv.lastMessage && conv.lastMessage.content) {
+        content = [conv.lastMessage.content conversationDigest];
+    }
+
+    __weak typeof(self) weakSelf = self;
+    [WKPixelParticleHint showInView:self.view
+                          avatarURL:avatarURL
+                               name:name
+                            content:content
+                              onTap:^{
+        [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:channel];
+    }];
 }
 
 @end
