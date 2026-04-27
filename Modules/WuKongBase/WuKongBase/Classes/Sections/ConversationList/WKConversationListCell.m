@@ -27,6 +27,7 @@
 #import "WKUserAvatar.h"
 #import "WKAutoDeleteView.h"
 #import "WKThreadModel.h"
+#import "WKConversationGroupThreadCell.h"
 //#define avatarSize 56.0f
 @interface WKConversationListCell ()
 
@@ -59,6 +60,8 @@
 
 @property(nonatomic,strong) UILabel *hashTagLbl; // 群组 # 标识（替代头像）
 
+@property(nonatomic,strong) UIButton *threadToggleBtn; // 子区预览展开按钮
+
 @end
 
 @implementation WKConversationListCell
@@ -74,7 +77,7 @@
         [self.contextContainerView addSubview:self.titleLbl];
         
         
-        self.avatarImgView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, [WKApp shared].config.messageListAvatarSize.width,  [WKApp shared].config.messageListAvatarSize.height)];
+        self.avatarImgView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, 52.0f, 52.0f)];
         [self.contextContainerView addSubview:self.avatarImgView];
         // 最后一条消息内容
         self.lastContentLbl = [[UILabel alloc] init];
@@ -109,6 +112,8 @@
         [self.contextContainerView addSubview:self.threadCountLbl];
         // 群组 # 标识
         [self.contextContainerView addSubview:self.hashTagLbl];
+        // 子区展开按钮
+        [self.contextContainerView addSubview:self.threadToggleBtn];
 
     }
     return self;
@@ -171,6 +176,8 @@
     [super prepareForReuse];
     self.avatarImgView.avatarImgView.image = nil;
     self.hashTagLbl.hidden = YES;
+    self.threadToggleBtn.hidden = YES;
+    self.onToggleThreadPreview = nil;
     self.avatarImgView.hidden = NO;
     self.lastContentLbl.hidden = NO;
     self.lastMsgTimeLbl.hidden = NO;
@@ -188,32 +195,59 @@
     }
 
     if(isGroup) {
-        // 群聊：显示 # 标识，隐藏头像/预览/时间
-        self.hashTagLbl.hidden = NO;
-        self.avatarImgView.hidden = YES;
+        // 群聊：显示头像，隐藏预览/时间
+        self.hashTagLbl.hidden = YES;
+        self.avatarImgView.hidden = NO;
+        [self refreshAvatar:model];
         self.lastMsgTimeLbl.hidden = YES;
         self.statusImgView.hidden = YES;
         self.typingIndicatorView.hidden = YES;
         [self.typingIndicatorView stopAnimating];
         self.onlineBadgeView.hidden = YES;
         self.autoDeleteView.hidden = YES;
+        BOOL showToggle = (model.threadCount > 0 && [WKApp shared].remoteConfig.threadOn);
+        self.threadToggleBtn.hidden = !showToggle;
+        if (showToggle) {
+            NSString *prefix = [NSString stringWithFormat:@"%@____", model.channel.channelId];
+            NSInteger threadUnread = 0;
+            BOOL threadHasMention = NO;
+            for (WKConversation *conv in [[WKSDK shared].conversationManager getConversationList]) {
+                if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
+                    threadUnread += conv.unreadCount;
+                    if (!threadHasMention) {
+                        NSArray<WKReminder *> *rems = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
+                        for (WKReminder *r in rems) {
+                            if (r.type == WKReminderTypeMentionMe) { threadHasMention = YES; break; }
+                        }
+                    }
+                }
+            }
+            NSInteger indicatorType = 0;
+            UIColor *indicatorColor = nil;
+            if (threadHasMention) {
+                indicatorType = 2;
+                indicatorColor = [UIColor orangeColor];
+            } else if (threadUnread > 0) {
+                indicatorType = 1;
+                indicatorColor = model.mute
+                    ? [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f]
+                    : [UIColor redColor];
+            }
+            UIImage *icon = [WKConversationGroupThreadCell threadToggleIconWithSize:CGSizeMake(28, 28)
+                                                                         baseColor:[WKApp shared].config.themeColor
+                                                                     indicatorType:indicatorType
+                                                                    indicatorColor:indicatorColor];
+            [self.threadToggleBtn setImage:icon forState:UIControlStateNormal];
+        }
 
         // 检查是否有 @我 的提醒
         BOOL hasMention = NO;
-        NSLog(@"[@mention] channel=%@, simpleReminders.count=%lu, reminders(raw).count=%lu, convAddr=%p",
-              model.channel.channelId,
-              (unsigned long)(model.simpleReminders ? model.simpleReminders.count : 0),
-              (unsigned long)([model getConversation].reminders ? [model getConversation].reminders.count : 0),
-              [model getConversation]);
         if (model.simpleReminders && model.simpleReminders.count > 0) {
             for (WKReminder *r in model.simpleReminders) {
-                NSLog(@"[@mention]   reminder type=%lu, text=%@, publisher=%@, done=%d",
-                      (unsigned long)r.type, r.text, r.publisher, r.done);
                 if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
             }
         }
         if (hasMention) {
-            NSLog(@"[@mention] 显示@预览: %@", model.content);
             self.lastContentLbl.hidden = NO;
             self.lastContentLbl.attributedText = [self getLastContent:model];
             self.lastContentLbl.lineBreakMode = NSLineBreakByTruncatingTail;
@@ -224,6 +258,7 @@
         // 私聊：正常显示
         self.hashTagLbl.hidden = YES;
         self.avatarImgView.hidden = NO;
+        self.threadToggleBtn.hidden = YES;
         self.lastContentLbl.hidden = NO;
         self.lastMsgTimeLbl.hidden = NO;
         [self refreshAvatar:model];
@@ -357,19 +392,8 @@
         self.botBadgeLbl.frame = frame;
     }
 
-    // 子区数量提示（无预览时显示）
-    NSInteger threadCount = model.threadCount;
-    if(threadCount > 0 && [WKApp shared].remoteConfig.threadOn && (!model.threadPreviews || model.threadPreviews.count == 0)) {
-        self.threadCountLbl.hidden = NO;
-        self.threadCountLbl.text = [NSString stringWithFormat:@"+%ld%@", (long)threadCount, LLang(@"个子区")];
-        [self.threadCountLbl sizeToFit];
-        CGRect tcFrame = self.threadCountLbl.frame;
-        tcFrame.size.width += 8.0f;
-        tcFrame.size.height += 2.0f;
-        self.threadCountLbl.frame = tcFrame;
-    } else {
-        self.threadCountLbl.hidden = YES;
-    }
+    // 子区数量提示已统一由 threadToggleBtn 展示，不再内联显示
+    self.threadCountLbl.hidden = YES;
 }
 
 -(void) refreshAvatar:(WKConversationWrapModel*)model {
@@ -699,14 +723,14 @@
     if(isGroup) {
         // ========== 群聊布局 ==========
         BOOL showMention = !self.lastContentLbl.hidden;
-        CGFloat hashSize = 36.0f;
+        CGFloat avatarSize = 52.0f;
         CGFloat rightPadding = 15.0f;
 
         if (showMention) {
             // 有 @我：两行布局（标题 + 预览）
-            self.hashTagLbl.frame = CGRectMake(15.0f, 8.0f, hashSize, hashSize);
+            self.avatarImgView.frame = CGRectMake(15.0f, 8.0f, avatarSize, avatarSize);
 
-            CGFloat titleLeft = self.hashTagLbl.lim_right + 6.0f;
+            CGFloat titleLeft = self.avatarImgView.lim_right + 10.0f;
             [self.titleLbl sizeToFit];
             CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f;
             if(self.titleLbl.lim_width > titleMaxWidth) self.titleLbl.lim_width = titleMaxWidth;
@@ -720,22 +744,30 @@
             self.lastContentLbl.lim_height = 18.0f;
         } else {
             // 无 @我：单行居中
-            self.hashTagLbl.frame = CGRectMake(15.0f, (self.lim_height - hashSize) / 2.0f, hashSize, hashSize);
+            self.avatarImgView.frame = CGRectMake(15.0f, (self.lim_height - avatarSize) / 2.0f, avatarSize, avatarSize);
 
-            CGFloat titleLeft = self.hashTagLbl.lim_right + 6.0f;
+            CGFloat titleLeft = self.avatarImgView.lim_right + 10.0f;
             [self.titleLbl sizeToFit];
             CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f;
             if(self.titleLbl.lim_width > titleMaxWidth) self.titleLbl.lim_width = titleMaxWidth;
             self.titleLbl.lim_left = titleLeft;
             self.titleLbl.lim_top = (self.lim_height - self.titleLbl.lim_height) / 2.0f;
         }
+        // 右侧元素从右往左排列：toggle → 红点/免打扰
+        CGFloat rightEdge = self.lim_width - rightPadding;
 
-        // 红点 - 垂直居中
-        self.badgeView.lim_left = self.lim_width - rightPadding - self.badgeView.lim_width;
+        // 子区展开按钮 - 最右侧固定位置
+        if (!self.threadToggleBtn.hidden) {
+            self.threadToggleBtn.frame = CGRectMake(rightEdge - 44, (self.lim_height - 44) / 2.0f, 44, 44);
+            rightEdge = self.threadToggleBtn.lim_left - 2;
+        }
+
+        // 红点
+        self.badgeView.lim_left = rightEdge - self.badgeView.lim_width;
         self.badgeView.lim_top = (self.lim_height - self.badgeView.lim_height) / 2.0f;
 
-        // 免打扰图标 - 垂直居中
-        self.muteIcon.lim_left = self.lim_width - self.muteIcon.lim_width - rightPadding;
+        // 免打扰图标
+        self.muteIcon.lim_left = rightEdge - self.muteIcon.lim_width;
         self.muteIcon.lim_top = (self.lim_height - self.muteIcon.lim_height) / 2.0f;
 
         // 官方标签
@@ -767,10 +799,10 @@
     } else {
         // ========== 私聊布局（保持原样） ==========
 
-        // 头像
-        self.avatarImgView.lim_left = 15.0f;
+        // 头像（统一尺寸 42x42）
+        CGFloat avatarSize = 52.0f;
+        self.avatarImgView.frame = CGRectMake(15.0f, 0, avatarSize, avatarSize);
         self.avatarImgView.lim_top = self.lim_height/2.0f - self.avatarImgView.lim_height/2.0f;
-
         // 在线标记
         if(self.model.channelInfo && self.model.channelInfo.online) {
             self.onlineBadgeView.lim_left = self.avatarImgView.lim_right - self.onlineBadgeView.lim_width;
@@ -786,7 +818,9 @@
 
         CGFloat titleLeftToAvatarSpace = 10.0f;
         self.titleLbl.lim_left = self.avatarImgView.lim_right + titleLeftToAvatarSpace;
-        self.titleLbl.lim_top = self.avatarImgView.lim_top + 4.0f ;
+        CGFloat textBlockH = 20.0f + 3.0f + 24.0f; // title + gap + content
+        CGFloat textBlockTop = (self.lim_height - textBlockH) / 2.0f;
+        self.titleLbl.lim_top = textBlockTop;
 
         [self.lastMsgTimeLbl sizeToFit];
         CGFloat titleMaxWidth = self.lim_width - (self.avatarImgView.lim_right + 5.0f) - (self.lastMsgTimeLbl.lim_width+5.0f + 20.0f)  - 20.0f;
@@ -885,8 +919,25 @@
     return _threadCountLbl;
 }
 
+- (UIButton *)threadToggleBtn {
+    if (!_threadToggleBtn) {
+        _threadToggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        UIImage *icon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(28, 28) color:[WKApp shared].config.themeColor];
+        [_threadToggleBtn setImage:icon forState:UIControlStateNormal];
+        _threadToggleBtn.contentEdgeInsets = UIEdgeInsetsMake(9, 9, 9, 9);
+        _threadToggleBtn.hidden = YES;
+        [_threadToggleBtn addTarget:self action:@selector(onThreadToggleTap) forControlEvents:UIControlEventTouchUpInside];
+    }
+    return _threadToggleBtn;
+}
+
+-(void) onThreadToggleTap {
+    if (self.onToggleThreadPreview && self.model.channel.channelId.length > 0) {
+        self.onToggleThreadPreview(self.model.channel.channelId);
+    }
+}
+
 -(UIImage*) imageName:(NSString*)name {
     return [WKApp.shared loadImage:name moduleID:@"WuKongBase"];
-//    return [[WKResource shared] resourceForImage:name podName:@"WuKongBase_images"];
 }
 @end

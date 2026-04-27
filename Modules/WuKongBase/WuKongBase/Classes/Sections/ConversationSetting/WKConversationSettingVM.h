@@ -27,6 +27,9 @@ NS_ASSUME_NONNULL_BEGIN
  */
 -(void) settingOnGroupNameClick:(WKConversationSettingVM*)vm;
 
+/// 群头像点击
+-(void) settingOnGroupAvatarClick:(WKConversationSettingVM*)vm;
+
 /**
  群公告点击
  

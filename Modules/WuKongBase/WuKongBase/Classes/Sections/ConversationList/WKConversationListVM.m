@@ -20,6 +20,7 @@
 @property(nonatomic,strong) NSArray<WKConversationWrapModel*> *filteredConversations; // 过滤后的列表
 @property(nonatomic,strong) NSRecursiveLock *conversationsLock;
 @property(nonatomic,strong) NSSet<NSString*> *syncedGroupChannelIds; // 当前空间的合法群聊白名单
+@property(nonatomic,strong) NSMutableSet<NSString*> *expandedThreadGroups; // 子区预览展开的群 channelId
 
 @end
 
@@ -51,6 +52,7 @@ static WKConversationListVM *_instance;
         self.conversationsLock = [[NSRecursiveLock alloc] init];
         self.channelIndex = [NSMutableDictionary dictionary];
         self.collapsedSections = [NSMutableSet set];
+        self.expandedThreadGroups = [NSMutableSet set];
         self.categoryList = @[];
     }
     return self;
@@ -140,9 +142,9 @@ static WKConversationListVM *_instance;
     if (self.conversationWrapModels.count > 0) {
         NSMutableDictionary *oldThreadData = [NSMutableDictionary dictionary];
         for (WKConversationWrapModel *old in self.conversationWrapModels) {
-            if (old.threadPreviews.count > 0) {
+            if (old.threadCount > 0) {
                 oldThreadData[old.channel.channelId] = @{
-                    @"previews": old.threadPreviews,
+                    @"previews": old.threadPreviews ?: @[],
                     @"count": @(old.threadCount)
                 };
             }
@@ -204,10 +206,23 @@ static WKConversationListVM *_instance;
             NSString *groupNo = model.channel.channelId;
             dispatch_semaphore_wait(rateLimiter, DISPATCH_TIME_FOREVER);
             dispatch_group_enter(group);
-            [[WKThreadService shared] listThreads:groupNo pageIndex:1 pageSize:2].then(^(NSDictionary *result) {
-                model.threadCount = [result[@"count"] integerValue];
-                NSArray *list = result[@"list"] ?: @[];
-                model.threadPreviews = list.count > 2 ? [list subarrayWithRange:NSMakeRange(0, 2)] : list;
+            [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
+                NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
+                NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
+                NSMutableArray *recentPreviews = [NSMutableArray array];
+                NSInteger inactiveCount = 0;
+                for (WKThreadModel *t in sorted) {
+                    if (t.status != WKThreadStatusActive) continue;
+                    WKConversation *conv = [[WKSDK shared].conversationManager getConversation:[t toChannel]];
+                    NSTimeInterval ts = conv ? conv.lastMsgTimestamp : 0;
+                    if (ts > threeDaysAgo) {
+                        [recentPreviews addObject:t];
+                    } else {
+                        inactiveCount++;
+                    }
+                }
+                model.threadPreviews = [recentPreviews copy];
+                model.threadCount = (NSInteger)recentPreviews.count + inactiveCount;
                 dispatch_semaphore_signal(rateLimiter);
                 dispatch_group_leave(group);
             }).catch(^(NSError *error) {
@@ -246,12 +261,26 @@ static WKConversationListVM *_instance;
             NSString *groupNo = model.channel.channelId;
             dispatch_semaphore_wait(rateLimiter, DISPATCH_TIME_FOREVER);
             dispatch_group_enter(batchGroup);
-            [[WKThreadService shared] listThreads:groupNo pageIndex:1 pageSize:2].then(^(NSDictionary *result) {
-                model.threadCount = [result[@"count"] integerValue];
-                NSArray<WKThreadModel *> *all = result[@"list"] ?: @[];
-                NSArray<WKThreadModel *> *previews = all.count > 2 ? [all subarrayWithRange:NSMakeRange(0, 2)] : all;
-                model.threadPreviews = previews;
-                for (WKThreadModel *t in previews) {
+            [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
+                NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
+                NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
+                NSMutableArray *recentPreviews = [NSMutableArray array];
+                NSInteger inactiveCount = 0;
+                for (WKThreadModel *t in sorted) {
+                    if (t.status != WKThreadStatusActive) continue;
+                    WKConversation *conv = [[WKSDK shared].conversationManager getConversation:[t toChannel]];
+                    NSTimeInterval ts = conv ? conv.lastMsgTimestamp : 0;
+                    if (ts > threeDaysAgo) {
+                        [recentPreviews addObject:t];
+                    } else {
+                        inactiveCount++;
+                    }
+                }
+                WKConversationWrapModel *currentModel = [self modelAtChannel:[WKChannel groupWithChannelID:groupNo]];
+                if (!currentModel) currentModel = model;
+                currentModel.threadPreviews = [recentPreviews copy];
+                currentModel.threadCount = (NSInteger)recentPreviews.count + inactiveCount;
+                for (WKThreadModel *t in recentPreviews) {
                     if (t.channelId.length > 0) {
                         [WKThreadCreatedContent messageCountCache][t.channelId] = @(t.messageCount);
                     }
@@ -268,6 +297,23 @@ static WKConversationListVM *_instance;
             [[NSNotificationCenter defaultCenter] postNotificationName:WKThreadMessageCountUpdatedNotification object:nil];
         });
     });
+}
+
+/// 用本地会话时间戳排序子区（解决服务端 updated_at 延迟导致首条消息排序不更新）
+-(NSArray<WKThreadModel*>*) sortThreadsByLocalTimestamp:(NSArray<WKThreadModel*>*)threads {
+    NSMutableDictionary<NSString*, NSNumber*> *tsMap = [NSMutableDictionary dictionaryWithCapacity:threads.count];
+    for (WKThreadModel *t in threads) {
+        if (t.channelId.length == 0) continue;
+        WKConversation *conv = [[WKSDK shared].conversationManager getConversation:
+                                [WKChannel channelID:t.channelId channelType:WK_COMMUNITY_TOPIC]];
+        tsMap[t.channelId] = @(conv ? conv.lastMsgTimestamp : 0);
+    }
+    return [threads sortedArrayUsingComparator:^NSComparisonResult(WKThreadModel *a, WKThreadModel *b) {
+        double tsA = [tsMap[a.channelId] doubleValue];
+        double tsB = [tsMap[b.channelId] doubleValue];
+        if (tsA != tsB) return tsA > tsB ? NSOrderedAscending : NSOrderedDescending;
+        return [b.updatedAt compare:a.updatedAt];
+    }];
 }
 
 /// 判断会话是否应在当前空间显示
@@ -941,6 +987,45 @@ static NSString *const kCollapsedSectionsKey = @"collapsed_sections";
             if(sectionId.length > 0) {
                 [self.collapsedSections addObject:sectionId];
             }
+        }
+    }
+}
+
+#pragma mark - Thread Expand
+
+static NSString *const kExpandedThreadGroupsKey = @"expanded_thread_groups";
+
+-(BOOL) isThreadExpanded:(NSString*)channelId {
+    return [self.expandedThreadGroups containsObject:channelId];
+}
+
+-(void) toggleThreadExpanded:(NSString*)channelId {
+    if ([self.expandedThreadGroups containsObject:channelId]) {
+        [self.expandedThreadGroups removeObject:channelId];
+    } else {
+        [self.expandedThreadGroups addObject:channelId];
+    }
+    [self saveExpandedThreadGroups];
+}
+
+-(void) saveExpandedThreadGroups {
+    NSString *uid = [WKApp shared].loginInfo.uid;
+    NSString *key = [NSString stringWithFormat:@"%@_%@", uid, kExpandedThreadGroupsKey];
+    NSString *value = [[self.expandedThreadGroups allObjects] componentsJoinedByString:@","];
+    [[NSUserDefaults standardUserDefaults] setObject:value forKey:key];
+}
+
+-(void) restoreExpandedThreadGroups {
+    if (!self.expandedThreadGroups) {
+        self.expandedThreadGroups = [NSMutableSet set];
+    }
+    NSString *uid = [WKApp shared].loginInfo.uid;
+    NSString *key = [NSString stringWithFormat:@"%@_%@", uid, kExpandedThreadGroupsKey];
+    NSString *saved = [[NSUserDefaults standardUserDefaults] objectForKey:key];
+    if (saved && saved.length > 0) {
+        NSArray *ids = [saved componentsSeparatedByString:@","];
+        for (NSString *cid in ids) {
+            if (cid.length > 0) [self.expandedThreadGroups addObject:cid];
         }
     }
 }

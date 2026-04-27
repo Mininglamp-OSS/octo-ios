@@ -467,7 +467,7 @@ CGFloat itemSpace = 10.0f;
     if(!self.disableAutoTop) {
         self.lim_top =  [self currentMessageToolBarY];
     }
-   
+
     
     if(self.panelHeight<=0) {
         [self unSelectedFuncItems];
@@ -1235,6 +1235,31 @@ CGFloat itemSpace = 10.0f;
     }
 }
 
+- (void)holdToTalkManager:(WKHoldToTalkManager *)manager sendText:(NSString *)text mentions:(NSArray<WKInputMentionItem *> *)mentions {
+    // 先写入 mentionCache
+    if (mentions.count > 0 && [self.conversationContext respondsToSelector:@selector(addMentionItems:)]) {
+        [self.conversationContext addMentionItems:mentions];
+    }
+    // 再走正常发送流程（sendTextMessage 会从 mentionCache 生成 entity）
+    if (self.delegate && [self.delegate respondsToSelector:@selector(inputPanelSend:text:)]) {
+        [self.delegate inputPanelSend:self text:text];
+    }
+}
+
+- (NSArray *)holdToTalkManagerChannelMembers:(WKHoldToTalkManager *)manager {
+    if (![self.conversationContext respondsToSelector:@selector(channel)]) return @[];
+    WKChannel *channel = self.conversationContext.channel;
+    // 子区成员在父群上
+    if (channel.channelType == WK_COMMUNITY_TOPIC) {
+        NSRange sep = [channel.channelId rangeOfString:@"____"];
+        if (sep.location != NSNotFound) {
+            NSString *groupNo = [channel.channelId substringToIndex:sep.location];
+            return [[WKChannelMemberDB shared] getMembersWithChannel:[WKChannel groupWithChannelID:groupNo]];
+        }
+    }
+    return [[WKChannelMemberDB shared] getMembersWithChannel:channel];
+}
+
 - (void)holdToTalkManagerDidStartRecording:(WKHoldToTalkManager *)manager {
     if ([self.conversationContext respondsToSelector:@selector(startRecordingVoiceMessage)]) {
         [self.conversationContext startRecordingVoiceMessage];
@@ -1259,8 +1284,15 @@ CGFloat itemSpace = 10.0f;
     NSMutableArray<NSString*> *memberNames = [NSMutableArray array];
     NSMutableSet<NSString*> *uniqueNames = [NSMutableSet set];
 
-    if (channel.channelType == WK_GROUP) {
-        NSArray<WKChannelMember*> *members = [[WKChannelMemberDB shared] getMembersWithChannel:channel];
+    if (channel.channelType == WK_GROUP || channel.channelType == WK_COMMUNITY_TOPIC) {
+        WKChannel *memberChannel = channel;
+        if (channel.channelType == WK_COMMUNITY_TOPIC) {
+            NSRange sep = [channel.channelId rangeOfString:@"____"];
+            if (sep.location != NSNotFound) {
+                memberChannel = [WKChannel groupWithChannelID:[channel.channelId substringToIndex:sep.location]];
+            }
+        }
+        NSArray<WKChannelMember*> *members = [[WKChannelMemberDB shared] getMembersWithChannel:memberChannel];
         NSInteger limit = MIN(members.count, 100);
         for (NSInteger i = 0; i < limit; i++) {
             WKChannelMember *member = members[i];
@@ -1484,14 +1516,14 @@ CGFloat itemSpace = 10.0f;
     [self removeKeyboardListen];
 }
 
-// iphoneX安全距离
 - (CGFloat) safeBottom {
     CGFloat safeNum = 0;
-    //判断版本
     if (@available(iOS 11.0, *)) {
-        //通过系统方法keyWindow来获取safeAreaInsets
-        UIEdgeInsets safeArea = [[UIApplication sharedApplication] keyWindow].safeAreaInsets;
-        safeNum = safeArea.bottom;
+        UIWindow *window = self.window;
+        if (!window) {
+            window = [UIApplication sharedApplication].keyWindow;
+        }
+        safeNum = window.safeAreaInsets.bottom;
     }
     return safeNum;
 }

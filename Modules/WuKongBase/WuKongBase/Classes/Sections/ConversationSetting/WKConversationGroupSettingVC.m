@@ -23,8 +23,10 @@
 #import "WKMemberListVC.h"
 #import "WKTextViewVC.h"
 #import "WKOnlineBadgeView.h"
+#import "TOCropViewController.h"
+#import <SDWebImage/SDImageCache.h>
 
-@interface WKConversationGroupSettingVC ()<WKConversationSettingDelegate,WKSettingMemberGridViewDelegate>
+@interface WKConversationGroupSettingVC ()<WKConversationSettingDelegate,WKSettingMemberGridViewDelegate,TOCropViewControllerDelegate>
 
 
 @property(nonatomic,strong) WKSettingMemberGridView *settingMemberGridView;
@@ -531,6 +533,59 @@
     }];
     [[WKNavigationManager shared] pushViewController:inputVC animated:YES];
 }
+// 群头像点击
+-(void) settingOnGroupAvatarClick:(WKConversationSettingVM*)vm {
+    __weak typeof(self) weakSelf = self;
+    WKActionSheetView2 *actionSheet = [WKActionSheetView2 initWithTip:nil];
+    [actionSheet addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"拍照") onClick:^{
+        [[WKPhotoService shared] getPhotoFromCamera:^(UIImage * _Nonnull image) {
+            [weakSelf cropGroupAvatar:image];
+        }];
+    }]];
+    [actionSheet addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"从手机相册选择") onClick:^{
+        [[WKPhotoService shared] getPhotoOneFromLibrary:^(UIImage * _Nonnull image) {
+            [weakSelf cropGroupAvatar:image];
+        }];
+    }]];
+    [actionSheet show];
+}
+
+-(void) cropGroupAvatar:(UIImage*)image {
+    TOCropViewController *cropController = [[TOCropViewController alloc] initWithCroppingStyle:TOCropViewCroppingStyleDefault image:image];
+    cropController.delegate = self;
+    cropController.aspectRatioPreset = TOCropViewControllerAspectRatioPresetSquare;
+    cropController.aspectRatioPickerButtonHidden = YES;
+    [self presentViewController:cropController animated:YES completion:nil];
+}
+
+#pragma mark - TOCropViewControllerDelegate
+
+- (void)cropViewController:(TOCropViewController *)cropViewController didCropToImage:(UIImage *)image withRect:(CGRect)cropRect angle:(NSInteger)angle {
+    [self dismissViewControllerAnimated:YES completion:nil];
+    NSData *data = [[WKPhotoService shared] compressImageSize:image toByte:1024*50];
+    NSString *path = [NSString stringWithFormat:@"groups/%@/avatar", self.channel.channelId];
+
+    __weak typeof(self) weakSelf = self;
+    [self.view showHUD:LLang(@"上传中")];
+    [[WKAPIClient sharedClient] fileUpload:path data:data progress:^(NSProgress *progress) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf.view switchHUDProgress:progress.fractionCompleted];
+        });
+    } completeCallback:^(id resposeObject, NSError *error) {
+        if (error) {
+            [weakSelf.view switchHUDSuccess:LLangW(@"上传失败", weakSelf)];
+            return;
+        }
+        [weakSelf.view switchHUDSuccess:LLangW(@"上传成功", weakSelf)];
+        [[WKSDK shared].channelManager refreshAvatarCacheKey:weakSelf.channel];
+        WKChannelInfo *updatedInfo = [[WKSDK shared].channelManager getChannelInfo:weakSelf.channel];
+        NSString *cacheURL = [WKAvatarUtil getGroupAvatar:weakSelf.channel.channelId cacheKey:updatedInfo.avatarCacheKey];
+        [[SDImageCache sharedImageCache] storeImage:image forKey:cacheURL toDisk:YES completion:nil];
+        [[WKSDK shared].channelManager fetchChannelInfo:weakSelf.channel completion:nil];
+        [weakSelf reloadData];
+    }];
+}
+
 // 群公告点击
 -(void) settingOnGroupNoticeClick:(WKConversationSettingVM*)vm {
     WKMemberRole roleOfMe = self.viewModel.memberOfMe.role;

@@ -21,6 +21,9 @@ typedef void(^WKContactsHeaderItemClick)(void);
 
 @property(nonatomic,copy) NSString *avatarURL; // 头像url
 
+@property(nonatomic,copy) NSString *svgIconName; // SVG图标名称 (e.g. "person-plus", "users", "bot")
+@property(nonatomic,copy) NSString *gradientKind; // 渐变类型 ("friend", "group", "ai")
+
 +(WKContactsHeaderItem*) initWithSid:(NSString*)sid title:(NSString*)title icon:(NSString*)icon moduleID:(NSString*)moduleID onClick:(WKContactsHeaderItemClick)onClick;
 
 @end

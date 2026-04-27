@@ -34,9 +34,17 @@
     self.users = contentDic[@"users"];
     NSArray<NSDictionary*> *msgDicts = contentDic[@"msgs"];
     NSMutableArray<WKMessage*> *messages = [NSMutableArray array];
-    if(msgDicts && msgDicts.count>0) {
-        for (NSDictionary *msgDict in msgDicts) {
-            [messages addObject:[WKMessageUtil toMessage:msgDict]];
+    if(msgDicts && [msgDicts isKindOfClass:[NSArray class]] && msgDicts.count>0) {
+        for (id msgItem in msgDicts) {
+            if(![msgItem isKindOfClass:[NSDictionary class]]) continue;
+            @try {
+                WKMessage *msg = [WKMessageUtil toMessage:msgItem];
+                if(msg) {
+                    [messages addObject:msg];
+                }
+            } @catch (NSException *exception) {
+                NSLog(@"[MergeForward] decode message exception: %@", exception);
+            }
         }
     }
     self.msgs = messages;

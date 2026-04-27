@@ -56,7 +56,6 @@
 
 // 顶部区域（群组信息）
 @property (nonatomic, strong) WKUserAvatar *avatarView;
-@property (nonatomic, strong) UILabel *hashTagLbl; // 群组 # 标识（替代头像）
 @property (nonatomic, strong) UILabel *titleLbl;
 @property (nonatomic, strong) UILabel *timeLbl;
 @property (nonatomic, strong) UILabel *subtitleLbl;
@@ -70,27 +69,27 @@
 @property (nonatomic, strong) UILabel *moreBadgeLbl;
 @property (nonatomic, strong) UIView *separatorLine;
 
-// 预创建的 2 个固定预览行（不动态增删）
-@property (nonatomic, strong) NSArray<UIView *> *previewRows;
-// 每行内的子视图引用
-@property (nonatomic, strong) NSArray<UIImageView *> *rowHashIcons; // 矢量 # 图标
-@property (nonatomic, strong) NSArray<UILabel *> *rowNameLbls;
-@property (nonatomic, strong) NSArray<UILabel *> *rowTimeLbls;
-@property (nonatomic, strong) NSArray<UILabel *> *rowMsgLbls;
-@property (nonatomic, strong) NSArray<UILabel *> *rowBadgeLbls;
+// 动态预览行（按需增删）
+@property (nonatomic, strong) NSMutableArray<UIView *> *previewRows;
+@property (nonatomic, strong) NSMutableArray<UIImageView *> *rowHashIcons;
+@property (nonatomic, strong) NSMutableArray<UILabel *> *rowNameLbls;
+@property (nonatomic, strong) NSMutableArray<UILabel *> *rowTimeLbls;
+@property (nonatomic, strong) NSMutableArray<UILabel *> *rowMsgLbls;
+@property (nonatomic, strong) NSMutableArray<UILabel *> *rowBadgeLbls;
 
 @property (nonatomic, strong) WKConversationWrapModel *model;
+@property (nonatomic, strong) UIButton *threadToggleBtn;
 
 @end
 
 @implementation WKConversationGroupThreadCell
 
-#define TOP_HEIGHT 48.0f
+#define TOP_HEIGHT 64.0f
 #define THREAD_ROW_HEIGHT 32.0f
 #define MORE_HEIGHT 26.0f
-#define HASH_TAG_SIZE 36.0f
+#define HASH_TAG_SIZE 52.0f
 #define HASH_TAG_LEFT 15.0f
-#define CONTENT_LEFT 57.0f
+#define CONTENT_LEFT 77.0f
 #define RIGHT_PADDING 15.0f
 
 +(CGFloat) heightForModel:(WKConversationWrapModel *)model {
@@ -130,18 +129,9 @@
 }
 
 - (void)setupUI {
-    // 头像（保留但隐藏）
-    self.avatarView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, 50, 50)];
-    self.avatarView.hidden = YES;
+    // 群头像
+    self.avatarView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, HASH_TAG_SIZE, HASH_TAG_SIZE)];
     [self.contentView addSubview:self.avatarView];
-
-    // 群组 # 标识（替代头像）
-    self.hashTagLbl = [[UILabel alloc] init];
-    self.hashTagLbl.text = @"#";
-    self.hashTagLbl.font = [UIFont systemFontOfSize:26 weight:UIFontWeightBold];
-    self.hashTagLbl.textColor = [UIColor colorWithRed:148.0f/255.0f green:152.0f/255.0f blue:168.0f/255.0f alpha:1.0f];
-    self.hashTagLbl.textAlignment = NSTextAlignmentCenter;
-    [self.contentView addSubview:self.hashTagLbl];
 
     // 标题
     self.titleLbl = [[UILabel alloc] init];
@@ -149,6 +139,14 @@
     self.titleLbl.textColor = [WKApp shared].config.defaultTextColor;
     self.titleLbl.lineBreakMode = NSLineBreakByTruncatingTail;
     [self.contentView addSubview:self.titleLbl];
+
+    // 折叠按钮
+    self.threadToggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    UIImage *toggleIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(28, 28) color:[WKApp shared].config.themeColor];
+    [self.threadToggleBtn setImage:toggleIcon forState:UIControlStateNormal];
+    self.threadToggleBtn.contentEdgeInsets = UIEdgeInsetsMake(9, 9, 9, 9);
+    [self.threadToggleBtn addTarget:self action:@selector(onToggleTap) forControlEvents:UIControlEventTouchUpInside];
+    [self.contentView addSubview:self.threadToggleBtn];
 
     // 时间（保留但隐藏）
     self.timeLbl = [[UILabel alloc] init];
@@ -185,73 +183,13 @@
     self.threadContainer.layer.masksToBounds = YES;
     [self.contentView addSubview:self.threadContainer];
 
-    // 生成矢量 # 图标
-    UIImage *channelIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(16, 16) color:[UIColor colorWithRed:148.0f/255.0f green:152.0f/255.0f blue:168.0f/255.0f alpha:1.0f]];
-
-    // 预创建 2 个固定预览行
-    NSMutableArray *rows = [NSMutableArray array];
-    NSMutableArray *hashIcons = [NSMutableArray array];
-    NSMutableArray *nameLbls = [NSMutableArray array];
-    NSMutableArray *timeLbls = [NSMutableArray array];
-    NSMutableArray *msgLbls = [NSMutableArray array];
-    NSMutableArray *badgeLbls = [NSMutableArray array];
-    for (NSInteger i = 0; i < 2; i++) {
-        UIView *row = [[UIView alloc] init];
-        row.hidden = YES;
-        row.tag = 2000 + i;
-        row.userInteractionEnabled = YES;
-        UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(threadRowTapped:)];
-        [row addGestureRecognizer:tap];
-        [self.threadContainer addSubview:row];
-        [rows addObject:row];
-
-        // 矢量 # 图标
-        UIImageView *hashIcon = [[UIImageView alloc] initWithImage:channelIcon];
-        hashIcon.contentMode = UIViewContentModeScaleAspectFit;
-        [row addSubview:hashIcon];
-        [hashIcons addObject:hashIcon];
-
-        UILabel *name = [[UILabel alloc] init];
-        name.font = [[WKApp shared].config appFontOfSizeMedium:14.0f];
-        name.textColor = [WKApp shared].config.defaultTextColor;
-        name.lineBreakMode = NSLineBreakByTruncatingTail;
-        [row addSubview:name];
-        [nameLbls addObject:name];
-
-        // 时间（保留但隐藏）
-        UILabel *time = [[UILabel alloc] init];
-        time.font = [[WKApp shared].config appFontOfSize:10.0f];
-        time.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
-        time.hidden = YES;
-        [row addSubview:time];
-        [timeLbls addObject:time];
-
-        // 消息（保留但隐藏）
-        UILabel *msg = [[UILabel alloc] init];
-        msg.font = [[WKApp shared].config appFontOfSize:12.0f];
-        msg.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
-        msg.lineBreakMode = NSLineBreakByTruncatingTail;
-        msg.hidden = YES;
-        [row addSubview:msg];
-        [msgLbls addObject:msg];
-
-        UILabel *badge = [[UILabel alloc] init];
-        badge.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
-        badge.textColor = [UIColor whiteColor];
-        badge.backgroundColor = [UIColor redColor];
-        badge.textAlignment = NSTextAlignmentCenter;
-        badge.layer.cornerRadius = 9;
-        badge.layer.masksToBounds = YES;
-        badge.hidden = YES;
-        [row addSubview:badge];
-        [badgeLbls addObject:badge];
-    }
-    self.previewRows = rows;
-    self.rowHashIcons = hashIcons;
-    self.rowNameLbls = nameLbls;
-    self.rowTimeLbls = timeLbls;
-    self.rowMsgLbls = msgLbls;
-    self.rowBadgeLbls = badgeLbls;
+    // 动态预览行（按需在 updateThreadPreviews 中创建）
+    self.previewRows = [NSMutableArray array];
+    self.rowHashIcons = [NSMutableArray array];
+    self.rowNameLbls = [NSMutableArray array];
+    self.rowTimeLbls = [NSMutableArray array];
+    self.rowMsgLbls = [NSMutableArray array];
+    self.rowBadgeLbls = [NSMutableArray array];
 
     // 分割线
     self.separatorLine = [[UIView alloc] init];
@@ -285,9 +223,8 @@
         [model startChannelRequest];
     }
 
-    // 隐藏头像，显示 # 标识
-    self.avatarView.hidden = YES;
-    self.hashTagLbl.hidden = NO;
+    // 加载群头像
+    [self refreshAvatar:model];
 
     // 隐藏时间
     self.timeLbl.hidden = YES;
@@ -322,7 +259,7 @@
     self.badgeView.hidden = YES;
     if (model.unreadCount > 0) {
         self.badgeView.hidden = NO;
-        self.badgeView.badgeValue = [NSString stringWithFormat:@"%ld", (long)model.unreadCount];
+        self.badgeView.badgeValue = model.unreadCount > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)model.unreadCount];
         self.badgeView.lim_left = self.contentView.lim_width - RIGHT_PADDING - self.badgeView.lim_width;
     }
 
@@ -335,12 +272,99 @@
         [self.badgeView setBadgeBackgroundColor:[UIColor redColor]];
     }
 
+    // 子区折叠图标颜色
+    NSString *prefix = [NSString stringWithFormat:@"%@____", model.channel.channelId];
+    NSInteger threadUnread = 0;
+    BOOL threadHasMention = NO;
+    for (WKConversation *conv in [[WKSDK shared].conversationManager getConversationList]) {
+        if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
+            threadUnread += conv.unreadCount;
+            if (!threadHasMention) {
+                NSArray<WKReminder *> *rems = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
+                for (WKReminder *r in rems) {
+                    if (r.type == WKReminderTypeMentionMe) { threadHasMention = YES; break; }
+                }
+            }
+        }
+    }
+    NSInteger indicatorType = 0;
+    UIColor *indicatorColor = nil;
+    if (threadHasMention) {
+        indicatorType = 2;
+        indicatorColor = [UIColor orangeColor];
+    } else if (threadUnread > 0) {
+        indicatorType = 1;
+        indicatorColor = model.mute
+            ? [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f]
+            : [UIColor redColor];
+    }
+    UIImage *toggleIcon = [WKConversationGroupThreadCell threadToggleIconWithSize:CGSizeMake(28, 28)
+                                                                       baseColor:[WKApp shared].config.themeColor
+                                                                   indicatorType:indicatorType
+                                                                  indicatorColor:indicatorColor];
+    [self.threadToggleBtn setImage:toggleIcon forState:UIControlStateNormal];
+
     // 子区预览：只更新固定视图的数据，不增删视图
     [self updateThreadPreviews];
     [self setNeedsLayout];
 }
 
-/// 更新预创建的固定预览行数据（无 add/remove，不闪烁）
+-(void) ensureRowCount:(NSInteger)needed {
+    while ((NSInteger)self.previewRows.count < needed) {
+        NSInteger i = self.previewRows.count;
+        UIView *row = [[UIView alloc] init];
+        row.hidden = YES;
+        row.tag = 2000 + i;
+        row.userInteractionEnabled = YES;
+        UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(threadRowTapped:)];
+        [row addGestureRecognizer:tap];
+        [self.threadContainer addSubview:row];
+        [self.previewRows addObject:row];
+
+        UIImageView *hashIcon = [[UIImageView alloc] init];
+        hashIcon.contentMode = UIViewContentModeScaleAspectFit;
+        [row addSubview:hashIcon];
+        [self.rowHashIcons addObject:hashIcon];
+
+        UILabel *name = [[UILabel alloc] init];
+        name.font = [[WKApp shared].config appFontOfSizeMedium:14.0f];
+        name.textColor = [WKApp shared].config.defaultTextColor;
+        name.lineBreakMode = NSLineBreakByTruncatingTail;
+        [row addSubview:name];
+        [self.rowNameLbls addObject:name];
+
+        UILabel *time = [[UILabel alloc] init];
+        time.font = [[WKApp shared].config appFontOfSize:10.0f];
+        time.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
+        time.hidden = YES;
+        [row addSubview:time];
+        [self.rowTimeLbls addObject:time];
+
+        UILabel *msg = [[UILabel alloc] init];
+        msg.font = [[WKApp shared].config appFontOfSize:12.0f];
+        msg.textColor = [UIColor colorWithWhite:0.6 alpha:1.0];
+        msg.lineBreakMode = NSLineBreakByTruncatingTail;
+        msg.hidden = YES;
+        [row addSubview:msg];
+        [self.rowMsgLbls addObject:msg];
+
+        UILabel *badge = [[UILabel alloc] init];
+        badge.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
+        badge.textColor = [UIColor whiteColor];
+        badge.backgroundColor = [UIColor redColor];
+        badge.textAlignment = NSTextAlignmentCenter;
+        badge.layer.cornerRadius = 9;
+        badge.layer.masksToBounds = YES;
+        badge.hidden = YES;
+        [row addSubview:badge];
+        [self.rowBadgeLbls addObject:badge];
+    }
+    for (NSInteger i = needed; i < (NSInteger)self.previewRows.count; i++) {
+        self.previewRows[i].hidden = YES;
+    }
+}
+
+/// 动态更新预览行（按需增减行视图）
 -(void) updateThreadPreviews {
     NSArray<WKThreadModel *> *previews = self.model.threadPreviews;
     NSInteger count = previews ? previews.count : 0;
@@ -352,64 +376,59 @@
         self.threadContainer.backgroundColor = [WKApp shared].config.backgroundColor;
     }
 
-    for (NSInteger i = 0; i < 2; i++) {
+    // 按需创建或移除行视图
+    [self ensureRowCount:count];
+
+    UIImage *channelIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(16, 16) color:[UIColor colorWithRed:148.0f/255.0f green:152.0f/255.0f blue:168.0f/255.0f alpha:1.0f]];
+
+    for (NSInteger i = 0; i < count; i++) {
         UIView *row = self.previewRows[i];
-        if (i < count) {
-            WKThreadModel *thread = previews[i];
-            row.hidden = NO;
+        WKThreadModel *thread = previews[i];
+        row.hidden = NO;
 
-            // 名称
-            self.rowNameLbls[i].text = thread.name;
+        self.rowHashIcons[i].image = channelIcon;
+        self.rowNameLbls[i].text = thread.name;
+        self.rowTimeLbls[i].hidden = YES;
 
-            // 时间隐藏
-            self.rowTimeLbls[i].hidden = YES;
-
-            // 检查子区是否有@提醒
-            WKChannel *threadChannel = [WKChannel channelID:thread.channelId channelType:WK_COMMUNITY_TOPIC];
-            NSArray<WKReminder *> *threadReminders = [[WKReminderDB shared] getWaitDoneReminder:threadChannel];
-            BOOL threadHasMention = NO;
-            for (WKReminder *r in threadReminders) {
-                if (r.type == WKReminderTypeMentionMe) { threadHasMention = YES; break; }
+        WKChannel *threadChannel = [WKChannel channelID:thread.channelId channelType:WK_COMMUNITY_TOPIC];
+        NSArray<WKReminder *> *threadReminders = [[WKReminderDB shared] getWaitDoneReminder:threadChannel];
+        BOOL threadHasMention = NO;
+        for (WKReminder *r in threadReminders) {
+            if (r.type == WKReminderTypeMentionMe) { threadHasMention = YES; break; }
+        }
+        if (threadHasMention) {
+            self.rowMsgLbls[i].hidden = NO;
+            WKConversation *tConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
+            NSString *lastContent = @"";
+            if (tConv && tConv.lastMessage && tConv.lastMessage.content) {
+                lastContent = [tConv.lastMessage.content conversationDigest] ?: @"";
+            } else if (thread.lastMessageContent.length > 0) {
+                lastContent = thread.lastMessageContent;
             }
-            if (threadHasMention) {
-                self.rowMsgLbls[i].hidden = NO;
-                // 显示 [有人@我] + 最后一条消息预览
-                WKConversation *tConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
-                NSString *lastContent = @"";
-                if (tConv && tConv.lastMessage && tConv.lastMessage.content) {
-                    lastContent = [tConv.lastMessage.content conversationDigest] ?: @"";
-                } else if (thread.lastMessageContent.length > 0) {
-                    lastContent = thread.lastMessageContent;
-                }
-                self.rowMsgLbls[i].text = [NSString stringWithFormat:@"%@ %@", LLang(@"[有人@我]"), lastContent];
-                self.rowMsgLbls[i].textColor = [UIColor orangeColor];
-                self.rowMsgLbls[i].font = [[WKApp shared].config appFontOfSize:11.0f];
-            } else {
-                self.rowMsgLbls[i].hidden = YES;
-            }
+            self.rowMsgLbls[i].text = [NSString stringWithFormat:@"%@ %@", LLang(@"[有人@我]"), lastContent];
+            self.rowMsgLbls[i].textColor = [UIColor orangeColor];
+            self.rowMsgLbls[i].font = [[WKApp shared].config appFontOfSize:11.0f];
+        } else {
+            self.rowMsgLbls[i].hidden = YES;
+        }
 
-            // 红点（父群聊静音时用浅蓝色，否则红色）
-            WKConversation *threadConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
-            NSInteger unread = thread.unreadCount;
-            if (threadConv) unread = threadConv.unreadCount;
-            if (unread > 0) {
-                self.rowBadgeLbls[i].hidden = NO;
-                self.rowBadgeLbls[i].text = unread > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)unread];
-                // 继承父群聊 mute 状态：静音时红点变浅蓝色
-                if (self.model.mute) {
-                    self.rowBadgeLbls[i].backgroundColor = [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f];
-                } else {
-                    self.rowBadgeLbls[i].backgroundColor = [UIColor redColor];
-                }
+        WKConversation *threadConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
+        NSInteger unread = thread.unreadCount;
+        if (threadConv) unread = threadConv.unreadCount;
+        if (unread > 0) {
+            self.rowBadgeLbls[i].hidden = NO;
+            self.rowBadgeLbls[i].text = unread > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)unread];
+            if (self.model.mute) {
+                self.rowBadgeLbls[i].backgroundColor = [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f];
             } else {
-                self.rowBadgeLbls[i].hidden = YES;
+                self.rowBadgeLbls[i].backgroundColor = [UIColor redColor];
             }
         } else {
-            row.hidden = YES;
+            self.rowBadgeLbls[i].hidden = YES;
         }
     }
 
-    // 分割线：只在有 2 个预览行时显示
+    // 分割线：有 2 个及以上预览行时显示
     self.separatorLine.hidden = (count < 2);
 
     // 更多
@@ -487,6 +506,31 @@
     }
 }
 
+-(void) onToggleTap {
+    if (self.onToggleThreadPreview && self.model.channel.channelId.length > 0) {
+        self.onToggleThreadPreview(self.model.channel.channelId);
+    }
+}
+
+-(void) refreshAvatar:(WKConversationWrapModel*)model {
+    UIImage *placeholder = [WKApp.shared loadImage:@"Common/Index/DefaultAvatar" moduleID:@"WuKongBase"];
+    self.avatarView.avatarImgView.image = placeholder;
+    if (model.channelInfo) {
+        NSString *avatarURL;
+        if ([model.channelInfo.logo hasPrefix:@"http"]) {
+            NSString *key = (model.channelInfo.avatarCacheKey.length > 0) ? model.channelInfo.avatarCacheKey : @"0";
+            NSString *sep = [model.channelInfo.logo containsString:@"?"] ? @"&" : @"?";
+            avatarURL = [NSString stringWithFormat:@"%@%@v=%@", model.channelInfo.logo, sep, key];
+        } else {
+            avatarURL = [WKAvatarUtil getGroupAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
+        }
+        [self.avatarView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL]
+                                          placeholderImage:placeholder
+                                                   options:0
+                                                   context:@{SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll)}];
+    }
+}
+
 - (void)layoutSubviews {
     [super layoutSubviews];
 
@@ -495,8 +539,8 @@
     BOOL showMention = !self.subtitleLbl.hidden;
     CGFloat topH = showMention ? (TOP_HEIGHT + 10) : TOP_HEIGHT;
 
-    // # 标识
-    self.hashTagLbl.frame = CGRectMake(HASH_TAG_LEFT, showMention ? 8.0f : (topH - HASH_TAG_SIZE) / 2.0f, HASH_TAG_SIZE, HASH_TAG_SIZE);
+    // 群头像
+    self.avatarView.frame = CGRectMake(HASH_TAG_LEFT, showMention ? 8.0f : (topH - HASH_TAG_SIZE) / 2.0f, HASH_TAG_SIZE, HASH_TAG_SIZE);
 
     // 标题
     CGFloat titleRight = w - RIGHT_PADDING - 50.0f;
@@ -507,43 +551,50 @@
         self.titleLbl.frame = CGRectMake(CONTENT_LEFT, (topH - 20) / 2.0f, titleRight - CONTENT_LEFT, 20);
     }
 
-    // 红点 - 垂直居中在顶部区域
-    self.badgeView.lim_left = w - RIGHT_PADDING - self.badgeView.lim_width;
+    // 右侧元素从右往左：toggle → 红点/免打扰
+    CGFloat rightEdge = w - RIGHT_PADDING;
+
+    // 折叠按钮 - 最右侧固定
+    self.threadToggleBtn.frame = CGRectMake(rightEdge - 44, (topH - 44) / 2.0f, 44, 44);
+    rightEdge = self.threadToggleBtn.lim_left - 2;
+
+    // 红点
+    self.badgeView.lim_left = rightEdge - self.badgeView.lim_width;
     self.badgeView.lim_top = (topH - self.badgeView.lim_height) / 2.0f;
 
     // 免打扰
-    self.muteIcon.lim_left = w - RIGHT_PADDING - self.muteIcon.lim_width;
+    self.muteIcon.lim_left = rightEdge - self.muteIcon.lim_width;
     self.muteIcon.lim_top = (topH - self.muteIcon.lim_height) / 2.0f;
 
     // 子区预览区域
     NSArray *previews = self.model.threadPreviews;
-    if (previews && previews.count > 0) {
+    NSInteger previewCount = previews ? previews.count : 0;
+    if (previewCount > 0) {
         CGFloat containerTop = topH;
         CGFloat containerWidth = w - CONTENT_LEFT - RIGHT_PADDING;
 
         // 计算每行高度
-        CGFloat rowHeights[2] = {THREAD_ROW_HEIGHT, THREAD_ROW_HEIGHT};
-        for (NSInteger i = 0; i < 2 && i < (NSInteger)previews.count; i++) {
-            if (!self.rowMsgLbls[i].hidden) rowHeights[i] = 44.0f;
-        }
         CGFloat containerHeight = 0;
-        for (NSInteger i = 0; i < (NSInteger)previews.count && i < 2; i++) containerHeight += rowHeights[i];
+        NSMutableArray<NSNumber *> *rowHeightsArr = [NSMutableArray arrayWithCapacity:previewCount];
+        for (NSInteger i = 0; i < previewCount; i++) {
+            CGFloat rh = (i < (NSInteger)self.rowMsgLbls.count && !self.rowMsgLbls[i].hidden) ? 44.0f : THREAD_ROW_HEIGHT;
+            [rowHeightsArr addObject:@(rh)];
+            containerHeight += rh;
+        }
 
         self.threadContainer.frame = CGRectMake(CONTENT_LEFT, containerTop, containerWidth, containerHeight);
 
         CGFloat iconSize = 16.0f;
         CGFloat nameLeft = 10 + iconSize + 6;
         CGFloat rowY = 0;
-        for (NSInteger i = 0; i < 2; i++) {
+        for (NSInteger i = 0; i < previewCount && i < (NSInteger)self.previewRows.count; i++) {
             UIView *row = self.previewRows[i];
             if (row.hidden) continue;
-            CGFloat rh = rowHeights[i];
+            CGFloat rh = [rowHeightsArr[i] floatValue];
             row.frame = CGRectMake(0, rowY, containerWidth, rh);
 
-            // 矢量 # 图标
             self.rowHashIcons[i].frame = CGRectMake(10, 8, iconSize, iconSize);
 
-            // 红点
             UILabel *badge = self.rowBadgeLbls[i];
             CGFloat nameRight = containerWidth - 10;
             if (!badge.hidden) {
@@ -553,7 +604,6 @@
                 nameRight = badge.lim_left - 4;
             }
 
-            // 名称和@提醒
             UILabel *msgLbl = self.rowMsgLbls[i];
             if (!msgLbl.hidden) {
                 self.rowNameLbls[i].frame = CGRectMake(nameLeft, 6, nameRight - nameLeft, 16);
@@ -564,15 +614,16 @@
             rowY += rh;
         }
 
-        // 分割线
+        // 分割线（第一行和第二行之间）
+        self.separatorLine.hidden = (previewCount < 2);
         if (!self.separatorLine.hidden) {
-            self.separatorLine.frame = CGRectMake(10, rowHeights[0] - 0.5f, containerWidth - 20, 0.5f);
+            self.separatorLine.frame = CGRectMake(10, [rowHeightsArr[0] floatValue] - 0.5f, containerWidth - 20, 0.5f);
         }
 
         // 弧线
         CGFloat hashCenterX = HASH_TAG_LEFT + HASH_TAG_SIZE / 2.0f;
         CGFloat branchWidth = CONTENT_LEFT - hashCenterX;
-        CGFloat hashBottom = self.hashTagLbl.lim_top + HASH_TAG_SIZE;
+        CGFloat hashBottom = self.avatarView.lim_top + HASH_TAG_SIZE;
         CGFloat branchHeight = containerTop + containerHeight - hashBottom;
 
         self.branchView.frame = CGRectMake(hashCenterX - branchWidth / 2.0f, hashBottom, branchWidth, branchHeight);
@@ -584,7 +635,6 @@
         // 更多
         if (!self.moreLbl.hidden) {
             self.moreLbl.frame = CGRectMake(CONTENT_LEFT + 10, containerTop + containerHeight + 2, containerWidth - 60, MORE_HEIGHT - 4);
-            // 红点
             if (!self.moreBadgeLbl.hidden) {
                 [self.moreBadgeLbl sizeToFit];
                 CGFloat badgeW = MAX(self.moreBadgeLbl.lim_width + 8, 18);
@@ -603,8 +653,10 @@
     self.branchView.hidden = YES;
     self.moreLbl.hidden = YES;
     self.moreBadgeLbl.hidden = YES;
+    for (UIView *row in self.previewRows) row.hidden = YES;
     self.onThreadPreviewTap = nil;
     self.onMoreThreadsTap = nil;
+    self.onToggleThreadPreview = nil;
 }
 
 /// Convert SVG arc endpoint parameterization to center parameterization,
@@ -756,6 +808,59 @@
     UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
     return image;
+}
+
++ (UIImage *)threadToggleIconWithSize:(CGSize)size
+                            baseColor:(UIColor *)baseColor
+                        indicatorType:(NSInteger)type
+                       indicatorColor:(UIColor *)indicatorColor {
+    CGFloat padding = 8.0f;
+    CGSize canvasSize = CGSizeMake(size.width + padding, size.height + padding);
+
+    UIGraphicsBeginImageContextWithOptions(canvasSize, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    if (!ctx) return nil;
+
+    UIImage *baseIcon = [self channelHashIconWithSize:size color:baseColor];
+    [baseIcon drawAtPoint:CGPointMake(0, 0)];
+
+    if (type == 2) {
+        // @符号
+        CGFloat atSize = 22.0f;
+        CGFloat atX = canvasSize.width - atSize;
+        CGFloat atY = canvasSize.height - atSize;
+        // 白色背景圆
+        [[UIColor whiteColor] setFill];
+        UIBezierPath *bgCircle = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(atX - 1, atY - 1, atSize + 2, atSize + 2)];
+        [bgCircle fill];
+        // @文字
+        NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
+        style.alignment = NSTextAlignmentCenter;
+        NSDictionary *attrs = @{
+            NSFontAttributeName: [UIFont systemFontOfSize:17 weight:UIFontWeightBold],
+            NSForegroundColorAttributeName: indicatorColor,
+            NSParagraphStyleAttributeName: style
+        };
+        CGRect textRect = CGRectMake(atX, atY + 0.5f, atSize, atSize);
+        [@"@" drawInRect:textRect withAttributes:attrs];
+    } else if (type == 1) {
+        // 小红点
+        CGFloat dotSize = 12.0f;
+        CGFloat dotX = canvasSize.width - dotSize;
+        CGFloat dotY = canvasSize.height - dotSize;
+        // 白色描边
+        [[UIColor whiteColor] setFill];
+        UIBezierPath *bgDot = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(dotX - 1, dotY - 1, dotSize + 2, dotSize + 2)];
+        [bgDot fill];
+        // 红点
+        [indicatorColor setFill];
+        UIBezierPath *dot = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(dotX, dotY, dotSize, dotSize)];
+        [dot fill];
+    }
+
+    UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return result;
 }
 
 @end

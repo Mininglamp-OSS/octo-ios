@@ -12,6 +12,7 @@
 #import "WKLabelItemCell.h"
 #import "WKSwitchItemCell.h"
 #import "WKIconItemCell.h"
+#import "WKMeAvatarCell.h"
 #import "WKResource.h"
 #import "WKGroupManager.h"
 #import "WKButtonItemCell.h"
@@ -21,6 +22,7 @@
 #import "WKGlobalSearchResultController.h"
 #import "WKThreadListVC.h"
 #import "WKThreadService.h"
+#import "WKGroupMdVC.h"
 
 @interface WKConversationSettingVM ()<WKChannelManagerDelegate>
 
@@ -160,26 +162,62 @@
         if(channel.channelType != WK_GROUP) {
             return nil;
         }
+        BOOL isExternalGroup = NO;
+        id externalGroupFlag = self.channelInfo ? self.channelInfo.extra[@"is_external_group"] : nil;
+        if([externalGroupFlag isKindOfClass:[NSNumber class]] || [externalGroupFlag isKindOfClass:[NSString class]]) {
+            isExternalGroup = [externalGroupFlag integerValue] == 1;
+        }
+        NSMutableDictionary *groupNameItem = [NSMutableDictionary dictionaryWithDictionary:@{
+            @"class":WKLabelItemModel.class,
+            @"label":LLang(@"群聊名称"),
+            @"value":self.channelInfo&&self.channelInfo.name?self.channelInfo.name:@"",
+            @"showBottomLine":@(NO),
+            @"showTopLine":@(NO),
+            @"onClick":^{
+                if(weakSelf.delegate && [weakSelf.delegate respondsToSelector:@selector(settingOnGroupNameClick:)]) {
+                    [weakSelf.delegate settingOnGroupNameClick:weakSelf];
+                }
+            }
+        }];
+        if(isExternalGroup) {
+            groupNameItem[@"tagText"] = LLang(@"外部群");
+            // 与 Web 端保持一致：橙色填充、白色文字
+            groupNameItem[@"tagBackgroundColor"] = [UIColor colorWithRed:255.0f/255.0f green:149.0f/255.0f blue:0.0f/255.0f alpha:1.0f];
+            groupNameItem[@"tagTextColor"] = [UIColor whiteColor];
+        }
         return @{
             @"height":WKSectionHeight,
+            @"items": @[groupNameItem],
+        };
+    } category:WKPOINT_CATEGORY_CHANNELSETTING sort:90000];
+
+    // 群头像（仅群主/管理员可见）
+    [[WKApp shared] setMethod:@"channelsetting.groupavatar" handler:^id _Nullable(id  _Nonnull param) {
+        WKChannel *channel = param[@"channel"];
+        BOOL isCreatorOrManager = [param[@"is_creator_or_manager"] boolValue];
+        if(channel.channelType != WK_GROUP || !isCreatorOrManager) {
+            return nil;
+        }
+        return @{
+            @"height":@(0.0f),
             @"items": @[
                 @{
-                    @"class":WKLabelItemModel.class,
-                    @"label":LLang(@"群聊名称"),
-                    @"value":self.channelInfo&&self.channelInfo.name?self.channelInfo.name:@"",
+                    @"class":WKMeAvatarModel.class,
+                    @"label":LLang(@"群头像"),
+                    @"extra":channel,
                     @"showBottomLine":@(NO),
                     @"showTopLine":@(NO),
                     @"onClick":^{
-                        if(weakSelf.delegate && [weakSelf.delegate respondsToSelector:@selector(settingOnGroupNameClick:)]) {
-                            [weakSelf.delegate settingOnGroupNameClick:weakSelf];
+                        if(weakSelf.delegate && [weakSelf.delegate respondsToSelector:@selector(settingOnGroupAvatarClick:)]) {
+                            [weakSelf.delegate settingOnGroupAvatarClick:weakSelf];
                         }
                     }
                 }
             ],
         };
-    } category:WKPOINT_CATEGORY_CHANNELSETTING sort:90000];
-    
-    
+    } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89900];
+
+
     [[WKApp shared] setMethod:@"channelsetting.groupqrcode" handler:^id _Nullable(id  _Nonnull param) {
         WKChannel *channel = param[@"channel"];
         if(channel.channelType != WK_GROUP) {
@@ -254,8 +292,41 @@
             ]
         };
     } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89700];
-    
-    
+
+    // GROUP.md
+    [[WKApp shared] setMethod:@"channelsetting.groupmd" handler:^id _Nullable(id  _Nonnull param) {
+        WKChannel *channel = param[@"channel"];
+        if(channel.channelType != WK_GROUP) {
+            return nil;
+        }
+        BOOL hasGroupMd = NO;
+        NSInteger mdVersion = 0;
+        if(self.channelInfo && self.channelInfo.extra[@"has_group_md"]) {
+            hasGroupMd = [self.channelInfo.extra[@"has_group_md"] boolValue];
+        }
+        if(self.channelInfo && self.channelInfo.extra[@"group_md_version"]) {
+            mdVersion = [self.channelInfo.extra[@"group_md_version"] integerValue];
+        }
+        NSString *statusText = hasGroupMd ? [NSString stringWithFormat:@"%@ v%ld", LLang(@"已配置"), (long)mdVersion] : LLang(@"未配置");
+        return @{
+            @"height":@(0.0f),
+            @"items": @[
+                @{
+                    @"class": WKLabelItemModel.class,
+                    @"label": @"GROUP.md",
+                    @"value": statusText,
+                    @"showBottomLine":@(NO),
+                    @"onClick":^{
+                        WKGroupMdVC *vc = [WKGroupMdVC new];
+                        vc.channel = weakSelf.channel;
+                        vc.canEdit = [weakSelf isManagerOrCreatorForMe];
+                        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+                    }
+                }
+            ]
+        };
+    } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89650];
+
     [[WKApp shared] setMethod:@"channelsetting.hsitory" handler:^id _Nullable(id  _Nonnull param) {
         return @{
             @"height":WKSectionHeight,

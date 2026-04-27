@@ -140,6 +140,26 @@
     
 }
 
+- (void)setLeftView:(UIView *)leftView {
+    if (_leftView) {
+        [_leftView removeFromSuperview];
+        _leftView = nil;
+    }
+    if (leftView) {
+        _leftView = leftView;
+        CGFloat statusHeight = [UIApplication sharedApplication].statusBarFrame.size.height;
+        if (_leftView.lim_height == 0) {
+            _leftView.lim_height = self.lim_height - statusHeight;
+        }
+        _leftView.lim_left = 16.0f;
+        _leftView.lim_top = (self.lim_height - statusHeight) / 2.0f - _leftView.lim_height / 2.0f + statusHeight;
+        [self addSubview:_leftView];
+        self.titleLabel.hidden = YES;
+    } else {
+        self.titleLabel.hidden = NO;
+    }
+}
+
 - (void)setRightView:(UIView *)rightView {
     if(!rightView) {
         rightView = [[UIView alloc] init];

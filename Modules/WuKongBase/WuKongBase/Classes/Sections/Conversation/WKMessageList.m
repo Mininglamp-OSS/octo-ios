@@ -72,6 +72,9 @@
 
 // 内部方法，调用前必须持有 messagesLock
 -(void) _insertMessageNoLock:(WKMessageModel*)model {
+    if(model.clientMsgNo.length > 0 && self.clientMsgNoIndex[model.clientMsgNo]) {
+        return;
+    }
     if(model.contentType == WK_TEXT) {
        WKTextContent *content = (WKTextContent*)model.content;
         content.content = [WKProhibitwordsService.shared filter:content.content]; // 违禁词过滤
@@ -243,6 +246,9 @@
 
 
 -(void) addMessageOnly:(WKMessageModel *)message {
+    if(message.clientMsgNo.length > 0 && self.clientMsgNoIndex[message.clientMsgNo]) {
+        return;
+    }
 
     [self handleProhibitwords:message]; // 处理违禁词
 

@@ -169,6 +169,11 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 刷新指定群组的子区数量
 -(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos;
 
+/// 子区预览展开状态
+-(BOOL) isThreadExpanded:(NSString*)channelId;
+-(void) toggleThreadExpanded:(NSString*)channelId;
+-(void) restoreExpandedThreadGroups;
+
 /// 有会话置顶
 -(BOOL) hasConversationTop;
 

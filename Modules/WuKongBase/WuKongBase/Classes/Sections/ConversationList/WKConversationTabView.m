@@ -7,20 +7,20 @@
 #import "WKApp.h"
 #import "WuKongBase.h"
 
-static CGFloat const kTabHeight = 40.0f;
-static CGFloat const kIndicatorHeight = 2.5f;
+static CGFloat const kTabHeight = 44.0f;
+static CGFloat const kCapsuleHeight = 36.0f;
+static CGFloat const kCapsuleHPadding = 16.0f;
 static CGFloat const kBadgeSize = 16.0f;
-static CGFloat const kHorizontalPadding = 16.0f;
 
 @interface WKConversationTabView ()
 
+@property (nonatomic, strong) UIView *capsuleContainer;
+@property (nonatomic, strong) UIView *selectedCapsule;
 @property (nonatomic, strong) UIButton *groupBtn;
 @property (nonatomic, strong) UIButton *privateBtn;
-@property (nonatomic, strong) UIView *indicator;
 @property (nonatomic, strong) UILabel *groupBadge;
 @property (nonatomic, strong) UILabel *privateBadge;
-@property (nonatomic, strong) UIView *bottomLine; // 底部分隔线
-@property (nonatomic, strong) UILabel *mentionLbl; // @提醒标识
+@property (nonatomic, strong) UILabel *mentionLbl;
 
 @end
 
@@ -37,51 +37,61 @@ static CGFloat const kHorizontalPadding = 16.0f;
 }
 
 - (void)setupUI {
-    UIColor *themeColor = [WKApp shared].config.themeColor;
+    _capsuleContainer = [[UIView alloc] init];
+    if (@available(iOS 13.0, *)) {
+        _capsuleContainer.backgroundColor = [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *tc) {
+            return tc.userInterfaceStyle == UIUserInterfaceStyleDark
+                ? [UIColor colorWithWhite:0.18 alpha:1.0]
+                : [UIColor colorWithWhite:0.93 alpha:1.0];
+        }];
+    } else {
+        _capsuleContainer.backgroundColor = [UIColor colorWithWhite:0.93 alpha:1.0];
+    }
+    [self addSubview:_capsuleContainer];
+
+    _selectedCapsule = [[UIView alloc] init];
+    if (@available(iOS 13.0, *)) {
+        _selectedCapsule.backgroundColor = [UIColor systemBackgroundColor];
+    } else {
+        _selectedCapsule.backgroundColor = [UIColor whiteColor];
+    }
+    _selectedCapsule.layer.shadowColor = [UIColor blackColor].CGColor;
+    _selectedCapsule.layer.shadowOpacity = 0.08;
+    _selectedCapsule.layer.shadowOffset = CGSizeMake(0, 1);
+    _selectedCapsule.layer.shadowRadius = 2;
+    [_capsuleContainer addSubview:_selectedCapsule];
+
+    UIColor *selectedColor = [WKApp shared].config.navBarTitleColor ?: [UIColor blackColor];
     UIColor *normalColor = [UIColor colorWithWhite:0.5 alpha:1.0];
-    UIFont *selectedFont = [[WKApp shared].config appFontOfSizeMedium:17.0f];
-    UIFont *normalFont = [[WKApp shared].config appFontOfSize:17.0f];
+    UIFont *selectedFont = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
 
     _groupBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     [_groupBtn setTitle:LLang(@"群聊") forState:UIControlStateNormal];
-    [_groupBtn setTitleColor:themeColor forState:UIControlStateNormal];
+    [_groupBtn setTitleColor:selectedColor forState:UIControlStateNormal];
     _groupBtn.titleLabel.font = selectedFont;
     [_groupBtn addTarget:self action:@selector(onGroupTap) forControlEvents:UIControlEventTouchUpInside];
-    [self addSubview:_groupBtn];
+    [_capsuleContainer addSubview:_groupBtn];
 
     _privateBtn = [UIButton buttonWithType:UIButtonTypeCustom];
     [_privateBtn setTitle:LLang(@"私聊") forState:UIControlStateNormal];
     [_privateBtn setTitleColor:normalColor forState:UIControlStateNormal];
-    _privateBtn.titleLabel.font = normalFont;
+    _privateBtn.titleLabel.font = selectedFont;
     [_privateBtn addTarget:self action:@selector(onPrivateTap) forControlEvents:UIControlEventTouchUpInside];
-    [self addSubview:_privateBtn];
-
-    _indicator = [[UIView alloc] init];
-    _indicator.backgroundColor = themeColor;
-    _indicator.layer.cornerRadius = kIndicatorHeight / 2.0f;
-    [self addSubview:_indicator];
+    [_capsuleContainer addSubview:_privateBtn];
 
     _groupBadge = [self createBadgeLabel];
-    [self addSubview:_groupBadge];
+    [_capsuleContainer addSubview:_groupBadge];
 
     _privateBadge = [self createBadgeLabel];
-    [self addSubview:_privateBadge];
+    [_capsuleContainer addSubview:_privateBadge];
 
-    _bottomLine = [[UIView alloc] init];
-    _bottomLine.backgroundColor = [UIColor colorWithWhite:0.88 alpha:1.0];
-    [self addSubview:_bottomLine];
-
-    // @提醒标识
     _mentionLbl = [[UILabel alloc] init];
-    _mentionLbl.text = LLang(@"有人@我");
-    _mentionLbl.font = [UIFont systemFontOfSize:9 weight:UIFontWeightMedium];
-    _mentionLbl.textColor = [UIColor whiteColor];
-    _mentionLbl.backgroundColor = [UIColor orangeColor];
+    _mentionLbl.text = @"[有人@我]";
+    _mentionLbl.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
+    _mentionLbl.textColor = [UIColor orangeColor];
     _mentionLbl.textAlignment = NSTextAlignmentCenter;
-    _mentionLbl.layer.cornerRadius = 8;
-    _mentionLbl.layer.masksToBounds = YES;
     _mentionLbl.hidden = YES;
-    [self addSubview:_mentionLbl];
+    [_capsuleContainer addSubview:_mentionLbl];
 }
 
 - (UILabel *)createBadgeLabel {
@@ -100,63 +110,119 @@ static CGFloat const kHorizontalPadding = 16.0f;
     [super layoutSubviews];
 
     CGFloat w = self.bounds.size.width;
-    CGFloat h = self.bounds.size.height;
-    CGFloat contentW = w - kHorizontalPadding * 2;
-    CGFloat halfW = contentW / 2.0f;
-    CGFloat btnH = h - kIndicatorHeight;
+    CGFloat capsuleW = w - kCapsuleHPadding * 2;
+    CGFloat capsuleY = (kTabHeight - kCapsuleHeight) / 2.0f;
+    CGFloat capsuleRadius = kCapsuleHeight / 2.0f;
+    CGFloat inset = 3.0f;
 
-    // 两个按钮平分宽度，居中排列
-    _groupBtn.frame = CGRectMake(kHorizontalPadding, 0, halfW, btnH);
-    _privateBtn.frame = CGRectMake(kHorizontalPadding + halfW, 0, halfW, btnH);
+    _capsuleContainer.frame = CGRectMake(kCapsuleHPadding, capsuleY, capsuleW, kCapsuleHeight);
+    _capsuleContainer.layer.cornerRadius = capsuleRadius;
+    _capsuleContainer.layer.masksToBounds = YES;
 
-    [self layoutIndicatorAnimated:NO];
+    CGFloat halfW = capsuleW / 2.0f;
+    _groupBtn.frame = CGRectMake(0, 0, halfW, kCapsuleHeight);
+    _privateBtn.frame = CGRectMake(halfW, 0, halfW, kCapsuleHeight);
+
+    [self layoutSelectedCapsuleAnimated:NO];
     [self layoutBadges];
     [self layoutMentionLabel];
-
-    // 底部分隔线
-    _bottomLine.frame = CGRectMake(0, h - 0.5, w, 0.5);
 }
 
-- (void)layoutIndicatorAnimated:(BOOL)animated {
-    UIButton *btn = (_selectedIndex == 0) ? _groupBtn : _privateBtn;
+- (void)layoutSelectedCapsuleAnimated:(BOOL)animated {
+    CGFloat capsuleW = _capsuleContainer.bounds.size.width;
+    CGFloat halfW = capsuleW / 2.0f;
+    CGFloat inset = 3.0f;
+    CGFloat selectedW = halfW - inset * 2;
+    CGFloat selectedH = kCapsuleHeight - inset * 2;
+    CGFloat selectedX = (_selectedIndex == 0) ? inset : (halfW + inset);
+    CGFloat selectedY = inset;
+    CGFloat selectedRadius = selectedH / 2.0f;
 
-    // 指示线宽度 = 文字宽度 + 20pt
-    NSString *title = btn.titleLabel.text ?: @"";
-    UIFont *font = btn.titleLabel.font;
-    CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-    CGFloat indicatorW = textW + 80;
-    CGFloat indicatorX = CGRectGetMidX(btn.frame) - indicatorW / 2.0f;
-    CGFloat indicatorY = self.bounds.size.height - kIndicatorHeight;
+    CGRect targetFrame = CGRectMake(selectedX, selectedY, selectedW, selectedH);
 
-    CGRect targetFrame = CGRectMake(indicatorX, indicatorY, indicatorW, kIndicatorHeight);
+    void (^applyFrame)(void) = ^{
+        self.selectedCapsule.frame = targetFrame;
+        self.selectedCapsule.layer.cornerRadius = selectedRadius;
+    };
 
     if (animated) {
-        [UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
-            self.indicator.frame = targetFrame;
-        } completion:nil];
+        [UIView animateWithDuration:0.25
+                              delay:0
+             usingSpringWithDamping:0.85
+              initialSpringVelocity:0.5
+                            options:UIViewAnimationOptionCurveEaseInOut
+                         animations:applyFrame
+                         completion:nil];
     } else {
-        self.indicator.frame = targetFrame;
+        applyFrame();
     }
 }
 
 - (void)layoutBadges {
-    [self layoutBadge:_groupBadge forButton:_groupBtn];
-    [self layoutBadge:_privateBadge forButton:_privateBtn];
+    [self layoutGroupContent];
+    [self layoutPrivateContent];
 }
 
-- (void)layoutBadge:(UILabel *)badge forButton:(UIButton *)btn {
-    if (badge.hidden) return;
-    [badge sizeToFit];
+- (CGFloat)extraWidthForGroup {
+    CGFloat extra = 0;
+    if (!_mentionLbl.hidden) {
+        [_mentionLbl sizeToFit];
+        extra += 2 + _mentionLbl.bounds.size.width + 2;
+    }
+    if (!_groupBadge.hidden) {
+        [_groupBadge sizeToFit];
+        extra += 2 + MAX(_groupBadge.bounds.size.width + 6, kBadgeSize);
+    }
+    return extra;
+}
 
-    // 算出文字右边缘，角标紧贴文字后面
-    NSString *title = btn.titleLabel.text ?: @"";
-    UIFont *font = btn.titleLabel.font;
+- (CGFloat)extraWidthForPrivate {
+    if (_privateBadge.hidden) return 0;
+    [_privateBadge sizeToFit];
+    return 2 + MAX(_privateBadge.bounds.size.width + 6, kBadgeSize);
+}
+
+- (void)layoutGroupContent {
+    CGFloat extra = [self extraWidthForGroup];
+    CGFloat offset = -extra / 2.0f;
+    _groupBtn.titleEdgeInsets = UIEdgeInsetsMake(0, offset, 0, -offset);
+    [_groupBtn layoutIfNeeded];
+
+    NSString *title = _groupBtn.titleLabel.text ?: @"";
+    UIFont *font = _groupBtn.titleLabel.font;
     CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-    CGFloat textRight = CGRectGetMidX(btn.frame) + textW / 2.0f;
-    CGFloat btnCenterY = CGRectGetMidY(btn.frame);
+    CGFloat titleRight = CGRectGetMidX(_groupBtn.frame) + offset + textW / 2.0f;
+    CGFloat btnCenterY = CGRectGetMidY(_groupBtn.frame);
 
-    CGFloat badgeW = MAX(badge.bounds.size.width + 6, kBadgeSize);
-    badge.frame = CGRectMake(textRight + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
+    CGFloat x = titleRight;
+    if (!_mentionLbl.hidden) {
+        CGFloat lblW = _mentionLbl.bounds.size.width + 2;
+        CGFloat lblH = _mentionLbl.bounds.size.height;
+        _mentionLbl.frame = CGRectMake(x + 2, btnCenterY - lblH / 2.0f + 1, lblW, lblH);
+        x += 2 + lblW;
+    }
+    if (!_groupBadge.hidden) {
+        CGFloat badgeW = MAX(_groupBadge.bounds.size.width + 6, kBadgeSize);
+        _groupBadge.frame = CGRectMake(x + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
+    }
+}
+
+- (void)layoutPrivateContent {
+    CGFloat extra = [self extraWidthForPrivate];
+    CGFloat offset = -extra / 2.0f;
+    _privateBtn.titleEdgeInsets = UIEdgeInsetsMake(0, offset, 0, -offset);
+    [_privateBtn layoutIfNeeded];
+
+    if (_privateBadge.hidden) return;
+
+    NSString *title = _privateBtn.titleLabel.text ?: @"";
+    UIFont *font = _privateBtn.titleLabel.font;
+    CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
+    CGFloat titleRight = CGRectGetMidX(_privateBtn.frame) + offset + textW / 2.0f;
+    CGFloat btnCenterY = CGRectGetMidY(_privateBtn.frame);
+
+    CGFloat badgeW = MAX(_privateBadge.bounds.size.width + 6, kBadgeSize);
+    _privateBadge.frame = CGRectMake(titleRight + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
 }
 
 #pragma mark - Actions
@@ -173,8 +239,9 @@ static CGFloat const kHorizontalPadding = 16.0f;
     if (_selectedIndex == index) return;
     _selectedIndex = index;
     [self updateButtonStyles];
-    [self layoutIndicatorAnimated:animated];
+    [self layoutSelectedCapsuleAnimated:animated];
     [self layoutBadges];
+    [self layoutMentionLabel];
     if (self.onTabChanged) {
         self.onTabChanged(index);
     }
@@ -184,42 +251,28 @@ static CGFloat const kHorizontalPadding = 16.0f;
     if (_selectedIndex == selectedIndex) return;
     _selectedIndex = selectedIndex;
     [self updateButtonStyles];
-    [self layoutIndicatorAnimated:NO];
+    [self layoutSelectedCapsuleAnimated:NO];
     [self layoutBadges];
+    [self layoutMentionLabel];
 }
 
 - (void)updateButtonStyles {
-    UIColor *themeColor = [WKApp shared].config.themeColor;
+    UIColor *selectedColor = [WKApp shared].config.navBarTitleColor ?: [UIColor blackColor];
     UIColor *normalColor = [UIColor colorWithWhite:0.5 alpha:1.0];
-    UIFont *selectedFont = [[WKApp shared].config appFontOfSizeMedium:17.0f];
-    UIFont *normalFont = [[WKApp shared].config appFontOfSize:17.0f];
 
     if (_selectedIndex == 0) {
-        [_groupBtn setTitleColor:themeColor forState:UIControlStateNormal];
-        _groupBtn.titleLabel.font = selectedFont;
+        [_groupBtn setTitleColor:selectedColor forState:UIControlStateNormal];
         [_privateBtn setTitleColor:normalColor forState:UIControlStateNormal];
-        _privateBtn.titleLabel.font = normalFont;
     } else {
         [_groupBtn setTitleColor:normalColor forState:UIControlStateNormal];
-        _groupBtn.titleLabel.font = normalFont;
-        [_privateBtn setTitleColor:themeColor forState:UIControlStateNormal];
-        _privateBtn.titleLabel.font = selectedFont;
+        [_privateBtn setTitleColor:selectedColor forState:UIControlStateNormal];
     }
 }
 
 #pragma mark - Badge
 
 - (void)layoutMentionLabel {
-    if (_mentionLbl.hidden) return;
-    NSString *title = _groupBtn.titleLabel.text ?: @"";
-    UIFont *font = _groupBtn.titleLabel.font;
-    CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-    CGFloat textRight = CGRectGetMidX(_groupBtn.frame) + textW / 2.0f;
-    CGFloat btnCenterY = CGRectGetMidY(_groupBtn.frame);
-    [_mentionLbl sizeToFit];
-    CGFloat lblW = _mentionLbl.lim_width + 10;
-    CGFloat lblH = 16;
-    _mentionLbl.frame = CGRectMake(textRight + 4, btnCenterY - lblH / 2.0, lblW, lblH);
+    [self layoutGroupContent];
 }
 
 - (void)setGroupHasMention:(BOOL)hasMention {
@@ -232,7 +285,8 @@ static CGFloat const kHorizontalPadding = 16.0f;
 }
 
 - (void)setPrivateUnreadCount:(NSInteger)count {
-    // 不再显示未读红点
+    [self updateBadge:_privateBadge count:count];
+    [self layoutBadges];
 }
 
 - (void)updateBadge:(UILabel *)badge count:(NSInteger)count {

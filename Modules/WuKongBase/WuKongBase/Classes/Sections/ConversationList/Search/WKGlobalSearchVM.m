@@ -30,6 +30,7 @@
 @property(nonatomic,assign) BOOL pullup; // 是否pullup中
 @property(nonatomic,assign) BOOL hasMore;// 是否有更多数据
 @property(nonatomic,copy) NSString *tabType;
+@property(nonatomic,strong) NSArray<WKChannelMessageSearchResult*> *localMessageSearchResults;
 
 @end
 
@@ -194,14 +195,16 @@
     }];
 }
 
-/// 聊天 tab：从本地会话列表按名称过滤，构造与 API 相同格式的结果
+/// 聊天 tab：从本地会话列表按名称过滤 + 从本地 DB 按消息内容搜索
 - (void)searchLocalConversations {
     NSString *keyword = self.keyword;
     if (!keyword || keyword.length == 0) {
         self.searchResult = @{@"friends":@[], @"groups":@[], @"messages":@[]};
+        self.localMessageSearchResults = nil;
         return;
     }
 
+    // 1) 按会话名称匹配
     NSArray<WKConversationWrapModel*> *allConversations = [[WKConversationListVM shared] conversationList];
     NSMutableArray *matchedFriends = [NSMutableArray array];
     NSMutableArray *matchedGroups = [NSMutableArray array];
@@ -211,7 +214,6 @@
         if (!displayName || [displayName rangeOfString:keyword options:NSCaseInsensitiveSearch].location == NSNotFound) {
             continue;
         }
-        // 构造与 API 返回相同的字典格式
         NSDictionary *item = @{
             @"channel_id": conv.channel.channelId ?: @"",
             @"channel_name": displayName,
@@ -225,11 +227,35 @@
         }
     }
 
+    // 2) 按消息内容搜索（本地 DB）
+    NSArray<WKChannelMessageSearchResult*> *msgResults = [[WKChannelInfoDB shared] searchChannelMessageWithKeyword:keyword limit:50];
+    self.localMessageSearchResults = msgResults;
+
     self.searchResult = @{
         @"friends": matchedFriends,
         @"groups": matchedGroups,
         @"messages": @[],
     };
+}
+
+/// 截取关键词周围的上下文片段（关键词前后各保留一段文字，超出用 ... 省略）
+- (NSString *)snippetFromText:(NSString *)text keyword:(NSString *)keyword maxLength:(NSInteger)maxLength {
+    if (!text || text.length == 0) return @"";
+    if (!keyword || keyword.length == 0) return [text substringToIndex:MIN(text.length, (NSUInteger)maxLength)];
+
+    NSRange range = [text rangeOfString:keyword options:NSCaseInsensitiveSearch];
+    if (range.location == NSNotFound) {
+        return text.length > (NSUInteger)maxLength ? [NSString stringWithFormat:@"%@...", [text substringToIndex:maxLength]] : text;
+    }
+
+    NSInteger contextRadius = (maxLength - (NSInteger)keyword.length) / 2;
+    NSInteger start = MAX(0, (NSInteger)range.location - contextRadius);
+    NSInteger end = MIN((NSInteger)text.length, (NSInteger)(range.location + range.length) + contextRadius);
+
+    NSString *snippet = [text substringWithRange:NSMakeRange(start, end - start)];
+    if (start > 0) snippet = [NSString stringWithFormat:@"...%@", snippet];
+    if (end < (NSInteger)text.length) snippet = [NSString stringWithFormat:@"%@...", snippet];
+    return snippet;
 }
 
 /// 剥离 HTML 标签（如 <mark>...</mark>），返回纯文本
@@ -329,7 +355,72 @@
         }];
     }
     
-    // messages
+    // 本地聊天记录搜索结果（按会话分组，类微信体验）
+    if (self.localMessageSearchResults && self.localMessageSearchResults.count > 0 && [self.tabType isEqualToString:@"all"]) {
+        [items addObject:@{
+            @"class": WKSearchHeaderModel.class,
+            @"title": LLang(@"聊天记录"),
+            @"showBottomLine": @(NO),
+        }];
+
+        NSString *kw = self.keyword ?: @"";
+        NSMutableArray<NSDictionary*> *msgItems = [NSMutableArray array];
+
+        for (WKChannelMessageSearchResult *result in self.localMessageSearchResults) {
+            WKChannel *ch = result.channel;
+            NSString *searchableWord = result.searchableWord ?: @"";
+
+            // 截取关键词周围的上下文片段用于预览
+            NSString *snippet = [self snippetFromText:searchableWord keyword:kw maxLength:40];
+
+            if (result.messageCount == 1) {
+                // 单条命中 → 显示消息预览，点击直接跳到该消息
+                uint32_t orderSeq = result.orderSeq;
+                [msgItems addObject:@{
+                    @"class": WKSearchMessageModel.class,
+                    @"channel": ch,
+                    @"keyword": kw,
+                    @"content": snippet,
+                    @"messageCount": @(1),
+                    @"timestamp": @(0),
+                    @"showBottomLine": @(NO),
+                    @"showTopLine": @(NO),
+                    @"onClick": ^{
+                        WKConversationVC *vc = [[WKConversationVC alloc] init];
+                        vc.channel = ch;
+                        vc.locationAtOrderSeq = orderSeq;
+                        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+                    }
+                }];
+            } else {
+                // 多条命中 → 显示 "N条相关聊天记录"，点击进入该会话的搜索详情页
+                NSInteger count = result.messageCount;
+                [msgItems addObject:@{
+                    @"class": WKSearchMessageModel.class,
+                    @"channel": ch,
+                    @"keyword": kw,
+                    @"content": @"",
+                    @"messageCount": @(count),
+                    @"timestamp": @(0),
+                    @"showBottomLine": @(NO),
+                    @"showTopLine": @(NO),
+                    @"onClick": ^{
+                        WKChannelMessageSearchResultVC *vc = [[WKChannelMessageSearchResultVC alloc] init];
+                        vc.channel = ch;
+                        vc.keyword = kw;
+                        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+                    }
+                }];
+            }
+        }
+
+        [items addObject:@{
+            @"height": WKSectionHeight,
+            @"items": msgItems,
+        }];
+    }
+
+    // messages (API results)
     if(messages && messages.count>0 && ![self.tabType isEqualToString:@"media"]) {
         if(![self.tabType isEqualToString:@"file"] && ![self searchInChannel]) {
             [items addObject: @{

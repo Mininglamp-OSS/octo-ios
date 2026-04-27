@@ -183,8 +183,11 @@
             NSString *updateDesc = resultDict[@"update_desc"];
             BOOL isForce = resultDict[@"is_force"] ? [resultDict[@"is_force"] boolValue] : NO;
             NSString *downloadURL = resultDict[@"download_url"];
-            [SELUpdateAlert showUpdateAlertWithVersion:rawVersion Description:updateDesc downloadURL:downloadURL forceUpdate:isForce];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [SELUpdateAlert showUpdateAlertWithVersion:rawVersion Description:updateDesc downloadURL:downloadURL forceUpdate:isForce];
+            });
         }
+    }).catch(^(NSError *error){
     });
 }
 

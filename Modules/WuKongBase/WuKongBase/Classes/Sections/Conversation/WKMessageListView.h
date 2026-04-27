@@ -86,6 +86,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 -(void) adjustTableWithOffset:(CGFloat)offset;
 
+-(void) markReminderDoneIfNeed;
+
 - (void)stopScrollingAnimation;
 // 添加消息
 -(void) sendMessage:(WKMessageModel*)message;

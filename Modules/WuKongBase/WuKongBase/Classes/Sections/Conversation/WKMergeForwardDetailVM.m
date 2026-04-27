@@ -33,7 +33,9 @@
         
         WKMessage *preMessage;
         for (WKMessage *message in self.mergeForwardContent.msgs) {
-            
+            if(!message || !message.content) {
+                continue;
+            }
             Class modelCls;
             BOOL hideAvatar;
             if(preMessage && [message.fromUid isEqualToString:preMessage.fromUid]) {
@@ -41,10 +43,14 @@
             }else{
                 hideAvatar = NO;
             }
-            
+
             switch (message.contentType) {
                 case WK_TEXT:
-                    modelCls = WKMergeForwardDetailTextModel.class;
+                    if([message.content isKindOfClass:[WKTextContent class]]) {
+                        modelCls = WKMergeForwardDetailTextModel.class;
+                    } else {
+                        modelCls = WKMergeForwardDetailOtherModel.class;
+                    }
                     break;
                 case WK_IMAGE:
                     modelCls = WKMergeForwardDetailImageModel.class;
@@ -56,10 +62,18 @@
                     modelCls = WKMergeForwardDetailVideoModel.class;
                     break;
                 case WK_FILE:
-                    modelCls = WKMergeForwardDetailFileModel.class;
+                    if([message.content isKindOfClass:[WKFileContent class]]) {
+                        modelCls = WKMergeForwardDetailFileModel.class;
+                    } else {
+                        modelCls = WKMergeForwardDetailOtherModel.class;
+                    }
                     break;
                 case WK_MERGEFORWARD:
-                    modelCls = WKMergeForwardDetailNestedModel.class;
+                    if([message.content isKindOfClass:[WKMergeForwardContent class]]) {
+                        modelCls = WKMergeForwardDetailNestedModel.class;
+                    } else {
+                        modelCls = WKMergeForwardDetailOtherModel.class;
+                    }
                     break;
                 default:
                     modelCls = [WKApp.shared.endpointManager mergeForwardItem:message.contentType];

@@ -14,6 +14,10 @@ NS_ASSUME_NONNULL_BEGIN
 @interface WKConversationListCell : SwipeTableCell
 
 -(void) refreshWithModel:(WKConversationWrapModel*)model;
+
+/// 子区预览展开/折叠回调
+@property(nonatomic,copy,nullable) void(^onToggleThreadPreview)(NSString *channelId);
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -30,6 +30,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,assign) BOOL chatPwdOn; // 聊天密码开关
 @property(nonatomic,assign) BOOL allowViewHistoryMsg; //允许新成员查看历史消息
 @property(nonatomic,assign) long version; // 群版本号
+@property(nonatomic,strong,nullable) NSNumber *isExternalGroup; // 外部群标识；nil 表示后端未返回，下游应保留旧值
 @end
 
 @interface WKGroupMemberModel : WKModel
@@ -49,6 +50,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,copy)   NSString *createdAt; // 创建时间
 @property(nonatomic,copy)  NSString *updatedAt; // 更新时间
 @property(nonatomic,assign) NSInteger forbiddenExpirTime; // 禁言过期时间（没被禁言为0）
+@property(nonatomic,assign) BOOL isExternal; // 是否为外部成员（来自其他 Space）
+@property(nonatomic,copy)   NSString *sourceSpaceId; // 来源 space id（外部成员）
+@property(nonatomic,copy)   NSString *sourceSpaceName; // 来源 space 名称（外部成员）
 
 
 

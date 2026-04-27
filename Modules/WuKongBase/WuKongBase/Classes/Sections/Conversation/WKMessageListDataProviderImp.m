@@ -467,6 +467,9 @@
 }
 
 - (NSArray<WKMessageModel *> *)messagesAtSection:(NSInteger)section {
+    if (section < 0 || section >= (NSInteger)self.messageList.dates.count) {
+        return @[];
+    }
     NSString *date = self.messageList.dates[section];
     return [self.messageList messagesAtDate:date];
 }

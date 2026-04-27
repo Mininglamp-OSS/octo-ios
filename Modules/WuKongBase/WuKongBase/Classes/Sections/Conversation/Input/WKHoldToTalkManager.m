@@ -6,11 +6,13 @@
 #import "WKHoldToTalkManager.h"
 #import <AVFoundation/AVFoundation.h>
 #import <Speech/Speech.h>
+#import <WuKongIMSDK/WuKongIMSDK.h>
 #import "WKVoiceInputService.h"
 #import "WKApp.h"
 #import "WKNavigationManager.h"
 #import "UIView+WKCommon.h"
 #import "WuKongBase.h"
+#import "WKInputMentionCache.h"
 
 static NSString * const kVoiceAPIPreferenceKey = @"WKVoiceAPIPreference";
 static NSString * const kVoiceAPIServer = @"server";
@@ -434,15 +436,33 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
 
     // 等待预取的语音上下文完成，再发起转写
     [[WKVoiceInputService shared] getVoiceContextWithCompletion:^(NSString *voiceContext) {
-        // chat_context: 优先使用服务端返回的 voice context，其次用本地聊天上下文
-        NSString *chatContext = voiceContext;
-        if (!chatContext && [ws.delegate respondsToSelector:@selector(holdToTalkManagerChatContext:)]) {
-            chatContext = [ws.delegate holdToTalkManagerChatContext:ws];
+        NSString *personalContext = voiceContext;
+        NSString *chatContext = nil;
+        NSString *memberContext = nil;
+        if ([ws.delegate respondsToSelector:@selector(holdToTalkManagerChatContext:)]) {
+            NSString *fullContext = [ws.delegate holdToTalkManagerChatContext:ws];
+            if (fullContext) {
+                NSRange memberRange = [fullContext rangeOfString:@"聊天成员："];
+                if (memberRange.location != NSNotFound) {
+                    NSRange newlineRange = [fullContext rangeOfString:@"\n"];
+                    if (newlineRange.location != NSNotFound) {
+                        memberContext = [fullContext substringToIndex:newlineRange.location];
+                        chatContext = [fullContext substringFromIndex:newlineRange.location + 1];
+                    } else {
+                        memberContext = fullContext;
+                    }
+                } else {
+                    chatContext = fullContext;
+                }
+            }
         }
-        NSLog(@"[VoiceContext] transcribe chatContext: %@", chatContext ? @"(有值)" : @"(nil)");
 
-        [[WKVoiceInputService shared] transcribeWavAudio:audioData contextText:contextText chatContext:chatContext
-                                           completion:^(WKVoiceInputResult *result, NSError *error) {
+        [[WKVoiceInputService shared] transcribeWavAudio:audioData
+                                             contextText:contextText
+                                             chatContext:chatContext
+                                         personalContext:personalContext
+                                           memberContext:memberContext
+                                              completion:^(WKVoiceInputResult *result, NSError *error) {
             [ws cleanupRecordFile];
             if (error || result.text.length == 0) {
                 [ws showHUD:LLang(@"语音识别失败，请重试")];
@@ -1134,8 +1154,21 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
 
 - (void)onResultSendText {
     NSString *text = self.resultTextView.text ?: self.transcribedText;
-    if (text.length > 0 && [self.delegate respondsToSelector:@selector(holdToTalkManager:sendText:)]) {
-        [self.delegate holdToTalkManager:self sendText:text];
+    if (text.length > 0) {
+        // 解析 @mention
+        NSArray *members = nil;
+        if ([self.delegate respondsToSelector:@selector(holdToTalkManagerChannelMembers:)]) {
+            members = [self.delegate holdToTalkManagerChannelMembers:self];
+        }
+        NSMutableArray<WKInputMentionItem *> *mentions = [NSMutableArray array];
+        if (members.count > 0) {
+            text = [self parseMentionMarkers:text members:members mentions:mentions];
+        }
+        if (mentions.count > 0 && [self.delegate respondsToSelector:@selector(holdToTalkManager:sendText:mentions:)]) {
+            [self.delegate holdToTalkManager:self sendText:text mentions:mentions];
+        } else if ([self.delegate respondsToSelector:@selector(holdToTalkManager:sendText:)]) {
+            [self.delegate holdToTalkManager:self sendText:text];
+        }
     }
     self.transcribedText = nil; self.recordedAudioData = nil;
     [self hideOverlay];
@@ -1256,5 +1289,98 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
 #pragma mark - SFSpeechRecognizerDelegate
 
 - (void)speechRecognizer:(SFSpeechRecognizer *)speechRecognizer availabilityDidChange:(BOOL)available {}
+
+#pragma mark - @Mention Parsing
+
+- (NSString *)parseMentionMarkers:(NSString *)text
+                          members:(NSArray<WKChannelMember *> *)members
+                         mentions:(NSMutableArray<WKInputMentionItem *> *)mentions {
+    if (text.length == 0) return text;
+
+    NSString *loginUID = [WKApp shared].loginInfo.uid;
+
+    NSMutableArray<NSDictionary *> *nameEntries = [NSMutableArray array];
+    for (WKChannelMember *member in members) {
+        if ([member.memberUid isEqualToString:loginUID]) continue;
+        if (member.isDeleted) continue;
+        NSString *displayName = member.memberRemark.length > 0 ? member.memberRemark : member.memberName;
+        if (displayName.length > 0) {
+            [nameEntries addObject:@{@"name": displayName, @"uid": member.memberUid}];
+        }
+        if (member.memberRemark.length > 0 && member.memberName.length > 0 &&
+            ![member.memberRemark isEqualToString:member.memberName]) {
+            [nameEntries addObject:@{@"name": member.memberName, @"uid": member.memberUid}];
+        }
+    }
+    [nameEntries sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        NSUInteger lenA = [a[@"name"] length];
+        NSUInteger lenB = [b[@"name"] length];
+        if (lenB > lenA) return NSOrderedDescending;
+        if (lenB < lenA) return NSOrderedAscending;
+        return NSOrderedSame;
+    }];
+
+    NSString *allName = LLang(@"所有人");
+    NSMutableString *result = [NSMutableString string];
+    NSUInteger i = 0;
+    NSUInteger len = text.length;
+
+    while (i < len) {
+        unichar ch = [text characterAtIndex:i];
+        if (ch != '@') {
+            [result appendFormat:@"%C", ch];
+            i++;
+            continue;
+        }
+
+        NSString *rest = [text substringFromIndex:i + 1];
+
+        if ([rest hasPrefix:allName]) {
+            WKInputMentionItem *item = [[WKInputMentionItem alloc] init];
+            item.uid = @"all";
+            item.name = allName;
+            [mentions addObject:item];
+            [result appendFormat:@"@%@%@", allName, WKInputAtEndChar];
+            i += 1 + allName.length;
+            if (i < len && [text characterAtIndex:i] == ' ') i++;
+            continue;
+        }
+        if ([rest.lowercaseString hasPrefix:@"all"] &&
+            (rest.length == 3 || (i + 4 < len && [text characterAtIndex:i + 4] == ' '))) {
+            WKInputMentionItem *item = [[WKInputMentionItem alloc] init];
+            item.uid = @"all";
+            item.name = allName;
+            [mentions addObject:item];
+            [result appendFormat:@"@%@%@", allName, WKInputAtEndChar];
+            i += 1 + 3;
+            if (i < len && [text characterAtIndex:i] == ' ') i++;
+            continue;
+        }
+
+        BOOL matched = NO;
+        for (NSDictionary *entry in nameEntries) {
+            NSString *name = entry[@"name"];
+            if (rest.length >= name.length &&
+                [[rest substringToIndex:name.length] caseInsensitiveCompare:name] == NSOrderedSame) {
+                WKInputMentionItem *item = [[WKInputMentionItem alloc] init];
+                item.uid = entry[@"uid"];
+                item.name = name;
+                [mentions addObject:item];
+                [result appendFormat:@"@%@%@", name, WKInputAtEndChar];
+                i += 1 + name.length;
+                if (i < len && [text characterAtIndex:i] == ' ') i++;
+                matched = YES;
+                break;
+            }
+        }
+
+        if (!matched) {
+            [result appendString:@"@"];
+            i++;
+        }
+    }
+
+    return [result copy];
+}
 
 @end

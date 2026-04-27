@@ -14,6 +14,7 @@
 #import "WuKongBase.h"
 #import "WKApp.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
+#import "WKGroupMdVC.h"
 
 @interface WKThreadSettingVC () <WKSettingMemberGridViewDelegate, UITableViewDataSource, UITableViewDelegate>
 
@@ -26,6 +27,7 @@
 @property (nonatomic, copy) NSString *threadName;
 @property (nonatomic, strong) WKThreadModel *thread;
 @property (nonatomic, assign) BOOL isCreator;  // 当前用户是否是子区创建者
+@property (nonatomic, assign) BOOL isBotOwner; // 当前用户是否是创建者bot的所有者
 
 @property (nonatomic, strong) NSArray *members; // API 返回的成员字典数组
 @property (nonatomic, assign) BOOL isMember;   // 当前用户是否在子区成员中
@@ -56,6 +58,11 @@
     [self loadMembers];
 }
 
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self.tableView reloadData];
+}
+
 - (void)parseChannelId {
     NSString *channelId = self.channel.channelId;
     NSRange range = [channelId rangeOfString:@"____"];
@@ -75,13 +82,40 @@
         weakSelf.threadName = thread.name;
         NSString *myUid = [WKSDK shared].options.connectInfo.uid;
         weakSelf.isCreator = (myUid.length > 0 && [thread.creatorUid isEqualToString:myUid]);
+        // 同步 thread md 状态到 channelInfo.extra
+        WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:weakSelf.channel];
+        if (info) {
+            info.extra[@"has_thread_md"] = @(thread.hasThreadMd);
+            info.extra[@"thread_md_version"] = @(thread.threadMdVersion);
+            [[WKSDK shared].channelManager updateChannelInfo:info];
+        }
         [weakSelf.tableView reloadData];
+
+        if (!weakSelf.isCreator && thread.creatorUid.length > 0) {
+            [weakSelf checkBotOwnership:thread.creatorUid];
+        }
     }).catch(^(NSError *error) {
         // 从 channelInfo 获取名称作为备选
         WKChannelInfo *info = [[WKChannelManager shared] getChannelInfo:weakSelf.channel];
         if (info) {
             weakSelf.threadName = info.displayName;
             [weakSelf.tableView reloadData];
+        }
+    });
+}
+
+- (void)checkBotOwnership:(NSString *)creatorUid {
+    __weak typeof(self) weakSelf = self;
+    [[WKAPIClient sharedClient] GET:@"robot/my_bots" parameters:nil].then(^(NSArray *bots) {
+        if (![bots isKindOfClass:[NSArray class]]) return;
+        for (NSDictionary *bot in bots) {
+            if (![bot isKindOfClass:[NSDictionary class]]) continue;
+            NSString *botUid = bot[@"uid"] ?: @"";
+            if ([botUid isEqualToString:creatorUid]) {
+                weakSelf.isBotOwner = YES;
+                [weakSelf.tableView reloadData];
+                break;
+            }
         }
     });
 }
@@ -190,12 +224,12 @@
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    if (section == 0) return 2;
     return 1;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    if (indexPath.section == 0) {
-        // 子区名称
+    if (indexPath.section == 0 && indexPath.row == 0) {
         UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"NameCell"];
         if (!cell) {
             cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:@"NameCell"];
@@ -209,8 +243,24 @@
         cell.detailTextLabel.textColor = [UIColor grayColor];
         cell.backgroundColor = [WKApp shared].config.cellBackgroundColor;
         return cell;
+    } else if (indexPath.section == 0 && indexPath.row == 1) {
+        UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"MdCell"];
+        if (!cell) {
+            cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:@"MdCell"];
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        }
+        cell.textLabel.text = @"GROUP.md";
+        cell.textLabel.font = [[WKApp shared].config appFontOfSize:16.0f];
+        cell.textLabel.textColor = [WKApp shared].config.defaultTextColor;
+        WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:self.channel];
+        BOOL hasMd = [info.extra[@"has_thread_md"] boolValue];
+        NSInteger mdVersion = [info.extra[@"thread_md_version"] integerValue];
+        cell.detailTextLabel.text = hasMd ? [NSString stringWithFormat:@"%@ v%ld", LLang(@"已配置"), (long)mdVersion] : LLang(@"未配置");
+        cell.detailTextLabel.font = [[WKApp shared].config appFontOfSize:15.0f];
+        cell.detailTextLabel.textColor = [UIColor grayColor];
+        cell.backgroundColor = [WKApp shared].config.cellBackgroundColor;
+        return cell;
     } else {
-        // 退出子区按钮
         UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"LeaveCell"];
         if (!cell) {
             cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"LeaveCell"];
@@ -242,7 +292,12 @@
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.section == 1) {
+    if (indexPath.section == 0 && indexPath.row == 1) {
+        WKGroupMdVC *vc = [WKGroupMdVC new];
+        vc.channel = self.channel;
+        vc.canEdit = self.isCreator || self.isBotOwner;
+        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+    } else if (indexPath.section == 1) {
         if (self.isCreator) {
             [self confirmCloseThread];
         } else {

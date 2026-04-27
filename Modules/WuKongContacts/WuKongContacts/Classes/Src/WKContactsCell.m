@@ -8,11 +8,10 @@
 #import "WKContactsCell.h"
 #import "WKContacts.h"
 #import <Masonry/Masonry.h>
-#import <WuKongBase/WKOnlineBadgeView.h>
 #import <WuKongBase/WKOfficialTag.h>
 #import <WuKongBase/WKConstant.h>
-@implementation WKContactsCellModel
 
+@implementation WKContactsCellModel
 
 @end
 
@@ -20,65 +19,51 @@
 
 @property(nonatomic,strong) WKUserAvatar *avatarImgView;
 @property(nonatomic,strong) UILabel *nameLbl;
-@property(nonatomic,strong) UILabel *subtitleLbl;
 @property(nonatomic,strong) WKContactsCellModel *contactModel;
-
-@property(nonatomic,strong) WKOnlineBadgeView *onlineBadgeView; // 在线状态view
-
-@property(nonatomic,strong) UILabel *botBadgeLbl; // Bot标识
-
-@property(nonatomic,strong) WKOfficialTag *officialTag; // 官方图标
+@property(nonatomic,strong) UIView *onlineDot;
+@property(nonatomic,strong) UILabel *aiBadgeLbl;
+@property(nonatomic,strong) WKOfficialTag *officialTag;
 
 @end
+
 @implementation WKContactsCell
-
-
-
 
 -(void) setupUI{
     [super setupUI];
     self.topLineView.hidden = YES;
     self.bottomLineView.hidden = YES;
-    
-    CGFloat avatarWidth = 50.0f;
-    CGFloat avatarheight = 50.0f;
-    _avatarImgView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, avatarWidth, avatarheight)];
-    [self.contentView addSubview:_avatarImgView];
-    
-    _nameLbl = [[UILabel alloc] init];
-    [_nameLbl setFont:[[WKApp shared].config appFontOfSize:16.0f]];
-    [self.contentView addSubview:_nameLbl];
-    
-    
-    _subtitleLbl = [[UILabel alloc] init];
-    [_subtitleLbl setFont:[WKApp.shared.config appFontOfSize:12.0f]];
-    [_subtitleLbl setTextColor:WKApp.shared.config.tipColor];
-    [self.contentView addSubview:_subtitleLbl];
-    
-    [self.contentView addSubview:self.onlineBadgeView];
 
-    _botBadgeLbl = [[UILabel alloc] init];
-    _botBadgeLbl.text = @"AI";
-    _botBadgeLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
-    _botBadgeLbl.textColor = [UIColor whiteColor];
-    _botBadgeLbl.backgroundColor = [UIColor colorWithRed:136.0f/255.0f green:84.0f/255.0f blue:208.0f/255.0f alpha:1.0f];
-    _botBadgeLbl.textAlignment = NSTextAlignmentCenter;
-    _botBadgeLbl.layer.cornerRadius = 4.0f;
-    _botBadgeLbl.layer.masksToBounds = YES;
-    _botBadgeLbl.hidden = YES;
-    [self.contentView addSubview:_botBadgeLbl];
+    CGFloat avatarSize = 36.0f;
+    _avatarImgView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, avatarSize, avatarSize)];
+    _avatarImgView.layer.cornerRadius = 9.0f;
+    _avatarImgView.layer.masksToBounds = YES;
+    _avatarImgView.avatarImgView.layer.cornerRadius = 9.0f;
+    _avatarImgView.avatarImgView.layer.masksToBounds = YES;
+    [self.contentView addSubview:_avatarImgView];
+
+    _nameLbl = [[UILabel alloc] init];
+    [_nameLbl setFont:[[WKApp shared].config appFontOfSize:15.0f]];
+    [self.contentView addSubview:_nameLbl];
+
+    _aiBadgeLbl = [[UILabel alloc] init];
+    _aiBadgeLbl.text = @"AI";
+    _aiBadgeLbl.font = [UIFont systemFontOfSize:9.0f weight:UIFontWeightBold];
+    _aiBadgeLbl.textColor = [UIColor whiteColor];
+    _aiBadgeLbl.textAlignment = NSTextAlignmentCenter;
+    _aiBadgeLbl.layer.cornerRadius = 7.0f;
+    _aiBadgeLbl.layer.masksToBounds = YES;
+    _aiBadgeLbl.hidden = YES;
+    [self.contentView addSubview:_aiBadgeLbl];
+
+    _onlineDot = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 8, 8)];
+    _onlineDot.layer.cornerRadius = 4.0f;
+    _onlineDot.layer.borderWidth = 1.5f;
+    _onlineDot.hidden = YES;
+    [self.contentView addSubview:_onlineDot];
 
     _officialTag = [WKOfficialTag new];
     _officialTag.hidden = YES;
     [self.contentView addSubview:_officialTag];
-
-}
-
-- (WKOnlineBadgeView *)onlineBadgeView {
-    if(!_onlineBadgeView) {
-        _onlineBadgeView = [WKOnlineBadgeView initWithTip:nil];
-    }
-    return _onlineBadgeView;
 }
 
 +(NSString*) cellId{
@@ -87,113 +72,83 @@
 
 - (void)refresh:(id)cellModel {
     [super refresh:cellModel];
-    
+
     [self.nameLbl setTextColor:[WKApp shared].config.defaultTextColor];
-    
+
     _contactModel = cellModel;
     [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:_contactModel.avatar] placeholderImage:[WKApp shared].config.defaultAvatar];
     self.nameLbl.text = _contactModel.name;
     [self.nameLbl sizeToFit];
-    
-    self.subtitleLbl.hidden = YES;
-    if(self.contactModel.channelInfo.lastOffline>0) {
-        self.subtitleLbl.hidden = NO;
-        self.subtitleLbl.text = [WKOnlineStatusManager.shared onlineStatusDetailTip:self.contactModel.channelInfo];
-        [self.subtitleLbl sizeToFit];
-    }
-  
-    
-    // 官方图标
+
+    // Official tag
     self.officialTag.hidden = YES;
     NSString *category = _contactModel.channelInfo ? _contactModel.channelInfo.category : nil;
-    // 系统通知直接判断为官方
     if ([_contactModel.uid isEqualToString:[WKApp shared].config.systemUID]) {
         category = WKChannelCategoryService;
     }
-    if(category && ![category isEqualToString:@""]) {
-        if([category isEqualToString:WKChannelCategoryService]) {
-            self.officialTag.frame = CGRectMake(0.0f, 0.0f, 18.0f, 18.0f);
+    if (category && ![category isEqualToString:@""]) {
+        if ([category isEqualToString:WKChannelCategoryService]) {
+            self.officialTag.frame = CGRectMake(0, 0, 18, 18);
             self.officialTag.hidden = NO;
             self.officialTag.image = [WKApp.shared loadImage:@"ConversationList/Index/Official" moduleID:@"WuKongBase"];
-        } else if([category isEqualToString:WKChannelCategoryVisitor]) {
-            self.officialTag.frame = CGRectMake(0.0f, 0.0f, 35.0f, 18.0f);
+        } else if ([category isEqualToString:WKChannelCategoryVisitor]) {
+            self.officialTag.frame = CGRectMake(0, 0, 35, 18);
             self.officialTag.hidden = NO;
             self.officialTag.image = [WKApp.shared loadImage:@"ConversationList/Index/Visitor" moduleID:@"WuKongBase"];
         }
     }
 
-    self.botBadgeLbl.hidden = !_contactModel.robot;
-    if(_contactModel.robot) {
-        [self.botBadgeLbl sizeToFit];
-        CGRect frame = self.botBadgeLbl.frame;
-        frame.size.width += 8.0f;
-        frame.size.height += 4.0f;
-        self.botBadgeLbl.frame = frame;
+    // AI badge
+    self.aiBadgeLbl.hidden = !_contactModel.robot;
+    if (_contactModel.robot) {
+        _aiBadgeLbl.backgroundColor = WKApp.shared.config.themeColor;
+        [self.aiBadgeLbl sizeToFit];
+        CGRect frame = self.aiBadgeLbl.frame;
+        frame.size.width = MAX(frame.size.width + 8.0f, 28.0f);
+        frame.size.height = 14.0f;
+        self.aiBadgeLbl.frame = frame;
     }
 
-    self.onlineBadgeView.hidden = YES;
-    if(_contactModel.online) {
-         self.onlineBadgeView.hidden = NO;
-        self.onlineBadgeView.tip = nil;
-    }else if( [[NSDate date] timeIntervalSince1970] - _contactModel.lastOffline<60) {
-        self.onlineBadgeView.hidden = NO;
-                   self.onlineBadgeView.tip =LLang(@"刚刚");
-    } else if(_contactModel.lastOffline+60*60>[[NSDate date] timeIntervalSince1970]) {
-        self.onlineBadgeView.hidden = NO;
-        self.onlineBadgeView.tip =[NSString stringWithFormat:LLang(@"%0.0f分钟"),([[NSDate date] timeIntervalSince1970]-_contactModel.lastOffline)/60];
+    // Online dot
+    self.onlineDot.hidden = YES;
+    UIColor *greenColor = [UIColor colorWithRed:11/255.0f green:135/255.0f blue:125/255.0f alpha:1.0f];
+    _onlineDot.backgroundColor = greenColor;
+    _onlineDot.layer.borderColor = [WKApp shared].config.cellBackgroundColor.CGColor;
+    if (_contactModel.online) {
+        self.onlineDot.hidden = NO;
     }
-    
 }
-
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    CGFloat nameLeft = 10.0f;
-    CGFloat avatarLeft = 15.0f;
-    // 头像
-    self.avatarImgView.lim_left = avatarLeft;
-    self.avatarImgView.lim_top = self.lim_height/2.0f - self.avatarImgView.lim_height/2.0f;
-    
-    // 在线状态
-    if(self.contactModel.online) {
-        self.onlineBadgeView.lim_left = self.avatarImgView.lim_right - self.onlineBadgeView.lim_width;
-    }else{
-        self.onlineBadgeView.lim_left = self.avatarImgView.lim_left + (self.avatarImgView.lim_width/2.0f - self.onlineBadgeView.lim_width/2.0f);
-    }
-    
-    self.onlineBadgeView.lim_top = self.avatarImgView.lim_bottom - self.onlineBadgeView.lim_height;
-    
-    // 名字
-    self.nameLbl.lim_left = self.avatarImgView.lim_right + nameLeft;
 
-    if(self.subtitleLbl.hidden) {
-        self.nameLbl.lim_top = self.lim_height/2.0f - self.nameLbl.lim_height/2.0f;
-    }else{
-        CGFloat subtitleTopSpace = 4.0f;
-        self.nameLbl.lim_top = self.lim_height/2.0f - (self.nameLbl.lim_height+self.subtitleLbl.lim_height+subtitleTopSpace)/2.0f;
+    CGFloat leftPad = 16.0f;
+    CGFloat avatarToName = 12.0f;
 
-        self.subtitleLbl.lim_left = self.nameLbl.lim_left;
-        self.subtitleLbl.lim_top = self.nameLbl.lim_bottom + subtitleTopSpace;
+    // Avatar
+    self.avatarImgView.lim_left = leftPad;
+    self.avatarImgView.lim_top = self.lim_height / 2.0f - self.avatarImgView.lim_height / 2.0f;
+
+    // Online dot on bottom-right of avatar
+    if (!self.onlineDot.hidden) {
+        self.onlineDot.lim_left = self.avatarImgView.lim_right - self.onlineDot.lim_width;
+        self.onlineDot.lim_top = self.avatarImgView.lim_bottom - self.onlineDot.lim_height;
     }
 
-    // 官方图标 + Bot标识
+    // Name
+    self.nameLbl.lim_left = self.avatarImgView.lim_right + avatarToName;
+    self.nameLbl.lim_top = self.lim_height / 2.0f - self.nameLbl.lim_height / 2.0f;
+
+    // Official tag + AI badge after name
     CGFloat nextLeft = self.nameLbl.lim_right;
-    if(!self.officialTag.hidden) {
+    if (!self.officialTag.hidden) {
         self.officialTag.lim_left = nextLeft + 4.0f;
         self.officialTag.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.officialTag.lim_height) / 2.0f;
         nextLeft = self.officialTag.lim_right;
     }
-    if(!self.botBadgeLbl.hidden) {
-        self.botBadgeLbl.lim_left = nextLeft + 6.0f;
-        self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
-    }
-    
-    if(_contactModel.last) {
-        self.bottomLineView.lim_left =  0;
-        self.bottomLineView.lim_width = self.lim_width;
-    }else {
-        self.bottomLineView.lim_left = self.nameLbl.lim_left;
-        self.bottomLineView.lim_width = self.lim_width - self.nameLbl.lim_left;
+    if (!self.aiBadgeLbl.hidden) {
+        self.aiBadgeLbl.lim_left = nextLeft + 6.0f;
+        self.aiBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.aiBadgeLbl.lim_height) / 2.0f;
     }
 }
 

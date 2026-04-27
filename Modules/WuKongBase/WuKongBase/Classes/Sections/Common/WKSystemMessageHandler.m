@@ -126,8 +126,8 @@ bool needRemind = false; // 是否需要提醒
         }
     }
 
-    // 按需显示本地通知
-    [[WKLocalNotificationManager shared] showLocalNotificationIfNeed:message];
+    // Socket 本地通知已关闭，由服务端 APNs 推送替代
+    // [[WKLocalNotificationManager shared] showLocalNotificationIfNeed:message];
     
     
     if(left == 0) {

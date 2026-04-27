@@ -45,7 +45,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    
+
     self.firstLoad = true;
     [self.view addSubview:self.backgroundView];
     
@@ -235,7 +235,13 @@
 }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
-    
+
+    CGFloat offset = self.navigationBar.lim_bottom;
+    CGRect newFrame = CGRectMake(0.0f, offset, self.view.lim_width, self.view.lim_height - offset);
+    if (!CGRectEqualToRect(self.conversationView.frame, newFrame)) {
+        self.conversationView.frame = newFrame;
+    }
+
     [self.conversationView layoutSubviews];
     [self.conversationView.messageListView viewDidLayoutSubviewsOfPosition];
 }
@@ -469,4 +475,9 @@
     }
    
 }
+
+-(void) locateToMessageSeq:(uint32_t)messageSeq {
+    [self.conversationView.messageListView locateMessageCellWithMessageSeq:messageSeq];
+}
+
 @end

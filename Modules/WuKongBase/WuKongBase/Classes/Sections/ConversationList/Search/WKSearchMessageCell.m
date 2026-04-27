@@ -78,14 +78,38 @@
     self.nameLbl.text = name;
     self.contentLbl.attributedText = nil;
     if(model.content && ![model.content isEqualToString:@""]) {
-        self.contentLbl.attributedText = [self highlightText:model.content];
+        if (model.keyword && model.keyword.length > 0 && [model.content rangeOfString:@"<mark>"].location == NSNotFound) {
+            self.contentLbl.attributedText = [self highlightKeyword:model.keyword inText:model.content];
+        } else {
+            self.contentLbl.attributedText = [self highlightText:model.content];
+        }
     }else {
         self.contentLbl.text = [NSString stringWithFormat:LLang(@"%d 条相关聊天记录"),[model.messageCount intValue]];
     }
-    
-    self.timeLbl.text = [WKTimeTool getTimeStringAutoShort2:[NSDate dateWithTimeIntervalSince1970:model.timestamp] mustIncludeTime:true];
+
+    if (model.timestamp > 0) {
+        self.timeLbl.text = [WKTimeTool getTimeStringAutoShort2:[NSDate dateWithTimeIntervalSince1970:model.timestamp] mustIncludeTime:true];
+        self.timeLbl.hidden = NO;
+    } else {
+        self.timeLbl.text = @"";
+        self.timeLbl.hidden = YES;
+    }
     [self.timeLbl sizeToFit];
     
+}
+
+-(NSMutableAttributedString*) highlightKeyword:(NSString*)keyword inText:(NSString*)text {
+    NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:text attributes:@{NSForegroundColorAttributeName: [UIColor grayColor]}];
+    if (!keyword || keyword.length == 0) return attr;
+    NSRange searchRange = NSMakeRange(0, text.length);
+    while (searchRange.location < text.length) {
+        NSRange found = [text rangeOfString:keyword options:NSCaseInsensitiveSearch range:searchRange];
+        if (found.location == NSNotFound) break;
+        [attr addAttribute:NSForegroundColorAttributeName value:WKApp.shared.config.themeColor range:found];
+        searchRange.location = found.location + found.length;
+        searchRange.length = text.length - searchRange.location;
+    }
+    return attr;
 }
 
 -(NSMutableAttributedString*)  highlightText:(NSString*)text {

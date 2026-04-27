@@ -34,7 +34,11 @@
     if(dictory[@"version"]) {
         groupModel.version = [dictory[@"version"] longValue];
     }
-    
+    id isExternalGroupRaw = dictory[@"is_external_group"];
+    if([isExternalGroupRaw isKindOfClass:[NSNumber class]] || [isExternalGroupRaw isKindOfClass:[NSString class]]) {
+        groupModel.isExternalGroup = @([isExternalGroupRaw integerValue] == 1);
+    }
+
     return groupModel;
 }
 
@@ -69,7 +73,20 @@
     if(dictory[@"forbidden_expir_time"]) {
         model.forbiddenExpirTime = [dictory[@"forbidden_expir_time"] integerValue];
     }
-    
+    // 外部成员标识及来源 space（与后端 memberDetailResp 对齐）
+    id isExternalRaw = dictory[@"is_external"];
+    if([isExternalRaw isKindOfClass:[NSNumber class]] || [isExternalRaw isKindOfClass:[NSString class]]) {
+        model.isExternal = [isExternalRaw integerValue] == 1;
+    }
+    id sourceSpaceIdRaw = dictory[@"source_space_id"];
+    if([sourceSpaceIdRaw isKindOfClass:[NSString class]]) {
+        model.sourceSpaceId = sourceSpaceIdRaw;
+    }
+    id sourceSpaceNameRaw = dictory[@"source_space_name"];
+    if([sourceSpaceNameRaw isKindOfClass:[NSString class]]) {
+        model.sourceSpaceName = sourceSpaceNameRaw;
+    }
+
     return model;
 }
 
@@ -98,7 +115,17 @@
     if(self.forbiddenExpirTime>0) {
         channelMember.extra[@"forbidden_expir_time"] = @(self.forbiddenExpirTime);
     }
-    
+    // 外部成员标识 + 来源 space 名称（仅在标记为外部时落到 extra，避免污染普通成员）
+    if(self.isExternal) {
+        channelMember.extra[@"is_external"] = @(1);
+        if(self.sourceSpaceId && self.sourceSpaceId.length > 0) {
+            channelMember.extra[@"source_space_id"] = self.sourceSpaceId;
+        }
+        if(self.sourceSpaceName && self.sourceSpaceName.length > 0) {
+            channelMember.extra[@"source_space_name"] = self.sourceSpaceName;
+        }
+    }
+
     return channelMember;
 }
 

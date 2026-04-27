@@ -90,8 +90,8 @@
 
 @end
 
-static const NSInteger kTextTruncateThreshold = 3000; // 超过此长度截断
-static const NSInteger kTextPreviewLength = 2000;     // 预览显示的字符数
+static const NSInteger kTextTruncateThreshold = 10000; // 超过此长度截断
+static const NSInteger kTextPreviewLength = 8000;      // 预览显示的字符数
 static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高度
 
 
@@ -178,8 +178,38 @@ static NSMutableDictionary *_jsTableHeights;
     return CGSizeMake(size.width, size.height + securityTipHeight);
 }
 
++(WKMemoryCache*) textAttrCache {
+    static WKMemoryCache *cache;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        cache = [[WKMemoryCache alloc] init];
+        cache.maxCacheNum = 500;
+    });
+    return cache;
+}
+
++(NSString*) textAttrCacheKey:(WKMessageModel*)message {
+    NSString *key = [NSString stringWithFormat:@"%llu%@",message.messageId,message.clientMsgNo];
+    if(message.remoteExtra.contentEdit) {
+        key = [NSString stringWithFormat:@"%@-edit-%lu",message.clientMsgNo,message.remoteExtra.editedAt];
+    }
+    id rawContent = message.remoteExtra.contentEdit ?: [message content];
+    if ([rawContent isKindOfClass:[WKTextContent class]] && [((WKTextContent*)rawContent).format isEqualToString:@"html"]) {
+        key = [NSString stringWithFormat:@"%@-%lu",key,(unsigned long)WKApp.shared.config.style];
+    }
+    return key;
+}
+
++(NSMutableAttributedString*) plainTextAttrStr:(WKMessageModel*)model {
+    NSString *content = [self getRawContent:model];
+    NSMutableAttributedString *attrStr = [[NSMutableAttributedString alloc] initWithString:content ?: @""];
+    attrStr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+    UIColor *textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
+    [attrStr addAttribute:NSForegroundColorAttributeName value:textColor range:NSMakeRange(0, attrStr.length)];
+    return attrStr;
+}
+
 + (CGSize)contentSizeForMessage:(WKMessageModel *)model {
-    // 链接卡片固定大小
     NSString *checkContent = [self getRawContent:model];
     if ([checkContent hasPrefix:@"[链接]"]) {
         return CGSizeMake(220, 70);
@@ -319,9 +349,36 @@ static NSMutableDictionary *_jsTableHeights;
     [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
 
+static const NSUInteger kWebViewPoolLimit = 4;
+static NSMutableArray<WKWebView*> *_webViewPool;
+static WKWebViewConfiguration *_sharedWebViewConfig;
+
++(NSMutableArray<WKWebView*>*) webViewPool {
+    if (!_webViewPool) {
+        _webViewPool = [NSMutableArray array];
+    }
+    return _webViewPool;
+}
+
++(WKWebViewConfiguration*) sharedWebViewConfig {
+    if (!_sharedWebViewConfig) {
+        _sharedWebViewConfig = [[WKWebViewConfiguration alloc] init];
+    }
+    return _sharedWebViewConfig;
+}
+
 -(void) clearSegmentViews {
+    // 回收 WKWebView 到复用池
+    for (WKWebView *wv in self.tableWebViews) {
+        wv.navigationDelegate = nil;
+        [wv stopLoading];
+        [wv loadHTMLString:@"" baseURL:nil];
+        NSMutableArray *pool = [WKTextMessageCell webViewPool];
+        if (pool.count < kWebViewPoolLimit) {
+            [pool addObject:wv];
+        }
+    }
     for (UIView *v in self.segmentViews) {
-        // 不移除 textLbl（它是 initUI 创建的持久视图，移除后复用会空白）
         if (v != self.textLbl) { [v removeFromSuperview]; }
     }
     [self.segmentViews removeAllObjects];
@@ -333,8 +390,15 @@ static NSMutableDictionary *_jsTableHeights;
 }
 
 -(WKWebView*) createSegmentWebView {
-    WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
-    WKWebView *wv = [[WKWebView alloc] initWithFrame:CGRectZero configuration:config];
+    NSMutableArray *pool = [WKTextMessageCell webViewPool];
+    WKWebView *wv = nil;
+    if (pool.count > 0) {
+        wv = pool.lastObject;
+        [pool removeLastObject];
+        wv.frame = CGRectZero;
+    } else {
+        wv = [[WKWebView alloc] initWithFrame:CGRectZero configuration:[WKTextMessageCell sharedWebViewConfig]];
+    }
     wv.scrollView.scrollEnabled = NO;
     wv.backgroundColor = [UIColor clearColor];
     wv.opaque = NO;
@@ -433,44 +497,27 @@ static NSMutableDictionary *_jsTableHeights;
 
 
 +(NSMutableAttributedString*) parseAndCacheTextMessage:(WKMessageModel*)message {
-    
-    
-    if(message.streamOn && message.streamFlag!=WKStreamFlagEnd) { // 流式消息不缓存
+    if(message.streamOn && message.streamFlag!=WKStreamFlagEnd) {
         return [self getContentAttrStr:message];
     }
-    
-    static WKMemoryCache *memoryCache;
-    if(!memoryCache) {
-        memoryCache = [[WKMemoryCache alloc] init];
-        memoryCache.maxCacheNum = 5000; // AttributedString 缓存，每条 5-50KB
-    }
-    NSString *key = [NSString stringWithFormat:@"%llu%@",message.messageId,message.clientMsgNo];
+
+    NSString *key = [self textAttrCacheKey:message];
     id rawContent = [message content];
     if(message.remoteExtra.contentEdit) {
-        key = [NSString stringWithFormat:@"%@-edit-%lu",message.clientMsgNo,message.remoteExtra.editedAt];
         rawContent = message.remoteExtra.contentEdit;
     }
-    // 类型保护：竞态下 content 可能不是 WKTextContent
     if (![rawContent isKindOfClass:[WKTextContent class]]) {
         return [[NSMutableAttributedString alloc] initWithString:@""];
     }
-    WKTextContent *textContent = (WKTextContent*)rawContent;
-    if([textContent.format isEqualToString:@"html"]) {
-        key = [NSString stringWithFormat:@"%@-%lu",key,(unsigned long)WKApp.shared.config.style]; // 如果是html需要加上主题
-    }
-    NSMutableAttributedString *attrStr =  [memoryCache getCache:key];
+    NSMutableAttributedString *attrStr = [[self textAttrCache] getCache:key];
     if(attrStr) {
         return attrStr;
     }
-    
+
     attrStr = [self getContentAttrStr:message];
-    
-//    attrStr = [[self class] parseText:textContent isSend:message.isSend parseBefore:nil];
     if(key) {
-        [memoryCache setCache:attrStr forKey:key];
+        [[self textAttrCache] setCache:attrStr forKey:key];
     }
-  
-    
     return attrStr;
 }
 
@@ -522,12 +569,8 @@ static NSMutableDictionary *_jsTableHeights;
         renderContent = [[WKMarkdownRenderer removeTableMarkdown:content] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     }
 
-    // 尝试使用 Down 库进行 markdown 渲染
-    // Down 库内部使用 WebKit (NSHTMLReader) 运行嵌套 RunLoop，
-    // 在交互式转场（手势返回）期间会导致主线程死锁，跳过 markdown 渲染
-    BOOL isInteractiveTransition = [WKNavigationManager shared].topViewController.navigationController.transitionCoordinator.isInteractive;
     BOOL useMarkdown = NO;
-    if (!isInteractiveTransition && ![textContent.format isEqualToString:@"html"]) {
+    if (![textContent.format isEqualToString:@"html"]) {
         if (renderContent.length > 0 && [WKMarkdownRenderer containsMarkdown:renderContent]) {
             UIColor *textColor = message.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
             NSString *colorHex = [textColor toHexRGB];
@@ -727,82 +770,99 @@ static NSMutableDictionary *_jsTableHeights;
     return attrStr;
 }
 
-/// 自动检测文本中的 @mention（匹配群成员或联系人）
+/// 自动检测文本中的 @mention（用已知成员/联系人名字反向匹配，支持名字含空格）
 +(NSArray<id<WKMatchToken>>*) detectMentionsInText:(NSString*)text channel:(WKChannel*)channel existingTokens:(NSArray<id<WKMatchToken>>*)existingTokens {
     if (!text || text.length == 0) return @[];
 
     NSMutableArray<id<WKMatchToken>> *result = [NSMutableArray array];
 
-    // 用正则找出所有 @xxx 片段（@后跟非空白字符）
-    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"@(\\S+)" options:0 error:nil];
-    if (!regex) return @[];
+    // 收集所有候选名字 -> uid 的映射（名字按长度降序，优先匹配长名字）
+    NSMutableArray<NSDictionary*> *candidates = [NSMutableArray array];
 
-    NSArray<NSTextCheckingResult*> *matches = [regex matchesInString:text options:0 range:NSMakeRange(0, text.length)];
-    if (matches.count == 0) return @[];
-
-    // 获取可匹配的成员/联系人列表
     NSArray<WKChannelMember*> *members = nil;
     if (channel.channelType == WK_GROUP) {
         members = [[WKSDK shared].channelManager getMembersWithChannel:channel];
     }
-
-    for (NSTextCheckingResult *match in matches) {
-        NSRange fullRange = [match range];           // @xxx 的完整范围
-        NSRange nameRange = [match rangeAtIndex:1];  // xxx 部分
-
-        // 检查是否与已有 token 重叠，避免重复
-        BOOL overlaps = NO;
-        for (id<WKMatchToken> token in existingTokens) {
-            if (token.type != WKatchTokenTypeMetion) continue;
-            NSRange tr = token.range;
-            if (fullRange.location < tr.location + tr.length && tr.location < fullRange.location + fullRange.length) {
-                overlaps = YES;
-                break;
+    if (members) {
+        for (WKChannelMember *member in members) {
+            NSString *uid = member.memberUid;
+            WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:uid]];
+            NSMutableSet *names = [NSMutableSet set];
+            if (info) {
+                if (info.name.length > 0) [names addObject:info.name];
+                if (info.remark.length > 0) [names addObject:info.remark];
+                if (info.displayName.length > 0) [names addObject:info.displayName];
+            }
+            if (member.memberName.length > 0) [names addObject:member.memberName];
+            if (uid.length > 0) [names addObject:uid];
+            for (NSString *name in names) {
+                [candidates addObject:@{@"name": name, @"uid": uid}];
             }
         }
-        if (overlaps) continue;
+    }
 
-        NSString *mentionName = [text substringWithRange:nameRange];
-        NSString *matchedUID = nil;
+    // 补充联系人
+    NSArray<WKChannelInfo*> *allContacts = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
+    NSMutableSet *memberUids = [NSMutableSet set];
+    for (NSDictionary *c in candidates) [memberUids addObject:c[@"uid"]];
+    for (WKChannelInfo *info in allContacts) {
+        if ([memberUids containsObject:info.channel.channelId]) continue;
+        NSMutableSet *names = [NSMutableSet set];
+        if (info.name.length > 0) [names addObject:info.name];
+        if (info.remark.length > 0) [names addObject:info.remark];
+        if (info.displayName.length > 0) [names addObject:info.displayName];
+        for (NSString *name in names) {
+            [candidates addObject:@{@"name": name, @"uid": info.channel.channelId}];
+        }
+    }
 
-        // 在群成员中匹配（名字/备注/uid）
-        if (members) {
-            for (WKChannelMember *member in members) {
-                WKChannelInfo *memberInfo = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:member.memberUid]];
-                if (memberInfo) {
-                    if (([memberInfo.name isEqualToString:mentionName]) ||
-                        (memberInfo.remark && [memberInfo.remark isEqualToString:mentionName]) ||
-                        ([memberInfo.displayName isEqualToString:mentionName]) ||
-                        ([member.memberUid isEqualToString:mentionName])) {
-                        matchedUID = member.memberUid;
-                        break;
+    // 按名字长度降序排列，优先匹配长名字（避免短前缀误匹配）
+    [candidates sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [@([b[@"name"] length]) compare:@([a[@"name"] length])];
+    }];
+
+    // 已匹配的范围（防止重叠）
+    NSMutableArray<NSValue*> *matchedRanges = [NSMutableArray array];
+
+    for (NSDictionary *candidate in candidates) {
+        NSString *name = candidate[@"name"];
+        NSString *uid = candidate[@"uid"];
+        NSString *pattern = [NSString stringWithFormat:@"@%@", name];
+
+        NSRange searchRange = NSMakeRange(0, text.length);
+        while (searchRange.location < text.length) {
+            NSRange found = [text rangeOfString:pattern options:0 range:searchRange];
+            if (found.location == NSNotFound) break;
+
+            // 推进搜索范围
+            searchRange.location = found.location + found.length;
+            searchRange.length = text.length - searchRange.location;
+
+            // 检查与已有 token 和已匹配范围是否重叠
+            BOOL overlaps = NO;
+            for (id<WKMatchToken> token in existingTokens) {
+                if (token.type != WKatchTokenTypeMetion) continue;
+                NSRange tr = token.range;
+                if (found.location < tr.location + tr.length && tr.location < found.location + found.length) {
+                    overlaps = YES; break;
+                }
+            }
+            if (!overlaps) {
+                for (NSValue *v in matchedRanges) {
+                    NSRange mr = [v rangeValue];
+                    if (found.location < mr.location + mr.length && mr.location < found.location + found.length) {
+                        overlaps = YES; break;
                     }
-                } else if ([member.memberUid isEqualToString:mentionName] ||
-                           (member.memberName && [member.memberName isEqualToString:mentionName])) {
-                    matchedUID = member.memberUid;
-                    break;
                 }
             }
-        }
+            if (overlaps) continue;
 
-        // 群成员没匹配到，尝试从联系人缓存中按名字匹配
-        if (!matchedUID) {
-            NSArray<WKChannelInfo*> *allContacts = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
-            for (WKChannelInfo *info in allContacts) {
-                if (([info.name isEqualToString:mentionName]) ||
-                    (info.remark && [info.remark isEqualToString:mentionName]) ||
-                    ([info.displayName isEqualToString:mentionName])) {
-                    matchedUID = info.channel.channelId;
-                    break;
-                }
-            }
-        }
+            [matchedRanges addObject:[NSValue valueWithRange:found]];
 
-        if (matchedUID) {
             WKMetionToken *token = [WKMetionToken new];
-            token.range = fullRange;
-            token.uid = matchedUID;
-            token.text = [text substringWithRange:fullRange];
+            token.range = found;
+            token.uid = uid;
+            token.text = [text substringWithRange:found];
             [result addObject:token];
             NSLog(@"[Mention] autoDetect ✅ \"%@\" → uid=%@", token.text, matchedUID);
         } else {
@@ -1014,7 +1074,7 @@ static NSMutableDictionary *_jsTableHeights;
     UIColor *textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
     NSString *colorHex = [textColor toHexRGB];
     CGFloat totalHeight = 0;
-    NSInteger tableSegIdx = 0;
+    UIFont *baseFont = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
 
     for (NSUInteger i = 0; i < segments.count; i++) {
         NSDictionary *seg = segments[i];
@@ -1023,22 +1083,27 @@ static NSMutableDictionary *_jsTableHeights;
         CGFloat spacing = (i < segments.count - 1) ? kTableTopSpace : 0;
 
         if ([type isEqualToString:@"text"]) {
-            NSAttributedString *segAttr = nil;
-            BOOL skipMarkdown = [WKNavigationManager shared].topViewController.navigationController.transitionCoordinator.isInteractive;
-            if (!skipMarkdown && [WKMarkdownRenderer containsMarkdown:content]) {
+            NSAttributedString *attrForMeasure = nil;
+            if ([WKMarkdownRenderer containsMarkdown:content]) {
                 @try {
-                    segAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
-                } @catch (NSException *e) { segAttr = nil; }
+                    attrForMeasure = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+                } @catch (NSException *e) {
+                    attrForMeasure = nil;
+                }
             }
-            if (!segAttr) {
+            if (!attrForMeasure) {
                 NSMutableAttributedString *plainAttr = [[NSMutableAttributedString alloc] init];
-                plainAttr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+                plainAttr.font = baseFont;
                 plainAttr.textColor = textColor;
                 [plainAttr lim_render:content tokens:nil];
-                segAttr = plainAttr;
+                attrForMeasure = plainAttr;
             }
-            CGFloat segH = [[self class] measureTextViewHeight:segAttr maxWidth:maxWidth];
-            totalHeight += ceil(segH) + spacing;
+            // boundingRect 是线程安全的，可在后台线程调用
+            // +4 补偿 boundingRect 与 UILabel.sizeThatFits 的测量偏差
+            CGRect rect = [attrForMeasure boundingRectWithSize:CGSizeMake(maxWidth, CGFLOAT_MAX)
+                                                       options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                                       context:nil];
+            totalHeight += ceil(rect.size.height) + 4.0f + spacing;
         } else {
             // 表格段：优先使用 JS 返回的实际内容高度，否则用公式估算
             NSString *jsKey = [NSString stringWithFormat:@"%@-%ld", model.clientMsgNo, (long)tableSegIdx];
@@ -1218,9 +1283,7 @@ static NSMutableDictionary *_jsTableHeights;
                         lbl.backgroundColor = [UIColor clearColor];
                         [self.messageContentView addSubview:lbl];
                     }
-                    // markdown 渲染 + 链接提取（交互式转场期间跳过，避免死锁）
-                    BOOL skipMd = [WKNavigationManager shared].topViewController.navigationController.transitionCoordinator.isInteractive;
-                    if (!skipMd && [WKMarkdownRenderer containsMarkdown:content]) {
+                    if ([WKMarkdownRenderer containsMarkdown:content]) {
                         NSAttributedString *mdAttr = nil;
                         @try {
                             mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex dynamicTextColor:textColor];
@@ -1342,14 +1405,16 @@ static NSMutableDictionary *_jsTableHeights;
         self.segmentsBuilt = NO;
     }
 
-    // 超长文本：显示"查看全文"按钮
+    // 超长文本：显示"查看全文"按钮（样式参考 bot 审批按钮）
     if ([[self class] isLongText:model]) {
         if (!self.viewFullTextBtn) {
-            self.viewFullTextBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+            self.viewFullTextBtn = [UIButton buttonWithType:UIButtonTypeCustom];
             [self.viewFullTextBtn setTitle:LLang(@"查看全文") forState:UIControlStateNormal];
-            self.viewFullTextBtn.titleLabel.font = [[WKApp shared].config appFontOfSize:14.0f];
             [self.viewFullTextBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
-            [self.viewFullTextBtn addTarget:self action:@selector(viewFullTextTapped) forControlEvents:UIControlEventTouchUpInside];
+            self.viewFullTextBtn.titleLabel.font = [[WKApp shared].config appFontOfSize:14.0f];
+            self.viewFullTextBtn.backgroundColor = [[WKApp shared].config.themeColor colorWithAlphaComponent:0.1];
+            self.viewFullTextBtn.layer.cornerRadius = 4.0f;
+            self.viewFullTextBtn.layer.masksToBounds = YES;
             [self.messageContentView addSubview:self.viewFullTextBtn];
         }
         self.viewFullTextBtn.hidden = NO;
@@ -1411,6 +1476,14 @@ static NSMutableDictionary *_jsTableHeights;
                 [self copyTableTapped:(UIButton*)sub];
                 return;
             }
+        }
+    }
+    // "查看全文"按钮点击检测
+    if (self.viewFullTextBtn && !self.viewFullTextBtn.hidden) {
+        CGPoint pointInContent = [self.messageContentView convertPoint:gesture.tapPoint fromView:self.contentView];
+        if (CGRectContainsPoint(self.viewFullTextBtn.frame, pointInContent)) {
+            [self viewFullTextTapped];
+            return;
         }
     }
     // BotFather 审批按钮点击检测

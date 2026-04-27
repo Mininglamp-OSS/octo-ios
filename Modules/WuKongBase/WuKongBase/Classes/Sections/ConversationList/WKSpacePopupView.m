@@ -214,7 +214,6 @@
 
 - (void)createFooterButtons {
     NSArray *items = @[
-        @{@"title": LLang(@"创建Space"), @"action": @"createSpace", @"icon": @"➕"},
         @{@"title": LLang(@"加入Space"), @"action": @"joinSpace", @"icon": @"🔍"},
         @{@"title": LLang(@"显示全部"), @"action": @"showAll", @"icon": @""}
     ];
@@ -266,13 +265,10 @@
     [self dismiss];
 
     switch (sender.tag) {
-        case 0: // 创建空间
-            [self showCreateSpaceDialog];
-            break;
-        case 1: // 加入空间
+        case 0: // 加入空间
             [self showJoinSpaceDialog];
             break;
-        case 2: // 显示全部
+        case 1: // 显示全部
             [self loadSpaces];
             break;
     }
@@ -353,60 +349,6 @@
             }
         });
     });
-}
-
-- (void)showCreateSpaceDialog {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"创建Space") message:nil preferredStyle:UIAlertControllerStyleAlert];
-
-    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-        textField.placeholder = LLang(@"Space名称");
-    }];
-
-    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-        textField.placeholder = LLang(@"描述(可选)");
-    }];
-
-    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
-
-    __weak typeof(self) weakSelf = self;
-    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"创建") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        NSString *name = alert.textFields[0].text;
-        NSString *desc = alert.textFields[1].text;
-
-        if (!name || name.length == 0) {
-            UIWindow *window = [UIApplication sharedApplication].keyWindow;
-            if (!window) {
-                window = [[UIApplication sharedApplication].windows firstObject];
-            }
-            [window showMsg:LLang(@"请输入Space名称")];
-            return;
-        }
-
-        UIWindow *window = [UIApplication sharedApplication].keyWindow;
-        if (!window) {
-            window = [[UIApplication sharedApplication].windows firstObject];
-        }
-        [window showHUD:LLang(@"创建中...")];
-        [[WKSpaceModel shared] createSpaceWithName:name description:desc].then(^(WKSpaceEntity *space){
-            [window hideHud];
-            [window showMsg:LLang(@"创建成功")];
-            // 自动切换到新创建的空间
-            if (space) {
-                [weakSelf dismiss];
-                if (weakSelf.onSpaceSelected) {
-                    weakSelf.onSpaceSelected(space);
-                }
-            } else {
-                [weakSelf loadSpaces];
-            }
-        }).catch(^(NSError *error){
-            [window hideHud];
-            [window showMsg:error.localizedDescription];
-        });
-    }]];
-
-    UIViewController *topVC = [self topViewController];
-    [topVC presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)showJoinSpaceDialog {

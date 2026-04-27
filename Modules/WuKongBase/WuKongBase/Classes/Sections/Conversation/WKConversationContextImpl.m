@@ -857,7 +857,7 @@
 }
 
 -(NSArray<WKMentionUserCellModel*>*) membersToMentionUsers:(NSArray<WKChannelMember*>*)members role:(WKMemberRole)role keyword:(NSString*)keyword{
-    
+
     NSMutableArray<WKMentionUserCellModel*> *users = [NSMutableArray array];
     // @所有人 对所有群成员可见，对齐 Web 端行为（移除管理员角色限制）
     NSString *allStr = LLang(@"所有人");
@@ -866,7 +866,7 @@
     }
     if(members && members.count>0) {
         for (WKChannelMember *member in members) {
-            if([member.memberUid isEqualToString:[WKApp shared].loginInfo.uid]) { // 自己不在@列表那
+            if([member.memberUid isEqualToString:[WKApp shared].loginInfo.uid]) {
                 continue;
             }
             NSString *name = member.displayName;
@@ -945,13 +945,20 @@
 }
 
 
+-(void) addMentionItems:(NSArray<WKInputMentionItem *> *)items {
+    for (WKInputMentionItem *item in items) {
+        [self.mentionCache addMentionItem:item];
+    }
+}
+
 -(NSString*) addMentionToCache:(NSArray<NSString*>*)uids {
     if(!uids || uids.count==0) {
         return @"";
     }
-    NSArray<WKChannelMember*> *mentionMembers = [[WKChannelMemberDB shared] getMembersWithChannel:self.channel uids:[uids filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"NOT (SELF in %@)",@"all"]]];
+
+    NSArray<WKChannelMember*> *mentionMembers = [[WKChannelMemberDB shared] getMembersWithChannel:self.channel uids:[uids filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"NOT (SELF in %@)",@[@"all"]]]];
     NSMutableString *str = [[NSMutableString alloc] initWithString:@""];
-    
+
     NSMutableDictionary *memberDict = [NSMutableDictionary dictionary];
     if(mentionMembers && mentionMembers.count>0) {
         for (WKChannelMember *mentionMember in mentionMembers) {
@@ -960,9 +967,9 @@
     }
 
     for (NSString *uid in uids) {
-        
+
         WKChannelMember *mentionMember =  memberDict[uid];
-        
+
         WKInputMentionItem *item = [[WKInputMentionItem alloc] init];
         item.uid  = uid;
         if(mentionMember) {
@@ -973,16 +980,16 @@
             }
         }else if([uid isEqualToString:@"all"]) {
             item.name = LLang(@"所有人");
-        }else  { // 这种情况是群成员退群了，不在群里
+        }else  {
            WKChannelInfo *memberUserInfo =  [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:uid]];
             if(memberUserInfo) {
                 item.name = [self handleMentionName:memberUserInfo.name];
-                
+
             }else {
-                item.name = @""; // 这种情况理论上应该不会发生，如果发生则给个空字符串避免闪退
+                item.name = @"";
             }
         }
-       
+
         [self.mentionCache addMentionItem:item];
         [str appendString:WKInputAtStartChar];
         [str appendString:item.name];

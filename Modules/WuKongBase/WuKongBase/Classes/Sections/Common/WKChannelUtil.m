@@ -62,7 +62,26 @@
     if(extra && extra != [NSNull null]) {
         channelInfo.extra = [NSMutableDictionary dictionaryWithDictionary:extra];
     }
-    
+
+    // GROUP.md 状态：优先顶层字段，兜底 extra（与 Web 端对齐）
+    if (resultDict[@"has_group_md"]) {
+        channelInfo.extra[@"has_group_md"] = resultDict[@"has_group_md"];
+    }
+    if (resultDict[@"group_md_version"]) {
+        channelInfo.extra[@"group_md_version"] = resultDict[@"group_md_version"];
+    }
+    if (resultDict[@"has_thread_md"]) {
+        channelInfo.extra[@"has_thread_md"] = resultDict[@"has_thread_md"];
+    }
+    if (resultDict[@"thread_md_version"]) {
+        channelInfo.extra[@"thread_md_version"] = resultDict[@"thread_md_version"];
+    }
+    // 外部群标识：来自 GroupResp.is_external_group（与 Web 端对齐）。NSNull 防御：仅接受 NSNumber/NSString。
+    id externalGroupRaw = resultDict[@"is_external_group"];
+    if([externalGroupRaw isKindOfClass:[NSNumber class]] || [externalGroupRaw isKindOfClass:[NSString class]]) {
+        channelInfo.extra[@"is_external_group"] = @([externalGroupRaw integerValue]);
+    }
+
     return channelInfo;
 }
 

@@ -99,6 +99,9 @@
             [self layoutConversationPositionBarView];
         }];
     }
+    if(hasDone) {
+        [self markReminderDoneIfNeed];
+    }
 }
 
 -(void) updatePostionReminders {
