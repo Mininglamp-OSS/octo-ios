@@ -412,6 +412,8 @@ static NSTimeInterval _lastShowTime = 0;
 
 - (void)onTap {
     void(^action)(void) = self.tapAction;
+    // 点击后设 3 秒冷却，防止右滑返回后因旧未读又弹出
+    _lastShowTime = [NSDate date].timeIntervalSince1970 + 2.5;
     [self cleanup];
     if (action) action();
 }

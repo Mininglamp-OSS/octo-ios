@@ -2950,9 +2950,14 @@
     NSTimeInterval msgTime = conv.lastMessage.timestamp;
     if (msgTime < self.connectedAtTime) return;
 
+    CFAbsoluteTime p0 = CFAbsoluteTimeGetCurrent();
+
     WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:channel];
     if (!info) return;
     if (info.mute) return;
+
+    CFAbsoluteTime p1 = CFAbsoluteTimeGetCurrent();
+    NSLog(@"[HUD-Perf] getChannelInfo: %.2fms", (p1 - p0) * 1000);
 
     NSString *avatarURL = nil;
     NSString *name = info.displayName ?: @"";
@@ -2964,19 +2969,46 @@
         }
     }
 
+    CFAbsoluteTime p2 = CFAbsoluteTimeGetCurrent();
+    NSLog(@"[HUD-Perf] avatarURL: %.2fms", (p2 - p1) * 1000);
+
     NSString *content = nil;
     if (conv.lastMessage.content) {
-        content = [conv.lastMessage.content conversationDigest];
+        NSString *digest = [conv.lastMessage.content conversationDigest];
+        NSString *senderName = nil;
+        if (conv.lastMessage.fromUid.length > 0) {
+            WKChannel *senderChannel = [WKChannel channelID:conv.lastMessage.fromUid channelType:WK_PERSON];
+            WKChannelInfo *senderInfo = [[WKSDK shared].channelManager getChannelInfo:senderChannel];
+            senderName = senderInfo.displayName;
+        }
+        if (senderName.length > 0 && digest.length > 0) {
+            content = [NSString stringWithFormat:@"%@: %@", senderName, digest];
+        } else {
+            content = digest;
+        }
     }
 
-    __weak typeof(self) weakSelf = self;
+    CFAbsoluteTime p3 = CFAbsoluteTimeGetCurrent();
+    NSLog(@"[HUD-Perf] conversationDigest: %.2fms", (p3 - p2) * 1000);
+
+    uint32_t msgSeq = conv.lastMessage.messageSeq;
     [WKPixelParticleHint showInView:self.view
                           avatarURL:avatarURL
                                name:name
                             content:content
                               onTap:^{
-        [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:channel];
+        WKConversationVC *vc = [WKConversationVC new];
+        vc.channel = channel;
+        if (msgSeq > 0) {
+            uint32_t orderSeq = [[WKSDK shared].chatManager getOrderSeq:msgSeq];
+            if (orderSeq == 0) orderSeq = msgSeq;
+            vc.locationAtOrderSeq = orderSeq;
+        }
+        [[WKNavigationManager shared] pushViewController:vc animated:YES];
     }];
+
+    CFAbsoluteTime p4 = CFAbsoluteTimeGetCurrent();
+    NSLog(@"[HUD-Perf] === TOTAL showPixelHint: %.2fms ===", (p4 - p0) * 1000);
 }
 
 @end
