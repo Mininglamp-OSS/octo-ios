@@ -2,7 +2,7 @@
 //  WKPixelParticleHint.m
 //  WuKongBase
 //
-//  Cyberpunk HUD — 未来极客风消息提醒
+//  Cyberpunk HUD — 复用单例 + RunLoop兼容
 
 #import "WKPixelParticleHint.h"
 #import "WKApp.h"
@@ -23,21 +23,34 @@ static const CGFloat kAvatarSize = 34.0f;
 @property (nonatomic, strong) CAGradientLayer *borderGradient;
 @property (nonatomic, strong) CAShapeLayer *cornerBrackets;
 @property (nonatomic, strong) NSTimer *typewriterTimer;
+@property (nonatomic, strong) NSTimer *dismissTimer;
 @property (nonatomic, copy) NSString *fullContentText;
 @property (nonatomic, assign) NSInteger typewriterIndex;
+@property (nonatomic, assign) BOOL hudBuilt;
 @property (nonatomic, copy, nullable) void(^tapAction)(void);
 @end
 
-static WKPixelParticleHint *_currentHint = nil;
+static WKPixelParticleHint *_sharedHint = nil;
 
 @implementation WKPixelParticleHint
+
+#pragma mark - Singleton & Show
+
++ (WKPixelParticleHint *)sharedHint {
+    if (!_sharedHint) {
+        _sharedHint = [[WKPixelParticleHint alloc] initWithFrame:CGRectMake(0, 0, kHintWidth, kHintHeight)];
+    }
+    return _sharedHint;
+}
 
 + (void)showInView:(UIView *)parentView
          avatarURL:(nullable NSString *)avatarURL
               name:(NSString *)name
            content:(nullable NSString *)content
              onTap:(nullable void(^)(void))onTap {
-    [self dismissCurrent];
+
+    WKPixelParticleHint *hint = [self sharedHint];
+    [hint cancelTimers];
 
     CGFloat tabBarH = 49.0f;
     CGFloat safeBottom = 0;
@@ -48,27 +61,35 @@ static WKPixelParticleHint *_currentHint = nil;
     CGFloat targetY = parentView.bounds.size.height - safeBottom - tabBarH - kHintHeight + 16.0f;
     CGFloat startY = parentView.bounds.size.height;
 
-    WKPixelParticleHint *hint = [[WKPixelParticleHint alloc] initWithFrame:
-        CGRectMake(centerX - kHintWidth / 2.0f, startY, kHintWidth, kHintHeight)];
     hint.tapAction = onTap;
-    [parentView addSubview:hint];
-    _currentHint = hint;
 
-    [hint buildHUDWithAvatarURL:avatarURL name:name content:content];
-    [hint animateSlideInToY:targetY];
+    if (!hint.hudBuilt) {
+        [hint buildHUD];
+    }
+
+    [hint updateContentWithAvatarURL:avatarURL name:name content:content];
+
+    if (hint.superview != parentView) {
+        [hint removeFromSuperview];
+        hint.frame = CGRectMake(centerX - kHintWidth / 2.0f, startY, kHintWidth, kHintHeight);
+        [parentView addSubview:hint];
+        [hint animateSlideInToY:targetY];
+    } else {
+        // 已在同一父视图，直接更新位置并重新播放内容动画
+        hint.alpha = 1.0;
+        CGRect f = hint.frame;
+        f.origin.y = targetY;
+        hint.frame = f;
+        [hint animateContentReveal];
+    }
 }
 
 + (void)dismissCurrent {
-    if (_currentHint) {
-        [_currentHint.typewriterTimer invalidate];
-        _currentHint.typewriterTimer = nil;
-        [_currentHint.layer removeAllAnimations];
-        for (CALayer *sub in _currentHint.hudCard.layer.sublayers.copy) {
-            [sub removeAllAnimations];
-        }
-        [_currentHint removeFromSuperview];
-        _currentHint = nil;
-    }
+    WKPixelParticleHint *hint = _sharedHint;
+    if (!hint || !hint.superview) return;
+    [hint cancelTimers];
+    [hint stopRepeatingAnimations];
+    [hint removeFromSuperview];
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -81,22 +102,35 @@ static WKPixelParticleHint *_currentHint = nil;
     return self;
 }
 
-#pragma mark - Build HUD
+- (void)cancelTimers {
+    [_typewriterTimer invalidate];
+    _typewriterTimer = nil;
+    [_dismissTimer invalidate];
+    _dismissTimer = nil;
+}
 
-- (void)buildHUDWithAvatarURL:(nullable NSString *)avatarURL name:(NSString *)name content:(nullable NSString *)content {
+- (void)stopRepeatingAnimations {
+    [_scanLine.layer removeAllAnimations];
+    [_borderGradient removeAllAnimations];
+    [_cornerBrackets removeAllAnimations];
+}
+
+#pragma mark - Build HUD (once)
+
+- (void)buildHUD {
     UIColor *cyan = [UIColor colorWithRed:0.0 green:1.0 blue:0.92 alpha:1.0];
     UIColor *magenta = [UIColor colorWithRed:1.0 green:0.0 blue:0.6 alpha:1.0];
     UIColor *theme = [WKApp shared].config.themeColor;
     UIColor *cyanDim = [cyan colorWithAlphaComponent:0.25];
 
-    // ========= 主卡片 =========
+    // 主卡片
     _hudCard = [[UIView alloc] initWithFrame:self.bounds];
     _hudCard.backgroundColor = [UIColor colorWithRed:0.02 green:0.04 blue:0.1 alpha:0.94];
     _hudCard.layer.cornerRadius = 4.0f;
     _hudCard.layer.masksToBounds = YES;
     [self addSubview:_hudCard];
 
-    // ========= 边框 — 青+紫渐变流动 =========
+    // 边框
     CAShapeLayer *borderMask = [CAShapeLayer layer];
     borderMask.path = [UIBezierPath bezierPathWithRoundedRect:self.bounds cornerRadius:4.0f].CGPath;
     borderMask.fillColor = [UIColor clearColor].CGColor;
@@ -117,35 +151,30 @@ static WKPixelParticleHint *_currentHint = nil;
     _borderGradient.mask = borderMask;
     [_hudCard.layer addSublayer:_borderGradient];
 
-    // ========= 外发光 — 双层 =========
+    // 外发光 — 用 shadowPath 优化性能
     self.layer.shadowColor = cyan.CGColor;
     self.layer.shadowOpacity = 0.5;
     self.layer.shadowRadius = 15;
     self.layer.shadowOffset = CGSizeZero;
+    self.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:self.bounds cornerRadius:4.0f].CGPath;
 
-    // ========= 四角方括号装饰 =========
+    // 四角方括号
     _cornerBrackets = [CAShapeLayer layer];
     UIBezierPath *brackets = [UIBezierPath bezierPath];
-    CGFloat bLen = 10.0f;
-    CGFloat bInset = 2.0f;
+    CGFloat bLen = 10.0f, bInset = 2.0f;
     CGFloat W = kHintWidth, H = kHintHeight;
-    // 左上
     [brackets moveToPoint:CGPointMake(bInset, bInset + bLen)];
     [brackets addLineToPoint:CGPointMake(bInset, bInset)];
     [brackets addLineToPoint:CGPointMake(bInset + bLen, bInset)];
-    // 右上
     [brackets moveToPoint:CGPointMake(W - bInset - bLen, bInset)];
     [brackets addLineToPoint:CGPointMake(W - bInset, bInset)];
     [brackets addLineToPoint:CGPointMake(W - bInset, bInset + bLen)];
-    // 右下
     [brackets moveToPoint:CGPointMake(W - bInset, H - bInset - bLen)];
     [brackets addLineToPoint:CGPointMake(W - bInset, H - bInset)];
     [brackets addLineToPoint:CGPointMake(W - bInset - bLen, H - bInset)];
-    // 左下
     [brackets moveToPoint:CGPointMake(bInset + bLen, H - bInset)];
     [brackets addLineToPoint:CGPointMake(bInset, H - bInset)];
     [brackets addLineToPoint:CGPointMake(bInset, H - bInset - bLen)];
-
     _cornerBrackets.path = brackets.CGPath;
     _cornerBrackets.strokeColor = [cyan colorWithAlphaComponent:0.7].CGColor;
     _cornerBrackets.fillColor = [UIColor clearColor].CGColor;
@@ -153,7 +182,7 @@ static WKPixelParticleHint *_currentHint = nil;
     _cornerBrackets.lineCap = kCALineCapSquare;
     [_hudCard.layer addSublayer:_cornerBrackets];
 
-    // ========= 扫描线 =========
+    // 扫描线
     _scanLine = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kHintWidth, 2)];
     CAGradientLayer *scanGrad = [CAGradientLayer layer];
     scanGrad.frame = _scanLine.bounds;
@@ -168,7 +197,7 @@ static WKPixelParticleHint *_currentHint = nil;
     [_scanLine.layer addSublayer:scanGrad];
     [_hudCard addSubview:_scanLine];
 
-    // ========= 横向细网格线（科幻感） =========
+    // 网格线（静态，只创建一次）
     for (NSInteger i = 1; i <= 3; i++) {
         CGFloat y = kHintHeight * i / 4.0f;
         UIView *gridLine = [[UIView alloc] initWithFrame:CGRectMake(8, y, kHintWidth - 16, 0.5)];
@@ -176,7 +205,7 @@ static WKPixelParticleHint *_currentHint = nil;
         [_hudCard addSubview:gridLine];
     }
 
-    // ========= 左侧装饰条 — 紫→青 =========
+    // 左侧装饰条
     UIView *leftBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 3, kHintHeight)];
     CAGradientLayer *barGrad = [CAGradientLayer layer];
     barGrad.frame = leftBar.bounds;
@@ -186,7 +215,7 @@ static WKPixelParticleHint *_currentHint = nil;
     [leftBar.layer addSublayer:barGrad];
     [_hudCard addSubview:leftBar];
 
-    // ========= 顶部标签 "INCOMING" =========
+    // 顶部标签
     _tagLabel = [[UILabel alloc] initWithFrame:CGRectMake(kHintWidth - 80, 5, 70, 10)];
     _tagLabel.font = [UIFont fontWithName:@"Menlo" size:7] ?: [UIFont systemFontOfSize:7 weight:UIFontWeightMedium];
     _tagLabel.textColor = [magenta colorWithAlphaComponent:0.7];
@@ -194,24 +223,24 @@ static WKPixelParticleHint *_currentHint = nil;
     _tagLabel.text = @"⚡ INCOMING";
     [_hudCard addSubview:_tagLabel];
 
-    // ========= 头像 =========
+    // 头像外框
     CGFloat avatarX = 14.0f;
     CGFloat avatarY = (kHintHeight - kAvatarSize) / 2.0f;
 
-    // 头像外框发光
     UIView *avatarGlow = [[UIView alloc] initWithFrame:CGRectMake(avatarX - 2, avatarY - 2, kAvatarSize + 4, kAvatarSize + 4)];
     avatarGlow.layer.cornerRadius = 4.0f;
     avatarGlow.layer.borderWidth = 1.0f;
     avatarGlow.layer.borderColor = cyanDim.CGColor;
-    avatarGlow.backgroundColor = [UIColor clearColor];
     [_hudCard addSubview:avatarGlow];
 
+    // 头像
     _avatarView = [[UIImageView alloc] initWithFrame:CGRectMake(avatarX, avatarY, kAvatarSize, kAvatarSize)];
     _avatarView.layer.cornerRadius = 4.0f;
     _avatarView.layer.masksToBounds = YES;
     _avatarView.contentMode = UIViewContentModeScaleAspectFill;
     [_hudCard addSubview:_avatarView];
 
+    // 首字备选
     _initialLabel = [[UILabel alloc] initWithFrame:_avatarView.frame];
     _initialLabel.textAlignment = NSTextAlignmentCenter;
     _initialLabel.font = [UIFont fontWithName:@"Menlo-Bold" size:20] ?: [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
@@ -222,23 +251,7 @@ static WKPixelParticleHint *_currentHint = nil;
     _initialLabel.hidden = YES;
     [_hudCard addSubview:_initialLabel];
 
-    if (avatarURL && avatarURL.length > 0) {
-        [_avatarView sd_setImageWithURL:[NSURL URLWithString:avatarURL]
-                       placeholderImage:nil
-                              completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, NSURL *imageURL) {
-            if (!image) {
-                self.avatarView.hidden = YES;
-                self.initialLabel.hidden = NO;
-                self.initialLabel.text = name.length > 0 ? [name substringToIndex:1] : @"#";
-            }
-        }];
-    } else {
-        _avatarView.hidden = YES;
-        _initialLabel.hidden = NO;
-        _initialLabel.text = name.length > 0 ? [name substringToIndex:1] : @"#";
-    }
-
-    // ========= 文字 =========
+    // 名称
     CGFloat textLeft = avatarX + kAvatarSize + 12.0f;
     CGFloat textWidth = kHintWidth - textLeft - 16.0f;
 
@@ -246,27 +259,16 @@ static WKPixelParticleHint *_currentHint = nil;
     _nameLabel.font = [UIFont fontWithName:@"Menlo-Bold" size:11] ?: [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
     _nameLabel.textColor = [UIColor whiteColor];
     _nameLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-    NSString *displayName = name.length > 14 ? [NSString stringWithFormat:@"%@…", [name substringToIndex:14]] : name;
-    _nameLabel.text = [NSString stringWithFormat:@"▸ %@", displayName];
-    _nameLabel.alpha = 0;
     [_hudCard addSubview:_nameLabel];
 
+    // 消息内容
     _contentLabel = [[UILabel alloc] initWithFrame:CGRectMake(textLeft, 30.0f, textWidth, 16)];
     _contentLabel.font = [UIFont fontWithName:@"Menlo" size:10] ?: [UIFont systemFontOfSize:10];
     _contentLabel.textColor = [cyan colorWithAlphaComponent:0.75];
     _contentLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-    _contentLabel.text = @"";
     [_hudCard addSubview:_contentLabel];
 
-    if (content && content.length > 0) {
-        NSString *truncated = content.length > 22 ? [NSString stringWithFormat:@"%@…", [content substringToIndex:22]] : content;
-        _fullContentText = truncated;
-    } else {
-        _fullContentText = @"";
-    }
-    _typewriterIndex = 0;
-
-    // ========= 右下角三角 — 品红 =========
+    // 右下角三角
     UIView *cornerMark = [[UIView alloc] initWithFrame:CGRectMake(kHintWidth - 18, kHintHeight - 18, 14, 14)];
     CAShapeLayer *tri = [CAShapeLayer layer];
     UIBezierPath *triPath = [UIBezierPath bezierPath];
@@ -279,6 +281,54 @@ static WKPixelParticleHint *_currentHint = nil;
     [cornerMark.layer addSublayer:tri];
     [_hudCard addSubview:cornerMark];
 
+    // 栅格化整个卡片提升渲染性能
+    _hudCard.layer.shouldRasterize = YES;
+    _hudCard.layer.rasterizationScale = [UIScreen mainScreen].scale;
+
+    _hudBuilt = YES;
+}
+
+#pragma mark - Update Content (reuse)
+
+- (void)updateContentWithAvatarURL:(nullable NSString *)avatarURL name:(NSString *)name content:(nullable NSString *)content {
+    // 更新内容时临时关闭栅格化（内容在变）
+    _hudCard.layer.shouldRasterize = NO;
+
+    // 头像
+    _avatarView.image = nil;
+    _avatarView.hidden = NO;
+    _initialLabel.hidden = YES;
+
+    if (avatarURL && avatarURL.length > 0) {
+        __weak typeof(self) weakSelf = self;
+        [_avatarView sd_setImageWithURL:[NSURL URLWithString:avatarURL]
+                       placeholderImage:nil
+                              completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, NSURL *imageURL) {
+            if (!image) {
+                weakSelf.avatarView.hidden = YES;
+                weakSelf.initialLabel.hidden = NO;
+                weakSelf.initialLabel.text = name.length > 0 ? [name substringToIndex:1] : @"#";
+            }
+        }];
+    } else {
+        _avatarView.hidden = YES;
+        _initialLabel.hidden = NO;
+        _initialLabel.text = name.length > 0 ? [name substringToIndex:1] : @"#";
+    }
+
+    // 名称
+    NSString *displayName = name.length > 14 ? [NSString stringWithFormat:@"%@…", [name substringToIndex:14]] : name;
+    _nameLabel.text = [NSString stringWithFormat:@"▸ %@", displayName];
+    _nameLabel.alpha = 0;
+
+    // 消息内容
+    _contentLabel.text = @"";
+    if (content && content.length > 0) {
+        _fullContentText = content.length > 22 ? [NSString stringWithFormat:@"%@…", [content substringToIndex:22]] : content;
+    } else {
+        _fullContentText = @"";
+    }
+    _typewriterIndex = 0;
 }
 
 #pragma mark - Animations
@@ -290,23 +340,28 @@ static WKPixelParticleHint *_currentHint = nil;
                           delay:0
          usingSpringWithDamping:0.75
           initialSpringVelocity:0.7
-                        options:UIViewAnimationOptionCurveEaseOut
+                        options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction
                      animations:^{
         CGRect f = self.frame;
         f.origin.y = targetY;
         self.frame = f;
         self.alpha = 1.0;
     } completion:^(BOOL finished) {
-        [self startScanLineAnimation];
-        [self animateNameReveal];
+        [self startRepeatingAnimations];
+        [self animateContentReveal];
     }];
 }
 
-- (void)startScanLineAnimation {
+- (void)startRepeatingAnimations {
+    // 扫描线 — 用 CADisplayLink 驱动的 CABasicAnimation 不受 RunLoop 模式影响
     _scanLine.frame = CGRectMake(0, -2, kHintWidth, 2);
-    [UIView animateWithDuration:2.0 delay:0 options:UIViewAnimationOptionRepeat | UIViewAnimationOptionCurveLinear animations:^{
-        self.scanLine.frame = CGRectMake(0, kHintHeight + 2, kHintWidth, 2);
-    } completion:nil];
+
+    CABasicAnimation *scanAnim = [CABasicAnimation animationWithKeyPath:@"position.y"];
+    scanAnim.fromValue = @(-2);
+    scanAnim.toValue = @(kHintHeight + 2);
+    scanAnim.duration = 2.0;
+    scanAnim.repeatCount = HUGE_VALF;
+    [_scanLine.layer addAnimation:scanAnim forKey:@"scan"];
 
     // 边框渐变流动
     UIColor *cyan = [UIColor colorWithRed:0.0 green:1.0 blue:0.92 alpha:1.0];
@@ -334,8 +389,11 @@ static WKPixelParticleHint *_currentHint = nil;
     [_cornerBrackets addAnimation:bracketPulse forKey:@"pulse"];
 }
 
-- (void)animateNameReveal {
-    [UIView animateWithDuration:0.15 animations:^{
+- (void)animateContentReveal {
+    [UIView animateWithDuration:0.15
+                          delay:0
+                        options:UIViewAnimationOptionAllowUserInteraction
+                     animations:^{
         self.nameLabel.alpha = 1.0;
     } completion:^(BOOL finished) {
         [self startTypewriterEffect];
@@ -344,15 +402,16 @@ static WKPixelParticleHint *_currentHint = nil;
 
 - (void)startTypewriterEffect {
     if (_fullContentText.length == 0) {
-        [self scheduleSlideOut];
+        [self scheduleDismiss];
         return;
     }
     _typewriterIndex = 0;
-    _typewriterTimer = [NSTimer scheduledTimerWithTimeInterval:0.04
-                                                       target:self
-                                                     selector:@selector(typewriterTick)
-                                                     userInfo:nil
-                                                      repeats:YES];
+    _typewriterTimer = [NSTimer timerWithTimeInterval:0.04
+                                              target:self
+                                            selector:@selector(typewriterTick)
+                                            userInfo:nil
+                                             repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:_typewriterTimer forMode:NSRunLoopCommonModes];
 }
 
 - (void)typewriterTick {
@@ -360,10 +419,15 @@ static WKPixelParticleHint *_currentHint = nil;
         [_typewriterTimer invalidate];
         _typewriterTimer = nil;
         _contentLabel.text = [NSString stringWithFormat:@"%@▌", _fullContentText];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            self.contentLabel.text = self.fullContentText;
-        });
-        [self scheduleSlideOut];
+
+        // 用 CommonModes timer 代替 dispatch_after
+        NSTimer *cursorTimer = [NSTimer timerWithTimeInterval:0.25 target:self selector:@selector(removeCursor) userInfo:nil repeats:NO];
+        [[NSRunLoop mainRunLoop] addTimer:cursorTimer forMode:NSRunLoopCommonModes];
+
+        [self scheduleDismiss];
+
+        // 打字完成，重新启用栅格化
+        _hudCard.layer.shouldRasterize = YES;
         return;
     }
     _typewriterIndex++;
@@ -371,39 +435,52 @@ static WKPixelParticleHint *_currentHint = nil;
     _contentLabel.text = [NSString stringWithFormat:@"%@▌", visible];
 }
 
-- (void)scheduleSlideOut {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (_currentHint != self) return;
-        [self animateSlideOut];
-    });
+- (void)removeCursor {
+    if (_fullContentText) {
+        _contentLabel.text = _fullContentText;
+    }
+}
+
+- (void)scheduleDismiss {
+    [_dismissTimer invalidate];
+    _dismissTimer = [NSTimer timerWithTimeInterval:2.0 target:self selector:@selector(dismissTimerFired) userInfo:nil repeats:NO];
+    [[NSRunLoop mainRunLoop] addTimer:_dismissTimer forMode:NSRunLoopCommonModes];
+}
+
+- (void)dismissTimerFired {
+    _dismissTimer = nil;
+    [self animateSlideOut];
 }
 
 - (void)animateSlideOut {
     [UIView animateWithDuration:0.35
                           delay:0
-                        options:UIViewAnimationOptionCurveEaseIn
+                        options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionAllowUserInteraction
                      animations:^{
         CGRect f = self.frame;
         f.origin.y += 60;
         self.frame = f;
         self.alpha = 0;
     } completion:^(BOOL finished) {
+        [self stopRepeatingAnimations];
         [self removeFromSuperview];
-        if (_currentHint == self) _currentHint = nil;
     }];
 }
 
 #pragma mark - Tap
 
 - (void)onTap {
+    [self cancelTimers];
     if (self.tapAction) {
         self.tapAction();
     }
-    [WKPixelParticleHint dismissCurrent];
+    [self stopRepeatingAnimations];
+    [self removeFromSuperview];
 }
 
 - (void)dealloc {
     [_typewriterTimer invalidate];
+    [_dismissTimer invalidate];
 }
 
 @end
