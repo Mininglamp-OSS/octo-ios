@@ -1042,9 +1042,7 @@
                 NSString *groupNo = [threadChannelId substringToIndex:range.location];
                 [refreshGroupNos addObject:groupNo];
             }
-            if (conv.unreadCount > 0) {
-                [self showPixelHintForChannel:conv.channel];
-            }
+            [self showPixelHintForChannel:conv.channel];
         } else {
             [nonThreadFiltered addObject:conv];
         }
@@ -1086,7 +1084,7 @@
     }
 
    WKConversation *conversation = filtered[0];
-    if (conversation.channel.channelType == WK_GROUP && conversation.unreadCount > 0) {
+    if (conversation.channel.channelType == WK_GROUP) {
         [self showPixelHintForChannel:conversation.channel];
     }
     [self uiAddOrUpdateConversationForOne:conversation];
@@ -2943,6 +2941,14 @@
 -(void) showPixelHintForChannel:(WKChannel *)channel {
     if (_conversationListVM.filterType != WKConversationFilterGroup) return;
     if (!self.view.window) return;
+    if (self.connectedAtTime <= 0) return;
+
+    WKConversation *conv = [[WKSDK shared].conversationManager getConversation:channel];
+    if (!conv || !conv.lastMessage) return;
+
+    // 只显示本次连接后收到的新消息
+    NSTimeInterval msgTime = conv.lastMessage.timestamp;
+    if (msgTime < self.connectedAtTime) return;
 
     WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:channel];
     if (!info) return;
@@ -2959,8 +2965,7 @@
     }
 
     NSString *content = nil;
-    WKConversation *conv = [[WKSDK shared].conversationManager getConversation:channel];
-    if (conv && conv.lastMessage && conv.lastMessage.content) {
+    if (conv.lastMessage.content) {
         content = [conv.lastMessage.content conversationDigest];
     }
 

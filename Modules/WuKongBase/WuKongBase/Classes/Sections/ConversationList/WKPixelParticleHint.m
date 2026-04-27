@@ -2,7 +2,7 @@
 //  WKPixelParticleHint.m
 //  WuKongBase
 //
-//  Cyberpunk HUD — 复用单例 + RunLoop兼容
+//  Cyberpunk HUD — 每次新建，RunLoop兼容
 
 #import "WKPixelParticleHint.h"
 #import "WKApp.h"
@@ -14,34 +14,25 @@ static const CGFloat kAvatarSize = 34.0f;
 
 @interface WKPixelParticleHint ()
 @property (nonatomic, strong) UIView *hudCard;
-@property (nonatomic, strong) UIView *scanLine;
+@property (nonatomic, strong) CAGradientLayer *borderGradient;
+@property (nonatomic, strong) CAShapeLayer *cornerBrackets;
 @property (nonatomic, strong) UIImageView *avatarView;
 @property (nonatomic, strong) UILabel *initialLabel;
 @property (nonatomic, strong) UILabel *nameLabel;
 @property (nonatomic, strong) UILabel *contentLabel;
-@property (nonatomic, strong) UILabel *tagLabel;
-@property (nonatomic, strong) CAGradientLayer *borderGradient;
-@property (nonatomic, strong) CAShapeLayer *cornerBrackets;
 @property (nonatomic, strong) NSTimer *typewriterTimer;
 @property (nonatomic, strong) NSTimer *dismissTimer;
+@property (nonatomic, strong) NSTimer *cursorTimer;
 @property (nonatomic, copy) NSString *fullContentText;
 @property (nonatomic, assign) NSInteger typewriterIndex;
-@property (nonatomic, assign) BOOL hudBuilt;
+@property (nonatomic, assign) BOOL dismissed;
 @property (nonatomic, copy, nullable) void(^tapAction)(void);
 @end
 
-static WKPixelParticleHint *_sharedHint = nil;
+static __weak WKPixelParticleHint *_currentHint = nil;
+static NSTimeInterval _lastShowTime = 0;
 
 @implementation WKPixelParticleHint
-
-#pragma mark - Singleton & Show
-
-+ (WKPixelParticleHint *)sharedHint {
-    if (!_sharedHint) {
-        _sharedHint = [[WKPixelParticleHint alloc] initWithFrame:CGRectMake(0, 0, kHintWidth, kHintHeight)];
-    }
-    return _sharedHint;
-}
 
 + (void)showInView:(UIView *)parentView
          avatarURL:(nullable NSString *)avatarURL
@@ -49,8 +40,12 @@ static WKPixelParticleHint *_sharedHint = nil;
            content:(nullable NSString *)content
              onTap:(nullable void(^)(void))onTap {
 
-    WKPixelParticleHint *hint = [self sharedHint];
-    [hint cancelTimers];
+    // 节流：0.5秒内不重复弹出
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (now - _lastShowTime < 0.5) return;
+    _lastShowTime = now;
+
+    [self dismissCurrent];
 
     CGFloat tabBarH = 49.0f;
     CGFloat safeBottom = 0;
@@ -61,35 +56,20 @@ static WKPixelParticleHint *_sharedHint = nil;
     CGFloat targetY = parentView.bounds.size.height - safeBottom - tabBarH - kHintHeight + 16.0f;
     CGFloat startY = parentView.bounds.size.height;
 
+    WKPixelParticleHint *hint = [[WKPixelParticleHint alloc] initWithFrame:
+        CGRectMake(centerX - kHintWidth / 2.0f, startY, kHintWidth, kHintHeight)];
     hint.tapAction = onTap;
+    [parentView addSubview:hint];
+    _currentHint = hint;
 
-    if (!hint.hudBuilt) {
-        [hint buildHUD];
-    }
-
-    [hint updateContentWithAvatarURL:avatarURL name:name content:content];
-
-    if (hint.superview != parentView) {
-        [hint removeFromSuperview];
-        hint.frame = CGRectMake(centerX - kHintWidth / 2.0f, startY, kHintWidth, kHintHeight);
-        [parentView addSubview:hint];
-        [hint animateSlideInToY:targetY];
-    } else {
-        // 已在同一父视图，直接更新位置并重新播放内容动画
-        hint.alpha = 1.0;
-        CGRect f = hint.frame;
-        f.origin.y = targetY;
-        hint.frame = f;
-        [hint animateContentReveal];
-    }
+    [hint buildHUDWithAvatarURL:avatarURL name:name content:content];
+    [hint animateSlideInToY:targetY];
 }
 
 + (void)dismissCurrent {
-    WKPixelParticleHint *hint = _sharedHint;
-    if (!hint || !hint.superview) return;
-    [hint cancelTimers];
-    [hint stopRepeatingAnimations];
-    [hint removeFromSuperview];
+    WKPixelParticleHint *hint = _currentHint;
+    if (!hint) return;
+    [hint cleanup];
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -102,22 +82,22 @@ static WKPixelParticleHint *_sharedHint = nil;
     return self;
 }
 
-- (void)cancelTimers {
-    [_typewriterTimer invalidate];
-    _typewriterTimer = nil;
-    [_dismissTimer invalidate];
-    _dismissTimer = nil;
-}
-
-- (void)stopRepeatingAnimations {
-    [_scanLine.layer removeAllAnimations];
+- (void)cleanup {
+    _dismissed = YES;
+    [_typewriterTimer invalidate]; _typewriterTimer = nil;
+    [_dismissTimer invalidate]; _dismissTimer = nil;
+    [_cursorTimer invalidate]; _cursorTimer = nil;
+    [self.layer removeAllAnimations];
+    [_hudCard.layer removeAllAnimations];
     [_borderGradient removeAllAnimations];
     [_cornerBrackets removeAllAnimations];
+    [self removeFromSuperview];
+    if (_currentHint == self) _currentHint = nil;
 }
 
-#pragma mark - Build HUD (once)
+#pragma mark - Build HUD
 
-- (void)buildHUD {
+- (void)buildHUDWithAvatarURL:(nullable NSString *)avatarURL name:(NSString *)name content:(nullable NSString *)content {
     UIColor *cyan = [UIColor colorWithRed:0.0 green:1.0 blue:0.92 alpha:1.0];
     UIColor *magenta = [UIColor colorWithRed:1.0 green:0.0 blue:0.6 alpha:1.0];
     UIColor *theme = [WKApp shared].config.themeColor;
@@ -151,7 +131,7 @@ static WKPixelParticleHint *_sharedHint = nil;
     _borderGradient.mask = borderMask;
     [_hudCard.layer addSublayer:_borderGradient];
 
-    // 外发光 — 用 shadowPath 优化性能
+    // 外发光 + shadowPath 优化
     self.layer.shadowColor = cyan.CGColor;
     self.layer.shadowOpacity = 0.5;
     self.layer.shadowRadius = 15;
@@ -182,10 +162,10 @@ static WKPixelParticleHint *_sharedHint = nil;
     _cornerBrackets.lineCap = kCALineCapSquare;
     [_hudCard.layer addSublayer:_cornerBrackets];
 
-    // 扫描线
-    _scanLine = [[UIView alloc] initWithFrame:CGRectMake(0, 0, kHintWidth, 2)];
+    // 扫描线（用 CABasicAnimation，不受 RunLoop 模式影响）
+    UIView *scanLine = [[UIView alloc] initWithFrame:CGRectMake(0, -2, kHintWidth, 2)];
     CAGradientLayer *scanGrad = [CAGradientLayer layer];
-    scanGrad.frame = _scanLine.bounds;
+    scanGrad.frame = scanLine.bounds;
     scanGrad.colors = @[
         (id)[UIColor clearColor].CGColor,
         (id)[cyan colorWithAlphaComponent:0.4].CGColor,
@@ -194,10 +174,17 @@ static WKPixelParticleHint *_sharedHint = nil;
     ];
     scanGrad.startPoint = CGPointMake(0, 0.5);
     scanGrad.endPoint = CGPointMake(1, 0.5);
-    [_scanLine.layer addSublayer:scanGrad];
-    [_hudCard addSubview:_scanLine];
+    [scanLine.layer addSublayer:scanGrad];
+    [_hudCard addSubview:scanLine];
 
-    // 网格线（静态，只创建一次）
+    CABasicAnimation *scanAnim = [CABasicAnimation animationWithKeyPath:@"position.y"];
+    scanAnim.fromValue = @(-2);
+    scanAnim.toValue = @(kHintHeight + 2);
+    scanAnim.duration = 2.0;
+    scanAnim.repeatCount = HUGE_VALF;
+    [scanLine.layer addAnimation:scanAnim forKey:@"scan"];
+
+    // 网格线
     for (NSInteger i = 1; i <= 3; i++) {
         CGFloat y = kHintHeight * i / 4.0f;
         UIView *gridLine = [[UIView alloc] initWithFrame:CGRectMake(8, y, kHintWidth - 16, 0.5)];
@@ -216,17 +203,16 @@ static WKPixelParticleHint *_sharedHint = nil;
     [_hudCard addSubview:leftBar];
 
     // 顶部标签
-    _tagLabel = [[UILabel alloc] initWithFrame:CGRectMake(kHintWidth - 80, 5, 70, 10)];
-    _tagLabel.font = [UIFont fontWithName:@"Menlo" size:7] ?: [UIFont systemFontOfSize:7 weight:UIFontWeightMedium];
-    _tagLabel.textColor = [magenta colorWithAlphaComponent:0.7];
-    _tagLabel.textAlignment = NSTextAlignmentRight;
-    _tagLabel.text = @"⚡ INCOMING";
-    [_hudCard addSubview:_tagLabel];
+    UILabel *tagLabel = [[UILabel alloc] initWithFrame:CGRectMake(kHintWidth - 80, 5, 70, 10)];
+    tagLabel.font = [UIFont fontWithName:@"Menlo" size:7] ?: [UIFont systemFontOfSize:7 weight:UIFontWeightMedium];
+    tagLabel.textColor = [magenta colorWithAlphaComponent:0.7];
+    tagLabel.textAlignment = NSTextAlignmentRight;
+    tagLabel.text = @"⚡ INCOMING";
+    [_hudCard addSubview:tagLabel];
 
     // 头像外框
     CGFloat avatarX = 14.0f;
     CGFloat avatarY = (kHintHeight - kAvatarSize) / 2.0f;
-
     UIView *avatarGlow = [[UIView alloc] initWithFrame:CGRectMake(avatarX - 2, avatarY - 2, kAvatarSize + 4, kAvatarSize + 4)];
     avatarGlow.layer.cornerRadius = 4.0f;
     avatarGlow.layer.borderWidth = 1.0f;
@@ -240,7 +226,6 @@ static WKPixelParticleHint *_sharedHint = nil;
     _avatarView.contentMode = UIViewContentModeScaleAspectFill;
     [_hudCard addSubview:_avatarView];
 
-    // 首字备选
     _initialLabel = [[UILabel alloc] initWithFrame:_avatarView.frame];
     _initialLabel.textAlignment = NSTextAlignmentCenter;
     _initialLabel.font = [UIFont fontWithName:@"Menlo-Bold" size:20] ?: [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
@@ -251,7 +236,24 @@ static WKPixelParticleHint *_sharedHint = nil;
     _initialLabel.hidden = YES;
     [_hudCard addSubview:_initialLabel];
 
-    // 名称
+    if (avatarURL && avatarURL.length > 0) {
+        __weak typeof(self) weakSelf = self;
+        [_avatarView sd_setImageWithURL:[NSURL URLWithString:avatarURL]
+                       placeholderImage:nil
+                              completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, NSURL *imageURL) {
+            if (!image && !weakSelf.dismissed) {
+                weakSelf.avatarView.hidden = YES;
+                weakSelf.initialLabel.hidden = NO;
+                weakSelf.initialLabel.text = name.length > 0 ? [name substringToIndex:1] : @"#";
+            }
+        }];
+    } else {
+        _avatarView.hidden = YES;
+        _initialLabel.hidden = NO;
+        _initialLabel.text = name.length > 0 ? [name substringToIndex:1] : @"#";
+    }
+
+    // 文字
     CGFloat textLeft = avatarX + kAvatarSize + 12.0f;
     CGFloat textWidth = kHintWidth - textLeft - 16.0f;
 
@@ -259,14 +261,24 @@ static WKPixelParticleHint *_sharedHint = nil;
     _nameLabel.font = [UIFont fontWithName:@"Menlo-Bold" size:11] ?: [UIFont systemFontOfSize:11 weight:UIFontWeightBold];
     _nameLabel.textColor = [UIColor whiteColor];
     _nameLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    NSString *displayName = name.length > 14 ? [NSString stringWithFormat:@"%@…", [name substringToIndex:14]] : name;
+    _nameLabel.text = [NSString stringWithFormat:@"▸ %@", displayName];
+    _nameLabel.alpha = 0;
     [_hudCard addSubview:_nameLabel];
 
-    // 消息内容
     _contentLabel = [[UILabel alloc] initWithFrame:CGRectMake(textLeft, 30.0f, textWidth, 16)];
     _contentLabel.font = [UIFont fontWithName:@"Menlo" size:10] ?: [UIFont systemFontOfSize:10];
     _contentLabel.textColor = [cyan colorWithAlphaComponent:0.75];
     _contentLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    _contentLabel.text = @"";
     [_hudCard addSubview:_contentLabel];
+
+    if (content && content.length > 0) {
+        _fullContentText = content.length > 22 ? [NSString stringWithFormat:@"%@…", [content substringToIndex:22]] : content;
+    } else {
+        _fullContentText = @"";
+    }
+    _typewriterIndex = 0;
 
     // 右下角三角
     UIView *cornerMark = [[UIView alloc] initWithFrame:CGRectMake(kHintWidth - 18, kHintHeight - 18, 14, 14)];
@@ -280,55 +292,6 @@ static WKPixelParticleHint *_sharedHint = nil;
     tri.fillColor = [magenta colorWithAlphaComponent:0.25].CGColor;
     [cornerMark.layer addSublayer:tri];
     [_hudCard addSubview:cornerMark];
-
-    // 栅格化整个卡片提升渲染性能
-    _hudCard.layer.shouldRasterize = YES;
-    _hudCard.layer.rasterizationScale = [UIScreen mainScreen].scale;
-
-    _hudBuilt = YES;
-}
-
-#pragma mark - Update Content (reuse)
-
-- (void)updateContentWithAvatarURL:(nullable NSString *)avatarURL name:(NSString *)name content:(nullable NSString *)content {
-    // 更新内容时临时关闭栅格化（内容在变）
-    _hudCard.layer.shouldRasterize = NO;
-
-    // 头像
-    _avatarView.image = nil;
-    _avatarView.hidden = NO;
-    _initialLabel.hidden = YES;
-
-    if (avatarURL && avatarURL.length > 0) {
-        __weak typeof(self) weakSelf = self;
-        [_avatarView sd_setImageWithURL:[NSURL URLWithString:avatarURL]
-                       placeholderImage:nil
-                              completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, NSURL *imageURL) {
-            if (!image) {
-                weakSelf.avatarView.hidden = YES;
-                weakSelf.initialLabel.hidden = NO;
-                weakSelf.initialLabel.text = name.length > 0 ? [name substringToIndex:1] : @"#";
-            }
-        }];
-    } else {
-        _avatarView.hidden = YES;
-        _initialLabel.hidden = NO;
-        _initialLabel.text = name.length > 0 ? [name substringToIndex:1] : @"#";
-    }
-
-    // 名称
-    NSString *displayName = name.length > 14 ? [NSString stringWithFormat:@"%@…", [name substringToIndex:14]] : name;
-    _nameLabel.text = [NSString stringWithFormat:@"▸ %@", displayName];
-    _nameLabel.alpha = 0;
-
-    // 消息内容
-    _contentLabel.text = @"";
-    if (content && content.length > 0) {
-        _fullContentText = content.length > 22 ? [NSString stringWithFormat:@"%@…", [content substringToIndex:22]] : content;
-    } else {
-        _fullContentText = @"";
-    }
-    _typewriterIndex = 0;
 }
 
 #pragma mark - Animations
@@ -347,26 +310,17 @@ static WKPixelParticleHint *_sharedHint = nil;
         self.frame = f;
         self.alpha = 1.0;
     } completion:^(BOOL finished) {
-        [self startRepeatingAnimations];
-        [self animateContentReveal];
+        if (self.dismissed) return;
+        [self startDecorationAnimations];
+        [self revealContent];
     }];
 }
 
-- (void)startRepeatingAnimations {
-    // 扫描线 — 用 CADisplayLink 驱动的 CABasicAnimation 不受 RunLoop 模式影响
-    _scanLine.frame = CGRectMake(0, -2, kHintWidth, 2);
-
-    CABasicAnimation *scanAnim = [CABasicAnimation animationWithKeyPath:@"position.y"];
-    scanAnim.fromValue = @(-2);
-    scanAnim.toValue = @(kHintHeight + 2);
-    scanAnim.duration = 2.0;
-    scanAnim.repeatCount = HUGE_VALF;
-    [_scanLine.layer addAnimation:scanAnim forKey:@"scan"];
-
-    // 边框渐变流动
+- (void)startDecorationAnimations {
     UIColor *cyan = [UIColor colorWithRed:0.0 green:1.0 blue:0.92 alpha:1.0];
     UIColor *magenta = [UIColor colorWithRed:1.0 green:0.0 blue:0.6 alpha:1.0];
     UIColor *theme = [WKApp shared].config.themeColor;
+
     CABasicAnimation *gradAnim = [CABasicAnimation animationWithKeyPath:@"colors"];
     gradAnim.toValue = @[
         (id)[magenta colorWithAlphaComponent:0.5].CGColor,
@@ -379,7 +333,6 @@ static WKPixelParticleHint *_sharedHint = nil;
     gradAnim.repeatCount = HUGE_VALF;
     [_borderGradient addAnimation:gradAnim forKey:@"borderFlow"];
 
-    // 四角方括号呼吸
     CABasicAnimation *bracketPulse = [CABasicAnimation animationWithKeyPath:@"opacity"];
     bracketPulse.fromValue = @(0.7);
     bracketPulse.toValue = @(1.0);
@@ -389,18 +342,10 @@ static WKPixelParticleHint *_sharedHint = nil;
     [_cornerBrackets addAnimation:bracketPulse forKey:@"pulse"];
 }
 
-- (void)animateContentReveal {
-    [UIView animateWithDuration:0.15
-                          delay:0
-                        options:UIViewAnimationOptionAllowUserInteraction
-                     animations:^{
-        self.nameLabel.alpha = 1.0;
-    } completion:^(BOOL finished) {
-        [self startTypewriterEffect];
-    }];
-}
+- (void)revealContent {
+    if (_dismissed) return;
+    _nameLabel.alpha = 1.0;
 
-- (void)startTypewriterEffect {
     if (_fullContentText.length == 0) {
         [self scheduleDismiss];
         return;
@@ -415,40 +360,37 @@ static WKPixelParticleHint *_sharedHint = nil;
 }
 
 - (void)typewriterTick {
+    if (_dismissed) { [_typewriterTimer invalidate]; _typewriterTimer = nil; return; }
+
+    _typewriterIndex++;
     if (_typewriterIndex >= (NSInteger)_fullContentText.length) {
         [_typewriterTimer invalidate];
         _typewriterTimer = nil;
         _contentLabel.text = [NSString stringWithFormat:@"%@▌", _fullContentText];
-
-        // 用 CommonModes timer 代替 dispatch_after
-        NSTimer *cursorTimer = [NSTimer timerWithTimeInterval:0.25 target:self selector:@selector(removeCursor) userInfo:nil repeats:NO];
-        [[NSRunLoop mainRunLoop] addTimer:cursorTimer forMode:NSRunLoopCommonModes];
-
+        _cursorTimer = [NSTimer timerWithTimeInterval:0.3 target:self selector:@selector(removeCursor) userInfo:nil repeats:NO];
+        [[NSRunLoop mainRunLoop] addTimer:_cursorTimer forMode:NSRunLoopCommonModes];
         [self scheduleDismiss];
-
-        // 打字完成，重新启用栅格化
-        _hudCard.layer.shouldRasterize = YES;
         return;
     }
-    _typewriterIndex++;
     NSString *visible = [_fullContentText substringToIndex:_typewriterIndex];
     _contentLabel.text = [NSString stringWithFormat:@"%@▌", visible];
 }
 
 - (void)removeCursor {
-    if (_fullContentText) {
+    _cursorTimer = nil;
+    if (!_dismissed && _fullContentText) {
         _contentLabel.text = _fullContentText;
     }
 }
 
 - (void)scheduleDismiss {
-    [_dismissTimer invalidate];
-    _dismissTimer = [NSTimer timerWithTimeInterval:2.0 target:self selector:@selector(dismissTimerFired) userInfo:nil repeats:NO];
+    _dismissTimer = [NSTimer timerWithTimeInterval:2.0 target:self selector:@selector(dismissFired) userInfo:nil repeats:NO];
     [[NSRunLoop mainRunLoop] addTimer:_dismissTimer forMode:NSRunLoopCommonModes];
 }
 
-- (void)dismissTimerFired {
+- (void)dismissFired {
     _dismissTimer = nil;
+    if (_dismissed) return;
     [self animateSlideOut];
 }
 
@@ -462,25 +404,22 @@ static WKPixelParticleHint *_sharedHint = nil;
         self.frame = f;
         self.alpha = 0;
     } completion:^(BOOL finished) {
-        [self stopRepeatingAnimations];
-        [self removeFromSuperview];
+        [self cleanup];
     }];
 }
 
 #pragma mark - Tap
 
 - (void)onTap {
-    [self cancelTimers];
-    if (self.tapAction) {
-        self.tapAction();
-    }
-    [self stopRepeatingAnimations];
-    [self removeFromSuperview];
+    void(^action)(void) = self.tapAction;
+    [self cleanup];
+    if (action) action();
 }
 
 - (void)dealloc {
     [_typewriterTimer invalidate];
     [_dismissTimer invalidate];
+    [_cursorTimer invalidate];
 }
 
 @end
