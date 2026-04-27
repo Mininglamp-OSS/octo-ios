@@ -90,6 +90,8 @@
 @property(nonatomic,strong) UIImageView *chevronView;
 @property(nonatomic,strong) UIView *fixedHeaderContainer; // 固定在顶部的搜索栏+tab容器
 @property(nonatomic,strong) NSArray<WKConversationDisplayItem *> *groupDisplayList; // 群聊 tab 展示列表
+@property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeLeft;
+@property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeRight;
 
 @end
 
@@ -120,6 +122,20 @@
     // 先创建固定头部（搜索栏+tab），再创建 tableView（tableView frame 需要依赖固定头部高度）
     [self setupFixedHeader];
     [self.view addSubview:self.tableView];
+
+    // 左右滑动切换群聊/私聊 tab
+    UISwipeGestureRecognizer *swipeLeft = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(handleTabSwipe:)];
+    swipeLeft.direction = UISwipeGestureRecognizerDirectionLeft;
+    [self.tableView addGestureRecognizer:swipeLeft];
+    UISwipeGestureRecognizer *swipeRight = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(handleTabSwipe:)];
+    swipeRight.direction = UISwipeGestureRecognizerDirectionRight;
+    [self.tableView addGestureRecognizer:swipeRight];
+    self.tabSwipeLeft = swipeLeft;
+    self.tabSwipeRight = swipeRight;
+    // tableView 自身的 panGesture 也需要让步给 swipe
+    [self.tableView.panGestureRecognizer requireGestureRecognizerToFail:swipeLeft];
+    [self.tableView.panGestureRecognizer requireGestureRecognizerToFail:swipeRight];
+
     self.connectLock = [[NSLock alloc] init];
     self.conversationLock = [[NSRecursiveLock alloc] init];
     [self addDelegates];
@@ -306,7 +322,22 @@
     }
     self.lastLoadTime = now;
 
-    // 重新从 SDK 加载会话列表，确保新会话（如首次发消息）能显示出来
+    // 交互式转场（右滑返回）期间不做同步 DB 查询，延迟到转场完成后执行
+    id<UIViewControllerTransitionCoordinator> coordinator = self.transitionCoordinator;
+    if (coordinator && coordinator.isInteractive) {
+        __weak typeof(self) weakSelf = self;
+        [coordinator animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+            if (!context.isCancelled) {
+                [weakSelf deferredLoadConversationList];
+            }
+        }];
+        return;
+    }
+
+    [self deferredLoadConversationList];
+}
+
+-(void) deferredLoadConversationList {
     __weak typeof(self) weakSelf = self;
     [self.conversationListVM loadConversationList:^{
         [weakSelf rebuildGroupDisplayAndReload];
@@ -1424,6 +1455,17 @@
     [self layoutFixedHeader];
 }
 
+-(void) handleTabSwipe:(UISwipeGestureRecognizer *)gesture {
+    NSLog(@"[TabSwipe] triggered direction=%ld state=%ld", (long)gesture.direction, (long)gesture.state);
+    if (!_conversationTabView) return;
+    NSInteger current = _conversationListVM.filterType;
+    if (gesture.direction == UISwipeGestureRecognizerDirectionLeft && current == 0) {
+        [_conversationTabView setSelectedIndex:1 animated:YES];
+    } else if (gesture.direction == UISwipeGestureRecognizerDirectionRight && current == 1) {
+        [_conversationTabView setSelectedIndex:0 animated:YES];
+    }
+}
+
 -(void) updateTabUnreadCounts {
     [self.conversationTabView setGroupUnreadCount:[self.conversationListVM getGroupUnreadCount]];
     [self.conversationTabView setPrivateUnreadCount:[self.conversationListVM getPrivateUnreadCount]];
@@ -1553,6 +1595,15 @@
 }
 
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
+    // 让 cell 内部的 pan 手势等 tab swipe 手势失败后再识别
+    if (self.tabSwipeLeft || self.tabSwipeRight) {
+        for (UIGestureRecognizer *gr in cell.gestureRecognizers) {
+            if ([gr isKindOfClass:[UIPanGestureRecognizer class]]) {
+                if (self.tabSwipeLeft) [gr requireGestureRecognizerToFail:self.tabSwipeLeft];
+                if (self.tabSwipeRight) [gr requireGestureRecognizerToFail:self.tabSwipeRight];
+            }
+        }
+    }
     // 群聊 tab
     if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
         if (indexPath.row >= (NSInteger)self.groupDisplayList.count) return;
