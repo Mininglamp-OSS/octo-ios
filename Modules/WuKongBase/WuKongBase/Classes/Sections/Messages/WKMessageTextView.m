@@ -44,6 +44,7 @@ static void *kWKMTVTokens = &kWKMTVTokens;
         [super setAttributedText:attributedText];
         return;
     }
+    attributedText = [attributedText copy];
     __block BOOL needsNormalize = NO;
     [attributedText enumerateAttribute:NSParagraphStyleAttributeName
                                inRange:NSMakeRange(0, attributedText.length)
@@ -139,29 +140,6 @@ static void *kWKMTVTokens = &kWKMTVTokens;
     return nil;
 }
 
-#pragma mark - touch delegate（参考 Android CursorHandle.onTouchEvent ACTION_MOVE/UP）
-
-- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [super touchesBegan:touches withEvent:event];
-    if (self.selectable) [self.selDelegate selectionTVTouchBegan];
-}
-- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [super touchesEnded:touches withEvent:event];
-    if (self.selectable) [self.selDelegate selectionTVTouchEnded];
-}
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [super touchesCancelled:touches withEvent:event];
-    if (self.selectable) [self.selDelegate selectionTVTouchEnded];
-}
-
-#pragma mark - 禁止系统 UIMenuController（文字选择菜单由我们自定义）
-
-- (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
-    return NO; // 屏蔽系统菜单，由外部自定义网格菜单处理
-}
-
-- (BOOL)canBecomeFirstResponder {
-    return self.selectable; // 只有开启选择时才允许成为 first responder
-}
+// 不再使用系统选区 UI — 自定义句柄方案不需要 hitTest/pointInside/touch delegate 重写
 
 @end

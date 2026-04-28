@@ -50,8 +50,7 @@
 #define kBotActionTopSpace 10.0f
 #define kBotActionBtnSpacing 10.0f
 
-// WKSelectionTVDelegate 已迁移到 WKMessageTextView.h
-@interface WKTextMessageCell ()<CNContactViewControllerDelegate,CNContactPickerDelegate,WKNavigationDelegate,UIScrollViewDelegate,UITextViewDelegate,WKSelectionTVDelegate>
+@interface WKTextMessageCell ()<CNContactViewControllerDelegate,CNContactPickerDelegate,WKNavigationDelegate,UIScrollViewDelegate,UITextViewDelegate,UIGestureRecognizerDelegate>
 
 @property(nonatomic,strong) WKMessageTextView *textLbl; // 原 UILabel，改为 UITextView 子类，天然支持文字选择
 @property(nonatomic,strong) id selectLinkData;
@@ -98,6 +97,65 @@ static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高
 // UITextView 子类：屏蔽系统复制/粘贴菜单，只保留自定义菜单
 // 参考 Android SelectTextHelper CursorHandle.onTouchEvent：
 // ACTION_MOVE → dismiss popup；ACTION_UP → show popup
+
+// ── 自定义选区句柄（加到 window 上，不在 cell 层级内，零手势冲突） ──
+
+@interface WKSelectionHandle : UIView
+@property(nonatomic, assign) BOOL isStart;
+@property(nonatomic, copy) void(^onDrag)(CGPoint locationInWindow);
+@property(nonatomic, copy) void(^onDragEnd)(void);
+- (instancetype)initWithStart:(BOOL)isStart;
+- (void)positionAtWindowPoint:(CGPoint)pt;
+@end
+
+@implementation WKSelectionHandle {
+    CGPoint _dragOffset;
+}
+- (instancetype)initWithStart:(BOOL)isStart {
+    CGFloat pad = 20, lineH = 20, circleR = 6;
+    self = [super initWithFrame:CGRectMake(0, 0, circleR*2+pad*2, lineH+circleR*2+pad)];
+    if (self) {
+        _isStart = isStart;
+        self.backgroundColor = [UIColor clearColor];
+        self.userInteractionEnabled = YES;
+        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(wk_pan:)];
+        [self addGestureRecognizer:pan];
+    }
+    return self;
+}
+- (void)drawRect:(CGRect)rect {
+    CGFloat pad = 20, lineW = 2, lineH = 20, circleR = 6;
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    [[UIColor systemBlueColor] setFill];
+    CGFloat cx = rect.size.width / 2;
+    if (self.isStart) {
+        CGContextFillEllipseInRect(ctx, CGRectMake(cx-circleR, pad, circleR*2, circleR*2));
+        CGContextFillRect(ctx, CGRectMake(cx-lineW/2, pad+circleR*2, lineW, lineH));
+    } else {
+        CGContextFillRect(ctx, CGRectMake(cx-lineW/2, pad, lineW, lineH));
+        CGContextFillEllipseInRect(ctx, CGRectMake(cx-circleR, pad+lineH, circleR*2, circleR*2));
+    }
+}
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    return CGRectContainsPoint(CGRectInset(self.bounds, -10, -10), point);
+}
+- (void)wk_pan:(UIPanGestureRecognizer *)gr {
+    CGPoint loc = [gr locationInView:nil];
+    if (gr.state == UIGestureRecognizerStateChanged) {
+        if (self.onDrag) self.onDrag(loc);
+    } else if (gr.state == UIGestureRecognizerStateEnded || gr.state == UIGestureRecognizerStateCancelled) {
+        if (self.onDragEnd) self.onDragEnd();
+    }
+}
+- (CGPoint)anchorOffset {
+    CGFloat pad = 20, lineH = 20, circleR = 6, cx = self.bounds.size.width / 2;
+    return self.isStart ? CGPointMake(cx, pad+circleR*2) : CGPointMake(cx, pad+lineH);
+}
+- (void)positionAtWindowPoint:(CGPoint)pt {
+    CGPoint a = [self anchorOffset];
+    self.frame = CGRectMake(pt.x-a.x, pt.y-a.y, self.bounds.size.width, self.bounds.size.height);
+}
+@end
 
 @implementation WKTextMessageCell
 
@@ -864,9 +922,6 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
             token.uid = uid;
             token.text = [text substringWithRange:found];
             [result addObject:token];
-            NSLog(@"[Mention] autoDetect ✅ \"%@\" → uid=%@", token.text, matchedUID);
-        } else {
-            NSLog(@"[Mention] autoDetect ❌ \"@%@\" 未匹配到群成员或联系人", mentionName);
         }
     }
 
@@ -1076,6 +1131,7 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
     CGFloat totalHeight = 0;
     UIFont *baseFont = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
 
+    NSInteger tableSegIdx = 0;
     for (NSUInteger i = 0; i < segments.count; i++) {
         NSDictionary *seg = segments[i];
         NSString *type = seg[@"type"];
@@ -1539,6 +1595,7 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
 }
 
 -(BOOL) shouldBeginContextGestureAtPoint:(CGPoint)point {
+    if ([self wk_isInSelectionMode]) return NO;
     CGPoint pointInContentView = [self.contentView convertPoint:point fromView:self.bubbleBackgroundView.superview];
     // 表格遮罩区域不触发长按菜单
     if (self.tableOverlays.count > 0) {
@@ -2244,26 +2301,33 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
     return img;
 }
 
-#pragma mark - 气泡内文字选择（透明 UITextView 原位叠加，UIKit 提供拖动句柄）
+#pragma mark - 气泡内文字选择（自定义句柄，参考 Android SelectTextHelper）
 
-static const char kSelectionTVKey      = 0;
-static const char kSelectionDimKey     = 1;
-static const char kSelectionMenusKey   = 2;
-static const char kSelectionTimerKey   = 3; // dispatch_block_t：textViewDidChangeSelection 防抖
-static const char kSelectionVisibleKey = 4; // NSValue<CGRect>：可见区域，用于菜单定位
-static const char kSelectionTouchTimer = 5; // dispatch_block_t：touch 松手后延迟重显菜单
-static const char kScrollTableKey     = 6; // NSArray：需还原 clipsToBounds 的祖先 view 列表
-static const char kScrollVisibleKey   = 7; // 弱引用 UITableView（KVO 滚动检测）
-static const char kWindowTapGRKey    = 8; // UITapGestureRecognizer：单击非选区即关闭选择
-static void *kScrollKVOCtx            = &kScrollKVOCtx;
+// ── 选区状态 associated object keys ──
+
+static const char kSelectionMenusKey   = 0;
+static const char kSelectionVisibleKey = 1;
+static const char kSelStartHandleKey   = 2;
+static const char kSelEndHandleKey     = 3;
+static const char kSelOrigAttrTextKey  = 4;
+static const char kSelRangeLocKey      = 5;
+static const char kSelRangeLenKey      = 6;
+static const char kSelWindowTapKey     = 7;
+static const char kSelNavKey           = 8;
+static const char kSelTimerKey         = 9;
+static const char kSelTableViewKey     = 10;
+static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
+
+// 判断是否处于选区模式
+-(BOOL) wk_isInSelectionMode {
+    return objc_getAssociatedObject(self, &kSelStartHandleKey) != nil;
+}
 
 -(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems {
-    // textLbl 已是 WKMessageTextView，直接在原始组件上开启选区，无任何 overlay
-    if (self.textLbl.selectable) return; // 已在选择模式
+    if ([self wk_isInSelectionMode]) return;
 
     self.transform = CGAffineTransformIdentity;
 
-    // 计算菜单定位用的可见区域
     UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
     CGFloat bottomMargin = 80.0f + window.safeAreaInsets.bottom;
     CGRect visibleArea = CGRectMake(0, window.safeAreaInsets.top, window.frame.size.width,
@@ -2272,347 +2336,448 @@ static void *kScrollKVOCtx            = &kScrollKVOCtx;
     CGRect visibleFrame = CGRectIntersection(tvInWindow, visibleArea);
     if (CGRectIsNull(visibleFrame) || visibleFrame.size.height < 4) return;
 
-    // 存选区模式标记（kSelectionTVKey 存 self.textLbl 弱引用，nil=未选区，非nil=选区中）
-    objc_setAssociatedObject(self, &kSelectionTVKey,      self.textLbl,                         OBJC_ASSOCIATION_ASSIGN);
-    objc_setAssociatedObject(self, &kSelectionMenusKey,   menuItems ?: @[],                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, &kSelectionVisibleKey, [NSValue valueWithCGRect:visibleFrame],OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // 保存状态
+    objc_setAssociatedObject(self, &kSelectionMenusKey, menuItems ?: @[], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionVisibleKey, [NSValue valueWithCGRect:visibleFrame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 设置 touch delegate（拖动句柄时隐藏菜单）
-    self.textLbl.selDelegate = self;
+    // 保存原始 attributedText
+    objc_setAssociatedObject(self, &kSelOrigAttrTextKey, [self.textLbl.attributedText copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // KVO 监听父 UITableView 滚动
+    // 设置全选范围
+    NSUInteger textLen = self.textLbl.text.length;
+    objc_setAssociatedObject(self, &kSelRangeLocKey, @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelRangeLenKey, @(textLen), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 应用高亮
+    [self wk_applyHighlightForRange:NSMakeRange(0, textLen)];
+
+    // 创建句柄加到 window
+    __weak typeof(self) weakSelf = self;
+    WKSelectionHandle *startHandle = [[WKSelectionHandle alloc] initWithStart:YES];
+    WKSelectionHandle *endHandle = [[WKSelectionHandle alloc] initWithStart:NO];
+
+    startHandle.onDrag = ^(CGPoint windowPt) { [weakSelf wk_handleDrag:YES point:windowPt]; };
+    startHandle.onDragEnd = ^{ [weakSelf wk_handleDragEnd]; };
+    endHandle.onDrag = ^(CGPoint windowPt) { [weakSelf wk_handleDrag:NO point:windowPt]; };
+    endHandle.onDragEnd = ^{ [weakSelf wk_handleDragEnd]; };
+
+    [window addSubview:startHandle];
+    [window addSubview:endHandle];
+    objc_setAssociatedObject(self, &kSelStartHandleKey, startHandle, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelEndHandleKey, endHandle, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 定位句柄
+    [self wk_updateHandlePositions];
+
+    // KVO 监听 tableView 滚动，实时更新句柄位置
     UIView *v = self.superview;
     while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
     if ([v isKindOfClass:[UITableView class]]) {
-        [v addObserver:self forKeyPath:@"contentOffset" options:NSKeyValueObservingOptionNew context:kScrollKVOCtx];
-        objc_setAssociatedObject(self, &kScrollVisibleKey, v, OBJC_ASSOCIATION_ASSIGN);
+        [v addObserver:self forKeyPath:@"contentOffset" options:NSKeyValueObservingOptionNew context:kSelScrollKVOCtx];
+        objc_setAssociatedObject(self, &kSelTableViewKey, v, OBJC_ASSOCIATION_ASSIGN);
     }
 
-    // window tap 手势（点击选区外退出）
-    UITapGestureRecognizer *windowTap = [[UITapGestureRecognizer alloc] initWithTarget:self
-                                                                                action:@selector(wk_windowTapToDismiss:)];
+    // 禁用导航滑动返回
+    UIResponder *responder = self;
+    while (responder) {
+        if ([responder isKindOfClass:[UINavigationController class]]) {
+            UINavigationController *nav = (UINavigationController *)responder;
+            for (UIGestureRecognizer *gr in nav.view.gestureRecognizers) {
+                if ([gr isKindOfClass:[UIPanGestureRecognizer class]]) gr.enabled = NO;
+            }
+            objc_setAssociatedObject(self, &kSelNavKey, nav, OBJC_ASSOCIATION_ASSIGN);
+            break;
+        }
+        responder = [responder nextResponder];
+    }
+
+    // window tap（点击气泡外 dismiss）
+    UITapGestureRecognizer *windowTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(wk_selectionWindowTap:)];
     windowTap.cancelsTouchesInView = NO;
     windowTap.delegate = self;
     [window addGestureRecognizer:windowTap];
-    objc_setAssociatedObject(self, &kWindowTapGRKey, windowTap, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelWindowTapKey, windowTap, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 开启原生文字选择（延迟确保 layout 完成）
-    self.textLbl.selectable = YES;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (!self.textLbl.selectable) return;
-        [self.textLbl becomeFirstResponder];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            if (!self.textLbl.selectable) return;
-            [self.textLbl selectAll:nil];
-        });
-    });
+    // 通知监听
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(wk_keyboardDismissSelection:) name:UIKeyboardWillShowNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(wk_viewDisappearDismissSelection:) name:@"WKConversationViewWillDisappear" object:nil];
+
+    // 显示菜单
+    [self wk_showSelectionMenuForRange:NSMakeRange(0, textLen) isAll:YES];
 }
 
 -(void) endInBubbleTextSelection {
-    if (!self.textLbl.selectable) return; // 未在选择模式，防止重复调用
+    if (![self wk_isInSelectionMode]) return;
 
-    // 关闭原生选区
-    self.textLbl.selectable = NO;
-    [self.textLbl resignFirstResponder];
-    self.textLbl.selDelegate = nil;
+    // 移除句柄
+    WKSelectionHandle *sh = objc_getAssociatedObject(self, &kSelStartHandleKey);
+    WKSelectionHandle *eh = objc_getAssociatedObject(self, &kSelEndHandleKey);
+    [sh removeFromSuperview];
+    [eh removeFromSuperview];
+    objc_setAssociatedObject(self, &kSelStartHandleKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelEndHandleKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 移除 KVO
-    UIView *tableView = objc_getAssociatedObject(self, &kScrollVisibleKey);
-    if (tableView) {
-        @try { [tableView removeObserver:self forKeyPath:@"contentOffset" context:kScrollKVOCtx]; } @catch (...) {}
-        objc_setAssociatedObject(self, &kScrollVisibleKey, nil, OBJC_ASSOCIATION_ASSIGN);
-    }
-    // 取消 timer
-    dispatch_block_t t1 = objc_getAssociatedObject(self, &kSelectionTimerKey);
-    if (t1) { dispatch_block_cancel(t1); objc_setAssociatedObject(self, &kSelectionTimerKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC); }
-    dispatch_block_t t2 = objc_getAssociatedObject(self, &kSelectionTouchTimer);
-    if (t2) { dispatch_block_cancel(t2); objc_setAssociatedObject(self, &kSelectionTouchTimer, nil, OBJC_ASSOCIATION_COPY_NONATOMIC); }
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(wk_reshowAfterScroll) object:nil];
+    // 恢复原始 attributedText（去除高亮）
+    NSAttributedString *orig = objc_getAssociatedObject(self, &kSelOrigAttrTextKey);
+    if (orig) self.textLbl.attributedText = orig;
+    objc_setAssociatedObject(self, &kSelOrigAttrTextKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     // 移除 window tap
-    UITapGestureRecognizer *tap = objc_getAssociatedObject(self, &kWindowTapGRKey);
-    if (tap) { [tap.view removeGestureRecognizer:tap]; objc_setAssociatedObject(self, &kWindowTapGRKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+    UITapGestureRecognizer *tap = objc_getAssociatedObject(self, &kSelWindowTapKey);
+    if (tap) { [tap.view removeGestureRecognizer:tap]; }
+    objc_setAssociatedObject(self, &kSelWindowTapKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
+    // 移除 KVO
+    UIView *tv = objc_getAssociatedObject(self, &kSelTableViewKey);
+    if (tv) {
+        @try { [tv removeObserver:self forKeyPath:@"contentOffset" context:kSelScrollKVOCtx]; } @catch (...) {}
+        objc_setAssociatedObject(self, &kSelTableViewKey, nil, OBJC_ASSOCIATION_ASSIGN);
+    }
+
+    // 恢复导航手势
+    UINavigationController *nav = objc_getAssociatedObject(self, &kSelNavKey);
+    if (nav) {
+        for (UIGestureRecognizer *gr in nav.view.gestureRecognizers) {
+            if ([gr isKindOfClass:[UIPanGestureRecognizer class]]) gr.enabled = YES;
+        }
+        objc_setAssociatedObject(self, &kSelNavKey, nil, OBJC_ASSOCIATION_ASSIGN);
+    }
+
+    // 取消 timer
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(wk_reshowMenuAfterScroll) object:nil];
+    dispatch_block_t t = objc_getAssociatedObject(self, &kSelTimerKey);
+    if (t) { dispatch_block_cancel(t); }
+    objc_setAssociatedObject(self, &kSelTimerKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
+
+    // 移除通知
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIKeyboardWillShowNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKConversationViewWillDisappear" object:nil];
+
+    // 隐藏菜单
     [self wk_hideSelectionPopup];
 
-    objc_setAssociatedObject(self, &kSelectionTVKey,      nil, OBJC_ASSOCIATION_ASSIGN);
-    objc_setAssociatedObject(self, &kSelectionMenusKey,   nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionMenusKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelectionVisibleKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelRangeLocKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelRangeLenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
-// 单击 window 上非 textLbl 区域 → 退出选择
--(void) wk_windowTapToDismiss:(UITapGestureRecognizer *)gr {
-    if (!self.textLbl.selectable) return;
-    CGPoint pt = [gr locationInView:self.textLbl];
-    if (CGRectContainsPoint(self.textLbl.bounds, pt)) return; // 点在 textLbl 内 → 文字选择自己处理
-    [self endInBubbleTextSelection];
+#pragma mark - 自定义选区：高亮、句柄定位、拖拽
+
+-(NSRange) wk_currentSelRange {
+    NSUInteger loc = [objc_getAssociatedObject(self, &kSelRangeLocKey) unsignedIntegerValue];
+    NSUInteger len = [objc_getAssociatedObject(self, &kSelRangeLenKey) unsignedIntegerValue];
+    return NSMakeRange(loc, len);
 }
 
-#pragma mark - UITextViewDelegate（选区变化 → 动态切换菜单）
-
--(void) textViewDidChangeSelection:(UITextView *)textView {
-    [self wk_cancelSelectionDebounce];
-    [self wk_hideSelectionPopup]; // 拖动期间隐藏菜单
-
-    NSRange sel = textView.selectedRange;
-    BOOL isAll = (sel.location == 0 && sel.length == textView.text.length && sel.length > 0);
-
-    if (isAll) {
-        // 全选：立即显示完整菜单
-        [self wk_showSelectionPopupForTextView:textView isAllSelected:YES];
-    } else if (sel.length > 0) {
-        // 部分选中：0.25s 防抖后显示 [复制, 全选]
-        __weak typeof(self) weakSelf = self;
-        dispatch_block_t block = dispatch_block_create(0, ^{
-            WKMessageTextView *tv = weakSelf.textLbl;
-            if (tv && tv.selectedRange.length > 0) {
-                [weakSelf wk_showSelectionPopupForTextView:tv isAllSelected:NO];
-            }
-        });
-        objc_setAssociatedObject(self, &kSelectionTimerKey, block, OBJC_ASSOCIATION_COPY_NONATOMIC);
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), block);
+-(void) wk_applyHighlightForRange:(NSRange)range {
+    NSAttributedString *orig = objc_getAssociatedObject(self, &kSelOrigAttrTextKey);
+    if (!orig) return;
+    NSMutableAttributedString *highlighted = [orig mutableCopy];
+    if (range.length > 0 && NSMaxRange(range) <= highlighted.length) {
+        [highlighted addAttribute:NSBackgroundColorAttributeName
+                            value:[[UIColor systemBlueColor] colorWithAlphaComponent:0.3]
+                            range:range];
     }
+    self.textLbl.attributedText = highlighted;
 }
 
--(void) wk_cancelSelectionDebounce {
-    dispatch_block_t block = objc_getAssociatedObject(self, &kSelectionTimerKey); // textViewDidChangeSelection 防抖
-    if (block) {
-        dispatch_block_cancel(block);
-        objc_setAssociatedObject(self, &kSelectionTimerKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
-    }
+-(void) wk_updateHandlePositions {
+    NSRange range = [self wk_currentSelRange];
+    if (range.length == 0) return;
+
+    NSLayoutManager *lm = self.textLbl.layoutManager;
+    NSTextContainer *tc = self.textLbl.textContainer;
+    [lm ensureLayoutForTextContainer:tc];
+
+    // 起始句柄：选区首字符的左上角
+    NSUInteger startGlyph = [lm glyphIndexForCharacterAtIndex:range.location];
+    CGRect startRect = [lm boundingRectForGlyphRange:NSMakeRange(startGlyph, 1) inTextContainer:tc];
+    CGPoint startPt = [self.textLbl convertPoint:CGPointMake(startRect.origin.x, startRect.origin.y) toView:nil];
+
+    // 结束句柄：选区末字符的右下角
+    NSUInteger endCharIdx = NSMaxRange(range) - 1;
+    NSUInteger endGlyph = [lm glyphIndexForCharacterAtIndex:endCharIdx];
+    CGRect endRect = [lm boundingRectForGlyphRange:NSMakeRange(endGlyph, 1) inTextContainer:tc];
+    CGPoint endPt = [self.textLbl convertPoint:CGPointMake(CGRectGetMaxX(endRect), CGRectGetMaxY(endRect)) toView:nil];
+
+    WKSelectionHandle *sh = objc_getAssociatedObject(self, &kSelStartHandleKey);
+    WKSelectionHandle *eh = objc_getAssociatedObject(self, &kSelEndHandleKey);
+    [sh positionAtWindowPoint:startPt];
+    [eh positionAtWindowPoint:endPt];
 }
 
-// WKSelectionTVDelegate - 参考 Android CursorHandle.onTouchEvent ACTION_MOVE/UP
--(void) selectionTVTouchBegan {
-    // 开始拖动句柄：立即隐藏菜单（对应 Android mOperateWindow.dismiss()）
-    dispatch_block_t t = objc_getAssociatedObject(self, &kSelectionTouchTimer);
-    if (t) { dispatch_block_cancel(t); objc_setAssociatedObject(self, &kSelectionTouchTimer, nil, OBJC_ASSOCIATION_COPY_NONATOMIC); }
+-(void) wk_handleDrag:(BOOL)isStart point:(CGPoint)windowPt {
     [self wk_hideSelectionPopup];
+
+    // 转换为 textLbl 本地坐标
+    CGPoint local = [self.textLbl convertPoint:windowPt fromView:nil];
+    local.x = MAX(0, MIN(local.x, self.textLbl.bounds.size.width));
+    local.y = MAX(0, MIN(local.y, self.textLbl.bounds.size.height));
+
+    NSLayoutManager *lm = self.textLbl.layoutManager;
+    NSTextContainer *tc = self.textLbl.textContainer;
+    CGFloat fraction = 0;
+    NSUInteger idx = [lm characterIndexForPoint:local inTextContainer:tc
+               fractionOfDistanceBetweenInsertionPoints:&fraction];
+    if (idx == NSNotFound) return;
+
+    NSRange cur = [self wk_currentSelRange];
+    NSUInteger newStart = cur.location, newEnd = NSMaxRange(cur);
+
+    if (isStart) {
+        newStart = idx;
+    } else {
+        newEnd = idx + 1;
+    }
+    if (newEnd > self.textLbl.text.length) newEnd = self.textLbl.text.length;
+    if (newStart >= newEnd) {
+        if (isStart) newStart = newEnd > 0 ? newEnd - 1 : 0;
+        else newEnd = newStart + 1;
+    }
+    if (newEnd > self.textLbl.text.length) newEnd = self.textLbl.text.length;
+    if (newStart >= newEnd) return;
+
+    NSRange newRange = NSMakeRange(newStart, newEnd - newStart);
+    objc_setAssociatedObject(self, &kSelRangeLocKey, @(newRange.location), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelRangeLenKey, @(newRange.length), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    [self wk_applyHighlightForRange:newRange];
+    [self wk_updateHandlePositions];
 }
 
--(void) selectionTVTouchEnded {
-    // 松手：100ms 后重显菜单（对应 Android postShowSelectView(mPopDelay=100)）
+-(void) wk_handleDragEnd {
+    NSRange range = [self wk_currentSelRange];
+    if (range.length == 0) return;
+    BOOL isAll = (range.location == 0 && range.length == self.textLbl.text.length);
     __weak typeof(self) weakSelf = self;
     dispatch_block_t block = dispatch_block_create(0, ^{
-        WKMessageTextView *tv = weakSelf.textLbl;
-        if (tv && tv.selectedRange.length > 0) {
-            BOOL isAll = (tv.selectedRange.location == 0 && tv.selectedRange.length == tv.text.length);
-            [weakSelf wk_showSelectionPopupForTextView:tv isAllSelected:isAll];
-        }
+        [weakSelf wk_showSelectionMenuForRange:[weakSelf wk_currentSelRange] isAll:isAll];
     });
-    objc_setAssociatedObject(self, &kSelectionTouchTimer, block, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelTimerKey, block, OBJC_ASSOCIATION_COPY_NONATOMIC);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), block);
 }
 
-// 参考 Android OnScrollChangedListener + OnPreDrawListener（滚动隐藏，停止后重显）
--(void) observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
-    if (context != kScrollKVOCtx) { [super observeValueForKeyPath:keyPath ofObject:object change:change context:context]; return; }
+#pragma mark - window tap dismiss + 通知
 
-    if (!self.textLbl.selectable) return; // 不在选择模式则忽略滚动事件
+-(void) wk_selectionWindowTap:(UITapGestureRecognizer *)gr {
+    if (![self wk_isInSelectionMode]) return;
+    [self endInBubbleTextSelection];
+}
 
-    [self wk_hideSelectionPopup];
-
-    // textLbl 随 cell 移动，重新计算当前可见区域
-    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
-    CGFloat bottomMargin = 80.0f + window.safeAreaInsets.bottom;
-    CGRect visibleArea = CGRectMake(0, window.safeAreaInsets.top, window.frame.size.width,
-                                    window.frame.size.height - window.safeAreaInsets.top - bottomMargin);
-    CGRect tvInWindow = [self.textLbl convertRect:self.textLbl.bounds toView:nil];
-    CGRect intersection = CGRectIntersection(tvInWindow, visibleArea);
-    if (CGRectIsNull(intersection) || intersection.size.height < 4) {
-        [self endInBubbleTextSelection];
-        return;
+-(BOOL) gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    UITapGestureRecognizer *windowTap = objc_getAssociatedObject(self, &kSelWindowTapKey);
+    if (gestureRecognizer == windowTap) {
+        CGPoint pt = [touch locationInView:nil];
+        // 不拦截句柄区域
+        WKSelectionHandle *sh = objc_getAssociatedObject(self, &kSelStartHandleKey);
+        WKSelectionHandle *eh = objc_getAssociatedObject(self, &kSelEndHandleKey);
+        if (sh && CGRectContainsPoint(sh.frame, pt)) return NO;
+        if (eh && CGRectContainsPoint(eh.frame, pt)) return NO;
+        // 不拦截菜单卡片
+        UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+        UIView *card = [window viewWithTag:kSelectionPopupTag];
+        if (card && CGRectContainsPoint(card.frame, pt)) return NO;
+        // 不拦截气泡区域（允许用户在文字上操作但不 dismiss）
+        CGRect bubbleInWindow = [self.bubbleBackgroundView convertRect:self.bubbleBackgroundView.bounds toView:nil];
+        if (CGRectContainsPoint(CGRectInset(bubbleInWindow, -10, -10), pt)) return NO;
     }
-    objc_setAssociatedObject(self, &kSelectionVisibleKey, [NSValue valueWithCGRect:intersection],
-                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-    // 滚动停止后延迟 100ms 重显（对应 Android postShowSelectView(mPopDelay)）
-    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(wk_reshowAfterScroll) object:nil];
-    [self performSelector:@selector(wk_reshowAfterScroll) withObject:nil afterDelay:0.15];
+    return YES;
 }
 
--(void) wk_reshowAfterScroll {
-    if (!self.textLbl.selectable || self.textLbl.selectedRange.length == 0) return;
-    BOOL isAll = (self.textLbl.selectedRange.location == 0 &&
-                  self.textLbl.selectedRange.length == self.textLbl.text.length);
-    [self wk_showSelectionPopupForTextView:self.textLbl isAllSelected:isAll];
+-(void) observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    if (context != kSelScrollKVOCtx) { [super observeValueForKeyPath:keyPath ofObject:object change:change context:context]; return; }
+    if (![self wk_isInSelectionMode]) return;
+    [self wk_hideSelectionPopup];
+    [self wk_updateHandlePositions];
+    // 滚动停止后重新显示菜单
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(wk_reshowMenuAfterScroll) object:nil];
+    [self performSelector:@selector(wk_reshowMenuAfterScroll) withObject:nil afterDelay:0.2];
 }
 
-#pragma mark - 选区菜单浮层（深色圆角卡片，定位在选区上方）
+-(void) wk_reshowMenuAfterScroll {
+    if (![self wk_isInSelectionMode]) return;
+    NSRange range = [self wk_currentSelRange];
+    if (range.length == 0) return;
+    BOOL isAll = (range.location == 0 && range.length == self.textLbl.text.length);
+    [self wk_showSelectionMenuForRange:range isAll:isAll];
+}
 
-static const NSInteger kSelectionPopupTag = 0x574B5350; // 'WKSP'
+-(BOOL) gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    UITapGestureRecognizer *windowTap = objc_getAssociatedObject(self, &kSelWindowTapKey);
+    if (gestureRecognizer == windowTap) return YES;
+    return NO;
+}
+
+-(void) wk_keyboardDismissSelection:(NSNotification *)note {
+    if (![self wk_isInSelectionMode]) return;
+    [self endInBubbleTextSelection];
+}
+
+-(void) wk_viewDisappearDismissSelection:(NSNotification *)note {
+    if (![self wk_isInSelectionMode]) return;
+    [self endInBubbleTextSelection];
+}
+
+#pragma mark - 选区菜单浮层
+
+static const NSInteger kSelectionPopupTag = 0x574B5350;
 
 -(void) wk_hideSelectionPopup {
     UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
     [[window viewWithTag:kSelectionPopupTag] removeFromSuperview];
 }
 
-// 根据选中范围计算选区在 window 中的矩形（取首行到尾行的合并 rect）
--(CGRect) wk_selectionRectInWindowForTextView:(UITextView *)tv {
-    UITextRange *range = tv.selectedTextRange;
-    if (!range) return CGRectZero;
-    NSArray<UITextSelectionRect*> *rects = [tv selectionRectsForRange:range];
-    CGRect merged = CGRectNull;
-    for (UITextSelectionRect *r in rects) {
-        if (r.rect.size.width < 1) continue;
-        merged = CGRectIsNull(merged) ? r.rect : CGRectUnion(merged, r.rect);
-    }
-    if (CGRectIsNull(merged)) {
-        merged = [tv caretRectForPosition:range.start];
-    }
-    return [tv convertRect:merged toView:nil];
-}
-
--(void) wk_showSelectionPopupForTextView:(UITextView *)tv isAllSelected:(BOOL)isAll {
+-(void) wk_showSelectionMenuForRange:(NSRange)selRange isAll:(BOOL)isAll {
     [self wk_hideSelectionPopup];
 
     UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
     NSArray *menuItems = objc_getAssociatedObject(self, &kSelectionMenusKey) ?: @[];
 
-    // 构建按钮列表
     NSMutableArray<NSDictionary*> *btns = [NSMutableArray array];
+    UIColor *iconTintColor = [WKApp shared].config.contextMenu.primaryColor;
+    __weak typeof(self) weakSelf = self;
 
     if (isAll) {
-        // 全选：原始菜单项全部显示
         for (WKMessageLongMenusItem *item in menuItems) {
-            __weak typeof(self) weakSelf = self;
             WKMessageLongMenusItem *captured = item;
             [btns addObject:@{
                 @"title": item.title ?: @"",
-                @"action": ^{ [weakSelf endInBubbleTextSelection]; if(captured.onTap) captured.onTap(weakSelf.conversationContext); }
+                @"icon": item.icon ?: [NSNull null],
+                @"action": ^{ if(captured.onTap) captured.onTap(weakSelf.conversationContext); }
             }];
         }
-        // 末尾补「复制」（复制全部文字）
-        __weak typeof(self) weakSelf = self;
-        [btns addObject:@{
-            @"title": LLang(@"复制"),
-            @"action": ^{
-                WKMessageTextView *t = weakSelf.textLbl;
-                [[UIPasteboard generalPasteboard] setString:t.text ?: @""];
-                [weakSelf endInBubbleTextSelection];
-            }
-        }];
     } else {
-        // 部分选中：仅「复制」+「全选」
-        __weak typeof(self) weakSelf = self;
+        // 复制选中文字
+        UIImage *copyIcon = [GenerateImageUtils generateTintedImgWithImage:[[WKApp shared] loadImage:@"Conversation/ContextMenu/Copy" moduleID:@"WuKongBase"] color:iconTintColor backgroundColor:nil];
         [btns addObject:@{
             @"title": LLang(@"复制"),
+            @"icon": copyIcon ?: [NSNull null],
             @"action": ^{
-                WKMessageTextView *t = weakSelf.textLbl;
-                NSRange sel = t.selectedRange;
-                if (sel.length > 0 && NSMaxRange(sel) <= t.text.length) {
-                    [[UIPasteboard generalPasteboard] setString:[t.text substringWithRange:sel]];
+                NSRange r = [weakSelf wk_currentSelRange];
+                if (r.length > 0 && NSMaxRange(r) <= weakSelf.textLbl.text.length) {
+                    [[UIPasteboard generalPasteboard] setString:[weakSelf.textLbl.text substringWithRange:r]];
                 }
-                [weakSelf endInBubbleTextSelection];
             }
         }];
+        // 全选
+        UIImage *selectIcon = [GenerateImageUtils generateTintedImgWithImage:[[WKApp shared] loadImage:@"Conversation/ContextMenu/Select" moduleID:@"WuKongBase"] color:iconTintColor backgroundColor:nil];
         [btns addObject:@{
             @"title": LLang(@"全选"),
+            @"icon": selectIcon ?: [NSNull null],
+            @"dismiss": @NO,
             @"action": ^{
-                WKMessageTextView *t = weakSelf.textLbl;
-                [t selectAll:nil]; // 触发 textViewDidChangeSelection → 显示完整菜单
+                NSUInteger len = weakSelf.textLbl.text.length;
+                objc_setAssociatedObject(weakSelf, &kSelRangeLocKey, @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                objc_setAssociatedObject(weakSelf, &kSelRangeLenKey, @(len), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [weakSelf wk_applyHighlightForRange:NSMakeRange(0, len)];
+                [weakSelf wk_updateHandlePositions];
+                [weakSelf wk_showSelectionMenuForRange:NSMakeRange(0, len) isAll:YES];
             }
         }];
+        // 创建子区
+        NSString *capturedSelText = @"";
+        if (selRange.length > 0 && NSMaxRange(selRange) <= self.textLbl.text.length) {
+            capturedSelText = [self.textLbl.text substringWithRange:selRange];
+        }
+        if (capturedSelText.length > 50) capturedSelText = [capturedSelText substringToIndex:50];
+        for (WKMessageLongMenusItem *item in menuItems) {
+            if ([item.title isEqualToString:LLang(@"创建子区")]) {
+                WKMessageLongMenusItem *captured = item;
+                NSString *threadName = [capturedSelText copy];
+                [btns addObject:@{
+                    @"title": item.title,
+                    @"icon": item.icon ?: [NSNull null],
+                    @"action": ^{
+                        if (captured.onTap) captured.onTap(weakSelf.conversationContext);
+                        if (threadName.length > 0) {
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                UIViewController *presented = [[WKNavigationManager shared] topViewController].presentedViewController;
+                                if ([presented isKindOfClass:[UIAlertController class]]) {
+                                    UIAlertController *alert = (UIAlertController *)presented;
+                                    if (alert.textFields.count > 0) alert.textFields.firstObject.text = threadName;
+                                }
+                            });
+                        }
+                    }
+                }];
+                break;
+            }
+        }
     }
 
     if (!btns.count) return;
 
-    // 与主菜单相同的网格风格（图标上方、文字下方、横向排列）
-    UIWindow *window2 = [UIApplication sharedApplication].windows.firstObject;
-    NSInteger colCount  = MIN(4, (NSInteger)btns.count);
-    NSInteger rowCount  = (btns.count + colCount - 1) / colCount;
-    CGFloat hPad        = 12.0f;
-    CGFloat cardW       = MIN(window2.frame.size.width - 24.0f, 380.0f);
-    CGFloat cellW       = (cardW - hPad * 2) / colCount;
-    CGFloat iconSz      = 22.0f;
-    CGFloat cellH       = 12.0f + iconSz + 4.0f + 13.0f + 10.0f;
-    CGFloat cardH       = rowCount * cellH + 8.0f;
-    CGFloat cornerR     = 14.0f;
+    // 布局
+    NSInteger colCount = MIN(4, (NSInteger)btns.count);
+    NSInteger rowCount = (btns.count + colCount - 1) / colCount;
+    CGFloat hPad, cellW, iconSz, cellH, cardW, cardH, cornerR;
+    if (isAll) {
+        hPad = 12; cardW = MIN(window.frame.size.width - 24, 380); cellW = (cardW - hPad*2) / colCount;
+        iconSz = 22; cellH = 12+iconSz+4+13+10; cardH = rowCount*cellH+8; cornerR = 14;
+    } else {
+        hPad = 6; cellW = 56; iconSz = 18; cellH = 8+iconSz+3+12+6;
+        cardW = cellW*colCount+hPad*2; cardH = rowCount*cellH+6; cornerR = 10;
+    }
 
-    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardW, cardH)];
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0,0,cardW,cardH)];
     card.tag = kSelectionPopupTag;
-    card.layer.cornerRadius = cornerR;
-    card.clipsToBounds = NO;
-    card.layer.shadowColor  = [UIColor blackColor].CGColor;
-    card.layer.shadowOpacity = 0.18f;
-    card.layer.shadowRadius  = 12.0f;
-    card.layer.shadowOffset  = CGSizeMake(0, 4);
+    card.layer.cornerRadius = cornerR; card.clipsToBounds = NO;
+    card.layer.shadowColor = [UIColor blackColor].CGColor;
+    card.layer.shadowOpacity = 0.18; card.layer.shadowRadius = 12; card.layer.shadowOffset = CGSizeMake(0,4);
 
-    UIView *clipView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardW, cardH)];
+    UIView *clipView = [[UIView alloc] initWithFrame:CGRectMake(0,0,cardW,cardH)];
     clipView.backgroundColor = [WKApp shared].config.style == WKSystemStyleDark
-        ? [UIColor colorWithRed:0.18 green:0.18 blue:0.20 alpha:1.0]
-        : [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1.0];
-    clipView.layer.cornerRadius = cornerR;
-    clipView.clipsToBounds = YES;
+        ? [UIColor colorWithRed:0.18 green:0.18 blue:0.20 alpha:1]
+        : [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1];
+    clipView.layer.cornerRadius = cornerR; clipView.clipsToBounds = YES;
     [card addSubview:clipView];
 
-    UIFont *textFont = [UIFont systemFontOfSize:11.0f];
+    CGFloat iconTopPad = isAll?12:8, iconTextGap = isAll?4:3, textH = isAll?13:12, cellTopPad = isAll?4:3;
+    UIFont *textFont = [UIFont systemFontOfSize:isAll?11:10];
     UIColor *textColor = [WKApp shared].config.defaultTextColor;
     for (NSInteger i = 0; i < (NSInteger)btns.count; i++) {
         NSDictionary *info = btns[i];
-        NSString *title = info[@"title"];
-        void(^action)(void) = info[@"action"];
-        NSInteger col = i % colCount;
-        NSInteger row = i / colCount;
-        CGFloat cellX = hPad + col * cellW;
-        CGFloat cellY = 4.0f + row * cellH;
-
-        UIButton *btn = [[UIButton alloc] initWithFrame:CGRectMake(cellX, cellY, cellW, cellH)];
-        btn.backgroundColor = [UIColor clearColor];
+        NSInteger col = i % colCount, row = i / colCount;
+        CGFloat cellX = hPad + col*cellW, cellY = cellTopPad + row*cellH;
+        UIButton *btn = [[UIButton alloc] initWithFrame:CGRectMake(cellX,cellY,cellW,cellH)];
         [btn setBackgroundImage:[self wk_imageWithColor:[UIColor colorWithWhite:0.5 alpha:0.15]] forState:UIControlStateHighlighted];
-
-        // 图标（上）
-        UIImageView *iconView = [[UIImageView alloc] initWithFrame:CGRectMake((cellW-iconSz)/2, 12.0f, iconSz, iconSz)];
-        iconView.contentMode = UIViewContentModeScaleAspectFit;
-        iconView.tintColor = textColor;
-        if (i == 0) {
-            iconView.image = [UIImage systemImageNamed:@"doc.on.doc"];
-        } else {
-            iconView.image = [UIImage systemImageNamed:@"text.alignleft"];
-        }
-        [btn addSubview:iconView];
-
-        // 文字（下）
-        UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(2, 12.0f+iconSz+4.0f, cellW-4, 13.0f)];
-        lbl.text = title; lbl.font = textFont; lbl.textColor = textColor;
+        UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake((cellW-iconSz)/2,iconTopPad,iconSz,iconSz)];
+        iv.contentMode = UIViewContentModeScaleAspectFit; iv.tintColor = textColor;
+        id iconObj = info[@"icon"];
+        iv.image = (iconObj && iconObj != [NSNull null]) ? (UIImage *)iconObj : [UIImage systemImageNamed:@"ellipsis"];
+        [btn addSubview:iv];
+        UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(2,iconTopPad+iconSz+iconTextGap,cellW-4,textH)];
+        lbl.text = info[@"title"]; lbl.font = textFont; lbl.textColor = textColor;
         lbl.textAlignment = NSTextAlignmentCenter; lbl.adjustsFontSizeToFitWidth = YES;
         [btn addSubview:lbl];
-
-        objc_setAssociatedObject(btn, "tapBlock", action, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        NSNumber *shouldDismiss = info[@"dismiss"] ?: @YES;
+        objc_setAssociatedObject(btn, "tapBlock", info[@"action"], OBJC_ASSOCIATION_COPY_NONATOMIC);
+        objc_setAssociatedObject(btn, "shouldDismiss", shouldDismiss, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [btn addTarget:self action:@selector(wk_selectionMenuItemTapped:) forControlEvents:UIControlEventTouchUpInside];
         [clipView addSubview:btn];
-
-        if (col < colCount - 1 && i < (NSInteger)btns.count - 1) {
-            UIView *vSep = [[UIView alloc] initWithFrame:CGRectMake(cellX+cellW-0.25f, cellY+8, 0.5f, cellH-16)];
-            vSep.backgroundColor = [UIColor colorWithWhite:0.6 alpha:0.3];
-            [clipView addSubview:vSep];
+        if (col < colCount-1 && i < (NSInteger)btns.count-1) {
+            UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(cellX+cellW-0.25,cellY+8,0.5,cellH-16)];
+            sep.backgroundColor = [UIColor colorWithWhite:0.6 alpha:0.3];
+            [clipView addSubview:sep];
         }
     }
-    clipView.frame = CGRectMake(0, 0, cardW, cardH);
 
-    // 菜单定位：上方优先（不遮挡选中文字），空间不足放选区末尾下方
+    // 菜单定位
     NSValue *visibleVal = objc_getAssociatedObject(self, &kSelectionVisibleKey);
-    CGRect visFrame = visibleVal ? [visibleVal CGRectValue] : [tv convertRect:tv.bounds toView:nil];
-    CGRect selRect  = [self wk_selectionRectInWindowForTextView:tv];
+    CGRect visFrame = visibleVal ? [visibleVal CGRectValue] : [self.textLbl convertRect:self.textLbl.bounds toView:nil];
     CGFloat safeTop = window.safeAreaInsets.top + 8;
     CGFloat safeBot = window.frame.size.height - window.safeAreaInsets.bottom - 80;
-    CGFloat cardX   = visFrame.origin.x;
-    if (cardX + cardW > window.frame.size.width - 8) cardX = window.frame.size.width - cardW - 8;
-    cardX = MAX(8, cardX);
-    CGFloat selTop = CGRectIsEmpty(selRect) ? visFrame.origin.y            : selRect.origin.y;
-    CGFloat selBot = CGRectIsEmpty(selRect) ? visFrame.origin.y+visFrame.size.height : selRect.origin.y+selRect.size.height;
-    CGFloat aboveY = selTop - cardH - 8;
-    CGFloat belowY = selBot + 8;
-    CGFloat cardY  = (aboveY >= safeTop) ? aboveY : belowY;
+    CGFloat cardX = MAX(8, MIN(visFrame.origin.x, window.frame.size.width - cardW - 8));
+    CGFloat handleGap = 28;
+    CGFloat aboveY = visFrame.origin.y - cardH - handleGap;
+    CGFloat belowY = visFrame.origin.y + visFrame.size.height + handleGap;
+    CGFloat cardY = (aboveY >= safeTop) ? aboveY : belowY;
     cardY = MAX(safeTop, MIN(cardY, safeBot - cardH));
     card.frame = CGRectMake(cardX, cardY, cardW, cardH);
-    clipView.frame = CGRectMake(0, 0, cardW, cardH);
+    [window addSubview:card];
 
-    UIButton *dimBtn = objc_getAssociatedObject(self, &kSelectionDimKey);
-    [window insertSubview:card aboveSubview:dimBtn ?: tv];
-
-    card.alpha = 0;
-    card.transform = CGAffineTransformMakeScale(0.9, 0.9);
+    card.alpha = 0; card.transform = CGAffineTransformMakeScale(0.9, 0.9);
     [UIView animateWithDuration:0.15 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
         card.alpha = 1; card.transform = CGAffineTransformIdentity;
     } completion:nil];
@@ -2620,7 +2785,16 @@ static const NSInteger kSelectionPopupTag = 0x574B5350; // 'WKSP'
 
 -(void) wk_selectionMenuItemTapped:(UIButton *)sender {
     void(^block)(void) = objc_getAssociatedObject(sender, "tapBlock");
-    if (block) block();
+    if (!block) return;
+    BOOL shouldDismiss = [objc_getAssociatedObject(sender, "shouldDismiss") boolValue];
+    if (shouldDismiss) {
+        [self endInBubbleTextSelection];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            block();
+        });
+    } else {
+        block();
+    }
 }
 
 -(UIImage *) wk_imageWithColor:(UIColor *)color {

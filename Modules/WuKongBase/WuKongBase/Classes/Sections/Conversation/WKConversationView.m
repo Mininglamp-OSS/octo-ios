@@ -154,7 +154,9 @@
     }
     
     [self.messageListView viewWillDisappear];
-    
+
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"WKConversationViewWillDisappear" object:nil];
+
     [self saveDraftOrKeepPosition];
     
     [self requestSetUnreadIfNeed];
