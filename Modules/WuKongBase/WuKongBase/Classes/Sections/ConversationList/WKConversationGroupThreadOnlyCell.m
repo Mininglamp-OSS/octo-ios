@@ -12,6 +12,7 @@
 #import "WKApp.h"
 #import "WuKongBase.h"
 #import <SDWebImage/UIImageView+WebCache.h>
+#import "WKConversationListVM.h"
 
 @interface WKConversationGroupThreadOnlyCell ()
 
@@ -153,21 +154,10 @@
         [self.badgeView setBadgeBackgroundColor:[UIColor redColor]];
     }
 
-    // 折叠图标（带指示器）
-    NSString *prefix = [NSString stringWithFormat:@"%@____", model.channel.channelId];
+    // 折叠图标（带指示器，从 VM 缓存读取，无 DB 查询）
     NSInteger threadUnread = 0;
     BOOL threadHasMention = NO;
-    for (WKConversation *conv in [[WKSDK shared].conversationManager getConversationList]) {
-        if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
-            threadUnread += conv.unreadCount;
-            if (!threadHasMention) {
-                NSArray<WKReminder *> *rems = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
-                for (WKReminder *r in rems) {
-                    if (r.type == WKReminderTypeMentionMe) { threadHasMention = YES; break; }
-                }
-            }
-        }
-    }
+    [[WKConversationListVM shared] getThreadIndicatorForGroup:model.channel.channelId threadUnread:&threadUnread threadHasMention:&threadHasMention];
     NSInteger indicatorType = 0;
     UIColor *indicatorColor = nil;
     if (threadHasMention) {
@@ -202,20 +192,9 @@
     self.moreLbl.hidden = NO;
 
     NSString *groupNo = self.model.channel.channelId;
-    NSString *prefix = [NSString stringWithFormat:@"%@____", groupNo];
     NSInteger moreUnread = 0;
     BOOL moreMention = NO;
-    for (WKConversation *conv in [[WKSDK shared].conversationManager getConversationList]) {
-        if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
-            moreUnread += conv.unreadCount;
-            if (!moreMention) {
-                NSArray<WKReminder *> *rems = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
-                for (WKReminder *r in rems) {
-                    if (r.type == WKReminderTypeMentionMe) { moreMention = YES; break; }
-                }
-            }
-        }
-    }
+    [[WKConversationListVM shared] getThreadIndicatorForGroup:groupNo threadUnread:&moreUnread threadHasMention:&moreMention];
 
     NSString *moreText = [NSString stringWithFormat:@"+%ld %@", (long)moreCount, LLang(@"个子区")];
     if (moreMention) {

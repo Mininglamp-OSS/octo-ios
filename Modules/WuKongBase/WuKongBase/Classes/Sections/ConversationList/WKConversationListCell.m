@@ -28,6 +28,7 @@
 #import "WKAutoDeleteView.h"
 #import "WKThreadModel.h"
 #import "WKConversationGroupThreadCell.h"
+#import "WKConversationListVM.h"
 //#define avatarSize 56.0f
 @interface WKConversationListCell ()
 
@@ -208,20 +209,9 @@
         BOOL showToggle = (model.threadCount > 0 && [WKApp shared].remoteConfig.threadOn);
         self.threadToggleBtn.hidden = !showToggle;
         if (showToggle) {
-            NSString *prefix = [NSString stringWithFormat:@"%@____", model.channel.channelId];
             NSInteger threadUnread = 0;
             BOOL threadHasMention = NO;
-            for (WKConversation *conv in [[WKSDK shared].conversationManager getConversationList]) {
-                if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
-                    threadUnread += conv.unreadCount;
-                    if (!threadHasMention) {
-                        NSArray<WKReminder *> *rems = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
-                        for (WKReminder *r in rems) {
-                            if (r.type == WKReminderTypeMentionMe) { threadHasMention = YES; break; }
-                        }
-                    }
-                }
-            }
+            [[WKConversationListVM shared] getThreadIndicatorForGroup:model.channel.channelId threadUnread:&threadUnread threadHasMention:&threadHasMention];
             NSInteger indicatorType = 0;
             UIColor *indicatorColor = nil;
             if (threadHasMention) {

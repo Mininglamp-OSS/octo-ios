@@ -110,6 +110,7 @@
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+    CFAbsoluteTime _vwaStart = CFAbsoluteTimeGetCurrent();
     [super viewWillAppear:animated];
     self.navigationBar.title = LLang(@"联系人");
 
@@ -126,13 +127,30 @@
         self.lastLoadTime = 0;
         self.isUpdating = NO;
         [self loadFromDBCacheThenFetchAPI];
+        NSLog(@"[TabPerf] ContactsVC.viewWillAppear SPACE_SWITCH %.1fms", (CFAbsoluteTimeGetCurrent() - _vwaStart) * 1000);
         return;
     }
 
-    // 每次出现都后台静默同步，DB 写入在后台线程不阻塞 UI
+    // 后台静默同步（节流：5秒内不重复请求，避免频繁切 tab 触发不必要的 API 调用和 reloadData）
     if (self.dataLoaded) {
-        [self requestData];
+        NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+        if (now - self.lastLoadTime >= 5) {
+            self.lastLoadTime = now;
+            // 延迟到动画结束后再请求，避免 API 回调在动画期间触发 reloadData
+            id<UIViewControllerTransitionCoordinator> coordinator = self.transitionCoordinator;
+            if (coordinator) {
+                __weak typeof(self) weakSelf = self;
+                [coordinator animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+                    if (!context.isCancelled) {
+                        [weakSelf requestData];
+                    }
+                }];
+            } else {
+                [self requestData];
+            }
+        }
     }
+    NSLog(@"[TabPerf] ContactsVC.viewWillAppear %.1fms dataLoaded=%d", (CFAbsoluteTimeGetCurrent() - _vwaStart) * 1000, self.dataLoaded);
 }
 
 
@@ -202,8 +220,10 @@
 -(void) refreshContactsList:(NSArray<WKChannelInfo*>*)channelInfos {
     NSString *newFingerprint = [self fingerprintForContactInfos:channelInfos];
     if (self.currentContactsFingerprint && [self.currentContactsFingerprint isEqualToString:newFingerprint]) {
+        NSLog(@"[TabPerf] ContactsVC.refreshContactsList SKIPPED (fingerprint match) count=%lu", (unsigned long)channelInfos.count);
         return; // 数据无变化，跳过刷新
     }
+    NSLog(@"[TabPerf] ContactsVC.refreshContactsList CHANGED count=%lu", (unsigned long)channelInfos.count);
     self.currentContactsFingerprint = newFingerprint;
     self.allContactInfos = channelInfos;
     [self rebuildTableData];
@@ -233,10 +253,35 @@
     [self rebuildTableData];
 }
 
+-(WKChannelInfo*) channelInfoForUid:(NSString*)uid {
+    for (WKChannelInfo *info in self.allContactInfos) {
+        if ([info.channel.channelId isEqualToString:uid]) return info;
+    }
+    return nil;
+}
+
 // 统一的列表重建方法（所有列表更新都走这里，用 generation 防止异步竞争）
 -(void) rebuildTableData {
+    CFAbsoluteTime _rtStart = CFAbsoluteTimeGetCurrent();
     self.sortGeneration++;
     NSInteger currentGeneration = self.sortGeneration;
+
+    // 去重检测：检查 allContactInfos 是否有重复 uid
+    {
+        NSMutableDictionary<NSString*, NSNumber*> *uidCounts = [NSMutableDictionary dictionary];
+        for (WKChannelInfo *info in self.allContactInfos) {
+            NSString *uid = info.channel.channelId;
+            uidCounts[uid] = @([uidCounts[uid] integerValue] + 1);
+        }
+        for (NSString *uid in uidCounts) {
+            if ([uidCounts[uid] integerValue] > 1) {
+                NSLog(@"[ContactsBug] ⚠️ 重复uid: %@ 出现%@次, allContactInfos.count=%lu, robot=%d, callStack:\n%@",
+                      uid, uidCounts[uid], (unsigned long)self.allContactInfos.count,
+                      [self channelInfoForUid:uid].robot,
+                      [[NSThread callStackSymbols] subarrayWithRange:NSMakeRange(1, MIN(6, [NSThread callStackSymbols].count - 1))]);
+            }
+        }
+    }
 
     NSArray<WKChannelInfo*> *filtered = [self filteredContactInfos];
     NSString *suffix = (self.contactsFilter == 1) ? @" AI" : LLang(@"联系人");
@@ -273,7 +318,20 @@
         [newItems addObjectsFromArray:sortedObjArr];
         weakSelf.sectionTitleArr = sectionTitleArr;
         weakSelf.items = newItems;
-        [weakSelf.tableView reloadData];
+
+        // 动画期间延迟 reloadData，避免 layout pass 阻塞 tab 切换动画
+        id<UIViewControllerTransitionCoordinator> coordinator = weakSelf.transitionCoordinator;
+        if (coordinator && coordinator.isAnimated) {
+            [coordinator animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+                [weakSelf.tableView reloadData];
+                NSLog(@"[TabPerf] ContactsVC.rebuildTableData: DEFERRED reloadData count=%lu total=%.1fms",
+                      (unsigned long)filtered.count, (CFAbsoluteTimeGetCurrent() - _rtStart) * 1000);
+            }];
+        } else {
+            [weakSelf.tableView reloadData];
+            NSLog(@"[TabPerf] ContactsVC.rebuildTableData: reloadData count=%lu total=%.1fms",
+                  (unsigned long)filtered.count, (CFAbsoluteTimeGetCurrent() - _rtStart) * 1000);
+        }
     }];
 }
 
@@ -292,6 +350,7 @@
 
 // 请求联系人数据（互斥保护，DB 写入在后台线程不阻塞 UI）
 -(void) requestData{
+    NSLog(@"[TabPerf] ContactsVC.requestData called, isUpdating=%d", self.isUpdating);
     // 互斥：更新管道正在执行中，拒绝新请求
     if (self.isUpdating) return;
 
@@ -1101,6 +1160,9 @@
             }
         }
         if (!alreadyExists) {
+            NSLog(@"[ContactsBug] addContactsWithChannelInfo ADD uid=%@ robot=%d isUpdating=%d isBatch=%d allCount=%lu→%lu",
+                  channelInfo.channel.channelId, channelInfo.robot, self.isUpdating, self.isBatchUpdating,
+                  (unsigned long)self.allContactInfos.count, (unsigned long)self.allContactInfos.count + 1);
             NSMutableArray *mutable = [self.allContactInfos mutableCopy];
             [mutable addObject:channelInfo];
             self.allContactInfos = mutable;
@@ -1207,6 +1269,35 @@
 -(void) applyIncrementalUpdate:(NSArray<WKChannelInfo*>*)newInfos {
     NSAssert([NSThread isMainThread], @"applyIncrementalUpdate must be on main thread");
 
+    // 防御性去重：按 uid 去重，保留最后出现的（防止上游数据源偶发重复）
+    NSMutableDictionary<NSString*, WKChannelInfo*> *dedup = [NSMutableDictionary dictionaryWithCapacity:newInfos.count];
+    NSMutableArray<NSString*> *order = [NSMutableArray arrayWithCapacity:newInfos.count];
+    for (WKChannelInfo *info in newInfos) {
+        NSString *uid = info.channel.channelId;
+        if (!uid) continue;
+        if (!dedup[uid]) [order addObject:uid];
+        dedup[uid] = info;
+    }
+    if (dedup.count != newInfos.count) {
+        NSLog(@"[ContactsBug] ⚠️ applyIncrementalUpdate 检测到重复！原始=%lu 去重后=%lu",
+              (unsigned long)newInfos.count, (unsigned long)dedup.count);
+        NSMutableDictionary<NSString*, NSNumber*> *uidCounts = [NSMutableDictionary dictionary];
+        for (WKChannelInfo *info in newInfos) {
+            NSString *uid = info.channel.channelId ?: @"nil";
+            uidCounts[uid] = @([uidCounts[uid] integerValue] + 1);
+        }
+        for (NSString *uid in uidCounts) {
+            if ([uidCounts[uid] integerValue] > 1) {
+                NSLog(@"[ContactsBug]   重复uid: %@ ×%@", uid, uidCounts[uid]);
+            }
+        }
+        NSMutableArray<WKChannelInfo*> *dedupedInfos = [NSMutableArray arrayWithCapacity:order.count];
+        for (NSString *uid in order) {
+            [dedupedInfos addObject:dedup[uid]];
+        }
+        newInfos = dedupedInfos;
+    }
+
     NSArray<WKChannelInfo*> *oldInfos = self.allContactInfos ?: @[];
 
     // 建立 uid -> WKChannelInfo 映射表（O(1) 查找）
@@ -1214,10 +1305,7 @@
     for (WKChannelInfo *info in oldInfos) {
         oldMap[info.channel.channelId] = info;
     }
-    NSMutableDictionary<NSString*, WKChannelInfo*> *newMap = [NSMutableDictionary dictionaryWithCapacity:newInfos.count];
-    for (WKChannelInfo *info in newInfos) {
-        newMap[info.channel.channelId] = info;
-    }
+    NSMutableDictionary<NSString*, WKChannelInfo*> *newMap = dedup;
 
     // 分类变化
     NSMutableArray<WKChannelInfo*> *toInsert = [NSMutableArray array];

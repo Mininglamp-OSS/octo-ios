@@ -195,8 +195,14 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 加载分组数据
 -(void) loadCategoriesWithCompletion:(nullable void(^)(void))completion;
 
-/// 构建群聊 tab 的展示列表（含 section header）
+/// 构建群聊 tab 的展示列表（含 section header），同时计算全局 hasMention 状态
 -(NSArray<WKConversationDisplayItem *> *) buildGroupDisplayList;
+
+/// buildGroupDisplayList 计算出的全局 @提醒状态（群聊 + 子区）
+@property (nonatomic, assign, readonly) BOOL lastBuildHasMention;
+
+/// 从缓存获取指定群聊下子区的未读数和 @提醒状态（供 cell 渲染用，无 DB 查询）
+-(void) getThreadIndicatorForGroup:(NSString *)groupNo threadUnread:(NSInteger *)outUnread threadHasMention:(BOOL *)outHasMention;
 
 /// 保存折叠状态
 -(void) saveCollapsedSections;

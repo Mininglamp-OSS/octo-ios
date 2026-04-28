@@ -21,6 +21,11 @@
 @property(nonatomic,strong) NSRecursiveLock *conversationsLock;
 @property(nonatomic,strong) NSSet<NSString*> *syncedGroupChannelIds; // 当前空间的合法群聊白名单
 @property(nonatomic,strong) NSMutableSet<NSString*> *expandedThreadGroups; // 子区预览展开的群 channelId
+@property(nonatomic,copy) NSArray<WKConversation*> *cachedAllConversations; // loadConversationList 缓存，供 buildGroupDisplayList 复用
+@property(nonatomic,strong) NSDictionary<NSString*, NSArray<WKConversation*>*> *cachedTopicsByGroup; // groupId → 子区会话列表
+@property(nonatomic,strong) NSDictionary<NSString*, NSArray<WKReminder*>*> *cachedRemindersByChannelId; // 子区 channelId → reminder 列表
+@property(nonatomic,strong) NSDictionary *cachedThreadData; // channelId → {previews, count}，跨 reset 保留
+@property(nonatomic,assign,readwrite) BOOL lastBuildHasMention;
 
 @end
 
@@ -74,8 +79,11 @@ static WKConversationListVM *_instance;
     [self.conversationWrapModels removeAllObjects];
     [self.channelIndex removeAllObjects];
     self.filteredConversations = @[];
-    self.syncedGroupChannelIds = nil; // 重置白名单
+    self.syncedGroupChannelIds = nil;
     self.categoryList = @[];
+    self.cachedAllConversations = nil;
+    self.cachedTopicsByGroup = nil;
+    self.cachedRemindersByChannelId = nil;
 }
 
 -(void) snapshotSyncedGroupIds {
@@ -107,48 +115,60 @@ static WKConversationListVM *_instance;
 }
 
 -(void) loadConversationList:(void(^)(void)) finished {
-    NSMutableArray<WKConversationWrapModel*> *conversationWrapModels = [[NSMutableArray alloc] init];
-    NSArray<WKConversation*> *conversations = [[[WKSDK shared] conversationManager] getConversationList];
-    NSLog(@"[ConvDebug] loadConversationList: DB returned %lu conversations, syncedGroupChannelIds=%@", (unsigned long)conversations.count, self.syncedGroupChannelIds ? [NSString stringWithFormat:@"%lu items", (unsigned long)self.syncedGroupChannelIds.count] : @"nil");
-    NSInteger filteredCount = 0;
-    if(conversations) {
-        for (WKConversation *conversation in conversations) {
-            // 空间隔离：过滤不属于当前空间的会话
-            if(![self shouldShowConversation:conversation]) {
-                filteredCount++;
-                continue;
-            }
-            // 子区完全不显示在会话列表
-            if(conversation.channel.channelType == WK_COMMUNITY_TOPIC) {
-                continue;
-            }
-            WKConversationWrapModel *wrapModel = [[WKConversationWrapModel alloc] initWithConversation:conversation];
-            if(conversation.parentChannel) {
+    CFAbsoluteTime _lcStart = CFAbsoluteTimeGetCurrent();
 
-                WKConversationWrapModel *parentConversationWrapModel = [self addOrCreateParentConversation:conversation.parentChannel newConversationWrapModel:wrapModel conversationWrapModels:conversationWrapModels];
-
-                if(parentConversationWrapModel) {
-                    [self handleProhibitwords:parentConversationWrapModel];
-                    [conversationWrapModels addObject:parentConversationWrapModel];
-                }
-            }else {
-                [self handleProhibitwords:wrapModel];
-                [conversationWrapModels addObject:wrapModel];
-            }
+    // 在主线程快照旧 threadPreviews/threadCount（后台线程不能读 self.conversationWrapModels）
+    // reset 会清空 conversationWrapModels，所以同时用 cachedThreadData 兜底
+    NSMutableDictionary *oldThreadData = [NSMutableDictionary dictionary];
+    if (self.cachedThreadData) {
+        [oldThreadData addEntriesFromDictionary:self.cachedThreadData];
+    }
+    for (WKConversationWrapModel *old in self.conversationWrapModels) {
+        if (old.threadCount > 0) {
+            oldThreadData[old.channel.channelId] = @{
+                @"previews": old.threadPreviews ?: @[],
+                @"count": @(old.threadCount)
+            };
         }
     }
 
-    // 从旧 model 继承 threadPreviews/threadCount（避免重建后子区预览丢失）
-    if (self.conversationWrapModels.count > 0) {
-        NSMutableDictionary *oldThreadData = [NSMutableDictionary dictionary];
-        for (WKConversationWrapModel *old in self.conversationWrapModels) {
-            if (old.threadCount > 0) {
-                oldThreadData[old.channel.channelId] = @{
-                    @"previews": old.threadPreviews ?: @[],
-                    @"count": @(old.threadCount)
-                };
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        // ===== 后台线程：DB 查询 + 数据构建 =====
+        CFAbsoluteTime _dbStart = CFAbsoluteTimeGetCurrent();
+        NSArray<WKConversation*> *conversations = [[[WKSDK shared] conversationManager] getConversationList];
+        NSLog(@"[TabPerf] loadConversationList(bg): DB query=%.1fms count=%lu",
+              (CFAbsoluteTimeGetCurrent()-_dbStart)*1000, (unsigned long)conversations.count);
+
+        NSMutableArray<WKConversationWrapModel*> *conversationWrapModels = [[NSMutableArray alloc] init];
+        NSInteger filteredCount = 0;
+        if(conversations) {
+            for (WKConversation *conversation in conversations) {
+                if(![strongSelf shouldShowConversation:conversation]) {
+                    filteredCount++;
+                    continue;
+                }
+                if(conversation.channel.channelType == WK_COMMUNITY_TOPIC) {
+                    continue;
+                }
+                WKConversationWrapModel *wrapModel = [[WKConversationWrapModel alloc] initWithConversation:conversation];
+                if(conversation.parentChannel) {
+                    WKConversationWrapModel *parentConversationWrapModel = [strongSelf addOrCreateParentConversation:conversation.parentChannel newConversationWrapModel:wrapModel conversationWrapModels:conversationWrapModels];
+                    if(parentConversationWrapModel) {
+                        [strongSelf handleProhibitwords:parentConversationWrapModel];
+                        [conversationWrapModels addObject:parentConversationWrapModel];
+                    }
+                } else {
+                    [strongSelf handleProhibitwords:wrapModel];
+                    [conversationWrapModels addObject:wrapModel];
+                }
             }
         }
+
+        // 从旧 model 继承 threadPreviews/threadCount
         for (WKConversationWrapModel *model in conversationWrapModels) {
             NSDictionary *data = oldThreadData[model.channel.channelId];
             if (data) {
@@ -156,32 +176,79 @@ static WKConversationListVM *_instance;
                 model.threadCount = [data[@"count"] integerValue];
             }
         }
-    }
 
-    NSLog(@"[ConvDebug] loadConversationList: filtered=%ld, final models=%lu", (long)filteredCount, (unsigned long)conversationWrapModels.count);
-    self.conversationWrapModels = conversationWrapModels;
-    [self rebuildChannelIndex];
-
-    // 从 DB 恢复每个会话的 reminders（@提醒等）
-    for (WKConversationWrapModel *model in self.conversationWrapModels) {
-        WKConversation *conv = [model getConversation];
-        if (!conv.reminders || conv.reminders.count == 0) {
-            NSArray<WKReminder *> *reminders = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
-            if (reminders.count > 0) {
-                conv.reminders = reminders;
+        // 恢复 reminders（DB 查询）
+        for (WKConversationWrapModel *model in conversationWrapModels) {
+            WKConversation *conv = [model getConversation];
+            if (!conv.reminders || conv.reminders.count == 0) {
+                NSArray<WKReminder *> *reminders = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
+                if (reminders.count > 0) {
+                    conv.reminders = reminders;
+                }
             }
         }
-    }
 
-    [self sortConversationList];
+        // 构建子区索引缓存（DB 查询）
+        NSMutableDictionary<NSString*, NSMutableArray<WKConversation*>*> *topicsByGroup = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString*, NSArray<WKReminder*>*> *remindersByChannelId = [NSMutableDictionary dictionary];
+        for (WKConversation *conv in conversations) {
+            if (conv.channel.channelType != WK_COMMUNITY_TOPIC) continue;
+            NSString *channelId = conv.channel.channelId;
+            NSRange sep = [channelId rangeOfString:@"____"];
+            if (sep.location == NSNotFound) continue;
+            NSString *groupId = [channelId substringToIndex:sep.location];
+            NSMutableArray *topics = topicsByGroup[groupId];
+            if (!topics) { topics = [NSMutableArray array]; topicsByGroup[groupId] = topics; }
+            [topics addObject:conv];
+            NSArray<WKReminder*> *reminders = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
+            if (reminders.count > 0) remindersByChannelId[channelId] = reminders;
+        }
 
-    // 立即回调渲染列表（不阻塞等待 thread API，避免网络异常时列表卡死）
-    if(finished) {
-        finished();
-    }
+        // 排序（纯内存）
+        [conversationWrapModels sortUsingComparator:^NSComparisonResult(WKConversationWrapModel *obj1, WKConversationWrapModel *obj2) {
+            if(obj1.stick && !obj2.stick) return NSOrderedAscending;
+            if(!obj1.stick && obj2.stick) return NSOrderedDescending;
+            if(obj1.lastMsgTimestamp > obj2.lastMsgTimestamp) return NSOrderedAscending;
+            if(obj1.lastMsgTimestamp < obj2.lastMsgTimestamp) return NSOrderedDescending;
+            return NSOrderedSame;
+        }];
 
-    // 异步请求子区数据，完成后通知刷新
-    [self fetchThreadCountsForGroups];
+        NSLog(@"[TabPerf] loadConversationList(bg): total=%.1fms models=%lu",
+              (CFAbsoluteTimeGetCurrent()-_lcStart)*1000, (unsigned long)conversationWrapModels.count);
+
+        // ===== 主线程：赋值 + UI 回调 =====
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) mainSelf = weakSelf;
+            if (!mainSelf) return;
+
+            mainSelf.cachedAllConversations = conversations;
+            mainSelf.conversationWrapModels = conversationWrapModels;
+            [mainSelf rebuildChannelIndex];
+            mainSelf.cachedTopicsByGroup = topicsByGroup;
+            mainSelf.cachedRemindersByChannelId = remindersByChannelId;
+            [mainSelf rebuildFilteredList];
+
+            // 更新 threadData 缓存（跨 reset 保留，防止切空间时 threadPreviews 丢失）
+            NSMutableDictionary *newThreadCache = [NSMutableDictionary dictionary];
+            for (WKConversationWrapModel *m in conversationWrapModels) {
+                if (m.threadCount > 0) {
+                    newThreadCache[m.channel.channelId] = @{
+                        @"previews": m.threadPreviews ?: @[],
+                        @"count": @(m.threadCount)
+                    };
+                }
+            }
+            mainSelf.cachedThreadData = newThreadCache;
+
+            NSLog(@"[TabPerf] loadConversationList: mainThread assign+callback, totalFromStart=%.1fms",
+                  (CFAbsoluteTimeGetCurrent()-_lcStart)*1000);
+
+            if(finished) {
+                finished();
+            }
+            [mainSelf fetchThreadCountsForGroups];
+        });
+    });
 }
 
 /// 通过 API 获取每个群组的子区真实数量（带完成回调）
@@ -238,10 +305,19 @@ static WKConversationListVM *_instance;
 
 /// 拉取所有群组的子区数量，完成后统一通知 VC 刷新（不再逐个发通知）
 -(void) fetchThreadCountsForGroups {
+    NSLog(@"[ThreadDebug] fetchThreadCountsForGroups START, groupCount=%ld", (long)[self groupModelCount]);
     [self fetchThreadCountsForGroupsWithCompletion:^{
-        // 所有子区数据到达后，发一次统一刷新通知（避免大量逐行通知导致 tableView 卡死）
+        NSLog(@"[ThreadDebug] fetchThreadCountsForGroups DONE, posting WKThreadCountBatchUpdated");
         [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountBatchUpdated" object:nil];
     }];
+}
+
+-(NSInteger) groupModelCount {
+    NSInteger count = 0;
+    for (WKConversationWrapModel *m in self.conversationWrapModels) {
+        if (m.channel.channelType == WK_GROUP) count++;
+    }
+    return count;
 }
 
 /// 刷新指定群组的子区数量（批量请求，统一刷新，最多 3 个并发）
@@ -778,6 +854,26 @@ static WKConversationListVM *_instance;
     return NO;
 }
 
+/// 从缓存获取指定群聊下子区的未读数和 @提醒状态（供 cell 渲染用，纯内存查找，无 DB 查询）
+-(void) getThreadIndicatorForGroup:(NSString *)groupNo threadUnread:(NSInteger *)outUnread threadHasMention:(BOOL *)outHasMention {
+    NSInteger unread = 0;
+    BOOL hasMention = NO;
+    NSArray<WKConversation*> *topics = self.cachedTopicsByGroup[groupNo];
+    if (topics) {
+        for (WKConversation *conv in topics) {
+            unread += conv.unreadCount;
+            if (!hasMention) {
+                NSArray<WKReminder*> *rems = self.cachedRemindersByChannelId[conv.channel.channelId];
+                for (WKReminder *r in rems) {
+                    if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
+                }
+            }
+        }
+    }
+    if (outUnread) *outUnread = unread;
+    if (outHasMention) *outHasMention = hasMention;
+}
+
 /// 检测指定群聊及其所有子区是否有未处理的@提醒（使用缓存的会话列表避免重复 DB 查询）
 -(BOOL) hasMentionForGroup:(NSString *)groupNo model:(WKConversationWrapModel *)model allConvs:(NSArray<WKConversation*>*)allConvs {
     // 检查群聊自身的 reminder
@@ -811,7 +907,30 @@ static WKConversationListVM *_instance;
     return total;
 }
 
+/// 从 cachedAllConversations 构建子区索引和 reminder 缓存
+-(void) rebuildTopicIndexCache {
+    NSArray<WKConversation *> *allConvs = self.cachedAllConversations;
+    if (!allConvs) return;
+    NSMutableDictionary<NSString*, NSMutableArray<WKConversation*>*> *topicsByGroup = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString*, NSArray<WKReminder*>*> *remindersByChannelId = [NSMutableDictionary dictionary];
+    for (WKConversation *conv in allConvs) {
+        if (conv.channel.channelType != WK_COMMUNITY_TOPIC) continue;
+        NSString *channelId = conv.channel.channelId;
+        NSRange sep = [channelId rangeOfString:@"____"];
+        if (sep.location == NSNotFound) continue;
+        NSString *groupId = [channelId substringToIndex:sep.location];
+        NSMutableArray *topics = topicsByGroup[groupId];
+        if (!topics) { topics = [NSMutableArray array]; topicsByGroup[groupId] = topics; }
+        [topics addObject:conv];
+        NSArray<WKReminder*> *reminders = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
+        if (reminders.count > 0) remindersByChannelId[channelId] = reminders;
+    }
+    self.cachedTopicsByGroup = topicsByGroup;
+    self.cachedRemindersByChannelId = remindersByChannelId;
+}
+
 -(NSArray<WKConversationDisplayItem *> *) buildGroupDisplayList {
+    CFAbsoluteTime _bgStart = CFAbsoluteTimeGetCurrent();
     // 1. 建立 channelId → WKConversationWrapModel 映射（仅群聊）
     NSMutableDictionary<NSString *, WKConversationWrapModel *> *channelMap = [NSMutableDictionary dictionary];
     for (WKConversationWrapModel *model in self.conversationWrapModels) {
@@ -823,25 +942,13 @@ static WKConversationListVM *_instance;
     NSMutableArray<WKConversationDisplayItem *> *displayList = [NSMutableArray array];
     NSMutableSet<NSString *> *groupedChannelIds = [NSMutableSet set];
 
-    // 缓存一次子区会话列表，避免在循环中重复从 DB 查询
-    NSArray<WKConversation *> *cachedAllConvs = [[WKSDK shared].conversationManager getConversationList];
-
-    // 预建索引：O(总会话数) 一次遍历，把 O(群聊数×总会话数) 的嵌套遍历降为 O(子区数) 查找
-    // topicsByGroup:        groupId → [WKConversation*]（该群下所有子区会话）
-    // remindersByChannelId: channelId → [WKReminder*]（子区的 reminder，一次性批量 DB 查询）
-    NSMutableDictionary<NSString*, NSMutableArray<WKConversation*>*> *topicsByGroup = [NSMutableDictionary dictionary];
-    NSMutableDictionary<NSString*, NSArray<WKReminder*>*> *remindersByChannelId = [NSMutableDictionary dictionary];
-    for (WKConversation *conv in cachedAllConvs) {
-        if (conv.channel.channelType != WK_COMMUNITY_TOPIC) continue;
-        NSString *channelId = conv.channel.channelId;
-        NSRange sep = [channelId rangeOfString:@"____"];
-        if (sep.location == NSNotFound) continue;
-        NSString *groupId = [channelId substringToIndex:sep.location];
-        NSMutableArray *topics = topicsByGroup[groupId];
-        if (!topics) { topics = [NSMutableArray array]; topicsByGroup[groupId] = topics; }
-        [topics addObject:conv];
-        NSArray<WKReminder*> *reminders = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
-        if (reminders.count > 0) remindersByChannelId[channelId] = reminders;
+    // 使用 loadConversationList 时预建的子区索引缓存，无缓存时现场构建（首次调用等边界情况）
+    NSDictionary<NSString*, NSArray<WKConversation*>*> *topicsByGroup = self.cachedTopicsByGroup;
+    NSDictionary<NSString*, NSArray<WKReminder*>*> *remindersByChannelId = self.cachedRemindersByChannelId;
+    if (!topicsByGroup) {
+        [self rebuildTopicIndexCache];
+        topicsByGroup = self.cachedTopicsByGroup ?: @{};
+        remindersByChannelId = self.cachedRemindersByChannelId ?: @{};
     }
 
     // 2. 收集已归组的 channelId，找到 is_default 分类
@@ -962,6 +1069,28 @@ static WKConversationListVM *_instance;
         }
     }
 
+    // 顺便计算全局 hasMention（复用已有的 remindersByChannelId，避免 updateGroupMentionBadge 重复查 DB）
+    BOOL globalHasMention = NO;
+    for (WKConversationWrapModel *model in self.conversationWrapModels) {
+        if (model.channel.channelType != WK_GROUP) continue;
+        if (model.simpleReminders.count > 0) {
+            for (WKReminder *r in model.simpleReminders) {
+                if (r.type == WKReminderTypeMentionMe) { globalHasMention = YES; break; }
+            }
+        }
+        if (globalHasMention) break;
+    }
+    if (!globalHasMention) {
+        for (NSArray<WKReminder*> *reminders in remindersByChannelId.allValues) {
+            for (WKReminder *r in reminders) {
+                if (r.type == WKReminderTypeMentionMe) { globalHasMention = YES; break; }
+            }
+            if (globalHasMention) break;
+        }
+    }
+    self.lastBuildHasMention = globalHasMention;
+
+    NSLog(@"[TabPerf] buildGroupDisplayList: %.1fms items=%lu hasMention=%d", (CFAbsoluteTimeGetCurrent()-_bgStart)*1000, (unsigned long)displayList.count, globalHasMention);
     return displayList;
 }
 

@@ -13,6 +13,7 @@
 #import "WKApp.h"
 #import "WuKongBase.h"
 #import <SDWebImage/UIImageView+WebCache.h>
+#import "WKConversationListVM.h"
 
 // 弧线绘制视图
 @interface WKThreadBranchView : UIView
@@ -274,21 +275,10 @@
         [self.badgeView setBadgeBackgroundColor:[UIColor redColor]];
     }
 
-    // 子区折叠图标颜色
-    NSString *prefix = [NSString stringWithFormat:@"%@____", model.channel.channelId];
+    // 子区折叠图标颜色（从 VM 缓存读取，无 DB 查询）
     NSInteger threadUnread = 0;
     BOOL threadHasMention = NO;
-    for (WKConversation *conv in [[WKSDK shared].conversationManager getConversationList]) {
-        if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
-            threadUnread += conv.unreadCount;
-            if (!threadHasMention) {
-                NSArray<WKReminder *> *rems = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
-                for (WKReminder *r in rems) {
-                    if (r.type == WKReminderTypeMentionMe) { threadHasMention = YES; break; }
-                }
-            }
-        }
-    }
+    [[WKConversationListVM shared] getThreadIndicatorForGroup:model.channel.channelId threadUnread:&threadUnread threadHasMention:&threadHasMention];
     NSInteger indicatorType = 0;
     UIColor *indicatorColor = nil;
     if (threadHasMention) {
@@ -456,29 +446,10 @@
             [self.moreLbl addGestureRecognizer:moreTap];
         }
 
-        // 计算未预览子区的未读数和@提醒
-        NSString *groupNo = self.model.channel.channelId;
-        NSString *prefix = [NSString stringWithFormat:@"%@____", groupNo];
-        NSMutableSet *previewedIds = [NSMutableSet set];
-        for (NSInteger i = 0; i < count; i++) {
-            [previewedIds addObject:previews[i].channelId];
-        }
+        // 计算子区的未读数和@提醒（从 VM 缓存读取，无 DB 查询）
         NSInteger moreUnread = 0;
         BOOL moreMention = NO;
-        NSArray<WKConversation *> *allConvs = [[WKSDK shared].conversationManager getConversationList];
-        for (WKConversation *conv in allConvs) {
-            if (conv.channel.channelType == WK_COMMUNITY_TOPIC
-                && [conv.channel.channelId hasPrefix:prefix]
-                && ![previewedIds containsObject:conv.channel.channelId]) {
-                moreUnread += conv.unreadCount;
-                if (!moreMention) {
-                    NSArray<WKReminder *> *rems = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
-                    for (WKReminder *r in rems) {
-                        if (r.type == WKReminderTypeMentionMe) { moreMention = YES; break; }
-                    }
-                }
-            }
-        }
+        [[WKConversationListVM shared] getThreadIndicatorForGroup:self.model.channel.channelId threadUnread:&moreUnread threadHasMention:&moreMention];
 
         // 构建文本：+N个子区 [有人@我]
         NSString *moreText = [NSString stringWithFormat:@"+%ld %@", (long)(self.model.threadCount - count), LLang(@"个子区")];

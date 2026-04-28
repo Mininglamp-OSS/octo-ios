@@ -66,8 +66,12 @@
 }
 
 - (void)viewDidAppear:(BOOL)animated {
+    CFAbsoluteTime _vdaStart = CFAbsoluteTimeGetCurrent();
     [super viewDidAppear:animated];
+    CFAbsoluteTime _hdrStart = CFAbsoluteTimeGetCurrent();
     [self.meHeader reloadData];
+    NSLog(@"[TabPerf] MeVC.viewDidAppear: super=%.1fms header=%.1fms",
+          (_hdrStart - _vdaStart) * 1000, (CFAbsoluteTimeGetCurrent() - _hdrStart) * 1000);
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
     if (now - self.lastAppearTime < 10) return;
     self.lastAppearTime = now;
