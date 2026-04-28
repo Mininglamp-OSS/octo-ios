@@ -3080,13 +3080,6 @@
         }
     }
 
-    // 记录已弹过，防止重复
-    [self.shownHintMsgIds addObject:msgIdNum];
-    // 防止集合无限增长
-    if (self.shownHintMsgIds.count > 200) {
-        [self.shownHintMsgIds removeAllObjects];
-    }
-
     uint32_t msgSeq = message.messageSeq;
     [WKPixelParticleHint showInView:self.view
                           avatarURL:avatarURL
