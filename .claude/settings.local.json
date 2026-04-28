@@ -94,7 +94,9 @@
       "WebFetch(domain:127.0.0.1)",
       "Bash(gh issue *)",
       "Bash(gh api *)",
-      "Bash(gh auth *)"
+      "Bash(gh auth *)",
+      "Bash(git stash *)",
+      "Bash(git *)"
     ]
   }
 }
