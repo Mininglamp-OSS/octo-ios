@@ -1513,17 +1513,20 @@
     BOOL isStreaming = msg.streamOn && msg.streamFlag != WKStreamFlagEnd;
     if (isStreaming) return;
 
-    NSString *heightKey = msg.clientMsgNo;
-    if (!heightKey || heightKey.length == 0) return;
-    if (msg.remoteExtra.contentEdit) {
-        heightKey = [NSString stringWithFormat:@"%@-e%lu", heightKey, (unsigned long)msg.remoteExtra.editedAt];
-    }
-    // 已缓存则跳过
-    if ([[WKMessageListView cellHeightCache] objectForKey:heightKey]) return;
+    if (!msg.clientMsgNo || msg.clientMsgNo.length == 0) return;
 
     @try {
         CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
         Class cellClass = [self getMessageCellClass:msg];
+        NSInteger bubblePos = 0;
+        if ([cellClass respondsToSelector:@selector(bubblePosition:)]) {
+            bubblePos = [cellClass bubblePosition:msg];
+        }
+        NSString *heightKey = [NSString stringWithFormat:@"%@-bp%ld", msg.clientMsgNo, (long)bubblePos];
+        if (msg.remoteExtra.contentEdit) {
+            heightKey = [NSString stringWithFormat:@"%@-e%lu", heightKey, (unsigned long)msg.remoteExtra.editedAt];
+        }
+        if ([[WKMessageListView cellHeightCache] objectForKey:heightKey]) return;
         CGSize size = [cellClass sizeForMessage:msg];
         CGFloat height = MAX(size.height, 0.1f);
         [[WKMessageListView cellHeightCache] setObject:@(height) forKey:heightKey];
@@ -1543,7 +1546,7 @@
                   heightKey, preview);
         }
     } @catch (NSException *exception) {
-        NSLog(@"[HeightCache] precache exception for %@: %@", heightKey, exception);
+        NSLog(@"[HeightCache] precache exception for %@: %@", msg.clientMsgNo, exception);
     }
 }
 
@@ -1570,8 +1573,12 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     BOOL isStreaming = messageModel.streamOn && messageModel.streamFlag != WKStreamFlagEnd;
     NSString *heightKey = nil;
     if (!isStreaming && messageModel.clientMsgNo.length > 0) {
-        heightKey = messageModel.clientMsgNo;
-        // 编辑过的消息用不同 key
+        Class cellClass = [self getMessageCellClass:messageModel];
+        NSInteger bubblePos = 0;
+        if ([cellClass respondsToSelector:@selector(bubblePosition:)]) {
+            bubblePos = [cellClass bubblePosition:messageModel];
+        }
+        heightKey = [NSString stringWithFormat:@"%@-bp%ld", messageModel.clientMsgNo, (long)bubblePos];
         if (messageModel.remoteExtra.contentEdit) {
             heightKey = [NSString stringWithFormat:@"%@-e%lu", heightKey, (unsigned long)messageModel.remoteExtra.editedAt];
         }

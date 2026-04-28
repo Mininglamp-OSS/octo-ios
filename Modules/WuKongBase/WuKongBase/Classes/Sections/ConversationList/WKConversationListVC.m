@@ -41,6 +41,7 @@
 #import "WKSpaceConversationCache.h"
 #import "WKPCOnlineVC.h"
 #import "WKPixelParticleHint.h"
+#import "WKThreadModel.h"
 @interface WKConversationListVC ()<UITableViewDelegate,UITableViewDataSource,UISearchControllerDelegate,WKConnectionManagerDelegate,WKChannelManagerDelegate,WKConversationManagerDelegate,WKNetworkListenerDelegate,WKChatManagerDelegate,WKTypingManagerDelegate,SwipeTableViewCellDelegate,WKOnlineStatusManagerDelegate,WKReminderManagerDelegate>
 @property(nonatomic,copy) NSString *_title;
 @property(nonatomic,strong)  WKConversationListTableView *tableView;
@@ -68,6 +69,7 @@
 
 // 网络信号监控
 @property(nonatomic,assign) NSTimeInterval connectedAtTime; // 连接成功的时间
+@property(nonatomic,strong) NSMutableSet<NSNumber *> *shownHintMsgIds; // 已弹过通知的消息ID
 @property(nonatomic,assign) NSInteger currentLatencyMs; // 当前延迟（毫秒）
 @property(nonatomic,strong) NSTimer *pingTimer; // ping定时器
 @property(nonatomic,strong) UIView *signalContainerView; // 信号显示容器
@@ -113,6 +115,7 @@
 
     // 初始化网络监控相关属性
     self.connectedAtTime = 0;
+    self.shownHintMsgIds = [NSMutableSet set];
     self.currentLatencyMs = -1;
 
     return self;
@@ -934,7 +937,7 @@
 #pragma mark - WKChatManagerDelegate
 
 -(void) onMessageUpdate:(WKMessage*) message left:(NSInteger)left{
-   
+
     NSInteger index = [self.conversationListVM indexAtChannel:message.channel];
     if(index!=-1) {
         WKConversationWrapModel *conversation = [self.conversationListVM modelAtIndex:index];
@@ -1054,7 +1057,10 @@
                 NSString *groupNo = [threadChannelId substringToIndex:range.location];
                 [refreshGroupNos addObject:groupNo];
             }
-            [self showPixelHintForChannel:conv.channel];
+            // 子区消息不走 onMessageUpdate，在这里触发提醒
+            if (conv.lastMessage) {
+                [self tryShowPixelHintForMessage:conv.lastMessage];
+            }
         } else {
             [nonThreadFiltered addObject:conv];
         }
@@ -1085,6 +1091,9 @@
 
     if(filtered.count>1) {
         for (WKConversation *conversation in filtered) {
+            if (conversation.channel.channelType == WK_GROUP && conversation.lastMessage) {
+                [self tryShowPixelHintForMessage:conversation.lastMessage];
+            }
             [self onlyAddOrUpdateConversation:conversation];
         }
         [self refreshTable];
@@ -1097,8 +1106,8 @@
     }
 
    WKConversation *conversation = filtered[0];
-    if (conversation.channel.channelType == WK_GROUP) {
-        [self showPixelHintForChannel:conversation.channel];
+    if (conversation.channel.channelType == WK_GROUP && conversation.lastMessage) {
+        [self tryShowPixelHintForMessage:conversation.lastMessage];
     }
     [self uiAddOrUpdateConversationForOne:conversation];
     [self refreshBadge];
@@ -1683,6 +1692,9 @@
                 [weakSelf.conversationListVM toggleThreadExpanded:channelId];
                 [weakSelf rebuildGroupDisplayAndReload];
             }];
+            [threadCell setOnThreadPreviewLongPress:^(NSString *threadChannelId, NSString *threadName, CGPoint pointInWindow) {
+                [weakSelf showThreadMuteMenuForChannelId:threadChannelId threadName:threadName atPoint:pointInWindow];
+            }];
         } else if ([cell isKindOfClass:[WKConversationGroupThreadOnlyCell class]]) {
             WKConversationGroupThreadOnlyCell *threadOnlyCell = (WKConversationGroupThreadOnlyCell *)cell;
             [threadOnlyCell refreshWithModel:conversationModel];
@@ -1910,6 +1922,26 @@
         }
     }];
 
+    [self showFloatingMenu:menuItems atPoint:point];
+}
+
+-(void) showThreadMuteMenuForChannelId:(NSString *)threadChannelId threadName:(NSString *)threadName atPoint:(CGPoint)point {
+    WKChannel *threadChannel = [WKChannel channelID:threadChannelId channelType:WK_COMMUNITY_TOPIC];
+    BOOL isMuted = [[WKChannelSettingManager shared] mute:threadChannel];
+
+    __weak typeof(self) weakSelf = self;
+    NSString *muteTitle = isMuted ? LLang(@"打开通知") : LLang(@"关闭通知");
+    NSMutableArray<NSDictionary *> *menuItems = [NSMutableArray array];
+    [menuItems addObject:@{
+        @"title": muteTitle,
+        @"icon": [WKConversationListVC iconMute:isMuted],
+        @"action": ^{
+            [[WKChannelSettingManager shared] channel:threadChannel mute:!isMuted];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [weakSelf rebuildGroupDisplayAndReload];
+            });
+        }
+    }];
     [self showFloatingMenu:menuItems atPoint:point];
 }
 
@@ -2498,44 +2530,9 @@
 }
 
 /// 检查群聊和子区中是否有未处理的@提醒，更新 tab 标识
+/// 直接使用 buildGroupDisplayList 中已计算好的结果，避免重复遍历和 DB 查询
 -(void) updateGroupMentionBadge {
-    BOOL hasMention = NO;
-    // 检查群聊（用全量列表，不受当前 tab 过滤影响）
-    for (WKConversationWrapModel *model in [_conversationListVM allConversations]) {
-        if (model.channel.channelType != WK_GROUP) continue;
-        if (model.simpleReminders.count > 0) {
-            for (WKReminder *r in model.simpleReminders) {
-                if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
-            }
-        }
-        if (hasMention) break;
-    }
-    // 检查子区（子区不在会话列表中，从 SDK 会话里查）
-    // 仅检查当前空间内群聊对应的子区，子区 channelId 格式为 {groupNo}____{threadId}
-    if (!hasMention) {
-        // 收集当前空间内的群聊 channelId 作为白名单（用全量列表）
-        NSMutableSet<NSString *> *spaceGroupIds = [NSMutableSet set];
-        for (WKConversationWrapModel *model in [_conversationListVM allConversations]) {
-            if (model.channel.channelType == WK_GROUP) {
-                [spaceGroupIds addObject:model.channel.channelId];
-            }
-        }
-        NSArray<WKConversation *> *allConvs = [[WKSDK shared].conversationManager getConversationList];
-        for (WKConversation *conv in allConvs) {
-            if (conv.channel.channelType != WK_COMMUNITY_TOPIC) continue;
-            // 提取子区的 groupNo 前缀，检查是否属于当前空间
-            NSRange sep = [conv.channel.channelId rangeOfString:@"____"];
-            if (sep.location == NSNotFound) continue;
-            NSString *groupNo = [conv.channel.channelId substringToIndex:sep.location];
-            if (![spaceGroupIds containsObject:groupNo]) continue;
-            NSArray<WKReminder *> *reminders = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
-            for (WKReminder *r in reminders) {
-                if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
-            }
-            if (hasMention) break;
-        }
-    }
-    [_conversationTabView setGroupHasMention:hasMention];
+    [_conversationTabView setGroupHasMention:_conversationListVM.lastBuildHasMention];
 }
 
 -(void) showCreateCategoryDialog {
@@ -2962,50 +2959,122 @@
 
 #pragma mark - Pixel Particle Hint
 
--(void) showPixelHintForChannel:(WKChannel *)channel {
-    if (_conversationListVM.filterType != WKConversationFilterGroup) return;
-    if (!self.view.window) return;
-    if (self.connectedAtTime <= 0) return;
+-(void) tryShowPixelHintForMessage:(WKMessage *)message {
+    NSLog(@"[HintDebug] >>> onMessage channel=%@/%d contentType=%ld fromUid=%@ msgSeq=%u",
+          message.channel.channelId, message.channel.channelType,
+          (long)message.contentType, message.fromUid ?: @"(nil)", message.messageSeq);
 
-    WKConversation *conv = [[WKSDK shared].conversationManager getConversation:channel];
-    if (!conv || !conv.lastMessage) return;
+    if (!message) return;
 
-    // 过滤自己发的消息
+    if (_conversationListVM.filterType != WKConversationFilterGroup) {
+        NSLog(@"[HintDebug] SKIP: not group tab (filterType=%ld)", (long)_conversationListVM.filterType);
+        return;
+    }
+    if (!self.view.window) {
+        NSLog(@"[HintDebug] SKIP: view not in window");
+        return;
+    }
+
+    WKChannel *channel = message.channel;
+    if (channel.channelType != WK_GROUP && channel.channelType != WK_COMMUNITY_TOPIC) {
+        NSLog(@"[HintDebug] SKIP: not group/topic (type=%d)", channel.channelType);
+        return;
+    }
+
     NSString *loginUid = [WKApp shared].loginInfo.uid;
-    if (loginUid.length > 0 && [conv.lastMessage.fromUid isEqualToString:loginUid]) return;
+    if (loginUid.length > 0 && [message.fromUid isEqualToString:loginUid]) {
+        NSLog(@"[HintDebug] SKIP: self-sent");
+        return;
+    }
 
-    // 只显示本次连接后收到的新消息
-    NSTimeInterval msgTime = conv.lastMessage.timestamp;
-    if (msgTime < self.connectedAtTime) return;
+    // 消息ID去重：每条消息只弹一次
+    NSNumber *msgIdNum = @(message.messageId);
+    if ([self.shownHintMsgIds containsObject:msgIdNum]) {
+        NSLog(@"[HintDebug] SKIP: already shown msgId=%@", msgIdNum);
+        return;
+    }
 
-    CFAbsoluteTime p0 = CFAbsoluteTimeGetCurrent();
+    // 只显示本次连接后收到的新消息，过滤重启同步回来的旧未读
+    if (self.connectedAtTime > 0 && message.timestamp > 0 && message.timestamp < self.connectedAtTime) {
+        NSLog(@"[HintDebug] SKIP: old msg timestamp=%.0f connectedAt=%.0f", (double)message.timestamp, self.connectedAtTime);
+        return;
+    }
+
+    NSInteger cType = message.contentType;
+    if (cType >= 15) {
+        NSLog(@"[HintDebug] SKIP: system msg contentType=%ld", (long)cType);
+        return;
+    }
 
     WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:channel];
-    if (!info) return;
-    if (info.mute) return;
+    if (info && info.mute) {
+        NSLog(@"[HintDebug] SKIP: muted channel=%@", info.displayName);
+        return;
+    }
+    if (channel.channelType == WK_COMMUNITY_TOPIC) {
+        NSRange range = [channel.channelId rangeOfString:@"____"];
+        if (range.location != NSNotFound) {
+            NSString *groupNo = [channel.channelId substringToIndex:range.location];
+            WKChannel *parentChannel = [WKChannel channelID:groupNo channelType:WK_GROUP];
+            WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parentChannel];
+            if (parentInfo && parentInfo.mute) {
+                NSLog(@"[HintDebug] SKIP: parent group muted groupNo=%@", groupNo);
+                return;
+            }
+        }
+    }
 
-    CFAbsoluteTime p1 = CFAbsoluteTimeGetCurrent();
-    NSLog(@"[HUD-Perf] getChannelInfo: %.2fms", (p1 - p0) * 1000);
+    NSLog(@"[HintDebug] PASS all filters → showing hint for %@ name=%@",
+          channel.channelId, info.displayName ?: @"(nil)");
 
-    NSString *avatarURL = nil;
     NSString *name = info.displayName ?: @"";
+    NSString *avatarURL = nil;
     if (channel.channelType == WK_GROUP) {
         if ([info.logo hasPrefix:@"http"]) {
             avatarURL = info.logo;
         } else {
             avatarURL = [WKAvatarUtil getGroupAvatar:channel.channelId cacheKey:info.avatarCacheKey];
         }
+    } else if (channel.channelType == WK_COMMUNITY_TOPIC) {
+        // 子区名称：从 channelInfo 获取，如果为空则从父群的 threadPreviews 中查找
+        if (name.length == 0) {
+            NSRange range = [channel.channelId rangeOfString:@"____"];
+            if (range.location != NSNotFound) {
+                NSString *groupNo = [channel.channelId substringToIndex:range.location];
+                WKConversationWrapModel *groupModel = [self.conversationListVM modelAtChannel:[WKChannel channelID:groupNo channelType:WK_GROUP]];
+                if (groupModel && groupModel.threadPreviews) {
+                    for (WKThreadModel *t in groupModel.threadPreviews) {
+                        if ([t.channelId isEqualToString:channel.channelId]) {
+                            name = t.name ?: @"";
+                            break;
+                        }
+                    }
+                }
+                // 如果还是空，用父群名称 + #子区，头像用父群头像
+                if (name.length == 0) {
+                    WKChannel *parentChannel = [WKChannel channelID:groupNo channelType:WK_GROUP];
+                    WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parentChannel];
+                    name = [NSString stringWithFormat:@"%@/#子区", parentInfo.displayName ?: groupNo];
+                    if (parentInfo) {
+                        if ([parentInfo.logo hasPrefix:@"http"]) {
+                            avatarURL = parentInfo.logo;
+                        } else {
+                            avatarURL = [WKAvatarUtil getGroupAvatar:groupNo cacheKey:parentInfo.avatarCacheKey];
+                        }
+                    }
+                }
+                // 有子区名称时 avatarURL 留空，HUD 会自动用首字显示
+            }
+        }
     }
 
-    CFAbsoluteTime p2 = CFAbsoluteTimeGetCurrent();
-    NSLog(@"[HUD-Perf] avatarURL: %.2fms", (p2 - p1) * 1000);
-
+    // 消息内容：发送者 + 摘要
     NSString *content = nil;
-    if (conv.lastMessage.content) {
-        NSString *digest = [conv.lastMessage.content conversationDigest];
+    if (message.content) {
+        NSString *digest = [message.content conversationDigest];
         NSString *senderName = nil;
-        if (conv.lastMessage.fromUid.length > 0) {
-            WKChannel *senderChannel = [WKChannel channelID:conv.lastMessage.fromUid channelType:WK_PERSON];
+        if (message.fromUid.length > 0) {
+            WKChannel *senderChannel = [WKChannel channelID:message.fromUid channelType:WK_PERSON];
             WKChannelInfo *senderInfo = [[WKSDK shared].channelManager getChannelInfo:senderChannel];
             senderName = senderInfo.displayName;
         }
@@ -3016,27 +3085,40 @@
         }
     }
 
-    CFAbsoluteTime p3 = CFAbsoluteTimeGetCurrent();
-    NSLog(@"[HUD-Perf] conversationDigest: %.2fms", (p3 - p2) * 1000);
+    // 记录已弹过，防止重复
+    [self.shownHintMsgIds addObject:msgIdNum];
+    // 防止集合无限增长
+    if (self.shownHintMsgIds.count > 200) {
+        [self.shownHintMsgIds removeAllObjects];
+    }
 
-    uint32_t msgSeq = conv.lastMessage.messageSeq;
+    uint32_t msgSeq = message.messageSeq;
     [WKPixelParticleHint showInView:self.view
                           avatarURL:avatarURL
                                name:name
                             content:content
                               onTap:^{
+        UIViewController *topVC = [WKNavigationManager shared].topViewController;
+        if ([topVC isKindOfClass:[WKConversationVC class]]) {
+            WKConversationVC *existingVC = (WKConversationVC *)topVC;
+            if ([existingVC.channel.channelId isEqualToString:channel.channelId]
+                && existingVC.channel.channelType == channel.channelType) {
+                if (msgSeq > 0) {
+                    [existingVC locateToMessageSeq:msgSeq];
+                }
+                return;
+            }
+        }
         WKConversationVC *vc = [WKConversationVC new];
         vc.channel = channel;
         if (msgSeq > 0) {
             uint32_t orderSeq = [[WKSDK shared].chatManager getOrderSeq:msgSeq];
-            if (orderSeq == 0) orderSeq = msgSeq;
-            vc.locationAtOrderSeq = orderSeq;
+            if (orderSeq > 0) {
+                vc.locationAtOrderSeq = orderSeq;
+            }
         }
         [[WKNavigationManager shared] pushViewController:vc animated:YES];
     }];
-
-    CFAbsoluteTime p4 = CFAbsoluteTimeGetCurrent();
-    NSLog(@"[HUD-Perf] === TOTAL showPixelHint: %.2fms ===", (p4 - p0) * 1000);
 }
 
 @end

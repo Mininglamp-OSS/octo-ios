@@ -42,7 +42,11 @@ static NSTimeInterval _lastShowTime = 0;
 
     // 节流：0.5秒内不重复弹出
     NSTimeInterval now = [NSDate date].timeIntervalSince1970;
-    if (now - _lastShowTime < 0.5) return;
+    if (now - _lastShowTime < 0.5) {
+        NSLog(@"[HintDebug] THROTTLED: %.2fs since last show (need 0.5s)", now - _lastShowTime);
+        return;
+    }
+    NSLog(@"[HintDebug] showInView: name=%@ hasAvatar=%@ content=%@", name, avatarURL ? @"YES" : @"NO", content ? @"YES" : @"NO");
     _lastShowTime = now;
 
     [self dismissCurrent];
