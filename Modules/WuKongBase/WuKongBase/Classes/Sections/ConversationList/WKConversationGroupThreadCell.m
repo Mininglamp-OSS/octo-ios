@@ -76,6 +76,7 @@
 @property (nonatomic, strong) NSMutableArray<UILabel *> *rowTimeLbls;
 @property (nonatomic, strong) NSMutableArray<UILabel *> *rowMsgLbls;
 @property (nonatomic, strong) NSMutableArray<UILabel *> *rowBadgeLbls;
+@property (nonatomic, strong) NSMutableArray<UIImageView *> *rowMuteIcons;
 
 @property (nonatomic, strong) WKConversationWrapModel *model;
 @property (nonatomic, strong) UIButton *threadToggleBtn;
@@ -190,6 +191,7 @@
     self.rowTimeLbls = [NSMutableArray array];
     self.rowMsgLbls = [NSMutableArray array];
     self.rowBadgeLbls = [NSMutableArray array];
+    self.rowMuteIcons = [NSMutableArray array];
 
     // 分割线
     self.separatorLine = [[UIView alloc] init];
@@ -318,6 +320,9 @@
         row.userInteractionEnabled = YES;
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(threadRowTapped:)];
         [row addGestureRecognizer:tap];
+        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(threadRowLongPressed:)];
+        longPress.minimumPressDuration = 0.5;
+        [row addGestureRecognizer:longPress];
         [self.threadContainer addSubview:row];
         [self.previewRows addObject:row];
 
@@ -358,6 +363,12 @@
         badge.hidden = YES;
         [row addSubview:badge];
         [self.rowBadgeLbls addObject:badge];
+
+        UIImageView *muteIv = [[UIImageView alloc] initWithImage:[WKApp.shared loadImage:@"ConversationList/Index/Mute" moduleID:@"WuKongBase"]];
+        muteIv.contentMode = UIViewContentModeScaleAspectFit;
+        muteIv.hidden = YES;
+        [row addSubview:muteIv];
+        [self.rowMuteIcons addObject:muteIv];
     }
     for (NSInteger i = needed; i < (NSInteger)self.previewRows.count; i++) {
         self.previewRows[i].hidden = YES;
@@ -415,10 +426,15 @@
         WKConversation *threadConv = [[WKSDK shared].conversationManager getConversation:threadChannel];
         NSInteger unread = thread.unreadCount;
         if (threadConv) unread = threadConv.unreadCount;
+        WKChannelInfo *threadInfo = [[WKSDK shared].channelManager getChannelInfo:threadChannel];
+        BOOL threadMute = threadInfo ? threadInfo.mute : NO;
+        if (i < (NSInteger)self.rowMuteIcons.count) {
+            self.rowMuteIcons[i].hidden = !threadMute;
+        }
         if (unread > 0) {
             self.rowBadgeLbls[i].hidden = NO;
             self.rowBadgeLbls[i].text = unread > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)unread];
-            if (self.model.mute) {
+            if (threadMute) {
                 self.rowBadgeLbls[i].backgroundColor = [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f];
             } else {
                 self.rowBadgeLbls[i].backgroundColor = [UIColor redColor];
@@ -503,6 +519,31 @@
         if (self.onThreadPreviewTap && t.channelId.length > 0) {
             self.onThreadPreviewTap(t.channelId);
         }
+    }
+}
+
+-(void) threadRowLongPressed:(UILongPressGestureRecognizer *)gesture {
+    UIView *row = gesture.view;
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        row.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.08];
+        UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        [feedback impactOccurred];
+
+        NSInteger index = row.tag - 2000;
+        NSArray *previews = self.model.threadPreviews;
+        if (previews && index >= 0 && index < (NSInteger)previews.count) {
+            WKThreadModel *t = previews[index];
+            if (self.onThreadPreviewLongPress && t.channelId.length > 0) {
+                CGPoint ptInWindow = [row convertPoint:CGPointMake(row.bounds.size.width / 2.0, row.bounds.size.height / 2.0) toView:nil];
+                self.onThreadPreviewLongPress(t.channelId, t.name ?: @"", ptInWindow);
+            }
+        }
+    } else if (gesture.state == UIGestureRecognizerStateEnded ||
+               gesture.state == UIGestureRecognizerStateCancelled ||
+               gesture.state == UIGestureRecognizerStateFailed) {
+        [UIView animateWithDuration:0.2 animations:^{
+            row.backgroundColor = [UIColor clearColor];
+        }];
     }
 }
 
@@ -603,6 +644,14 @@
                 badge.frame = CGRectMake(containerWidth - 10 - badgeW, 8, badgeW, 18);
                 nameRight = badge.lim_left - 4;
             }
+            if (i < (NSInteger)self.rowMuteIcons.count) {
+                UIImageView *muteIv = self.rowMuteIcons[i];
+                if (!muteIv.hidden) {
+                    CGFloat muteSize = 14.0f;
+                    muteIv.frame = CGRectMake(nameRight - muteSize, (rh - muteSize) / 2.0f, muteSize, muteSize);
+                    nameRight = muteIv.frame.origin.x - 4;
+                }
+            }
 
             UILabel *msgLbl = self.rowMsgLbls[i];
             if (!msgLbl.hidden) {
@@ -657,6 +706,7 @@
     self.onThreadPreviewTap = nil;
     self.onMoreThreadsTap = nil;
     self.onToggleThreadPreview = nil;
+    self.onThreadPreviewLongPress = nil;
 }
 
 /// Convert SVG arc endpoint parameterization to center parameterization,

@@ -1936,10 +1936,17 @@
         @"title": muteTitle,
         @"icon": [WKConversationListVC iconMute:isMuted],
         @"action": ^{
-            [[WKChannelSettingManager shared] channel:threadChannel mute:!isMuted];
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [weakSelf rebuildGroupDisplayAndReload];
-            });
+            BOOL newMute = !isMuted;
+            [[WKChannelSettingManager shared] channel:threadChannel mute:newMute];
+            WKChannelInfo *threadInfo = [[WKSDK shared].channelManager getChannelInfo:threadChannel];
+            if (!threadInfo) {
+                threadInfo = [[WKChannelInfo alloc] init];
+                threadInfo.channel = threadChannel;
+                threadInfo.name = threadName;
+            }
+            threadInfo.mute = newMute;
+            [[WKSDK shared].channelManager addOrUpdateChannelInfo:threadInfo];
+            [weakSelf rebuildGroupDisplayAndReload];
         }
     }];
     [self showFloatingMenu:menuItems atPoint:point];
@@ -2966,39 +2973,27 @@
 
     if (!message) return;
 
-    if (_conversationListVM.filterType != WKConversationFilterGroup) {
-        NSLog(@"[HintDebug] SKIP: not group tab (filterType=%ld)", (long)_conversationListVM.filterType);
-        return;
-    }
-    if (!self.view.window) {
-        NSLog(@"[HintDebug] SKIP: view not in window");
-        return;
-    }
-
     WKChannel *channel = message.channel;
-    if (channel.channelType != WK_GROUP && channel.channelType != WK_COMMUNITY_TOPIC) {
-        NSLog(@"[HintDebug] SKIP: not group/topic (type=%d)", channel.channelType);
-        return;
-    }
+    if (channel.channelType != WK_GROUP && channel.channelType != WK_COMMUNITY_TOPIC) return;
 
     NSString *loginUid = [WKApp shared].loginInfo.uid;
-    if (loginUid.length > 0 && [message.fromUid isEqualToString:loginUid]) {
-        NSLog(@"[HintDebug] SKIP: self-sent");
-        return;
-    }
+    if (loginUid.length > 0 && [message.fromUid isEqualToString:loginUid]) return;
 
-    // 消息ID去重：每条消息只弹一次
+    // 消息ID去重：无论是否可见，都先记录，防止返回页面时重复弹出
     NSNumber *msgIdNum = @(message.messageId);
-    if ([self.shownHintMsgIds containsObject:msgIdNum]) {
-        NSLog(@"[HintDebug] SKIP: already shown msgId=%@", msgIdNum);
-        return;
+    if (msgIdNum.unsignedLongLongValue == 0) return;
+    if ([self.shownHintMsgIds containsObject:msgIdNum]) return;
+    [self.shownHintMsgIds addObject:msgIdNum];
+    if (self.shownHintMsgIds.count > 500) {
+        [self.shownHintMsgIds removeAllObjects];
+        [self.shownHintMsgIds addObject:msgIdNum];
     }
 
-    // 只显示本次连接后收到的新消息，过滤重启同步回来的旧未读
-    if (self.connectedAtTime > 0 && message.timestamp > 0 && message.timestamp < self.connectedAtTime) {
-        NSLog(@"[HintDebug] SKIP: old msg timestamp=%.0f connectedAt=%.0f", (double)message.timestamp, self.connectedAtTime);
-        return;
-    }
+    // 以下条件不满足时静默跳过（messageId已记录，不会重复弹）
+    if (_conversationListVM.filterType != WKConversationFilterGroup) return;
+    if (!self.view.window) return;
+
+    if (self.connectedAtTime > 0 && message.timestamp > 0 && message.timestamp < self.connectedAtTime) return;
 
     NSInteger cType = message.contentType;
     if (cType >= 15) {
