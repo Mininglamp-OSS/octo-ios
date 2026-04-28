@@ -95,6 +95,7 @@
 @property(nonatomic,strong) NSArray<WKConversationDisplayItem *> *groupDisplayList; // 群聊 tab 展示列表
 @property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeLeft;
 @property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeRight;
+@property(nonatomic,assign) BOOL pendingSpaceSwitchLoad;
 
 @end
 
@@ -726,16 +727,12 @@
                         }
                     });
                 }
-                NSLog(@"✅ Space会话同步成功");
+                NSLog(@"[ThreadDebug] ✅ Space会话同步成功, pendingSpaceSwitchLoad=YES");
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [weakSelf.conversationListVM loadConversationList:^{
-                        // sync完成后记录当前空间的合法群聊白名单
-                        [weakSelf.conversationListVM snapshotSyncedGroupIds];
-                        [weakSelf rebuildGroupDisplayAndReload];
-                        [weakSelf refreshBadge];
-                        // 加载新空间的分组
-                        [weakSelf loadCategories];
-                    }];
+                    // 不直接调 loadConversationList：handleSyncConversation 是异步的，
+                    // DB 写入还没完成，此时查 DB 会返回空数据。
+                    // 设标记，等 onConversationUpdate 回调（DB 写入完成后触发）再加载。
+                    weakSelf.pendingSpaceSwitchLoad = YES;
                 });
             });
         }
@@ -1101,6 +1098,20 @@
         [self updateGroupMentionBadge];
         // 批量更新后补拉子区数据（网络恢复等场景）
         [self.conversationListVM fetchThreadCountsForGroups];
+
+        // 空间切换后的延迟加载：DB 写入已完成，现在可以安全调 loadConversationList
+        if (self.pendingSpaceSwitchLoad) {
+            self.pendingSpaceSwitchLoad = NO;
+            NSLog(@"[ThreadDebug] pendingSpaceSwitchLoad → loadConversationList NOW");
+            __weak typeof(self) weakSelf = self;
+            [self.conversationListVM loadConversationList:^{
+                [weakSelf.conversationListVM snapshotSyncedGroupIds];
+                [weakSelf rebuildGroupDisplayAndReload];
+                [weakSelf refreshBadge];
+                [weakSelf loadCategories];
+            }];
+        }
+
         NSLog(@"[TabPerf] onConversationUpdate(batch): count=%lu %.1fms", (unsigned long)conversations.count, (CFAbsoluteTimeGetCurrent() - _cuStart) * 1000);
         return;
     }
@@ -1305,6 +1316,8 @@
 
 /// 子区数量批量更新完成后统一刷新整个列表（避免大量逐行更新导致 tableView 卡死）
 -(void) onThreadCountBatchUpdated:(NSNotification*)notification {
+    NSLog(@"[ThreadDebug] onThreadCountBatchUpdated received, isViewLoaded=%d, window=%@",
+          self.isViewLoaded, self.view.window ? @"YES" : @"NO");
     [self rebuildGroupDisplayAndReload];
 }
 
@@ -2993,6 +3006,9 @@
     if (_conversationListVM.filterType != WKConversationFilterGroup) return;
     if (!self.view.window) return;
 
+    // 空间隔离：不属于当前空间的消息不显示
+    if (![[WKLocalNotificationManager shared] isMessageInCurrentSpace:message]) return;
+
     if (self.connectedAtTime > 0 && message.timestamp > 0 && message.timestamp < self.connectedAtTime) return;
 
     NSInteger cType = message.contentType;
@@ -3002,21 +3018,12 @@
     }
 
     WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:channel];
-    if (info && info.mute) {
-        NSLog(@"[HintDebug] SKIP: muted channel=%@", info.displayName);
-        return;
-    }
-    if (channel.channelType == WK_COMMUNITY_TOPIC) {
-        NSRange range = [channel.channelId rangeOfString:@"____"];
-        if (range.location != NSNotFound) {
-            NSString *groupNo = [channel.channelId substringToIndex:range.location];
-            WKChannel *parentChannel = [WKChannel channelID:groupNo channelType:WK_GROUP];
-            WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parentChannel];
-            if (parentInfo && parentInfo.mute) {
-                NSLog(@"[HintDebug] SKIP: parent group muted groupNo=%@", groupNo);
-                return;
-            }
-        }
+    if (channel.channelType == WK_GROUP) {
+        // 群聊：直接检查群的 mute
+        if (info && info.mute) return;
+    } else if (channel.channelType == WK_COMMUNITY_TOPIC) {
+        // 子区：只检查子区自身的 mute，不继承父群
+        if (info && info.mute) return;
     }
 
     NSLog(@"[HintDebug] PASS all filters → showing hint for %@ name=%@",

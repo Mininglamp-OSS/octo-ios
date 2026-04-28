@@ -137,17 +137,6 @@ bool needRemind = false; // 是否需要提醒
                 if(message.channelInfo.mute) { // 免打扰不通知
                     return;
                 }
-                // 子区继承父群聊 mute：父群聊静音则子区也不响铃/震动
-                if(message.channel.channelType == WK_COMMUNITY_TOPIC) {
-                    NSRange sep = [message.channel.channelId rangeOfString:@"____"];
-                    if(sep.location != NSNotFound) {
-                        NSString *groupNo = [message.channel.channelId substringToIndex:sep.location];
-                        WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:[WKChannel channelID:groupNo channelType:WK_GROUP]];
-                        if(parentInfo && parentInfo.mute) {
-                            return;
-                        }
-                    }
-                }
                 if(message.contentType == WK_GROUP_MEMBERADD && ![message.channelInfo settingForKey:WKChannelExtraKeyJoinGroupRemind defaultValue:YES]) {
                     return;
                 }

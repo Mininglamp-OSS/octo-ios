@@ -111,18 +111,6 @@ static WKLocalNotificationManager *_instance = nil;
     if(channelInfo.mute) { // 免打扰不通知
         return;
     }
-    // 子区继承父群聊的 mute 状态：父群聊静音则子区也静音
-    if(message.channel.channelType == WK_COMMUNITY_TOPIC) {
-        NSRange sep = [message.channel.channelId rangeOfString:@"____"];
-        if(sep.location != NSNotFound) {
-            NSString *groupNo = [message.channel.channelId substringToIndex:sep.location];
-            WKChannel *parentChannel = [WKChannel channelID:groupNo channelType:WK_GROUP];
-            WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parentChannel];
-            if(parentInfo && parentInfo.mute) {
-                return;
-            }
-        }
-    }
     
     NSString *title;
     NSString *alert;
