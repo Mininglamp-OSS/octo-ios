@@ -309,22 +309,18 @@
 }
 
 -(void) viewWillAppear:(BOOL)animated {
-    CFAbsoluteTime _vwaStart = CFAbsoluteTimeGetCurrent();
     [super viewWillAppear:animated];
 
     [self refreshTitle];
     [self hiddenRightItem:NO];
 
-    // 从内存刷新 PC 在线状态
     BOOL pcOnline = [WKOnlineStatusManager shared].pcOnline;
-    NSLog(@"[PCDebug] viewWillAppear: pcOnline=%d, setting pcOnlineBtn.hidden=%d", pcOnline, !pcOnline);
     self.pcOnlineBtn.hidden = !pcOnline;
     [self relayoutRightItems];
 
     // 频繁切换 tab 时节流，2 秒内不重复加载
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
     if (now - self.lastLoadTime < 2) {
-        NSLog(@"[TabPerf] ConvListVC.viewWillAppear THROTTLED %.1fms", (CFAbsoluteTimeGetCurrent() - _vwaStart) * 1000);
         return;
     }
     self.lastLoadTime = now;
@@ -338,26 +334,17 @@
                 [weakSelf deferredLoadConversationList];
             }
         }];
-        NSLog(@"[TabPerf] ConvListVC.viewWillAppear DEFERRED(interactive) %.1fms", (CFAbsoluteTimeGetCurrent() - _vwaStart) * 1000);
         return;
     }
 
     [self deferredLoadConversationList];
-    NSLog(@"[TabPerf] ConvListVC.viewWillAppear FULL %.1fms", (CFAbsoluteTimeGetCurrent() - _vwaStart) * 1000);
 }
 
 -(void) deferredLoadConversationList {
-    CFAbsoluteTime _dlStart = CFAbsoluteTimeGetCurrent();
     __weak typeof(self) weakSelf = self;
     [self.conversationListVM loadConversationList:^{
-        CFAbsoluteTime _rbStart = CFAbsoluteTimeGetCurrent();
         [weakSelf rebuildGroupDisplayAndReload];
-        CFAbsoluteTime _badgeStart = CFAbsoluteTimeGetCurrent();
         [weakSelf refreshBadge];
-        NSLog(@"[TabPerf] deferredLoad callback: rebuild=%.1fms badge=%.1fms total=%.1fms",
-              (_badgeStart - _rbStart) * 1000,
-              (CFAbsoluteTimeGetCurrent() - _badgeStart) * 1000,
-              (CFAbsoluteTimeGetCurrent() - _dlStart) * 1000);
     }];
 }
 
@@ -727,7 +714,6 @@
                         }
                     });
                 }
-                NSLog(@"[ThreadDebug] ✅ Space会话同步成功, pendingSpaceSwitchLoad=YES");
                 dispatch_async(dispatch_get_main_queue(), ^{
                     // 不直接调 loadConversationList：handleSyncConversation 是异步的，
                     // DB 写入还没完成，此时查 DB 会返回空数据。
@@ -1024,7 +1010,6 @@
 
 // 更新最近会话
 - (void)onConversationUpdate:(NSArray<WKConversation*>*)conversations{
-    CFAbsoluteTime _cuStart = CFAbsoluteTimeGetCurrent();
     if(!conversations || conversations.count<=0) {
         return;
     }
@@ -1102,7 +1087,6 @@
         // 空间切换后的延迟加载：DB 写入已完成，现在可以安全调 loadConversationList
         if (self.pendingSpaceSwitchLoad) {
             self.pendingSpaceSwitchLoad = NO;
-            NSLog(@"[ThreadDebug] pendingSpaceSwitchLoad → loadConversationList NOW");
             __weak typeof(self) weakSelf = self;
             [self.conversationListVM loadConversationList:^{
                 [weakSelf.conversationListVM snapshotSyncedGroupIds];
@@ -1112,7 +1096,6 @@
             }];
         }
 
-        NSLog(@"[TabPerf] onConversationUpdate(batch): count=%lu %.1fms", (unsigned long)conversations.count, (CFAbsoluteTimeGetCurrent() - _cuStart) * 1000);
         return;
     }
 
@@ -1124,7 +1107,6 @@
     [self refreshBadge];
     // 无论当前在哪个 tab，都更新群聊 tab 的 @提醒标识
     [self updateGroupMentionBadge];
-    NSLog(@"[TabPerf] onConversationUpdate: count=%lu %.1fms", (unsigned long)conversations.count, (CFAbsoluteTimeGetCurrent() - _cuStart) * 1000);
 }
 /// 过滤不属于当前空间的会话更新（解决跨空间消息产生红点的问题）
 -(NSArray<WKConversation*>*) filterConversationsBySpace:(NSArray<WKConversation*>*)conversations {
@@ -1316,8 +1298,6 @@
 
 /// 子区数量批量更新完成后统一刷新整个列表（避免大量逐行更新导致 tableView 卡死）
 -(void) onThreadCountBatchUpdated:(NSNotification*)notification {
-    NSLog(@"[ThreadDebug] onThreadCountBatchUpdated received, isViewLoaded=%d, window=%@",
-          self.isViewLoaded, self.view.window ? @"YES" : @"NO");
     [self rebuildGroupDisplayAndReload];
 }
 

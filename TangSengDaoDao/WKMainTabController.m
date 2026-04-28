@@ -15,9 +15,6 @@
 @interface WKMainTabController ()<UITabBarControllerDelegate>
 
 @property(nonatomic,strong) LOTAnimationView *currentLOTAnimationView;
-@property(nonatomic,assign) CFAbsoluteTime tabSwitchStart;
-@property(nonatomic,strong) CADisplayLink *frameMonitor;
-@property(nonatomic,assign) CFAbsoluteTime lastFrameTime;
 
 @end
 
@@ -46,7 +43,6 @@
                  image:[self drawMeIconWithColor:normalColor filled:NO]
          selectedImage:[self drawMeIconWithColor:selectedColor filled:YES]];
 
-    [self startFrameMonitor];
 }
 
 
@@ -175,34 +171,8 @@
 
 #pragma mark - UITabBarControllerDelegate
 
--(void) startFrameMonitor {
-    if (self.frameMonitor) return;
-    self.lastFrameTime = CACurrentMediaTime();
-    self.frameMonitor = [CADisplayLink displayLinkWithTarget:self selector:@selector(onFrame:)];
-    [self.frameMonitor addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-}
-
--(void) onFrame:(CADisplayLink *)link {
-    CFAbsoluteTime now = CACurrentMediaTime();
-    CFAbsoluteTime delta = (now - self.lastFrameTime) * 1000;
-    self.lastFrameTime = now;
-    if (delta > 33) {
-        NSArray *stack = [[NSThread callStackSymbols] subarrayWithRange:NSMakeRange(1, MIN(8, [NSThread callStackSymbols].count - 1))];
-        NSLog(@"[TabPerf] ⚠️ FRAME DROP: %.0fms (%.0f frames skipped)\n%@", delta, delta / 16.67, [stack componentsJoinedByString:@"\n"]);
-    }
-}
-
 static UIImpactFeedbackGenerator *impactFeedBack;
-- (BOOL)tabBarController:(UITabBarController *)tabBarController shouldSelectViewController:(UIViewController *)viewController {
-    self.tabSwitchStart = CFAbsoluteTimeGetCurrent();
-    NSLog(@"[TabPerf] ━━━ TAB SWITCH BEGIN → %@ ━━━", NSStringFromClass([viewController class]));
-    return YES;
-}
-
 - (void)tabBarController:(UITabBarController *)tabBarController didSelectViewController:(UIViewController *)viewController {
-    CFAbsoluteTime elapsed = (CFAbsoluteTimeGetCurrent() - self.tabSwitchStart) * 1000;
-    NSLog(@"[TabPerf] ━━━ TAB SWITCH END → %@ %.1fms ━━━", NSStringFromClass([viewController class]), elapsed);
-
     if(!impactFeedBack) {
         impactFeedBack = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
     }

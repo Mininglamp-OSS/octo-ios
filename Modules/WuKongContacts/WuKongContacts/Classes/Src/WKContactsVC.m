@@ -41,6 +41,8 @@
 @property(nonatomic,assign) NSTimeInterval lastLoadTime; // 上次加载完成时间
 @property(nonatomic,assign) NSInteger sortGeneration; // 排序序号，防止异步回调错乱
 @property(nonatomic,copy) NSString *lastSpaceId;  // 上次加载的空间ID，用于检测空间切换
+@property(nonatomic,strong) NSSet<NSString*> *lastHumanUids; // 上一次的人类 uid 快照（用于对比）
+@property(nonatomic,assign) NSInteger lastHumanCount; // 上一次的人类数量
 
 @end
 
@@ -99,6 +101,7 @@
             if (cachedInfos && cachedInfos.count > 0) {
                 // 有缓存数据，先显示（首次加载允许全量reloadData，因为表是空的）
                 weakSelf.allContactInfos = cachedInfos;
+                [weakSelf logContactsCounts:@"SET(dbCache)"];
                 [weakSelf rebuildTableData];
             }
             weakSelf.dataLoaded = YES;
@@ -121,6 +124,7 @@
         // 空间切换了，清除旧数据并强制重新加载
         self.lastSpaceId = currentSpaceId;
         self.allContactInfos = nil;
+        [self logContactsCounts:@"SET(spaceSwitch=nil)"];
         self.currentContactsFingerprint = nil;
         self.groupCount = 0;
         self.myBotCount = 0;
@@ -223,9 +227,9 @@
         NSLog(@"[TabPerf] ContactsVC.refreshContactsList SKIPPED (fingerprint match) count=%lu", (unsigned long)channelInfos.count);
         return; // 数据无变化，跳过刷新
     }
-    NSLog(@"[TabPerf] ContactsVC.refreshContactsList CHANGED count=%lu", (unsigned long)channelInfos.count);
     self.currentContactsFingerprint = newFingerprint;
     self.allContactInfos = channelInfos;
+    [self logContactsCounts:@"SET(refreshContactsList)"];
     [self rebuildTableData];
 }
 
@@ -251,6 +255,41 @@
 // 重新应用过滤（tab 切换时调用）
 -(void) applyFilter {
     [self rebuildTableData];
+}
+
+-(void) logContactsCounts:(NSString*)tag {
+    NSInteger total = self.allContactInfos.count;
+    NSInteger robots = 0;
+    NSMutableSet<NSString*> *currentHumanUids = [NSMutableSet set];
+    for (WKChannelInfo *info in self.allContactInfos) {
+        if (info.robot) {
+            robots++;
+        } else {
+            [currentHumanUids addObject:info.channel.channelId ?: @"nil"];
+        }
+    }
+    NSInteger humans = total - robots;
+    NSLog(@"[ContactsBug] %@ total=%ld robot=%ld human=%ld", tag, (long)total, (long)robots, (long)humans);
+
+    if (self.lastHumanUids && humans != self.lastHumanCount) {
+        NSMutableSet *added = [currentHumanUids mutableCopy];
+        [added minusSet:self.lastHumanUids];
+        NSMutableSet *removed = [self.lastHumanUids mutableCopy];
+        [removed minusSet:currentHumanUids];
+        NSLog(@"[ContactsBug] ⚠️ 人类数量变化 %ld→%ld, 新增=%@, 移除=%@",
+              (long)self.lastHumanCount, (long)humans,
+              added.count > 0 ? [added.allObjects componentsJoinedByString:@","] : @"无",
+              removed.count > 0 ? [removed.allObjects componentsJoinedByString:@","] : @"无");
+        if (added.count > 0) {
+            for (NSString *uid in added) {
+                WKChannelInfo *info = [self channelInfoForUid:uid];
+                NSLog(@"[ContactsBug]   新增人类详情: uid=%@ name=%@ robot=%d follow=%d category=%@",
+                      uid, info.displayName, info.robot, info.follow, info.category ?: @"nil");
+            }
+        }
+    }
+    self.lastHumanUids = currentHumanUids;
+    self.lastHumanCount = humans;
 }
 
 -(WKChannelInfo*) channelInfoForUid:(NSString*)uid {
@@ -1144,6 +1183,7 @@
                 NSMutableArray *mutable = [self.allContactInfos mutableCopy];
                 [mutable addObject:channelInfo];
                 self.allContactInfos = mutable;
+                [self logContactsCounts:[NSString stringWithFormat:@"SET(addContact-noSection uid=%@)", channelInfo.channel.channelId]];
             }
             [self rebuildTableData];
             return;
@@ -1166,6 +1206,7 @@
             NSMutableArray *mutable = [self.allContactInfos mutableCopy];
             [mutable addObject:channelInfo];
             self.allContactInfos = mutable;
+            [self logContactsCounts:[NSString stringWithFormat:@"SET(addContact uid=%@)", channelInfo.channel.channelId]];
         }
     }
     // 局部更新 header 计数
@@ -1226,8 +1267,10 @@
                 }
             }
             if (idx != NSNotFound) {
+                NSString *removedUid = ((WKChannelInfo *)mutable[idx]).channel.channelId;
                 [mutable removeObjectAtIndex:idx];
                 self.allContactInfos = mutable;
+                [self logContactsCounts:[NSString stringWithFormat:@"SET(removeContact uid=%@)", removedUid]];
             }
         }
         // 局部更新 header 计数
@@ -1238,9 +1281,10 @@
 #pragma mark - WKChannelManagerDelegate
 
 - (void)channelInfoUpdate:(WKChannelInfo *)channelInfo oldChannelInfo:(WKChannelInfo *)oldChannelInfo {
-    if (self.isBatchUpdating) return; // 批量写DB期间忽略，防止循环
-    if (self.isUpdating) return;      // API更新管道执行中跳过，applyIncrementalUpdate 会带来完整数据
+    if (self.isBatchUpdating) return;
+    if (self.isUpdating) return;
     if(channelInfo.channel.channelType == WK_PERSON && channelInfo.follow == WKChannelInfoFollowFriend) {
+        if ([channelInfo.channel.channelId isEqualToString:[WKApp shared].loginInfo.uid]) return;
         [self addOrUpdateContactsWithChannelInfo:channelInfo];
     }
 }
@@ -1328,6 +1372,7 @@
 
     // 更新主列表
     self.allContactInfos = newInfos;
+    [self logContactsCounts:@"SET(applyIncrementalUpdate)"];
 
     // 无任何变化时只更新 header 计数
     if (toInsert.count == 0 && toUpdate.count == 0 && toDelete.count == 0) {
