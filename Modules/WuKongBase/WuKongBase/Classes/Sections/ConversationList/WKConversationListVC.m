@@ -305,6 +305,7 @@
 }
 
 -(void) viewWillAppear:(BOOL)animated {
+    CFAbsoluteTime _vwaStart = CFAbsoluteTimeGetCurrent();
     [super viewWillAppear:animated];
 
     [self refreshTitle];
@@ -319,6 +320,7 @@
     // 频繁切换 tab 时节流，2 秒内不重复加载
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
     if (now - self.lastLoadTime < 2) {
+        NSLog(@"[TabPerf] ConvListVC.viewWillAppear THROTTLED %.1fms", (CFAbsoluteTimeGetCurrent() - _vwaStart) * 1000);
         return;
     }
     self.lastLoadTime = now;
@@ -332,17 +334,26 @@
                 [weakSelf deferredLoadConversationList];
             }
         }];
+        NSLog(@"[TabPerf] ConvListVC.viewWillAppear DEFERRED(interactive) %.1fms", (CFAbsoluteTimeGetCurrent() - _vwaStart) * 1000);
         return;
     }
 
     [self deferredLoadConversationList];
+    NSLog(@"[TabPerf] ConvListVC.viewWillAppear FULL %.1fms", (CFAbsoluteTimeGetCurrent() - _vwaStart) * 1000);
 }
 
 -(void) deferredLoadConversationList {
+    CFAbsoluteTime _dlStart = CFAbsoluteTimeGetCurrent();
     __weak typeof(self) weakSelf = self;
     [self.conversationListVM loadConversationList:^{
+        CFAbsoluteTime _rbStart = CFAbsoluteTimeGetCurrent();
         [weakSelf rebuildGroupDisplayAndReload];
+        CFAbsoluteTime _badgeStart = CFAbsoluteTimeGetCurrent();
         [weakSelf refreshBadge];
+        NSLog(@"[TabPerf] deferredLoad callback: rebuild=%.1fms badge=%.1fms total=%.1fms",
+              (_badgeStart - _rbStart) * 1000,
+              (CFAbsoluteTimeGetCurrent() - _badgeStart) * 1000,
+              (CFAbsoluteTimeGetCurrent() - _dlStart) * 1000);
     }];
 }
 
@@ -1013,6 +1024,7 @@
 
 // 更新最近会话
 - (void)onConversationUpdate:(NSArray<WKConversation*>*)conversations{
+    CFAbsoluteTime _cuStart = CFAbsoluteTimeGetCurrent();
     if(!conversations || conversations.count<=0) {
         return;
     }
@@ -1080,6 +1092,7 @@
         [self updateGroupMentionBadge];
         // 批量更新后补拉子区数据（网络恢复等场景）
         [self.conversationListVM fetchThreadCountsForGroups];
+        NSLog(@"[TabPerf] onConversationUpdate(batch): count=%lu %.1fms", (unsigned long)conversations.count, (CFAbsoluteTimeGetCurrent() - _cuStart) * 1000);
         return;
     }
 
@@ -1091,7 +1104,7 @@
     [self refreshBadge];
     // 无论当前在哪个 tab，都更新群聊 tab 的 @提醒标识
     [self updateGroupMentionBadge];
-
+    NSLog(@"[TabPerf] onConversationUpdate: count=%lu %.1fms", (unsigned long)conversations.count, (CFAbsoluteTimeGetCurrent() - _cuStart) * 1000);
 }
 /// 过滤不属于当前空间的会话更新（解决跨空间消息产生红点的问题）
 -(NSArray<WKConversation*>*) filterConversationsBySpace:(NSArray<WKConversation*>*)conversations {
@@ -1612,6 +1625,7 @@
 }
 
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
+    CFAbsoluteTime _wdStart = CFAbsoluteTimeGetCurrent();
     // 让 cell 内部的 pan 手势等 tab swipe 手势失败后再识别
     if (self.tabSwipeLeft || self.tabSwipeRight) {
         for (UIGestureRecognizer *gr in cell.gestureRecognizers) {
@@ -1691,6 +1705,8 @@
         }
         // 群聊 tab 会话 cell 添加长按手势
         [self addLongPressGestureToCell:cell forConversation:conversationModel];
+        CFAbsoluteTime _wdElapsed = (CFAbsoluteTimeGetCurrent() - _wdStart) * 1000;
+        if (_wdElapsed > 8) NSLog(@"[TabPerf] willDisplayCell(group) row=%ld %.1fms %@", (long)indexPath.row, _wdElapsed, NSStringFromClass([cell class]));
         return;
     }
     // 私聊 tab
@@ -1700,6 +1716,8 @@
     [conversationListCell refreshWithModel:conversationModel];
     // 私聊 tab 添加长按手势
     [self addLongPressGestureToCell:cell forConversation:conversationModel];
+    CFAbsoluteTime _wdElapsed2 = (CFAbsoluteTimeGetCurrent() - _wdStart) * 1000;
+    if (_wdElapsed2 > 8) NSLog(@"[TabPerf] willDisplayCell(private) row=%ld %.1fms", (long)indexPath.row, _wdElapsed2);
 }
 
 - (void)tableView:(UITableView *)tableView didEndDisplayingCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -2467,10 +2485,16 @@
 }
 
 -(void) rebuildGroupDisplayAndReload {
+    CFAbsoluteTime _t0 = CFAbsoluteTimeGetCurrent();
     self.groupDisplayList = [_conversationListVM buildGroupDisplayList];
-    NSLog(@"[ConvDebug] rebuildGroupDisplayAndReload: filterType=%ld, groupDisplayList=%lu, conversationCount=%ld, callStack=%@", (long)_conversationListVM.filterType, (unsigned long)self.groupDisplayList.count, (long)[_conversationListVM conversationCount], [[NSThread callStackSymbols] subarrayWithRange:NSMakeRange(1, MIN(5, [NSThread callStackSymbols].count - 1))]);
+    CFAbsoluteTime _t1 = CFAbsoluteTimeGetCurrent();
     [self.tableView reloadData];
+    CFAbsoluteTime _t2 = CFAbsoluteTimeGetCurrent();
     [self updateGroupMentionBadge];
+    CFAbsoluteTime _t3 = CFAbsoluteTimeGetCurrent();
+    NSLog(@"[TabPerf] rebuildGroupDisplayAndReload: buildList=%.1fms reloadData=%.1fms mentionBadge=%.1fms total=%.1fms rows=%lu",
+          (_t1-_t0)*1000, (_t2-_t1)*1000, (_t3-_t2)*1000, (_t3-_t0)*1000,
+          (unsigned long)self.groupDisplayList.count);
 }
 
 /// 检查群聊和子区中是否有未处理的@提醒，更新 tab 标识
@@ -2945,6 +2969,10 @@
 
     WKConversation *conv = [[WKSDK shared].conversationManager getConversation:channel];
     if (!conv || !conv.lastMessage) return;
+
+    // 过滤自己发的消息
+    NSString *loginUid = [WKApp shared].loginInfo.uid;
+    if (loginUid.length > 0 && [conv.lastMessage.fromUid isEqualToString:loginUid]) return;
 
     // 只显示本次连接后收到的新消息
     NSTimeInterval msgTime = conv.lastMessage.timestamp;
