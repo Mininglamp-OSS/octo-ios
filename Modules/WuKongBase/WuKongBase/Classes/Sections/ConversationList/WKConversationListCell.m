@@ -63,6 +63,8 @@
 
 @property(nonatomic,strong) UIButton *threadToggleBtn; // 子区预览展开按钮
 
+@property(nonatomic,strong) UILabel *externalGroupTagLbl; // 外部群 Tag（仅 WK_GROUP 的 is_external_group==1 会话）
+
 @end
 
 @implementation WKConversationListCell
@@ -115,6 +117,8 @@
         [self.contextContainerView addSubview:self.hashTagLbl];
         // 子区展开按钮
         [self.contextContainerView addSubview:self.threadToggleBtn];
+        // 外部群 Tag
+        [self.contextContainerView addSubview:self.externalGroupTagLbl];
 
     }
     return self;
@@ -171,6 +175,46 @@
     return _botBadgeLbl;
 }
 
+- (UILabel *)externalGroupTagLbl {
+    if(!_externalGroupTagLbl) {
+        _externalGroupTagLbl = [[UILabel alloc] init];
+        _externalGroupTagLbl.text = LLang(@"外部");
+        _externalGroupTagLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
+        _externalGroupTagLbl.textColor = [UIColor whiteColor];
+        // 紫色 #722ED1（对齐 dmwork-web PR #980 Semi 紫色 Tag；Android YUJ-90 同色）
+        _externalGroupTagLbl.backgroundColor = [UIColor colorWithRed:114.0f/255.0f green:46.0f/255.0f blue:209.0f/255.0f alpha:1.0f];
+        _externalGroupTagLbl.textAlignment = NSTextAlignmentCenter;
+        _externalGroupTagLbl.layer.cornerRadius = 4.0f;
+        _externalGroupTagLbl.layer.masksToBounds = YES;
+        _externalGroupTagLbl.hidden = YES;
+    }
+    return _externalGroupTagLbl;
+}
+
+// 外部群判定兜底：优先读 channelInfo.extra[is_external_group]，容忍 NSNumber / NSString。
+// 策略 B（客户端兜底，不完全信任后端）：
+//   - 硬门控 channelType == WK_GROUP：私聊 / 子区 / 社区不参与判定
+//   - NSNull / 非数字 / 缺失 → NO（保持 legacy 行为）
++ (BOOL)shouldShowExternalGroupTag:(WKConversationWrapModel *)model {
+    if(!model || !model.channel) {
+        return NO;
+    }
+    if(model.channel.channelType != WK_GROUP) {
+        return NO;
+    }
+    if(!model.channelInfo || !model.channelInfo.extra) {
+        return NO;
+    }
+    id flag = model.channelInfo.extra[@"is_external_group"];
+    if(!flag || flag == [NSNull null]) {
+        return NO;
+    }
+    if([flag isKindOfClass:[NSNumber class]] || [flag isKindOfClass:[NSString class]]) {
+        return [flag integerValue] == 1;
+    }
+    return NO;
+}
+
 
 
 - (void)prepareForReuse {
@@ -182,6 +226,7 @@
     self.avatarImgView.hidden = NO;
     self.lastContentLbl.hidden = NO;
     self.lastMsgTimeLbl.hidden = NO;
+    self.externalGroupTagLbl.hidden = YES;
 }
 
 
@@ -277,6 +322,9 @@
 
     // 刷新官方tag
     [self refreshOfficialTag:model];
+
+    // 刷新外部群 Tag（仅 WK_GROUP 显示，私聊 / 子区 / 社区自动跳过）
+    [self refreshExternalGroupTag:model];
 
     [self layoutSubviews];
 }
@@ -553,6 +601,21 @@
     }
 }
 
+-(void) refreshExternalGroupTag:(WKConversationWrapModel*)model {
+    // 每次 bind 重新评估（Space 切换 / channelInfo 推送后会触发 refreshWithModel，继而走这里），
+    // 不需要额外监听。字段走 model.channelInfo.extra[is_external_group]，
+    // 由 WKGroupManagerDelegateImp 从 /groups/{no} 响应自动透传（EP1 依赖，已就位）。
+    BOOL show = [WKConversationListCell shouldShowExternalGroupTag:model];
+    self.externalGroupTagLbl.hidden = !show;
+    if(show) {
+        [self.externalGroupTagLbl sizeToFit];
+        CGRect frame = self.externalGroupTagLbl.frame;
+        frame.size.width += 8.0f;
+        frame.size.height += 4.0f;
+        self.externalGroupTagLbl.frame = frame;
+    }
+}
+
 
 -(void) updateStatus {
     if(!self.model.lastMessage || !self.model.lastMessage.isSend) {
@@ -715,6 +778,11 @@
         BOOL showMention = !self.lastContentLbl.hidden;
         CGFloat avatarSize = 52.0f;
         CGFloat rightPadding = 15.0f;
+        // 外部群 Tag 占位（与 bot/official 并列，挤占 title 宽度）
+        CGFloat externalTagReserve = 0.0f;
+        if(!self.externalGroupTagLbl.hidden) {
+            externalTagReserve = self.externalGroupTagLbl.lim_width + 6.0f;
+        }
 
         if (showMention) {
             // 有 @我：两行布局（标题 + 预览）
@@ -722,7 +790,7 @@
 
             CGFloat titleLeft = self.avatarImgView.lim_right + 10.0f;
             [self.titleLbl sizeToFit];
-            CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f;
+            CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f - externalTagReserve;
             if(self.titleLbl.lim_width > titleMaxWidth) self.titleLbl.lim_width = titleMaxWidth;
             self.titleLbl.lim_left = titleLeft;
             self.titleLbl.lim_top = 10.0f;
@@ -738,7 +806,7 @@
 
             CGFloat titleLeft = self.avatarImgView.lim_right + 10.0f;
             [self.titleLbl sizeToFit];
-            CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f;
+            CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f - externalTagReserve;
             if(self.titleLbl.lim_width > titleMaxWidth) self.titleLbl.lim_width = titleMaxWidth;
             self.titleLbl.lim_left = titleLeft;
             self.titleLbl.lim_top = (self.lim_height - self.titleLbl.lim_height) / 2.0f;
@@ -784,6 +852,18 @@
             }
             self.threadCountLbl.lim_left = tcLeft;
             self.threadCountLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.threadCountLbl.lim_height) / 2.0f;
+        }
+
+        // 外部群 Tag（只在群聊布局下可能出现；layout 路径外层已校验 isGroup）
+        if(!self.externalGroupTagLbl.hidden) {
+            CGFloat extLeft = self.titleLbl.lim_right + 6.0f;
+            if(!self.botBadgeLbl.hidden) {
+                extLeft = self.botBadgeLbl.lim_right + 4.0f;
+            } else if(!self.officialTag.hidden) {
+                extLeft = self.officialTag.lim_right + 4.0f;
+            }
+            self.externalGroupTagLbl.lim_left = extLeft;
+            self.externalGroupTagLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.externalGroupTagLbl.lim_height) / 2.0f;
         }
 
     } else {
