@@ -10,6 +10,8 @@
 #import "WKDBMigrationManager.h"
 #import <objc/runtime.h>
 
+NSString * const WKIMDBHealthCheckFailedNotification = @"WKIMDBHealthCheckFailedNotification";
+
 // 数据库中常见的几种类型
 #define SQL_TEXT     @"TEXT" //文本
 #define SQL_INTEGER  @"INTEGER" //int long integer ...
@@ -76,21 +78,44 @@ static WKDBMigrationManager *_manager;
     }
     
     NSString *dbKey = uid;
-    
-    
+
 //    [WKFMEncryptHelper shared].encryptKey = dbKey;
 //    [[WKFMEncryptHelper shared] unEncryptDatabase:dbPath targetPath:[NSString stringWithFormat:@"%@.tmp.db",dbPath]];
-//
-    
+
     FMDatabaseQueue *fmdb = [FMDatabaseQueue databaseQueueWithPath:dbPath];
-  
-    self.dbQueue = [WKFMDatabaseQueue databaseQueue:fmdb] ;
+    self.dbQueue = [WKFMDatabaseQueue databaseQueue:fmdb];
     [self.dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
         [db setKeyWithData:[dbKey dataUsingEncoding:NSUTF8StringEncoding]];
 //        [db setKey:uid];
     }];
-    // 合并数据库
+
+    // 开库健康检查：SQLITE_NOTADB(26) 说明文件格式与加密方式不兼容
+    if (![self isDBHealthyForUID:uid dbPath:dbPath]) {
+        return;
+    }
     [self migrateDatabase];
+}
+
+- (BOOL)isDBHealthyForUID:(NSString *)uid dbPath:(NSString *)dbPath {
+    __block BOOL healthy = NO;
+    [self.dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
+        FMResultSet *rs = [db executeQuery:@"SELECT count(*) FROM sqlite_master"];
+        if (rs) {
+            healthy = YES;
+            [rs close];
+        }
+    }];
+    if (!healthy) {
+        NSString *capturedPath = dbPath;
+        NSString *capturedUID  = uid;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[NSNotificationCenter defaultCenter]
+                postNotificationName:WKIMDBHealthCheckFailedNotification
+                object:nil
+                userInfo:@{@"imDBPath": capturedPath, @"uid": capturedUID}];
+        });
+    }
+    return healthy;
 }
 -(void) createMigrationsTable{
     [[self dbQueue] inDatabase:^(FMDatabase * _Nonnull db) {

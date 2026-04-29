@@ -11,6 +11,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface WKConversationListHeaderView : UIView
 
+@property(nonatomic,strong,readonly) UIView *contentView;
 
 @property(nonatomic,assign) BOOL showNetworkError; // 是否显示网络错误
 

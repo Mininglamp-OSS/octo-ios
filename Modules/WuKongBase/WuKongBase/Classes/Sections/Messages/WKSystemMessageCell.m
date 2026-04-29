@@ -30,6 +30,9 @@
 #define WK_INVITE_LEFT_SPACE 15.0f // 群聊邀请确认左边距离
 #define WK_INVITE_RIGHT_SPACE 20.0f // 群聊邀请确认右边距离
 + (CGSize)sizeForMessage:(WKMessageModel *)model {
+     if (![model.content isKindOfClass:[WKSystemContent class]]) {
+         return CGSizeMake(200, 30); // 竞态兜底
+     }
      WKSystemContent *content = (WKSystemContent*)model.content;
      NSString *text = content.displayContent;
     CGSize contentSize = CGSizeMake(0.0f, 0.0f);

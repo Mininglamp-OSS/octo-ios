@@ -23,6 +23,15 @@ post_install do |installer|
             config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '11.0'
             config.build_settings['ENABLE_BITCODE'] = 'NO'
             config.build_settings["EXCLUDED_ARCHS[sdk=iphonesimulator*]"] = "arm64"
+            # librlottie: config.h 在根目录，源文件在子目录用 #include "config.h"
+            # 需要同时设置 HEADER_SEARCH_PATHS 和 USER_HEADER_SEARCH_PATHS
+            if target.name == 'librlottie'
+              src = '"${PODS_ROOT}/librlottie"'
+              config.build_settings['HEADER_SEARCH_PATHS'] ||= ['$(inherited)']
+              config.build_settings['HEADER_SEARCH_PATHS'] << src
+              config.build_settings['USER_HEADER_SEARCH_PATHS'] ||= ['$(inherited)']
+              config.build_settings['USER_HEADER_SEARCH_PATHS'] << src
+            end
         end
 
     end
@@ -106,7 +115,7 @@ end
 
 
 abstract_target 'TangSengDaoDaoiOSBase' do
-  
+
 #  pod 'lottie-ios', '~> 2.5.3'
   pod 'Socket.IO-Client-Swift'
   pod 'SSZipArchive', '~> 2.2.3'
@@ -114,7 +123,7 @@ abstract_target 'TangSengDaoDaoiOSBase' do
   pod 'Aspects'
   pod 'ReactiveObjC'
 
-  target 'TangSengDaoDaoiOS' do
+  target 'OctoiOS' do
     project 'TangSengDaoDaoiOS.xcodeproj'
     
   use_frameworks!
@@ -126,11 +135,18 @@ abstract_target 'TangSengDaoDaoiOSBase' do
   pod 'WuKongIMSDK',  :path => './Modules/WuKongIMiOSSDK'   ## WuKongBase 基础工具包  源码地址 https://github.com/WuKongIM/WuKongIMiOSSDK
 #  pod 'WuKongIMSDK',  :path => '../../../wukongIM/iOS/WuKongIMiOSSDK'
 #  pod  'WuKongIMSDK', '~> 1.0.2' ## 源码地址 https://github.com/WuKongIM/WuKongIMiOSSDK
-  pod 'Down', :git => 'https://github.com/johnxnguyen/Down.git', :tag => 'v0.11.0'  ## Markdown渲染库
+  # pod 'Down', :git => 'https://github.com/johnxnguyen/Down.git', :tag => 'v0.11.0'  ## 已替换为 libcmark_gfm
+  pod 'libcmark_gfm'  ## Markdown 渲染（纯 C 解析，无 WebKit 依赖）
   pod 'WuKongBase',  :path => './Modules/WuKongBase'   ## WuKongBase 基础工具包
   pod 'WuKongLogin', :path => './Modules/WuKongLogin'  ##  登录模块
   pod 'WuKongContacts', :path => './Modules/WuKongContacts'  ## 联系人模块
   pod 'WuKongDataSource', :path => './Modules/WuKongDataSource'  ## 数据源
+# pod 'Bugly'  ## 通过 WuKongBase vendored_frameworks 手动集成
+
+  # 性能监控（仅 Debug 模式）
+  pod 'DoraemonKit/Core', '~> 3.1.2', :configurations => ['Debug']
+  pod 'DoraemonKit/WithGPS', '~> 3.1.2', :configurations => ['Debug']
+
   end
   
 end

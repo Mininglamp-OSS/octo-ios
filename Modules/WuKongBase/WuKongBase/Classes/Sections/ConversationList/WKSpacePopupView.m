@@ -165,6 +165,9 @@
     _tableView.backgroundColor = [UIColor clearColor];
     _tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
     _tableView.rowHeight = 48;
+    _tableView.scrollEnabled = NO;
+    _tableView.showsVerticalScrollIndicator = YES;
+    _tableView.bounces = NO;
     [_tableView registerClass:[WKSpaceListCell class] forCellReuseIdentifier:@"SpaceCell"];
     [_containerView addSubview:_tableView];
 
@@ -211,7 +214,6 @@
 
 - (void)createFooterButtons {
     NSArray *items = @[
-        @{@"title": LLang(@"创建Space"), @"action": @"createSpace", @"icon": @"➕"},
         @{@"title": LLang(@"加入Space"), @"action": @"joinSpace", @"icon": @"🔍"},
         @{@"title": LLang(@"显示全部"), @"action": @"showAll", @"icon": @""}
     ];
@@ -263,13 +265,10 @@
     [self dismiss];
 
     switch (sender.tag) {
-        case 0: // 创建空间
-            [self showCreateSpaceDialog];
-            break;
-        case 1: // 加入空间
+        case 0: // 加入空间
             [self showJoinSpaceDialog];
             break;
-        case 2: // 显示全部
+        case 1: // 显示全部
             [self loadSpaces];
             break;
     }
@@ -318,6 +317,8 @@
 
 - (void)loadSpaces {
     NSLog(@"📡 开始加载Space列表");
+    // 清除缓存，强制从服务器获取最新数据
+    [[WKSpaceModel shared] invalidateCache];
     __weak typeof(self) weakSelf = self;
     [[WKSpaceModel shared] getMySpaces].then(^(NSArray *spaces){
         NSLog(@"✅ Space列表加载成功，数量: %lu", (unsigned long)spaces.count);
@@ -325,9 +326,11 @@
         dispatch_async(dispatch_get_main_queue(), ^{
             weakSelf.spaces = spaces ?: @[];  // 防止nil
 
-            // 更新tableView高度：每行48，最大300
-            CGFloat height = MIN(weakSelf.spaces.count * 48, 300);
+            // 更新tableView高度：每行48，最多显示6行，超出可滚动
+            NSInteger maxVisibleRows = 6;
+            CGFloat height = MIN(weakSelf.spaces.count, maxVisibleRows) * 48;
             NSLog(@"📐 更新tableView高度: %.0f (共%lu个Space)", height, (unsigned long)weakSelf.spaces.count);
+            weakSelf.tableView.scrollEnabled = (NSInteger)weakSelf.spaces.count > maxVisibleRows;
             weakSelf.tableViewHeightConstraint.constant = height;
 
             [weakSelf.tableView reloadData];
@@ -346,60 +349,6 @@
             }
         });
     });
-}
-
-- (void)showCreateSpaceDialog {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"创建Space") message:nil preferredStyle:UIAlertControllerStyleAlert];
-
-    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-        textField.placeholder = LLang(@"Space名称");
-    }];
-
-    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-        textField.placeholder = LLang(@"描述(可选)");
-    }];
-
-    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
-
-    __weak typeof(self) weakSelf = self;
-    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"创建") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        NSString *name = alert.textFields[0].text;
-        NSString *desc = alert.textFields[1].text;
-
-        if (!name || name.length == 0) {
-            UIWindow *window = [UIApplication sharedApplication].keyWindow;
-            if (!window) {
-                window = [[UIApplication sharedApplication].windows firstObject];
-            }
-            [window showMsg:LLang(@"请输入Space名称")];
-            return;
-        }
-
-        UIWindow *window = [UIApplication sharedApplication].keyWindow;
-        if (!window) {
-            window = [[UIApplication sharedApplication].windows firstObject];
-        }
-        [window showHUD:LLang(@"创建中...")];
-        [[WKSpaceModel shared] createSpaceWithName:name description:desc].then(^(WKSpaceEntity *space){
-            [window hideHud];
-            [window showMsg:LLang(@"创建成功")];
-            // 自动切换到新创建的空间
-            if (space) {
-                [weakSelf dismiss];
-                if (weakSelf.onSpaceSelected) {
-                    weakSelf.onSpaceSelected(space);
-                }
-            } else {
-                [weakSelf loadSpaces];
-            }
-        }).catch(^(NSError *error){
-            [window hideHud];
-            [window showMsg:error.localizedDescription];
-        });
-    }]];
-
-    UIViewController *topVC = [self topViewController];
-    [topVC presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)showJoinSpaceDialog {
@@ -431,21 +380,41 @@
         [window showHUD:LLang(@"加入中...")];
         [[WKSpaceModel shared] joinSpace:inviteCode].then(^(id result){
             [window hideHud];
-            [window showMsg:LLang(@"加入成功")];
-            // 加入成功后刷新列表，并自动切换到新加入的空间
+            [window showHUDWithHide:LLang(@"加入成功")];
+
+            // 从 API 返回中提取新空间 ID
+            NSString *joinedSpaceId = nil;
+            if ([result isKindOfClass:[NSDictionary class]]) {
+                joinedSpaceId = result[@"space_id"];
+            }
+
+            // 刷新空间列表，自动切换到新加入的空间
             [[WKSpaceModel shared] invalidateCache];
             [[WKSpaceModel shared] getMySpaces].then(^(NSArray<WKSpaceEntity *> *spaces) {
                 weakSelf.spaces = spaces ?: @[];
                 [weakSelf.tableView reloadData];
-                // 找到新加入的空间并自动选中
-                for (WKSpaceEntity *space in spaces) {
-                    if (![space.space_id isEqualToString:weakSelf.currentSpaceId]) {
-                        // 选中非当前空间的最后一个（新加入的通常在最后）
+
+                // 用 API 返回的 space_id 精确匹配新空间
+                WKSpaceEntity *newSpace = nil;
+                if (joinedSpaceId) {
+                    for (WKSpaceEntity *space in spaces) {
+                        if ([space.space_id isEqualToString:joinedSpaceId]) {
+                            newSpace = space;
+                            break;
+                        }
                     }
                 }
-                // 选中最后一个空间（新加入的）
-                WKSpaceEntity *newSpace = spaces.lastObject;
-                if (newSpace && ![newSpace.space_id isEqualToString:weakSelf.currentSpaceId]) {
+                // 兜底：找不到则用不等于当前空间的最后一个
+                if (!newSpace) {
+                    for (NSInteger i = spaces.count - 1; i >= 0; i--) {
+                        if (![spaces[i].space_id isEqualToString:weakSelf.currentSpaceId]) {
+                            newSpace = spaces[i];
+                            break;
+                        }
+                    }
+                }
+
+                if (newSpace) {
                     [weakSelf dismiss];
                     if (weakSelf.onSpaceSelected) {
                         weakSelf.onSpaceSelected(newSpace);
@@ -454,7 +423,7 @@
             });
         }).catch(^(NSError *error){
             [window hideHud];
-            [window showMsg:error.localizedDescription];
+            [window showHUDWithHide:error.localizedDescription];
         });
     }]];
 

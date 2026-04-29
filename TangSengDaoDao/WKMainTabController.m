@@ -9,7 +9,6 @@
 #import "WKMainTabController.h"
 #import <WuKongBase/WuKongBase.h>
 #import <Lottie/Lottie.h>
-#import <CoreImage/CoreImage.h>
 #import "WKConversationListVC.h"
 #import "WKContactsVC.h"
 #import "WKMeVC.h"
@@ -24,77 +23,156 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.delegate = self;
-    // Do any additional setup after loading the view.
-    [self.tabBar setBarTintColor:[UIColor whiteColor]];
-    
-    [[UITabBar appearance] setShadowImage:[[UIImage alloc]init]];
-    [[UITabBar appearance] setBackgroundImage:[[UIImage alloc]init]];
-    if (@available(iOS 13.0, *)) {
-        [self.tabBar setBarTintColor:[UIColor systemBackgroundColor]];
-        [self.tabBar setBackgroundColor:[UIColor systemBackgroundColor]];
-    } else {
-        [self.tabBar setBarTintColor:[UIColor whiteColor]];
-        [self.tabBar setBackgroundColor:[UIColor whiteColor]];
-    }
-   
+    [self updateTabBarAppearance];
     self.tabBar.tintColor = [WKApp shared].config.themeColor;
+    // 监听 viewConfigChange 通知（WKBaseVC 的 traitCollectionDidChange 会发这个）
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onStyleChange) name:@"WK_NOTIFY_STYLE_CHANGE" object:nil];
 
-    [self setupChildVC:WKConversationListVC.class title:@"" andImage:@"HomeTab" andSelectImage:@"HomeTabSelected"];
-    [self setupChildVC:WKContactsVC.class title:@"" andImage:@"ContactsTab" andSelectImage:@"ContactsTabSelected"];
-    [self setupChildVC:WKMeVC.class title:@"" andImage:@"MeTab" andSelectImage:@"MeTabSelected"];
+    UIColor *normalColor = [UIColor colorWithWhite:0.55 alpha:1.0];
+    UIColor *selectedColor = [WKApp shared].config.themeColor;
+
+    [self setupChildVC:WKConversationListVC.class title:LLang(@"消息")
+                 image:[self drawMessageIconWithColor:normalColor filled:NO]
+         selectedImage:[self drawMessageIconWithColor:selectedColor filled:YES]];
+
+    [self setupChildVC:WKContactsVC.class title:LLang(@"通讯录")
+                 image:[self drawContactsIconWithColor:normalColor filled:NO]
+         selectedImage:[self drawContactsIconWithColor:selectedColor filled:YES]];
+
+    [self setupChildVC:WKMeVC.class title:LLang(@"我")
+                 image:[self drawMeIconWithColor:normalColor filled:NO]
+         selectedImage:[self drawMeIconWithColor:selectedColor filled:YES]];
 
 }
 
-/// 色相旋转：将图片从橘色调转为紫色调，保留透明度和亮度层次
-- (UIImage *)hueRotateImage:(UIImage *)image angle:(CGFloat)angleInRadians {
-    CIImage *ciImage = [[CIImage alloc] initWithImage:image];
-    if (!ciImage) return image;
-    CIFilter *filter = [CIFilter filterWithName:@"CIHueAdjust"];
-    [filter setValue:ciImage forKey:kCIInputImageKey];
-    [filter setValue:@(angleInRadians) forKey:@"inputAngle"];
-    CIImage *output = filter.outputImage;
-    if (!output) return image;
-    CIContext *ctx = [CIContext contextWithOptions:nil];
-    CGImageRef cgImage = [ctx createCGImage:output fromRect:output.extent];
-    if (!cgImage) return image;
-    UIImage *result = [UIImage imageWithCGImage:cgImage scale:image.scale orientation:image.imageOrientation];
-    CGImageRelease(cgImage);
-    return result;
-}
 
-- (void)setupChildVC:(Class)vc title:(NSString *)title andImage:(NSString * )image andSelectImage:(NSString *)selectImage{
-
-    UIViewController * vcInstall = [[vc alloc] init];
-    vcInstall.tabBarItem.title = title;
-
-    // 橘色 ≈ 30°，紫色 ≈ 270°，色相旋转约 240° = 4.19 弧度
-    CGFloat hueShift = 240.0 * M_PI / 180.0;
-
-    // 未选中：色相旋转后整体降低透明度
-    UIImage *unselectedImg = [self hueRotateImage:[UIImage imageNamed:image] angle:hueShift];
-    UIGraphicsBeginImageContextWithOptions(unselectedImg.size, NO, unselectedImg.scale);
-    [unselectedImg drawInRect:CGRectMake(0, 0, unselectedImg.size.width, unselectedImg.size.height) blendMode:kCGBlendModeNormal alpha:1.0];
-    UIImage *fadedImg = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    vcInstall.tabBarItem.image = [fadedImg imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
-
-    // 选中：色相旋转，保留原图所有透明度和亮度层次
-    UIImage *selectedImg = [self hueRotateImage:[UIImage imageNamed:selectImage] angle:hueShift];
-    vcInstall.tabBarItem.selectedImage = [selectedImg imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
-
-    vcInstall.tabBarItem.imageInsets = UIEdgeInsetsMake(6, 0, -6, 0);
+- (void)setupChildVC:(Class)vc title:(NSString *)title image:(UIImage *)image selectedImage:(UIImage *)selectedImage {
+    UIViewController *vcInstall = [[vc alloc] init];
+    vcInstall.tabBarItem = [[UITabBarItem alloc] initWithTitle:title
+                                                        image:[image imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]
+                                                selectedImage:[selectedImage imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal]];
     [self addChildViewController:vcInstall];
 }
 
--(void) dealloc {
-    WKLogDebug(@"WKMainTabController dealloc");
+#pragma mark - Tab Bar Icon Drawing
+
+- (UIImage *)drawMessageIconWithColor:(UIColor *)color filled:(BOOL)filled {
+    CGSize size = CGSizeMake(26, 26);
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+
+    UIBezierPath *bubble = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(2, 3, 22, 16) cornerRadius:4];
+    // 小尾巴
+    UIBezierPath *tail = [UIBezierPath bezierPath];
+    [tail moveToPoint:CGPointMake(7, 19)];
+    [tail addLineToPoint:CGPointMake(5, 23)];
+    [tail addLineToPoint:CGPointMake(12, 19)];
+    [bubble appendPath:tail];
+
+    if (filled) {
+        CGContextSetFillColorWithColor(ctx, color.CGColor);
+        [bubble fill];
+    } else {
+        CGContextSetStrokeColorWithColor(ctx, color.CGColor);
+        CGContextSetLineWidth(ctx, 1.5);
+        [bubble stroke];
+    }
+
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return image;
 }
+
+- (UIImage *)drawContactsIconWithColor:(UIColor *)color filled:(BOOL)filled {
+    CGSize size = CGSizeMake(28, 26);
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    CGContextSetLineWidth(ctx, 1.5);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+
+    if (filled) {
+        CGContextSetFillColorWithColor(ctx, color.CGColor);
+        // 前面的人（左）
+        CGContextFillEllipseInRect(ctx, CGRectMake(6, 4, 9, 9));
+        UIBezierPath *body1 = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(2, 17, 17, 8) cornerRadius:4];
+        [body1 fill];
+        // 后面的人（右）
+        CGContextFillEllipseInRect(ctx, CGRectMake(16, 5, 7.5, 7.5));
+        UIBezierPath *body2 = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(14, 16, 13, 7) cornerRadius:3.5];
+        [body2 fill];
+    } else {
+        CGContextSetStrokeColorWithColor(ctx, color.CGColor);
+        // 前面的人（左）
+        CGContextStrokeEllipseInRect(ctx, CGRectMake(6, 4, 9, 9));
+        UIBezierPath *body1 = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(2, 17, 17, 8) cornerRadius:4];
+        [body1 stroke];
+        // 后面的人（右）
+        CGContextStrokeEllipseInRect(ctx, CGRectMake(16, 5, 7.5, 7.5));
+        UIBezierPath *body2 = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(14, 16, 13, 7) cornerRadius:3.5];
+        [body2 stroke];
+    }
+
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return image;
+}
+
+- (UIImage *)drawMeIconWithColor:(UIColor *)color filled:(BOOL)filled {
+    CGSize size = CGSizeMake(26, 26);
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    CGContextSetLineWidth(ctx, 1.5);
+
+    if (filled) {
+        CGContextSetFillColorWithColor(ctx, color.CGColor);
+        CGContextFillEllipseInRect(ctx, CGRectMake(7.5, 3, 11, 11));
+        UIBezierPath *body = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(3, 17, 20, 8) cornerRadius:4];
+        [body fill];
+    } else {
+        CGContextSetStrokeColorWithColor(ctx, color.CGColor);
+        CGContextStrokeEllipseInRect(ctx, CGRectMake(7.5, 3, 11, 11));
+        UIBezierPath *body = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(3, 17, 20, 8) cornerRadius:4];
+        [body stroke];
+    }
+
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return image;
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    [self onStyleChange];
+}
+
+- (void)onStyleChange {
+    [self updateTabBarAppearance];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)updateTabBarAppearance {
+    if (@available(iOS 13.0, *)) {
+        UITabBarAppearance *appearance = [[UITabBarAppearance alloc] init];
+        [appearance configureWithOpaqueBackground];
+        appearance.backgroundColor = [UIColor systemBackgroundColor];
+        appearance.shadowColor = [UIColor clearColor];
+        self.tabBar.standardAppearance = appearance;
+        if (@available(iOS 15.0, *)) {
+            self.tabBar.scrollEdgeAppearance = appearance;
+        }
+    }
+    self.tabBar.translucent = NO;
+}
+
 
 #pragma mark - UITabBarControllerDelegate
 
 static UIImpactFeedbackGenerator *impactFeedBack;
 - (void)tabBarController:(UITabBarController *)tabBarController didSelectViewController:(UIViewController *)viewController {
-    
     if(!impactFeedBack) {
         impactFeedBack = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
     }

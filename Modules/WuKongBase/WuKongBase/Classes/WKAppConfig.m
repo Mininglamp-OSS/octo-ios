@@ -65,7 +65,7 @@
         self.unkownMessageText = @"[不支持的消息类型，或许可升级版本后查看]";
         self.signalErrorMessageText = @"[消息无法解密，因为双方密钥有发送变更]";
         self.messageTipTimeInterval = 60 * 5;
-        self.messageTextMaxBytes = 1024*2;
+        self.messageTextMaxBytes = 1024*10;
         
         // ---------- 导航栏相关 ----------
 //        self.navBarButtonColor = [UIColor colorWithRed:0.0f green:0.0f blue:0.0f alpha:1.0f];
@@ -119,6 +119,7 @@
             [UIApplication sharedApplication].keyWindow.overrideUserInterfaceStyle = UIUserInterfaceStyleLight;
         }
     }
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"WK_NOTIFY_STYLE_CHANGE" object:nil];
 }
 
 - (NSString *)bundleID {
@@ -499,6 +500,9 @@
             }
             if(resultDict[@"register_user_must_complete_info_on"]) {
                 weakSelf.registerUserMustCompleteInfoOn = [resultDict[@"register_user_must_complete_info_on"] boolValue];
+            }
+            if(resultDict[@"thread_on"]) {
+                weakSelf.threadOn = [resultDict[@"thread_on"] boolValue];
             }
            
             

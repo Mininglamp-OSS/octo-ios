@@ -11,6 +11,7 @@
 #import "WKGrowingTextView.h"
 #import "WKConversationPanel.h"
 #import "WKMenusBtn.h"
+#import "WKHoldToTalkManager.h"
 #define SessionInputAnimateDuration 0.2f  // 输入框动画时间
 
 
@@ -100,6 +101,11 @@
 
 @property(nonatomic,strong) WKMenusBtn *menusBtn; // 菜单按钮
 @property(nonatomic,assign) BOOL showMenusBtn;
+
+// 语音/文本模式切换
+@property(nonatomic,assign) BOOL isVoiceMode; // 是否处于语音模式
+@property(nonatomic,strong) UIButton *voiceToggleBtn; // 语音/键盘切换按钮
+@property(nonatomic,strong) UIButton *holdToTalkBtn; // "按住 说话"按钮
 
 @property(nonatomic,strong) UIView *topView; // 输入框顶部试图
 

@@ -95,7 +95,7 @@
 
 
 //数组操作信号量
-dispatch_semaphore_t semaphore;
+// semaphore 已改为方法内局部变量，避免并发覆盖崩溃
 
 @implementation WKChineseSort
 #pragma mark ============== tools ==================
@@ -157,7 +157,7 @@ dispatch_semaphore_t semaphore;
     }
     CFAbsoluteTime start = CFAbsoluteTimeGetCurrent();
 
-    semaphore = dispatch_semaphore_create(1);
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(1);
 
     //异步执行
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
@@ -223,6 +223,19 @@ dispatch_semaphore_t semaphore;
             }
         }
         //
+
+        // 对 # 组（数字/符号）内按原始 name 字符串排序
+        NSString *specialTitle = WKChineseSortSetting.share.specialCharSectionTitle;
+        for (NSInteger i = 0; i < sectionTitleArr.count; i++) {
+            if ([sectionTitleArr[i] isEqualToString:specialTitle]) {
+                [sortedObjArr[i] sortUsingComparator:^NSComparisonResult(id a, id b) {
+                    NSString *nameA = key ? [a valueForKeyPath:key] : a;
+                    NSString *nameB = key ? [b valueForKeyPath:key] : b;
+                    return [nameA compare:nameB options:NSCaseInsensitiveSearch];
+                }];
+                break;
+            }
+        }
 
         //打印 总用时
         CFAbsoluteTime state3 = CFAbsoluteTimeGetCurrent();

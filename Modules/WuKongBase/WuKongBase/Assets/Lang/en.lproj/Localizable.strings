@@ -577,3 +577,14 @@
 "文件"="File";
 "图片/视频"="Images/Videos";
 "[系统消息]" = "[System Message]";
+
+// Speech to Text
+"语音转文字"="Speech to Text";
+"按住说话转文字"="Hold to speak";
+"松手发送"="Release to send";
+"上滑取消"="Swipe up to cancel";
+"松手取消"="Release to cancel";
+"未识别到语音"="No speech recognized";
+"语音识别不可用"="Speech recognition unavailable";
+"请在设置中允许语音识别"="Please allow speech recognition in Settings";
+"识别中..."="Recognizing...";

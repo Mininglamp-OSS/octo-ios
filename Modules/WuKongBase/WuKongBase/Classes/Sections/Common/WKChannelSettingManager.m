@@ -30,8 +30,16 @@
         [self updateUserSetting:channel.channelId settingDict:@{@"mute":@(on?1:0)}];
     }else {
         [self updateGroupSetting:WKGroupSettingKeyMute on:on groupNo:channel.channelId];
+        // 同步群聊下所有子区的通知设置
+        NSString *prefix = [NSString stringWithFormat:@"%@____", channel.channelId];
+        NSArray<WKConversation *> *allConvs = [[WKSDK shared].conversationManager getConversationList];
+        for (WKConversation *conv in allConvs) {
+            if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
+                [self updateGroupSetting:WKGroupSettingKeyMute on:on groupNo:conv.channel.channelId];
+            }
+        }
     }
-    
+
 }
 // 设置-置顶
 -(void) channel:(WKChannel*)channel stick:(BOOL) on {

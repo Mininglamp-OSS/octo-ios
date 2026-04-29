@@ -76,6 +76,10 @@
     
 }
 
+- (NSInteger)childrenCount {
+    return _children ? _children.count : 0;
+}
+
 -(WKConversationWrapModel*) getChildren:(WKChannel*)channel {
     for (WKConversationWrapModel *c in self.children) {
         if([c.channel isEqual:channel]) {
@@ -195,10 +199,23 @@
     if (self.c.channel.channelType == WK_PERSON && rawLastMessage) {
         NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
         NSString *msgSpaceId = rawLastMessage.content.contentDict[@"space_id"];
-        if (currentSpaceId.length > 0 && [msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:currentSpaceId]) {
-            return rawLastMessage; // rawLastMessage 属于当前空间，直接用（比缓存更新）
+        BOOL hasSpaceId = [msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0;
+        if (currentSpaceId.length > 0) {
+            // rawLastMessage 明确属于当前空间
+            if (hasSpaceId && [msgSpaceId isEqualToString:currentSpaceId]) {
+                return rawLastMessage;
+            }
+            // rawLastMessage 没有 space_id（如 AI 机器人回复）：
+            // 非 BotFather 的频道视为属于当前空间，直接使用最新消息
+            if (!hasSpaceId) {
+                NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+                BOOL isBotFather = botfatherUID.length > 0 && [self.c.channel.channelId isEqualToString:botfatherUID];
+                if (!isBotFather) {
+                    return rawLastMessage;
+                }
+            }
         }
-        // rawLastMessage 不属于当前空间 → 用缓存替代 DB 扫描
+        // rawLastMessage 属于其他空间，或 BotFather 无 space_id → 用缓存替代 DB 扫描
         WKMessage *cached = [[WKSpaceConversationCache shared] spaceLastMessageForChannel:self.c.channel];
         if (cached) {
             return cached;

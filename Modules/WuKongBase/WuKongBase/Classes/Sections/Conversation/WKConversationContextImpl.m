@@ -6,6 +6,7 @@
 //
 
 #import "WKConversationContextImpl.h"
+#import <objc/runtime.h>
 #import "WKUserHandleVC.h"
 #import "WKMentionUserCell.h"
 #import "WKInputMentionCache.h"
@@ -548,16 +549,11 @@
 }
 
 -(void) longPressMessageCell:(WKMessageCell*)messageCell gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer{
-//    if (self.messageActionsVCIsShow) {
-//         return;
-//     }
-//    return;
-    
     __weak typeof(self) weakSelf = self;
     [self endEditing];
 
     WKMessageModel *contextMessage = messageCell.messageModel;
-    
+
     NSArray<WKMessageLongMenusItem*> *toolbarMenus;
     if(contextMessage.content.flame) {
         WKMessageLongMenusItem *revokeToolbarMenus = [[WKApp shared] invoke:WKPOINT_LONGMENUS_REVOKE param:@{@"message":contextMessage}];
@@ -567,22 +563,264 @@
     }else{
         toolbarMenus = [[WKApp shared] invokes:WKPOINT_CATEGORY_MESSAGE_LONGMENUS param:@{@"message":contextMessage}];
     }
-    
-    WKMessageContextController *messageContextController = [[WKMessageContextController alloc] initWithMessage:messageCell.messageModel context:self menusItems:toolbarMenus gesture:(ContextGesture*)gestureRecognizer];
-    messageContextController.onDismissed = ^{
-//        if(weakSelf.conversationView.keepKeyboard) {
-//            weakSelf.conversationView.keepKeyboard = false;
-//            [self.conversationView.input becomeFirstResponder];
-//        }
-    };
-    __weak typeof(messageContextController) weakController = messageContextController;
-    messageContextController.reactionSelected = ^(WKReactionContextItem * item, BOOL isLarge) {
-        [[WKSDK shared].reactionManager addOrCancelReaction:item.reaction messageID:messageCell.messageModel.messageId complete:^(NSError * _Nullable error) {
-            [weakController dismiss];
+
+    // Fix5: 获取手指触摸的 window 坐标，用于精准定位菜单
+    CGPoint touchInWindow = [gestureRecognizer locationInView:nil];
+    __weak typeof(messageCell) weakCell = messageCell;
+
+    // 文本消息：长按直接进入全选模式，菜单在选区上方显示，无需单独「选择文字」按钮
+    if (contextMessage.contentType == WK_TEXT) {
+        NSArray *capturedMenus = [toolbarMenus copy];
+        [messageCell startInBubbleTextSelectionWithMenuItems:capturedMenus];
+        return;
+    }
+
+    // 非文本消息：显示常规内联菜单（定位在手指位置附近）
+    [self showInlineMenuForCell:messageCell menuItems:toolbarMenus atTouchPoint:touchInWindow];
+}
+
+// ─── 自定义气泡内联菜单（替代 Telegram ContextController，避免黑屏） ───
+
+-(void) showInlineMenuForCell:(WKMessageCell*)cell menuItems:(NSArray<WKMessageLongMenusItem*>*)items {
+    CGPoint touch = [cell.bubbleBackgroundView convertRect:cell.bubbleBackgroundView.bounds toView:nil].origin;
+    touch.y += cell.bubbleBackgroundView.bounds.size.height / 2.0f;
+    [self showInlineMenuForCell:cell menuItems:items atTouchPoint:touch];
+}
+
+-(void) showInlineMenuForCell:(WKMessageCell*)cell menuItems:(NSArray<WKMessageLongMenusItem*>*)items atTouchPoint:(CGPoint)touchInWindow {
+    if (!items.count) return;
+
+    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+    __weak typeof(self) weakSelf = self;
+    __weak typeof(cell)  weakCell = cell;
+
+    // 气泡在 window 中的绝对位置
+    CGRect bubbleRect = [cell.bubbleBackgroundView convertRect:cell.bubbleBackgroundView.bounds toView:nil];
+
+    // ── 遮罩层（轻微暗色，点击即关闭）
+    UIButton *overlay = [[UIButton alloc] initWithFrame:window.bounds];
+    overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.08f];
+    overlay.alpha = 0;
+    [window addSubview:overlay];
+
+    // ── 菜单卡片
+    // ── 网格菜单：图标在上、文字在下、每行 4 个、最多 3 行（参考微信长按菜单）
+    NSInteger colCount  = MIN(4, (NSInteger)items.count);
+    NSInteger rowCount  = (items.count + colCount - 1) / colCount;
+    CGFloat hPad        = 12.0f;
+    CGFloat cardW       = MIN(window.frame.size.width - 24.0f, 380.0f);
+    CGFloat cellW       = (cardW - hPad * 2) / colCount;
+    CGFloat iconSz      = 24.0f;
+    CGFloat cellH       = 12.0f + iconSz + 4.0f + 13.0f + 10.0f; // top+icon+gap+text+bottom
+    CGFloat cardH       = rowCount * cellH + 8.0f; // 8pt top/bottom padding
+    CGFloat cornerR     = 14.0f;
+
+    // __block 前向引用：dismiss block 里捕获 card，card 需先声明
+    __block UIView *card = nil;
+    __block BOOL dismissed = NO;
+    void(^dismiss)(void) = ^{
+        if (dismissed) return;
+        dismissed = YES;
+        [UIView animateWithDuration:0.15 animations:^{
+            card.alpha    = 0;
+            overlay.alpha = 0;
+        } completion:^(BOOL f) {
+            [card removeFromSuperview];
+            [overlay removeFromSuperview];
         }];
     };
-    [messageContextController setup];
-    [messageContextController show];
+    objc_setAssociatedObject(overlay, "dismiss", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    [overlay addTarget:self action:@selector(wk_inlineMenuOverlayTapped:) forControlEvents:UIControlEventTouchUpInside];
+
+    card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardW, cardH)];
+    card.layer.cornerRadius = cornerR;
+    card.clipsToBounds = NO;
+    card.layer.shadowColor  = [UIColor blackColor].CGColor;
+    card.layer.shadowOpacity = 0.18f;
+    card.layer.shadowRadius  = 12.0f;
+    card.layer.shadowOffset  = CGSizeMake(0, 4);
+
+    UIView *clipView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardW, cardH)];
+    clipView.backgroundColor = [WKApp shared].config.style == WKSystemStyleDark
+        ? [UIColor colorWithRed:0.18 green:0.18 blue:0.20 alpha:1.0]
+        : [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1.0];
+    clipView.layer.cornerRadius = cornerR;
+    clipView.clipsToBounds = YES;
+    [card addSubview:clipView];
+
+    UIFont *textFont  = [UIFont systemFontOfSize:11.0f];
+    UIColor *textColor = [WKApp shared].config.defaultTextColor;
+    UIColor *iconTint  = textColor;
+
+    for (NSInteger i = 0; i < (NSInteger)items.count; i++) {
+        WKMessageLongMenusItem *item = items[i];
+        NSInteger col = i % colCount;
+        NSInteger row = i / colCount;
+        CGFloat cellX = hPad + col * cellW;
+        CGFloat cellY = 4.0f + row * cellH; // 4pt top padding
+
+        UIButton *btn = [[UIButton alloc] initWithFrame:CGRectMake(cellX, cellY, cellW, cellH)];
+        btn.backgroundColor = [UIColor clearColor];
+        [btn setBackgroundImage:[self wk_solidColorImage:[UIColor colorWithWhite:0.5 alpha:0.15]] forState:UIControlStateHighlighted];
+
+        // 图标（居中，上方）
+        UIImageView *iconView = [[UIImageView alloc] initWithFrame:CGRectMake((cellW - iconSz)/2, 12.0f, iconSz, iconSz)];
+        iconView.image = item.icon ?: [UIImage systemImageNamed:@"ellipsis"];
+        iconView.tintColor = iconTint;
+        iconView.contentMode = UIViewContentModeScaleAspectFit;
+        [btn addSubview:iconView];
+
+        // 文字（居中，图标下方）
+        UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(2, 12.0f + iconSz + 4.0f, cellW - 4, 13.0f)];
+        lbl.text = item.title;
+        lbl.font = textFont;
+        lbl.textColor = textColor;
+        lbl.textAlignment = NSTextAlignmentCenter;
+        lbl.adjustsFontSizeToFitWidth = YES;
+        lbl.minimumScaleFactor = 0.8f;
+        [btn addSubview:lbl];
+
+        WKMessageLongMenusItem *captured = item;
+        objc_setAssociatedObject(btn, "itemDismiss", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        objc_setAssociatedObject(btn, "itemAction", captured.onTap, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        [btn addTarget:self action:@selector(wk_inlineMenuItemTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [clipView addSubview:btn];
+
+        // 列分割线
+        if (col < colCount - 1 && i < (NSInteger)items.count - 1) {
+            UIView *vSep = [[UIView alloc] initWithFrame:CGRectMake(cellX + cellW - 0.25f, cellY + 8, 0.5f, cellH - 16)];
+            vSep.backgroundColor = [UIColor colorWithWhite:0.6 alpha:0.3];
+            [clipView addSubview:vSep];
+        }
+        // 行分割线
+        if (row < rowCount - 1 && i + colCount < (NSInteger)items.count) {
+            CGFloat rowY = cellY + cellH - 0.25f;
+            UIView *hSep = [[UIView alloc] initWithFrame:CGRectMake(hPad, rowY, cardW - hPad*2, 0.5f)];
+            hSep.backgroundColor = [UIColor colorWithWhite:0.6 alpha:0.3];
+            [clipView addSubview:hSep];
+        }
+    }
+
+    // ── 定位：上方优先（不遮挡已选中文字），空间不足则放下方 ──
+    CGFloat safeTop    = window.safeAreaInsets.top + 8;
+    CGFloat safeBottom = window.frame.size.height - window.safeAreaInsets.bottom - 80;
+    CGFloat cardX = bubbleRect.origin.x;
+    if (cardX + cardW > window.frame.size.width - 8) cardX = window.frame.size.width - cardW - 8;
+    cardX = MAX(8, cardX);
+    // 气泡上方是否有足够空间
+    CGFloat aboveY = touchInWindow.y - cardH - 12;
+    CGFloat belowY = touchInWindow.y + 12;
+    CGFloat cardY  = (aboveY >= safeTop) ? aboveY : belowY;
+    cardY = MAX(safeTop, MIN(cardY, safeBottom - cardH));
+    card.frame = CGRectMake(cardX, cardY, cardW, cardH);
+    clipView.frame = CGRectMake(0, 0, cardW, cardH);
+
+    [window addSubview:card];
+
+    card.alpha = 0;
+    card.transform = CGAffineTransformMakeScale(0.88, 0.88);
+    [UIView animateWithDuration:0.18 delay:0 usingSpringWithDamping:0.82 initialSpringVelocity:0 options:0 animations:^{
+        card.alpha = 1;
+        card.transform = CGAffineTransformIdentity;
+        overlay.alpha = 1;
+    } completion:nil];
+}
+
+-(void) wk_inlineMenuOverlayTapped:(UIButton *)btn {
+    void(^dismiss)(void) = objc_getAssociatedObject(btn, "dismiss");
+    if (dismiss) dismiss();
+}
+
+-(void) wk_inlineMenuItemTapped:(UIButton *)btn {
+    void(^dismiss)(void) = objc_getAssociatedObject(btn, "itemDismiss");
+    void(^action)(id) = objc_getAssociatedObject(btn, "itemAction");
+    if (dismiss) dismiss();
+    if (action) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            action(self);
+        });
+    }
+}
+
+-(UIImage *) wk_solidColorImage:(UIColor *)color {
+    CGRect r = CGRectMake(0,0,1,1);
+    UIGraphicsBeginImageContextWithOptions(r.size, NO, 0);
+    [color setFill]; UIRectFill(r);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
+/// 弹出文字选择界面，支持选取部分文字复制
+-(void) showTextSelectionForMessage:(WKMessageModel *)model fromCell:(WKMessageCell *)cell {
+    WKTextContent *textContent = nil;
+    if ([model.content isKindOfClass:[WKTextContent class]]) {
+        textContent = (WKTextContent *)model.content;
+    }
+    NSString *rawText = textContent.content;
+    if (!rawText.length) return;
+
+    UIViewController *topVC = [WKNavigationManager shared].topViewController;
+
+    // 背景遮罩
+    UIView *dimView = [[UIView alloc] initWithFrame:topVC.view.bounds];
+    dimView.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35f];
+    dimView.alpha = 0;
+
+    // 文字选择容器
+    CGFloat padding = 16.0f;
+    CGFloat maxW = topVC.view.bounds.size.width - padding * 2;
+    UITextView *tv = [[UITextView alloc] init];
+    tv.text = rawText;
+    tv.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+    tv.textColor = [WKApp shared].config.defaultTextColor;
+    tv.backgroundColor = [WKApp shared].config.cellBackgroundColor;
+    tv.layer.cornerRadius = 12.0f;
+    tv.clipsToBounds = YES;
+    tv.editable = NO;
+    tv.selectable = YES;
+    tv.scrollEnabled = YES;
+    tv.contentInset = UIEdgeInsetsMake(8, 8, 8, 8);
+    tv.textContainerInset = UIEdgeInsetsMake(12, 12, 12, 12);
+    CGFloat tvMaxH = topVC.view.bounds.size.height * 0.5f;
+    CGFloat tvH = MIN([tv sizeThatFits:CGSizeMake(maxW, CGFLOAT_MAX)].height + 24.0f, tvMaxH);
+    tv.frame = CGRectMake(padding, topVC.view.bounds.size.height - tvH - 60.0f, maxW, tvH);
+
+    // 「完成」按钮
+    UIButton *doneBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [doneBtn setTitle:LLang(@"完成") forState:UIControlStateNormal];
+    doneBtn.titleLabel.font = [[WKApp shared].config appFontOfSizeMedium:16.0f];
+    doneBtn.backgroundColor = [WKApp shared].config.themeColor;
+    [doneBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    doneBtn.layer.cornerRadius = 10.0f;
+    doneBtn.clipsToBounds = YES;
+    doneBtn.frame = CGRectMake(padding, tv.frame.origin.y + tv.frame.size.height + 10.0f, maxW, 44.0f);
+
+    [dimView addSubview:tv];
+    [dimView addSubview:doneBtn];
+    [topVC.view addSubview:dimView];
+
+    void(^dismiss)(void) = ^{
+        [UIView animateWithDuration:0.2 animations:^{ dimView.alpha = 0; } completion:^(BOOL f) { [dimView removeFromSuperview]; }];
+    };
+    objc_setAssociatedObject(doneBtn, "dismissBlock", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    [doneBtn addTarget:self action:@selector(onTextSelectionDone:) forControlEvents:UIControlEventTouchUpInside];
+    UITapGestureRecognizer *bgTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTextSelectionBgTap:)];
+    objc_setAssociatedObject(bgTap, "dismissBlock", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    [dimView addGestureRecognizer:bgTap];
+
+    [UIView animateWithDuration:0.2 animations:^{ dimView.alpha = 1; }];
+    [tv selectAll:nil]; // 默认全选，用户可拖动调整范围
+}
+
+-(void) onTextSelectionDone:(UIButton *)btn {
+    void(^dismiss)(void) = objc_getAssociatedObject(btn, "dismissBlock");
+    if (dismiss) dismiss();
+}
+
+-(void) onTextSelectionBgTap:(UITapGestureRecognizer *)gr {
+    void(^dismiss)(void) = objc_getAssociatedObject(gr, "dismissBlock");
+    if (dismiss) dismiss();
 }
 
 -(void) addMentionUserHandleVCIfNeed {
@@ -602,11 +840,14 @@
 -(void) getMentionUserListWithKeyword:(NSString*)keyword complete:(void(^)(NSArray<WKMentionUserCellModel*>*users))complete{
 
     __weak typeof(self) weakSelf = self;
-    
+
+    NSLog(@"[Mention] getMentionUserList channel=%@/%d keyword=%@", self.channel.channelId, self.channel.channelType, keyword);
     [[WKGroupManager shared] searchMembers:self.channel keyword:keyword limit:10000 complete:^(WKChannelMemberCacheType cacheType, NSArray<WKChannelMember *> * _Nonnull members) {
+        NSLog(@"[Mention] searchMembers returned %lu members, cacheType=%ld", (unsigned long)members.count, (long)cacheType);
         WKMemberRole role =  weakSelf.conversationVM.memberRole;
-        
+
         NSArray<WKMentionUserCellModel*>*users = [weakSelf membersToMentionUsers:members role:role keyword:keyword];
+        NSLog(@"[Mention] final mention users count=%lu", (unsigned long)users.count);
         if(complete) {
             complete(users);
         }
@@ -616,7 +857,7 @@
 }
 
 -(NSArray<WKMentionUserCellModel*>*) membersToMentionUsers:(NSArray<WKChannelMember*>*)members role:(WKMemberRole)role keyword:(NSString*)keyword{
-    
+
     NSMutableArray<WKMentionUserCellModel*> *users = [NSMutableArray array];
     // @所有人 对所有群成员可见，对齐 Web 端行为（移除管理员角色限制）
     NSString *allStr = LLang(@"所有人");
@@ -625,7 +866,7 @@
     }
     if(members && members.count>0) {
         for (WKChannelMember *member in members) {
-            if([member.memberUid isEqualToString:[WKApp shared].loginInfo.uid]) { // 自己不在@列表那
+            if([member.memberUid isEqualToString:[WKApp shared].loginInfo.uid]) {
                 continue;
             }
             NSString *name = member.displayName;
@@ -704,13 +945,20 @@
 }
 
 
+-(void) addMentionItems:(NSArray<WKInputMentionItem *> *)items {
+    for (WKInputMentionItem *item in items) {
+        [self.mentionCache addMentionItem:item];
+    }
+}
+
 -(NSString*) addMentionToCache:(NSArray<NSString*>*)uids {
     if(!uids || uids.count==0) {
         return @"";
     }
-    NSArray<WKChannelMember*> *mentionMembers = [[WKChannelMemberDB shared] getMembersWithChannel:self.channel uids:[uids filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"NOT (SELF in %@)",@"all"]]];
+
+    NSArray<WKChannelMember*> *mentionMembers = [[WKChannelMemberDB shared] getMembersWithChannel:self.channel uids:[uids filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"NOT (SELF in %@)",@[@"all"]]]];
     NSMutableString *str = [[NSMutableString alloc] initWithString:@""];
-    
+
     NSMutableDictionary *memberDict = [NSMutableDictionary dictionary];
     if(mentionMembers && mentionMembers.count>0) {
         for (WKChannelMember *mentionMember in mentionMembers) {
@@ -719,9 +967,9 @@
     }
 
     for (NSString *uid in uids) {
-        
+
         WKChannelMember *mentionMember =  memberDict[uid];
-        
+
         WKInputMentionItem *item = [[WKInputMentionItem alloc] init];
         item.uid  = uid;
         if(mentionMember) {
@@ -732,16 +980,16 @@
             }
         }else if([uid isEqualToString:@"all"]) {
             item.name = LLang(@"所有人");
-        }else  { // 这种情况是群成员退群了，不在群里
+        }else  {
            WKChannelInfo *memberUserInfo =  [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:uid]];
             if(memberUserInfo) {
                 item.name = [self handleMentionName:memberUserInfo.name];
-                
+
             }else {
-                item.name = @""; // 这种情况理论上应该不会发生，如果发生则给个空字符串避免闪退
+                item.name = @"";
             }
         }
-       
+
         [self.mentionCache addMentionItem:item];
         [str appendString:WKInputAtStartChar];
         [str appendString:item.name];

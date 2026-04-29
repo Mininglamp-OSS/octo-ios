@@ -13,6 +13,8 @@
 #import "WKWebViewVC.h"
 #import "WKCopyLabel.h"
 #import "WKConversationVC.h"
+#import "WKUserInfoExternalGate.h"
+#import "WKExternalViewerResolver.h"
 #define textToAvatarLeftSpace 10.0f // 文本距头像的左边距离
 
 @interface WKUserInfoVC ()<WKUserInfoVMDelegate,WKChannelManagerDelegate>
@@ -32,6 +34,8 @@
 @property(nonatomic,strong) UIView *footerHeader;
 @property(nonatomic,strong) UIButton *sendBtn; // 发送消息
 @property(nonatomic,strong) UIButton *addFriendBtn; // 添加好友
+// YUJ-137: 外部群成员 DM 拦截提示（对齐 web PR #1021）。
+@property(nonatomic,strong) UILabel *externalHintLbl;
 
 // ---------- 视频通话 ----------
 @property(nonatomic,strong) UIButton *videoCallBtn; // 视频通话ß
@@ -76,6 +80,7 @@
     }
     [self.footerHeader addSubview:self.sendBtn];
     [self.footerHeader addSubview:self.addFriendBtn];
+    [self.footerHeader addSubview:self.externalHintLbl];
     
     // tableFooter
     self.tableView.tableFooterView = self.tableFooterView;
@@ -193,10 +198,45 @@
     }
     self.sendBtn.hidden = NO;
     self.addFriendBtn.hidden = YES;
+    self.externalHintLbl.hidden = YES;
+    // Reset 已经创建出来的 videoCallBtn，防止 Space 切换后它仍保留被
+    // 外部成员分支隐藏下来的状态（reloadData 会多次被调用）。
+    if (_videoCallBtn) {
+        _videoCallBtn.hidden = NO;
+    }
     NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
     BOOL isSpaceMode = currentSpaceId && currentSpaceId.length > 0;
 
-    if([self isSelf]) {
+    // YUJ-137 (iOS P1, 对齐 web PR #1021 + Android YUJ-67)：
+    // 跨 Space 外部成员 DM 拦截 —— Phase 1 仅前端 UI 层抑制，后端 Phase 2
+    // 会补齐好友/同 Space 服务端校验。优先级放在好友/Space 分支之前：即便
+    // follow=friend 也不给直接 DM 入口，只能继续在群里交流。
+    //
+    // 判定字段沿用 WKExternalViewerResolver（YUJ-93），
+    // 数据源优先级：memberOfUser.extra（群内 subscriber，最准）→
+    // channelInfo.extra（旧版 /users/{uid}?group_no=... 写入的
+    // is_external / source_space_name 兼容字段）。
+    BOOL shouldHideDM = [WKUserInfoExternalGate
+        shouldHideDMWithMemberExtras:self.viewModel.memberOfUser.extra
+                  channelInfoExtras:self.viewModel.channelInfo.extra
+                      viewerSpaceId:[WKExternalViewerResolver currentViewerSpaceId]
+                             isSelf:[self isSelf]];
+
+    if (shouldHideDM) {
+        // YUJ-137 footer = 仅一条「仅可在群内交流」文案（对齐 web
+        // UserInfo.getBottomPanel 的 div.wk-userinfo-footer-external-hint
+        // 整块替换逻辑）：sendBtn / addFriendBtn / videoCallBtn 全部让位，
+        // 保留 footer 容器显示静态 hint。
+        self.sendBtn.hidden = YES;
+        self.addFriendBtn.hidden = YES;
+        // 只隐藏已经挂出来的 videoCallBtn；不通过 getter 触发懒加载，避免
+        // 在不支持视频通话的账号上凭空实例化一个按钮。
+        if (_videoCallBtn) {
+            _videoCallBtn.hidden = YES;
+        }
+        self.externalHintLbl.hidden = NO;
+        self.footerHeader.hidden = NO;
+    } else if([self isSelf]) {
         self.footerHeader.hidden = YES;
     } else if (isSpaceMode) {
         // Space 模式：根据实际好友关系决定按钮显示
@@ -225,7 +265,7 @@
         self.footerHeader.hidden = YES;
     }
 
-    if(!isSpaceMode && self.viewModel.fromChannelInfo && ![self isFriend] && [self forbiddenAddFriend] && ![self isGroupManager]) {
+    if(!shouldHideDM && !isSpaceMode && self.viewModel.fromChannelInfo && ![self isFriend] && [self forbiddenAddFriend] && ![self isGroupManager]) {
         self.footerHeader.hidden = YES;
     }
     
@@ -311,7 +351,8 @@
 - (WKUserAvatar *)userAvatarView {
     if(!_userAvatarView) {
         _userAvatarView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0.0f, 0.0f, 64.0f, 64.0f)];
-        [_userAvatarView setUrl:[WKAvatarUtil getAvatar:self.uid]];
+        WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:self.uid]];
+        [_userAvatarView setUrl:[WKAvatarUtil getAvatar:self.uid cacheKey:info.avatarCacheKey]];
         _userAvatarView.lim_left = 20.0f;
         _userAvatarView.lim_top = self.userHeader.lim_height/2.0f - _userAvatarView.lim_height/2.0f;
         _userAvatarView.hidden = YES;
@@ -323,19 +364,25 @@
 }
 
 -(void) avatarPressed:(UIGestureRecognizer*)gesture  {
+    // 先刷新cacheKey（生成新UUID），确保后续URL带新key
+    [[WKSDK shared].channelManager refreshAvatarCacheKey:[WKChannel personWithChannelID:self.uid]];
+
+    // 用新cacheKey构建URL，SDWebImage没有该URL缓存 → 从服务器下载最新头像
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:self.uid]];
+    NSString *avatarUrl = [WKAvatarUtil getAvatar:self.uid cacheKey:info.avatarCacheKey];
+
     WKUserAvatar *imgView = (WKUserAvatar*)gesture.view;
     YBImageBrowser *imageBrowser = [[YBImageBrowser alloc] init];
     imageBrowser.toolViewHandlers = @[WKBrowserToolbar.new];
     imageBrowser.webImageMediator = [WKDefaultWebImageMediator new];
-    
+
     YBIBImageData *data = [YBIBImageData new];
-    data.imageURL = [NSURL URLWithString:[WKAvatarUtil getAvatar:self.uid]];
+    data.imageURL = [NSURL URLWithString:avatarUrl];
     data.projectiveView = imgView.avatarImgView;
-    
+
     imageBrowser.dataSourceArray = @[data];
-    
+
     [imageBrowser show];
-    
 }
 
 - (UIImageView *)sexImgView {
@@ -479,6 +526,25 @@
     return _addFriendBtn;
 }
 
+// YUJ-137: 外部群成员 DM 拦截后显示「仅可在群内交流」的静态提示。
+// 同时作为 sendBtn/addFriendBtn 的替身（大小与 footer 一致，居中显示）。
+- (UILabel *)externalHintLbl {
+    if(!_externalHintLbl) {
+        _externalHintLbl = [[UILabel alloc] initWithFrame:CGRectMake(bottomBtnSpace, 15.0f,
+                                                                      self.view.lim_width - bottomBtnSpace*2,
+                                                                      40.0f)];
+        _externalHintLbl.textAlignment = NSTextAlignmentCenter;
+        _externalHintLbl.font = [[WKApp shared].config appFontOfSize:14.0f];
+        _externalHintLbl.textColor = [UIColor colorWithRed:153.0f/255.0f
+                                                    green:153.0f/255.0f
+                                                     blue:153.0f/255.0f
+                                                    alpha:1.0f];
+        _externalHintLbl.text = LLang(@"仅可在群内交流");
+        _externalHintLbl.hidden = YES;
+    }
+    return _externalHintLbl;
+}
+
 // ---------- tip ----------
 
 - (UIView *)tableFooterView {
@@ -571,6 +637,11 @@
         [self refreshData];
     }else if(channelInfo.channel.channelType == WK_PERSON && [channelInfo.channel.channelId isEqualToString:self.uid]) {
         self.viewModel.channelInfo = channelInfo;
+        // 用新的cacheKey更新头像URL，触发SDWebImage重新下载
+        NSString *key = (channelInfo.avatarCacheKey.length > 0) ? channelInfo.avatarCacheKey : @"0";
+        NSString *baseUrl = (channelInfo.logo && ![channelInfo.logo isEqualToString:@""]) ?
+            [WKAvatarUtil getFullAvatarWIthPath:channelInfo.logo] : [WKAvatarUtil getAvatar:self.uid];
+        [self.userAvatarView setUrl:[NSString stringWithFormat:@"%@?v=%@", baseUrl, key]];
         [self refreshData];
     }
 }

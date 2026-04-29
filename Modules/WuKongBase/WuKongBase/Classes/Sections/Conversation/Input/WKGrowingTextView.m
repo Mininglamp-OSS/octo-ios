@@ -45,7 +45,7 @@
 
 -(void) setupUI:(UIFont*)font{
     
-    _maxHeight = 100.0f; // 输入框最大高度，大于此高度进入滚动模式
+    _maxHeight = 260.0f; // 输入框最大高度，约15行，大于此高度进入滚动模式
     _minHeight = 20.0f;
     _intrinsicTextFont = font;
     
@@ -206,6 +206,10 @@
 
 -(void) setText:(NSString *)text{
     [self.internalTextView setText:text];
+    // 延迟到下一次布局后刷新高度，确保 bounds 已正确
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self refreshHeight:YES];
+    });
 }
 -(NSString*) text{
     return self.internalTextView.text;

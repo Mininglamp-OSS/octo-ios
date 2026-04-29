@@ -198,6 +198,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,assign) BOOL registerUserMustCompleteInfoOn; // 用户注册是否必须要完善信息后才能进入
 
+@property(nonatomic,assign) BOOL threadOn; // 子区功能开关
+
 @property(nonatomic,strong) NSArray<WKAppModuleResp*> *modules;
 
 @property(nonatomic,assign) BOOL requestSuccess; // 请求远程配置是否成功

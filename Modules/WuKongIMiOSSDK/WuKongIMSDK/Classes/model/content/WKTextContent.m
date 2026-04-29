@@ -19,7 +19,18 @@
 
 
 - (void)decodeWithJSON:(NSDictionary *)contentDic {
-     self.content = contentDic[@"content"];
+    id rawContent = contentDic[@"content"];
+    if ([rawContent isKindOfClass:[NSString class]]) {
+        self.content = rawContent;
+    } else if ([rawContent isKindOfClass:[NSDictionary class]] || [rawContent isKindOfClass:[NSArray class]]) {
+        // 服务端异常：content 是 JSON 对象，转为字符串显示
+        NSData *jsonData = [NSJSONSerialization dataWithJSONObject:rawContent options:NSJSONWritingPrettyPrinted error:nil];
+        self.content = jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : @"";
+    } else if (rawContent) {
+        self.content = [rawContent description];
+    } else {
+        self.content = @"";
+    }
     self.format = contentDic[@"format"]?:@"";
 }
 
@@ -34,6 +45,10 @@
 
 
 - (NSString *)conversationDigest {
+    // 防护：content 可能是非 NSString 类型（服务端数据异常）
+    if (self.content && ![self.content isKindOfClass:[NSString class]]) {
+        return @"";
+    }
     if([self.format isEqualToString:@"html"]) {
         NSRegularExpression *regularExpretion=[NSRegularExpression regularExpressionWithPattern:@"<[^>]*>|\n"
                                                 options:0

@@ -62,7 +62,37 @@
     if(extra && extra != [NSNull null]) {
         channelInfo.extra = [NSMutableDictionary dictionaryWithDictionary:extra];
     }
-    
+
+    // GROUP.md 状态：优先顶层字段，兜底 extra（与 Web 端对齐）
+    if (resultDict[@"has_group_md"]) {
+        channelInfo.extra[@"has_group_md"] = resultDict[@"has_group_md"];
+    }
+    if (resultDict[@"group_md_version"]) {
+        channelInfo.extra[@"group_md_version"] = resultDict[@"group_md_version"];
+    }
+    if (resultDict[@"has_thread_md"]) {
+        channelInfo.extra[@"has_thread_md"] = resultDict[@"has_thread_md"];
+    }
+    if (resultDict[@"thread_md_version"]) {
+        channelInfo.extra[@"thread_md_version"] = resultDict[@"thread_md_version"];
+    }
+    // ---------- 外部群 (External Group) Phase 1 ----------
+    // 外部群标识：来自 GroupResp.is_external_group（与 Web 端对齐）。NSNull 防御：仅接受 NSNumber/NSString。
+    id externalGroupRaw = resultDict[@"is_external_group"];
+    if([externalGroupRaw isKindOfClass:[NSNumber class]] || [externalGroupRaw isKindOfClass:[NSString class]]) {
+        channelInfo.extra[@"is_external_group"] = @([externalGroupRaw integerValue] == 1 ? 1 : 0);
+    }
+    // YUJ-27 allow_external: 是否允许邀请外部成员
+    id allowExternalRaw = resultDict[@"allow_external"];
+    if([allowExternalRaw isKindOfClass:[NSNumber class]] || [allowExternalRaw isKindOfClass:[NSString class]]) {
+        channelInfo.extra[@"allow_external"] = @([allowExternalRaw integerValue] == 1 ? 1 : 0);
+    }
+    // 群归属 space_id（客户端过滤兜底 — 策略 B：不完全信任后端 SetEffectiveSpaceID）
+    id spaceIdRaw = resultDict[@"space_id"];
+    if([spaceIdRaw isKindOfClass:[NSString class]] && [(NSString*)spaceIdRaw length] > 0) {
+        channelInfo.extra[@"space_id"] = spaceIdRaw;
+    }
+
     return channelInfo;
 }
 

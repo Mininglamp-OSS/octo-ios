@@ -126,13 +126,19 @@
 }
 
 -(void) searchTextChange:(NSString*)text {
+    // 防抖：取消上一次搜索排序，避免信号量并发释放崩溃
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(doSearch:) object:nil];
+    [self performSelector:@selector(doSearch:) withObject:text afterDelay:0.3];
+}
+
+-(void) doSearch:(NSString*)text {
     NSArray *data;
-    if([text isEqualToString:@""]) {
+    if(!text || [text isEqualToString:@""]) {
         data = self.data;
     }else {
         data = [self.data filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"name CONTAINS[c] %@ OR displayName CONTAINS[c] %@",text,text]];
     }
-    
+
     [self parseData:data];
 }
 
@@ -352,10 +358,13 @@
 
 #pragma mark UITableDataSource
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section{
-    return  self.items[section].count;;
+    if (section >= (NSInteger)self.items.count) return 0;
+    return  self.items[section].count;
 }
 -(UITableViewCell*) tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    
+    if (indexPath.section >= (NSInteger)self.items.count || indexPath.row >= (NSInteger)self.items[indexPath.section].count) {
+        return [tableView dequeueReusableCellWithIdentifier:[WKContactsSelectCell cellId]] ?: [[UITableViewCell alloc] init];
+    }
     id model =  self.items[indexPath.section][indexPath.row];
     WKContactsSelectCell *cell =  [tableView dequeueReusableCellWithIdentifier:[WKContactsSelectCell cellId]];
     WKContactsSelect *contactsSelectModel = (WKContactsSelect*)model;
@@ -400,6 +409,7 @@
     return self.sectionTitleArr.count;
 }
 -(void) tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath{
+    if (indexPath.section >= (NSInteger)self.items.count || indexPath.row >= (NSInteger)self.items[indexPath.section].count) return;
     WKContactsSelect *model =  self.items[indexPath.section][indexPath.row];
     if(model.mode == WKContactsModeSingle) {
         if(model && !model.disable) {

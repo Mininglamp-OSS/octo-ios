@@ -10,6 +10,7 @@
 #import "WKSearchbarView.h"
 #import "WKGlobalSearchResultController.h"
 #import "WKPCOnlineVC.h"
+#import "WKMySettingManager.h"
 #define networkErrorViewHeight 50.0f
 
 @interface WKConversationListHeaderView ()
@@ -47,14 +48,12 @@
 
 -(void) setupUI {
     [self addSubview:self.contentView];
-    
-    [self.searchbarBoxView addSubview:self.searchbarView];
-    [self.contentView addSubview:self.searchbarBoxView];
-    self.searchbarView.lim_centerX_parent = self.searchbarBoxView;
-    
+
+    // 搜索栏已移到固定头部，不再添加到 tableHeaderView
+
     _showEmpty = true;
     [self.contentView addSubview:self.tableHeaderBottomEmptyView];
-    
+
 }
 
 - (void)viewConfigChange:(WKViewConfigChangeType)type{
@@ -132,7 +131,7 @@
     UIView *preView;
     for (UIView *view in subviews) {
         if(!preView) {
-            view.lim_top = 10.0f;
+            view.lim_top = 0.0f;
         }else {
             view.lim_top = preView.lim_bottom;
         }
@@ -177,7 +176,7 @@
 
 - (UIView *)tableHeaderBottomEmptyView {
     if(!_tableHeaderBottomEmptyView) {
-        _tableHeaderBottomEmptyView = [[UIView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, WKScreenWidth, 10.0f)];
+        _tableHeaderBottomEmptyView = [[UIView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, WKScreenWidth, 0.0f)];
         [_tableHeaderBottomEmptyView setBackgroundColor:[UIColor whiteColor]];
     }
     return _tableHeaderBottomEmptyView;
@@ -187,7 +186,7 @@
 - (UIView *)searchbarBoxView {
     if(!_searchbarBoxView) {
         _searchbarBoxView = [[UIView alloc] init];
-        _searchbarBoxView.lim_size = CGSizeMake(self.searchbarView.bounds.size.width, self.searchbarView.bounds.size.height + 10.0f);
+        _searchbarBoxView.lim_size = CGSizeMake(self.searchbarView.bounds.size.width, self.searchbarView.bounds.size.height + 4.0f);
     }
     return _searchbarBoxView;
 }
@@ -212,7 +211,7 @@
 
 -(void) onPCOnlineTap {
     WKPCOnlineVC *vc = [WKPCOnlineVC new];
-    vc.mute = WKOnlineStatusManager.shared.muteOfApp;
+    vc.mute = [WKMySettingManager shared].muteOfApp;
     [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
 

@@ -16,7 +16,7 @@
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "71D6960223926E3500D092BA"
                BuildableName = "TangSengDaoDao.app"
-               BlueprintName = "TangSengDaoDaoiOS"
+               BlueprintName = "OctoiOS"
                ReferencedContainer = "container:TangSengDaoDaoiOS.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -46,7 +46,7 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "71D6960223926E3500D092BA"
             BuildableName = "TangSengDaoDao.app"
-            BlueprintName = "TangSengDaoDaoiOS"
+            BlueprintName = "OctoiOS"
             ReferencedContainer = "container:TangSengDaoDaoiOS.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -63,7 +63,7 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "71D6960223926E3500D092BA"
             BuildableName = "TangSengDaoDao.app"
-            BlueprintName = "TangSengDaoDaoiOS"
+            BlueprintName = "OctoiOS"
             ReferencedContainer = "container:TangSengDaoDaoiOS.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

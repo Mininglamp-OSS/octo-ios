@@ -57,6 +57,46 @@ NS_ASSUME_NONNULL_BEGIN
 
 
 
+//---------- 文件cell ----------
+
+@interface WKMergeForwardDetailFileModel : WKMergeForwardDetailModel
+
+@end
+
+@interface WKMergeForwardDetailFileCell : WKMergeForwardDetailCell
+
+@end
+
+//---------- 语音cell ----------
+
+@interface WKMergeForwardDetailVoiceModel : WKMergeForwardDetailModel
+
+@end
+
+@interface WKMergeForwardDetailVoiceCell : WKMergeForwardDetailCell
+
+@end
+
+//---------- 视频cell ----------
+
+@interface WKMergeForwardDetailVideoModel : WKMergeForwardDetailModel
+
+@end
+
+@interface WKMergeForwardDetailVideoCell : WKMergeForwardDetailCell
+
+@end
+
+//---------- 嵌套合并转发cell ----------
+
+@interface WKMergeForwardDetailNestedModel : WKMergeForwardDetailModel
+
+@end
+
+@interface WKMergeForwardDetailNestedCell : WKMergeForwardDetailCell
+
+@end
+
 //----------其他cell ----------
 
 @interface WKMergeForwardDetailOtherModel : WKMergeForwardDetailModel

@@ -140,7 +140,14 @@
 -(UIView*) memberAvatarView:(CGSize)size {
     
     WKUserAvatar *avatarView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, 54.0f,  54.0f)];
-    [avatarView setUrl:[WKAvatarUtil getFullAvatarWIthPath:[WKAvatarUtil getFullAvatarWIthPath:self.viewModel.channelInfo.logo]]];
+    NSString *key = (self.viewModel.channelInfo.avatarCacheKey.length > 0) ? self.viewModel.channelInfo.avatarCacheKey : @"0";
+    NSString *baseUrl;
+    if(self.viewModel.channelInfo.logo && ![self.viewModel.channelInfo.logo isEqualToString:@""]) {
+        baseUrl = [WKAvatarUtil getFullAvatarWIthPath:self.viewModel.channelInfo.logo];
+    } else {
+        baseUrl = [WKAvatarUtil getAvatar:self.channel.channelId];
+    }
+    [avatarView setUrl:[NSString stringWithFormat:@"%@?v=%@", baseUrl, key]];
     UIView *view = [[UIView alloc] initWithFrame:CGRectMake(0, 0, size.width, size.height)];
     [view addSubview:avatarView];
     avatarView.lim_left = view.lim_width/2.0f - avatarView.lim_width/2.0f;

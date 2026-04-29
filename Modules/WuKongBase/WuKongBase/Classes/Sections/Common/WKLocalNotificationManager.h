@@ -6,12 +6,16 @@
 //
 
 #import <Foundation/Foundation.h>
+#import <UserNotifications/UserNotifications.h>
 #import <WuKongIMSDK/WuKongIMSDK.h>
 NS_ASSUME_NONNULL_BEGIN
 
-@interface WKLocalNotificationManager : NSObject
+@interface WKLocalNotificationManager : NSObject <UNUserNotificationCenterDelegate>
 
 + (WKLocalNotificationManager *)shared;
+
+/// 注册为通知中心代理（在 App 启动时调用）
+-(void) registerAsNotificationDelegate;
 
 
 /// 显示本地通知

@@ -18,10 +18,12 @@
 #import "WKEmojiContentView.h"
 #import "WKUserHandleVC.h"
 #import "WKMultiplePanel.h"
-#import "WKConversationListSelectVC.h"
+#import "WKForwardSelectVC.h"
 #import "WKMergeForwardContent.h"
 #import "WKScreenshotContent.h"
 #import "WKConversationView+Robot.h"
+#import "WKVoiceInputView.h"
+#import "WKVoiceInputService.h"
 
 
 @interface WKConversationView ()<WKConversationInputPanelDelegate,WKMultiplePanelDelegate>
@@ -136,7 +138,9 @@
     if(self.inputParentView != self) {
         [self.inputParentView addSubview:self.input];
     }
-    
+
+    // 预取语音输入 config
+    [[WKVoiceInputService shared] prefetchConfig];
 }
 - (void)viewWillDisappear:(BOOL)animated {
     
@@ -150,14 +154,19 @@
     }
     
     [self.messageListView viewWillDisappear];
-    
+
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"WKConversationViewWillDisappear" object:nil];
+
     [self saveDraftOrKeepPosition];
     
     [self requestSetUnreadIfNeed];
     if(self.inputParentView != self) {
         [self.input removeFromSuperview];
     }
-    
+
+    // 取消语音输入录音
+    [[NSNotificationCenter defaultCenter] postNotificationName:WKVoiceInputCancelRecordingNotification
+                                                        object:self];
 }
 -(void) viewDidDisappear {
     // 截屏通知
@@ -238,7 +247,7 @@
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    
+
     self.forbiddenView.lim_top = self.inputParentView.lim_height;
     self.multiplePanel.lim_top = self.inputParentView.lim_height;
     
@@ -297,8 +306,9 @@
 }
 
 
-// 用户截屏
+// 用户截屏：抑制本次 scrollToBottom，不打断用户阅读位置
 -(void) userDidTakeScreenshot {
+    [self.messageListView suppressScrollOnce];
     [self.conversationContext sendMessage:WKScreenshotContent.new];
 }
 
@@ -311,12 +321,22 @@
     if(self.messageListView.lastMessage) {
         messageSeq = self.messageListView.lastMessage.messageSeq;
     }
-    if(self.messageListView.browseToOrderSeq == 0 && self.messageListView.newMsgCount>0) { // lastMessageSeq为0 要么就是自己发送中的消息，要么就是本地插入的消息，此时
-        [[WKMessageManager shared] conversationSetUnread:self.channel unread:0 messageSeq:messageSeq complete:nil];
-    }else if(conversation.unreadCount != self.messageListView.newMsgCount) {
-        [[WKMessageManager shared] conversationSetUnread:self.channel unread:self.messageListView.newMsgCount messageSeq:messageSeq complete:nil];
-    }else if(self.messageListView.hasRecvMsg) {
-        [[WKMessageManager shared] conversationSetUnread:self.channel unread:self.messageListView.newMsgCount messageSeq:messageSeq complete:nil];
+    NSInteger newUnread = self.messageListView.newMsgCount;
+    NSInteger targetUnread = -1;
+    if(self.messageListView.browseToOrderSeq == 0 && newUnread > 0) {
+        targetUnread = 0;
+    } else if(conversation.unreadCount != newUnread) {
+        targetUnread = newUnread;
+    } else if(self.messageListView.hasRecvMsg) {
+        targetUnread = newUnread;
+    }
+    if(targetUnread >= 0) {
+        [[WKMessageManager shared] conversationSetUnread:self.channel unread:targetUnread messageSeq:messageSeq complete:nil];
+        // 同步更新本地 DB，防止 loadConversationList: 从 DB 重新加载时覆盖内存中已清零的未读数
+        // 根因：大量机器人消息（如 100 条子区创建消息）造成 unreadCount=100，
+        // 用户进入会话已阅读，但 WebSocket 重连等场景触发 loadConversationList: 从旧 DB 重载，
+        // 导致会话列表红点复现并无法消除
+        [[WKSDK shared].conversationManager setConversationUnreadCount:self.channel unread:targetUnread];
     }
 }
 
@@ -778,34 +798,40 @@
 
 // 逐条转发
 -(void) multipActionForward {
-    WKConversationListSelectVC *vc = [WKConversationListSelectVC new];
-    vc.title = LLang(@"选择一个聊天");
+    WKForwardSelectVC *vc = [WKForwardSelectVC new];
+    vc.title = LLang(@"选择聊天");
+    vc.singleSelectMode = YES;
     NSArray *selectedMessages = [self.messageListView getSelectedMessages];
     __weak typeof(self) weakSelf = self;
-    [vc setOnSelect:^(WKChannel * _Nonnull channel) {
-        [[WKNavigationManager shared] popToViewController:weakSelf.lim_viewController animated:YES];
-        for (WKMessageModel *messageModel  in selectedMessages) {
-            if([[WKApp shared] allowMessageForward:messageModel.contentType]) { // 如果允许转发则直接转发
+    [vc setOnSingleConfirm:^(WKChannel *channel, NSString *extraText) {
+        // ForwardSelectVC 确认后会自动 pop，这里不再重复 pop
+        for (WKMessageModel *messageModel in selectedMessages) {
+            if([[WKApp shared] allowMessageForward:messageModel.contentType]) {
                 if([weakSelf.channel isEqual:channel]) {
                     [weakSelf.conversationContext forwardMessage:messageModel.content];
-                }else{
+                } else {
                     [[WKSDK shared].chatManager forwardMessage:messageModel.content channel:channel];
                 }
-                
-            }else{ // 如果不允许转发，则将变成文本消息转发
+            } else {
                 WKTextContent *textContent = [[WKTextContent alloc] initWithContent:[messageModel.content conversationDigest]];
                 if([weakSelf.channel isEqual:channel]) {
                     [weakSelf.conversationContext forwardMessage:textContent];
-                }else{
+                } else {
                     [[WKSDK shared].chatManager forwardMessage:textContent channel:channel];
                 }
-                
             }
-           
+        }
+        if (extraText.length > 0) {
+            if([weakSelf.channel isEqual:channel]) {
+                WKTextContent *tc = [[WKTextContent alloc] initWithContent:extraText];
+                [weakSelf.conversationContext forwardMessage:tc];
+            } else {
+                WKTextContent *tc = [[WKTextContent alloc] initWithContent:extraText];
+                [[WKSDK shared].chatManager forwardMessage:tc channel:channel];
+            }
         }
         [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送成功")];
         [weakSelf setMultipleOn:NO];
-        
     }];
     [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
@@ -813,15 +839,16 @@
 // 合并转发
 -(void) multipActionMergeForward {
     __weak typeof(self) weakSelf = self;
-    WKConversationListSelectVC *vc = [WKConversationListSelectVC new];
-    vc.title = LLang(@"选择一个聊天");
+    WKForwardSelectVC *vc = [WKForwardSelectVC new];
+    vc.title = LLang(@"选择聊天");
+    vc.singleSelectMode = YES;
     NSArray *selectedMessages = [self.messageListView getSelectedMessages];
-    [vc setOnSelect:^(WKChannel * _Nonnull channel) {
-        [[WKNavigationManager shared] popToViewController:weakSelf.lim_viewController animated:YES];
-        
+    [vc setOnSingleConfirm:^(WKChannel *channel, NSString *extraText) {
+        // ForwardSelectVC 确认后会自动 pop，这里不再重复 pop
+
         NSMutableArray *msgs = [NSMutableArray array];
         NSMutableArray<NSDictionary*> *userDicts = [NSMutableArray array];
-        for (WKMessageModel *messageModel  in selectedMessages) {
+        for (WKMessageModel *messageModel in selectedMessages) {
             [msgs addObject:messageModel.message];
             bool hasUser = false;
             for (NSDictionary *userDict in userDicts) {
@@ -835,26 +862,29 @@
                 [userDicts addObject:@{@"uid":messageModel.fromUid?:@"",@"name":name}];
             }
         }
-        [msgs sortUsingComparator:^NSComparisonResult(WKMessageModel  *obj1, WKMessageModel *obj2) {
-            if(obj1.timestamp<obj2.timestamp) {
-                return NSOrderedAscending;
-            }
-            if(obj1.timestamp == obj2.timestamp) {
-                return NSOrderedSame;
-            }
+        [msgs sortUsingComparator:^NSComparisonResult(WKMessageModel *obj1, WKMessageModel *obj2) {
+            if(obj1.timestamp<obj2.timestamp) return NSOrderedAscending;
+            if(obj1.timestamp == obj2.timestamp) return NSOrderedSame;
             return NSOrderedDescending;
         }];
-        
+
         WKMergeForwardContent *content = [WKMergeForwardContent msgs:msgs users:userDicts channelType:weakSelf.channel.channelType];
         if([weakSelf.channel isEqual:channel]) {
             [weakSelf.conversationContext sendMessage:content];
-        }else {
+        } else {
             [[WKSDK shared].chatManager sendMessage:content channel:channel];
         }
-       
+        if (extraText.length > 0) {
+            if([weakSelf.channel isEqual:channel]) {
+                WKTextContent *tc = [[WKTextContent alloc] initWithContent:extraText];
+                [weakSelf.conversationContext forwardMessage:tc];
+            } else {
+                WKTextContent *tc = [[WKTextContent alloc] initWithContent:extraText];
+                [[WKSDK shared].chatManager forwardMessage:tc channel:channel];
+            }
+        }
         [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送成功")];
         [weakSelf setMultipleOn:NO];
-        
     }];
     [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }

@@ -20,6 +20,8 @@
 #import "WKMediaManager.h"
 #import "WKConversationDB.h"
 #import "WKConversationUtil.h"
+#import "WKReminderDB.h"
+#import "WKReminderManager.h"
 #import "WKUUIDUtil.h"
 #import "WKMOSContentConvertManager.h"
 #import "WKMediaUtil.h"
@@ -767,9 +769,22 @@
             lastMessageUnreadModel.incUnreadCount += 1;
         }
     }
-    //    if(!message.isSend && message.header.showUnread && message.content.mentionedInfo && message.content.mentionedInfo.isMentionedMe) { // 是否是@我
-    //        [lastMessageUnreadModel.reminderManager appendReminder:[WKReminder initWithType:WKReminderTypeMentionMe text:@"[有人@我]" data:@{}]];
-    //    }
+    // 客户端检测@所有人，创建本地reminder（服务端只为@具体用户创建reminder，@所有人需要客户端补偿）
+    if(![message isSend] && message.header.showUnread && message.content.mentionedInfo && message.content.mentionedInfo.type == WK_Mentioned_All) {
+        WKReminder *reminder = [[WKReminder alloc] init];
+        reminder.reminderID = (int64_t)message.messageId; // 用messageId作为reminderID避免重复
+        reminder.messageId = message.messageId;
+        reminder.messageSeq = message.messageSeq;
+        reminder.channel = message.channel;
+        reminder.type = WKReminderTypeMentionMe;
+        reminder.text = @"[有人@我]";
+        reminder.publisher = message.fromUid ?: @"";
+        reminder.isLocate = YES;
+        reminder.done = NO;
+        reminder.version = 0;
+        [[WKReminderDB shared] addOrUpdates:@[reminder]];
+        [[WKReminderManager shared] updateConversations:[NSSet setWithObject:message.channel]];
+    }
     return lastMessageUnreadModel;
 }
 

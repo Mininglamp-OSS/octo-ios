@@ -11,6 +11,7 @@
 #import "WKMultiLabelItemCell.h"
 #import "WKForbiddenSpeakTimeSelectVC.h"
 #import "WKCountdownFormItemCell.h"
+#import "WKExternalViewerResolver.h"
 
 
 @interface UserModel : WKModel
@@ -366,12 +367,42 @@
         };
     } category:WKPOINT_CATEGORY_USER_INFO_ITEM sort:1000];
     
-    // 来源
+    // 来源 — 群内外部成员显示 home_space_name（YUJ-93 viewer-relative）
+    // 优先级：群内 memberOfUser.extra 的 viewer-relative 判定 →
+    //         个人详情的 channelInfo.extra[@"source_desc"]（旧兼容）
+    // 自己查自己 / 同 Space / 没有 sourceSpaceName → 整行隐藏
     [[WKApp shared] setMethod:@"user.info.source" handler:^id _Nullable(id  _Nonnull param) {
         NSString *uid = param[@"uid"];
         if([uid isEqualToString:[WKApp shared].loginInfo.uid]) {
             return nil;
         }
+        // 群内路径优先：取 memberOfUser.extra 走 viewer-relative 判定
+        WKChannelMember *memberOfUser = param[@"memberOfUser"];
+        if(memberOfUser && memberOfUser.extra) {
+            NSString *viewerSpaceId = [WKExternalViewerResolver currentViewerSpaceId];
+            WKExternalResolveResult *ext = [WKExternalViewerResolver resolveFromExtras:memberOfUser.extra
+                                                                         viewerSpaceId:viewerSpaceId];
+            if(ext.isExternal && ext.sourceSpaceName.length > 0) {
+                return @{
+                    @"height":@(10.0f),
+                    @"items":@[
+                            @{
+                                @"class":WKMultiLabelItemModel.class,
+                                @"mode": @(WKMultiLabelItemModeLeftRight),
+                                @"label":LLang(@"来源"),
+                                @"value": ext.sourceSpaceName,
+                            },
+                    ],
+                };
+            }
+            // 有 home_space_id 可判定但非外部（同 Space）→ 不回落到 source_desc，
+            // 行为对齐 web PR #976：同 Space 整行隐藏。
+            id homeSpaceIdRaw = memberOfUser.extra[WKExternalExtrasKeyHomeSpaceId];
+            if([homeSpaceIdRaw isKindOfClass:[NSString class]] && [(NSString*)homeSpaceIdRaw length] > 0) {
+                return nil;
+            }
+        }
+        // 非群上下文降级到旧的 user.source_desc
         WKChannelInfo *channelInfo = param[@"channel_info"];
         if(!channelInfo || (!channelInfo.extra[@"source_desc"] || [channelInfo.extra[@"source_desc"] isEqualToString:@""])) {
             return  nil;

@@ -204,6 +204,64 @@
     return self.message.extra;
 }
 
+#pragma mark - External Group (Phase 1) 消息级 getter
+
+// 发送者是否为外部成员：优先读 message.extra[@"from_is_external"]（来自后端消息顶层字段），
+// 若缺失则回落到 memberOfFrom.extra[@"is_external"]（来自 group 成员同步时写入的 extra）。
+// 这样即使服务端某条路径忘记填 from_is_external，iOS 仍能用 groupmember 的 is_external 兜底，避免 UI 静默失败。
+- (BOOL)fromIsExternal {
+    id v = self.message.extra[@"from_is_external"];
+    if([v isKindOfClass:[NSNumber class]] || [v isKindOfClass:[NSString class]]) {
+        return [v integerValue] == 1;
+    }
+    // 兜底：读 memberOfFrom.extra[@"is_external"]
+    WKChannelMember *m = self.message.memberOfFrom;
+    id mv = m.extra[@"is_external"];
+    if([mv isKindOfClass:[NSNumber class]] || [mv isKindOfClass:[NSString class]]) {
+        return [mv integerValue] == 1;
+    }
+    return NO;
+}
+
+- (NSString *)fromSourceSpaceName {
+    id v = self.message.extra[@"from_source_space_name"];
+    if([v isKindOfClass:[NSString class]] && [(NSString*)v length] > 0) {
+        return v;
+    }
+    WKChannelMember *m = self.message.memberOfFrom;
+    id mv = m.extra[@"source_space_name"];
+    if([mv isKindOfClass:[NSString class]] && [(NSString*)mv length] > 0) {
+        return mv;
+    }
+    return nil;
+}
+
+- (NSString *)fromHomeSpaceId {
+    id v = self.message.extra[@"from_home_space_id"];
+    if([v isKindOfClass:[NSString class]] && [(NSString*)v length] > 0) {
+        return v;
+    }
+    WKChannelMember *m = self.message.memberOfFrom;
+    id mv = m.extra[@"home_space_id"];
+    if([mv isKindOfClass:[NSString class]] && [(NSString*)mv length] > 0) {
+        return mv;
+    }
+    return nil;
+}
+
+- (NSString *)fromHomeSpaceName {
+    id v = self.message.extra[@"from_home_space_name"];
+    if([v isKindOfClass:[NSString class]] && [(NSString*)v length] > 0) {
+        return v;
+    }
+    WKChannelMember *m = self.message.memberOfFrom;
+    id mv = m.extra[@"home_space_name"];
+    if([mv isKindOfClass:[NSString class]] && [(NSString*)mv length] > 0) {
+        return mv;
+    }
+    return nil;
+}
+
 - (BOOL)readed {
     return self.message.remoteExtra.readed;
 }

@@ -8,6 +8,7 @@
 #import "WKMemberCell.h"
 #import "WuKongBase.h"
 #import "WKOnlineBadgeView.h"
+#import "WKExternalViewerResolver.h"
 @interface WKMemberCell ()<WKCheckBoxDelegate>
 
 @property(nonatomic,strong) WKUserAvatar *avatar;
@@ -18,6 +19,8 @@
 
 @property(nonatomic,strong) WKOnlineBadgeView *onlineBadgeView;
 
+@property(nonatomic,strong) UILabel *botBadgeLbl; // AI标识
+
 @property(nonatomic,strong) WKUserOnlineResp *online;
 
 @end
@@ -26,22 +29,50 @@
 
 - (void)setupUI {
     [super setupUI];
-    
+
     [self.contentView addSubview:self.checkBox];
     [self.contentView addSubview:self.avatar];
     [self.contentView addSubview:self.nameLbl];
+    [self.contentView addSubview:self.botBadgeLbl];
     [self.avatar addSubview:self.onlineBadgeView];
 }
 
 - (void)refresh:(WKChannelMember*)member checkOn:(BOOL)checkOn online:(WKUserOnlineResp*)online{
     self.online = online;
-    self.nameLbl.text = [self getName:member];
-    
+
+    // v2 外部群：昵称后追加灰色「@SpaceName」内联后缀（YUJ-66 / web PR #1013 对齐）
+    // 取代 v1 紫色「外部」Tag + 「来自 XX」副标题。判定走 viewer-relative。
+    NSString *baseName = [self getName:member] ?: @"";
+    NSString *viewerSpaceId = [WKExternalViewerResolver currentViewerSpaceId];
+    WKExternalResolveResult *ext = [WKExternalViewerResolver resolveFromExtras:member.extra
+                                                                 viewerSpaceId:viewerSpaceId];
+    NSString *suffix = @"";
+    if (ext.isExternal && ext.sourceSpaceName.length > 0) {
+        // 自己查自己豁免：群成员列表里自己也可能显示 @Space，但当前用户与
+        // home=当前 viewerSpaceId 匹配时 isExternal 已是 NO；无需额外判定。
+        // viewerSpaceId 为空（未选空间）时 resolver 返回 isExternal=YES，但
+        // 这种场景 sourceSpaceName 仍可显示，语义与 web 一致。
+        suffix = [NSString stringWithFormat:@" @%@", ext.sourceSpaceName];
+    }
+    if (suffix.length > 0) {
+        NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:baseName
+                                                                                attributes:@{NSFontAttributeName: self.nameLbl.font ?: [[WKApp shared].config appFontOfSize:16.0f],
+                                                                                             NSForegroundColorAttributeName: [WKApp shared].config.defaultTextColor ?: [UIColor blackColor]}];
+        UIColor *suffixColor = [UIColor colorWithRed:153.0f/255.0f green:153.0f/255.0f blue:153.0f/255.0f alpha:1.0f];
+        [attr appendAttributedString:[[NSAttributedString alloc] initWithString:suffix
+                                                                     attributes:@{NSFontAttributeName: [[WKApp shared].config appFontOfSize:14.0f],
+                                                                                  NSForegroundColorAttributeName: suffixColor}]];
+        self.nameLbl.attributedText = attr;
+    } else {
+        self.nameLbl.attributedText = nil;
+        self.nameLbl.text = baseName;
+    }
+
     self.avatar.url =  [WKApp.shared getImageFullUrl:member.memberAvatar].absoluteString;
-    
+
     self.checkBox.hidden = !self.edit;
     self.checkBox.on = checkOn;
-    
+
     [self.checkBox setEnabled:YES];
     if(self.disable) {
         [self.checkBox setEnabled:NO];
@@ -49,8 +80,18 @@
     }else{
         self.contentView.alpha = 1.0f;
     }
-    
-    
+
+
+    // AI标识
+    self.botBadgeLbl.hidden = !member.robot;
+    if(member.robot) {
+        [self.botBadgeLbl sizeToFit];
+        CGRect frame = self.botBadgeLbl.frame;
+        frame.size.width += 8.0f;
+        frame.size.height += 4.0f;
+        self.botBadgeLbl.frame = frame;
+    }
+
     self.onlineBadgeView.hidden = YES;
     if(online) {
         if(!online.online) {
@@ -88,7 +129,7 @@
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    
+
     CGFloat leftSpace = 15.0f;
     CGFloat checkBoxRight = 0.0f;
     if(!self.checkBox.hidden) {
@@ -99,11 +140,27 @@
 
     self.avatar.lim_left = checkBoxRight + leftSpace;
     self.avatar.lim_centerY_parent = self.contentView;
-    
+
+    // v2 单行布局：昵称+「 @SpaceName」后缀已内联在 nameLbl.attributedText 里
     self.nameLbl.lim_left = self.avatar.lim_right + leftSpace;
     self.nameLbl.lim_height = self.contentView.lim_height;
+    self.nameLbl.lim_top = 0.0f;
     self.nameLbl.lim_width = self.contentView.lim_width - self.nameLbl.lim_left - 40.0f;
-    
+
+    // 名字右侧的 AI badge
+    CGFloat textWidth = 0.0f;
+    if (self.nameLbl.attributedText.length > 0) {
+        textWidth = [self.nameLbl.attributedText size].width;
+    } else if(self.nameLbl.text.length > 0 && self.nameLbl.font) {
+        textWidth = [self.nameLbl.text sizeWithAttributes:@{NSFontAttributeName: self.nameLbl.font}].width;
+    }
+    CGFloat badgeLeft = self.nameLbl.lim_left + MIN(textWidth, self.nameLbl.lim_width) + 6.0f;
+    CGFloat badgeCenterY = self.contentView.lim_height / 2.0f;
+    if(!self.botBadgeLbl.hidden) {
+        self.botBadgeLbl.lim_left = badgeLeft;
+        self.botBadgeLbl.lim_top = badgeCenterY - self.botBadgeLbl.lim_height / 2.0f;
+    }
+
     // 在线标记
     if(self.online && self.online.online) {
         self.onlineBadgeView.lim_left = self.avatar.lim_width - self.onlineBadgeView.lim_width;
@@ -133,6 +190,21 @@
         _nameLbl.font = [WKApp.shared.config appFontOfSize:16.0f];
     }
     return _nameLbl;
+}
+
+- (UILabel *)botBadgeLbl {
+    if(!_botBadgeLbl) {
+        _botBadgeLbl = [[UILabel alloc] init];
+        _botBadgeLbl.text = @"AI";
+        _botBadgeLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
+        _botBadgeLbl.textColor = [UIColor whiteColor];
+        _botBadgeLbl.backgroundColor = [UIColor colorWithRed:136.0f/255.0f green:84.0f/255.0f blue:208.0f/255.0f alpha:1.0f];
+        _botBadgeLbl.textAlignment = NSTextAlignmentCenter;
+        _botBadgeLbl.layer.cornerRadius = 4.0f;
+        _botBadgeLbl.layer.masksToBounds = YES;
+        _botBadgeLbl.hidden = YES;
+    }
+    return _botBadgeLbl;
 }
 
 - (WKCheckBox *)checkBox {

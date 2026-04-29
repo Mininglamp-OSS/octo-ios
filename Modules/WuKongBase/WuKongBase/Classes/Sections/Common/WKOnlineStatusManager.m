@@ -9,6 +9,7 @@
 #import "WKAPIClient.h"
 #import "WKApp.h"
 #import "WuKongBase.h"
+#import "WKMySettingManager.h"
 @class WKOnlineStatusResp;
 @interface WKOnlineStatusManager ()<WKConnectionManagerDelegate>
 
@@ -51,8 +52,11 @@ static WKOnlineStatusManager *_instance = nil;
 
 - (BOOL)pcOnline {
     if(self.friendAndMyDeviceOnlineStatusResp && self.friendAndMyDeviceOnlineStatusResp.pc) {
-        return self.friendAndMyDeviceOnlineStatusResp.pc.online;
+        BOOL val = self.friendAndMyDeviceOnlineStatusResp.pc.online;
+        NSLog(@"[PCDebug] pcOnline getter: %d (from friendAndMyDeviceOnlineStatusResp.pc)", val);
+        return val;
     }
+    NSLog(@"[PCDebug] pcOnline getter: false (friendAndMyDeviceOnlineStatusResp.pc is nil)");
     return false;
 }
 - (WKDeviceFlagEnum)pcDeviceFlag {
@@ -105,13 +109,18 @@ static WKOnlineStatusManager *_instance = nil;
            
         }
        
+        NSLog(@"[PCDebug] API user/online response: pc=%@, pc.online=%d", onlineStatusResp.pc ? @"exists" : @"nil", onlineStatusResp.pc ? onlineStatusResp.pc.online : -1);
         if(onlineStatusResp.pc) {
+            NSLog(@"[PCDebug] PC exists, setting pcOnline=%d", onlineStatusResp.pc.online);
             weakSelf.pcOnline = onlineStatusResp.pc.online;
-            weakSelf.muteOfApp = onlineStatusResp.pc.muteOfApp;
+            // 不从服务端覆盖 muteOfApp，静音状态由本地 NSUserDefaults 独立管理
             [weakSelf callOnlineStatusChangeMyPCOnlineStatusDelegate:onlineStatusResp.pc];
         }else {
+            NSLog(@"[PCDebug] PC is nil, setting pcOnline=false");
             weakSelf.pcOnline = false;
             weakSelf.muteOfApp = false;
+            // PC离线时清除本地静音设置
+            [[WKMySettingManager shared] saveMuteOfAppLocally:NO];
             // 服务器未返回pc字段时，也需要通知UI更新为离线状态
             WKPCOnlineResp *offlineResp = [WKPCOnlineResp new];
             offlineResp.online = NO;
@@ -285,7 +294,7 @@ static WKOnlineStatusManager *_instance = nil;
     if(dictory[@"device_flag"]) {
         resp.deviceFlag = [dictory[@"device_flag"] integerValue];
     }
-    
+
     resp.muteOfApp = [dictory[@"mute_of_app"] boolValue];
     return resp;
 }

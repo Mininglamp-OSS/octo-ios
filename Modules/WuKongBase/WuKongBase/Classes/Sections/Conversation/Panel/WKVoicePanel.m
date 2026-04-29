@@ -11,11 +11,17 @@
 #import "CWFlieManager.h"
 #import "CWRecorder.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
+#import <WuKongIMSDK/WKChannelMemberDB.h>
 #import "CWRecordModel.h"
+#import "CWSpeechToTextView.h"
+#import "WKVoiceInputView.h"
+#import "WKVoiceInputViewDelegate.h"
+#import "WKVoiceInputService.h"
+#import "WKInputMentionCache.h"
 
 #define MAXWaveformNum 30
 
-@interface WKVoicePanel ()<CWTalkBackViewDelegate,CWAudioPlayViewDelegate,CWRecordViewDelegate,CWVoiceChangePlayViewDelegate>
+@interface WKVoicePanel ()<CWTalkBackViewDelegate,CWAudioPlayViewDelegate,CWSpeechToTextViewDelegate,CWVoiceChangePlayViewDelegate,WKVoiceInputViewDelegate>
 @property(nonatomic,strong) CWVoiceView *voiceView;
 @end
 
@@ -31,16 +37,20 @@
 -(void) layoutPanel:(CGFloat)height {
     [super layoutPanel:height];
     if(!_voiceView) {
-        _voiceView = [[CWVoiceView alloc] initWithFrame:CGRectMake(0, 0,WKScreenWidth, height)];
+        WKVoiceInputConfig *config = [WKVoiceInputService shared].cachedConfig;
+        BOOL enabled = config ? config.enabled : YES; // optimistic default
+
+        _voiceView = [[CWVoiceView alloc] initWithFrame:CGRectMake(0, 0, WKScreenWidth, height)];
+        _voiceView.voiceInputEnabled = enabled;
         _voiceView.talkBackViewDelegate = self;
         _voiceView.playViewDelegate = self;
         _voiceView.voiceChangePlayDelegate = self;
-        _voiceView.voiceRecordViewDelegate = self;
+        _voiceView.speechToTextDelegate = self;
+        _voiceView.voiceInputDelegate = self;
         [_voiceView setupSubViews];
         [_voiceView setBackgroundColor:[WKApp shared].config.backgroundColor];
         [self.contentView addSubview:_voiceView];
     }
-    
     _voiceView.frame = self.contentView.bounds;
 }
 
@@ -74,6 +84,273 @@
     if(voiceData) {
         [self sendVoiceMessage:voiceData second:second waveform:[CWRecordModel shareInstance].levels];
         [CWFlieManager removeFile:path];
+    }
+}
+
+#pragma mark - CWSpeechToTextViewDelegate
+
+- (void)speechToTextViewDidBeginRecording:(CWSpeechToTextView *)view {
+    [self.context startRecordingVoiceMessage];
+}
+
+- (void)speechToTextView:(CWSpeechToTextView *)view didRecognizeText:(NSString *)text {
+    if (text.length > 0) {
+        [self.context sendTextMessage:text];
+    }
+}
+
+- (void)speechToTextView:(CWSpeechToTextView *)view didRecognizeTextForInput:(NSString *)text {
+    if (text.length > 0) {
+        [self.context inputInsertText:text];
+    }
+}
+
+#pragma mark - WKVoiceInputViewDelegate
+
+- (void)voiceInputDidTranscribe:(NSString *)text shouldReplace:(BOOL)shouldReplace {
+    if (shouldReplace) {
+        if ([self.context respondsToSelector:@selector(inputSetText:)]) {
+            [self.context inputSetText:text];
+        }
+    } else {
+        if ([self.context respondsToSelector:@selector(inputInsertText:)]) {
+            [self.context inputInsertText:text];
+        }
+    }
+}
+
+- (void)voiceInputInsertText:(NSString *)text {
+    if ([text isEqualToString:@"@"]) {
+        if ([self.context respondsToSelector:@selector(inputInsertText:)]) {
+            [self.context inputInsertText:@"@"];
+        }
+        if ([self.context respondsToSelector:@selector(showMentionUsers)]) {
+            [self.context showMentionUsers];
+        }
+    } else {
+        if ([self.context respondsToSelector:@selector(inputInsertText:)]) {
+            [self.context inputInsertText:text];
+        }
+    }
+}
+
+- (void)voiceInputDeleteBackward {
+    if (![self.context respondsToSelector:@selector(inputSelectedRange)]) return;
+    NSRange selectedRange = [self.context inputSelectedRange];
+
+    if (selectedRange.length > 0) {
+        if ([self.context respondsToSelector:@selector(inputDeleteText:)]) {
+            [self.context inputDeleteText:selectedRange];
+        }
+    } else if (selectedRange.location > 0) {
+        if ([self.context respondsToSelector:@selector(inputText)]) {
+            NSString *text = [self.context inputText];
+            NSRange charRange = [text rangeOfComposedCharacterSequenceAtIndex:selectedRange.location - 1];
+            if ([self.context respondsToSelector:@selector(inputDeleteText:)]) {
+                [self.context inputDeleteText:charRange];
+            }
+        }
+    }
+}
+
+- (NSString *)voiceInputCurrentText {
+    if ([self.context respondsToSelector:@selector(inputText)]) {
+        return [self.context inputText];
+    }
+    return nil;
+}
+
+- (NSString *)voiceInputChatContext {
+    NSMutableArray<NSString*> *parts = [NSMutableArray array];
+    NSString *myUid = [WKApp shared].loginInfo.uid;
+    WKChannel *channel = self.context.channel;
+
+    // === 第一部分：聊天成员名单（与Web端 buildChatContext 对齐）===
+    NSMutableArray<NSString*> *memberNames = [NSMutableArray array];
+    NSMutableSet<NSString*> *uniqueNames = [NSMutableSet set];
+
+    if (channel.channelType == WK_GROUP || channel.channelType == WK_COMMUNITY_TOPIC) {
+        // 群聊/子区：从DB读取群成员（子区用父群的成员）
+        WKChannel *memberChannel = channel;
+        if (channel.channelType == WK_COMMUNITY_TOPIC) {
+            WKChannel *parent = [self parentGroupChannel:channel];
+            if (parent) memberChannel = parent;
+        }
+        NSArray<WKChannelMember*> *members = [[WKChannelMemberDB shared] getMembersWithChannel:memberChannel];
+        if (members.count <= 100) {
+            // 小群：收集所有成员
+            for (WKChannelMember *member in members) {
+                if ([member.memberUid isEqualToString:myUid]) continue;
+                if (member.status != WKMemberStatusNormal) continue;
+                WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfoOfUser:member.memberUid];
+                if (info) {
+                    NSString *name = info.name;
+                    if (name.length > 0 && ![uniqueNames containsObject:name]) {
+                        [uniqueNames addObject:name];
+                        [memberNames addObject:name];
+                    }
+                    NSString *remark = info.remark;
+                    if (remark.length > 0 && ![remark isEqualToString:name] && ![uniqueNames containsObject:remark]) {
+                        [uniqueNames addObject:remark];
+                        [memberNames addObject:remark];
+                    }
+                }
+            }
+        } else {
+            // 大群(>100人)：只收集最后100条消息中的活跃成员
+            NSMutableArray<WKMessageModel*> *allMsgs = [NSMutableArray array];
+            for (NSString *date in [self.context dates]) {
+                NSArray<WKMessageModel*> *msgs = [self.context messagesAtDate:date];
+                if (msgs) [allMsgs addObjectsFromArray:msgs];
+            }
+            NSMutableOrderedSet<NSString*> *activeUids = [NSMutableOrderedSet orderedSet];
+            for (NSInteger i = allMsgs.count - 1; i >= 0 && activeUids.count < 100; i--) {
+                NSString *uid = allMsgs[i].fromUid;
+                if (uid.length > 0 && ![uid isEqualToString:myUid]) {
+                    [activeUids addObject:uid];
+                }
+            }
+            for (NSString *uid in activeUids) {
+                WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfoOfUser:uid];
+                if (info) {
+                    NSString *name = info.name;
+                    if (name.length > 0 && ![uniqueNames containsObject:name]) {
+                        [uniqueNames addObject:name];
+                        [memberNames addObject:name];
+                    }
+                    NSString *remark = info.remark;
+                    if (remark.length > 0 && ![remark isEqualToString:name] && ![uniqueNames containsObject:remark]) {
+                        [uniqueNames addObject:remark];
+                        [memberNames addObject:remark];
+                    }
+                }
+            }
+        }
+    } else if (channel.channelType == WK_PERSON) {
+        // 单聊：使用对方的名称和备注
+        WKChannelInfo *peerInfo = [[WKSDK shared].channelManager getChannelInfo:channel];
+        if (peerInfo) {
+            if (peerInfo.name.length > 0 && ![uniqueNames containsObject:peerInfo.name]) {
+                [uniqueNames addObject:peerInfo.name];
+                [memberNames addObject:peerInfo.name];
+            }
+            if (peerInfo.remark.length > 0 && ![peerInfo.remark isEqualToString:peerInfo.name] && ![uniqueNames containsObject:peerInfo.remark]) {
+                [uniqueNames addObject:peerInfo.remark];
+                [memberNames addObject:peerInfo.remark];
+            }
+        }
+    }
+
+    if (memberNames.count > 0) {
+        [parts addObject:[NSString stringWithFormat:@"聊天成员：%@", [memberNames componentsJoinedByString:@","]]];
+    }
+
+    // === 第二部分：最后10条消息 ===
+    NSMutableArray<WKMessageModel*> *allMessages = [NSMutableArray array];
+    for (NSString *date in [self.context dates]) {
+        NSArray<WKMessageModel*> *msgs = [self.context messagesAtDate:date];
+        if (msgs) [allMessages addObjectsFromArray:msgs];
+    }
+
+    // 过滤文本类型消息
+    NSMutableArray<WKMessageModel*> *textMessages = [NSMutableArray array];
+    for (WKMessageModel *msg in allMessages) {
+        NSString *content = msg.content.contentDict[@"content"];
+        if (content.length > 0 && (msg.contentType == WK_TEXT || msg.content.contentDict[@"type"])) {
+            [textMessages addObject:msg];
+        }
+    }
+
+    if (textMessages.count > 0) {
+        NSInteger count = MIN(textMessages.count, 10);
+        NSArray<WKMessageModel*> *recentMessages = [textMessages subarrayWithRange:NSMakeRange(textMessages.count - count, count)];
+
+        NSMutableArray<NSString*> *msgLines = [NSMutableArray array];
+        for (WKMessageModel *msg in recentMessages) {
+            NSString *text = msg.content.contentDict[@"content"];
+            NSString *name = nil;
+            WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfoOfUser:msg.fromUid];
+            if (info) {
+                name = info.displayName;
+            }
+            if (!name || name.length == 0) {
+                name = msg.fromUid;
+            }
+            [msgLines addObject:[NSString stringWithFormat:@"[%@]: %@", name, text]];
+        }
+        [parts addObject:[msgLines componentsJoinedByString:@"\n"]];
+    }
+
+    return parts.count > 0 ? [parts componentsJoinedByString:@"\n"] : nil;
+}
+
+- (NSRange)voiceInputSelectedRange {
+    if ([self.context respondsToSelector:@selector(inputSelectedRange)]) {
+        return [self.context inputSelectedRange];
+    }
+    return NSMakeRange(0, 0);
+}
+
+- (void)voiceInputRecordingDidStart {
+    [self.context startRecordingVoiceMessage];
+}
+
+- (void)voiceInputRecordingDidStop {
+    // 录音结束，无需额外操作
+}
+
+- (void)voiceInputRequestCursor {
+    if ([self.context respondsToSelector:@selector(inputBecomeFirstResponder)]) {
+        [self.context inputBecomeFirstResponder];
+    }
+}
+
+- (WKChannel *)voiceInputChannel {
+    if ([self.context respondsToSelector:@selector(channel)]) {
+        return self.context.channel;
+    }
+    return nil;
+}
+
+- (NSArray<WKChannelMember *> *)voiceInputChannelMembers {
+    if (![self.context respondsToSelector:@selector(channel)]) return @[];
+    WKChannel *channel = self.context.channel;
+    // 子区成员在父群上
+    if (channel.channelType == WK_COMMUNITY_TOPIC) {
+        WKChannel *parentChannel = [self parentGroupChannel:channel];
+        if (parentChannel) return [[WKChannelMemberDB shared] getMembersWithChannel:parentChannel];
+    }
+    return [[WKChannelMemberDB shared] getMembersWithChannel:channel];
+}
+
+- (WKChannel *)parentGroupChannel:(WKChannel *)channel {
+    NSRange sep = [channel.channelId rangeOfString:@"____"];
+    if (sep.location != NSNotFound) {
+        NSString *groupNo = [channel.channelId substringToIndex:sep.location];
+        return [WKChannel groupWithChannelID:groupNo];
+    }
+    return nil;
+}
+
+- (void)voiceInputDidTranscribe:(NSString *)text
+                       mentions:(NSArray<WKInputMentionItem *> *)mentions
+                  shouldReplace:(BOOL)shouldReplace {
+    NSLog(@"[VoicePanel] voiceInputDidTranscribe:mentions: mentions=%lu, shouldReplace=%d",
+          (unsigned long)mentions.count, shouldReplace);
+
+    if (mentions.count > 0 && [self.context respondsToSelector:@selector(addMentionItems:)]) {
+        NSLog(@"[VoicePanel] writing %lu mentions to mentionCache", (unsigned long)mentions.count);
+        [self.context addMentionItems:mentions];
+    }
+
+    if (shouldReplace) {
+        if ([self.context respondsToSelector:@selector(inputSetText:)]) {
+            [self.context inputSetText:text];
+        }
+    } else {
+        if ([self.context respondsToSelector:@selector(inputInsertText:)]) {
+            [self.context inputInsertText:text];
+        }
     }
 }
 

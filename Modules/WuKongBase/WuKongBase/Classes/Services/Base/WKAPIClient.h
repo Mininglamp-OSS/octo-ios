@@ -82,6 +82,16 @@ NS_ASSUME_NONNULL_BEGIN
 
 -(NSURLSessionDataTask*) fileUpload:(NSString*)path data:(NSData*)data fileName:(NSString*)fileName progress:(void(^_Nullable)(NSProgress *progress)) progressCallback completeCallback:(void(^)(id resposeObject,NSError *error)) completeCallback ;
 
+/// 自定义 multipart POST（支持多个表单字段 + 自定义文件参数）
+-(NSURLSessionDataTask *_Nullable)fileUpload:(NSString *_Nonnull)path
+                         formFields:(nullable NSDictionary<NSString *, NSString *> *)formFields
+                           fileData:(NSData *_Nonnull)fileData
+                           fileName:(NSString *_Nonnull)fileName
+                          fileField:(NSString *_Nonnull)fileField
+                           mimeType:(NSString *_Nonnull)mimeType
+                            timeout:(NSTimeInterval)timeout
+                   completeCallback:(void(^_Nullable)(id _Nullable responseObject,
+                                             NSError * _Nullable error))completeCallback;
 
 /**
  上传聊天文件

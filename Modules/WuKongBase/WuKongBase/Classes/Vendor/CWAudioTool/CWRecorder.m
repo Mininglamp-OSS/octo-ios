@@ -130,13 +130,12 @@ singtonImplement(CWRecorder);
 
 - (float)levels {
     [self.audioRecorder updateMeters];
-    double aveChannel = pow(10, (ALPHA * [self.audioRecorder averagePowerForChannel:0]));
-    if (aveChannel <= 0.05f) aveChannel = 0.05f;
-    
-    if (aveChannel >= 1.0f) aveChannel = 1.0f;
-    
-    return aveChannel;
-    
+    // 与语音输入统一线性映射，范围扩大到 [-55dB, -10dB] → [0, 1]
+    float power = [self.audioRecorder averagePowerForChannel:0];
+    float normalizedPower = (power + 55) / 45.0f;
+    if (normalizedPower < 0.05f) normalizedPower = 0.05f;
+    if (normalizedPower > 1.0f) normalizedPower = 1.0f;
+    return normalizedPower;
 }
 
 // 判断麦克风权限

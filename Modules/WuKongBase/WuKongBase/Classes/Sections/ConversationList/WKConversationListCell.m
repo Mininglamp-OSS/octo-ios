@@ -26,6 +26,9 @@
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKUserAvatar.h"
 #import "WKAutoDeleteView.h"
+#import "WKThreadModel.h"
+#import "WKConversationGroupThreadCell.h"
+#import "WKConversationListVM.h"
 //#define avatarSize 56.0f
 @interface WKConversationListCell ()
 
@@ -54,6 +57,14 @@
 
 @property(nonatomic,strong) UILabel *botBadgeLbl; // Bot标识
 
+@property(nonatomic,strong) UILabel *threadCountLbl; // 子区数量提示
+
+@property(nonatomic,strong) UILabel *hashTagLbl; // 群组 # 标识（替代头像）
+
+@property(nonatomic,strong) UIButton *threadToggleBtn; // 子区预览展开按钮
+
+@property(nonatomic,strong) UILabel *externalGroupTagLbl; // 外部群 Tag（仅 WK_GROUP 的 is_external_group==1 会话）
+
 @end
 
 @implementation WKConversationListCell
@@ -69,7 +80,7 @@
         [self.contextContainerView addSubview:self.titleLbl];
         
         
-        self.avatarImgView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, [WKApp shared].config.messageListAvatarSize.width,  [WKApp shared].config.messageListAvatarSize.height)];
+        self.avatarImgView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, 52.0f, 52.0f)];
         [self.contextContainerView addSubview:self.avatarImgView];
         // 最后一条消息内容
         self.lastContentLbl = [[UILabel alloc] init];
@@ -100,6 +111,14 @@
         [self.contextContainerView addSubview:self.autoDeleteView];
         // Bot标识
         [self.contextContainerView addSubview:self.botBadgeLbl];
+        // 子区数量提示
+        [self.contextContainerView addSubview:self.threadCountLbl];
+        // 群组 # 标识
+        [self.contextContainerView addSubview:self.hashTagLbl];
+        // 子区展开按钮
+        [self.contextContainerView addSubview:self.threadToggleBtn];
+        // 外部群 Tag
+        [self.contextContainerView addSubview:self.externalGroupTagLbl];
 
     }
     return self;
@@ -156,53 +175,157 @@
     return _botBadgeLbl;
 }
 
+- (UILabel *)externalGroupTagLbl {
+    if(!_externalGroupTagLbl) {
+        _externalGroupTagLbl = [[UILabel alloc] init];
+        _externalGroupTagLbl.text = LLang(@"外部");
+        _externalGroupTagLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
+        _externalGroupTagLbl.textColor = [UIColor whiteColor];
+        // 紫色 #722ED1（对齐 dmwork-web PR #980 Semi 紫色 Tag；Android YUJ-90 同色）
+        _externalGroupTagLbl.backgroundColor = [UIColor colorWithRed:114.0f/255.0f green:46.0f/255.0f blue:209.0f/255.0f alpha:1.0f];
+        _externalGroupTagLbl.textAlignment = NSTextAlignmentCenter;
+        _externalGroupTagLbl.layer.cornerRadius = 4.0f;
+        _externalGroupTagLbl.layer.masksToBounds = YES;
+        _externalGroupTagLbl.hidden = YES;
+    }
+    return _externalGroupTagLbl;
+}
+
+// 外部群判定兜底：优先读 channelInfo.extra[is_external_group]，容忍 NSNumber / NSString。
+// 策略 B（客户端兜底，不完全信任后端）：
+//   - 硬门控 channelType == WK_GROUP：私聊 / 子区 / 社区不参与判定
+//   - NSNull / 非数字 / 缺失 → NO（保持 legacy 行为）
++ (BOOL)shouldShowExternalGroupTag:(WKConversationWrapModel *)model {
+    if(!model || !model.channel) {
+        return NO;
+    }
+    if(model.channel.channelType != WK_GROUP) {
+        return NO;
+    }
+    if(!model.channelInfo || !model.channelInfo.extra) {
+        return NO;
+    }
+    id flag = model.channelInfo.extra[@"is_external_group"];
+    if(!flag || flag == [NSNull null]) {
+        return NO;
+    }
+    if([flag isKindOfClass:[NSNumber class]] || [flag isKindOfClass:[NSString class]]) {
+        return [flag integerValue] == 1;
+    }
+    return NO;
+}
+
 
 
 - (void)prepareForReuse {
     [super prepareForReuse];
-    self.avatarImgView.avatarImgView.image =nil;
+    self.avatarImgView.avatarImgView.image = nil;
+    self.hashTagLbl.hidden = YES;
+    self.threadToggleBtn.hidden = YES;
+    self.onToggleThreadPreview = nil;
+    self.avatarImgView.hidden = NO;
+    self.lastContentLbl.hidden = NO;
+    self.lastMsgTimeLbl.hidden = NO;
+    self.externalGroupTagLbl.hidden = YES;
 }
 
 
 -(void) refreshWithModel:(WKConversationWrapModel*)model{
     self.model = model;
-    
+
+    BOOL isGroup = (model.channel.channelType == WK_GROUP);
+
     BOOL hasChannelInfo  = model.channelInfo?true:false;
     if(!hasChannelInfo) {
         [model startChannelRequest];
     }
-    [self refreshAvatar:model];
-    
-    // 最后一次消息时间
-    self.lastMsgTimeLbl.text = [WKTimeTool getTimeStringAutoShort2:[NSDate dateWithTimeIntervalSince1970:model.lastMsgTimestamp] mustIncludeTime:true];
-//    [ self.lastMsgTimeLbl sizeToFit];
-    
+
+    if(isGroup) {
+        // 群聊：显示头像，隐藏预览/时间
+        self.hashTagLbl.hidden = YES;
+        self.avatarImgView.hidden = NO;
+        [self refreshAvatar:model];
+        self.lastMsgTimeLbl.hidden = YES;
+        self.statusImgView.hidden = YES;
+        self.typingIndicatorView.hidden = YES;
+        [self.typingIndicatorView stopAnimating];
+        self.onlineBadgeView.hidden = YES;
+        self.autoDeleteView.hidden = YES;
+        BOOL showToggle = (model.threadCount > 0 && [WKApp shared].remoteConfig.threadOn);
+        self.threadToggleBtn.hidden = !showToggle;
+        if (showToggle) {
+            NSInteger threadUnread = 0;
+            BOOL threadHasMention = NO;
+            [[WKConversationListVM shared] getThreadIndicatorForGroup:model.channel.channelId threadUnread:&threadUnread threadHasMention:&threadHasMention];
+            NSInteger indicatorType = 0;
+            UIColor *indicatorColor = nil;
+            if (threadHasMention) {
+                indicatorType = 2;
+                indicatorColor = [UIColor orangeColor];
+            } else if (threadUnread > 0) {
+                indicatorType = 1;
+                indicatorColor = model.mute
+                    ? [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f]
+                    : [UIColor redColor];
+            }
+            UIImage *icon = [WKConversationGroupThreadCell threadToggleIconWithSize:CGSizeMake(28, 28)
+                                                                         baseColor:[WKApp shared].config.themeColor
+                                                                     indicatorType:indicatorType
+                                                                    indicatorColor:indicatorColor];
+            [self.threadToggleBtn setImage:icon forState:UIControlStateNormal];
+        }
+
+        // 检查是否有 @我 的提醒
+        BOOL hasMention = NO;
+        if (model.simpleReminders && model.simpleReminders.count > 0) {
+            for (WKReminder *r in model.simpleReminders) {
+                if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
+            }
+        }
+        if (hasMention) {
+            self.lastContentLbl.hidden = NO;
+            self.lastContentLbl.attributedText = [self getLastContent:model];
+            self.lastContentLbl.lineBreakMode = NSLineBreakByTruncatingTail;
+        } else {
+            self.lastContentLbl.hidden = YES;
+        }
+    } else {
+        // 私聊：正常显示
+        self.hashTagLbl.hidden = YES;
+        self.avatarImgView.hidden = NO;
+        self.threadToggleBtn.hidden = YES;
+        self.lastContentLbl.hidden = NO;
+        self.lastMsgTimeLbl.hidden = NO;
+        [self refreshAvatar:model];
+        // 最后一次消息时间
+        self.lastMsgTimeLbl.text = [WKTimeTool getTimeStringAutoShort2:[NSDate dateWithTimeIntervalSince1970:model.lastMsgTimestamp] mustIncludeTime:true];
+        // 刷新在线状态
+        [self refreshOnlineStatus:model];
+        // 刷新最后一条消息
+        [self refreshLastMessage:model];
+        // 刷新输入中
+        [self refreshTyping:model];
+        // 刷新消息状态
+        [self refreshStatus:model];
+        // 自动删除
+        [self refreshAutoDeleteIfNeed:model];
+    }
+
     // 刷新标题
     [self refreshTitle:model];
-    
-    // 刷新在线状态
-    [self refreshOnlineStatus:model];
-    
-    // 刷新最后一条消息
-    [self refreshLastMessage:model];
-    
-    // 刷新输入中
-    [self refreshTyping:model];
-    
+
     // 刷新未读数
     [self refreshUnread:model];
-    
+
     // 刷新设置
     [self refreshSetting:model];
-    
-    // 刷新消息状态
-    [self refreshStatus:model];
-    
+
     // 刷新官方tag
     [self refreshOfficialTag:model];
-    // 自动删除
-    [self refreshAutoDeleteIfNeed:model];
-    
+
+    // 刷新外部群 Tag（仅 WK_GROUP 显示，私聊 / 子区 / 社区自动跳过）
+    [self refreshExternalGroupTag:model];
+
     [self layoutSubviews];
 }
 
@@ -306,6 +429,9 @@
         frame.size.height += 4.0f;
         self.botBadgeLbl.frame = frame;
     }
+
+    // 子区数量提示已统一由 threadToggleBtn 展示，不再内联显示
+    self.threadCountLbl.hidden = YES;
 }
 
 -(void) refreshAvatar:(WKConversationWrapModel*)model {
@@ -328,10 +454,16 @@
                 avatarURL = [WKAvatarUtil getGroupAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
             }
         } else {
+            // 个人频道：和群频道一样，始终拼接 ?v=cacheKey
+            NSString *key = (model.channelInfo.avatarCacheKey.length > 0) ? model.channelInfo.avatarCacheKey : @"0";
             if([model.channelInfo.logo hasPrefix:@"http"]) {
-                avatarURL = model.channelInfo.logo;
+                NSString *separator = [model.channelInfo.logo containsString:@"?"] ? @"&" : @"?";
+                avatarURL = [NSString stringWithFormat:@"%@%@v=%@", model.channelInfo.logo, separator, key];
+            } else if(model.channelInfo.logo && ![model.channelInfo.logo isEqualToString:@""]) {
+                NSString *fullUrl = [WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo];
+                avatarURL = [NSString stringWithFormat:@"%@?v=%@", fullUrl, key];
             } else {
-                avatarURL = [WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo];
+                avatarURL = [WKAvatarUtil getAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
             }
         }
         [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL] placeholderImage:[self imageName:@"Common/Index/DefaultAvatar"] options:0 context:@{
@@ -407,7 +539,7 @@
     self.badgeView.hidden = YES;
     if(model.unreadCount>0) {
         self.badgeView.hidden = NO;
-        self.badgeView.badgeValue = [NSString stringWithFormat:@"%ld",(long)self.model.unreadCount];
+        self.badgeView.badgeValue = self.model.unreadCount > 99 ? @"99+" : [NSString stringWithFormat:@"%ld",(long)self.model.unreadCount];
         self.badgeView.lim_left = self.lim_width - 15.0f - self.badgeView.lim_width; // 这里强行执行下lim_left 因为杀掉app收离线，从无红点到有红点会向左漂移，因为layoutSubviews后执行
     }
 }
@@ -466,6 +598,21 @@
             self.officialTag.hidden = NO;
             self.officialTag.image = [self imageName:@"ConversationList/Index/Visitor"];
         }
+    }
+}
+
+-(void) refreshExternalGroupTag:(WKConversationWrapModel*)model {
+    // 每次 bind 重新评估（Space 切换 / channelInfo 推送后会触发 refreshWithModel，继而走这里），
+    // 不需要额外监听。字段走 model.channelInfo.extra[is_external_group]，
+    // 由 WKGroupManagerDelegateImp 从 /groups/{no} 响应自动透传（EP1 依赖，已就位）。
+    BOOL show = [WKConversationListCell shouldShowExternalGroupTag:model];
+    self.externalGroupTagLbl.hidden = !show;
+    if(show) {
+        [self.externalGroupTagLbl sizeToFit];
+        CGRect frame = self.externalGroupTagLbl.frame;
+        frame.size.width += 8.0f;
+        frame.size.height += 4.0f;
+        self.externalGroupTagLbl.frame = frame;
     }
 }
 
@@ -621,96 +768,246 @@
 
 -(void) layoutSubviews {
     [super layoutSubviews];
-    
+
     self.contextContainerView.frame = self.contentView.bounds;
-    
-    // 头像
-    self.avatarImgView.lim_left = 15.0f;
-    self.avatarImgView.lim_top = self.lim_height/2.0f - self.avatarImgView.lim_height/2.0f;
-    
-    // 在线标记
-    if(self.model.channelInfo && self.model.channelInfo.online) {
-        self.onlineBadgeView.lim_left = self.avatarImgView.lim_right - self.onlineBadgeView.lim_width;
-    }else {
-        self.onlineBadgeView.lim_left = self.avatarImgView.lim_right - self.onlineBadgeView.lim_width + 4.0f;
-    }
-   self.onlineBadgeView.lim_top = self.avatarImgView.lim_bottom - self.onlineBadgeView.lim_height;
-   
-    self.autoDeleteView.lim_left = self.avatarImgView.lim_right - self.autoDeleteView.lim_width + 2.0f;
-    self.autoDeleteView.lim_top = self.avatarImgView.lim_bottom - self.autoDeleteView.lim_height + 2.0f;
-    // 名称
-    CGFloat statusRightSpace = 2.0f;
-    
-    CGFloat titleLeftToAvatarSpace = 10.0f;
-    self.titleLbl.lim_left = self.avatarImgView.lim_right + titleLeftToAvatarSpace;
-    self.titleLbl.lim_top = self.avatarImgView.lim_top + 4.0f ;
-    
-    [self.lastMsgTimeLbl sizeToFit];
-    CGFloat titleMaxWidth = self.lim_width - (self.avatarImgView.lim_right + 5.0f) - (self.lastMsgTimeLbl.lim_width+5.0f + 20.0f)  - 20.0f;
-    if(!self.statusImgView.hidden) {
-        titleMaxWidth = titleMaxWidth - (self.statusImgView.lim_width + statusRightSpace);
-    }
-    [self.titleLbl sizeToFit];
-    if(self.titleLbl.lim_width> titleMaxWidth) {
-        self.titleLbl.lim_width = titleMaxWidth;
-    }
-    
-    // 最后一条消息
-    self.lastContentLbl.lim_left = self.titleLbl.lim_left;
-    self.lastContentLbl.lim_width = self.lim_width - self.lastContentLbl.lim_left - 10.0f;
-    
-    if(self.model.unreadCount>0 || self.model.mute) {
-        self.lastContentLbl.lim_width -= 40.0f;
-    }
-    self.lastContentLbl.lim_top = self.titleLbl.lim_bottom + 3.0f;
-    self.lastContentLbl.lim_height = 24.0f;
 
-    // typing
-    if(!self.typingIndicatorView.hidden) {
-        self.typingIndicatorView.lim_left = self.titleLbl.lim_left;
-        self.typingIndicatorView.lim_top = self.titleLbl.lim_bottom + 6.0f;
-        
-        self.lastContentLbl.lim_left = self.typingIndicatorView.lim_right + 2.0f;
-        self.lastContentLbl.lim_width -= self.typingIndicatorView.lim_width;
-    }
-    
-    // 最后一条消息时间
-    self.lastMsgTimeLbl.lim_left = self.lim_width - self.lastMsgTimeLbl.lim_width - 15.0f;
-    self.lastMsgTimeLbl.lim_top = self.titleLbl.lim_top+2.0f;
-    
-    // 消息状态
-    
-    self.statusImgView.lim_left = self.lastMsgTimeLbl.lim_left - self.statusImgView.lim_width - statusRightSpace;
-    self.statusImgView.lim_top = self.lastMsgTimeLbl.lim_top+1.0f;
-    
-    
-    // 红点
-    self.badgeView.lim_top = self.lastMsgTimeLbl.lim_bottom + 2.0f;
-   
-    self.badgeView.lim_left = self.lim_width - 15.0f - self.badgeView.lim_width;
-    
-    // 免打扰图标
-    self.muteIcon.lim_left = self.lim_width - self.muteIcon.lim_width - (self.lim_width-self.lastMsgTimeLbl.lim_left-self.lastMsgTimeLbl.lim_width);
-    self.muteIcon.lim_top = self.badgeView.lim_top + 4.0f;
-    
-    self.officialTag.lim_left = self.titleLbl.lim_right+4.0f;
-    self.officialTag.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height/2.0f - self.officialTag.lim_height/2.0f);
-    if(self.model.channelInfo && [self.model.channelInfo.category isEqualToString:@"visitor"]) {
-        self.officialTag.lim_top+=2;
-    }
+    BOOL isGroup = (self.model.channel.channelType == WK_GROUP);
 
-    // Bot标识
-    if(!self.botBadgeLbl.hidden) {
-        CGFloat botLeft = self.titleLbl.lim_right + 6.0f;
-        if(!self.officialTag.hidden) {
-            botLeft = self.officialTag.lim_right + 4.0f;
+    if(isGroup) {
+        // ========== 群聊布局 ==========
+        BOOL showMention = !self.lastContentLbl.hidden;
+        CGFloat avatarSize = 52.0f;
+        CGFloat rightPadding = 15.0f;
+        // 外部群 Tag 占位（与 bot/official 并列，挤占 title 宽度）
+        CGFloat externalTagReserve = 0.0f;
+        if(!self.externalGroupTagLbl.hidden) {
+            externalTagReserve = self.externalGroupTagLbl.lim_width + 6.0f;
         }
-        self.botBadgeLbl.lim_left = botLeft;
-        self.botBadgeLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
+
+        if (showMention) {
+            // 有 @我：两行布局（标题 + 预览）
+            self.avatarImgView.frame = CGRectMake(15.0f, 8.0f, avatarSize, avatarSize);
+
+            CGFloat titleLeft = self.avatarImgView.lim_right + 10.0f;
+            [self.titleLbl sizeToFit];
+            CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f - externalTagReserve;
+            if(self.titleLbl.lim_width > titleMaxWidth) self.titleLbl.lim_width = titleMaxWidth;
+            self.titleLbl.lim_left = titleLeft;
+            self.titleLbl.lim_top = 10.0f;
+
+            // @预览消息
+            self.lastContentLbl.lim_left = titleLeft;
+            self.lastContentLbl.lim_width = self.lim_width - titleLeft - rightPadding - 40.0f;
+            self.lastContentLbl.lim_top = self.titleLbl.lim_bottom + 2.0f;
+            self.lastContentLbl.lim_height = 18.0f;
+        } else {
+            // 无 @我：单行居中
+            self.avatarImgView.frame = CGRectMake(15.0f, (self.lim_height - avatarSize) / 2.0f, avatarSize, avatarSize);
+
+            CGFloat titleLeft = self.avatarImgView.lim_right + 10.0f;
+            [self.titleLbl sizeToFit];
+            CGFloat titleMaxWidth = self.lim_width - titleLeft - rightPadding - 50.0f - externalTagReserve;
+            if(self.titleLbl.lim_width > titleMaxWidth) self.titleLbl.lim_width = titleMaxWidth;
+            self.titleLbl.lim_left = titleLeft;
+            self.titleLbl.lim_top = (self.lim_height - self.titleLbl.lim_height) / 2.0f;
+        }
+        // 右侧元素从右往左排列：toggle → 红点/免打扰
+        CGFloat rightEdge = self.lim_width - rightPadding;
+
+        // 子区展开按钮 - 最右侧固定位置
+        if (!self.threadToggleBtn.hidden) {
+            self.threadToggleBtn.frame = CGRectMake(rightEdge - 44, (self.lim_height - 44) / 2.0f, 44, 44);
+            rightEdge = self.threadToggleBtn.lim_left - 2;
+        }
+
+        // 红点
+        self.badgeView.lim_left = rightEdge - self.badgeView.lim_width;
+        self.badgeView.lim_top = (self.lim_height - self.badgeView.lim_height) / 2.0f;
+
+        // 免打扰图标
+        self.muteIcon.lim_left = rightEdge - self.muteIcon.lim_width;
+        self.muteIcon.lim_top = (self.lim_height - self.muteIcon.lim_height) / 2.0f;
+
+        // 官方标签
+        self.officialTag.lim_left = self.titleLbl.lim_right + 4.0f;
+        self.officialTag.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height / 2.0f - self.officialTag.lim_height / 2.0f);
+
+        // Bot标识
+        if(!self.botBadgeLbl.hidden) {
+            CGFloat botLeft = self.titleLbl.lim_right + 6.0f;
+            if(!self.officialTag.hidden) {
+                botLeft = self.officialTag.lim_right + 4.0f;
+            }
+            self.botBadgeLbl.lim_left = botLeft;
+            self.botBadgeLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
+        }
+
+        // 子区数量提示
+        if(!self.threadCountLbl.hidden) {
+            CGFloat tcLeft = self.titleLbl.lim_right + 4.0f;
+            if(!self.botBadgeLbl.hidden) {
+                tcLeft = self.botBadgeLbl.lim_right + 4.0f;
+            } else if(!self.officialTag.hidden) {
+                tcLeft = self.officialTag.lim_right + 4.0f;
+            }
+            self.threadCountLbl.lim_left = tcLeft;
+            self.threadCountLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.threadCountLbl.lim_height) / 2.0f;
+        }
+
+        // 外部群 Tag（只在群聊布局下可能出现；layout 路径外层已校验 isGroup）
+        if(!self.externalGroupTagLbl.hidden) {
+            CGFloat extLeft = self.titleLbl.lim_right + 6.0f;
+            if(!self.botBadgeLbl.hidden) {
+                extLeft = self.botBadgeLbl.lim_right + 4.0f;
+            } else if(!self.officialTag.hidden) {
+                extLeft = self.officialTag.lim_right + 4.0f;
+            }
+            self.externalGroupTagLbl.lim_left = extLeft;
+            self.externalGroupTagLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.externalGroupTagLbl.lim_height) / 2.0f;
+        }
+
+    } else {
+        // ========== 私聊布局（保持原样） ==========
+
+        // 头像（统一尺寸 42x42）
+        CGFloat avatarSize = 52.0f;
+        self.avatarImgView.frame = CGRectMake(15.0f, 0, avatarSize, avatarSize);
+        self.avatarImgView.lim_top = self.lim_height/2.0f - self.avatarImgView.lim_height/2.0f;
+        // 在线标记
+        if(self.model.channelInfo && self.model.channelInfo.online) {
+            self.onlineBadgeView.lim_left = self.avatarImgView.lim_right - self.onlineBadgeView.lim_width;
+        }else {
+            self.onlineBadgeView.lim_left = self.avatarImgView.lim_right - self.onlineBadgeView.lim_width + 4.0f;
+        }
+        self.onlineBadgeView.lim_top = self.avatarImgView.lim_bottom - self.onlineBadgeView.lim_height;
+
+        self.autoDeleteView.lim_left = self.avatarImgView.lim_right - self.autoDeleteView.lim_width + 2.0f;
+        self.autoDeleteView.lim_top = self.avatarImgView.lim_bottom - self.autoDeleteView.lim_height + 2.0f;
+        // 名称
+        CGFloat statusRightSpace = 2.0f;
+
+        CGFloat titleLeftToAvatarSpace = 10.0f;
+        self.titleLbl.lim_left = self.avatarImgView.lim_right + titleLeftToAvatarSpace;
+        CGFloat textBlockH = 20.0f + 3.0f + 24.0f; // title + gap + content
+        CGFloat textBlockTop = (self.lim_height - textBlockH) / 2.0f;
+        self.titleLbl.lim_top = textBlockTop;
+
+        [self.lastMsgTimeLbl sizeToFit];
+        CGFloat titleMaxWidth = self.lim_width - (self.avatarImgView.lim_right + 5.0f) - (self.lastMsgTimeLbl.lim_width+5.0f + 20.0f)  - 20.0f;
+        if(!self.statusImgView.hidden) {
+            titleMaxWidth = titleMaxWidth - (self.statusImgView.lim_width + statusRightSpace);
+        }
+        [self.titleLbl sizeToFit];
+        if(self.titleLbl.lim_width> titleMaxWidth) {
+            self.titleLbl.lim_width = titleMaxWidth;
+        }
+
+        // 最后一条消息
+        self.lastContentLbl.lim_left = self.titleLbl.lim_left;
+        self.lastContentLbl.lim_width = self.lim_width - self.lastContentLbl.lim_left - 10.0f;
+
+        if(self.model.unreadCount>0 || self.model.mute) {
+            self.lastContentLbl.lim_width -= 40.0f;
+        }
+        self.lastContentLbl.lim_top = self.titleLbl.lim_bottom + 3.0f;
+        self.lastContentLbl.lim_height = 24.0f;
+
+        // typing
+        if(!self.typingIndicatorView.hidden) {
+            self.typingIndicatorView.lim_left = self.titleLbl.lim_left;
+            self.typingIndicatorView.lim_top = self.titleLbl.lim_bottom + 6.0f;
+
+            self.lastContentLbl.lim_left = self.typingIndicatorView.lim_right + 2.0f;
+            self.lastContentLbl.lim_width -= self.typingIndicatorView.lim_width;
+        }
+
+        // 最后一条消息时间
+        self.lastMsgTimeLbl.lim_left = self.lim_width - self.lastMsgTimeLbl.lim_width - 15.0f;
+        self.lastMsgTimeLbl.lim_top = self.titleLbl.lim_top+2.0f;
+
+        // 消息状态
+        self.statusImgView.lim_left = self.lastMsgTimeLbl.lim_left - self.statusImgView.lim_width - statusRightSpace;
+        self.statusImgView.lim_top = self.lastMsgTimeLbl.lim_top+1.0f;
+
+        // 红点
+        self.badgeView.lim_top = self.lastMsgTimeLbl.lim_bottom + 2.0f;
+        self.badgeView.lim_left = self.lim_width - 15.0f - self.badgeView.lim_width;
+
+        // 免打扰图标
+        self.muteIcon.lim_left = self.lim_width - self.muteIcon.lim_width - (self.lim_width-self.lastMsgTimeLbl.lim_left-self.lastMsgTimeLbl.lim_width);
+        self.muteIcon.lim_top = self.badgeView.lim_top + 4.0f;
+
+        self.officialTag.lim_left = self.titleLbl.lim_right+4.0f;
+        self.officialTag.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height/2.0f - self.officialTag.lim_height/2.0f);
+        if(self.model.channelInfo && [self.model.channelInfo.category isEqualToString:@"visitor"]) {
+            self.officialTag.lim_top+=2;
+        }
+
+        // Bot标识
+        if(!self.botBadgeLbl.hidden) {
+            CGFloat botLeft = self.titleLbl.lim_right + 6.0f;
+            if(!self.officialTag.hidden) {
+                botLeft = self.officialTag.lim_right + 4.0f;
+            }
+            self.botBadgeLbl.lim_left = botLeft;
+            self.botBadgeLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
+        }
+
+        // 子区数量提示
+        if(!self.threadCountLbl.hidden) {
+            CGFloat tcLeft = self.titleLbl.lim_right + 4.0f;
+            if(!self.botBadgeLbl.hidden) {
+                tcLeft = self.botBadgeLbl.lim_right + 4.0f;
+            } else if(!self.officialTag.hidden) {
+                tcLeft = self.officialTag.lim_right + 4.0f;
+            }
+            self.threadCountLbl.lim_left = tcLeft;
+            self.threadCountLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.threadCountLbl.lim_height) / 2.0f;
+        }
     }
 }
+- (UILabel *)hashTagLbl {
+    if(!_hashTagLbl) {
+        _hashTagLbl = [[UILabel alloc] init];
+        _hashTagLbl.text = @"#";
+        _hashTagLbl.font = [UIFont systemFontOfSize:26 weight:UIFontWeightBold];
+        _hashTagLbl.textColor = [UIColor colorWithRed:148.0f/255.0f green:152.0f/255.0f blue:168.0f/255.0f alpha:1.0f]; // #9498A8
+        _hashTagLbl.textAlignment = NSTextAlignmentCenter;
+        _hashTagLbl.hidden = YES;
+    }
+    return _hashTagLbl;
+}
+
+- (UILabel *)threadCountLbl {
+    if(!_threadCountLbl) {
+        _threadCountLbl = [[UILabel alloc] init];
+        _threadCountLbl.font = [[WKApp shared].config appFontOfSize:11.0f];
+        _threadCountLbl.textColor = [UIColor colorWithRed:255.0f/255.0f green:149.0f/255.0f blue:0.0f/255.0f alpha:1.0f]; // #FF9500 橘黄色
+        _threadCountLbl.textAlignment = NSTextAlignmentCenter;
+        _threadCountLbl.hidden = YES;
+    }
+    return _threadCountLbl;
+}
+
+- (UIButton *)threadToggleBtn {
+    if (!_threadToggleBtn) {
+        _threadToggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        UIImage *icon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(28, 28) color:[WKApp shared].config.themeColor];
+        [_threadToggleBtn setImage:icon forState:UIControlStateNormal];
+        _threadToggleBtn.contentEdgeInsets = UIEdgeInsetsMake(9, 9, 9, 9);
+        _threadToggleBtn.hidden = YES;
+        [_threadToggleBtn addTarget:self action:@selector(onThreadToggleTap) forControlEvents:UIControlEventTouchUpInside];
+    }
+    return _threadToggleBtn;
+}
+
+-(void) onThreadToggleTap {
+    if (self.onToggleThreadPreview && self.model.channel.channelId.length > 0) {
+        self.onToggleThreadPreview(self.model.channel.channelId);
+    }
+}
+
 -(UIImage*) imageName:(NSString*)name {
     return [WKApp.shared loadImage:name moduleID:@"WuKongBase"];
-//    return [[WKResource shared] resourceForImage:name podName:@"WuKongBase_images"];
 }
 @end

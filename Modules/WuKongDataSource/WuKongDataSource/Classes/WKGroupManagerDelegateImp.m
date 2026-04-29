@@ -21,6 +21,13 @@
     if (currentSpaceId && currentSpaceId.length > 0) {
         params[@"space_id"] = currentSpaceId;
     }
+    // 注入分组 ID（从 object 参数传入）
+    if ([object isKindOfClass:[NSDictionary class]]) {
+        NSString *categoryId = object[@"category_id"];
+        if (categoryId && categoryId.length > 0) {
+            params[@"category_id"] = categoryId;
+        }
+    }
     __weak typeof(self) weakSelf = self;
     [[WKAPIClient sharedClient] POST:@"group/create" parameters:params model:WKGroupModel.class].then(^(WKGroupModel *groupModel){
         if(complete) {
@@ -80,9 +87,9 @@
             WKLogError(@"群[%@]同步成员失败！->%@",groupNo,error);
             return;
         }
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            [[WKSDK shared].channelManager addOrUpdateMembers:members];
-        });
+        // 同步写入 DB，确保 finish 触发通知时 DB 已有成员数据
+        // （原 dispatch_async 会导致通知先于 DB 写入，新建群聊时 memberCount 为 0）
+        [[WKSDK shared].channelManager addOrUpdateMembers:members];
         memberCount+= members.count;
                    
     } finish:^{
@@ -96,9 +103,14 @@
 
 -(void) requestSyncMembers:(NSString*)groupNo limit:(NSInteger)limit  maxRetryCount:(NSInteger)maxRetryCount complete:(void(^)(NSArray<WKChannelMember*>*members,NSError *error))complete finish:(void(^)(void))finish{
     __weak typeof(self) weakSelf = self;
-    NSString *syncKey = [[WKSDK shared].channelManager getMemberLastSyncKey:[[WKChannel alloc] initWith:groupNo channelType:WK_GROUP]];
+    // 子区 channelId 含 ____，channelType 用 WK_COMMUNITY_TOPIC
+    BOOL isThread = ([groupNo rangeOfString:@"____"].location != NSNotFound);
+    uint8_t channelType = isThread ? WK_COMMUNITY_TOPIC : WK_GROUP;
+
+    NSString *syncKey = [[WKSDK shared].channelManager getMemberLastSyncKey:[[WKChannel alloc] initWith:groupNo channelType:channelType]];
+    NSLog(@"[Mention] requestSyncMembers groupNo=%@ channelType=%d syncKey=%@", groupNo, channelType, syncKey);
     [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"groups/%@/membersync",groupNo] parameters:@{@"version":syncKey?:@"",@"limit":@(limit)} model:WKGroupMemberModel.class].then(^(NSArray<WKGroupMemberModel*> *members){
-        NSLog(@"同步到成员数量[%ld]",members.count);
+        NSLog(@"[Mention] 同步到成员数量[%ld] for %@",(long)members.count, groupNo);
         if(members && members.count>0) {
             NSMutableArray<WKChannelMember*> *channelMembers = [NSMutableArray array];
             for (WKGroupMemberModel *groupMember in members) {
@@ -140,7 +152,9 @@
 }
 
 -(void) groupManager:(WKGroupManager*)manager searchMembers:(NSString*)groupNo keyword:(NSString*)keyword page:(NSInteger)page  limit:(NSInteger)limit complete:(void(^__nullable)(NSError * __nullable error,NSArray<WKChannelMember*>*members))complete {
+    NSLog(@"[Mention] searchMembers API groupNo=%@ keyword=%@", groupNo, keyword);
     [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"groups/%@/members",groupNo] parameters:@{@"keyword":keyword?:@"",@"limit":@(limit),@"page":@(page)} model:WKGroupMemberModel.class].then(^(NSArray<WKGroupMemberModel*> *members){
+        NSLog(@"[Mention] searchMembers API returned %lu members", (unsigned long)members.count);
         NSMutableArray<WKChannelMember*> *channelMembers = [NSMutableArray array];
         if(members && members.count>0) {
             for (WKGroupMemberModel *groupMember in members) {
@@ -158,8 +172,12 @@
 }
 
 -(void) updateChannelInfoByGroupModel:(WKGroupModel*)groupModel {
+    WKChannel *channel = [[WKChannel alloc] initWith:groupModel.groupNo channelType:WK_GROUP];
+    // 先保留旧 extra 中由其他接口写入的标志位（如 is_external_group / has_group_md / member_count），
+    // 否则 group/{groupNo} 同步会清空 channels/{id}/{type} 写入的扩展字段。
+    WKChannelInfo *existing = [[WKSDK shared].channelManager getChannelInfo:channel];
     WKChannelInfo *channelInfo = [[WKChannelInfo alloc] init];
-    channelInfo.channel = [[WKChannel alloc] initWith:groupModel.groupNo channelType:WK_GROUP];
+    channelInfo.channel = channel;
     channelInfo.name = groupModel.name;
     channelInfo.notice = groupModel.notice;
     channelInfo.mute = groupModel.mute;
@@ -174,13 +192,27 @@
     }else {
         channelInfo.logo = [NSString stringWithFormat:@"groups/%@/avatar",groupModel.groupNo];
     }
+    if(existing.extra) {
+        [channelInfo.extra addEntriesFromDictionary:existing.extra];
+    }
     [channelInfo setSettingValue:groupModel.forbiddenAddFriend forKey:WKChannelExtraKeyForbiddenAddFriend];
     [channelInfo setSettingValue:groupModel.screenshot forKey:WKChannelExtraKeyScreenshot];
     [channelInfo setSettingValue:groupModel.joinGroupRemind forKey:WKChannelExtraKeyJoinGroupRemind];
     [channelInfo setSettingValue:groupModel.revokeRemind forKey:WKChannelExtraKeyRevokeRemind];
     [channelInfo setSettingValue:groupModel.chatPwdOn forKey:WKChannelExtraKeyChatPwd];
     [channelInfo setSettingValue:groupModel.allowViewHistoryMsg forKey:WKChannelExtraKeyAllowViewHistoryMsg];
-    
+    // groups/{groupNo} 也会返回 is_external_group / allow_external / space_id，
+    // 仅在后端显式返回该字段时覆盖（nil 表示未返回，保留旧值，避免增量 group_update 清零）
+    if(groupModel.isExternalGroup != nil) {
+        channelInfo.extra[@"is_external_group"] = @([groupModel.isExternalGroup integerValue] == 1 ? 1 : 0);
+    }
+    if(groupModel.allowExternal != nil) {
+        channelInfo.extra[@"allow_external"] = @([groupModel.allowExternal integerValue] == 1 ? 1 : 0);
+    }
+    if(groupModel.spaceId && groupModel.spaceId.length > 0) {
+        channelInfo.extra[@"space_id"] = groupModel.spaceId;
+    }
+
     [[WKSDK shared].channelManager addOrUpdateChannelInfo:channelInfo];
 }
 

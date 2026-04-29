@@ -145,7 +145,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// @param uid 被@人的uid
 -(void) addMention:(NSString*)uid;
 
-
+/// 批量添加 mention 到缓存（不插入文本到输入框）
+-(void) addMentionItems:(NSArray<WKInputMentionItem *> *)items;
 
 /// 设置多选模式
 /// @param multiple <#multiple description#>

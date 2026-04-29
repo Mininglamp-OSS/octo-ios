@@ -15,6 +15,10 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+// 数据库健康检查失败通知（主线程发出）
+// userInfo: @{ @"imDBPath": NSString, @"uid": NSString }
+extern NSString * const WKIMDBHealthCheckFailedNotification;
+
 @interface WKDB : NSObject
 
 @property (nonatomic, strong) WKFMDatabaseQueue *dbQueue;

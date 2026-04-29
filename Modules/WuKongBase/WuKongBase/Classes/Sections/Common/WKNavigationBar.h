@@ -28,6 +28,9 @@ typedef enum : NSUInteger {
 /// 子标题
 @property(nonatomic,copy,nullable) NSString *subtitle;
 
+/// 左边视图（自定义左侧内容，如头像+标题）
+@property(nonatomic,strong,nullable) UIView *leftView;
+
 /// 右边视图
 @property(nonatomic,strong) UIView *rightView;
 

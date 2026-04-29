@@ -89,7 +89,10 @@ static inline CGFloat mgEaseInOutBounce(CGFloat t, CGFloat b, CGFloat c) {
         CGFloat offset = 0.0;
         for(SwipeButton *button in self.buttonArray)
         {
-            button.frame = CGRectMake(offset, 0, MAX(button.frame.size.width, cellHeight), cellHeight);
+            // 按钮宽度不与 cellHeight 挂钩，避免带子区预览的高 cell 导致按钮过宽显示不全
+            CGFloat btnWidth = button.frame.size.width;
+            if (btnWidth < 60) btnWidth = 60; // 最小宽度保底
+            button.frame = CGRectMake(offset, 0, btnWidth, cellHeight);
             offset += button.frame.size.width;
             //防止重用问题，移除点击事件
             [button removeTarget:self action:@selector(touchSwipeButton:) forControlEvents:UIControlEventTouchUpInside];

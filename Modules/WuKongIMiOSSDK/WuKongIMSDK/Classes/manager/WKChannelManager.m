@@ -181,14 +181,12 @@ static WKChannelManager *_instance;
     if(existChannelInfo && existChannelInfo.version >= channelInfo.version) { // 如果存在并且版本号大于传入频道信息的版本号则不更新
         return;
     }
-    if(channelInfo.channel.channelType == WK_GROUP) {
-        if(existChannelInfo && existChannelInfo.avatarCacheKey.length > 0 && existChannelInfo.version == channelInfo.version) {
-            // version 没变，保留已有 cacheKey（重启后 SDWebImage 磁盘缓存命中）
-            channelInfo.avatarCacheKey = existChannelInfo.avatarCacheKey;
-        } else {
-            // 首次创建或 version 变化，生成新 cacheKey
-            channelInfo.avatarCacheKey = [[NSUUID UUID] UUIDString];
-        }
+    if(existChannelInfo && existChannelInfo.avatarCacheKey.length > 0 && existChannelInfo.version == channelInfo.version) {
+        // version 没变，保留已有 cacheKey（重启后 SDWebImage 磁盘缓存命中）
+        channelInfo.avatarCacheKey = existChannelInfo.avatarCacheKey;
+    } else {
+        // 首次创建或 version 变化，生成新 cacheKey
+        channelInfo.avatarCacheKey = [[NSUUID UUID] UUIDString];
     }
     if(existChannelInfo) {
         [self updateChannelInfo:channelInfo];
@@ -199,12 +197,10 @@ static WKChannelManager *_instance;
 }
 -(void) addOrUpdateChannelInfo:(WKChannelInfo*) channelInfo {
     WKChannelInfo *existChannelInfo =  [self getChannelInfo:channelInfo.channel];
-    if(channelInfo.channel.channelType == WK_GROUP) {
-        if(existChannelInfo && existChannelInfo.avatarCacheKey.length > 0 && existChannelInfo.version == channelInfo.version) {
-            channelInfo.avatarCacheKey = existChannelInfo.avatarCacheKey;
-        } else {
-            channelInfo.avatarCacheKey = [[NSUUID UUID] UUIDString];
-        }
+    if(existChannelInfo && existChannelInfo.avatarCacheKey.length > 0 && existChannelInfo.version == channelInfo.version) {
+        channelInfo.avatarCacheKey = existChannelInfo.avatarCacheKey;
+    } else {
+        channelInfo.avatarCacheKey = [[NSUUID UUID] UUIDString];
     }
     if(existChannelInfo) {
         [self updateChannelInfo:channelInfo];
@@ -246,7 +242,7 @@ static WKChannelManager *_instance;
 
 -(void) addOrUpdateChannelInfos:(NSArray<WKChannelInfo*>*) channelInfos {
     for (WKChannelInfo *channelInfo in channelInfos) {
-        if(channelInfo.channel.channelType == WK_GROUP) {
+        {
             // 优先从缓存读取，避免逐条 DB 查询
             WKChannelInfo *existChannelInfo = [self getCache:channelInfo.channel];
             if (!existChannelInfo) {
@@ -302,12 +298,10 @@ static WKChannelManager *_instance;
     [self deleteMembersWithChannelFromCache:channel];
     [[WKChannelMemberDB shared] addOrUpdateMembers:members];
     // 群成员变化，强制刷新头像缓存key
-    if(channel.channelType == WK_GROUP) {
-        [self refreshAvatarCacheKey:channel];
-    }
+    [self refreshAvatarCacheKey:channel];
 }
 
-/// 群成员变化时刷新头像缓存key（生成新UUID使SDWebImage缓存失效）
+/// 刷新头像缓存key（生成新UUID使SDWebImage缓存失效）
 -(void) refreshAvatarCacheKey:(WKChannel*)channel {
     WKChannelInfo *channelInfo = [self getChannelInfo:channel];
     if(channelInfo) {

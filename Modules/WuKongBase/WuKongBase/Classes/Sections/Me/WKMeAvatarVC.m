@@ -24,7 +24,8 @@
     [super viewDidLoad];
     self.navigationBar.rightView = self.moreButtonItem;
     [self.view addSubview:self.avatarImgView];
-    self.avatarImgView.url = [WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid];
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:[WKApp shared].loginInfo.uid]];
+    self.avatarImgView.url = [WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid cacheKey:info.avatarCacheKey];
 }
 
 - (NSString *)langTitle {
@@ -124,11 +125,24 @@ didCropToImage:(nonnull UIImage *)image withRect:(CGRect)cropRect
             [weakSelf.view switchHUDSuccess:LLangW(@"上传失败", weakSelf)];
             WKLogError(@"上传失败！-> %@",error);
         }else {
+            NSLog(@"[Avatar] upload success, imageSize=%@", NSStringFromCGSize(image.size));
             weakSelf.avatarImgView.avatarImgView.image = image;
             [weakSelf.view switchHUDSuccess:LLangW(@"上传成功", weakSelf)];
-            [[SDImageCache sharedImageCache] removeImageForKey:[WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid] withCompletion:nil];
-            
-            [[NSNotificationCenter defaultCenter] postNotificationName:WKNOTIFY_USER_AVATAR_UPDATE object:@{@"uid":[WKApp shared].loginInfo.uid?:@""}];
+
+            // 生成新的 avatarCacheKey，统一使用 cacheKey URL 体系
+            NSString *uid = [WKApp shared].loginInfo.uid;
+            [[WKSDK shared].channelManager refreshAvatarCacheKey:[WKChannel personWithChannelID:uid]];
+            WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:uid]];
+            NSString *avatarKey = [WKAvatarUtil getAvatar:uid cacheKey:info.avatarCacheKey];
+
+            // 写入 SDWebImage 缓存（内存 + 磁盘）
+            [[SDImageCache sharedImageCache] storeImage:image forKey:avatarKey toDisk:YES completion:nil];
+
+            // 清除 NSURLCache 中该 URL 的 HTTP 缓存
+            [[NSURLCache sharedURLCache] removeCachedResponseForRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:avatarKey]]];
+
+            // 发送通知，其他页面从缓存加载新头像
+            [[NSNotificationCenter defaultCenter] postNotificationName:WKNOTIFY_USER_AVATAR_UPDATE object:@{@"uid":uid?:@""}];
         }
         
     }];

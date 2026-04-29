@@ -54,6 +54,9 @@ typedef void(^WKReminderDoneProvider)(NSArray<NSNumber*> *ids,WKReminderDoneCall
 @property(nonatomic,copy) WKReminderProvider reminderProvider; // 消息提醒项内容同步提供者
 @property(nonatomic,copy) WKReminderDoneProvider reminderDoneProvider; // 消息提醒项完成提供者
 
+// 刷新指定频道的reminder并通知UI
+-(void) updateConversations:(NSSet<WKChannel*>*)channels;
+
 
 
 @end

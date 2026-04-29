@@ -13,6 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface WKRichTextParseOptions : NSObject
 
 @property(nonatomic,assign) BOOL disableLink; // 禁止解析链接
+@property(nonatomic,assign) BOOL allowLargeCustomEmoji; // 允许自定义表情大图显示（仅聊天气泡）
 
 @end
 

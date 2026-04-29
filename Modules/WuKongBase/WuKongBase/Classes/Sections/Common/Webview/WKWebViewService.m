@@ -7,7 +7,7 @@
 
 #import "WKWebViewService.h"
 #import "WuKongBase.h"
-#import "WKConversationListSelectVC.h"
+#import "WKForwardSelectVC.h"
 #import "WKUserAuthView.h"
 #import "WKWebViewJavascriptBridge.h"
 @implementation WKWebViewService
@@ -39,7 +39,7 @@
     
     // 选择最近会话
     [self.bridge registerHandler:@"chooseConversation" handler:^(id data, WVJBResponseCallback responseCallback) {
-        WKConversationListSelectVC *vc = [WKConversationListSelectVC new];
+        WKForwardSelectVC *vc = [WKForwardSelectVC new];
         vc.title = LLangW(@"选择一个聊天", weakSelf);
         [vc setOnSelect:^(WKChannel * _Nonnull channel) {
             responseCallback([WKJsonUtil toJson:@{

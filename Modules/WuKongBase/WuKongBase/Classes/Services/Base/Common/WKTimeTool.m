@@ -19,23 +19,26 @@
 }
 
 +(NSString*) formatTimeByAutoAMPM:(NSDate*)dt {
-    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-    // ----------设置你想要的格式,hh与HH的区别:分别表示12小时制,24小时制
-    formatter.AMSymbol = LLang(@"上午");
-    formatter.PMSymbol = LLang(@"下午");
-    
-    if([self is12HourFormat]) {
+    NSCalendar *calendar = [NSCalendar currentCalendar];
+    NSDate *now = [NSDate date];
+    NSDateComponents *nowComp = [calendar components:NSCalendarUnitYear|NSCalendarUnitMonth|NSCalendarUnitDay fromDate:now];
+    NSDateComponents *dtComp = [calendar components:NSCalendarUnitYear|NSCalendarUnitMonth|NSCalendarUnitDay fromDate:dt];
+
+    NSString *timePart;
+    if ([self is12HourFormat]) {
         NSString *lang = [WKApp shared].config.langue;
-        if([lang isEqualToString:@"zh-Hans"]) {
-            [formatter setDateFormat:@"aaa hh:mm"];
-        }else{
-            [formatter setDateFormat:@"hh:mm aaa"];
-        }
-        
-    }else{
-        [formatter setDateFormat:@"HH:mm"];
+        timePart = [self getTimeString:dt format:[lang isEqualToString:@"zh-Hans"] ? @"aaa hh:mm" : @"hh:mm aaa"];
+    } else {
+        timePart = [self getTimeString:dt format:@"HH:mm"];
     }
-    return [formatter stringFromDate:dt];;
+
+    if (nowComp.year != dtComp.year) {
+        return [NSString stringWithFormat:@"%@ %@", [self getTimeString:dt format:@"yyyy/M/d"], timePart];
+    }
+    if (nowComp.month != dtComp.month || nowComp.day != dtComp.day) {
+        return [NSString stringWithFormat:@"%@ %@", [self getTimeString:dt format:@"M/d"], timePart];
+    }
+    return timePart;
 }
 
 +(NSString*) formatDateStyle1:(NSDate*)dt {
@@ -197,9 +200,18 @@
 }
 
 + (NSString *)getTimeString:(NSDate *)dt format:(NSString *)fmt{
-    NSDateFormatter* format = [[NSDateFormatter alloc] init];
-    [format setDateFormat:fmt];
-    return [format stringFromDate:(dt==nil?[WKTimeTool getIOSDefaultDate]:dt)];
+    static NSMutableDictionary<NSString *, NSDateFormatter *> *formatters;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        formatters = [NSMutableDictionary dictionary];
+    });
+    NSDateFormatter *formatter = formatters[fmt];
+    if (!formatter) {
+        formatter = [[NSDateFormatter alloc] init];
+        [formatter setDateFormat:fmt];
+        formatters[fmt] = formatter;
+    }
+    return [formatter stringFromDate:(dt == nil ? [WKTimeTool getIOSDefaultDate] : dt)];
 }
 
 + (NSTimeInterval) getIOSTimeStamp:(NSDate *)dat{

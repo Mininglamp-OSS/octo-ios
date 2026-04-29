@@ -162,8 +162,13 @@ static dispatch_queue_t _imsocketQueue;
           [self changeConnectStatus:WKConnecting];
           
         if(self.ssocket) {
-            self.ssocket.delegate = nil;
+            GCDAsyncSocket *oldSocket = self.ssocket;
+            oldSocket.delegate = nil;
             self.ssocket = nil;
+            // 在 socket 自己的队列上断开并释放，避免非 socketQueue 上 dealloc 导致递归锁崩溃
+            dispatch_async(oldSocket.delegateQueue ?: dispatch_get_main_queue(), ^{
+                [oldSocket disconnect];
+            });
           }
           // 循环去拿连接地址，直到拿到地址
           [self loopGetAddrToConnect];
@@ -293,9 +298,14 @@ static dispatch_queue_t _imsocketQueue;
     [self.connectStatusLock lock];
     self.forceDisconnect = force;
     [self.connectStatusLock unlock];
-    
-    [self.ssocket disconnect];
-    
+
+    // 异步断开，避免主线程 dispatch_sync 到 socketQueue 导致死锁
+    GCDAsyncSocket *socket = self.ssocket;
+    if (socket) {
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            [socket disconnect];
+        });
+    }
 }
 
 -(void) logout {

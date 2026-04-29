@@ -26,12 +26,15 @@
 #import "WuKongBase.h"
 #import "WKSendButton.h"
 #import "WKFuncGroupView.h"
+#import "WKHoldToTalkManager.h"
+#import <WuKongIMSDK/WKChannelMemberDB.h>
+#import "WKMessageModel.h"
 #define  WKiPhoneX (WKScreenWidth == 375.f && WKScreenHeight == 812.f ? YES : NO)
 
 #define WKConversationInputHeight 36.0f // 输入框高度
 #define WKConversationFuncGroupViewHeight 50.0f // 输入框下面的功能组的视图高度
 
-@interface WKConversationInputPanel()<WKGrowingTextViewDelegate>{
+@interface WKConversationInputPanel()<WKGrowingTextViewDelegate, WKHoldToTalkManagerDelegate, UITableViewDelegate, UITableViewDataSource>{
     //    CGFloat _inputPanelBorder;
     BOOL _noFollowKeyboradHeight; // 不追随键盘高度
 }
@@ -65,6 +68,13 @@
 
 @property(nonatomic,strong) NSArray<UIView*> *textViewRights;
 
+@property(nonatomic,strong) WKHoldToTalkManager *holdToTalkManager;
+
+// BotFather 命令联想
+@property(nonatomic,strong) UIView *cmdSuggestView;
+@property(nonatomic,strong) UITableView *cmdSuggestTable;
+@property(nonatomic,strong) NSArray<NSDictionary *> *cmdSuggestData; // @{@"cmd":..., @"desc":...}
+@property(nonatomic,strong) NSArray<NSDictionary *> *cmdSuggestFiltered;
 
 @end
 
@@ -111,10 +121,12 @@
     [self.messageToolBar addSubview:self.menusBtn];
     [self.messageToolBar addSubview:self.sendButton];
     
+    [self.messageToolBar addSubview:self.voiceToggleBtn];
+    [self.messageToolBar addSubview:self.holdToTalkBtn];
     [self.messageToolBar addSubview:self.textView];
     [self.messageToolBar addSubview:self.funcGroupView];
-    
-    
+
+
     [self reloadInputPanelFrame];
     [self layoutContentView];
     
@@ -195,13 +207,21 @@ CGFloat itemSpace = 10.0f;
     if([WKApp shared].config.style == WKSystemStyleDark) {
         self.layer.shadowColor = [UIColor colorWithRed:15.0f/255.0f green:15.0f/255.0f blue:15.0f/255.0f alpha:1.0].CGColor;
         [self.textView setBackgroundColor:[UIColor colorWithRed:38.0f/255.0f green:38.0f/255.0f blue:38.0f/255.0f alpha:1.0]];
+        [self.holdToTalkBtn setBackgroundColor:[UIColor colorWithRed:38.0f/255.0f green:38.0f/255.0f blue:38.0f/255.0f alpha:1.0]];
     }else{
         self.layer.shadowColor = [UIColor colorWithRed:240.0f/255.0f green:240.0f/255.0f blue:240.0f/255.0f alpha:1.0].CGColor;
         [self.textView setBackgroundColor:[UIColor colorWithRed:246.0f/255.0f green:246.0f/255.0f blue:246.0f/255.0f alpha:1.0]];
+        [self.holdToTalkBtn setBackgroundColor:[UIColor colorWithRed:246.0f/255.0f green:246.0f/255.0f blue:246.0f/255.0f alpha:1.0]];
     }
     
 
 }
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
+}
+
 -(void) layoutContentView{
     
 //    UIEdgeInsets inputFieldInsets = [self inputFieldInsets];
@@ -209,51 +229,53 @@ CGFloat itemSpace = 10.0f;
     CGFloat contentHeight = self.currentContentHeight;
     
     CGFloat leftSpace = 10.0f;
-    
+
     // messageToolBar
     self.contentView.lim_width = self.lim_width;
     self.contentView.lim_height = contentHeight;
-    
+
     self.messageToolBar.lim_size = self.contentView.lim_size;
     if(self.topView) {
         self.messageToolBar.lim_top = self.topView.lim_bottom;
     }else {
         self.messageToolBar.lim_top = 0.0f;
     }
-    
-    
-    
+
+    // voiceToggleBtn
+    CGFloat voiceToggleBtnLeft = leftSpace;
     if(self.showMenusBtn) {
         self.menusBtn.lim_left = leftSpace;
+        voiceToggleBtnLeft = self.menusBtn.lim_right + 6.0f;
     }
-    
-    // textView
+    self.voiceToggleBtn.lim_left = voiceToggleBtnLeft;
+    self.voiceToggleBtn.lim_top = 10.0f + (self.currentInputHeight / 2.0f - self.voiceToggleBtn.lim_height / 2.0f);
+
+    // textView / holdToTalkBtn
+    CGFloat inputLeft = self.voiceToggleBtn.lim_right + 8.0f;
     self.textView.lim_top = 10.0f;
-    CGFloat textViewWidth = 0.0f;
-    if(self.showMenusBtn) {
-        self.textView.lim_left = self.menusBtn.lim_right + 10.0f;
-        textViewWidth = self.lim_width - self.menusBtn.lim_right - 20.0f;
-    }else{
-        self.textView.lim_left = 10.0f;
-        textViewWidth  =self.lim_width - 20.0f;
-    }
-    
+    CGFloat textViewWidth = self.lim_width - inputLeft - 10.0f;
+
     [self.sendButton layoutSubviews];
     CGFloat sendLeftSpace = 10.0f;
-    if(self.sendButton.show) {
-        
+    if(self.sendButton.show && !self.isVoiceMode) {
         textViewWidth -= (self.sendButton.lim_width+sendLeftSpace);
     }
-    
+
+    self.textView.lim_left = inputLeft;
     self.textView.lim_width = textViewWidth;
-    
     self.textView.lim_height = self.currentInputHeight;
     self.textView.lim_top = 10.0f;
-    
+
+    // holdToTalkBtn（语音模式下与textView位置对齐）
+    self.holdToTalkBtn.lim_left = inputLeft;
+    self.holdToTalkBtn.lim_width = self.lim_width - inputLeft - 10.0f;
+    self.holdToTalkBtn.lim_height = WKConversationInputHeight;
+    self.holdToTalkBtn.lim_top = 10.0f;
+
     if(self.showMenusBtn) {
         self.menusBtn.lim_top = self.textView.lim_top + ( self.textView.lim_height/2.0f - self.menusBtn.lim_height/2.0f);
     }
-    
+
     self.sendButton.lim_top = self.textView.lim_bottom - self.sendButton.lim_height;
     self.sendButton.lim_left = self.textView.lim_right + sendLeftSpace;
    
@@ -445,7 +467,7 @@ CGFloat itemSpace = 10.0f;
     if(!self.disableAutoTop) {
         self.lim_top =  [self currentMessageToolBarY];
     }
-   
+
     
     if(self.panelHeight<=0) {
         [self unSelectedFuncItems];
@@ -643,20 +665,71 @@ CGFloat itemSpace = 10.0f;
     NSString *content = self.textView.text;
     if([WKApp shared].config.messageTextMaxBytes !=0) {
         if(content && [self convertToByte:content]>[WKApp shared].config.messageTextMaxBytes) {
-            [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送的内容太长！")];
+            [self showTextToFileAlert:content];
             return;
         }
     }
-    
+
     self.textView.text = @"";
     self.sendButton.show = NO;
+    self.sendButton.hidden = YES;
     [self resetInputHeight];
     [self animateInputPanelChange:^{
         if(self.delegate && [self.delegate respondsToSelector:@selector(inputPanelSend:text:)]) {
             [self.delegate inputPanelSend:self text:content];
         }
     }];
-   
+
+}
+
+/// 文本超出限制时弹窗提示，确认后转为 .txt 文件发送
+-(void) showTextToFileAlert:(NSString *)text {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil
+        message:LLang(@"字数超出限制无法发送，是否需将消息转为文档发出？")
+        preferredStyle:UIAlertControllerStyleAlert];
+
+    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:LLang(@"取消")
+        style:UIAlertActionStyleCancel handler:nil];
+
+    __weak typeof(self) weakSelf = self;
+    UIAlertAction *confirmAction = [UIAlertAction actionWithTitle:LLang(@"确认发送")
+        style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            [weakSelf sendTextAsFile:text];
+        }];
+
+    [alert addAction:cancelAction];
+    [alert addAction:confirmAction];
+    [[WKNavigationManager shared].topViewController presentViewController:alert animated:YES completion:nil];
+}
+
+/// 将文本内容生成 .txt 文件并以文件消息发送
+-(void) sendTextAsFile:(NSString *)text {
+    // 用前10个字符作为文件名
+    NSString *namePrefix = text.length > 10 ? [text substringToIndex:10] : text;
+    // 移除文件名中的非法字符
+    NSCharacterSet *illegal = [NSCharacterSet characterSetWithCharactersInString:@"/\\:*?\"<>|\n\r\t"];
+    namePrefix = [[namePrefix componentsSeparatedByCharactersInSet:illegal] componentsJoinedByString:@""];
+    if (namePrefix.length == 0) namePrefix = @"消息";
+    NSString *fileName = [NSString stringWithFormat:@"%@.txt", namePrefix];
+
+    // 写入临时文件
+    NSString *tmpDir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"WKTextToFile"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:tmpDir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *filePath = [tmpDir stringByAppendingPathComponent:fileName];
+    [text writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+    NSURL *fileURL = [NSURL fileURLWithPath:filePath];
+    WKFileContent *fileContent = [WKFileContent initWithFileURL:fileURL];
+
+    // 清空输入框
+    self.textView.text = @"";
+    self.sendButton.show = NO;
+    [self resetInputHeight];
+
+    // 通过 delegate 发送文件消息
+    if (self.delegate && [self.delegate respondsToSelector:@selector(inputPanel:sendMessage:)]) {
+        [self.delegate inputPanel:self sendMessage:fileContent];
+    }
 }
 
 #pragma mark - UITextViewDelegate
@@ -742,11 +815,9 @@ CGFloat itemSpace = 10.0f;
 
 -(void) handleTextViewContentDidChange {
     NSString *text = self.textView.text;
-    if([[text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:@""]) {
-        self.sendButton.show = false;
-    }else {
-        self.sendButton.show = true;
-    }
+    BOOL hasText = ![[text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:@""];
+    self.sendButton.show = hasText;
+    self.sendButton.hidden = !hasText || self.isVoiceMode;
     [self animateInputPanelChange];
     
     if(self.delegate && [self.delegate respondsToSelector:@selector(inputPanelTyping:)]) {
@@ -768,8 +839,11 @@ CGFloat itemSpace = 10.0f;
         [self textChangeMentionCandidateIfNeeded];
     }
     
+    // BotFather 命令联想
+    [self updateCommandSuggestions:text];
+
     [[WKApp shared] invokes:WKPOINT_CATEGORY_CONVERSATION_INPUT_TEXT_CHANGE param:@{@"input":self}];
-    
+
     if(self.delegate && [self.delegate respondsToSelector:@selector(inputPanel:textChange:)]) {
         [self.delegate inputPanel:self textChange:text];
     }
@@ -898,14 +972,26 @@ CGFloat itemSpace = 10.0f;
  */
 -(void) inputInsertText:(NSString *)text{
     [self.textView insertText:text];
-    
     [self handleTextViewContentDidChange];
+    // 滚动到文本末尾
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UITextView *tv = self.textView.internalTextView;
+        if (tv.text.length > 0) {
+            [tv scrollRangeToVisible:NSMakeRange(tv.text.length, 0)];
+        }
+    });
 }
 
 -(void) inputSetText:(NSString *)text {
     [self.textView setText:text];
-    [self resetInputHeight];
     [self handleTextViewContentDidChange];
+    // 滚动到文本末尾
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UITextView *tv = self.textView.internalTextView;
+        if (tv.text.length > 0) {
+            [tv scrollRangeToVisible:NSMakeRange(tv.text.length, 0)];
+        }
+    });
 }
 
 
@@ -1030,18 +1116,414 @@ CGFloat itemSpace = 10.0f;
     return [self.funcGroupView isZooming];
 }
 
+#pragma mark - Voice/Text Mode Toggle
+
+- (UIButton *)voiceToggleBtn {
+    if (!_voiceToggleBtn) {
+        _voiceToggleBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        _voiceToggleBtn.frame = CGRectMake(0, 0, 30, 30);
+        UIImage *voiceImg = [WKApp.shared loadImage:@"Conversation/Toolbar/VoiceToggle" moduleID:@"WuKongBase"];
+        [_voiceToggleBtn setImage:voiceImg forState:UIControlStateNormal];
+        _voiceToggleBtn.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        [_voiceToggleBtn addTarget:self action:@selector(toggleVoiceMode) forControlEvents:UIControlEventTouchUpInside];
+    }
+    return _voiceToggleBtn;
+}
+
+- (UIButton *)holdToTalkBtn {
+    if (!_holdToTalkBtn) {
+        _holdToTalkBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+        _holdToTalkBtn.frame = CGRectMake(0, 0, 100, WKConversationInputHeight);
+        [_holdToTalkBtn setTitle:LLang(@"按住 说话") forState:UIControlStateNormal];
+        [_holdToTalkBtn setTitleColor:[UIColor colorWithRed:0.35 green:0.35 blue:0.37 alpha:1.0] forState:UIControlStateNormal];
+        _holdToTalkBtn.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+        _holdToTalkBtn.layer.cornerRadius = 15.0f;
+        _holdToTalkBtn.layer.masksToBounds = YES;
+        _holdToTalkBtn.hidden = YES;
+
+        // 长按手势
+        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleHoldToTalk:)];
+        longPress.minimumPressDuration = 0.15;
+        [_holdToTalkBtn addGestureRecognizer:longPress];
+    }
+    return _holdToTalkBtn;
+}
+
+- (WKHoldToTalkManager *)holdToTalkManager {
+    if (!_holdToTalkManager) {
+        _holdToTalkManager = [[WKHoldToTalkManager alloc] init];
+        _holdToTalkManager.delegate = self;
+    }
+    return _holdToTalkManager;
+}
+
+- (void)toggleVoiceMode {
+    self.isVoiceMode = !self.isVoiceMode;
+
+    if (self.isVoiceMode) {
+        // 切换到语音模式
+        UIImage *kbImg = [WKApp.shared loadImage:@"Conversation/Toolbar/KeyboardToggle" moduleID:@"WuKongBase"];
+        [self.voiceToggleBtn setImage:kbImg forState:UIControlStateNormal];
+        self.textView.hidden = YES;
+        self.sendButton.hidden = YES;
+        self.holdToTalkBtn.hidden = NO;
+        [self.textView endEditing:YES];
+        // 语音模式下输入栏高度重置为单行
+        self.currentInputHeight = WKConversationInputHeight;
+    } else {
+        // 切换回文本模式
+        UIImage *voiceImg = [WKApp.shared loadImage:@"Conversation/Toolbar/VoiceToggle" moduleID:@"WuKongBase"];
+        [self.voiceToggleBtn setImage:voiceImg forState:UIControlStateNormal];
+        self.textView.hidden = NO;
+        self.holdToTalkBtn.hidden = YES;
+        // 恢复发送按钮状态
+        NSString *text = self.textView.text;
+        BOOL hasText = text && ![[text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:@""];
+        self.sendButton.show = hasText;
+        self.sendButton.hidden = !hasText;
+        // 恢复文本模式下输入框高度
+        [self resetCurrentInputHeight];
+        [self.holdToTalkManager cancelIfRecording];
+    }
+
+    [self animateInputPanelChange];
+}
+
+- (void)handleHoldToTalk:(UILongPressGestureRecognizer *)gesture {
+    UIWindow *window = self.window;
+    if (!window) return;
+    [self.holdToTalkManager handleLongPress:gesture inWindow:window];
+}
+
+#pragma mark - WKHoldToTalkManagerDelegate
+
+- (void)holdToTalkManager:(WKHoldToTalkManager *)manager didTranscribeText:(NSString *)text {
+    [self inputInsertText:text];
+}
+
+- (void)holdToTalkManager:(WKHoldToTalkManager *)manager sendVoiceData:(NSData *)data seconds:(NSInteger)seconds waveform:(NSArray<NSNumber *> *)waveform {
+    if (seconds <= 0) {
+        [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"说话时间太短")];
+        return;
+    }
+    // 将波形数组转为 NSData（与 WKVoicePanel cutAudioWaveform 一致）
+    NSData *waveformData = [self convertWaveformToData:waveform];
+    if ([self.conversationContext respondsToSelector:@selector(sendMessage:)]) {
+        [self.conversationContext sendMessage:[WKVoiceContent initWithData:data second:(int)seconds waveform:waveformData]];
+    }
+}
+
+- (NSData *)convertWaveformToData:(NSArray<NSNumber *> *)waveform {
+    if (!waveform || waveform.count == 0) return nil;
+    NSMutableData *data = [[NSMutableData alloc] init];
+    NSUInteger binSize = waveform.count / 20; // 缩减到约20个采样点
+    if (binSize == 0) binSize = 1;
+    for (NSUInteger i = 0; i < waveform.count; i += binSize) {
+        uint8_t maxVal = 0;
+        for (NSUInteger j = 0; j < binSize && (i + j) < waveform.count; j++) {
+            uint8_t v = (uint8_t)(MIN(waveform[i + j].floatValue * 100.0f, 255));
+            if (v > maxVal) maxVal = v;
+        }
+        [data appendBytes:&maxVal length:1];
+    }
+    return data;
+}
+
+- (void)holdToTalkManager:(WKHoldToTalkManager *)manager sendText:(NSString *)text {
+    if (self.delegate && [self.delegate respondsToSelector:@selector(inputPanelSend:text:)]) {
+        [self.delegate inputPanelSend:self text:text];
+    }
+}
+
+- (void)holdToTalkManager:(WKHoldToTalkManager *)manager sendText:(NSString *)text mentions:(NSArray<WKInputMentionItem *> *)mentions {
+    // 先写入 mentionCache
+    if (mentions.count > 0 && [self.conversationContext respondsToSelector:@selector(addMentionItems:)]) {
+        [self.conversationContext addMentionItems:mentions];
+    }
+    // 再走正常发送流程（sendTextMessage 会从 mentionCache 生成 entity）
+    if (self.delegate && [self.delegate respondsToSelector:@selector(inputPanelSend:text:)]) {
+        [self.delegate inputPanelSend:self text:text];
+    }
+}
+
+- (NSArray *)holdToTalkManagerChannelMembers:(WKHoldToTalkManager *)manager {
+    if (![self.conversationContext respondsToSelector:@selector(channel)]) return @[];
+    WKChannel *channel = self.conversationContext.channel;
+    // 子区成员在父群上
+    if (channel.channelType == WK_COMMUNITY_TOPIC) {
+        NSRange sep = [channel.channelId rangeOfString:@"____"];
+        if (sep.location != NSNotFound) {
+            NSString *groupNo = [channel.channelId substringToIndex:sep.location];
+            return [[WKChannelMemberDB shared] getMembersWithChannel:[WKChannel groupWithChannelID:groupNo]];
+        }
+    }
+    return [[WKChannelMemberDB shared] getMembersWithChannel:channel];
+}
+
+- (void)holdToTalkManagerDidStartRecording:(WKHoldToTalkManager *)manager {
+    if ([self.conversationContext respondsToSelector:@selector(startRecordingVoiceMessage)]) {
+        [self.conversationContext startRecordingVoiceMessage];
+    }
+}
+
+- (void)holdToTalkManagerDidStopRecording:(WKHoldToTalkManager *)manager {
+    // 录音结束
+}
+
+- (NSString *)holdToTalkManagerCurrentInputText:(WKHoldToTalkManager *)manager {
+    return self.textView.text;
+}
+
+- (NSString *)holdToTalkManagerChatContext:(WKHoldToTalkManager *)manager {
+    // 构建聊天上下文（复用 WKVoicePanel 的逻辑）
+    NSMutableArray<NSString*> *parts = [NSMutableArray array];
+    NSString *myUid = [WKApp shared].loginInfo.uid;
+    WKChannel *channel = self.conversationContext.channel;
+
+    // 聊天成员名单
+    NSMutableArray<NSString*> *memberNames = [NSMutableArray array];
+    NSMutableSet<NSString*> *uniqueNames = [NSMutableSet set];
+
+    if (channel.channelType == WK_GROUP || channel.channelType == WK_COMMUNITY_TOPIC) {
+        WKChannel *memberChannel = channel;
+        if (channel.channelType == WK_COMMUNITY_TOPIC) {
+            NSRange sep = [channel.channelId rangeOfString:@"____"];
+            if (sep.location != NSNotFound) {
+                memberChannel = [WKChannel groupWithChannelID:[channel.channelId substringToIndex:sep.location]];
+            }
+        }
+        NSArray<WKChannelMember*> *members = [[WKChannelMemberDB shared] getMembersWithChannel:memberChannel];
+        NSInteger limit = MIN(members.count, 100);
+        for (NSInteger i = 0; i < limit; i++) {
+            WKChannelMember *member = members[i];
+            if ([member.memberUid isEqualToString:myUid]) continue;
+            if (member.status != WKMemberStatusNormal) continue;
+            WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfoOfUser:member.memberUid];
+            if (info) {
+                if (info.name.length > 0 && ![uniqueNames containsObject:info.name]) {
+                    [uniqueNames addObject:info.name];
+                    [memberNames addObject:info.name];
+                }
+            }
+        }
+    } else if (channel.channelType == WK_PERSON) {
+        WKChannelInfo *peerInfo = [[WKSDK shared].channelManager getChannelInfo:channel];
+        if (peerInfo && peerInfo.name.length > 0) {
+            [memberNames addObject:peerInfo.name];
+        }
+    }
+
+    if (memberNames.count > 0) {
+        [parts addObject:[NSString stringWithFormat:@"聊天成员：%@", [memberNames componentsJoinedByString:@","]]];
+    }
+
+    // 最后10条消息
+    if ([self.conversationContext respondsToSelector:@selector(dates)] &&
+        [self.conversationContext respondsToSelector:@selector(messagesAtDate:)]) {
+        NSMutableArray<WKMessageModel*> *allMessages = [NSMutableArray array];
+        for (NSString *date in [self.conversationContext dates]) {
+            NSArray<WKMessageModel*> *msgs = [self.conversationContext messagesAtDate:date];
+            if (msgs) [allMessages addObjectsFromArray:msgs];
+        }
+        NSMutableArray<WKMessageModel*> *textMessages = [NSMutableArray array];
+        for (WKMessageModel *msg in allMessages) {
+            NSString *content = msg.content.contentDict[@"content"];
+            if (content.length > 0) {
+                [textMessages addObject:msg];
+            }
+        }
+        if (textMessages.count > 0) {
+            NSInteger count = MIN(textMessages.count, 10);
+            NSArray *recent = [textMessages subarrayWithRange:NSMakeRange(textMessages.count - count, count)];
+            NSMutableArray<NSString*> *msgLines = [NSMutableArray array];
+            for (WKMessageModel *msg in recent) {
+                NSString *text = msg.content.contentDict[@"content"];
+                NSString *name = nil;
+                WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfoOfUser:msg.fromUid];
+                if (info) name = info.displayName;
+                if (!name) name = msg.fromUid;
+                [msgLines addObject:[NSString stringWithFormat:@"[%@]: %@", name, text]];
+            }
+            [parts addObject:[msgLines componentsJoinedByString:@"\n"]];
+        }
+    }
+
+    return parts.count > 0 ? [parts componentsJoinedByString:@"\n"] : nil;
+}
+
+#pragma mark - BotFather 命令联想
+
+- (BOOL)isBotFatherChannel {
+    NSString *botUID = [WKApp shared].config.botfatherUID;
+    if (!botUID || botUID.length == 0) return NO;
+    return [self.conversationContext.channel.channelId isEqualToString:botUID];
+}
+
+- (NSArray<NSDictionary *> *)botFatherCommands {
+    if (!_cmdSuggestData) {
+        _cmdSuggestData = @[
+            @{@"cmd": @"/quickstart", @"desc": @"AI Agent 快速入门"},
+            @{@"cmd": @"/newbot",     @"desc": @"创建新机器人"},
+            @{@"cmd": @"/mybots",     @"desc": @"查看我的机器人"},
+            @{@"cmd": @"/connect",    @"desc": @"获取连接 prompt"},
+            @{@"cmd": @"/disconnect", @"desc": @"断开 Agent 连接"},
+            @{@"cmd": @"/setname",    @"desc": @"修改机器人名称"},
+            @{@"cmd": @"/setdescription", @"desc": @"修改机器人描述"},
+            @{@"cmd": @"/deletebot",  @"desc": @"删除机器人"},
+            @{@"cmd": @"/token",      @"desc": @"查看 Token"},
+            @{@"cmd": @"/revoke",     @"desc": @"重置 Token"},
+            @{@"cmd": @"/pending",    @"desc": @"查看待处理的好友申请"},
+            @{@"cmd": @"/approve",    @"desc": @"通过好友申请"},
+            @{@"cmd": @"/reject",     @"desc": @"拒绝好友申请"},
+            @{@"cmd": @"/cancel",     @"desc": @"取消当前操作"},
+            @{@"cmd": @"/help",       @"desc": @"显示帮助"},
+        ];
+    }
+    return _cmdSuggestData;
+}
+
+- (void)updateCommandSuggestions:(NSString *)text {
+    if (![self isBotFatherChannel]) {
+        [self hideCmdSuggestView];
+        return;
+    }
+
+    // 只在文本以 / 开头时显示联想
+    NSString *trimmed = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (![trimmed hasPrefix:@"/"]) {
+        [self hideCmdSuggestView];
+        return;
+    }
+
+    // 用输入的文本过滤命令
+    NSString *keyword = [trimmed lowercaseString];
+    NSMutableArray *filtered = [NSMutableArray array];
+    for (NSDictionary *item in [self botFatherCommands]) {
+        NSString *cmd = item[@"cmd"];
+        if ([cmd hasPrefix:keyword] || [cmd containsString:keyword]) {
+            [filtered addObject:item];
+        }
+    }
+
+    // 如果只剩一个且完全匹配，不显示
+    if (filtered.count == 1 && [filtered[0][@"cmd"] isEqualToString:trimmed]) {
+        [self hideCmdSuggestView];
+        return;
+    }
+
+    if (filtered.count == 0) {
+        [self hideCmdSuggestView];
+        return;
+    }
+
+    self.cmdSuggestFiltered = filtered;
+    [self showCmdSuggestView];
+    [self.cmdSuggestTable reloadData];
+}
+
+- (void)showCmdSuggestView {
+    if (self.cmdSuggestView) {
+        [self layoutCmdSuggestView];
+        return;
+    }
+
+    self.cmdSuggestView = [[UIView alloc] init];
+    self.cmdSuggestView.backgroundColor = [WKApp shared].config.cellBackgroundColor;
+    self.cmdSuggestView.layer.shadowColor = [UIColor blackColor].CGColor;
+    self.cmdSuggestView.layer.shadowOpacity = 0.1;
+    self.cmdSuggestView.layer.shadowOffset = CGSizeMake(0, -2);
+    self.cmdSuggestView.layer.shadowRadius = 4;
+
+    self.cmdSuggestTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
+    self.cmdSuggestTable.delegate = self;
+    self.cmdSuggestTable.dataSource = self;
+    self.cmdSuggestTable.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
+    self.cmdSuggestTable.separatorInset = UIEdgeInsetsMake(0, 16, 0, 16);
+    self.cmdSuggestTable.backgroundColor = [UIColor clearColor];
+    self.cmdSuggestTable.rowHeight = 44;
+    self.cmdSuggestTable.bounces = NO;
+    [self.cmdSuggestTable registerClass:[UITableViewCell class] forCellReuseIdentifier:@"CmdCell"];
+    [self.cmdSuggestView addSubview:self.cmdSuggestTable];
+
+    UIView *parentView = self.superview;
+    if (parentView) {
+        [parentView insertSubview:self.cmdSuggestView belowSubview:self];
+    }
+    [self layoutCmdSuggestView];
+}
+
+- (void)layoutCmdSuggestView {
+    if (!self.cmdSuggestView || !self.cmdSuggestFiltered) return;
+    CGFloat rowH = 44;
+    CGFloat maxRows = MIN(self.cmdSuggestFiltered.count, 6);
+    CGFloat tableH = rowH * maxRows;
+    CGFloat w = self.lim_width;
+    CGFloat y = self.frame.origin.y - tableH;
+    self.cmdSuggestView.frame = CGRectMake(0, y, w, tableH);
+    self.cmdSuggestTable.frame = self.cmdSuggestView.bounds;
+}
+
+- (void)hideCmdSuggestView {
+    if (self.cmdSuggestView) {
+        [self.cmdSuggestView removeFromSuperview];
+        self.cmdSuggestView = nil;
+        self.cmdSuggestTable = nil;
+        self.cmdSuggestFiltered = nil;
+    }
+}
+
+#pragma mark - Command Suggest UITableView
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    if (tableView == self.cmdSuggestTable) {
+        return self.cmdSuggestFiltered.count;
+    }
+    return 0;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"CmdCell" forIndexPath:indexPath];
+    NSDictionary *item = self.cmdSuggestFiltered[indexPath.row];
+    cell.backgroundColor = [UIColor clearColor];
+    cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+
+    // 命令文字（蓝色加粗）+ 描述（灰色）
+    NSString *cmd = item[@"cmd"];
+    NSString *desc = item[@"desc"];
+    NSString *full = [NSString stringWithFormat:@"%@  %@", cmd, desc];
+
+    NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:full];
+    UIColor *themeColor = [WKApp shared].config.themeColor;
+    [attr addAttribute:NSForegroundColorAttributeName value:themeColor range:NSMakeRange(0, cmd.length)];
+    [attr addAttribute:NSFontAttributeName value:[UIFont systemFontOfSize:15 weight:UIFontWeightMedium] range:NSMakeRange(0, cmd.length)];
+    [attr addAttribute:NSForegroundColorAttributeName value:[UIColor grayColor] range:NSMakeRange(cmd.length + 2, desc.length)];
+    [attr addAttribute:NSFontAttributeName value:[UIFont systemFontOfSize:13] range:NSMakeRange(cmd.length + 2, desc.length)];
+
+    cell.textLabel.attributedText = attr;
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    NSDictionary *item = self.cmdSuggestFiltered[indexPath.row];
+    NSString *cmd = item[@"cmd"];
+    self.textView.text = cmd;
+    [self handleTextViewContentDidChange];
+    [self hideCmdSuggestView];
+}
+
 -(void) dealloc{
     [self removeKeyboardListen];
 }
 
-// iphoneX安全距离
 - (CGFloat) safeBottom {
     CGFloat safeNum = 0;
-    //判断版本
     if (@available(iOS 11.0, *)) {
-        //通过系统方法keyWindow来获取safeAreaInsets
-        UIEdgeInsets safeArea = [[UIApplication sharedApplication] keyWindow].safeAreaInsets;
-        safeNum = safeArea.bottom;
+        UIWindow *window = self.window;
+        if (!window) {
+            window = [UIApplication sharedApplication].keyWindow;
+        }
+        safeNum = window.safeAreaInsets.bottom;
     }
     return safeNum;
 }

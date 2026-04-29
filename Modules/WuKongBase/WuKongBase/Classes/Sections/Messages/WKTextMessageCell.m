@@ -6,6 +6,8 @@
 //
 
 #import "WKTextMessageCell.h"
+#import "WKMessageTextView.h"
+#import <objc/runtime.h>
 #import "WKApp.h"
 #import "UIView+WK.h"
 #import "WKMentionService.h"
@@ -18,16 +20,18 @@
 #import "WKSecurityTipManager.h"
 #import "WKRichTextParseService.h"
 #import "WKMarkdownParser.h"
+#import <WebKit/WebKit.h>
 #import <WuKongBase/WuKongBase-Swift.h>
 
-#define replyNameFontSize 13.0f
+#define replyNameFontSize    13.0f
+#define replyContentFontSize 13.0f
+#define replyAvatarSize      22.0f   // 头像从 16→22，更清晰
 
+#define splitWidth      3.0f    // 左侧彩色竖线宽度（原来是 0 且被隐藏）
+#define replyBoxPadH    8.0f    // 引用块水平内边距
+#define replyBoxPadV    6.0f    // 引用块垂直内边距
+#define replyItemSpacing 3.0f  // 头像/名称行 与 内容行之间的间距
 
-#define replyContentFontSize 14.0f
-
-#define replyAvatarSize 16.0f
-
-#define splitWidth 0.0f
 #define replyNameLeftSpace 10.0f
 
 #define textTopSpace 8.0f // 消息内容顶部距离
@@ -38,12 +42,30 @@
 
 #define replyToNameSpace 4.0f // 回复离名字的距离
 
+#define kTableTopSpace 8.0f
+#define kTableExtraPadding 10.0f
+#define kTableToolbarHeight 36.0f
 
-@interface WKTextMessageCell ()<CNContactViewControllerDelegate,CNContactPickerDelegate>
+#define kBotActionBtnHeight 32.0f
+#define kBotActionTopSpace 10.0f
+#define kBotActionBtnSpacing 10.0f
 
-@property(nonatomic,strong) UILabel *textLbl;
+@interface WKTextMessageCell ()<CNContactViewControllerDelegate,CNContactPickerDelegate,WKNavigationDelegate,UIScrollViewDelegate,UITextViewDelegate,UIGestureRecognizerDelegate>
+
+@property(nonatomic,strong) WKMessageTextView *textLbl; // 原 UILabel，改为 UITextView 子类，天然支持文字选择
 @property(nonatomic,strong) id selectLinkData;
 
+// ---------- 分段渲染（文本段=UILabel，表格段=WKWebView）----------
+@property(nonatomic,strong) NSMutableArray<UIView*> *segmentViews;       // 按顺序的 UILabel / WKWebView
+@property(nonatomic,strong) NSMutableArray<WKWebView*> *tableWebViews;   // 表格 WebView 引用
+@property(nonatomic,strong) NSMutableArray<UIScrollView*> *tableOverlays; // 滑动遮罩（在 contentView 上）
+@property(nonatomic,strong) NSMutableArray<UIView*> *tableToolbars;      // 表格工具栏
+@property(nonatomic,strong) NSMutableArray<NSString*> *tableRawContents; // 表格原始 markdown 内容（供复制用）
+@property(nonatomic,assign) BOOL segmentsBuilt; // 分段视图是否已创建
+
+// ---------- 链接卡片 ----------
+@property(nonatomic,strong) UIView *linkCardView;
+@property(nonatomic,assign) BOOL isLinkCard;
 
 // ---------- 回复 ----------
 @property(nonatomic,strong) UIView *replyBox;
@@ -55,10 +77,153 @@
 // ---------- 安全提醒 ----------
 @property(nonatomic,strong) WKTipLabel *securityTipLbl;
 
+// ---------- BotFather 审批按钮 ----------
+@property(nonatomic,strong) UIView *botActionView;
+@property(nonatomic,strong) UIButton *approveBtn;
+@property(nonatomic,strong) UIButton *rejectBtn;
+@property(nonatomic,copy) NSString *approveCommand;
+@property(nonatomic,copy) NSString *rejectCommand;
+
+// ---------- 超长文本截断 ----------
+@property(nonatomic,strong) UIButton *viewFullTextBtn;
+
 @end
 
+static const NSInteger kTextTruncateThreshold = 10000; // 超过此长度截断
+static const NSInteger kTextPreviewLength = 8000;      // 预览显示的字符数
+static const CGFloat kViewFullTextBtnHeight = 36.0f;  // "查看全文"按钮高度
+
+
+// UITextView 子类：屏蔽系统复制/粘贴菜单，只保留自定义菜单
+// 参考 Android SelectTextHelper CursorHandle.onTouchEvent：
+// ACTION_MOVE → dismiss popup；ACTION_UP → show popup
+
+// ── 自定义选区句柄（加到 window 上，不在 cell 层级内，零手势冲突） ──
+
+@interface WKSelectionHandle : UIView
+@property(nonatomic, assign) BOOL isStart;
+@property(nonatomic, copy) void(^onDrag)(CGPoint locationInWindow);
+@property(nonatomic, copy) void(^onDragEnd)(void);
+- (instancetype)initWithStart:(BOOL)isStart;
+- (void)positionAtWindowPoint:(CGPoint)pt;
+@end
+
+@implementation WKSelectionHandle {
+    CGPoint _dragOffset;
+}
+- (instancetype)initWithStart:(BOOL)isStart {
+    CGFloat pad = 20, lineH = 20, circleR = 6;
+    self = [super initWithFrame:CGRectMake(0, 0, circleR*2+pad*2, lineH+circleR*2+pad)];
+    if (self) {
+        _isStart = isStart;
+        self.backgroundColor = [UIColor clearColor];
+        self.userInteractionEnabled = YES;
+        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(wk_pan:)];
+        [self addGestureRecognizer:pan];
+    }
+    return self;
+}
+- (void)drawRect:(CGRect)rect {
+    CGFloat pad = 20, lineW = 2, lineH = 20, circleR = 6;
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    [[UIColor systemBlueColor] setFill];
+    CGFloat cx = rect.size.width / 2;
+    if (self.isStart) {
+        CGContextFillEllipseInRect(ctx, CGRectMake(cx-circleR, pad, circleR*2, circleR*2));
+        CGContextFillRect(ctx, CGRectMake(cx-lineW/2, pad+circleR*2, lineW, lineH));
+    } else {
+        CGContextFillRect(ctx, CGRectMake(cx-lineW/2, pad, lineW, lineH));
+        CGContextFillEllipseInRect(ctx, CGRectMake(cx-circleR, pad+lineH, circleR*2, circleR*2));
+    }
+}
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    return CGRectContainsPoint(CGRectInset(self.bounds, -10, -10), point);
+}
+- (void)wk_pan:(UIPanGestureRecognizer *)gr {
+    CGPoint loc = [gr locationInView:nil];
+    if (gr.state == UIGestureRecognizerStateChanged) {
+        if (self.onDrag) self.onDrag(loc);
+    } else if (gr.state == UIGestureRecognizerStateEnded || gr.state == UIGestureRecognizerStateCancelled) {
+        if (self.onDragEnd) self.onDragEnd();
+    }
+}
+- (CGPoint)anchorOffset {
+    CGFloat pad = 20, lineH = 20, circleR = 6, cx = self.bounds.size.width / 2;
+    return self.isStart ? CGPointMake(cx, pad+circleR*2) : CGPointMake(cx, pad+lineH);
+}
+- (void)positionAtWindowPoint:(CGPoint)pt {
+    CGPoint a = [self anchorOffset];
+    self.frame = CGRectMake(pt.x-a.x, pt.y-a.y, self.bounds.size.width, self.bounds.size.height);
+}
+@end
 
 @implementation WKTextMessageCell
+
+/// WebView 加载完成后 JS 返回的实际表格内容高度（key = "clientMsgNo-tableIdx"）
+static NSMutableDictionary *_jsTableHeights;
++ (NSMutableDictionary *)jsTableHeights {
+    if (!_jsTableHeights) _jsTableHeights = [NSMutableDictionary dictionary];
+    return _jsTableHeights;
+}
+
+/// 与 CSS buildTableWebViewCSS 中行高保持一致：padding(10+10) + lineHeight(fontSize*1.2) + border(~2)
++ (CGFloat)tableRowHeight {
+    return ceil([WKApp shared].config.messageTextFontSize * 1.2 + 22.0f);
+}
+
++ (WKMessageTextView *)sharedMeasureTV {
+    static WKMessageTextView *tv;
+    if (!tv) {
+        tv = [[WKMessageTextView alloc] init];
+    }
+    tv.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+    return tv;
+}
+
+/// 宽度：NSLayoutManager usedRect（实际最宽行，用于气泡宽度）
+/// 高度：取 MAX(sizeThatFits, boundingRect)
+///   - sizeThatFits：UITextView 排版高度（NSLayoutManager），防止 UITextView 截断
+///   - boundingRect：CoreText 高度（UILabel 时代的测量方式），通常比 sizeThatFits 略大，
+///     这个"多出来的"底部空间刚好吸收时间戳(trailingView)对最后一行文字的视觉叠加。
+///     UILabel 时代一直依赖这个隐式 padding，换成 UITextView 后如果只用精确的
+///     sizeThatFits 高度，时间戳会覆盖最后一行。
++ (CGSize)measureTextViewSize:(NSAttributedString *)attrStr maxWidth:(CGFloat)maxWidth {
+    WKMessageTextView *tv = [[self class] sharedMeasureTV];
+    tv.frame = CGRectMake(0, 0, maxWidth, 10000);
+    tv.attributedText = attrStr;
+    NSAttributedString *normalizedAttr = tv.attributedText;
+
+    CGFloat tvH = [tv sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)].height;
+    CGFloat brH = [normalizedAttr boundingRectWithSize:CGSizeMake(maxWidth, CGFLOAT_MAX)
+                                        options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                        context:nil].size.height;
+    CGFloat h = MAX(ceil(tvH), ceil(brH));
+
+    NSLayoutManager *lm = tv.layoutManager;
+    NSTextContainer *tc = tv.textContainer;
+    [lm ensureLayoutForTextContainer:tc];
+    CGRect usedRect = [lm usedRectForTextContainer:tc];
+    CGFloat w = MIN(ceil(usedRect.size.width), maxWidth);
+
+    // --- 诊断日志 ---
+    NSString *textPreview = attrStr.string.length > 30
+        ? [NSString stringWithFormat:@"%@...", [attrStr.string substringToIndex:30]]
+        : attrStr.string;
+    textPreview = [textPreview stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
+    NSLog(@"[BubbleHeight] measure: text=\"%@\" len=%lu maxW=%.1f | tvH=%.2f brH=%.2f → h=%.0f w=%.0f",
+          textPreview, (unsigned long)attrStr.string.length, maxWidth, tvH, brH, h, w);
+
+    return CGSizeMake(w, h);
+}
+
++ (CGFloat)measureTextViewHeight:(NSAttributedString *)attrStr maxWidth:(CGFloat)maxWidth {
+    return [[self class] measureTextViewSize:attrStr maxWidth:maxWidth].height;
+}
+
+-(void) invalidateSegments {
+    self.segmentsBuilt = NO;
+    [self clearSegmentViews];
+}
 
 + (CGSize)sizeForMessage:(WKMessageModel *)model {
    CGSize size = [super sizeForMessage:model];
@@ -71,7 +236,42 @@
     return CGSizeMake(size.width, size.height + securityTipHeight);
 }
 
++(WKMemoryCache*) textAttrCache {
+    static WKMemoryCache *cache;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        cache = [[WKMemoryCache alloc] init];
+        cache.maxCacheNum = 500;
+    });
+    return cache;
+}
+
++(NSString*) textAttrCacheKey:(WKMessageModel*)message {
+    NSString *key = [NSString stringWithFormat:@"%llu%@",message.messageId,message.clientMsgNo];
+    if(message.remoteExtra.contentEdit) {
+        key = [NSString stringWithFormat:@"%@-edit-%lu",message.clientMsgNo,message.remoteExtra.editedAt];
+    }
+    id rawContent = message.remoteExtra.contentEdit ?: [message content];
+    if ([rawContent isKindOfClass:[WKTextContent class]] && [((WKTextContent*)rawContent).format isEqualToString:@"html"]) {
+        key = [NSString stringWithFormat:@"%@-%lu",key,(unsigned long)WKApp.shared.config.style];
+    }
+    return key;
+}
+
++(NSMutableAttributedString*) plainTextAttrStr:(WKMessageModel*)model {
+    NSString *content = [self getRawContent:model];
+    NSMutableAttributedString *attrStr = [[NSMutableAttributedString alloc] initWithString:content ?: @""];
+    attrStr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+    UIColor *textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
+    [attrStr addAttribute:NSForegroundColorAttributeName value:textColor range:NSMakeRange(0, attrStr.length)];
+    return attrStr;
+}
+
 + (CGSize)contentSizeForMessage:(WKMessageModel *)model {
+    NSString *checkContent = [self getRawContent:model];
+    if ([checkContent hasPrefix:@"[链接]"]) {
+        return CGSizeMake(220, 70);
+    }
     NSMutableAttributedString *attrStr = [[self class] parseAndCacheTextMessage:model];
     CGSize  messageTextSize =  [[self class] textSize:attrStr messageModel:model];
     CGSize size = messageTextSize;
@@ -85,10 +285,28 @@
         if([self isShowName:model]) {
             nameTopSpace = replyToNameSpace;
         }
-        size = CGSizeMake(MAX(MAX(messageTextSize.width, replyNameSize.width+replyNameLeftSpace+replyAvatarSize+splitWidth), replyContentSize.width) , messageTextSize.height + replyNameSize.height+replyContentSize.height+textTopSpace + nameTopSpace);
+        // 引用块高度 = 上下内边距 + max(头像,名字行) + 行间距 + 内容行
+        CGFloat replyRow1H = MAX(replyAvatarSize, replyNameSize.height);
+        CGFloat replyBoxH  = replyBoxPadV + replyRow1H + replyItemSpacing + replyContentSize.height + replyBoxPadV;
+        size = CGSizeMake(MAX(MAX(messageTextSize.width, replyNameSize.width + replyAvatarSize + 4.0f + splitWidth + replyBoxPadH * 2), replyContentSize.width + splitWidth + replyBoxPadH * 2),
+                          messageTextSize.height + replyBoxH + textTopSpace + nameTopSpace);
     }
-    
-    
+
+
+    // 含表格时：逐段计算高度（与 layoutSubviews 保持一致，避免合并文本与分段之和的偏差）
+    NSString *rawContent = [[self class] getRawContent:model];
+    if ([WKMarkdownRenderer containsTable:rawContent]) {
+        CGFloat segHeight = [[self class] segmentedContentHeightForMessage:model];
+        // 用分段高度替换 messageTextSize 中的文本高度部分（保留 reply 等其他高度）
+        size.height = size.height - messageTextSize.height + segHeight;
+        size.width = MAX(size.width, [WKApp shared].config.messageContentMaxWidth);
+    }
+
+    // BotFather 审批按钮高度
+    if ([self isBotFatherApproveMessage:model]) {
+        size.height += kBotActionTopSpace + kBotActionBtnHeight;
+    }
+
     CGSize trailingSize = [WKTrailingView size:model];
 
     CGFloat lastlineWidth = [[self class] textLastlineWidth:attrStr messageModel:model];
@@ -105,26 +323,34 @@
         nicknameWidth = [self getNicknameRowWidth:model];
     }
 
+    // 超长文本截断时增加"查看全文"按钮高度
+    if ([self isLongText:model]) {
+        size.height += kViewFullTextBtnHeight;
+    }
+
     return CGSizeMake(MAX(size.width, nicknameWidth), size.height);
-   
+
 }
 
 
 -(void) initUI {
     [super initUI];
-    self.textLbl = [[UILabel alloc] init];
-//    self.textLbl.underLineForLink = false;
-//    self.textLbl.delegate = self;
-
-   
-    
+    // 原 UILabel，现改为 WKMessageTextView（UITextView 子类）
+    // 构造函数已配置 display-only 默认值：
+    //   scrollEnabled=NO, editable=NO, selectable=NO,
+    //   textContainerInset=zero, lineFragmentPadding=0, maximumNumberOfLines=0
+    self.textLbl = [[WKMessageTextView alloc] init];
+    self.textLbl.delegate = self; // 用于 shouldInteractWithURL: 处理链接点击
     [self.textLbl setFont:[[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize]];
-    [_textLbl setBackgroundColor:[UIColor clearColor]];
-//    [self.textLbl setTextColor:[WKApp shared].config.defaultTextColor];
-    self.textLbl.numberOfLines = 0;
-    self.textLbl.lineBreakMode = NSLineBreakByWordWrapping;
     [self.messageContentView addSubview:self.textLbl];
-    
+
+    // 分段渲染数组
+    self.segmentViews = [NSMutableArray array];
+    self.tableWebViews = [NSMutableArray array];
+    self.tableOverlays = [NSMutableArray array];
+    self.tableToolbars = [NSMutableArray array];
+    self.tableRawContents = [NSMutableArray array];
+
     // 回复
     [self.messageContentView addSubview:self.replyBox];
     [self.replyBox addSubview:self.splitView];
@@ -134,7 +360,188 @@
     
     // 安全提醒
     [self.contentView addSubview:self.securityTipLbl];
-    
+
+    // BotFather 审批按钮
+    self.botActionView = [[UIView alloc] init];
+    self.botActionView.hidden = YES;
+    [self.messageContentView addSubview:self.botActionView];
+
+    self.rejectBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    [self.rejectBtn setTitle:LLang(@"拒绝") forState:UIControlStateNormal];
+    [self.rejectBtn setTitleColor:[WKApp shared].config.defaultTextColor forState:UIControlStateNormal];
+    self.rejectBtn.backgroundColor = [UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0];
+    self.rejectBtn.titleLabel.font = [[WKApp shared].config appFontOfSize:14.0f];
+    self.rejectBtn.layer.cornerRadius = 4.0f;
+    self.rejectBtn.layer.masksToBounds = YES;
+    [self.rejectBtn addTarget:self action:@selector(rejectBtnTap) forControlEvents:UIControlEventTouchUpInside];
+    [self.botActionView addSubview:self.rejectBtn];
+
+    self.approveBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    [self.approveBtn setTitle:LLang(@"通过") forState:UIControlStateNormal];
+    [self.approveBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    self.approveBtn.backgroundColor = [WKApp shared].config.themeColor;
+    self.approveBtn.titleLabel.font = [[WKApp shared].config appFontOfSize:14.0f];
+    self.approveBtn.layer.cornerRadius = 4.0f;
+    self.approveBtn.layer.masksToBounds = YES;
+    [self.approveBtn addTarget:self action:@selector(approveBtnTap) forControlEvents:UIControlEventTouchUpInside];
+    [self.botActionView addSubview:self.approveBtn];
+
+
+}
+
+-(void) viewFullTextTapped {
+    NSString *fullText = [[self class] getFullRawContent:self.messageModel];
+    // 用简单的全文查看页面展示
+    UIViewController *vc = [[UIViewController alloc] init];
+    vc.title = LLang(@"查看全文");
+    vc.view.backgroundColor = [WKApp shared].config.backgroundColor;
+    UITextView *textView = [[UITextView alloc] initWithFrame:vc.view.bounds];
+    textView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    textView.text = fullText;
+    textView.editable = NO;
+    textView.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+    textView.textColor = [WKApp shared].config.defaultTextColor;
+    textView.backgroundColor = [UIColor clearColor];
+    textView.contentInset = UIEdgeInsetsMake(10, 10, 10, 10);
+    [vc.view addSubview:textView];
+    [[WKNavigationManager shared] pushViewController:vc animated:YES];
+}
+
+static const NSUInteger kWebViewPoolLimit = 4;
+static NSMutableArray<WKWebView*> *_webViewPool;
+static WKWebViewConfiguration *_sharedWebViewConfig;
+
++(NSMutableArray<WKWebView*>*) webViewPool {
+    if (!_webViewPool) {
+        _webViewPool = [NSMutableArray array];
+    }
+    return _webViewPool;
+}
+
++(WKWebViewConfiguration*) sharedWebViewConfig {
+    if (!_sharedWebViewConfig) {
+        _sharedWebViewConfig = [[WKWebViewConfiguration alloc] init];
+    }
+    return _sharedWebViewConfig;
+}
+
+-(void) clearSegmentViews {
+    // 回收 WKWebView 到复用池
+    for (WKWebView *wv in self.tableWebViews) {
+        wv.navigationDelegate = nil;
+        [wv stopLoading];
+        [wv loadHTMLString:@"" baseURL:nil];
+        NSMutableArray *pool = [WKTextMessageCell webViewPool];
+        if (pool.count < kWebViewPoolLimit) {
+            [pool addObject:wv];
+        }
+    }
+    for (UIView *v in self.segmentViews) {
+        if (v != self.textLbl) { [v removeFromSuperview]; }
+    }
+    [self.segmentViews removeAllObjects];
+    for (UIScrollView *o in self.tableOverlays) { [o removeFromSuperview]; }
+    [self.tableOverlays removeAllObjects];
+    [self.tableWebViews removeAllObjects];
+    [self.tableToolbars removeAllObjects];
+    [self.tableRawContents removeAllObjects];
+}
+
+-(WKWebView*) createSegmentWebView {
+    NSMutableArray *pool = [WKTextMessageCell webViewPool];
+    WKWebView *wv = nil;
+    if (pool.count > 0) {
+        wv = pool.lastObject;
+        [pool removeLastObject];
+        wv.frame = CGRectZero;
+    } else {
+        wv = [[WKWebView alloc] initWithFrame:CGRectZero configuration:[WKTextMessageCell sharedWebViewConfig]];
+    }
+    wv.scrollView.scrollEnabled = NO;
+    wv.backgroundColor = [UIColor clearColor];
+    wv.opaque = NO;
+    wv.scrollView.backgroundColor = [UIColor clearColor];
+    wv.navigationDelegate = self;
+    return wv;
+}
+
+-(UIScrollView*) createSegmentOverlay {
+    UIScrollView *sv = [[UIScrollView alloc] init];
+    sv.backgroundColor = [UIColor clearColor];
+    sv.showsHorizontalScrollIndicator = YES;
+    sv.showsVerticalScrollIndicator = NO;
+    sv.bounces = NO;
+    sv.directionalLockEnabled = YES;
+    sv.delegate = self;
+    // tap 手势：将点击透传到 WebView，通过 JS 找到链接并触发导航
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTableLinkTap:)];
+    [sv addGestureRecognizer:tap];
+    return sv;
+}
+
+- (void)handleTableLinkTap:(UITapGestureRecognizer *)gr {
+    NSInteger idx = [self.tableOverlays indexOfObject:gr.view];
+    if (idx == NSNotFound || idx >= self.tableWebViews.count) return;
+    WKWebView *wv = self.tableWebViews[idx];
+    CGPoint pt = [gr locationInView:gr.view];
+    // overlay 从 toolbar 底部开始覆盖 WebView，tap 坐标 = CSS client 坐标（无需补偿）
+    // elementFromPoint 使用 client 坐标，WebView 内部处理 scrollOffset
+    NSString *js = [NSString stringWithFormat:
+        @"(function(){"
+        @"var el=document.elementFromPoint(%f,%f);"
+        @"if(!el)return;"
+        @"var a=el.tagName==='A'?el:(el.closest?el.closest('a'):null);"
+        @"if(a&&a.href)window.location.href=a.href;"
+        @"})()", pt.x, pt.y];
+    [wv evaluateJavaScript:js completionHandler:nil];
+}
+
+-(UIView*) createTableToolbar:(NSInteger)tableIndex {
+    UIView *toolbar = [[UIView alloc] init];
+    toolbar.backgroundColor = [UIColor colorWithRed:0xF5/255.0 green:0xF5/255.0 blue:0xF6/255.0 alpha:1.0];
+
+    // 左侧 "表格" 标签
+    UILabel *titleLbl = [[UILabel alloc] init];
+    titleLbl.text = @"表格";
+    titleLbl.font = [UIFont boldSystemFontOfSize:15];
+    titleLbl.textColor = [UIColor colorWithRed:0x33/255.0 green:0x33/255.0 blue:0x33/255.0 alpha:1.0];
+    [titleLbl sizeToFit];
+    titleLbl.frame = CGRectMake(12, (kTableToolbarHeight - titleLbl.frame.size.height) / 2.0, titleLbl.frame.size.width, titleLbl.frame.size.height);
+    [toolbar addSubview:titleLbl];
+
+    // 右侧复制按钮
+    UIButton *copyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    copyBtn.tag = tableIndex;
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightRegular];
+        UIImage *icon = [UIImage systemImageNamed:@"doc.on.doc" withConfiguration:config];
+        [copyBtn setImage:[icon imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal];
+    } else {
+        [copyBtn setTitle:@"复制" forState:UIControlStateNormal];
+        copyBtn.titleLabel.font = [UIFont systemFontOfSize:13];
+    }
+    copyBtn.tintColor = [UIColor colorWithRed:0x99/255.0 green:0x99/255.0 blue:0x99/255.0 alpha:1.0];
+    [copyBtn addTarget:self action:@selector(copyTableTapped:) forControlEvents:UIControlEventTouchUpInside];
+    copyBtn.frame = CGRectMake(0, 0, 36, kTableToolbarHeight);
+    [toolbar addSubview:copyBtn];
+
+    // 底部分隔线
+    UIView *separator = [[UIView alloc] init];
+    separator.backgroundColor = [UIColor colorWithRed:0xE0/255.0 green:0xE0/255.0 blue:0xE0/255.0 alpha:1.0];
+    separator.tag = 9999; // 用于 layoutSubviews 中定位
+    [toolbar addSubview:separator];
+
+    return toolbar;
+}
+
+-(void) copyTableTapped:(UIButton*)sender {
+    NSInteger idx = sender.tag;
+    if (idx < (NSInteger)self.tableRawContents.count) {
+        NSString *content = self.tableRawContents[idx];
+        [UIPasteboard generalPasteboard].string = content;
+        UIView *topView = [WKNavigationManager shared].topViewController.view;
+        [topView showHUDWithHide:LLang(@"已复制")];
+    }
 }
 
 -(void) removeAllGestureRecognizers {
@@ -148,48 +555,42 @@
 
 
 +(NSMutableAttributedString*) parseAndCacheTextMessage:(WKMessageModel*)message {
-    
-    
-    if(message.streamOn && message.streamFlag!=WKStreamFlagEnd) { // 流式消息不缓存
+    if(message.streamOn && message.streamFlag!=WKStreamFlagEnd) {
         return [self getContentAttrStr:message];
     }
-    
-    static WKMemoryCache *memoryCache;
-    if(!memoryCache) {
-        memoryCache = [[WKMemoryCache alloc] init];
-        memoryCache.maxCacheNum = 500; // TODO: 如果这里设置的过小 滑动会闪屏
-    }
-    NSString *key = [NSString stringWithFormat:@"%llu%@",message.messageId,message.clientMsgNo];
-    WKTextContent *textContent =  (WKTextContent*)[message content];
+
+    NSString *key = [self textAttrCacheKey:message];
+    id rawContent = [message content];
     if(message.remoteExtra.contentEdit) {
-        key = [NSString stringWithFormat:@"%@-edit-%lu",message.clientMsgNo,message.remoteExtra.editedAt];
-        textContent = (WKTextContent*)message.remoteExtra.contentEdit;
+        rawContent = message.remoteExtra.contentEdit;
     }
-    if([textContent.format isEqualToString:@"html"]) {
-        key = [NSString stringWithFormat:@"%@-%lu",key,(unsigned long)WKApp.shared.config.style]; // 如果是html需要加上主题
+    if (![rawContent isKindOfClass:[WKTextContent class]]) {
+        return [[NSMutableAttributedString alloc] initWithString:@""];
     }
-    NSMutableAttributedString *attrStr =  [memoryCache getCache:key];
+    NSMutableAttributedString *attrStr = [[self textAttrCache] getCache:key];
     if(attrStr) {
         return attrStr;
     }
-    
+
     attrStr = [self getContentAttrStr:message];
-    
-//    attrStr = [[self class] parseText:textContent isSend:message.isSend parseBefore:nil];
     if(key) {
-        [memoryCache setCache:attrStr forKey:key];
+        [[self textAttrCache] setCache:attrStr forKey:key];
     }
-  
-    
     return attrStr;
 }
 
 +(NSMutableAttributedString*) getContentAttrStr:(WKMessageModel*)message {
-    WKTextContent *textContent =  (WKTextContent*)[message content];
+    id rawObj = [message content];
     if(message.remoteExtra.contentEdit) {
-        textContent = (WKTextContent*)message.remoteExtra.contentEdit;
+        rawObj = message.remoteExtra.contentEdit;
     }
-    NSMutableString *content = [[NSMutableString alloc] initWithString:textContent.content];
+    // 类型保护：竞态下 content 可能不是 WKTextContent
+    if (![rawObj isKindOfClass:[WKTextContent class]]) {
+        NSMutableAttributedString *fallback = [[NSMutableAttributedString alloc] initWithString:@""];
+        return fallback;
+    }
+    WKTextContent *textContent = (WKTextContent*)rawObj;
+    NSMutableString *content = [[NSMutableString alloc] initWithString:textContent.content ?: @""];
     if(message.streams && message.streams.count>0) {
         for (WKStream *stream in message.streams) {
             if([stream.content isKindOfClass:WKTextContent.class]) {
@@ -199,16 +600,41 @@
         }
     }
 
+    // BotFather 审批消息：从显示文本中剥离 /approve 和 /reject 命令行
+    if ([[self class] isBotFatherApproveMessage:message]) {
+        NSRange approveRange = [content rangeOfString:@"/approve"];
+        NSRange rejectRange = [content rangeOfString:@"/reject"];
+        NSUInteger cutPos = NSNotFound;
+        if (approveRange.location != NSNotFound && rejectRange.location != NSNotFound) {
+            cutPos = MIN(approveRange.location, rejectRange.location);
+        } else if (approveRange.location != NSNotFound) {
+            cutPos = approveRange.location;
+        } else if (rejectRange.location != NSNotFound) {
+            cutPos = rejectRange.location;
+        }
+        if (cutPos != NSNotFound && cutPos > 0) {
+            NSString *trimmed = [[content substringToIndex:cutPos] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            [content setString:trimmed];
+        }
+    }
+
     NSMutableAttributedString *attrStr = [[NSMutableAttributedString alloc] init];
     attrStr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
 
-    // 尝试使用 Down 库进行 markdown 渲染
+    // 如果内容包含表格，将表格部分移除（表格由 WKWebView 单独渲染）
+    NSString *renderContent = content;
+    if (![textContent.format isEqualToString:@"html"] && [WKMarkdownRenderer containsTable:content]) {
+        renderContent = [[WKMarkdownRenderer removeTableMarkdown:content] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    }
+
     BOOL useMarkdown = NO;
     if (![textContent.format isEqualToString:@"html"]) {
-        if ([WKMarkdownRenderer containsMarkdown:content]) {
+        if (renderContent.length > 0 && [WKMarkdownRenderer containsMarkdown:renderContent]) {
             UIColor *textColor = message.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
             NSString *colorHex = [textColor toHexRGB];
-            NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+            NSAttributedString *mdAttr = nil;
+            @try {
+                mdAttr = [WKMarkdownRenderer render:renderContent fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex dynamicTextColor:textColor];
             if (mdAttr && mdAttr.length > 0) {
                 useMarkdown = YES;
                 NSMutableAttributedString *mdMutable = [[NSMutableAttributedString alloc] initWithAttributedString:mdAttr];
@@ -217,7 +643,8 @@
                 // 从 Down 渲染结果中提取可点击的 tokens
                 NSMutableArray<id<WKMatchToken>> *clickableTokens = [NSMutableArray array];
 
-                // 1. 提取链接 tokens
+                // 1. 提取链接 tokens，并记录需要移除NSLinkAttributeName的range
+                NSMutableArray<NSValue*> *linkRanges = [NSMutableArray array];
                 [mdMutable enumerateAttribute:NSLinkAttributeName inRange:NSMakeRange(0, mdMutable.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
                     if (value) {
                         WKLinkToken *token = [WKLinkToken new];
@@ -230,53 +657,132 @@
                         }
                         token.text = token.linkText;
                         [clickableTokens addObject:token];
+                        [linkRanges addObject:[NSValue valueWithRange:range]];
                     }
                 }];
+                // 移除NSLinkAttributeName：UILabel不支持该属性，且会导致hitTest用的
+                // UITextView布局与UILabel不一致，使点击坐标无法匹配到token range
+                for (NSValue *rangeValue in linkRanges) {
+                    NSRange range = [rangeValue rangeValue];
+                    [mdMutable removeAttribute:NSLinkAttributeName range:range];
+                    // 确保链接有可见的视觉样式（颜色+下划线）
+                    [mdMutable addAttribute:NSForegroundColorAttributeName value:[UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f] range:range];
+                    [mdMutable addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:range];
+                }
 
                 // 2. 从消息 entities 中提取 @mention tokens，在渲染后的文本中查找匹配位置
                 NSArray<WKMessageEntity*> *entities = message.content.entities;
                 if (message.remoteExtra.contentEdit) {
                     entities = message.remoteExtra.contentEdit.entities;
                 }
+                NSLog(@"[Mention] markdown路径: msgNo=%@ entities=%lu rawLen=%lu mdLen=%lu",
+                      message.clientMsgNo, (unsigned long)(entities ? entities.count : 0),
+                      (unsigned long)content.length, (unsigned long)mdMutable.string.length);
                 if (entities) {
                     NSString *renderedText = mdMutable.string;
+                    NSMutableIndexSet *usedRanges = [NSMutableIndexSet indexSet];
                     for (WKMessageEntity *entity in entities) {
-                        if (![entity.type isEqualToString:WKMentionRichTextStyle]) continue;
-                        // 从原文中取出 @xxx 文本
-                        if (entity.range.location + entity.range.length > content.length) continue;
+                        NSLog(@"[Mention]   entity: type=%@ range=(%lu,%lu) value=%@",
+                              entity.type, (unsigned long)entity.range.location, (unsigned long)entity.range.length, entity.value ?: @"(nil)");
+                        if (![entity.type isEqualToString:WKMentionRichTextStyle]) {
+                            NSLog(@"[Mention]     → 跳过(非mention类型)");
+                            continue;
+                        }
+                        if (entity.range.location + entity.range.length > content.length) {
+                            NSLog(@"[Mention]     → 跳过(range越界: %lu+%lu > %lu)",
+                                  (unsigned long)entity.range.location, (unsigned long)entity.range.length, (unsigned long)content.length);
+                            continue;
+                        }
                         NSString *mentionText = [content substringWithRange:entity.range];
                         if ([mentionText hasSuffix:@" "]) {
                             mentionText = [mentionText substringToIndex:mentionText.length - 1];
                         }
-                        // 在渲染后的文本中查找这段 @xxx
-                        NSRange foundRange = [renderedText rangeOfString:mentionText];
+                        if (![mentionText hasPrefix:@"@"]) {
+                            NSLog(@"[Mention]     → 跳过(非@开头: \"%@\")", mentionText);
+                            continue;
+                        }
+                        // 在渲染后的文本中查找这段 @xxx（跳过已使用的位置，避免重复匹配）
+                        NSRange searchRange = NSMakeRange(0, renderedText.length);
+                        NSRange foundRange = NSMakeRange(NSNotFound, 0);
+                        while (searchRange.location < renderedText.length) {
+                            foundRange = [renderedText rangeOfString:mentionText options:0 range:searchRange];
+                            if (foundRange.location == NSNotFound) break;
+                            if (![usedRanges containsIndexesInRange:foundRange]) break;
+                            searchRange.location = foundRange.location + foundRange.length;
+                            searchRange.length = renderedText.length - searchRange.location;
+                            foundRange.location = NSNotFound;
+                        }
                         if (foundRange.location != NSNotFound) {
+                            [usedRanges addIndexesInRange:foundRange];
                             WKMetionToken *token = [WKMetionToken new];
                             token.range = foundRange;
                             token.uid = entity.value ?: @"";
                             token.text = mentionText;
                             [clickableTokens addObject:token];
-                            // 给 @mention 文本加上下划线 + 颜色
                             UIColor *mentionColor = message.isSend ? [UIColor whiteColor] : [WKApp shared].config.themeColor;
                             [mdMutable addAttribute:NSForegroundColorAttributeName value:mentionColor range:foundRange];
                             [mdMutable addAttribute:NSUnderlineStyleAttributeName value:@1 range:foundRange];
+                            NSLog(@"[Mention]     ✅ 找到: \"%@\" → rendered位置(%lu,%lu) uid=%@",
+                                  mentionText, (unsigned long)foundRange.location, (unsigned long)foundRange.length, entity.value ?: @"");
+                        } else {
+                            NSLog(@"[Mention]     ❌ 未找到: \"%@\" 在rendered文本中不存在", mentionText);
+                            // 打印渲染文本中所有包含@的位置，帮助排查
+                            NSRange atRange = [renderedText rangeOfString:@"@"];
+                            if (atRange.location != NSNotFound) {
+                                NSUInteger start = atRange.location;
+                                NSUInteger end = MIN(start + 20, renderedText.length);
+                                NSLog(@"[Mention]       rendered文本中@附近: \"%@\"", [renderedText substringWithRange:NSMakeRange(start, end - start)]);
+                            }
                         }
                     }
+                } else {
+                    NSLog(@"[Mention]   无entities");
+                }
+
+                // 3. Auto-detect pure URLs not covered by markdown [text](url) links
+                NSArray<id<WKMatchToken>> *autoLinkTokens = [[WKRichTextParseService shared] parseLink:mdMutable.string];
+                for (id<WKMatchToken> autoToken in autoLinkTokens) {
+                    if (autoToken.type != WKatchTokenTypeLink) continue;
+                    // Check if this URL overlaps with any existing clickable token
+                    BOOL overlaps = NO;
+                    for (id<WKMatchToken> existing in clickableTokens) {
+                        NSRange ar = autoToken.range;
+                        NSRange er = existing.range;
+                        if (ar.location < er.location + er.length && er.location < ar.location + ar.length) {
+                            overlaps = YES;
+                            break;
+                        }
+                    }
+                    if (overlaps) continue;
+                    // Create a clickable link token for the pure URL
+                    WKLinkToken *linkToken = [WKLinkToken new];
+                    linkToken.range = autoToken.range;
+                    linkToken.linkText = autoToken.text;
+                    linkToken.linkContent = autoToken.text;
+                    linkToken.text = autoToken.text;
+                    [clickableTokens addObject:linkToken];
+                    [mdMutable addAttribute:NSForegroundColorAttributeName value:[UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f] range:autoToken.range];
+                    [mdMutable addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:autoToken.range];
                 }
 
                 mdMutable.tokens = clickableTokens;
 
                 return mdMutable;
             }
+            } @catch (NSException *exception) {
+                NSLog(@"[Markdown] render exception caught, fallback to plain text: %@", exception);
+                // fallback 到纯文本渲染
+            }
         }
     }
 
     if (!useMarkdown) {
         // 原有逻辑：entity tokens + 自动 URL 检测
-        NSArray<id<WKMatchToken>> *entityTokens = [self getTokens:message text:content];
+        NSString *textForRender = renderContent.length > 0 ? renderContent : content;
+        NSArray<id<WKMatchToken>> *entityTokens = [self getTokens:message text:textForRender];
 
         // 自动检测 URL 链接（补充 entity 中未包含的链接）
-        NSArray<id<WKMatchToken>> *linkTokens = [[WKRichTextParseService shared] parseLink:content];
+        NSArray<id<WKMatchToken>> *linkTokens = [[WKRichTextParseService shared] parseLink:textForRender];
         NSMutableArray<id<WKMatchToken>> *tokens = [NSMutableArray arrayWithArray:entityTokens];
         for (id<WKMatchToken> linkToken in linkTokens) {
             if(linkToken.type != WKatchTokenTypeLink) {
@@ -297,93 +803,124 @@
         }
 
         // 自动检测手写/复制的 @mention（补充 entity 中未包含的 @提及）
-        NSArray<id<WKMatchToken>> *autoMentionTokens = [self detectMentionsInText:content channel:message.message.channel existingTokens:tokens];
+        NSArray<id<WKMatchToken>> *autoMentionTokens = [self detectMentionsInText:textForRender channel:message.message.channel existingTokens:tokens];
         if (autoMentionTokens.count > 0) {
             [tokens addObjectsFromArray:autoMentionTokens];
         }
 
-        [attrStr lim_render:content tokens:tokens];
+        // --- @mention 诊断日志 ---
+        {
+            NSInteger mentionCount = 0;
+            for (id<WKMatchToken> t in tokens) {
+                if (t.type == WKatchTokenTypeMetion) mentionCount++;
+            }
+            if ([textForRender containsString:@"@"]) {
+                NSLog(@"[Mention] 非markdown路径: msgNo=%@ entityMentions=%lu autoMentions=%lu totalMentions=%ld text前30=\"%@\"",
+                      message.clientMsgNo,
+                      (unsigned long)entityTokens.count, (unsigned long)autoMentionTokens.count, (long)mentionCount,
+                      textForRender.length > 30 ? [textForRender substringToIndex:30] : textForRender);
+            }
+        }
+
+        [attrStr lim_render:textForRender tokens:tokens];
     }
 
     return attrStr;
 }
 
-/// 自动检测文本中的 @mention（匹配群成员或联系人）
+/// 自动检测文本中的 @mention（用已知成员/联系人名字反向匹配，支持名字含空格）
 +(NSArray<id<WKMatchToken>>*) detectMentionsInText:(NSString*)text channel:(WKChannel*)channel existingTokens:(NSArray<id<WKMatchToken>>*)existingTokens {
     if (!text || text.length == 0) return @[];
 
     NSMutableArray<id<WKMatchToken>> *result = [NSMutableArray array];
 
-    // 用正则找出所有 @xxx 片段（@后跟非空白字符）
-    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"@(\\S+)" options:0 error:nil];
-    if (!regex) return @[];
+    // 收集所有候选名字 -> uid 的映射（名字按长度降序，优先匹配长名字）
+    NSMutableArray<NSDictionary*> *candidates = [NSMutableArray array];
 
-    NSArray<NSTextCheckingResult*> *matches = [regex matchesInString:text options:0 range:NSMakeRange(0, text.length)];
-    if (matches.count == 0) return @[];
-
-    // 获取可匹配的成员/联系人列表
     NSArray<WKChannelMember*> *members = nil;
     if (channel.channelType == WK_GROUP) {
         members = [[WKSDK shared].channelManager getMembersWithChannel:channel];
     }
-
-    for (NSTextCheckingResult *match in matches) {
-        NSRange fullRange = [match range];           // @xxx 的完整范围
-        NSRange nameRange = [match rangeAtIndex:1];  // xxx 部分
-
-        // 检查是否与已有 token 重叠，避免重复
-        BOOL overlaps = NO;
-        for (id<WKMatchToken> token in existingTokens) {
-            if (token.type != WKatchTokenTypeMetion) continue;
-            NSRange tr = token.range;
-            if (fullRange.location < tr.location + tr.length && tr.location < fullRange.location + fullRange.length) {
-                overlaps = YES;
-                break;
+    if (members) {
+        for (WKChannelMember *member in members) {
+            NSString *uid = member.memberUid;
+            WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:uid]];
+            NSMutableSet *names = [NSMutableSet set];
+            if (info) {
+                if (info.name.length > 0) [names addObject:info.name];
+                if (info.remark.length > 0) [names addObject:info.remark];
+                if (info.displayName.length > 0) [names addObject:info.displayName];
+            }
+            if (member.memberName.length > 0) [names addObject:member.memberName];
+            if (uid.length > 0) [names addObject:uid];
+            for (NSString *name in names) {
+                [candidates addObject:@{@"name": name, @"uid": uid}];
             }
         }
-        if (overlaps) continue;
+    }
 
-        NSString *mentionName = [text substringWithRange:nameRange];
-        NSString *matchedUID = nil;
+    // 补充联系人
+    NSArray<WKChannelInfo*> *allContacts = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
+    NSMutableSet *memberUids = [NSMutableSet set];
+    for (NSDictionary *c in candidates) [memberUids addObject:c[@"uid"]];
+    for (WKChannelInfo *info in allContacts) {
+        if ([memberUids containsObject:info.channel.channelId]) continue;
+        NSMutableSet *names = [NSMutableSet set];
+        if (info.name.length > 0) [names addObject:info.name];
+        if (info.remark.length > 0) [names addObject:info.remark];
+        if (info.displayName.length > 0) [names addObject:info.displayName];
+        for (NSString *name in names) {
+            [candidates addObject:@{@"name": name, @"uid": info.channel.channelId}];
+        }
+    }
 
-        // 在群成员中匹配（名字/备注/uid）
-        if (members) {
-            for (WKChannelMember *member in members) {
-                WKChannelInfo *memberInfo = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:member.memberUid]];
-                if (memberInfo) {
-                    if (([memberInfo.name isEqualToString:mentionName]) ||
-                        (memberInfo.remark && [memberInfo.remark isEqualToString:mentionName]) ||
-                        ([memberInfo.displayName isEqualToString:mentionName]) ||
-                        ([member.memberUid isEqualToString:mentionName])) {
-                        matchedUID = member.memberUid;
-                        break;
+    // 按名字长度降序排列，优先匹配长名字（避免短前缀误匹配）
+    [candidates sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [@([b[@"name"] length]) compare:@([a[@"name"] length])];
+    }];
+
+    // 已匹配的范围（防止重叠）
+    NSMutableArray<NSValue*> *matchedRanges = [NSMutableArray array];
+
+    for (NSDictionary *candidate in candidates) {
+        NSString *name = candidate[@"name"];
+        NSString *uid = candidate[@"uid"];
+        NSString *pattern = [NSString stringWithFormat:@"@%@", name];
+
+        NSRange searchRange = NSMakeRange(0, text.length);
+        while (searchRange.location < text.length) {
+            NSRange found = [text rangeOfString:pattern options:0 range:searchRange];
+            if (found.location == NSNotFound) break;
+
+            // 推进搜索范围
+            searchRange.location = found.location + found.length;
+            searchRange.length = text.length - searchRange.location;
+
+            // 检查与已有 token 和已匹配范围是否重叠
+            BOOL overlaps = NO;
+            for (id<WKMatchToken> token in existingTokens) {
+                if (token.type != WKatchTokenTypeMetion) continue;
+                NSRange tr = token.range;
+                if (found.location < tr.location + tr.length && tr.location < found.location + found.length) {
+                    overlaps = YES; break;
+                }
+            }
+            if (!overlaps) {
+                for (NSValue *v in matchedRanges) {
+                    NSRange mr = [v rangeValue];
+                    if (found.location < mr.location + mr.length && mr.location < found.location + found.length) {
+                        overlaps = YES; break;
                     }
-                } else if ([member.memberUid isEqualToString:mentionName] ||
-                           (member.memberName && [member.memberName isEqualToString:mentionName])) {
-                    matchedUID = member.memberUid;
-                    break;
                 }
             }
-        }
+            if (overlaps) continue;
 
-        // 群成员没匹配到，尝试从联系人缓存中按名字匹配
-        if (!matchedUID) {
-            NSArray<WKChannelInfo*> *allContacts = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
-            for (WKChannelInfo *info in allContacts) {
-                if (([info.name isEqualToString:mentionName]) ||
-                    (info.remark && [info.remark isEqualToString:mentionName]) ||
-                    ([info.displayName isEqualToString:mentionName])) {
-                    matchedUID = info.channel.channelId;
-                    break;
-                }
-            }
-        }
+            [matchedRanges addObject:[NSValue valueWithRange:found]];
 
-        if (matchedUID) {
             WKMetionToken *token = [WKMetionToken new];
-            token.range = fullRange;
-            token.uid = matchedUID;
-            token.text = [text substringWithRange:fullRange];
+            token.range = found;
+            token.uid = uid;
+            token.text = [text substringWithRange:found];
             [result addObject:token];
         }
     }
@@ -434,13 +971,17 @@
                     continue;
                 }
                 if(messageEntiy.type && [messageEntiy.type isEqualToString:WKMentionRichTextStyle]) {
+                    // 范围越界检查
+                    if(messageEntiy.range.location + messageEntiy.range.length > text.length) continue;
                    NSString *mentionText =  [text substringWithRange:messageEntiy.range];
-                    
+                    // 验证提取的文本确实以 @ 开头（防止 entity range 偏移）
+                    if (![mentionText hasPrefix:@"@"]) continue;
+
                     NSRange range = messageEntiy.range;
                     if([mentionText hasSuffix:@" "]) {
                         range = NSMakeRange(range.location, range.length-1);
                     }
-                    
+
                     WKMetionToken *token = [WKMetionToken new];
                     token.range = range;
                     token.uid = messageEntiy.value?:@"";
@@ -462,13 +1003,190 @@
     return tokens;
 }
 
+/// 判断消息文本是否超长需要截断
++(BOOL) isLongText:(WKMessageModel*)message {
+    // 流式消息不截断（内容还在增长）
+    if (message.streamOn && message.streamFlag != WKStreamFlagEnd) return NO;
+    NSString *full = [self getFullRawContent:message];
+    return full.length > kTextTruncateThreshold;
+}
+
+/// 提取完整原始文本（不截断）
++(NSString*) getFullRawContent:(WKMessageModel*)message {
+    id rawContent = [message content];
+    if (message.remoteExtra.contentEdit) {
+        rawContent = message.remoteExtra.contentEdit;
+    }
+    if (![rawContent isKindOfClass:[WKTextContent class]]) {
+        return @"";
+    }
+    WKTextContent *textContent = (WKTextContent*)rawContent;
+    NSMutableString *content = [[NSMutableString alloc] initWithString:textContent.content ?: @""];
+    if (message.streams && message.streams.count > 0) {
+        for (WKStream *stream in message.streams) {
+            if ([stream.content isKindOfClass:WKTextContent.class]) {
+                [content appendString:((WKTextContent*)stream.content).content];
+            }
+        }
+    }
+    return content;
+}
+
+/// 提取消息的原始文本内容（合并流式内容，超长时截断）
++(NSString*) getRawContent:(WKMessageModel*)message {
+    id rawContent = [message content];
+    if (message.remoteExtra.contentEdit) {
+        rawContent = message.remoteExtra.contentEdit;
+    }
+    // 类型保护：非 WKTextContent 时返回空字符串，避免崩溃
+    if (![rawContent isKindOfClass:[WKTextContent class]]) {
+        return @"";
+    }
+    WKTextContent *textContent = (WKTextContent*)rawContent;
+    NSMutableString *content = [[NSMutableString alloc] initWithString:textContent.content ?: @""];
+    if (message.streams && message.streams.count > 0) {
+        for (WKStream *stream in message.streams) {
+            if ([stream.content isKindOfClass:WKTextContent.class]) {
+                [content appendString:((WKTextContent*)stream.content).content];
+            }
+        }
+    }
+    // 超长文本截断为预览长度，避免 Down 库渲染超长 Markdown 崩溃/卡顿
+    if (content.length > kTextTruncateThreshold) {
+        // 流式消息不截断
+        if (!(message.streamOn && message.streamFlag != WKStreamFlagEnd)) {
+            return [content substringToIndex:kTextPreviewLength];
+        }
+    }
+    return content;
+}
+
+/// 判断是否为 BotFather 好友审批消息
+/// 帮助文本包含多个 /command，审批消息只包含 /approve 和 /reject 两个命令
++(BOOL) isBotFatherApproveMessage:(WKMessageModel*)model {
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    if (!botfatherUID || botfatherUID.length == 0) return NO;
+    if (![model.channel.channelId isEqualToString:botfatherUID]) return NO;
+    if (model.isSend) return NO;
+    NSString *rawContent = [[self class] getRawContent:model];
+    if (![rawContent containsString:@"/approve"]) return NO;
+    // 帮助文本会包含 /help、/newbot 等多个命令，排除这种情况
+    if ([rawContent containsString:@"/help"] || [rawContent containsString:@"/newbot"]) return NO;
+    return YES;
+}
+
+/// 用正则从文本中提取指定前缀的完整命令（如 /approve uid botname）
++(NSString*) extractCommand:(NSString*)content prefix:(NSString*)prefix {
+    if (!content || !prefix) return nil;
+    NSString *pattern = [NSString stringWithFormat:@"%@\\s+\\S+(?:\\s+\\S+)?", [NSRegularExpression escapedPatternForString:prefix]];
+    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:pattern options:0 error:nil];
+    if (!regex) return nil;
+    NSTextCheckingResult *match = [regex firstMatchInString:content options:0 range:NSMakeRange(0, content.length)];
+    if (!match) return nil;
+    return [content substringWithRange:match.range];
+}
+
+/// 计算表格部分的高度（不含顶部间距）
++(CGFloat) tableHeightForMessage:(WKMessageModel*)message {
+    NSString *content = [[self class] getRawContent:message];
+    if (![WKMarkdownRenderer containsTable:content]) return 0;
+    NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
+    if (rowCount <= 0) return 0;
+    return kTableToolbarHeight + rowCount * [[self class] tableRowHeight] + kTableExtraPadding;
+}
+
+/// 分段计算内容高度（与 layoutSubviews 中逐段布局逻辑完全一致）
+/// 使用 measureTextViewHeight: 测量（与 layoutSubviews 中 UITextView.sizeThatFits: 一致）
++ (WKMemoryCache *)segHeightCache {
+    static WKMemoryCache *cache;
+    if (!cache) {
+        cache = [[WKMemoryCache alloc] init];
+        cache.maxCacheNum = 0;
+    }
+    return cache;
+}
+
++(CGFloat) segmentedContentHeightForMessage:(WKMessageModel*)model {
+    WKMemoryCache *segHeightCache = [[self class] segHeightCache];
+
+    // 流式消息不缓存
+    BOOL isStreaming = model.streamOn && model.streamFlag != WKStreamFlagEnd;
+    NSString *modeTag = ([WKApp shared].config.style == WKSystemStyleDark) ? @"d" : @"l";
+    NSString *cacheKey = [NSString stringWithFormat:@"%@-segH-%@", model.clientMsgNo, modeTag];
+    if (model.remoteExtra.contentEdit) {
+        cacheKey = [NSString stringWithFormat:@"%@-segH-edit-%lu-%@", model.clientMsgNo, model.remoteExtra.editedAt, modeTag];
+    }
+    if (!isStreaming) {
+        NSNumber *cached = [segHeightCache getCache:cacheKey];
+        if (cached) return cached.floatValue;
+    }
+
+    NSString *rawContent = [[self class] getRawContent:model];
+    NSArray *segments = [WKMarkdownRenderer splitContentSegments:rawContent];
+    if (segments.count == 0) return 0;
+
+    CGFloat maxWidth = [WKApp shared].config.messageContentMaxWidth;
+    UIColor *textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
+    NSString *colorHex = [textColor toHexRGB];
+    CGFloat totalHeight = 0;
+    UIFont *baseFont = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+
+    NSInteger tableSegIdx = 0;
+    for (NSUInteger i = 0; i < segments.count; i++) {
+        NSDictionary *seg = segments[i];
+        NSString *type = seg[@"type"];
+        NSString *content = seg[@"content"];
+        CGFloat spacing = (i < segments.count - 1) ? kTableTopSpace : 0;
+
+        if ([type isEqualToString:@"text"]) {
+            NSAttributedString *attrForMeasure = nil;
+            if ([WKMarkdownRenderer containsMarkdown:content]) {
+                @try {
+                    attrForMeasure = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+                } @catch (NSException *e) {
+                    attrForMeasure = nil;
+                }
+            }
+            if (!attrForMeasure) {
+                NSMutableAttributedString *plainAttr = [[NSMutableAttributedString alloc] init];
+                plainAttr.font = baseFont;
+                plainAttr.textColor = textColor;
+                [plainAttr lim_render:content tokens:nil];
+                attrForMeasure = plainAttr;
+            }
+            // boundingRect 是线程安全的，可在后台线程调用
+            // +4 补偿 boundingRect 与 UILabel.sizeThatFits 的测量偏差
+            CGRect rect = [attrForMeasure boundingRectWithSize:CGSizeMake(maxWidth, CGFLOAT_MAX)
+                                                       options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                                       context:nil];
+            totalHeight += ceil(rect.size.height) + 4.0f + spacing;
+        } else {
+            // 表格段：优先使用 JS 返回的实际内容高度，否则用公式估算
+            NSString *jsKey = [NSString stringWithFormat:@"%@-%ld", model.clientMsgNo, (long)tableSegIdx];
+            NSNumber *jsHeight = [[self class] jsTableHeights][jsKey];
+            if (jsHeight) {
+                totalHeight += [jsHeight floatValue] + spacing;
+            } else {
+                NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
+                totalHeight += kTableToolbarHeight + rowCount * [[self class] tableRowHeight] + kTableExtraPadding + spacing;
+            }
+            tableSegIdx++;
+        }
+    }
+
+    if (!isStreaming) {
+        [segHeightCache setCache:@(totalHeight) forKey:cacheKey];
+    }
+    return totalHeight;
+}
 
 +(CGSize) textSize:(NSMutableAttributedString*)attrStr messageModel:(WKMessageModel*)model{
-    
+    CGFloat maxWidth = [WKApp shared].config.messageContentMaxWidth;
+
     if(model.streamOn && model.streamFlag!=WKStreamFlagEnd) { // 流式消息不缓存
-        return [attrStr size:[WKApp shared].config.messageContentMaxWidth];
+        return [[self class] measureTextViewSize:attrStr maxWidth:maxWidth];
     }
-    
+
     NSString *key = [NSString stringWithFormat:@"%@-size",model.clientMsgNo];
     if(model.remoteExtra.contentEdit) {
         key = [NSString stringWithFormat:@"%@-size-edit-%lu",model.clientMsgNo,model.remoteExtra.editedAt];
@@ -476,23 +1194,38 @@
     static WKMemoryCache *memoryCache;
     if(!memoryCache) {
         memoryCache = [[WKMemoryCache alloc] init];
-        memoryCache.maxCacheNum = 100;
+        memoryCache.maxCacheNum = 0; // 数值缓存，内存极小，不设上限
     }
     NSString  *sizeStr =  [memoryCache getCache:key];
     if(sizeStr) {
         return CGSizeFromString(sizeStr);
     }
-    CGSize size = [attrStr size:[WKApp shared].config.messageContentMaxWidth];
+    CGSize size = [[self class] measureTextViewSize:attrStr maxWidth:maxWidth];
     [memoryCache setCache:NSStringFromCGSize(size) forKey:key];
     return size;
 }
 
+/// 用 sharedMeasureTV 的 layoutManager 测量最后一行宽度（与 textSize: 使用同一排版引擎）
++ (CGFloat)measureLastLineWidth:(NSAttributedString *)attrStr maxWidth:(CGFloat)maxWidth {
+    WKMessageTextView *tv = [[self class] sharedMeasureTV];
+    tv.frame = CGRectMake(0, 0, maxWidth, 10000);
+    tv.attributedText = attrStr;
+    NSLayoutManager *lm = tv.layoutManager;
+    NSTextContainer *tc = tv.textContainer;
+    [lm ensureLayoutForTextContainer:tc];
+    if (attrStr.length == 0) return 0;
+    NSUInteger lastGlyphIdx = [lm glyphIndexForCharacterAtIndex:attrStr.length - 1];
+    CGRect lastLineRect = [lm lineFragmentUsedRectForGlyphAtIndex:lastGlyphIdx effectiveRange:nil];
+    return lastLineRect.size.width;
+}
+
 +(CGFloat) textLastlineWidth:(NSMutableAttributedString*)attrStr messageModel:(WKMessageModel*)model{
-    
+    CGFloat maxWidth = [WKApp shared].config.messageContentMaxWidth;
+
     if(model.streamOn && model.streamFlag!=WKStreamFlagEnd) { // 流式消息不缓存
-        return [attrStr lastlineWidth:[WKApp shared].config.messageContentMaxWidth];
+        return [[self class] measureLastLineWidth:attrStr maxWidth:maxWidth];
     }
-    
+
     NSString *key = [NSString stringWithFormat:@"%@-lastLine",model.clientMsgNo];
     if(model.remoteExtra.contentEdit) {
         key = [NSString stringWithFormat:@"%@-lastLine-edit-%lu",model.clientMsgNo,model.remoteExtra.editedAt];
@@ -500,13 +1233,13 @@
     static WKMemoryCache *memoryCache;
     if(!memoryCache) {
         memoryCache = [[WKMemoryCache alloc] init];
-        memoryCache.maxCacheNum = 100;
+        memoryCache.maxCacheNum = 0; // 数值缓存，内存极小，不设上限
     }
     NSNumber  *lastLineWidth =  [memoryCache getCache:key];
     if(lastLineWidth) {
         return lastLineWidth.floatValue;
     }
-    CGFloat lastLineWidthF = [attrStr lastlineWidth:[WKApp shared].config.messageContentMaxWidth];
+    CGFloat lastLineWidthF = [[self class] measureLastLineWidth:attrStr maxWidth:maxWidth];
     [memoryCache setCache:@(lastLineWidthF) forKey:key];
     return lastLineWidthF;
 }
@@ -520,16 +1253,27 @@
 
 - (void)refresh:(WKMessageModel *)model {
     [super refresh:model];
-//    NSString *text = textContent.content;
-    
+
+    // 检测链接卡片
+    NSString *rawText = [[self class] getRawContent:model];
+    if ([rawText hasPrefix:@"[链接]"]) {
+        [self showLinkCard:rawText model:model];
+        return;
+    }
+    // 非链接卡片：隐藏卡片视图，正常渲染文本
+    self.linkCardView.hidden = YES;
+    self.isLinkCard = NO;
+    self.textLbl.hidden = NO;
+
     NSMutableAttributedString *attrStr = [[self class] parseAndCacheTextMessage:model];
 
     if(model.isSend) {
         attrStr.textColor =  [WKApp shared].config.messageSendTextColor;
-        attrStr.linkColor = [UIColor blueColor];
+        // 紫色气泡上用偏青的亮蓝色，避免蓝紫混淆看不清
+        attrStr.linkColor = [UIColor colorWithRed:168.0f/255.0f green:222.0f/255.0f blue:255.0f/255.0f alpha:1.0f]; // #A8DEFF
     }else {
         attrStr.textColor = [WKApp shared].config.messageRecvTextColor;
-        attrStr.linkColor = [UIColor blueColor];
+        attrStr.linkColor = [UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f]; // #5979F0
     }
     // @mention 下划线 + 区分发送/接收的颜色
     if(model.isSend) {
@@ -541,15 +1285,204 @@
     }
     attrStr.metionUnderline = true;
 
-    self.textLbl.attributedText = attrStr;
-    self.textLbl.tokens = attrStr.tokens;
-    self.textLbl.lim_size =[[self class] textSize:attrStr messageModel:model];
-    //[self.textLbl lim_setText:text mentionInfo:textContent.mentionedInfo];
-    
+    // 分段渲染：文本段用 UILabel，表格段用 WKWebView，按原始顺序排列
+    NSString *rawContent = [[self class] getRawContent:model];
+    BOOL hasTable = [WKMarkdownRenderer containsTable:rawContent];
+
+    // 无表格 或 有表格但分段未创建时，才设置 textLbl
+    if (!hasTable) {
+        // 无表格：textLbl 显示全部内容
+        self.textLbl.attributedText = attrStr;
+        self.textLbl.tokens = attrStr.tokens;
+        self.textLbl.lim_size =[[self class] textSize:attrStr messageModel:model];
+        // --- 诊断日志 ---
+        {
+            CGSize ts = self.textLbl.lim_size;
+            CGFloat fitH = [self.textLbl sizeThatFits:CGSizeMake(ts.width, CGFLOAT_MAX)].height;
+            if (fitH > ts.height + 1.0) {
+                NSLog(@"[BubbleHeight] ⚠️ refresh溢出: msgNo=%@ lim_size=(%.1f,%.1f) fitH=%.1f Δ=%.1f textLbl.frame.w=%.1f",
+                      model.clientMsgNo, ts.width, ts.height, fitH, fitH - ts.height, self.textLbl.frame.size.width);
+            }
+        }
+    } else if (!self.segmentsBuilt) {
+        // 有表格且首次构建：仅设置内容，不设 lim_size 为全文尺寸
+        // lim_size 会在段落构建完成后根据第一段文本正确设置
+        self.textLbl.attributedText = attrStr;
+        self.textLbl.tokens = attrStr.tokens;
+    }
+
+    if (hasTable) {
+        // 表格 cell 用唯一 reuseIdentifier，不会被复用给其他消息，只需创建一次
+        if (!self.segmentsBuilt) {
+            [self clearSegmentViews];
+            NSArray *segments = [WKMarkdownRenderer splitContentSegments:rawContent];
+            UIColor *textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
+            NSString *colorHex = [textColor toHexRGB];
+            BOOL firstTextUsed = NO;
+            for (NSDictionary *seg in segments) {
+                NSString *type = seg[@"type"];
+                NSString *content = seg[@"content"];
+                if ([type isEqualToString:@"text"]) {
+                    // 统一用 WKMarkdownRenderer 渲染文本段（和 getContentAttrStr: 同一套逻辑，确保高度一致）
+                    UILabel *lbl;
+                    if (!firstTextUsed) {
+                        // 第一个文本段复用 textLbl（支持点击链接等交互）
+                        firstTextUsed = YES;
+                        lbl = self.textLbl;
+                        lbl.hidden = NO;
+                    } else {
+                        lbl = [[UILabel alloc] init];
+                        lbl.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+                        lbl.textColor = textColor;
+                        lbl.numberOfLines = 0;
+                        lbl.lineBreakMode = NSLineBreakByWordWrapping;
+                        lbl.backgroundColor = [UIColor clearColor];
+                        [self.messageContentView addSubview:lbl];
+                    }
+                    if ([WKMarkdownRenderer containsMarkdown:content]) {
+                        NSAttributedString *mdAttr = nil;
+                        @try {
+                            mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex dynamicTextColor:textColor];
+                        } @catch (NSException *e) { mdAttr = nil; }
+                        if (mdAttr) {
+                            NSMutableAttributedString *mutable = [[NSMutableAttributedString alloc] initWithAttributedString:mdAttr];
+                            // 提取 markdown 链接 token 并移除 NSLinkAttributeName（UILabel 不支持）
+                            NSMutableArray<id<WKMatchToken>> *tokens = [NSMutableArray array];
+                            [mutable enumerateAttribute:NSLinkAttributeName inRange:NSMakeRange(0, mutable.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
+                                if (value) {
+                                    WKLinkToken *token = [WKLinkToken new];
+                                    token.range = range;
+                                    token.linkText = [mutable.string substringWithRange:range];
+                                    if ([value isKindOfClass:[NSURL class]]) {
+                                        token.linkContent = [(NSURL*)value absoluteString];
+                                    } else if ([value isKindOfClass:[NSString class]]) {
+                                        token.linkContent = (NSString*)value;
+                                    }
+                                    token.text = token.linkText;
+                                    [tokens addObject:token];
+                                }
+                            }];
+                            UIColor *segLinkColor = model.isSend
+                                ? [UIColor colorWithRed:168.0f/255.0f green:222.0f/255.0f blue:255.0f/255.0f alpha:1.0f]  // #A8DEFF
+                                : [UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f]; // #5979F0
+                            [mutable enumerateAttribute:NSLinkAttributeName inRange:NSMakeRange(0, mutable.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
+                                if (value) {
+                                    [mutable removeAttribute:NSLinkAttributeName range:range];
+                                    [mutable addAttribute:NSForegroundColorAttributeName value:segLinkColor range:range];
+                                    [mutable addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:range];
+                                }
+                            }];
+                            // 自动检测纯 URL
+                            NSArray *autoLinks = [[WKRichTextParseService shared] parseLink:mutable.string];
+                            for (id<WKMatchToken> autoToken in autoLinks) {
+                                if (autoToken.type != WKatchTokenTypeLink) continue;
+                                BOOL overlaps = NO;
+                                for (id<WKMatchToken> existing in tokens) {
+                                    NSRange ar = autoToken.range, er = existing.range;
+                                    if (ar.location < er.location + er.length && er.location < ar.location + ar.length) { overlaps = YES; break; }
+                                }
+                                if (!overlaps) {
+                                    [tokens addObject:autoToken];
+                                    [mutable addAttribute:NSForegroundColorAttributeName value:segLinkColor range:autoToken.range];
+                                    [mutable addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:autoToken.range];
+                                }
+                            }
+                            mutable.tokens = tokens;
+                            lbl.attributedText = mutable;
+                            if ([lbl respondsToSelector:@selector(setTokens:)]) {
+                                [(id)lbl setTokens:tokens];
+                            }
+                        } else {
+                            lbl.text = content;
+                        }
+                    } else {
+                        // 非 markdown：纯文本 + URL 检测
+                        NSMutableAttributedString *plainAttr = [[NSMutableAttributedString alloc] init];
+                        plainAttr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+                        NSArray *tokens = [[WKRichTextParseService shared] parseLink:content];
+                        [plainAttr lim_render:content tokens:tokens];
+                        plainAttr.textColor = textColor;
+                        plainAttr.linkColor = model.isSend
+                            ? [UIColor colorWithRed:168.0f/255.0f green:222.0f/255.0f blue:255.0f/255.0f alpha:1.0f]  // #A8DEFF
+                            : [UIColor colorWithRed:89.0f/255.0f green:121.0f/255.0f blue:240.0f/255.0f alpha:1.0f]; // #5979F0
+                        lbl.attributedText = plainAttr;
+                        if ([lbl respondsToSelector:@selector(setTokens:)]) {
+                            [(id)lbl setTokens:plainAttr.tokens];
+                        }
+                    }
+                    [self.segmentViews addObject:lbl];
+                } else {
+                    // 表格段：容器（圆角灰色背景）+ 工具栏 + WebView
+                    NSInteger tableIndex = (NSInteger)self.tableRawContents.count;
+                    [self.tableRawContents addObject:content];
+
+                    UIView *container = [[UIView alloc] init];
+                    container.backgroundColor = [UIColor colorWithRed:0xF5/255.0 green:0xF5/255.0 blue:0xF6/255.0 alpha:1.0];
+                    container.layer.cornerRadius = 8.0;
+                    container.clipsToBounds = YES;
+
+                    UIView *toolbar = [self createTableToolbar:tableIndex];
+                    [container addSubview:toolbar];
+
+                    WKWebView *wv = [self createSegmentWebView];
+                    // 表格在灰色容器内，文字始终用深色（不跟随发送/接收消息颜色）
+                    NSString *tableColorHex = @"#333333";
+                    NSString *tableHTML = [WKMarkdownRenderer extractTableHTML:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:tableColorHex];
+                    if (tableHTML) { [wv loadHTMLString:tableHTML baseURL:nil]; }
+                    [container addSubview:wv];
+
+                    NSInteger rowCount = [WKMarkdownRenderer tableRowCount:content];
+                    container.tag = (NSInteger)(kTableToolbarHeight + rowCount * [[self class] tableRowHeight] + kTableExtraPadding);
+
+                    [self.messageContentView addSubview:container];
+                    [self.segmentViews addObject:container];
+                    [self.tableWebViews addObject:wv];
+                    [self.tableToolbars addObject:toolbar];
+
+                    UIScrollView *overlay = [self createSegmentOverlay];
+                    [self.contentView addSubview:overlay];
+                    [self.tableOverlays addObject:overlay];
+                }
+            }
+            // 如果第一个段不是文本段，隐藏 textLbl
+            if (!firstTextUsed) {
+                self.textLbl.hidden = YES;
+            } else {
+                // 段落构建后 textLbl 内容已是第一段文本，须重置 lim_size
+                // 避免仍保持全文尺寸导致溢出（转发时触发）
+                CGSize fitSize = [self.textLbl sizeThatFits:CGSizeMake([WKApp shared].config.messageContentMaxWidth, CGFLOAT_MAX)];
+                self.textLbl.lim_size = fitSize;
+            }
+            self.segmentsBuilt = YES;
+        }
+    } else {
+        self.textLbl.hidden = NO;
+        [self clearSegmentViews];
+        self.segmentsBuilt = NO;
+    }
+
+    // 超长文本：显示"查看全文"按钮（样式参考 bot 审批按钮）
+    if ([[self class] isLongText:model]) {
+        if (!self.viewFullTextBtn) {
+            self.viewFullTextBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+            [self.viewFullTextBtn setTitle:LLang(@"查看全文") forState:UIControlStateNormal];
+            [self.viewFullTextBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
+            self.viewFullTextBtn.titleLabel.font = [[WKApp shared].config appFontOfSize:14.0f];
+            self.viewFullTextBtn.backgroundColor = [[WKApp shared].config.themeColor colorWithAlphaComponent:0.1];
+            self.viewFullTextBtn.layer.cornerRadius = 4.0f;
+            self.viewFullTextBtn.layer.masksToBounds = YES;
+            [self.messageContentView addSubview:self.viewFullTextBtn];
+        }
+        self.viewFullTextBtn.hidden = NO;
+    } else {
+        self.viewFullTextBtn.hidden = YES;
+    }
+
     self.replyBox.hidden = YES;
     if([[self class] hasReply:model]) {
         self.replyBox.hidden = NO;
-        self.replyNameLbl.text = model.content.reply.fromName;
+        self.replyNameLbl.text = model.content.reply.fromName.length > 0
+            ? model.content.reply.fromName : LLang(@"未知用户");
         self.replyAvatarIcon.url = [WKAvatarUtil getAvatar:model.content.reply.fromUID];
         if(model.content.reply.revoke) {
             self.replyContentLbl.text = LLang(@"消息已被撤回");
@@ -566,29 +1499,120 @@
         self.replyContentLbl.textColor =[WKApp shared].config.tipColor;
         self.replyNameLbl.textColor = [WKApp shared].config.tipColor;
     }
-    
+
+    // BotFather 审批按钮
+    if ([[self class] isBotFatherApproveMessage:model]) {
+        self.botActionView.hidden = NO;
+        NSString *rawContent = [[self class] getRawContent:model];
+        self.approveCommand = [[self class] extractCommand:rawContent prefix:@"/approve"];
+        self.rejectCommand = [[self class] extractCommand:rawContent prefix:@"/reject"];
+    } else {
+        self.botActionView.hidden = YES;
+    }
+
 }
 
 -(void) onTapWithGestureRecognizer:(TapLongTapOrDoubleTapGestureRecognizerWrap*)gesture {
-   // [self.textLbl onTap:gesture];
+    // 链接卡片点击：打开 URL
+    if (self.isLinkCard && self.linkCardView && !self.linkCardView.hidden) {
+        NSString *url = objc_getAssociatedObject(self.linkCardView, "linkURL");
+        if (url.length > 0) {
+            [[UIApplication sharedApplication] openURL:[NSURL URLWithString:url] options:@{} completionHandler:nil];
+        }
+        return;
+    }
+    // 表格工具栏复制按钮点击检测（参考 BotFather 按钮模式）
+    for (NSUInteger i = 0; i < self.tableToolbars.count; i++) {
+        UIView *toolbar = self.tableToolbars[i];
+        // 找到工具栏中的复制按钮
+        for (UIView *sub in toolbar.subviews) {
+            if (![sub isKindOfClass:[UIButton class]]) continue;
+            CGRect btnInContentView = [self.contentView convertRect:sub.bounds fromView:sub];
+            if (CGRectContainsPoint(btnInContentView, gesture.tapPoint)) {
+                [self copyTableTapped:(UIButton*)sub];
+                return;
+            }
+        }
+    }
+    // "查看全文"按钮点击检测
+    if (self.viewFullTextBtn && !self.viewFullTextBtn.hidden) {
+        CGPoint pointInContent = [self.messageContentView convertPoint:gesture.tapPoint fromView:self.contentView];
+        if (CGRectContainsPoint(self.viewFullTextBtn.frame, pointInContent)) {
+            [self viewFullTextTapped];
+            return;
+        }
+    }
+    // BotFather 审批按钮点击检测
+    if (!self.botActionView.hidden) {
+        CGPoint pointInBotAction = [self.botActionView convertPoint:gesture.tapPoint fromView:self.contentView];
+        if (CGRectContainsPoint(self.approveBtn.frame, pointInBotAction)) {
+            [self approveBtnTap];
+            return;
+        }
+        if (CGRectContainsPoint(self.rejectBtn.frame, pointInBotAction)) {
+            [self rejectBtnTap];
+            return;
+        }
+    }
     if([self replyAtPoint:gesture.tapPoint]) {
         [self replyBoxTap];
         return;
     }
-    CGPoint point = [self.textLbl convertPoint:gesture.tapPoint fromView:self.contentView];
-   id<WKMatchToken> token = [self.textLbl matchDidTapAttributedTextInLabelWithPoint:point];
-    if(token) {
-        if(token.type == WKatchTokenTypeMetion) {
-            [self didMetionClick:token];
-        }else if(token.type == WKatchTokenTypeLink) {
-            [self didLinkClick:token.text];
-        }else if(token.type == WKatchTokenTypeLink2) {
-            WKLinkToken *linToken = (WKLinkToken*)token;
-            NSString *linkTarget = linToken.linkContent ?: linToken.linkText;
-            [self didLinkClick:linkTarget];
+    // 检查所有文本段 label 的 token（包括 textLbl 和分段创建的 label）
+    NSArray *labelsToCheck = (self.segmentViews.count > 0) ? self.segmentViews : @[self.textLbl];
+    for (UIView *v in labelsToCheck) {
+        if (![v isKindOfClass:[UILabel class]] && ![v isKindOfClass:[UITextView class]]) continue;
+        UILabel *lbl = (UILabel *)v;
+        CGPoint point = [lbl convertPoint:gesture.tapPoint fromView:self.contentView];
+        if (![lbl pointInside:point withEvent:nil]) continue;
+        if (![lbl respondsToSelector:@selector(matchDidTapAttributedTextInLabelWithPoint:)]) continue;
+        id<WKMatchToken> token = [(id)lbl matchDidTapAttributedTextInLabelWithPoint:point];
+        if (token) {
+            if (token.type == WKatchTokenTypeMetion) {
+                [self didMetionClick:token];
+            } else if (token.type == WKatchTokenTypeLink) {
+                [self didLinkClick:token.text];
+            } else if (token.type == WKatchTokenTypeLink2) {
+                WKLinkToken *linToken = (WKLinkToken *)token;
+                NSString *linkTarget = linToken.linkContent ?: linToken.linkText;
+                [self didLinkClick:linkTarget];
+            }
+            return;
         }
     }
     
+}
+
+-(WKTapLongTapOrDoubleTapGestureRecognizerEvent*) tapActionAtPoint:(CGPoint)point {
+    // 表格遮罩区域 + 工具栏区域：让手势识别器 fail，使触摸事件传递到遮罩/按钮
+    for (UIScrollView *overlay in self.tableOverlays) {
+        if (CGRectContainsPoint(overlay.frame, point)) {
+            return [WKTapLongTapOrDoubleTapGestureRecognizerEvent action:WKTapLongTapOrDoubleTapGestureRecognizerActionFail];
+        }
+    }
+    // 表格工具栏区域：不 fail，走 onTapWithGestureRecognizer: 处理复制按钮点击
+    return [super tapActionAtPoint:point];
+}
+
+-(BOOL) shouldBeginContextGestureAtPoint:(CGPoint)point {
+    if ([self wk_isInSelectionMode]) return NO;
+    CGPoint pointInContentView = [self.contentView convertPoint:point fromView:self.bubbleBackgroundView.superview];
+    // 表格遮罩区域不触发长按菜单
+    if (self.tableOverlays.count > 0) {
+        for (UIScrollView *overlay in self.tableOverlays) {
+            if (CGRectContainsPoint(overlay.frame, pointInContentView)) {
+                return NO;
+            }
+        }
+    }
+    // 表格工具栏区域不触发长按菜单
+    for (UIView *toolbar in self.tableToolbars) {
+        CGRect toolbarInContentView = [self.contentView convertRect:toolbar.bounds fromView:toolbar];
+        if (CGRectContainsPoint(toolbarInContentView, pointInContentView)) {
+            return NO;
+        }
+    }
+    return [super shouldBeginContextGestureAtPoint:point];
 }
 
 -(BOOL) replyAtPoint:(CGPoint)point {
@@ -615,38 +1639,143 @@
             replyContentSize.height = replyContentFontSize+1;
             replyContentSize.width = self.messageContentView.lim_width;
         }
-        self.replyNameLbl.lim_size = replyNameSize;
-        self.replyContentLbl.lim_size = replyContentSize;
-        
-        self.replyBox.lim_top = 0.0f;
-        if(!self.nameLbl.hidden) {
-            self.replyBox.lim_top = replyToNameSpace;
+        // 引用块：背景色随发送/接收方向调整
+        if (self.messageModel.isSend) {
+            self.replyBox.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.18f];
+        } else {
+            self.replyBox.backgroundColor = [UIColor colorWithRed:0.93f green:0.93f blue:0.95f alpha:1.0f];
         }
+
+        CGFloat replyRow1H = MAX(replyAvatarSize, replyNameSize.height);
+        CGFloat replyBoxH  = replyBoxPadV + replyRow1H + replyItemSpacing + replyContentSize.height + replyBoxPadV;
+
+        self.replyBox.lim_top = !self.nameLbl.hidden ? replyToNameSpace : 0.0f;
         self.replyBox.lim_width = self.messageContentView.lim_width;
-        self.replyBox.lim_height = replyNameSize.height + replyContentSize.height;
-        
+        self.replyBox.lim_height = replyBoxH;
+
+        // 左侧彩色竖线
         self.splitView.lim_left = 0.0f;
         self.splitView.lim_top = 0.0f;
-        self.splitView.lim_height = self.replyBox.lim_height;
         self.splitView.lim_width = splitWidth;
-        
-        self.replyAvatarIcon.lim_left = self.splitView.lim_right;
-        self.replyAvatarIcon.lim_top = self.splitView.lim_top;
-        self.replyAvatarIcon.lim_centerY_parent = self.replyNameLbl;
-        
-        self.replyNameLbl.lim_left = self.replyAvatarIcon.lim_right+4.0f;
-        self.replyNameLbl.lim_top = self.splitView.lim_top;
-        
-        
-        self.replyContentLbl.lim_top = self.replyNameLbl.lim_bottom+2.0f;
-        self.replyContentLbl.lim_left = self.replyAvatarIcon.lim_left;
-       
-        replyBoxBottom = self.replyBox.lim_bottom+textTopSpace;
+        self.splitView.lim_height = replyBoxH;
+
+        // 头像（22×22）
+        CGFloat contentLeft = splitWidth + replyBoxPadH;
+        self.replyAvatarIcon.lim_left = contentLeft;
+        self.replyAvatarIcon.lim_top = replyBoxPadV + (replyRow1H - replyAvatarSize) / 2.0f;
+        self.replyAvatarIcon.lim_width = replyAvatarSize;
+        self.replyAvatarIcon.lim_height = replyAvatarSize;
+
+        // 名字（右侧紧邻头像）：给满可用宽度，由 label 的 lineBreakMode 决定是否截断
+        CGFloat nameLeft = contentLeft + replyAvatarSize + 4.0f;
+        CGFloat nameMaxW = self.replyBox.lim_width - nameLeft - replyBoxPadH;
+        self.replyNameLbl.lim_left   = nameLeft;
+        self.replyNameLbl.lim_top    = replyBoxPadV + (replyRow1H - replyNameSize.height) / 2.0f;
+        self.replyNameLbl.lim_width  = MAX(0, nameMaxW);  // 全部可用宽度
+        self.replyNameLbl.lim_height = replyNameSize.height;
+
+        // 内容（第二行，与头像左对齐）：同理给满可用宽度
+        CGFloat contentMaxW = self.replyBox.lim_width - contentLeft - replyBoxPadH;
+        self.replyContentLbl.lim_left   = contentLeft;
+        self.replyContentLbl.lim_top    = replyBoxPadV + replyRow1H + replyItemSpacing;
+        self.replyContentLbl.lim_width  = MAX(0, contentMaxW);
+        self.replyContentLbl.lim_height = replyContentSize.height;
+
+        replyBoxBottom = self.replyBox.lim_bottom + textTopSpace;
     }
     
     self.textLbl.lim_left = 0.0f;
     self.textLbl.lim_top = replyBoxBottom;
-    
+    // 非分段模式：textLbl 渲染宽度必须 = 测量宽度（maxWidth），
+    // lim_size.width 来自 usedRect（最宽行，可能 < maxWidth），
+    // 但高度是在 maxWidth 下计算的，所以渲染宽度也必须用 messageContentView 宽度。
+    if (self.segmentViews.count == 0) {
+        CGFloat renderW = self.messageContentView.lim_width;
+        if (renderW > self.textLbl.lim_width) {
+            self.textLbl.lim_width = renderW;
+        }
+        // --- 诊断日志 ---
+        {
+            CGFloat fitH = [self.textLbl sizeThatFits:CGSizeMake(self.textLbl.lim_width, CGFLOAT_MAX)].height;
+            if (fitH > self.textLbl.lim_height + 1.0) {
+                NSLog(@"[BubbleHeight] ⚠️ layout溢出: textLbl=(%.1f,%.1f,%.1f,%.1f) fitH=%.1f Δ=%.1f contentView=(%.1f,%.1f)",
+                      self.textLbl.lim_left, self.textLbl.lim_top, self.textLbl.lim_width, self.textLbl.lim_height,
+                      fitH, fitH - self.textLbl.lim_height,
+                      self.messageContentView.lim_width, self.messageContentView.lim_height);
+            }
+        }
+    }
+    // 分段布局：按顺序排列文本段和表格段
+    if (self.segmentViews.count > 0) {
+        CGFloat segTop = replyBoxBottom;
+        NSInteger tableIdx = 0;
+        CGFloat contentW = self.messageContentView.lim_width;
+        for (NSUInteger i = 0; i < self.segmentViews.count; i++) {
+            UIView *v = self.segmentViews[i];
+            CGFloat spacing = (i < self.segmentViews.count - 1) ? kTableTopSpace : 0;
+            if ([v isKindOfClass:[UILabel class]] || [v isKindOfClass:[UITextView class]]) {
+                CGSize fitSize = [v sizeThatFits:CGSizeMake(contentW, CGFLOAT_MAX)];
+                v.frame = CGRectMake(0, segTop, contentW, fitSize.height);
+                segTop += fitSize.height + spacing;
+            } else {
+                // 表格容器布局（容器内含 toolbar + webview）
+                CGFloat tableH = v.tag > 0 ? v.tag : (kTableToolbarHeight + [[self class] tableRowHeight] + kTableExtraPadding);
+                v.frame = CGRectMake(0, segTop, contentW, tableH);
+
+                // 容器内部布局：toolbar 在顶部，webview 紧跟其下
+                if (tableIdx < (NSInteger)self.tableToolbars.count) {
+                    UIView *toolbar = self.tableToolbars[tableIdx];
+                    toolbar.frame = CGRectMake(0, 0, contentW, kTableToolbarHeight);
+                    // 复制按钮靠右
+                    for (UIView *sub in toolbar.subviews) {
+                        if ([sub isKindOfClass:[UIButton class]]) {
+                            sub.frame = CGRectMake(contentW - 36, 0, 36, kTableToolbarHeight);
+                        }
+                        // 底部分隔线
+                        if (sub.tag == 9999) {
+                            sub.frame = CGRectMake(0, kTableToolbarHeight - 0.5, contentW, 0.5);
+                        }
+                    }
+                }
+                if (tableIdx < (NSInteger)self.tableWebViews.count) {
+                    WKWebView *wv = self.tableWebViews[tableIdx];
+                    wv.frame = CGRectMake(0, kTableToolbarHeight, contentW, tableH - kTableToolbarHeight);
+                }
+                if (tableIdx < (NSInteger)self.tableOverlays.count) {
+                    // overlay 只覆盖 webview 区域（跳过 toolbar）
+                    CGRect containerInContentView = [self.contentView convertRect:v.frame fromView:self.messageContentView];
+                    CGRect overlayRect = CGRectMake(containerInContentView.origin.x, containerInContentView.origin.y + kTableToolbarHeight, containerInContentView.size.width, containerInContentView.size.height - kTableToolbarHeight);
+                    self.tableOverlays[tableIdx].frame = overlayRect;
+                    tableIdx++;
+                }
+                segTop += tableH + spacing;
+            }
+        }
+    }
+
+    // BotFather 审批按钮布局
+    if (!self.botActionView.hidden) {
+        CGFloat top = self.textLbl.lim_top + self.textLbl.lim_size.height + kBotActionTopSpace;
+        if (self.segmentViews.count > 0) {
+            UIView *lastSeg = self.segmentViews.lastObject;
+            top = CGRectGetMaxY(lastSeg.frame) + kBotActionTopSpace;
+        }
+        self.botActionView.frame = CGRectMake(0, top, self.messageContentView.lim_width, kBotActionBtnHeight);
+        CGFloat btnW = (self.botActionView.lim_width - kBotActionBtnSpacing) / 2.0;
+        self.rejectBtn.frame = CGRectMake(0, 0, btnW, kBotActionBtnHeight);
+        self.approveBtn.frame = CGRectMake(btnW + kBotActionBtnSpacing, 0, btnW, kBotActionBtnHeight);
+    }
+
+    // "查看全文"按钮布局
+    if (self.viewFullTextBtn && !self.viewFullTextBtn.hidden) {
+        CGFloat btnTop = self.textLbl.lim_top + self.textLbl.lim_size.height;
+        if (self.segmentViews.count > 0) {
+            UIView *lastSeg = self.segmentViews.lastObject;
+            btnTop = CGRectGetMaxY(lastSeg.frame);
+        }
+        self.viewFullTextBtn.frame = CGRectMake(0, btnTop, self.messageContentView.lim_width, kViewFullTextBtnHeight);
+    }
+
     self.securityTipLbl.lim_top = self.messageContentView.lim_bottom + securityTipTopSpace;
     self.securityTipLbl.lim_centerX_parent = self.contentView;
     
@@ -714,11 +1843,16 @@
 - (UIView *)replyBox {
     if(!_replyBox) {
         _replyBox = [[UIView alloc] init];
+        _replyBox.layer.cornerRadius = 6.0f;
+        _replyBox.clipsToBounds = YES;
     }
     return _replyBox;
 }
 
 -(void) replyBoxTap {
+    if(!self.messageModel.content.reply || self.messageModel.content.reply.messageSeq == 0) {
+        return;
+    }
     [self.conversationContext locateMessageCell:self.messageModel.content.reply.messageSeq];
 }
 
@@ -732,25 +1866,28 @@
 - (UIView *)splitView {
     if(!_splitView) {
         _splitView = [[UIView alloc] init];
-        [_splitView setHidden:YES];
         _splitView.backgroundColor = [WKApp shared].config.themeColor;
+        // 不再隐藏：作为左侧彩色竖线显示（原设计是 hidden=YES 且 width=0）
     }
     return _splitView;
 }
 
 - (UILabel *)replyNameLbl {
     if(!_replyNameLbl) {
-        _replyNameLbl = [[UILabel alloc] initWithFrame:CGRectMake(0.0f, 0.0f, [WKApp shared].config.messageContentMaxWidth - 20*2, 0.0f)];
+        _replyNameLbl = [[UILabel alloc] init];
         _replyNameLbl.font = [[WKApp shared].config appFontOfSize:replyNameFontSize];
+        _replyNameLbl.numberOfLines = 1;
+        _replyNameLbl.lineBreakMode = NSLineBreakByTruncatingTail;
     }
     return _replyNameLbl;
 }
 
 - (UILabel *)replyContentLbl {
     if(!_replyContentLbl) {
-        _replyContentLbl = [[UILabel alloc] initWithFrame:CGRectMake(0.0f, 0.0f, [WKApp shared].config.messageContentMaxWidth - 20*2, 0.0f)];
+        _replyContentLbl = [[UILabel alloc] init];
         _replyContentLbl.font = [[WKApp shared].config appFontOfSize:replyContentFontSize];
         _replyContentLbl.numberOfLines = 1;
+        _replyContentLbl.lineBreakMode = NSLineBreakByTruncatingTail;
         [_replyContentLbl setTextColor:[WKApp shared].config.messageTipColor];
     }
     return _replyContentLbl;
@@ -775,13 +1912,20 @@
 }
 
 
-
 +(CGSize) getReplyNameSize:(WKMessageModel *)message {
-    return [self getTextSize:message.content.reply.fromName?:@"" maxWidth:[WKApp shared].config.messageContentMaxWidth - 20*2 fontSize:replyNameFontSize];
+    // 可用宽度 = 最大宽度 - 竖线 - 左右内边距 - 头像 - 头像右间距
+    CGFloat maxW = [WKApp shared].config.messageContentMaxWidth
+        - splitWidth - replyBoxPadH - replyAvatarSize - 4.0f - replyBoxPadH;
+    NSString *name = message.content.reply.fromName;
+    if (!name.length) name = LLang(@"未知用户");  // 与 refreshModel: 显示值一致
+    return [self getTextSize:name maxWidth:maxW fontSize:replyNameFontSize];
 }
 
 +(CGSize) getReplyContentSize:(WKMessageModel *)message {
-    return [self getTextSize:[message.content.reply.content conversationDigest] maxWidth:[WKApp shared].config.messageContentMaxWidth - 20*2 fontSize:replyContentFontSize];
+    // 可用宽度 = 最大宽度 - 竖线 - 左右内边距
+    CGFloat maxW = [WKApp shared].config.messageContentMaxWidth
+        - splitWidth - replyBoxPadH * 2;
+    return [self getTextSize:[message.content.reply.content conversationDigest] maxWidth:maxW fontSize:replyContentFontSize];
 }
 
 +(CGFloat)getWidthWithText:(NSString*)text height:(CGFloat)height font:(CGFloat)font{
@@ -937,6 +2081,729 @@
 - (void)contactViewController:(CNContactViewController *)viewController
        didCompleteWithContact:(nullable CNContact *)contact  API_AVAILABLE(ios(9.0)){
   [viewController dismissViewControllerAnimated:YES completion:nil];
+}
+
+#pragma mark -- WKNavigationDelegate & UIScrollViewDelegate (表格滑动)
+
+-(void) webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+    NSURL *url = navigationAction.request.URL;
+    NSString *scheme = url.scheme.lowercaseString;
+    // 拦截所有 http/https 导航（包括 JS window.location.href 触发的），用系统浏览器打开
+    // about:blank 是 loadHTMLString 的初始加载，需要放行
+    if (url && ([scheme isEqualToString:@"https"] || [scheme isEqualToString:@"http"])) {
+        [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+        decisionHandler(WKNavigationActionPolicyCancel);
+        return;
+    }
+    decisionHandler(WKNavigationActionPolicyAllow);
+}
+
+-(void) webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    NSUInteger idx = [self.tableWebViews indexOfObject:webView];
+    if (idx == NSNotFound) return;
+
+    NSString *js = @"JSON.stringify({w:Math.max(document.body.scrollWidth,document.documentElement.scrollWidth),h:Math.max(document.body.scrollHeight,document.documentElement.scrollHeight)})";
+    [webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
+        if (!result || error) return;
+        NSData *data = [(NSString *)result dataUsingEncoding:NSUTF8StringEncoding];
+        NSDictionary *dims = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (!dims) return;
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            CGFloat contentWidth  = [dims[@"w"] floatValue];
+            CGFloat contentHeight = [dims[@"h"] floatValue];
+
+            // 水平滚动 overlay
+            if (idx < self.tableOverlays.count) {
+                UIScrollView *overlay = self.tableOverlays[idx];
+                if (contentWidth > overlay.frame.size.width && overlay.frame.size.width > 0) {
+                    overlay.contentSize = CGSizeMake(contentWidth, overlay.frame.size.height);
+                }
+            }
+
+            // 动态高度修正：用 JS 实际高度替换公式估算
+            UIView *container = webView.superview;
+            if (!container || !self.messageModel) return;
+            CGFloat actualContainerH = kTableToolbarHeight + ceil(contentHeight);
+            CGFloat currentH = (CGFloat)container.tag;
+            if (fabs(actualContainerH - currentH) < 2.0) return; // 误差 <2px 无需修正
+
+            container.tag = (NSInteger)actualContainerH;
+            NSString *jsKey = [NSString stringWithFormat:@"%@-%lu", self.messageModel.clientMsgNo, (unsigned long)idx];
+            [[WKTextMessageCell jsTableHeights] setObject:@(actualContainerH) forKey:jsKey];
+
+            // 清除分段高度缓存（让 segmentedContentHeightForMessage: 使用 JS 实际高度重新计算）
+            NSString *modeTag = ([WKApp shared].config.style == WKSystemStyleDark) ? @"d" : @"l";
+            NSString *cacheKey = [NSString stringWithFormat:@"%@-segH-%@", self.messageModel.clientMsgNo, modeTag];
+            [[[self class] segHeightCache] setCache:nil forKey:cacheKey];
+
+            // 触发 UITableView 重新计算 cell 高度
+            UIView *v = self.superview;
+            while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
+            if ([v isKindOfClass:[UITableView class]]) {
+                UITableView *tv = (UITableView *)v;
+                [tv beginUpdates];
+                [tv endUpdates];
+            }
+        });
+    }];
+}
+
+-(void) scrollViewDidScroll:(UIScrollView *)scrollView {
+    // 遮罩层滑动时，同步偏移到对应的 WebView
+    NSUInteger idx = [self.tableOverlays indexOfObject:scrollView];
+    if (idx != NSNotFound && idx < self.tableWebViews.count) {
+        self.tableWebViews[idx].scrollView.contentOffset = scrollView.contentOffset;
+    }
+}
+
+#pragma mark -- BotFather 审批按钮
+
+-(void) approveBtnTap {
+    if (self.approveCommand) {
+        [self.conversationContext sendTextMessage:self.approveCommand];
+    }
+}
+
+-(void) rejectBtnTap {
+    if (self.rejectCommand) {
+        [self.conversationContext sendTextMessage:self.rejectCommand];
+    }
+}
+
+#pragma mark - Link Card
+
+- (void)showLinkCard:(NSString *)rawText model:(WKMessageModel *)model {
+    self.isLinkCard = YES;
+    // 彻底隐藏所有可能残留的子视图
+    self.textLbl.hidden = YES;
+    self.textLbl.text = nil;
+    self.textLbl.attributedText = nil;
+    self.textLbl.lim_size = CGSizeZero;
+    for (UIView *seg in self.segmentViews) seg.hidden = YES;
+    self.replyBox.hidden = YES;
+    self.botActionView.hidden = YES;
+    self.securityTipLbl.hidden = YES;
+    // 隐藏 messageContentView 上所有非 linkCardView 的子视图
+    for (UIView *sub in self.messageContentView.subviews) {
+        if (sub != self.linkCardView) sub.hidden = YES;
+    }
+
+    // 解析 JSON
+    NSString *jsonStr = [rawText substringFromIndex:@"[链接]".length];
+    NSData *jsonData = [jsonStr dataUsingEncoding:NSUTF8StringEncoding];
+    NSDictionary *cardData = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+    NSString *title = cardData[@"title"] ?: @"";
+    NSString *url = cardData[@"url"] ?: @"";
+    NSString *iconURL = cardData[@"icon"] ?: @"";
+
+    // 创建或复用卡片视图
+    if (!self.linkCardView) {
+        self.linkCardView = [[UIView alloc] init];
+        [self.messageContentView addSubview:self.linkCardView];
+    }
+    self.linkCardView.hidden = NO;
+
+    // 清除旧的子视图
+    for (UIView *sub in self.linkCardView.subviews) [sub removeFromSuperview];
+
+    CGFloat cardW = 220;
+    CGFloat cardH = 70;
+    self.linkCardView.frame = CGRectMake(0, 0, cardW, cardH);
+
+    // favicon（右侧）
+    CGFloat iconSize = 32;
+    UIImageView *faviconView = [[UIImageView alloc] initWithFrame:CGRectMake(cardW - iconSize - 10, (cardH - iconSize) / 2, iconSize, iconSize)];
+    faviconView.contentMode = UIViewContentModeScaleAspectFit;
+    faviconView.layer.cornerRadius = 4;
+    faviconView.layer.masksToBounds = YES;
+    faviconView.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.1];
+    // 默认链接图标（程序化绘制地球图标）
+    faviconView.image = [[self class] defaultLinkIcon];
+    [self.linkCardView addSubview:faviconView];
+
+    // 异步加载 favicon
+    if (iconURL.length > 0) {
+        dispatch_async(dispatch_get_global_queue(0, 0), ^{
+            NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:iconURL]];
+            if (data) {
+                UIImage *icon = [UIImage imageWithData:data];
+                if (icon) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        faviconView.image = icon;
+                    });
+                }
+            }
+        });
+    }
+
+    // 标题
+    CGFloat textW = cardW - iconSize - 24;
+    UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(8, 10, textW, 22)];
+    titleLbl.text = title.length > 0 ? title : url;
+    titleLbl.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+    titleLbl.textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.defaultTextColor;
+    titleLbl.lineBreakMode = NSLineBreakByTruncatingTail;
+    [self.linkCardView addSubview:titleLbl];
+
+    // URL（截断显示域名）
+    NSURL *parsedURL = [NSURL URLWithString:url];
+    NSString *displayURL = parsedURL.host ?: url;
+    UILabel *urlLbl = [[UILabel alloc] initWithFrame:CGRectMake(8, 34, textW, 16)];
+    urlLbl.text = displayURL;
+    urlLbl.font = [UIFont systemFontOfSize:11];
+    urlLbl.textColor = model.isSend ? [[UIColor whiteColor] colorWithAlphaComponent:0.7] : [UIColor grayColor];
+    urlLbl.lineBreakMode = NSLineBreakByTruncatingTail;
+    [self.linkCardView addSubview:urlLbl];
+
+    // 底部分隔线
+    UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(8, cardH - 20, cardW - 16, 0.5)];
+    sep.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.15];
+    [self.linkCardView addSubview:sep];
+
+    // "网页" 标签
+    UILabel *webLabel = [[UILabel alloc] initWithFrame:CGRectMake(8, cardH - 18, 60, 16)];
+    webLabel.text = LLang(@"网页");
+    webLabel.font = [UIFont systemFontOfSize:10];
+    webLabel.textColor = model.isSend ? [[UIColor whiteColor] colorWithAlphaComponent:0.5] : [UIColor lightGrayColor];
+    [self.linkCardView addSubview:webLabel];
+
+    // 存储 URL 供点击使用
+    objc_setAssociatedObject(self.linkCardView, "linkURL", url, OBJC_ASSOCIATION_COPY_NONATOMIC);
+
+    // 更新 messageContentView 大小
+    self.messageContentView.frame = CGRectMake(self.messageContentView.frame.origin.x,
+                                                self.messageContentView.frame.origin.y,
+                                                cardW, cardH);
+}
+
++ (UIImage *)defaultLinkIcon {
+    CGSize s = CGSizeMake(32, 32);
+    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    if (!ctx) return nil;
+    // 灰色地球图标
+    UIColor *color = [UIColor colorWithWhite:0.65 alpha:1.0];
+    [color setStroke];
+    CGContextSetLineWidth(ctx, 1.5);
+    // 圆
+    CGContextAddEllipseInRect(ctx, CGRectMake(4, 4, 24, 24));
+    CGContextStrokePath(ctx);
+    // 横线
+    CGContextMoveToPoint(ctx, 4, 16);
+    CGContextAddLineToPoint(ctx, 28, 16);
+    CGContextStrokePath(ctx);
+    // 竖椭圆
+    CGContextAddEllipseInRect(ctx, CGRectMake(11, 4, 10, 24));
+    CGContextStrokePath(ctx);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
+#pragma mark - 气泡内文字选择（自定义句柄，参考 Android SelectTextHelper）
+
+// ── 选区状态 associated object keys ──
+
+static const char kSelectionMenusKey   = 0;
+static const char kSelectionVisibleKey = 1;
+static const char kSelStartHandleKey   = 2;
+static const char kSelEndHandleKey     = 3;
+static const char kSelOrigAttrTextKey  = 4;
+static const char kSelRangeLocKey      = 5;
+static const char kSelRangeLenKey      = 6;
+static const char kSelWindowTapKey     = 7;
+static const char kSelNavKey           = 8;
+static const char kSelTimerKey         = 9;
+static const char kSelTableViewKey     = 10;
+static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
+
+// 判断是否处于选区模式
+-(BOOL) wk_isInSelectionMode {
+    return objc_getAssociatedObject(self, &kSelStartHandleKey) != nil;
+}
+
+-(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems {
+    if ([self wk_isInSelectionMode]) return;
+
+    self.transform = CGAffineTransformIdentity;
+
+    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+    CGFloat bottomMargin = 80.0f + window.safeAreaInsets.bottom;
+    CGRect visibleArea = CGRectMake(0, window.safeAreaInsets.top, window.frame.size.width,
+                                    window.frame.size.height - window.safeAreaInsets.top - bottomMargin);
+    CGRect tvInWindow = [self.textLbl convertRect:self.textLbl.bounds toView:nil];
+    CGRect visibleFrame = CGRectIntersection(tvInWindow, visibleArea);
+    if (CGRectIsNull(visibleFrame) || visibleFrame.size.height < 4) return;
+
+    // 保存状态
+    objc_setAssociatedObject(self, &kSelectionMenusKey, menuItems ?: @[], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionVisibleKey, [NSValue valueWithCGRect:visibleFrame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 保存原始 attributedText
+    objc_setAssociatedObject(self, &kSelOrigAttrTextKey, [self.textLbl.attributedText copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 设置全选范围
+    NSUInteger textLen = self.textLbl.text.length;
+    objc_setAssociatedObject(self, &kSelRangeLocKey, @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelRangeLenKey, @(textLen), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 应用高亮
+    [self wk_applyHighlightForRange:NSMakeRange(0, textLen)];
+
+    // 创建句柄加到 window
+    __weak typeof(self) weakSelf = self;
+    WKSelectionHandle *startHandle = [[WKSelectionHandle alloc] initWithStart:YES];
+    WKSelectionHandle *endHandle = [[WKSelectionHandle alloc] initWithStart:NO];
+
+    startHandle.onDrag = ^(CGPoint windowPt) { [weakSelf wk_handleDrag:YES point:windowPt]; };
+    startHandle.onDragEnd = ^{ [weakSelf wk_handleDragEnd]; };
+    endHandle.onDrag = ^(CGPoint windowPt) { [weakSelf wk_handleDrag:NO point:windowPt]; };
+    endHandle.onDragEnd = ^{ [weakSelf wk_handleDragEnd]; };
+
+    [window addSubview:startHandle];
+    [window addSubview:endHandle];
+    objc_setAssociatedObject(self, &kSelStartHandleKey, startHandle, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelEndHandleKey, endHandle, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 定位句柄
+    [self wk_updateHandlePositions];
+
+    // KVO 监听 tableView 滚动，实时更新句柄位置
+    UIView *v = self.superview;
+    while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
+    if ([v isKindOfClass:[UITableView class]]) {
+        [v addObserver:self forKeyPath:@"contentOffset" options:NSKeyValueObservingOptionNew context:kSelScrollKVOCtx];
+        objc_setAssociatedObject(self, &kSelTableViewKey, v, OBJC_ASSOCIATION_ASSIGN);
+    }
+
+    // 禁用导航滑动返回
+    UIResponder *responder = self;
+    while (responder) {
+        if ([responder isKindOfClass:[UINavigationController class]]) {
+            UINavigationController *nav = (UINavigationController *)responder;
+            for (UIGestureRecognizer *gr in nav.view.gestureRecognizers) {
+                if ([gr isKindOfClass:[UIPanGestureRecognizer class]]) gr.enabled = NO;
+            }
+            objc_setAssociatedObject(self, &kSelNavKey, nav, OBJC_ASSOCIATION_ASSIGN);
+            break;
+        }
+        responder = [responder nextResponder];
+    }
+
+    // window tap（点击气泡外 dismiss）
+    UITapGestureRecognizer *windowTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(wk_selectionWindowTap:)];
+    windowTap.cancelsTouchesInView = NO;
+    windowTap.delegate = self;
+    [window addGestureRecognizer:windowTap];
+    objc_setAssociatedObject(self, &kSelWindowTapKey, windowTap, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 通知监听
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(wk_keyboardDismissSelection:) name:UIKeyboardWillShowNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(wk_viewDisappearDismissSelection:) name:@"WKConversationViewWillDisappear" object:nil];
+
+    // 显示菜单
+    [self wk_showSelectionMenuForRange:NSMakeRange(0, textLen) isAll:YES];
+}
+
+-(void) endInBubbleTextSelection {
+    if (![self wk_isInSelectionMode]) return;
+
+    // 移除句柄
+    WKSelectionHandle *sh = objc_getAssociatedObject(self, &kSelStartHandleKey);
+    WKSelectionHandle *eh = objc_getAssociatedObject(self, &kSelEndHandleKey);
+    [sh removeFromSuperview];
+    [eh removeFromSuperview];
+    objc_setAssociatedObject(self, &kSelStartHandleKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelEndHandleKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 恢复原始 attributedText（去除高亮）
+    NSAttributedString *orig = objc_getAssociatedObject(self, &kSelOrigAttrTextKey);
+    if (orig) self.textLbl.attributedText = orig;
+    objc_setAssociatedObject(self, &kSelOrigAttrTextKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 移除 window tap
+    UITapGestureRecognizer *tap = objc_getAssociatedObject(self, &kSelWindowTapKey);
+    if (tap) { [tap.view removeGestureRecognizer:tap]; }
+    objc_setAssociatedObject(self, &kSelWindowTapKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 移除 KVO
+    UIView *tv = objc_getAssociatedObject(self, &kSelTableViewKey);
+    if (tv) {
+        @try { [tv removeObserver:self forKeyPath:@"contentOffset" context:kSelScrollKVOCtx]; } @catch (...) {}
+        objc_setAssociatedObject(self, &kSelTableViewKey, nil, OBJC_ASSOCIATION_ASSIGN);
+    }
+
+    // 恢复导航手势
+    UINavigationController *nav = objc_getAssociatedObject(self, &kSelNavKey);
+    if (nav) {
+        for (UIGestureRecognizer *gr in nav.view.gestureRecognizers) {
+            if ([gr isKindOfClass:[UIPanGestureRecognizer class]]) gr.enabled = YES;
+        }
+        objc_setAssociatedObject(self, &kSelNavKey, nil, OBJC_ASSOCIATION_ASSIGN);
+    }
+
+    // 取消 timer
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(wk_reshowMenuAfterScroll) object:nil];
+    dispatch_block_t t = objc_getAssociatedObject(self, &kSelTimerKey);
+    if (t) { dispatch_block_cancel(t); }
+    objc_setAssociatedObject(self, &kSelTimerKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
+
+    // 移除通知
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIKeyboardWillShowNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKConversationViewWillDisappear" object:nil];
+
+    // 隐藏菜单
+    [self wk_hideSelectionPopup];
+
+    objc_setAssociatedObject(self, &kSelectionMenusKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelectionVisibleKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelRangeLocKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelRangeLenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+#pragma mark - 自定义选区：高亮、句柄定位、拖拽
+
+-(NSRange) wk_currentSelRange {
+    NSUInteger loc = [objc_getAssociatedObject(self, &kSelRangeLocKey) unsignedIntegerValue];
+    NSUInteger len = [objc_getAssociatedObject(self, &kSelRangeLenKey) unsignedIntegerValue];
+    return NSMakeRange(loc, len);
+}
+
+-(void) wk_applyHighlightForRange:(NSRange)range {
+    NSAttributedString *orig = objc_getAssociatedObject(self, &kSelOrigAttrTextKey);
+    if (!orig) return;
+    NSMutableAttributedString *highlighted = [orig mutableCopy];
+    if (range.length > 0 && NSMaxRange(range) <= highlighted.length) {
+        [highlighted addAttribute:NSBackgroundColorAttributeName
+                            value:[[UIColor systemBlueColor] colorWithAlphaComponent:0.3]
+                            range:range];
+    }
+    self.textLbl.attributedText = highlighted;
+}
+
+-(void) wk_updateHandlePositions {
+    NSRange range = [self wk_currentSelRange];
+    if (range.length == 0) return;
+
+    NSLayoutManager *lm = self.textLbl.layoutManager;
+    NSTextContainer *tc = self.textLbl.textContainer;
+    [lm ensureLayoutForTextContainer:tc];
+
+    // 起始句柄：选区首字符的左上角
+    NSUInteger startGlyph = [lm glyphIndexForCharacterAtIndex:range.location];
+    CGRect startRect = [lm boundingRectForGlyphRange:NSMakeRange(startGlyph, 1) inTextContainer:tc];
+    CGPoint startPt = [self.textLbl convertPoint:CGPointMake(startRect.origin.x, startRect.origin.y) toView:nil];
+
+    // 结束句柄：选区末字符的右下角
+    NSUInteger endCharIdx = NSMaxRange(range) - 1;
+    NSUInteger endGlyph = [lm glyphIndexForCharacterAtIndex:endCharIdx];
+    CGRect endRect = [lm boundingRectForGlyphRange:NSMakeRange(endGlyph, 1) inTextContainer:tc];
+    CGPoint endPt = [self.textLbl convertPoint:CGPointMake(CGRectGetMaxX(endRect), CGRectGetMaxY(endRect)) toView:nil];
+
+    WKSelectionHandle *sh = objc_getAssociatedObject(self, &kSelStartHandleKey);
+    WKSelectionHandle *eh = objc_getAssociatedObject(self, &kSelEndHandleKey);
+    [sh positionAtWindowPoint:startPt];
+    [eh positionAtWindowPoint:endPt];
+}
+
+-(void) wk_handleDrag:(BOOL)isStart point:(CGPoint)windowPt {
+    [self wk_hideSelectionPopup];
+
+    // 转换为 textLbl 本地坐标
+    CGPoint local = [self.textLbl convertPoint:windowPt fromView:nil];
+    local.x = MAX(0, MIN(local.x, self.textLbl.bounds.size.width));
+    local.y = MAX(0, MIN(local.y, self.textLbl.bounds.size.height));
+
+    NSLayoutManager *lm = self.textLbl.layoutManager;
+    NSTextContainer *tc = self.textLbl.textContainer;
+    CGFloat fraction = 0;
+    NSUInteger idx = [lm characterIndexForPoint:local inTextContainer:tc
+               fractionOfDistanceBetweenInsertionPoints:&fraction];
+    if (idx == NSNotFound) return;
+
+    NSRange cur = [self wk_currentSelRange];
+    NSUInteger newStart = cur.location, newEnd = NSMaxRange(cur);
+
+    if (isStart) {
+        newStart = idx;
+    } else {
+        newEnd = idx + 1;
+    }
+    if (newEnd > self.textLbl.text.length) newEnd = self.textLbl.text.length;
+    if (newStart >= newEnd) {
+        if (isStart) newStart = newEnd > 0 ? newEnd - 1 : 0;
+        else newEnd = newStart + 1;
+    }
+    if (newEnd > self.textLbl.text.length) newEnd = self.textLbl.text.length;
+    if (newStart >= newEnd) return;
+
+    NSRange newRange = NSMakeRange(newStart, newEnd - newStart);
+    objc_setAssociatedObject(self, &kSelRangeLocKey, @(newRange.location), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelRangeLenKey, @(newRange.length), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    [self wk_applyHighlightForRange:newRange];
+    [self wk_updateHandlePositions];
+}
+
+-(void) wk_handleDragEnd {
+    NSRange range = [self wk_currentSelRange];
+    if (range.length == 0) return;
+    BOOL isAll = (range.location == 0 && range.length == self.textLbl.text.length);
+    __weak typeof(self) weakSelf = self;
+    dispatch_block_t block = dispatch_block_create(0, ^{
+        [weakSelf wk_showSelectionMenuForRange:[weakSelf wk_currentSelRange] isAll:isAll];
+    });
+    objc_setAssociatedObject(self, &kSelTimerKey, block, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), block);
+}
+
+#pragma mark - window tap dismiss + 通知
+
+-(void) wk_selectionWindowTap:(UITapGestureRecognizer *)gr {
+    if (![self wk_isInSelectionMode]) return;
+    [self endInBubbleTextSelection];
+}
+
+-(BOOL) gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    UITapGestureRecognizer *windowTap = objc_getAssociatedObject(self, &kSelWindowTapKey);
+    if (gestureRecognizer == windowTap) {
+        CGPoint pt = [touch locationInView:nil];
+        // 不拦截句柄区域
+        WKSelectionHandle *sh = objc_getAssociatedObject(self, &kSelStartHandleKey);
+        WKSelectionHandle *eh = objc_getAssociatedObject(self, &kSelEndHandleKey);
+        if (sh && CGRectContainsPoint(sh.frame, pt)) return NO;
+        if (eh && CGRectContainsPoint(eh.frame, pt)) return NO;
+        // 不拦截菜单卡片
+        UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+        UIView *card = [window viewWithTag:kSelectionPopupTag];
+        if (card && CGRectContainsPoint(card.frame, pt)) return NO;
+        // 不拦截气泡区域（允许用户在文字上操作但不 dismiss）
+        CGRect bubbleInWindow = [self.bubbleBackgroundView convertRect:self.bubbleBackgroundView.bounds toView:nil];
+        if (CGRectContainsPoint(CGRectInset(bubbleInWindow, -10, -10), pt)) return NO;
+    }
+    return YES;
+}
+
+-(void) observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    if (context != kSelScrollKVOCtx) { [super observeValueForKeyPath:keyPath ofObject:object change:change context:context]; return; }
+    if (![self wk_isInSelectionMode]) return;
+    [self wk_hideSelectionPopup];
+    [self wk_updateHandlePositions];
+    // 滚动停止后重新显示菜单
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(wk_reshowMenuAfterScroll) object:nil];
+    [self performSelector:@selector(wk_reshowMenuAfterScroll) withObject:nil afterDelay:0.2];
+}
+
+-(void) wk_reshowMenuAfterScroll {
+    if (![self wk_isInSelectionMode]) return;
+    NSRange range = [self wk_currentSelRange];
+    if (range.length == 0) return;
+    BOOL isAll = (range.location == 0 && range.length == self.textLbl.text.length);
+    [self wk_showSelectionMenuForRange:range isAll:isAll];
+}
+
+-(BOOL) gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    UITapGestureRecognizer *windowTap = objc_getAssociatedObject(self, &kSelWindowTapKey);
+    if (gestureRecognizer == windowTap) return YES;
+    return NO;
+}
+
+-(void) wk_keyboardDismissSelection:(NSNotification *)note {
+    if (![self wk_isInSelectionMode]) return;
+    [self endInBubbleTextSelection];
+}
+
+-(void) wk_viewDisappearDismissSelection:(NSNotification *)note {
+    if (![self wk_isInSelectionMode]) return;
+    [self endInBubbleTextSelection];
+}
+
+#pragma mark - 选区菜单浮层
+
+static const NSInteger kSelectionPopupTag = 0x574B5350;
+
+-(void) wk_hideSelectionPopup {
+    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+    [[window viewWithTag:kSelectionPopupTag] removeFromSuperview];
+}
+
+-(void) wk_showSelectionMenuForRange:(NSRange)selRange isAll:(BOOL)isAll {
+    [self wk_hideSelectionPopup];
+
+    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+    NSArray *menuItems = objc_getAssociatedObject(self, &kSelectionMenusKey) ?: @[];
+
+    NSMutableArray<NSDictionary*> *btns = [NSMutableArray array];
+    UIColor *iconTintColor = [WKApp shared].config.contextMenu.primaryColor;
+    __weak typeof(self) weakSelf = self;
+
+    if (isAll) {
+        for (WKMessageLongMenusItem *item in menuItems) {
+            WKMessageLongMenusItem *captured = item;
+            [btns addObject:@{
+                @"title": item.title ?: @"",
+                @"icon": item.icon ?: [NSNull null],
+                @"action": ^{ if(captured.onTap) captured.onTap(weakSelf.conversationContext); }
+            }];
+        }
+    } else {
+        // 复制选中文字
+        UIImage *copyIcon = [GenerateImageUtils generateTintedImgWithImage:[[WKApp shared] loadImage:@"Conversation/ContextMenu/Copy" moduleID:@"WuKongBase"] color:iconTintColor backgroundColor:nil];
+        [btns addObject:@{
+            @"title": LLang(@"复制"),
+            @"icon": copyIcon ?: [NSNull null],
+            @"action": ^{
+                NSRange r = [weakSelf wk_currentSelRange];
+                if (r.length > 0 && NSMaxRange(r) <= weakSelf.textLbl.text.length) {
+                    [[UIPasteboard generalPasteboard] setString:[weakSelf.textLbl.text substringWithRange:r]];
+                }
+            }
+        }];
+        // 全选
+        UIImage *selectIcon = [GenerateImageUtils generateTintedImgWithImage:[[WKApp shared] loadImage:@"Conversation/ContextMenu/Select" moduleID:@"WuKongBase"] color:iconTintColor backgroundColor:nil];
+        [btns addObject:@{
+            @"title": LLang(@"全选"),
+            @"icon": selectIcon ?: [NSNull null],
+            @"dismiss": @NO,
+            @"action": ^{
+                NSUInteger len = weakSelf.textLbl.text.length;
+                objc_setAssociatedObject(weakSelf, &kSelRangeLocKey, @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                objc_setAssociatedObject(weakSelf, &kSelRangeLenKey, @(len), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [weakSelf wk_applyHighlightForRange:NSMakeRange(0, len)];
+                [weakSelf wk_updateHandlePositions];
+                [weakSelf wk_showSelectionMenuForRange:NSMakeRange(0, len) isAll:YES];
+            }
+        }];
+        // 创建子区
+        NSString *capturedSelText = @"";
+        if (selRange.length > 0 && NSMaxRange(selRange) <= self.textLbl.text.length) {
+            capturedSelText = [self.textLbl.text substringWithRange:selRange];
+        }
+        if (capturedSelText.length > 50) capturedSelText = [capturedSelText substringToIndex:50];
+        for (WKMessageLongMenusItem *item in menuItems) {
+            if ([item.title isEqualToString:LLang(@"创建子区")]) {
+                WKMessageLongMenusItem *captured = item;
+                NSString *threadName = [capturedSelText copy];
+                [btns addObject:@{
+                    @"title": item.title,
+                    @"icon": item.icon ?: [NSNull null],
+                    @"action": ^{
+                        if (captured.onTap) captured.onTap(weakSelf.conversationContext);
+                        if (threadName.length > 0) {
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                UIViewController *presented = [[WKNavigationManager shared] topViewController].presentedViewController;
+                                if ([presented isKindOfClass:[UIAlertController class]]) {
+                                    UIAlertController *alert = (UIAlertController *)presented;
+                                    if (alert.textFields.count > 0) alert.textFields.firstObject.text = threadName;
+                                }
+                            });
+                        }
+                    }
+                }];
+                break;
+            }
+        }
+    }
+
+    if (!btns.count) return;
+
+    // 布局
+    NSInteger colCount = MIN(4, (NSInteger)btns.count);
+    NSInteger rowCount = (btns.count + colCount - 1) / colCount;
+    CGFloat hPad, cellW, iconSz, cellH, cardW, cardH, cornerR;
+    if (isAll) {
+        hPad = 12; cardW = MIN(window.frame.size.width - 24, 380); cellW = (cardW - hPad*2) / colCount;
+        iconSz = 22; cellH = 12+iconSz+4+13+10; cardH = rowCount*cellH+8; cornerR = 14;
+    } else {
+        hPad = 6; cellW = 56; iconSz = 18; cellH = 8+iconSz+3+12+6;
+        cardW = cellW*colCount+hPad*2; cardH = rowCount*cellH+6; cornerR = 10;
+    }
+
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0,0,cardW,cardH)];
+    card.tag = kSelectionPopupTag;
+    card.layer.cornerRadius = cornerR; card.clipsToBounds = NO;
+    card.layer.shadowColor = [UIColor blackColor].CGColor;
+    card.layer.shadowOpacity = 0.18; card.layer.shadowRadius = 12; card.layer.shadowOffset = CGSizeMake(0,4);
+
+    UIView *clipView = [[UIView alloc] initWithFrame:CGRectMake(0,0,cardW,cardH)];
+    clipView.backgroundColor = [WKApp shared].config.style == WKSystemStyleDark
+        ? [UIColor colorWithRed:0.18 green:0.18 blue:0.20 alpha:1]
+        : [UIColor colorWithRed:0.97 green:0.97 blue:0.97 alpha:1];
+    clipView.layer.cornerRadius = cornerR; clipView.clipsToBounds = YES;
+    [card addSubview:clipView];
+
+    CGFloat iconTopPad = isAll?12:8, iconTextGap = isAll?4:3, textH = isAll?13:12, cellTopPad = isAll?4:3;
+    UIFont *textFont = [UIFont systemFontOfSize:isAll?11:10];
+    UIColor *textColor = [WKApp shared].config.defaultTextColor;
+    for (NSInteger i = 0; i < (NSInteger)btns.count; i++) {
+        NSDictionary *info = btns[i];
+        NSInteger col = i % colCount, row = i / colCount;
+        CGFloat cellX = hPad + col*cellW, cellY = cellTopPad + row*cellH;
+        UIButton *btn = [[UIButton alloc] initWithFrame:CGRectMake(cellX,cellY,cellW,cellH)];
+        [btn setBackgroundImage:[self wk_imageWithColor:[UIColor colorWithWhite:0.5 alpha:0.15]] forState:UIControlStateHighlighted];
+        UIImageView *iv = [[UIImageView alloc] initWithFrame:CGRectMake((cellW-iconSz)/2,iconTopPad,iconSz,iconSz)];
+        iv.contentMode = UIViewContentModeScaleAspectFit; iv.tintColor = textColor;
+        id iconObj = info[@"icon"];
+        iv.image = (iconObj && iconObj != [NSNull null]) ? (UIImage *)iconObj : [UIImage systemImageNamed:@"ellipsis"];
+        [btn addSubview:iv];
+        UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(2,iconTopPad+iconSz+iconTextGap,cellW-4,textH)];
+        lbl.text = info[@"title"]; lbl.font = textFont; lbl.textColor = textColor;
+        lbl.textAlignment = NSTextAlignmentCenter; lbl.adjustsFontSizeToFitWidth = YES;
+        [btn addSubview:lbl];
+        NSNumber *shouldDismiss = info[@"dismiss"] ?: @YES;
+        objc_setAssociatedObject(btn, "tapBlock", info[@"action"], OBJC_ASSOCIATION_COPY_NONATOMIC);
+        objc_setAssociatedObject(btn, "shouldDismiss", shouldDismiss, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [btn addTarget:self action:@selector(wk_selectionMenuItemTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [clipView addSubview:btn];
+        if (col < colCount-1 && i < (NSInteger)btns.count-1) {
+            UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(cellX+cellW-0.25,cellY+8,0.5,cellH-16)];
+            sep.backgroundColor = [UIColor colorWithWhite:0.6 alpha:0.3];
+            [clipView addSubview:sep];
+        }
+    }
+
+    // 菜单定位
+    NSValue *visibleVal = objc_getAssociatedObject(self, &kSelectionVisibleKey);
+    CGRect visFrame = visibleVal ? [visibleVal CGRectValue] : [self.textLbl convertRect:self.textLbl.bounds toView:nil];
+    CGFloat safeTop = window.safeAreaInsets.top + 8;
+    CGFloat safeBot = window.frame.size.height - window.safeAreaInsets.bottom - 80;
+    CGFloat cardX = MAX(8, MIN(visFrame.origin.x, window.frame.size.width - cardW - 8));
+    CGFloat handleGap = 28;
+    CGFloat aboveY = visFrame.origin.y - cardH - handleGap;
+    CGFloat belowY = visFrame.origin.y + visFrame.size.height + handleGap;
+    CGFloat cardY = (aboveY >= safeTop) ? aboveY : belowY;
+    cardY = MAX(safeTop, MIN(cardY, safeBot - cardH));
+    card.frame = CGRectMake(cardX, cardY, cardW, cardH);
+    [window addSubview:card];
+
+    card.alpha = 0; card.transform = CGAffineTransformMakeScale(0.9, 0.9);
+    [UIView animateWithDuration:0.15 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        card.alpha = 1; card.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+
+-(void) wk_selectionMenuItemTapped:(UIButton *)sender {
+    void(^block)(void) = objc_getAssociatedObject(sender, "tapBlock");
+    if (!block) return;
+    BOOL shouldDismiss = [objc_getAssociatedObject(sender, "shouldDismiss") boolValue];
+    if (shouldDismiss) {
+        [self endInBubbleTextSelection];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            block();
+        });
+    } else {
+        block();
+    }
+}
+
+-(UIImage *) wk_imageWithColor:(UIColor *)color {
+    CGRect r = CGRectMake(0,0,1,1);
+    UIGraphicsBeginImageContextWithOptions(r.size, NO, 0);
+    [color setFill]; UIRectFill(r);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
 }
 
 @end

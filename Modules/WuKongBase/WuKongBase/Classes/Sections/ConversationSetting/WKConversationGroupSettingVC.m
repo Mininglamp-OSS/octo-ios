@@ -23,8 +23,11 @@
 #import "WKMemberListVC.h"
 #import "WKTextViewVC.h"
 #import "WKOnlineBadgeView.h"
+#import "WKExternalViewerResolver.h"
+#import "TOCropViewController.h"
+#import <SDWebImage/SDImageCache.h>
 
-@interface WKConversationGroupSettingVC ()<WKConversationSettingDelegate,WKSettingMemberGridViewDelegate>
+@interface WKConversationGroupSettingVC ()<WKConversationSettingDelegate,WKSettingMemberGridViewDelegate,TOCropViewControllerDelegate>
 
 
 @property(nonatomic,strong) WKSettingMemberGridView *settingMemberGridView;
@@ -244,7 +247,14 @@
     
     // 用户头像
     WKUserAvatar *avatarView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, 54.0f,  54.0f)];
-    [avatarView setUrl:[WKAvatarUtil getFullAvatarWIthPath:member.memberAvatar]];
+    WKChannelInfo *avatarChannelInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:member.memberUid channelType:WK_PERSON]];
+    if (avatarChannelInfo && avatarChannelInfo.avatarCacheKey.length > 0) {
+        NSString *fullUrl = [WKAvatarUtil getFullAvatarWIthPath:member.memberAvatar];
+        NSString *separator = [fullUrl containsString:@"?"] ? @"&" : @"?";
+        [avatarView setUrl:[NSString stringWithFormat:@"%@%@v=%@", fullUrl, separator, avatarChannelInfo.avatarCacheKey]];
+    } else {
+        [avatarView setUrl:[WKAvatarUtil getFullAvatarWIthPath:member.memberAvatar]];
+    }
     
     [view addSubview:avatarView];
     avatarView.lim_left = view.lim_width/2.0f - avatarView.lim_width/2.0f;
@@ -281,14 +291,15 @@
 
     // 名字
      UILabel *nameLbl = [UILabel new];
+     NSString *displayName = nil;
      if(member.memberRemark && ![member.memberRemark isEqualToString:@""]) {
-          nameLbl.text = member.memberRemark;
+          displayName = member.memberRemark;
      }else {
-          nameLbl.text = member.memberName;
+          displayName = member.memberName;
      }
     WKChannelInfo *memberChannelInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:member.memberUid channelType:WK_PERSON]];
     if(memberChannelInfo && memberChannelInfo.remark && ![memberChannelInfo.remark isEqualToString:@""]) {
-        nameLbl.text = memberChannelInfo.remark; // 有好友备注，优先显示好友备注
+        displayName = memberChannelInfo.remark; // 有好友备注，优先显示好友备注
     }
 
     nameLbl.font = [[WKApp shared].config appFontOfSize:12.0f];
@@ -296,6 +307,26 @@
      [nameLbl setTextAlignment:NSTextAlignmentCenter];
      nameLbl.lim_width = avatarView.lim_width;
      nameLbl.lim_height = 17.0f;
+
+    // v2 外部群后缀（YUJ-93）：viewer-relative 判定外部时 name 后拼接「 @SpaceName」
+    // 使用 attributedText 以便后缀用浅灰色，与 Android AllMembersAdapter 一致。
+    NSString *viewerSpaceId = [WKExternalViewerResolver currentViewerSpaceId];
+    WKExternalResolveResult *ext = [WKExternalViewerResolver resolveFromExtras:member.extra
+                                                                 viewerSpaceId:viewerSpaceId];
+    if (ext.isExternal && ext.sourceSpaceName.length > 0) {
+        NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:displayName ?: @""
+                                                                                attributes:@{NSFontAttributeName: nameLbl.font,
+                                                                                             NSForegroundColorAttributeName: nameLbl.textColor ?: [UIColor blackColor]}];
+        UIColor *suffixColor = [UIColor colorWithRed:153.0f/255.0f green:153.0f/255.0f blue:153.0f/255.0f alpha:1.0f];
+        [attr appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@" @%@", ext.sourceSpaceName]
+                                                                     attributes:@{NSFontAttributeName: nameLbl.font,
+                                                                                  NSForegroundColorAttributeName: suffixColor}]];
+        nameLbl.attributedText = attr;
+        nameLbl.lineBreakMode = NSLineBreakByTruncatingTail;
+    } else {
+        nameLbl.text = displayName;
+    }
+
      [view addSubview:nameLbl];
      nameLbl.lim_top = avatarView.lim_bottom + 5.0f;
      nameLbl.lim_left = view.lim_width/2.0f - nameLbl.lim_width/2.0f;
@@ -524,6 +555,59 @@
     }];
     [[WKNavigationManager shared] pushViewController:inputVC animated:YES];
 }
+// 群头像点击
+-(void) settingOnGroupAvatarClick:(WKConversationSettingVM*)vm {
+    __weak typeof(self) weakSelf = self;
+    WKActionSheetView2 *actionSheet = [WKActionSheetView2 initWithTip:nil];
+    [actionSheet addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"拍照") onClick:^{
+        [[WKPhotoService shared] getPhotoFromCamera:^(UIImage * _Nonnull image) {
+            [weakSelf cropGroupAvatar:image];
+        }];
+    }]];
+    [actionSheet addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"从手机相册选择") onClick:^{
+        [[WKPhotoService shared] getPhotoOneFromLibrary:^(UIImage * _Nonnull image) {
+            [weakSelf cropGroupAvatar:image];
+        }];
+    }]];
+    [actionSheet show];
+}
+
+-(void) cropGroupAvatar:(UIImage*)image {
+    TOCropViewController *cropController = [[TOCropViewController alloc] initWithCroppingStyle:TOCropViewCroppingStyleDefault image:image];
+    cropController.delegate = self;
+    cropController.aspectRatioPreset = TOCropViewControllerAspectRatioPresetSquare;
+    cropController.aspectRatioPickerButtonHidden = YES;
+    [self presentViewController:cropController animated:YES completion:nil];
+}
+
+#pragma mark - TOCropViewControllerDelegate
+
+- (void)cropViewController:(TOCropViewController *)cropViewController didCropToImage:(UIImage *)image withRect:(CGRect)cropRect angle:(NSInteger)angle {
+    [self dismissViewControllerAnimated:YES completion:nil];
+    NSData *data = [[WKPhotoService shared] compressImageSize:image toByte:1024*50];
+    NSString *path = [NSString stringWithFormat:@"groups/%@/avatar", self.channel.channelId];
+
+    __weak typeof(self) weakSelf = self;
+    [self.view showHUD:LLang(@"上传中")];
+    [[WKAPIClient sharedClient] fileUpload:path data:data progress:^(NSProgress *progress) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf.view switchHUDProgress:progress.fractionCompleted];
+        });
+    } completeCallback:^(id resposeObject, NSError *error) {
+        if (error) {
+            [weakSelf.view switchHUDSuccess:LLangW(@"上传失败", weakSelf)];
+            return;
+        }
+        [weakSelf.view switchHUDSuccess:LLangW(@"上传成功", weakSelf)];
+        [[WKSDK shared].channelManager refreshAvatarCacheKey:weakSelf.channel];
+        WKChannelInfo *updatedInfo = [[WKSDK shared].channelManager getChannelInfo:weakSelf.channel];
+        NSString *cacheURL = [WKAvatarUtil getGroupAvatar:weakSelf.channel.channelId cacheKey:updatedInfo.avatarCacheKey];
+        [[SDImageCache sharedImageCache] storeImage:image forKey:cacheURL toDisk:YES completion:nil];
+        [[WKSDK shared].channelManager fetchChannelInfo:weakSelf.channel completion:nil];
+        [weakSelf reloadData];
+    }];
+}
+
 // 群公告点击
 -(void) settingOnGroupNoticeClick:(WKConversationSettingVM*)vm {
     WKMemberRole roleOfMe = self.viewModel.memberOfMe.role;

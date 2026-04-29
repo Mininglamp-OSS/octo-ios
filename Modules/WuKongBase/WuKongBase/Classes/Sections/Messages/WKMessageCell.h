@@ -149,6 +149,18 @@ typedef enum :NSUInteger {
 // 响应上述方法返回的行为
 -(void) tapLongTapOrDoubleTapGesture:(TapLongTapOrDoubleTapGestureRecognizerWrap*)recognizer;
 
+/// 长按上下文手势是否应该在该点开始（子类可重写以排除特定区域）
+-(BOOL) shouldBeginContextGestureAtPoint:(CGPoint)point;
+
+/// 长按时高亮气泡（叠加半透明遮罩层）
+-(void) showLongPressHighlight;
+/// 取消气泡高亮（淡出遮罩层）
+-(void) hideLongPressHighlight;
+/// 在气泡原位启动文字选择模式，menuItems 是长按原始菜单项（全选时显示完整菜单）
+-(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems;
+/// 退出气泡文字选择模式，恢复正常显示
+-(void) endInBubbleTextSelection;
+
 
 
 @end

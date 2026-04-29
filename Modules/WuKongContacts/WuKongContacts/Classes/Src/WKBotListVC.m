@@ -21,7 +21,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.navigationBar.title = LLang(@"AI");
+    self.navigationBar.title = LLang(@"我的AI");
     self.vm = [WKBotListVM new];
     self.items = [NSMutableArray array];
     self.sectionTitleArr = [NSMutableArray array];

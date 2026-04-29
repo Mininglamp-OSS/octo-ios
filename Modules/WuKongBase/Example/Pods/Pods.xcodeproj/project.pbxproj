@@ -179,6 +179,7 @@
 		2274ADC2ABC23157FC1FD581F94BFFDA /* CWRecordModel.h in Headers */ = {isa = PBXBuildFile; fileRef = FBC6D1AF9C5EDD086EE2525FAD8C316F /* CWRecordModel.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		22C70499B5876AC7E49511B43EAD1C40 /* WKMessageLongMenusItem.h in Headers */ = {isa = PBXBuildFile; fileRef = 6EA4802F1E80BAF8ED7AC8A2A175A31D /* WKMessageLongMenusItem.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		22EB11CAE14742CE923283B84CFB6BD2 /* WKChannelUtil.h in Headers */ = {isa = PBXBuildFile; fileRef = 30EB381F747E840D6738E1BD4D3433B1 /* WKChannelUtil.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		8F70ED9AE4678A5AFD5E4402025BAAC8 /* WKExternalViewerResolver.h in Headers */ = {isa = PBXBuildFile; fileRef = 9465556514AAA7C854560C928BE0EA15 /* WKExternalViewerResolver.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		22F7E802691DD33A320CA5F4CE464444 /* WKDragModalView.h in Headers */ = {isa = PBXBuildFile; fileRef = 8ECDBE1702B89108800AAF10B95EB6C4 /* WKDragModalView.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		2380B1ABECFABCA42DD728BB8DE5ABED /* WKVideoCell.h in Headers */ = {isa = PBXBuildFile; fileRef = ADD6F088893664375F8A0ABE622CDA9A /* WKVideoCell.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		2386B85FCBE3AEBE1A49FF2AD3464DFC /* WKConversationContextImpl.h in Headers */ = {isa = PBXBuildFile; fileRef = 75615964A67B8A07C23100F4FEA77F74 /* WKConversationContextImpl.h */; settings = {ATTRIBUTES = (Public, ); }; };
@@ -623,6 +624,8 @@
 		7EBC28FA6E2E4E0B9CD296EBF1B56E9A /* WKThemeUtil.m in Sources */ = {isa = PBXBuildFile; fileRef = 2BD6B2986FDAA96418AB6FB6024FA0B8 /* WKThemeUtil.m */; };
 		7F47D407A93670D443016197ADB74025 /* WKConversationVM2.h in Headers */ = {isa = PBXBuildFile; fileRef = 9483569827906F5F99B5C1D7FB214A84 /* WKConversationVM2.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		7FBEC718BFAD85B799DB0F689DF977E8 /* WKSessionPanelProto.h in Headers */ = {isa = PBXBuildFile; fileRef = 8205B7AB2A97732A39B698EECD69C2DC /* WKSessionPanelProto.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		491D49D4E42640EB95F7D311 /* WKMessageTextView.h in Headers */ = {isa = PBXBuildFile; fileRef = EAF5D52403E047BCAABA2B91 /* WKMessageTextView.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		FE648C5F9C204F68A4C80D24 /* WKMessageTextView.m in Sources */ = {isa = PBXBuildFile; fileRef = B5EE318E4563480E81CD0AC7 /* WKMessageTextView.m */; };
 		802724F9F985462D4B7E0F6C0E182812 /* WKScreenshotCell.h in Headers */ = {isa = PBXBuildFile; fileRef = 73C02E6C6B0EE6BAA364B28BB6A7E7FA /* WKScreenshotCell.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		803E2C6EE3A143D1020EBB506EF70D8D /* WKEndpointManager.m in Sources */ = {isa = PBXBuildFile; fileRef = E246410480B3E2242A37824FA7A26764 /* WKEndpointManager.m */; };
 		807F96F9251E70047518580033B22234 /* WKSearchHeaderCell.h in Headers */ = {isa = PBXBuildFile; fileRef = 28F0924D70FDAA957D642BE83FA2AD9F /* WKSearchHeaderCell.h */; settings = {ATTRIBUTES = (Public, ); }; };
@@ -881,6 +884,7 @@
 		B61008FA5C79FCF6D01191CFFE869E59 /* PeekControllerNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E2F8BBA911D394EA907E39443387298 /* PeekControllerNode.swift */; };
 		B625719345FC6023E2A8F5760C9DBD48 /* Multicast.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBB34D03DA430F727FFA449006E94E3C /* Multicast.swift */; };
 		B6E072E1CA3C762EEADE7A33C6688ABF /* WKChannelUtil.m in Sources */ = {isa = PBXBuildFile; fileRef = CEBD64D630C7A768B2CB64D4B89BD15A /* WKChannelUtil.m */; };
+		ED303F3376D00708982F3B613D7D13BF /* WKExternalViewerResolver.m in Sources */ = {isa = PBXBuildFile; fileRef = EC4AEB0AA925FA8C31742278904DEEDF /* WKExternalViewerResolver.m */; };
 		B72F3F962C91B3F2721593F640792DD6 /* WKConversationListSelectCell.m in Sources */ = {isa = PBXBuildFile; fileRef = 645BDE8191356C0B179ED300C4DCCABD /* WKConversationListSelectCell.m */; };
 		B75AE2B2B136752F4A63980B4164022F /* pitch.h in Headers */ = {isa = PBXBuildFile; fileRef = 2FDB1CEEF50CA6E7F159EA0C0D3A510E /* pitch.h */; settings = {ATTRIBUTES = (Private, ); }; };
 		B7B48EF14327ABD129DAD010A7604DEF /* WKPwdKeyboardInputView.h in Headers */ = {isa = PBXBuildFile; fileRef = 6F0D8231BB78FA9E54BA7CB4722C6C1A /* WKPwdKeyboardInputView.h */; settings = {ATTRIBUTES = (Public, ); }; };
@@ -1511,6 +1515,7 @@
 		3088CD98A978BDC52453AABF1B1735FA /* WKMessageModel.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WKMessageModel.h; sourceTree = "<group>"; };
 		3089750F749B96E94D8E6C7AEA2ADB6A /* POPAnimationEventInternal.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = POPAnimationEventInternal.h; sourceTree = "<group>"; };
 		30EB381F747E840D6738E1BD4D3433B1 /* WKChannelUtil.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WKChannelUtil.h; sourceTree = "<group>"; };
+		9465556514AAA7C854560C928BE0EA15 /* WKExternalViewerResolver.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WKExternalViewerResolver.h; sourceTree = "<group>"; };
 		30FB6952B46C3F55F01B75A6833C7100 /* XLPageViewControllerUtil.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = XLPageViewControllerUtil.m; sourceTree = "<group>"; };
 		3100F5BA1C5E3684B62B08A0D11FD14D /* WKCardCell.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WKCardCell.m; sourceTree = "<group>"; };
 		315CF76533D99E5B3E6F6462F88878F6 /* WKTextView.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WKTextView.m; sourceTree = "<group>"; };
@@ -1860,6 +1865,8 @@
 		72E56137A34B07E44604B0D036C1D9B7 /* BUILD */ = {isa = PBXFileReference; includeInIndex = 1; path = BUILD; sourceTree = "<group>"; };
 		7308CC1BEFA47D38C75ECE5BD3AA822C /* WKMessageModel.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WKMessageModel.m; sourceTree = "<group>"; };
 		7360B0429E347BB20E9BC24A66EE690C /* ReactionSelectionNode.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReactionSelectionNode.swift; sourceTree = "<group>"; };
+		EAF5D52403E047BCAABA2B91 /* WKMessageTextView.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WKMessageTextView.h; sourceTree = "<group>"; };
+		B5EE318E4563480E81CD0AC7 /* WKMessageTextView.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WKMessageTextView.m; sourceTree = "<group>"; };
 		73C02E6C6B0EE6BAA364B28BB6A7E7FA /* WKScreenshotCell.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WKScreenshotCell.h; sourceTree = "<group>"; };
 		73C7427179ECCD5C5861094CF7D5A0CA /* WKTabPageView.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WKTabPageView.h; sourceTree = "<group>"; };
 		73DCC3ABE72AB52002AA52D0B9BD9E9A /* WKSettingMemberGridView.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WKSettingMemberGridView.m; sourceTree = "<group>"; };
@@ -2306,6 +2313,7 @@
 		CEAB148C170F3FC50706D10A268007A6 /* WKSearchContactsCell.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WKSearchContactsCell.m; sourceTree = "<group>"; };
 		CEB42411314CA75114953EB2E0288374 /* WKPanelFuncItemProto.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WKPanelFuncItemProto.h; sourceTree = "<group>"; };
 		CEBD64D630C7A768B2CB64D4B89BD15A /* WKChannelUtil.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WKChannelUtil.m; sourceTree = "<group>"; };
+		EC4AEB0AA925FA8C31742278904DEEDF /* WKExternalViewerResolver.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WKExternalViewerResolver.m; sourceTree = "<group>"; };
 		CF05F388AC94E3BAE3CDDB72F16972EE /* WKSecuritySettingVC.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WKSecuritySettingVC.h; sourceTree = "<group>"; };
 		CF7826309E04BE08B888A4B0B122D15A /* WKDefaultWebImageMediator.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WKDefaultWebImageMediator.h; sourceTree = "<group>"; };
 		CF792A32882738083FE5B86138D41D77 /* WKStickerManager.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WKStickerManager.m; sourceTree = "<group>"; };
@@ -2902,6 +2910,8 @@
 				92A4EABF6DE680CC1FBA9A0961925C4F /* WKMessageStickerCell.swift */,
 				D7799377BE8DBDE40CC025171C9AB38B /* WKReactionBaseView.h */,
 				095121543C5A9B59A11CBBBEB1FD08ED /* WKReactionBaseView.m */,
+				EAF5D52403E047BCAABA2B91 /* WKMessageTextView.h */,
+				B5EE318E4563480E81CD0AC7 /* WKMessageTextView.m */,
 				73C02E6C6B0EE6BAA364B28BB6A7E7FA /* WKScreenshotCell.h */,
 				9E316537A89F561DA075323649BD922B /* WKScreenshotCell.m */,
 				60832312177DF6ACCE095B6A9D259771 /* WKScreenshotContent.h */,
@@ -3036,6 +3046,8 @@
 				5060EF528360EF90E70B51D74021B0D7 /* WKChannelSettingManager.m */,
 				30EB381F747E840D6738E1BD4D3433B1 /* WKChannelUtil.h */,
 				CEBD64D630C7A768B2CB64D4B89BD15A /* WKChannelUtil.m */,
+				9465556514AAA7C854560C928BE0EA15 /* WKExternalViewerResolver.h */,
+				EC4AEB0AA925FA8C31742278904DEEDF /* WKExternalViewerResolver.m */,
 				2E387888159379F1F071CC445D4FF366 /* WKEndToEndInitVC.h */,
 				D981A1AB9E2F09F137716E6230C56FF7 /* WKEndToEndInitVC.m */,
 				FFF9B1D7091B9B9E7D0F2120ED1D8505 /* WKEndToEndInitVM.h */,
@@ -5280,6 +5292,7 @@
 				FC77748AA1A1A357804300DE8134A752 /* WKChannelMessageSearchVM.h in Headers */,
 				74F20DC2BA5ABC0CA3D1F68B7065B147 /* WKChannelSettingManager.h in Headers */,
 				22EB11CAE14742CE923283B84CFB6BD2 /* WKChannelUtil.h in Headers */,
+				8F70ED9AE4678A5AFD5E4402025BAAC8 /* WKExternalViewerResolver.h in Headers */,
 				BCD456BC1F4BD135A198BCB5A3077F07 /* WKChatBackupVC.h in Headers */,
 				77EF6DDB314860F5BA36F216AB64C5B5 /* WKChatBackupVM.h in Headers */,
 				0620256877F32B62036039D425D8D048 /* WKChatRecoverVC.h in Headers */,
@@ -5520,6 +5533,7 @@
 				729B0B60F1B8C68993AA0BD640F65843 /* WKScreenPasswordVC.h in Headers */,
 				73D5201A3773ADD0837D4F231ED2D925 /* WKScreenPasswordVM.h in Headers */,
 				A9440217D2837687DC28813486F0E01E /* WKScreenProtectionView.h in Headers */,
+				491D49D4E42640EB95F7D311 /* WKMessageTextView.h in Headers */,
 				802724F9F985462D4B7E0F6C0E182812 /* WKScreenshotCell.h in Headers */,
 				320D9AE49527B6E5FC4D423D08F4871A /* WKScreenshotContent.h in Headers */,
 				F12C81527335E1C50180908C33BAA991 /* WKSDImageLottieCoder.h in Headers */,
@@ -6244,6 +6258,7 @@
 				F286F4891DBEB406EA52934F803E2845 /* WKChannelMessageSearchVM.m in Sources */,
 				9A3DDD386339BC095425BE4ACD21A307 /* WKChannelSettingManager.m in Sources */,
 				B6E072E1CA3C762EEADE7A33C6688ABF /* WKChannelUtil.m in Sources */,
+				ED303F3376D00708982F3B613D7D13BF /* WKExternalViewerResolver.m in Sources */,
 				1F33610FFF374547BC8CCF7AB140BD73 /* WKChatBackupVC.m in Sources */,
 				73138E139F998E138B0575B3B2EEE3E6 /* WKChatBackupVM.m in Sources */,
 				AF32D43F9C45492E30ED25389DA68A23 /* WKChatRecoverVC.m in Sources */,
@@ -6480,6 +6495,7 @@
 				79195B88BCED85C1D8612B94285C96C4 /* WKScreenPasswordVC.m in Sources */,
 				0F6D044E5E379E2C31D22E3C24447552 /* WKScreenPasswordVM.m in Sources */,
 				367D05041C640D123EF3D2CC04B175A8 /* WKScreenProtectionView.m in Sources */,
+				FE648C5F9C204F68A4C80D24 /* WKMessageTextView.m in Sources */,
 				9B96FEFA769075816D37A60140AA9581 /* WKScreenshotCell.m in Sources */,
 				1CE9F4816554FA0F4655A83BD8B064BA /* WKScreenshotContent.m in Sources */,
 				2D531A1260FD8CC1E807D03C9BFD4E98 /* WKSDImageLottieCoder.m in Sources */,

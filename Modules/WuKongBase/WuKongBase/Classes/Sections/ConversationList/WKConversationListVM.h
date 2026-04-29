@@ -7,9 +7,34 @@
 
 #import <Foundation/Foundation.h>
 #import "WKConversationWrapModel.h"
+
+@class WKCategoryEntity;
+
 NS_ASSUME_NONNULL_BEGIN
 
+typedef NS_ENUM(NSInteger, WKConversationFilterType) {
+    WKConversationFilterGroup = 0,   // 群组
+    WKConversationFilterPrivate = 1, // 私聊
+};
+
+/// 会话列表展示项（可以是普通会话 或 分组 section header）
+@interface WKConversationDisplayItem : NSObject
+@property (nonatomic, strong, nullable) WKConversationWrapModel *conversation; // 普通会话
+@property (nonatomic, assign) BOOL isSectionHeader;   // 是否为分组 header
+@property (nonatomic, copy, nullable) NSString *sectionId;
+@property (nonatomic, copy, nullable) NSString *sectionTitle;
+@property (nonatomic, assign) BOOL isDefaultSection;  // 默认分组（不可管理）
+@property (nonatomic, assign) NSInteger groupCount;   // 分组内群聊数量
+@property (nonatomic, assign) NSInteger unreadCount;  // 分组内未读总数
+@property (nonatomic, assign) BOOL hasMention;        // 分组内是否有@我提醒（折叠时显示）
++ (instancetype)itemWithConversation:(WKConversationWrapModel *)model;
++ (instancetype)sectionHeaderWithId:(NSString *)sectionId title:(NSString *)title isDefault:(BOOL)isDefault;
+@end
+
 @interface WKConversationListVM : NSObject
+
+/// 当前过滤类型（群组/私聊）
+@property (nonatomic, assign) WKConversationFilterType filterType;
 
 + (WKConversationListVM *)shared;
 
@@ -126,6 +151,29 @@ NS_ASSUME_NONNULL_BEGIN
 -(void) removeConversationAtIndex:(NSInteger)index;
 
 
+/// 拉取所有群组的子区数量
+-(void) fetchThreadCountsForGroups;
+
+/// 重建过滤列表（filterType 变更或数据增删后调用）
+-(void) rebuildFilteredList;
+
+/// 全量会话列表（不受 tab 过滤影响，用于跨 tab 检测@提醒等）
+-(NSArray<WKConversationWrapModel*> *) allConversations;
+
+/// 获取群组类未读数
+-(NSInteger) getGroupUnreadCount;
+
+/// 获取私聊类未读数
+-(NSInteger) getPrivateUnreadCount;
+
+/// 刷新指定群组的子区数量
+-(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos;
+
+/// 子区预览展开状态
+-(BOOL) isThreadExpanded:(NSString*)channelId;
+-(void) toggleThreadExpanded:(NSString*)channelId;
+-(void) restoreExpandedThreadGroups;
+
 /// 有会话置顶
 -(BOOL) hasConversationTop;
 
@@ -135,6 +183,32 @@ NS_ASSUME_NONNULL_BEGIN
  @return <#return value description#>
  */
 -(NSInteger) getAllUnreadCount;
+
+#pragma mark - Category (分组)
+
+/// 分组列表
+@property (nonatomic, strong) NSArray<WKCategoryEntity *> *categoryList;
+
+/// 折叠状态
+@property (nonatomic, strong) NSMutableSet<NSString *> *collapsedSections;
+
+/// 加载分组数据
+-(void) loadCategoriesWithCompletion:(nullable void(^)(void))completion;
+
+/// 构建群聊 tab 的展示列表（含 section header），同时计算全局 hasMention 状态
+-(NSArray<WKConversationDisplayItem *> *) buildGroupDisplayList;
+
+/// buildGroupDisplayList 计算出的全局 @提醒状态（群聊 + 子区）
+@property (nonatomic, assign, readonly) BOOL lastBuildHasMention;
+
+/// 从缓存获取指定群聊下子区的未读数和 @提醒状态（供 cell 渲染用，无 DB 查询）
+-(void) getThreadIndicatorForGroup:(NSString *)groupNo threadUnread:(NSInteger *)outUnread threadHasMention:(BOOL *)outHasMention;
+
+/// 保存折叠状态
+-(void) saveCollapsedSections;
+
+/// 恢复折叠状态
+-(void) restoreCollapsedSections;
 
 @end
 

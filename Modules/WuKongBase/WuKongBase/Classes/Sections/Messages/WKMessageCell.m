@@ -6,6 +6,7 @@
 //
 
 #import "WKMessageCell.h"
+#import "WKThreadCreatedContent.h"
 #import "WKImageView.h"
 #import "WKResource.h"
 #import "WKConversationInputPanel.h"
@@ -49,7 +50,6 @@ static NSMutableDictionary *flameNodeCacheDict;
 
 @property(nonatomic,strong) TapLongTapOrDoubleTapGestureRecognizerWrap *tapLongTapOrDoubleTapGestureRecognizerWrap;
 
-
 @end
 
 @implementation WKMessageCell
@@ -69,7 +69,7 @@ static NSMutableDictionary *flameNodeCacheDict;
         reasonHeight = reasonSize.height + errorTipTopSpace;
     }
     CGFloat height = contentSize.height + contentEdgeInsets.top + contentEdgeInsets.bottom + bubbleEdgeInsets.top + bubbleEdgeInsets.bottom + WK_MESSAGE_TOP + nicknameTop + reasonHeight;
-    
+
     CGFloat contentWidth = contentSize.width;
    
     
@@ -81,17 +81,13 @@ static NSMutableDictionary *flameNodeCacheDict;
 
 - (void)prepareForReuse {
     [super prepareForReuse];
-//    if(self.flameNode) {
-//        [self.flameNode.view removeFromSuperview];
-//    }
-    
+
     [self stopReminderAnimation];
     if(self.onPrepareForReuse) {
         self.onPrepareForReuse();
         self.onPrepareForReuse = nil;
     }
-   
-    
+
 }
 
 + (CGSize) contentSizeForMessage:(WKMessageModel *)model {
@@ -136,15 +132,7 @@ static NSMutableDictionary *flameNodeCacheDict;
         if(!weakSelf) {
             return false;
         }
-        if(!CGRectContainsPoint(weakSelf.bubbleBackgroundView.frame, point)) {
-            return false;
-        }
-//        WKTapLongTapOrDoubleTapGestureRecognizerEvent *event = [weakSelf tapActionAtPoint:point];
-//        if(event.action != WKTapLongTapOrDoubleTapGestureRecognizerActionNone) {
-//            return false;
-//        }
-        
-        return true;
+        return [weakSelf shouldBeginContextGestureAtPoint:point];
     }];
     [self.mainContainerNode setActivated:^(ContextGesture *gesture, CGPoint point) {
         if(!weakSelf) {
@@ -232,6 +220,8 @@ static NSMutableDictionary *flameNodeCacheDict;
     self.botBadgeLbl.textAlignment = NSTextAlignmentCenter;
     self.botBadgeLbl.layer.cornerRadius = 4.0f;
     self.botBadgeLbl.layer.masksToBounds = YES;
+    self.botBadgeLbl.layer.shouldRasterize = YES;
+    self.botBadgeLbl.layer.rasterizationScale = [UIScreen mainScreen].scale;
     self.botBadgeLbl.hidden = YES;
     [self.bubbleBackgroundView addSubview:self.botBadgeLbl];
 
@@ -292,7 +282,7 @@ static NSMutableDictionary *flameNodeCacheDict;
 
 -(WKTapLongTapOrDoubleTapGestureRecognizerEvent*) tapActionAtPoint:(CGPoint)point {
     CGRect rectInContentView = [self.contentView convertRect:self.messageContentView.frame fromView:self.messageContentView.superview];
-    
+
     WKTapLongTapOrDoubleTapGestureRecognizerEvent *event;
     if([self respondContentSingleTap] && CGRectContainsPoint(rectInContentView, point)) {
         event = [WKTapLongTapOrDoubleTapGestureRecognizerEvent action:(WKTapLongTapOrDoubleTapGestureRecognizerActionWaitForSingleTap)];
@@ -302,6 +292,13 @@ static NSMutableDictionary *flameNodeCacheDict;
         event = [WKTapLongTapOrDoubleTapGestureRecognizerEvent action:WKTapLongTapOrDoubleTapGestureRecognizerActionWaitForSingleTap];
     }
     return event;
+}
+
+-(BOOL) shouldBeginContextGestureAtPoint:(CGPoint)point {
+    if (!CGRectContainsPoint(self.bubbleBackgroundView.frame, point)) {
+        return NO;
+    }
+    return YES;
 }
 
 -(BOOL) avatarTapAtPoint:(CGPoint)point {
@@ -384,9 +381,18 @@ static NSMutableDictionary *flameNodeCacheDict;
     if(self.messageModel.contentType == WK_TYPING) {
         return;
     }
+    // 重置 ContextGesture 缩放，不做任何气泡视觉变化（去掉高亮和弹跳效果）
+    self.transform = CGAffineTransformIdentity;
+    self.contentView.transform = CGAffineTransformIdentity;
     [self.conversationContext longPressMessageCell:self gestureRecognizer:gestureRecognizer];
-    
 }
+
+// 基类空实现，WKTextMessageCell 重写
+-(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems {}
+-(void) endInBubbleTextSelection {}
+// 保留方法声明兼容性（实现为空，外部不再调用）
+-(void) showLongPressHighlight {}
+-(void) hideLongPressHighlight {}
 
 
 -(void) tappedMenuItem:(NSString*)title {
@@ -470,6 +476,7 @@ static NSMutableDictionary *flameNodeCacheDict;
             }
         }
     }
+    BOOL badgeWasHidden = self.botBadgeLbl.hidden;
     self.botBadgeLbl.hidden = !isBot || self.nameLbl.hidden;
     if (!self.botBadgeLbl.hidden) {
         [self.botBadgeLbl sizeToFit];
@@ -478,12 +485,30 @@ static NSMutableDictionary *flameNodeCacheDict;
         badgeFrame.size.height += 4.0f;
         self.botBadgeLbl.frame = badgeFrame;
     }
+    // 仅在 badge 显隐状态真正改变时触发 layout（channel info 异步加载场景）
+    // 无条件 setNeedsLayout 会经 layoutMainContextSourceNode→AsyncDisplayKit→takeView
+    // 形成无限回调循环，导致长按菜单卡死
+    if (badgeWasHidden != self.botBadgeLbl.hidden) {
+        [self setNeedsLayout];
+    }
 
     if(model.isSend) {
-        self.avatarImgView.url = [WKApp shared].loginInfo.extra[@"avatar"];
+        NSString *myUid = [WKApp shared].loginInfo.uid;
+        WKChannelInfo *myInfo = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:myUid]];
+        NSString *myAvatar = [WKApp shared].loginInfo.extra[@"avatar"];
+        if(myInfo && myInfo.avatarCacheKey.length > 0 && myAvatar) {
+            NSString *separator = [myAvatar containsString:@"?"] ? @"&" : @"?";
+            myAvatar = [NSString stringWithFormat:@"%@%@v=%@", myAvatar, separator, myInfo.avatarCacheKey];
+        }
+        self.avatarImgView.url = myAvatar;
     }else {
-        if(model.from) { // 如果有发送者信息
-            self.avatarImgView.url = [WKAvatarUtil getFullAvatarWIthPath:model.from.logo];
+        if(model.from) {
+            NSString *avatarURL = [WKAvatarUtil getFullAvatarWIthPath:model.from.logo];
+            if(avatarURL && model.from.avatarCacheKey.length > 0) {
+                NSString *separator = [avatarURL containsString:@"?"] ? @"&" : @"?";
+                avatarURL = [NSString stringWithFormat:@"%@%@v=%@", avatarURL, separator, model.from.avatarCacheKey];
+            }
+            self.avatarImgView.url = avatarURL;
         }else {
             self.avatarImgView.avatarImgView.image = nil;
         }
@@ -682,7 +707,20 @@ static NSMutableDictionary *flameNodeCacheDict;
 
 // 下一条消息是否连续
 +(BOOL) nextIsContinue:(WKMessageModel*) messageModel {
-    
+    // 如果下一条是带 sourceMessageId 的子区创建通知，打断连续性（强制当前消息显示头像）
+    if(messageModel.nextMessageModel && messageModel.nextMessageModel.contentType == WK_THREAD_CREATED) {
+        BOOL hasSource = NO;
+        if([messageModel.nextMessageModel.content isKindOfClass:[WKThreadCreatedContent class]]) {
+            WKThreadCreatedContent *threadContent = (WKThreadCreatedContent *)messageModel.nextMessageModel.content;
+            hasSource = (threadContent.sourceMessageId.length > 0);
+        }
+        if(!hasSource && messageModel.nextMessageModel.content.contentDict[@"source_message_id"]) {
+            hasSource = ([messageModel.nextMessageModel.content.contentDict[@"source_message_id"] longLongValue] > 0);
+        }
+        if(hasSource) {
+            return false;
+        }
+    }
     return [self nextIsSameFrom:messageModel] && ![self nextIsSystemOrRevoke:messageModel] && [self nextIsSameDay:messageModel];
 }
 
@@ -785,11 +823,17 @@ static NSMutableDictionary *flameNodeCacheDict;
     if(!self.messageModel) {
         return;
     }
-    
+
     Class cellClass = [self class];
     UIEdgeInsets contentInsets = [cellClass contentEdgeInsets:self.messageModel];
-    
-    CGSize contentSize = [cellClass contentSizeForMessage:self.messageModel];
+
+    CGSize contentSize;
+    @try {
+        contentSize = [cellClass contentSizeForMessage:self.messageModel];
+    } @catch (NSException *exception) {
+        // Down 库嵌套 RunLoop 期间 layoutSubviews 可能被重入，消息类型不匹配时安全兜底
+        contentSize = CGSizeMake(200, 44);
+    }
     self.messageContentView.lim_size = contentSize;
     self.messageContentView.lim_top = contentInsets.top;
     
@@ -936,36 +980,68 @@ static NSMutableDictionary *flameNodeCacheDict;
     self.reactionView.lim_top = self.bubbleBackgroundView.lim_bottom  -  self.reactionView.lim_height - 10.0f;
 }
 
+static NSMutableDictionary<NSString*, UIImage*> *_bubbleImageCache;
+
 -(UIImage*) bubbleImage {
     if([[self class] hiddenBubble]) {
         return nil;
     }
     WKBubblePostion bubblePosition = [[self class] bubblePosition:self.messageModel];
+    NSString *cacheKey = [NSString stringWithFormat:@"%d_%d", (int)bubblePosition, self.messageModel.isSend ? 1 : 0];
+
+    if (!_bubbleImageCache) {
+        _bubbleImageCache = [NSMutableDictionary dictionary];
+    }
+    UIImage *cached = _bubbleImageCache[cacheKey];
+    if (cached) return cached;
+
     UIImage *img;
     NSString *imgName;
+    BOOL needFlip = NO;
     if(self.messageModel.isSend) {
-        if(bubblePosition == WKBubblePostionFirst) {
-            imgName = @"Conversation/Messages/MessageSendBubbleFirst";
+        if(bubblePosition == WKBubblePostionFirst || bubblePosition == WKBubblePostionSingle) {
+            imgName = @"Conversation/Messages/MessageSendBubble";
+            needFlip = YES;
         }else  if(bubblePosition == WKBubblePostionMiddle){
             imgName = @"Conversation/Messages/MessageSendBubbleMiddle";
         }else {
-            imgName = @"Conversation/Messages/MessageSendBubble";
+            imgName = @"Conversation/Messages/MessageSendBubbleFirst";
         }
         img = [self getImageNameForBaseModule:imgName] ;
+        if(needFlip) {
+            img = [self verticallyFlipImage:img];
+        }
         img = [img resizableImageWithCapInsets:UIEdgeInsetsMake(img.size.height/2.0f - 4.0f,img.size.width/2.0f - 4.0f, img.size.height/2.0f - 4.0f, img.size.width/2.0f - 4.0f) resizingMode:UIImageResizingModeStretch];
     }else {
-        if(bubblePosition == WKBubblePostionFirst) {
-            imgName = @"Conversation/Messages/MessageReceiverBubbleFirst";
+        if(bubblePosition == WKBubblePostionFirst || bubblePosition == WKBubblePostionSingle) {
+            imgName = @"Conversation/Messages/MessageReceiverBubble";
+            needFlip = YES;
         }else  if(bubblePosition == WKBubblePostionMiddle){
             imgName = @"Conversation/Messages/MessageReceiverBubbleMiddle";
         }else {
-            imgName = @"Conversation/Messages/MessageReceiverBubble";
+            imgName = @"Conversation/Messages/MessageReceiverBubbleFirst";
         }
         img = [self getImageNameForBaseModule:imgName] ;
+        if(needFlip) {
+            img = [self verticallyFlipImage:img];
+        }
         img = [img resizableImageWithCapInsets:UIEdgeInsetsMake(img.size.height/2.0f - 4.0f,img.size.width/2.0f - 4.0f, img.size.height/2.0f - 4.0f, img.size.width/2.0f - 4.0f) resizingMode:UIImageResizingModeStretch];
     }
     img = [img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    _bubbleImageCache[cacheKey] = img;
     return img;
+}
+
+// 垂直翻转图片：将底部三角翻转到顶部
+-(UIImage*) verticallyFlipImage:(UIImage*)image {
+    UIGraphicsBeginImageContextWithOptions(image.size, NO, image.scale);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    CGContextTranslateCTM(ctx, 0, image.size.height);
+    CGContextScaleCTM(ctx, 1.0, -1.0);
+    [image drawInRect:CGRectMake(0, 0, image.size.width, image.size.height)];
+    UIImage *flipped = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return flipped;
 }
 
 
@@ -985,7 +1061,15 @@ static NSMutableDictionary *flameNodeCacheDict;
         self.nameLbl.lim_width = MIN(fitSize.width, WK_NICKNAME_MAX_WIDTH);
     }
 
-    // Bot标识布局：始终定位（不判断hidden，确保layoutSubviews后位置正确）
+    // Bot标识布局：在 layoutName 中计算尺寸再定位，避免 channel info 异步加载时
+    // refreshModel: 已设 hidden=NO 但 layoutSubviews 尚未执行导致 lim_height=0 的时序问题
+    if (!self.botBadgeLbl.hidden) {
+        [self.botBadgeLbl sizeToFit];
+        CGRect badgeFrame = self.botBadgeLbl.frame;
+        badgeFrame.size.width += 8.0f;
+        badgeFrame.size.height += 4.0f;
+        self.botBadgeLbl.frame = badgeFrame;
+    }
     self.botBadgeLbl.lim_left = self.nameLbl.lim_left + self.nameLbl.lim_width + 6.0f;
     self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
 }
@@ -1163,6 +1247,7 @@ static NSMutableDictionary *flameNodeCacheDict;
 - (void)didTapCheckBox:(WKCheckBox *)checkBox {
     [self didTapCheck];
 }
+
 @end
 
 @interface WKBubbleBackgroundView ()

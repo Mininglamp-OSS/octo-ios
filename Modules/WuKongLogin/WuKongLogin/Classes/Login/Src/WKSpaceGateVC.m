@@ -23,7 +23,6 @@
 
 // 主按钮
 @property(nonatomic,strong) UIButton *showInviteInputBtn; // 显示邀请码输入按钮
-@property(nonatomic,strong) UIButton *createSpaceBtn; // 创建新团队按钮
 
 @property(nonatomic,assign) BOOL showInviteInput; // 是否显示邀请码输入
 @property(nonatomic,assign) BOOL isJoining; // 是否正在加入
@@ -63,7 +62,6 @@
 
     // 添加主按钮
     [self.containerView addSubview:self.showInviteInputBtn];
-    [self.containerView addSubview:self.createSpaceBtn];
 
     // 检查是否有 DeepLink 暂存的邀请码
     [self checkPendingInviteCode];
@@ -196,7 +194,7 @@
 - (UILabel *)subtitleLbl {
     if(!_subtitleLbl) {
         _subtitleLbl = [[UILabel alloc] initWithFrame:CGRectMake(20, self.titleLbl.lim_bottom + 8, self.containerView.lim_width - 40, 20)];
-        _subtitleLbl.text = LLang(@"加入团队或创建新的工作空间");
+        _subtitleLbl.text = LLang(@"输入邀请码加入团队");
         _subtitleLbl.font = [UIFont systemFontOfSize:14];
         _subtitleLbl.textColor = [UIColor colorWithWhite:0.5 alpha:1.0];
         _subtitleLbl.textAlignment = NSTextAlignmentCenter;
@@ -261,32 +259,18 @@
     return _showInviteInputBtn;
 }
 
-- (UIButton *)createSpaceBtn {
-    if(!_createSpaceBtn) {
-        _createSpaceBtn = [[UIButton alloc] initWithFrame:CGRectMake(40, self.showInviteInputBtn.lim_bottom + 12, self.containerView.lim_width - 80, 44)];
-        [_createSpaceBtn setTitle:LLang(@"✨ 创建新团队") forState:UIControlStateNormal];
-        [_createSpaceBtn setBackgroundColor:[UIColor colorWithWhite:0.95 alpha:1.0]];
-        [_createSpaceBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
-        _createSpaceBtn.layer.cornerRadius = 4;
-        [_createSpaceBtn addTarget:self action:@selector(createSpacePressed) forControlEvents:UIControlEventTouchUpInside];
-    }
-    return _createSpaceBtn;
-}
-
 #pragma mark - Actions
 
 - (void)showInviteInputPressed {
     self.showInviteInput = YES;
     self.inviteInputView.hidden = NO;
     self.showInviteInputBtn.hidden = YES;
-    self.createSpaceBtn.hidden = YES;
 }
 
 - (void)backPressed {
     self.showInviteInput = NO;
     self.inviteInputView.hidden = YES;
     self.showInviteInputBtn.hidden = NO;
-    self.createSpaceBtn.hidden = NO;
     self.inviteCodeTextField.text = @"";
 }
 
@@ -316,83 +300,6 @@
             [weakSelf.view switchHUDError:LLang(@"邀请码无效或已过期")];
         }
     });
-}
-
-- (void)createSpacePressed {
-    // 创建Alert输入对话框
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"创建 Space") message:LLang(@"请输入 Space 名称和描述") preferredStyle:UIAlertControllerStyleAlert];
-
-    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-        textField.placeholder = LLang(@"Space 名称");
-    }];
-
-    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-        textField.placeholder = LLang(@"Space 描述（可选）");
-    }];
-
-    __weak typeof(self) weakSelf = self;
-    __weak typeof(alert) weakAlert = alert;
-    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil];
-    UIAlertAction *createAction = [UIAlertAction actionWithTitle:LLang(@"创建") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        NSString *nameText = weakAlert.textFields[0].text;
-        NSString *descText = weakAlert.textFields[1].text;
-
-        NSString *name = [nameText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        NSString *spaceDesc = [descText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-
-        if(!name || [name isEqualToString:@""]) {
-            [weakSelf.view showHUDWithHide:LLang(@"请输入 Space 名称")];
-            return;
-        }
-
-        if(!spaceDesc) {
-            spaceDesc = @"";
-        }
-
-        [weakSelf.view showHUD:LLang(@"创建中...")];
-        [weakSelf.viewModel createSpace:name description:spaceDesc].then(^(id response){
-            [weakSelf.view switchHUDSuccess:LLang(@"Space 创建成功")];
-            NSLog(@"✅ createSpace response: %@", response);
-
-            // 尝试从返回中提取新空间 ID（兼容多种字段名）
-            NSString *newSpaceId = nil;
-            if ([response isKindOfClass:[NSDictionary class]]) {
-                NSDictionary *result = (NSDictionary *)response;
-                newSpaceId = result[@"space_id"] ?: result[@"sid"] ?: result[@"id"];
-                if (![newSpaceId isKindOfClass:[NSString class]]) {
-                    // 可能是数字类型
-                    if ([newSpaceId isKindOfClass:[NSNumber class]]) {
-                        newSpaceId = [(NSNumber *)(id)newSpaceId stringValue];
-                    } else {
-                        newSpaceId = nil;
-                    }
-                }
-            }
-
-            // 清除空间缓存
-            [[WKSpaceModel shared] invalidateCache];
-
-            if (newSpaceId && newSpaceId.length > 0) {
-                [[NSUserDefaults standardUserDefaults] setObject:newSpaceId forKey:@"currentSpaceId"];
-                [[NSUserDefaults standardUserDefaults] synchronize];
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    [weakSelf enterApp];
-                });
-            } else {
-                // 未从返回中取到 space_id，重新拉取列表取最后一个（最新创建的）
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    [weakSelf checkSpaces];
-                });
-            }
-        }).catch(^(NSError *error){
-            [weakSelf.view switchHUDError:LLang(@"创建失败，请重试")];
-        });
-    }];
-
-    [alert addAction:cancelAction];
-    [alert addAction:createAction];
-
-    [self presentViewController:alert animated:YES completion:nil];
 }
 
 #pragma mark - UITextFieldDelegate

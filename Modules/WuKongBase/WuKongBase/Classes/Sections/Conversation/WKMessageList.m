@@ -15,23 +15,71 @@
 
 @property(nonatomic,strong) NSMutableDictionary<NSString*,NSMutableArray<WKMessageModel*>*> *dateMessageGroups; // 通过日期对消息分组
 
+// O(1) 查找索引：存 model 引用而非 NSIndexPath，避免插入/删除后 indexPath 陈旧
+// indexPath 在需要时通过 _indexPathForModel: 从 model 反向计算（O(D+K)，D=日期数，K=当天消息数）
+@property(nonatomic,strong) NSMutableDictionary<NSString*, WKMessageModel*> *clientMsgNoIndex;
+@property(nonatomic,strong) NSMutableDictionary<NSNumber*, WKMessageModel*> *orderSeqIndex;
+@property(nonatomic,strong) NSMutableDictionary<NSNumber*, WKMessageModel*> *messageIdIndex;
+@property(nonatomic,strong) NSMutableDictionary<NSString*, WKMessageModel*> *streamNoIndex;
+
 @end
 
 @implementation WKMessageList
 
+#pragma mark - 索引维护（调用前必须持有 messagesLock）
+
+- (void)_addToIndexNoLock:(WKMessageModel *)model {
+    if (model.clientMsgNo.length > 0) self.clientMsgNoIndex[model.clientMsgNo] = model;
+    if (model.orderSeq > 0) self.orderSeqIndex[@(model.orderSeq)] = model;
+    if (model.messageId > 0) self.messageIdIndex[@(model.messageId)] = model;
+    if (model.streamNo.length > 0) self.streamNoIndex[model.streamNo] = model;
+}
+
+- (void)_removeFromIndexNoLock:(WKMessageModel *)model {
+    if (model.clientMsgNo.length > 0) [self.clientMsgNoIndex removeObjectForKey:model.clientMsgNo];
+    if (model.orderSeq > 0) [self.orderSeqIndex removeObjectForKey:@(model.orderSeq)];
+    if (model.messageId > 0) [self.messageIdIndex removeObjectForKey:@(model.messageId)];
+    if (model.streamNo.length > 0) [self.streamNoIndex removeObjectForKey:model.streamNo];
+}
+
+// 由 model 反推 NSIndexPath：O(D+K)，D=日期分组数(<20)，K=当天消息数，远小于总消息数 N
+- (NSIndexPath *)_indexPathForModel:(WKMessageModel *)model {
+    NSString *date = [self formatMessageDate:model];
+    NSInteger section = [self.dates indexOfObject:date];
+    if (section == NSNotFound) return nil;
+    NSMutableArray *messages = self.dateMessageGroups[date];
+    NSInteger row = [messages indexOfObjectIdenticalTo:model]; // 指针比较，不用 isEqual
+    if (row == NSNotFound) return nil;
+    return [NSIndexPath indexPathForRow:row inSection:section];
+}
+
+#pragma mark -
+
 - (void)insertMessages:(NSArray<WKMessageModel *> *)messages {
+    [self.messagesLock lock];
     for(int i=0;i<messages.count;i++) {
-        [self insertMessage:messages[i]];
+        [self _insertMessageNoLock:messages[i]];
     }
+    [self.messagesLock unlock];
 }
 
 
 -(void) insertMessage:(WKMessageModel*)model {
+    [self.messagesLock lock];
+    [self _insertMessageNoLock:model];
+    [self.messagesLock unlock];
+}
+
+// 内部方法，调用前必须持有 messagesLock
+-(void) _insertMessageNoLock:(WKMessageModel*)model {
+    if(model.clientMsgNo.length > 0 && self.clientMsgNoIndex[model.clientMsgNo]) {
+        return;
+    }
     if(model.contentType == WK_TEXT) {
        WKTextContent *content = (WKTextContent*)model.content;
         content.content = [WKProhibitwordsService.shared filter:content.content]; // 违禁词过滤
     }
-    
+
     NSString *date = [self formatMessageDate:model];
     NSMutableArray *messages = self.dateMessageGroups[date];
     if(!messages) {
@@ -45,7 +93,7 @@
         oldMessageModel.preMessageModel = model;
     }
     [messages insertObject:model atIndex:0];
-    
+    [self _addToIndexNoLock:model];
 }
 
 
@@ -56,7 +104,11 @@
 }
 
 -(void) setMessages:(NSArray<WKMessageModel*>*)messages forDate:(NSString*)date {
-    [self.dateMessageGroups setObject:[NSMutableArray arrayWithArray:messages] forKey:date];
+    NSMutableArray *oldMessages = self.dateMessageGroups[date];
+    for (WKMessageModel *m in oldMessages) [self _removeFromIndexNoLock:m];
+    NSMutableArray *newMessages = [NSMutableArray arrayWithArray:messages];
+    self.dateMessageGroups[date] = newMessages;
+    for (WKMessageModel *m in newMessages) [self _addToIndexNoLock:m];
 }
 
 -(NSArray<WKMessageModel*>*) messagesAtDate:(NSString*)date {
@@ -70,6 +122,10 @@
     [_messagesLock lock];
     [self.dates removeAllObjects];
     [self.dateMessageGroups removeAllObjects];
+    [self.clientMsgNoIndex removeAllObjects];
+    [self.orderSeqIndex removeAllObjects];
+    [self.messageIdIndex removeAllObjects];
+    [self.streamNoIndex removeAllObjects];
     [_messagesLock unlock];
 }
 -(void) addMessage:(WKMessageModel*)message {
@@ -139,6 +195,7 @@
     }
    
     [messages insertObject:message atIndex:indexPath.row];
+   [self _addToIndexNoLock:message];
 }
 
 
@@ -149,11 +206,13 @@
     NSMutableArray *messages = self.dateMessageGroups[date];
     if(messages && messages.count>0) {
         WKMessageModel *oldMessageModel = messages.lastObject;
+        [self _removeFromIndexNoLock:oldMessageModel];
         model.preMessageModel = oldMessageModel.preMessageModel;
         if(oldMessageModel.preMessageModel) {
             oldMessageModel.preMessageModel.nextMessageModel = model;
         }
         [messages replaceObjectAtIndex:messages.count-1 withObject:model];
+        [self _addToIndexNoLock:model];
     }
 }
 
@@ -168,9 +227,11 @@
         }
         if(path.row < messages.count) {
             WKMessageModel *oldMessage =  messages[path.row];
+            [self _removeFromIndexNoLock:oldMessage];
             newMessage.preMessageModel = oldMessage.preMessageModel;
             newMessage.nextMessageModel = oldMessage.nextMessageModel;
             messages[path.row] = newMessage;
+            [self _addToIndexNoLock:newMessage];
             if(oldMessage.preMessageModel) {
                 oldMessage.preMessageModel.nextMessageModel = newMessage;
             }
@@ -185,9 +246,12 @@
 
 
 -(void) addMessageOnly:(WKMessageModel *)message {
-    
+    if(message.clientMsgNo.length > 0 && self.clientMsgNoIndex[message.clientMsgNo]) {
+        return;
+    }
+
     [self handleProhibitwords:message]; // 处理违禁词
-    
+
     NSString *date = [self formatMessageDate:message];
     NSMutableArray *messages = self.dateMessageGroups[date];
     if(!messages) {
@@ -196,18 +260,23 @@
         [self.dates addObject:date];
     }
     [messages addObject:message];
-    
+    [self _addToIndexNoLock:message];
 }
 
 -(void) handleProhibitwords:(WKMessageModel*)messageModel {
     if(messageModel.contentType == WK_TEXT) {
-        if(messageModel.remoteExtra.isEdit) {
+        if(messageModel.remoteExtra.isEdit && [messageModel.remoteExtra.contentEdit isKindOfClass:[WKTextContent class]]) {
             WKTextContent *content = (WKTextContent*)messageModel.remoteExtra.contentEdit;
-            content.content =[WKProhibitwordsService.shared filter:content.content]; // 违禁词过滤
+            if ([content.content isKindOfClass:[NSString class]]) {
+                content.content = [WKProhibitwordsService.shared filter:content.content];
+            }
             return;
         }
+        if (![messageModel.content isKindOfClass:[WKTextContent class]]) return;
         WKTextContent *content = (WKTextContent*)messageModel.content;
-        content.content = [WKProhibitwordsService.shared filter:content.content]; // 违禁词过滤
+        if ([content.content isKindOfClass:[NSString class]]) {
+            content.content = [WKProhibitwordsService.shared filter:content.content];
+        }
     }
 }
 
@@ -238,48 +307,21 @@
 
 
 -(NSIndexPath*) indexPathAtOrderSeq:(uint32_t)orderSeq {
-    if(orderSeq == 0 ){
-        return nil;
-    }
+    if(orderSeq == 0) return nil;
     [_messagesLock lock];
-    for (NSInteger i=self.dates.count-1; i>=0; i--) {
-        NSMutableArray *messages = self.dateMessageGroups[self.dates[i]];
-        if(messages && messages.count>0) {
-            for (NSInteger j=messages.count-1;j>=0; j--) {
-                WKMessageModel *messageModel = messages[j];
-                if(messageModel.orderSeq == orderSeq) {
-                    [_messagesLock unlock];
-                    return [NSIndexPath indexPathForRow:j inSection:i];
-                }
-            }
-            
-        }
-    }
+    WKMessageModel *model = self.orderSeqIndex[@(orderSeq)];
+    NSIndexPath *path = model ? [self _indexPathForModel:model] : nil;
     [_messagesLock unlock];
-    return nil;
+    return path;
 }
 
 -(NSIndexPath*) indexPathAtMessageID:(uint64_t)messageID {
-    if(messageID == 0 ){
-        return nil;
-    }
+    if(messageID == 0) return nil;
     [_messagesLock lock];
-    for (NSInteger i=self.dates.count-1; i>=0; i--) {
-        NSMutableArray *messages = self.dateMessageGroups[self.dates[i]];
-        if(messages && messages.count>0) {
-            for (NSInteger j=messages.count-1;j>=0; j--) {
-                WKMessageModel *messageModel = messages[j];
-                if(messageModel.messageId == messageID) {
-                    [_messagesLock unlock];
-                    return [NSIndexPath indexPathForRow:j inSection:i];
-                }
-            }
-            
-        }
-    }
+    WKMessageModel *model = self.messageIdIndex[@(messageID)];
+    NSIndexPath *path = model ? [self _indexPathForModel:model] : nil;
     [_messagesLock unlock];
-    return nil;
-
+    return path;
 }
 
 -(NSArray<NSIndexPath*>*) indexPathAtMessageReply:(uint64_t)messageID {
@@ -325,48 +367,23 @@
 }
 
 -(NSIndexPath*) indexPathAtClientMsgNo:(NSString*) clientMsgNo {
-    if(!clientMsgNo ){
-        return nil;
-    }
+    if(!clientMsgNo) return nil;
     [_messagesLock lock];
-    for (NSInteger i=self.dates.count-1; i>=0; i--) {
-        NSMutableArray *messages = self.dateMessageGroups[self.dates[i]];
-        if(messages && messages.count>0) {
-            for (NSInteger j=messages.count-1;j>=0; j--) {
-                WKMessageModel *messageModel = messages[j];
-                if([messageModel.clientMsgNo isEqualToString:clientMsgNo]) {
-                    [_messagesLock unlock];
-                    return [NSIndexPath indexPathForRow:j inSection:i];
-                }
-            }
-            
-        }
-    }
+    WKMessageModel *model = self.clientMsgNoIndex[clientMsgNo];
+    NSIndexPath *path = model ? [self _indexPathForModel:model] : nil;
     [_messagesLock unlock];
-    return nil;
+    return path;
 }
 
 -(NSIndexPath*) indexPathAtStreamNo:(NSString*)streamNo {
-    if(!streamNo ){
-        return nil;
-    }
+    if(!streamNo) return nil;
     [_messagesLock lock];
-    for (NSInteger i=self.dates.count-1; i>=0; i--) {
-        NSMutableArray *messages = self.dateMessageGroups[self.dates[i]];
-        if(messages && messages.count>0) {
-            for (NSInteger j=messages.count-1;j>=0; j--) {
-                WKMessageModel *messageModel = messages[j];
-                if([messageModel.streamNo isEqualToString:streamNo]) {
-                    [_messagesLock unlock];
-                    return [NSIndexPath indexPathForRow:j inSection:i];
-                }
-            }
-            
-        }
-    }
+    WKMessageModel *model = self.streamNoIndex[streamNo];
+    NSIndexPath *path = model ? [self _indexPathForModel:model] : nil;
     [_messagesLock unlock];
-    return nil;
+    return path;
 }
+
 
 
 -(NSIndexPath*) removeMessage:(WKMessageModel*) message {
@@ -376,13 +393,14 @@
         NSMutableArray *messages =  self.dateMessageGroups[self.dates[path.section]];
         
         WKMessageModel *deleteMessageModel = messages[path.row];
+        [self _removeFromIndexNoLock:deleteMessageModel];
         if(deleteMessageModel.preMessageModel) {
             deleteMessageModel.preMessageModel.nextMessageModel = deleteMessageModel.nextMessageModel;
         }
         if(deleteMessageModel.nextMessageModel) {
             deleteMessageModel.nextMessageModel.preMessageModel = deleteMessageModel.preMessageModel;
         }
-        
+
         [messages removeObjectAtIndex:path.row];
         if(messages.count == 0) {
             [self.dateMessageGroups removeObjectForKey:self.dates[path.section]];
@@ -398,15 +416,16 @@
     [_messagesLock lock];
     if(path) {
         NSMutableArray *messages =  self.dateMessageGroups[self.dates[path.section]];
-        
+
         WKMessageModel *deleteMessageModel = messages[path.row];
+        [self _removeFromIndexNoLock:deleteMessageModel];
         if(deleteMessageModel.preMessageModel) {
             deleteMessageModel.preMessageModel.nextMessageModel = deleteMessageModel.nextMessageModel;
         }
         if(deleteMessageModel.nextMessageModel) {
             deleteMessageModel.nextMessageModel.preMessageModel = deleteMessageModel.preMessageModel;
         }
-        
+
         [messages removeObjectAtIndex:path.row];
         if(messages.count == 0) {
             *sectionRemove = true;
@@ -456,6 +475,7 @@
     }
     if(hasTyping) {
         WKMessageModel *typingMessageModel = self.dateMessageGroups[self.dates[indexPath.section]][indexPath.row];
+        [self _removeFromIndexNoLock:typingMessageModel];
         if(typingMessageModel.preMessageModel) {
             typingMessageModel.preMessageModel.nextMessageModel = messageModel;
         }
@@ -464,9 +484,9 @@
         }
         messageModel.preMessageModel = typingMessageModel.preMessageModel;
         messageModel.nextMessageModel = typingMessageModel.nextMessageModel;
-        
+
         self.dateMessageGroups[self.dates[indexPath.section]][indexPath.row] = messageModel;
-        
+        [self _addToIndexNoLock:messageModel];
     }
     
     [self.messagesLock unlock];
@@ -565,6 +585,23 @@
         _messagesLock = [[NSLock alloc] init];
     }
     return _messagesLock;
+}
+
+- (NSMutableDictionary *)clientMsgNoIndex {
+    if (!_clientMsgNoIndex) _clientMsgNoIndex = [NSMutableDictionary dictionary];
+    return _clientMsgNoIndex;
+}
+- (NSMutableDictionary *)orderSeqIndex {
+    if (!_orderSeqIndex) _orderSeqIndex = [NSMutableDictionary dictionary];
+    return _orderSeqIndex;
+}
+- (NSMutableDictionary *)messageIdIndex {
+    if (!_messageIdIndex) _messageIdIndex = [NSMutableDictionary dictionary];
+    return _messageIdIndex;
+}
+- (NSMutableDictionary *)streamNoIndex {
+    if (!_streamNoIndex) _streamNoIndex = [NSMutableDictionary dictionary];
+    return _streamNoIndex;
 }
 
 - (void)dealloc {

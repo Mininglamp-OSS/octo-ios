@@ -55,7 +55,18 @@
 }
 
 -(AnyPromise*) muteOfApp:(BOOL)on {
-    return [self setting:@"mute_of_app" on:on];
+    [self saveMuteOfAppLocally:on];
+    return [[WKAPIClient sharedClient] PUT:@"user/my/setting" parameters:@{@"mute_of_app":(on?@(1):@(0))}].then(^{
+
+    }).catch(^(NSError*error){
+        WKLogError(@"设置失败！->%@",error);
+    });
+}
+
+-(void) saveMuteOfAppLocally:(BOOL)on {
+    NSString *key = [NSString stringWithFormat:@"%@_mute_of_app", [WKApp shared].loginInfo.uid];
+    [[NSUserDefaults standardUserDefaults] setBool:on forKey:key];
+    [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
 
@@ -88,7 +99,8 @@
 }
 
 - (BOOL)muteOfApp {
-    return [self setting:@"mute_of_app"];
+    NSString *key = [NSString stringWithFormat:@"%@_mute_of_app", [WKApp shared].loginInfo.uid];
+    return [[NSUserDefaults standardUserDefaults] boolForKey:key];
 }
 
 

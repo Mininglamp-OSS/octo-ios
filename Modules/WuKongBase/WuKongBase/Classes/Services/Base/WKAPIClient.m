@@ -215,6 +215,72 @@
     
 }
 
+-(NSURLSessionDataTask *)fileUpload:(NSString *)path
+                         formFields:(NSDictionary<NSString *, NSString *> *)formFields
+                           fileData:(NSData *)fileData
+                           fileName:(NSString *)fileName
+                          fileField:(NSString *)fileField
+                           mimeType:(NSString *)mimeType
+                            timeout:(NSTimeInterval)timeout
+                   completeCallback:(void(^)(id, NSError *))completeCallback {
+
+    NSString *requestPath = path;
+    if (_config.requestPathReplace) {
+        requestPath = _config.requestPathReplace(path);
+    }
+    [self resetPublicHeader];
+
+    NSError *serializerError = nil;
+    NSMutableURLRequest *request =
+        [_sessionManager.requestSerializer
+         multipartFormRequestWithMethod:@"POST"
+         URLString:[[NSURL URLWithString:[self pathURLEncode:requestPath]
+                            relativeToURL:_sessionManager.baseURL] absoluteString]
+         parameters:nil
+         constructingBodyWithBlock:^(id<AFMultipartFormData> formData) {
+             [formData appendPartWithFileData:fileData
+                                        name:fileField
+                                    fileName:fileName
+                                    mimeType:mimeType];
+             [formFields enumerateKeysAndObjectsUsingBlock:^(NSString *key, NSString *value, BOOL *stop) {
+                 [formData appendPartWithFormData:[value dataUsingEncoding:NSUTF8StringEncoding]
+                                             name:key];
+             }];
+         }
+         error:&serializerError];
+
+    if (serializerError) {
+        if (completeCallback) completeCallback(nil, serializerError);
+        return nil;
+    }
+
+    if (timeout > 0) {
+        request.timeoutInterval = timeout;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    NSURLSessionDataTask *task =
+        [_sessionManager dataTaskWithRequest:request
+                              uploadProgress:nil
+                            downloadProgress:nil
+                           completionHandler:^(NSURLResponse *response, id responseObject, NSError *error) {
+            if (error) {
+                NSError *er = nil;
+                if (weakSelf.config.errorHandler) {
+                    er = weakSelf.config.errorHandler(nil, error);
+                }
+                if (!er) {
+                    er = error;
+                }
+                if (completeCallback) completeCallback(nil, er);
+            } else {
+                if (completeCallback) completeCallback(responseObject, nil);
+            }
+        }];
+    [task resume];
+    return task;
+}
+
 -(void) uploadChatFile:(NSString*)serverPath localURL:(NSURL*)localURL progress:(void(^_Nullable)(NSProgress * _Nonnull progress)) progressCallback completeCallback:(void(^_Nullable)(id __nullable resposeObject,NSError * __nullable error)) completeCallback {
     [self getChatUploadURL:serverPath].then(^(NSDictionary*result){
         NSString *uploadUrl = result[@"url"];
@@ -236,7 +302,14 @@
     if(_config.requestPathReplace) {
         requestPath = _config.requestPathReplace(path);
     }
-     NSMutableURLRequest *request = [_sessionManager.requestSerializer requestWithMethod:@"GET" URLString:[[NSURL URLWithString:[self pathURLEncode:requestPath] relativeToURL:_sessionManager.baseURL] absoluteString] parameters:nil error:nil];
+     // 完整 URL 不再做 percent encoding，避免中文文件名被多重编码导致 404
+     NSString *urlString;
+     if ([requestPath hasPrefix:@"http"]) {
+         urlString = requestPath;
+     } else {
+         urlString = [[NSURL URLWithString:[self pathURLEncode:requestPath] relativeToURL:_sessionManager.baseURL] absoluteString];
+     }
+     NSMutableURLRequest *request = [_sessionManager.requestSerializer requestWithMethod:@"GET" URLString:urlString parameters:nil error:nil];
    NSURLSessionDownloadTask *task = [_sessionManager downloadTaskWithRequest:request progress:downloadProgressBlock destination:^NSURL * _Nonnull(NSURL * _Nonnull targetPath, NSURLResponse * _Nonnull response) {
         return [NSURL fileURLWithPath:storePath];
     } completionHandler:^(NSURLResponse * _Nonnull response, NSURL * _Nullable filePath, NSError * _Nullable error) {
@@ -367,7 +440,13 @@
         __weak typeof(self) weakSelf = self;
         if(headers){
             [headers enumerateKeysAndObjectsUsingBlock:^(id  _Nonnull key, id  _Nonnull obj, BOOL * _Nonnull stop) {
-                [weakSelf.sessionManager.requestSerializer setValue:obj forHTTPHeaderField:key];
+                // 空字串代表 caller 希望清除该 header（避免 stale value 粘在 requestSerializer 上）
+                NSString *valueStr = [obj isKindOfClass:[NSString class]] ? (NSString *)obj : [obj description];
+                if (valueStr.length == 0) {
+                    [weakSelf.sessionManager.requestSerializer setValue:nil forHTTPHeaderField:key];
+                } else {
+                    [weakSelf.sessionManager.requestSerializer setValue:valueStr forHTTPHeaderField:key];
+                }
             }];
         }
     }

@@ -47,10 +47,12 @@
 
 
 -(void) syncMembersIfNeed{
-    if(self.channel.channelType == WK_GROUP) {
+    NSLog(@"[Mention] syncMembersIfNeed channelType=%d channelId=%@", self.channel.channelType, self.channel.channelId);
+    if(self.channel.channelType == WK_GROUP || self.channel.channelType == WK_COMMUNITY_TOPIC) {
+        NSLog(@"[Mention] calling syncMemebers for %@", self.channel.channelId);
         [[WKGroupManager shared] syncMemebers:self.channel.channelId];
     }
-   
+
 }
 
 -(void) typing {

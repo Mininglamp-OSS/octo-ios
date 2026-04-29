@@ -19,8 +19,12 @@
     btn.frame = frame;
     btn.cw_size = normalImage.size;
     if (isMicPhone) {
-        [btn setBackgroundImage:normalImage forState:UIControlStateNormal];
-        [btn setBackgroundImage:selectedImage forState:UIControlStateSelected];
+        // 用 template 模式渲染背景图，通过 tintColor 统一改色为主题色
+        UIImage *norTemplate = [normalImage imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        UIImage *selTemplate = [selectedImage imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        [btn setBackgroundImage:norTemplate forState:UIControlStateNormal];
+        [btn setBackgroundImage:selTemplate forState:UIControlStateSelected];
+        btn.tintColor = [WKApp shared].config.themeColor;
     }
     btn.norImage = normalImage;
     btn.selectedImage = selectedImage;

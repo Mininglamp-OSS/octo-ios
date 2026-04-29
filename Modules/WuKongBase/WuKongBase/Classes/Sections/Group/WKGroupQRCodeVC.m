@@ -34,6 +34,9 @@
 
 @property(nonatomic,strong) UIButton *moreButtonItem; // 顶部右边更多按钮
 
+@property(nonatomic,strong) UIButton *copyInviteBtn; // 复制邀请链接按钮（YUJ-97）
+@property(nonatomic,copy) NSString *inviteUrl; // 跨 Space 邀请链接（v2 外部群入群入口）
+
 
 @end
 
@@ -59,11 +62,14 @@
     [self.qrcodeBoxView addSubview:self.titleLbl];
     
     [self.qrcodeBoxView addSubview:self.remarkLbl];
-    
+
+    // YUJ-97: 复制邀请链接按钮，挂在 qrcode box 外部底部，默认隐藏直到请求返回 invite_url
+    [self.view addSubview:self.copyInviteBtn];
+
     //
-    
+
     [self.qrcodeImgView addSubview:self.activityView];
-    
+
 
     __weak typeof(self) weakSelf = self;
     [self.activityView startAnimating];
@@ -73,11 +79,13 @@
         }else {
             weakSelf.qrcodeMaskView.hidden = YES;
             [weakSelf updateRemark: [NSString stringWithFormat:LLangW(@"该二维码%ld天内(%@)前有效，重新进入将更新",weakSelf),(long)model.day,model.expire]];
-           
+
         }
          weakSelf.qrcodeImgView.image =  [LBXScanNative createQRWithString:model.qrcode QRSize:weakSelf.qrcodeImgView.lim_size];
         [weakSelf.activityView stopAnimating];
-       
+        // YUJ-97: 拿到 invite_url 后再显示复制按钮。空字符串 / nil 保持隐藏以兼容旧后端。
+        [weakSelf applyInviteUrl:model.inviteUrl];
+
     });
 }
 
@@ -246,6 +254,62 @@
 
 -(UIImage*) imageName:(NSString*)name {
     return [WKApp.shared loadImage:name moduleID:@"WuKongBase"];
+}
+
+#pragma mark - YUJ-97 复制邀请链接
+
+// 按钮懒加载：默认隐藏，等 applyInviteUrl: 收到非空字符串后再显示。
+// 防御 YUJ-53 静默失败：显式在 applyInviteUrl: 里校验 model.inviteUrl 的类型和长度，
+// 避免后端字段改名后 UI 悄悄退化（按钮常驻不可点 / 点击后复制空串）。
+-(UIButton*) copyInviteBtn {
+    if(!_copyInviteBtn) {
+        _copyInviteBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        [_copyInviteBtn setTitle:LLang(@"复制邀请链接") forState:UIControlStateNormal];
+        [_copyInviteBtn setTitleColor:WKApp.shared.config.themeColor forState:UIControlStateNormal];
+        _copyInviteBtn.titleLabel.font = [UIFont systemFontOfSize:15.0f];
+        [_copyInviteBtn addTarget:self action:@selector(copyInvitePressed) forControlEvents:UIControlEventTouchUpInside];
+        _copyInviteBtn.hidden = YES;
+    }
+    return _copyInviteBtn;
+}
+
+-(void) applyInviteUrl:(NSString*)inviteUrl {
+    NSString *trimmed = [inviteUrl isKindOfClass:[NSString class]]
+        ? [inviteUrl stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]
+        : nil;
+    if (trimmed.length == 0) {
+        self.inviteUrl = nil;
+        self.copyInviteBtn.hidden = YES;
+        return;
+    }
+    self.inviteUrl = trimmed;
+    self.copyInviteBtn.hidden = NO;
+    [self.copyInviteBtn sizeToFit];
+    CGFloat w = MAX(self.copyInviteBtn.lim_width + 32.0f, 160.0f);
+    CGFloat h = 40.0f;
+    // 小屏兼容 (iPhone SE 1st gen 320×568 / 老设备 iOS 12+)：
+    // qrcodeBoxView 高 = screenWidth-40 + 140, 会把 320pt 宽屏塞到接近底部。
+    // 若按钮「紧贴 box 下方 +20」超出可视区，就钳制到安全底部上方 20pt，
+    // 保证按钮始终可点（宁可和 box 轻微重叠也不能整体掉出屏幕）。
+    CGFloat preferredTop = self.qrcodeBoxView.lim_bottom + 20.0f;
+    CGFloat maxTop = self.view.lim_height - [self safeBottom] - h - 20.0f;
+    CGFloat top = MIN(preferredTop, MAX(maxTop, 0.0f));
+    self.copyInviteBtn.frame = CGRectMake((self.view.lim_width - w) / 2.0f,
+                                          top,
+                                          w,
+                                          h);
+}
+
+-(void) copyInvitePressed {
+    // 兜底：即使按钮显示了也再校验一次，防止 inviteUrl 被上层清空后竞态点击。
+    NSString *url = self.inviteUrl;
+    if (![url isKindOfClass:[NSString class]] || url.length == 0) {
+        [self.view showHUDWithHide:LLang(@"邀请链接不可用")];
+        return;
+    }
+    UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
+    pasteboard.string = url;
+    [self.view showHUDWithHide:LLang(@"复制成功")];
 }
 
 @end

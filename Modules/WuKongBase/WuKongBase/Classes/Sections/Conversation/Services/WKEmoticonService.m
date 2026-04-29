@@ -77,7 +77,16 @@ static WKEmoticonService *_instance;
             [faceNames addObject:emotion.faceName];
         }];
         
-        self.emojiReg = [NSString stringWithFormat:@"(%@)",[faceNames componentsJoinedByString:@"|"]];
+        // 转义特殊字符（如 [ ] 用于自定义表情 [崇尚行动]）
+        NSMutableArray *escapedNames = [NSMutableArray array];
+        for (NSString *name in faceNames) {
+            NSString *escaped = [name stringByReplacingOccurrencesOfString:@"[" withString:@"\\["];
+            escaped = [escaped stringByReplacingOccurrencesOfString:@"]" withString:@"\\]"];
+            [escapedNames addObject:escaped];
+        }
+        self.emojiReg = [NSString stringWithFormat:@"(%@)",[escapedNames componentsJoinedByString:@"|"]];
+        NSLog(@"[Emoji] emojiReg first 200 chars: %@", [self.emojiReg substringToIndex:MIN(self.emojiReg.length, 200)]);
+        NSLog(@"[Emoji] total emoji count: %lu", (unsigned long)faceNames.count);
         
         NSArray *recentArrays = [[NSUserDefaults standardUserDefaults] arrayForKey:@"recentFaceArrays"];
         if (recentArrays) {
@@ -111,15 +120,30 @@ static WKEmoticonService *_instance;
     }
     
     tokens = [NSMutableArray array];
+    // 日志：检查是否能匹配自定义表情
+    if ([text containsString:@"["] && [text containsString:@"]"]) {
+        NSLog(@"[Emoji] parseEmotion called with bracket text: %@", [text substringToIndex:MIN(text.length, 50)]);
+    }
     static NSRegularExpression *exp;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
+        NSLog(@"[Emoji] creating regex with pattern length: %lu", (unsigned long)self.emojiReg.length);
+        NSError *regexError = nil;
         exp = [NSRegularExpression regularExpressionWithPattern:self.emojiReg
                                                         options:NSRegularExpressionCaseInsensitive
-                                                          error:nil];
+                                                          error:&regexError];
+        if (regexError) {
+            NSLog(@"[Emoji] ERROR creating regex: %@", regexError);
+        } else {
+            NSLog(@"[Emoji] regex created OK");
+        }
     });
     
     __block NSInteger index = 0;
+    if ([text containsString:@"["] && [text containsString:@"]"]) {
+        NSInteger matchCount = [exp numberOfMatchesInString:text options:0 range:NSMakeRange(0, text.length)];
+        NSLog(@"[Emoji] regex match count for '%@': %ld, exp=%@", [text substringToIndex:MIN(text.length, 30)], (long)matchCount, exp ? @"OK" : @"NIL");
+    }
     [exp enumerateMatchesInString:text
                           options:0
                             range:NSMakeRange(0, [text length])
@@ -174,9 +198,11 @@ static WKEmoticonService *_instance;
 }
 
 -(UIImage*) emojiImageNamed:(NSString*)imageName{
-    
-    
-    return [self imageNamed:[NSString stringWithFormat:@"Conversation/Emoji/%@",imageName]];
+    UIImage *img = [self imageNamed:[NSString stringWithFormat:@"Conversation/Emoji/%@",imageName]];
+    if ([imageName hasPrefix:@"custom_"]) {
+        NSLog(@"[Emoji] emojiImageNamed: %@ -> image=%@", imageName, img ? @"LOADED" : @"NIL");
+    }
+    return img;
 }
 
 - (NSArray<WKEmotion*> *)emotions {

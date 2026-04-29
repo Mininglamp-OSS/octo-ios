@@ -24,6 +24,7 @@
 @property(nonatomic,strong) WKLoadProgressView *progressView;
 @property(nonatomic,strong) WKMessageFileUploadTask *uploadTask;
 @property(nonatomic,strong) UIDocumentInteractionController *documentController;
+@property(nonatomic,assign) BOOL isFileDownloading;
 
 @end
 
@@ -37,6 +38,11 @@
     [super prepareForReuse];
     if (self.uploadTask) {
         [self.uploadTask removeListener:self];
+    }
+    // 清理文件预览控制器，防止 cell 复用后 delegate 指向错误对象
+    if (self.documentController) {
+        self.documentController.delegate = nil;
+        self.documentController = nil;
     }
 }
 
@@ -158,25 +164,64 @@
     }
     WKFileContent *fileContent = (WKFileContent *)self.messageModel.content;
 
+    NSLog(@"[File-onTap] name=%@, localPath=%@, remoteUrl=%@, fileSize=%lld, status=%ld",
+          fileContent.name, fileContent.localPath, fileContent.remoteUrl, fileContent.fileSize, (long)self.messageModel.status);
+
     // 检查本地文件是否存在
     NSString *localPath = fileContent.localPath;
     if (localPath && [[NSFileManager defaultManager] fileExistsAtPath:localPath]) {
+        NSLog(@"[File-onTap] 本地文件存在，直接预览");
         [self previewFileAtPath:localPath];
         return;
     }
 
+    NSLog(@"[File-onTap] 本地文件不存在 (localPath=%@)", localPath);
+
+    // 下载中再点击 → 取消下载
+    if (self.isFileDownloading) {
+        self.isFileDownloading = NO;
+        self.progressView.hidden = YES;
+        [self.progressView setProgress:0];
+        return;
+    }
+
     // 需要下载
-    if (fileContent.remoteUrl && fileContent.remoteUrl.length > 0) {
+    if (!fileContent.remoteUrl || fileContent.remoteUrl.length == 0) {
+        NSLog(@"[File-onTap] remoteUrl 为空，文件无法下载");
+        [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"文件不存在或正在上传中")];
+        return;
+    }
+    if (fileContent.remoteUrl.length > 0) {
+        self.isFileDownloading = YES;
+        self.progressView.hidden = NO;
+        [self.progressView setProgress:0];
         __weak typeof(self) weakSelf = self;
         [[WKSDK shared].mediaManager download:self.messageModel.message callback:^(WKMediaDownloadState state, CGFloat progress, NSError *error) {
-            if (state == WKMediaDownloadStateSuccess) {
-                dispatch_async(dispatch_get_main_queue(), ^{
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (!weakSelf.isFileDownloading) return; // 已取消，忽略回调
+                if (state == WKMediaDownloadStateSuccess) {
+                    weakSelf.isFileDownloading = NO;
+                    weakSelf.progressView.hidden = YES;
+                    [weakSelf.progressView setProgress:0];
                     NSString *downloadedPath = fileContent.localPath;
+                    NSLog(@"[File] download success, localPath=%@, exists=%d, extension='%@', name='%@'",
+                          downloadedPath,
+                          [[NSFileManager defaultManager] fileExistsAtPath:downloadedPath],
+                          fileContent.fileExtension ?: @"(nil)",
+                          fileContent.name ?: @"(nil)");
                     if (downloadedPath && [[NSFileManager defaultManager] fileExistsAtPath:downloadedPath]) {
                         [weakSelf previewFileAtPath:downloadedPath];
+                    } else {
+                        NSLog(@"[File] downloaded file NOT found at localPath!");
                     }
-                });
-            }
+                } else if (state == WKMediaDownloadStateFail) {
+                    weakSelf.isFileDownloading = NO;
+                    weakSelf.progressView.hidden = YES;
+                    [weakSelf.progressView setProgress:0];
+                } else {
+                    [weakSelf.progressView setProgress:progress];
+                }
+            });
         }];
     }
 }
@@ -206,10 +251,14 @@
     }
 
     NSURL *fileURL = [NSURL fileURLWithPath:previewPath];
+    NSLog(@"[File] preview path=%@, fileSize=%lld", previewPath,
+          [[[NSFileManager defaultManager] attributesOfItemAtPath:previewPath error:nil] fileSize]);
     self.documentController = [UIDocumentInteractionController interactionControllerWithURL:fileURL];
     self.documentController.delegate = self;
     UIViewController *topVC = [WKNavigationManager shared].topViewController;
-    if (![self.documentController presentPreviewAnimated:YES]) {
+    BOOL canPreview = [self.documentController presentPreviewAnimated:YES];
+    NSLog(@"[File] presentPreview=%d, UTI=%@", canPreview, self.documentController.UTI ?: @"(nil)");
+    if (!canPreview) {
         [self.documentController presentOptionsMenuFromRect:topVC.view.bounds inView:topVC.view animated:YES];
     }
 }
@@ -218,6 +267,24 @@
 
 - (UIViewController *)documentInteractionControllerViewControllerForPreview:(UIDocumentInteractionController *)controller {
     return [WKNavigationManager shared].topViewController;
+}
+
+- (void)documentInteractionControllerWillBeginPreview:(UIDocumentInteractionController *)controller {
+    // 预览期间禁用手势返回（QLPreviewController 内部 WebKit 在手势返回时会触发嵌套 RunLoop 死锁）
+    UINavigationController *nav = [WKNavigationManager shared].topViewController.navigationController;
+    if (nav) {
+        nav.interactivePopGestureRecognizer.enabled = NO;
+    }
+}
+
+- (void)documentInteractionControllerDidEndPreview:(UIDocumentInteractionController *)controller {
+    // 恢复手势返回
+    UINavigationController *nav = [WKNavigationManager shared].topViewController.navigationController;
+    if (nav) {
+        nav.interactivePopGestureRecognizer.enabled = YES;
+    }
+    controller.delegate = nil;
+    self.documentController = nil;
 }
 
 + (BOOL)hiddenBubble {

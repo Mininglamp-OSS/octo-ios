@@ -477,6 +477,7 @@
         reminder.messageSeq = (uint32_t)[dataDict[@"message_seq"] unsignedLongValue];
     }
     reminder.type = [dataDict[@"reminder_type"] integerValue];
+    NSLog(@"[ReminderDebug] toReminder: id=%lld, channel=%@/%ld, reminder_type=%lu, text=%@, done=%d, raw=%@", reminder.reminderID, channelID, (long)channelType, (unsigned long)reminder.type, dataDict[@"text"], [dataDict[@"done"] boolValue], dataDict);
     if(dataDict[@"text"]) {
         reminder.text = dataDict[@"text"];
     }

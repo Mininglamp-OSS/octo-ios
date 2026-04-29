@@ -7,6 +7,8 @@
 
 #import "WKConversationVC.h"
 #import "WKMessageListView.h"
+#import "WKTextMessageCell.h"
+#import "WKTimeHeaderView.h"
 #import "WuKongBase.h"
 #import "WKMessageListDataProviderImp.h"
 #import "WKConversationChannelHeader.h"
@@ -18,6 +20,9 @@
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "Svg.h"
 #import "WKThemeUtil.h"
+#import "WKThreadService.h"
+#import "WKThreadModel.h"
+#import "WKThreadCreatedContent.h"
 @interface WKConversationVC ()<WKChannelManagerDelegate>
 
 @property(nonatomic,strong) WKConversationView *conversationView;
@@ -40,7 +45,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    
+
     self.firstLoad = true;
     [self.view addSubview:self.backgroundView];
     
@@ -163,11 +168,16 @@
     
     if(self.firstLoad) {
         self.firstLoad = false;
-        WKGroupType groupType =  self.conversationView.conversationVM.groupType;
-        if(groupType == WKGroupTypeCommon) { // 普通群
-            [self commonGroupInit];
-        }else if(groupType == WKGroupTypeSuper) { // 超级群
-            [self superGroupInit];
+        if(self.channel.channelType == WK_COMMUNITY_TOPIC) {
+            // 子区：同步成员（服务端已支持子区 channelId 格式）
+            [self.conversationView.conversationVM syncMembersIfNeed];
+        } else {
+            WKGroupType groupType =  self.conversationView.conversationVM.groupType;
+            if(groupType == WKGroupTypeCommon) { // 普通群
+                [self commonGroupInit];
+            }else if(groupType == WKGroupTypeSuper) { // 超级群
+                [self superGroupInit];
+            }
         }
     }
     
@@ -181,6 +191,24 @@
 // 普通群初始化
 -(void) commonGroupInit {
     [self.conversationView.conversationVM requestMembers];
+    // 获取子区消息数量缓存
+    [self fetchThreadMessageCounts];
+}
+
+/// 获取群内子区的消息数量，更新到全局缓存
+-(void) fetchThreadMessageCounts {
+    if (self.channel.channelType != WK_GROUP) return;
+    [[WKThreadService shared] listThreads:self.channel.channelId].then(^(NSArray<WKThreadModel *> *threads) {
+        for (WKThreadModel *t in threads) {
+            if (t.channelId.length > 0) {
+                [WKThreadCreatedContent messageCountCache][t.channelId] = @(t.messageCount);
+            }
+        }
+        // 通知群聊页面刷新子区卡片
+        [[NSNotificationCenter defaultCenter] postNotificationName:WKThreadMessageCountUpdatedNotification object:self.channel];
+    }).catch(^(NSError *error) {
+        // 忽略
+    });
 }
 
 
@@ -207,7 +235,13 @@
 }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
-    
+
+    CGFloat offset = self.navigationBar.lim_bottom;
+    CGRect newFrame = CGRectMake(0.0f, offset, self.view.lim_width, self.view.lim_height - offset);
+    if (!CGRectEqualToRect(self.conversationView.frame, newFrame)) {
+        self.conversationView.frame = newFrame;
+    }
+
     [self.conversationView layoutSubviews];
     [self.conversationView.messageListView viewDidLayoutSubviewsOfPosition];
 }
@@ -231,20 +265,44 @@
 }
 -(void) refreshTitle {
     if(self.channelInfo) {
-        
+
         self.channelHeader.channelInfo = self.channelInfo;
         self.channelHeader.memberCount = self.conversationView.conversationVM.memberCount;
-        
-        
+
+        // 子区会话：标题加 # 前缀，副标题显示来源群名
+        if(self.channel.channelType == WK_COMMUNITY_TOPIC) {
+            [self setupThreadHeader];
+        }
+
         [self.channelHeader layoutSubviews];
-        
+
         NSString *channelName = self.channelInfo.displayName;
         NSString *showChannelName = [channelName limitedStringForMaxBytesLength:20];
         if(showChannelName.length <channelName.length) {
             showChannelName = [NSString stringWithFormat:@"%@...",showChannelName];
         }
         [self.conversationView.input.textView internalTextView].placeholder=[NSString stringWithFormat:LLang(@"发送给 %@"),showChannelName];
-       
+
+    }
+}
+
+/// 子区会话头部定制
+-(void) setupThreadHeader {
+    // 解析 groupNo: channelId 格式为 {groupNo}____{shortId}
+    NSString *channelId = self.channel.channelId;
+    NSRange separatorRange = [channelId rangeOfString:@"____"];
+    if(separatorRange.location != NSNotFound) {
+        NSString *groupNo = [channelId substringToIndex:separatorRange.location];
+        // 获取父群信息
+        WKChannel *parentChannel = [WKChannel groupWithChannelID:groupNo];
+        WKChannelInfo *parentInfo = [[WKChannelManager shared] getChannelInfo:parentChannel];
+        if(parentInfo && parentInfo.displayName.length > 0) {
+            self.channelHeader.subtitleText = [NSString stringWithFormat:@"%@: %@", LLang(@"来自"), parentInfo.displayName];
+        } else {
+            // 如果还没有父群信息，先请求
+            self.channelHeader.subtitleText = [NSString stringWithFormat:@"%@: %@", LLang(@"来自"), LLang(@"群聊")];
+            [[WKChannelManager shared] fetchChannelInfo:parentChannel];
+        }
     }
 }
 
@@ -261,6 +319,22 @@
     [super viewConfigChange:type];
     if(type == WKViewConfigChangeTypeStyle) {
         [self setupChatBackground];
+        // 刷新时间标签（今天/昨天）的背景色
+        // layer.cornerRadius + masksToBounds 导致动态颜色不生效，需手动设置 layer.backgroundColor
+        UITableView *tv = self.conversationView.messageListView.tableView;
+        if (@available(iOS 13.0, *)) {
+            UIColor *bg = [WKApp shared].config.cellBackgroundColor;
+            CGColorRef resolvedBg = [bg resolvedColorWithTraitCollection:self.traitCollection].CGColor;
+            for (NSInteger section = 0; section < tv.numberOfSections; section++) {
+                UITableViewHeaderFooterView *header = [tv headerViewForSection:section];
+                if ([header isKindOfClass:[WKTimeHeaderView class]]) {
+                    ((WKTimeHeaderView *)header).dateLbl.layer.backgroundColor = resolvedBg;
+                }
+            }
+        }
+        // 刷新输入框区域颜色
+        [self.conversationView.input setNeedsLayout];
+        [self.conversationView.input layoutIfNeeded];
     }
 }
 
@@ -340,6 +414,14 @@
 }
 
 -(void) showVideoCall:(BOOL) show {
+    // 子区会话：隐藏通话按钮，显示设置按钮
+    if(self.channel.channelType == WK_COMMUNITY_TOPIC) {
+        _channelHeader.voiceCallBtn.hidden = YES;
+        _channelHeader.videoCallBtn.hidden = YES;
+        _channelHeader.moreDotsBtn.hidden = NO;
+        [_channelHeader layoutSubviews];
+        return;
+    }
     if(!show) {
         _channelHeader.voiceCallBtn.hidden = YES;
         _channelHeader.videoCallBtn.hidden = YES;
@@ -351,6 +433,8 @@
             _channelHeader.videoCallBtn.hidden = NO;
         }
     }
+    // 群聊显示三个点按钮（打开群组设置）
+    _channelHeader.moreDotsBtn.hidden = (self.channel.channelType != WK_GROUP);
     [_channelHeader layoutSubviews];
 }
 
@@ -391,4 +475,9 @@
     }
    
 }
+
+-(void) locateToMessageSeq:(uint32_t)messageSeq {
+    [self.conversationView.messageListView locateMessageCellWithMessageSeq:messageSeq];
+}
+
 @end

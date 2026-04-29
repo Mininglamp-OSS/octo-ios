@@ -27,6 +27,13 @@
     return  [NSString stringWithFormat:@"%@%@",[WKApp shared].config.apiBaseUrl,avatarPath];
 }
 
++(NSString*) getAvatar:(NSString*)uid cacheKey:(NSString*)cacheKey {
+    NSString *url = [self getAvatar:uid];
+    NSString *key = (cacheKey && cacheKey.length > 0) ? cacheKey : @"0";
+    url = [NSString stringWithFormat:@"%@?v=%@", url, key];
+    return url;
+}
+
 +(NSString*) getGroupAvatar:(NSString*)groupNo {
      return [[NSURL URLWithString:[NSString stringWithFormat:@"groups/%@/avatar",groupNo] relativeToURL:[NSURL URLWithString:[WKApp shared].config.apiBaseUrl]] absoluteString];
 }

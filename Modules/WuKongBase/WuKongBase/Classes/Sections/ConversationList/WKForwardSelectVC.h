@@ -1,0 +1,32 @@
+//
+//  WKForwardSelectVC.h
+//  WuKongBase
+//
+//  转发选择会话页面（群聊/私聊 tab + 分组 + 子区）
+//
+
+#import "WKBaseVC.h"
+#import <WuKongIMSDK/WuKongIMSDK.h>
+
+NS_ASSUME_NONNULL_BEGIN
+
+@interface WKForwardSelectVC : WKBaseVC
+
+/// 多选模式：逐个回调
+@property (nonatomic, copy, nullable) void(^onSelect)(WKChannel *channel);
+
+/// 多选模式：批量回调
+@property (nonatomic, copy, nullable) void(^onConfirmChannels)(NSArray<WKChannel *> *channels);
+
+/// 单选模式（外部分享场景：点击会话弹确认面板）
+@property (nonatomic, assign) BOOL singleSelectMode;
+
+/// 分享的文件信息（单选模式下用于确认面板展示文件预览）
+@property (nonatomic, strong, nullable) NSArray<NSDictionary *> *shareFileInfos;
+
+/// 单选确认回调（channel + 用户输入的附带文本）
+@property (nonatomic, copy, nullable) void(^onSingleConfirm)(WKChannel *channel, NSString * _Nullable extraText);
+
+@end
+
+NS_ASSUME_NONNULL_END

@@ -12,6 +12,7 @@
 #import "NSString+WKLocalized.h"
 #import "WKModuleVC.h"
 #import "WKAboutVC.h"
+#import "WKDestroyAccountVC.h"
 
 @interface WKCommonSettingVM ()
 
@@ -220,6 +221,23 @@
     } category:WKPOINT_CATEGORY_COMMONSETTING sort:60000];
     
     
+    // 注销账号
+    [[WKApp shared] setMethod:@"commonsetting.destroyaccount" handler:^id _Nullable(id  _Nonnull param) {
+        return  @{
+            @"height":WKSectionHeight,
+            @"items":@[
+                    @{
+                        @"class":WKLabelItemModel.class,
+                        @"label":LLang(@"注销账号"),
+                        @"onClick":^{
+                            WKDestroyAccountVC *vc = [WKDestroyAccountVC new];
+                            [[WKNavigationManager shared] pushViewController:vc animated:YES];
+                        }
+                    },
+            ],
+        };
+    } category:WKPOINT_CATEGORY_COMMONSETTING sort:150];
+
     // 退出登陆
     [[WKApp shared] setMethod:@"commonsetting.logout" handler:^id _Nullable(id  _Nonnull param) {
         __weak typeof(self) weakSelf = self;

@@ -5,13 +5,14 @@
 //  Created by tt on 2019/12/1.
 //
 #import <UserNotifications/UserNotifications.h>
-#import <AVFoundation/AVFoundation.h>
+
 #import "WKApp.h"
 #import "WKEndpointManager.h"
 #import "WKModuleManager.h"
 #import "WKConstant.h"
 #import "WKConversationVC.h"
 #import "WKNavigationManager.h"
+#import "WKLocalNotificationManager.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 #import "WKMessageRegistry.h"
 #import "WKTextMessageCell.h"
@@ -23,6 +24,7 @@
 #import "WKMoreItemClickEvent.h"
 #import "WKImageMessageCell.h"
 #import "WKConversationContext.h"
+#import "WKSpaceFilter.h"
 #import "WKVoicePanel.h"
 #import "WKVoiceMessageCell.h"
 #import "WKGroupManager.h"
@@ -35,7 +37,7 @@
 #import "WKStickerGIFContentView.h"
 #import "WKGIFMessageCell.h"
 #import "WKGIFContent.h"
-#import "WKConversationListSelectVC.h"
+#import "WKForwardSelectVC.h"
 #import "WKSyncService.h"
 #import "WKSpaceModel.h"
 #import "WKNavigationManager.h"
@@ -57,8 +59,14 @@
 #import "WKHistorySplitTipContent.h"
 #import "WKMergeForwardContent.h"
 #import "WKMergeForwardCell.h"
+#import "WKGroupScanJoinVC.h"
 #import "WKScreenshotCell.h"
 #import "WKScreenshotContent.h"
+#import "WKThreadCreatedCell.h"
+#import "WKThreadCreatedContent.h"
+#import "WKThreadService.h"
+#import "WKThreadModel.h"
+#import "WKThreadSettingVC.h"
 #import "WKConversationAddItem.h"
 #import "WKConversationContext.h"
 #import <SDWebImageWebPCoder/SDWebImageWebPCoder.h>
@@ -234,6 +242,7 @@ static WKApp *_instance;
     [self.messageRegitry registerCellClass:WKLottieStickerCell.class forMessageContentClass:WKLottieStickerContent.class]; // lottie格式的贴图
     [self.messageRegitry registerCellClass:WKEmojiStickerCell.class forMessageContentClass:WKEmojiStickerContent.class];
     [self.messageRegitry registerCellClass:[WKFileMessageCell class] forMessageContentClass:[WKFileContent class]]; // 文件消息
+    [self.messageRegitry registerCellClass:[WKThreadCreatedCell class] forMessageContentClass:[WKThreadCreatedContent class]]; // 子区创建通知
 }
 
 -(void) traceConfig {
@@ -261,6 +270,13 @@ static WKApp *_instance;
 }
 
 -(BOOL) appOpenURL:(NSURL *)url options:(NSDictionary<UIApplicationOpenURLOptionsKey,id> *)options {
+    // 处理 Share Extension 跳转
+    if ([url.scheme isEqualToString:@"botgate"] && [url.host isEqualToString:@"share"]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self handleShareExtensionData];
+        });
+        return YES;
+    }
     return [[WKSwiftModuleManager shared] didOpen:url options:options];
 }
 
@@ -473,6 +489,9 @@ static WKApp *_instance;
      UIUserNotificationTypeBadge);
     UIUserNotificationSettings *settings;
     settings = [UIUserNotificationSettings settingsForTypes:types categories:nil];
+    // 注册本地通知点击处理
+    [[WKLocalNotificationManager shared] registerAsNotificationDelegate];
+
     if (@available(iOS 11.0, *)) {
         UNUserNotificationCenter *center =
         [UNUserNotificationCenter currentNotificationCenter];
@@ -547,10 +566,14 @@ static WKApp *_instance;
         [header setObject:[self config].bundleID forKey:@"bundle_id"];
         if([WKApp shared].isLogined) {
             [header setObject:[WKApp shared].loginInfo.token forKey:@"token"];
-            return header;
         }
+        // X-Space-Id header — 动态注入（对齐 dmwork-web PR #1039）
+        // 每次请求都读 WKSpaceFilter.currentSpaceId，Space 切换立即生效。
+        // 空值时以空字串标记，由 WKAPIClient resetPublicHeader 负责移除 stale header。
+        NSString *currentSpaceId = [[WKSpaceFilter shared] currentSpaceId];
+        [header setObject:(currentSpaceId.length > 0 ? currentSpaceId : @"") forKey:@"X-Space-Id"];
         return  header;
-        
+
     }];
     // 路径替换
     [config setRequestPathReplace:^NSString *(NSString *requestPath) {
@@ -639,11 +662,7 @@ static WKApp *_instance;
     [self invoke:WKPOINT_LOGIN_LOGOUT param:nil];
 }
 
-static  UIBackgroundTaskIdentifier _bgTaskToken;
-static  AVAudioPlayer *_silentAudioPlayer;
-
 - (void)appDidEnterBackground:(NSNotification *)notification   {
-    UIApplication *application = (UIApplication*)notification.object;
     if([WKApp shared].isLogined) {
         NSInteger unreadCount = [[WKConversationListVM shared] getAllUnreadCount];
            [[UIApplication sharedApplication] setApplicationIconBadgeNumber:unreadCount];
@@ -653,26 +672,8 @@ static  AVAudioPlayer *_silentAudioPlayer;
     }else {
           [[UIApplication sharedApplication] setApplicationIconBadgeNumber:0];
     }
-//        [[[WKSDK shared] connectionManager] disconnect:YES];
-    
-    // 后台静音播放，保持 App 和 IM 连接存活
-    [self startSilentAudioPlay];
 
-    // 需要下面这代码回到桌面后台进程才会保持
-    _bgTaskToken = [application beginBackgroundTaskWithExpirationHandler:^{
-        // 取消后台任务
-        [application endBackgroundTask:_bgTaskToken];
-        _bgTaskToken = UIBackgroundTaskInvalid;
-        // 有静音播放保活，不再断开连接
-    }];
-    
     [WKApp shared].loginInfo.extra[@"enter_background_time"] = @([[NSDate date] timeIntervalSince1970]);
-    
-//
-//    self.myTimer =[NSTimer scheduledTimerWithTimeInterval:1.0f
-//                            target:self
-//                           selector:@selector(timerMethod:)     userInfo:nil
-//                           repeats:YES];
 }
 
 
@@ -692,62 +693,9 @@ static  AVAudioPlayer *_silentAudioPlayer;
     WKLogDebug(@"appWillTerminate---------------------------->");
 }
 
-#pragma mark - 后台静音播放保活
-
-- (void)startSilentAudioPlay {
-    if (_silentAudioPlayer && _silentAudioPlayer.isPlaying) {
-        return;
-    }
-    NSError *error = nil;
-    AVAudioSession *session = [AVAudioSession sharedInstance];
-    [session setCategory:AVAudioSessionCategoryPlayback
-             withOptions:AVAudioSessionCategoryOptionMixWithOthers
-                   error:&error];
-    if (error) {
-        NSLog(@"[BackgroundAudio] setCategory error: %@", error);
-        return;
-    }
-    [session setActive:YES error:&error];
-    if (error) {
-        NSLog(@"[BackgroundAudio] setActive error: %@", error);
-        return;
-    }
-    if (!_silentAudioPlayer) {
-        NSString *path = [[NSBundle mainBundle] pathForResource:@"silence" ofType:@"mp3"];
-        if (!path) {
-            NSLog(@"[BackgroundAudio] silence.mp3 not found");
-            return;
-        }
-        _silentAudioPlayer = [[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:path] error:&error];
-        if (error) {
-            NSLog(@"[BackgroundAudio] init player error: %@", error);
-            return;
-        }
-        _silentAudioPlayer.numberOfLoops = -1;
-        _silentAudioPlayer.volume = 0.0f;
-    }
-    [_silentAudioPlayer prepareToPlay];
-    [_silentAudioPlayer play];
-    NSLog(@"[BackgroundAudio] started");
-}
-
-- (void)stopSilentAudioPlay {
-    if (_silentAudioPlayer && _silentAudioPlayer.isPlaying) {
-        [_silentAudioPlayer stop];
-        NSLog(@"[BackgroundAudio] stopped");
-    }
-}
-
 - (void)appDidBecomeActive:(NSNotification *)notification  {
     WKLogDebug(@"appDidBecomeActive--->");
-    // 停止后台静音播放
-    [self stopSilentAudioPlay];
 
-    UIApplication *application = (UIApplication*)notification.object;
-    if(_bgTaskToken) {
-        [application endBackgroundTask:_bgTaskToken];
-        _bgTaskToken = UIBackgroundTaskInvalid;
-    }
     if([self isLogined]) {
         // 回到前台时强制刷新在线状态（参考Android的onFront方案）
         // 解决网页端异常断开后iOS端仍显示"网页端在线"的问题
@@ -761,7 +709,6 @@ static  AVAudioPlayer *_silentAudioPlayer;
     
     if([WKApp shared].config.darkModeWithSystem) {
         if (@available(iOS 13.0, *)) {
-            // 延迟一点执行模式切换（TODO: 延迟为了解决有时候UI界面模式没有切换成功的问题）
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                 if(UITraitCollection.currentTraitCollection.userInterfaceStyle == UIUserInterfaceStyleDark) {
                     [WKApp shared].config.style = WKSystemStyleDark;
@@ -771,7 +718,7 @@ static  AVAudioPlayer *_silentAudioPlayer;
             });
         }
     }else{
-        [WKApp shared].config.style =  [WKApp shared].config.style; // 这里重新设置下 触发setStyle方法里的逻辑
+        [WKApp shared].config.style =  [WKApp shared].config.style;
     }
 }
 
@@ -897,8 +844,9 @@ static  AVAudioPlayer *_silentAudioPlayer;
     // file/preview/ 路径使用服务器公共文件地址（与 web 端一致）
     if ([path hasPrefix:@"file/preview/"]) {
         NSString *filePath = [path stringByReplacingCharactersInRange:NSMakeRange(0, [@"file/preview/" length]) withString:@"file/"];
-        NSString *urlStr = [NSString stringWithFormat:@"%@/%@", [self serverOrigin], filePath];
-        return [NSURL URLWithString:[urlStr stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
+        NSString *encodedPath = [filePath stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
+        NSString *urlStr = [NSString stringWithFormat:@"%@/%@", [self serverOrigin], encodedPath];
+        return [NSURL URLWithString:urlStr];
     }
     NSString *encodePath = [path stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
     if(encodePath) {
@@ -919,8 +867,9 @@ static  AVAudioPlayer *_silentAudioPlayer;
     // file/preview/ 路径使用服务器公共文件地址（与 web 端一致）
     if ([path hasPrefix:@"file/preview/"]) {
         NSString *filePath = [path stringByReplacingCharactersInRange:NSMakeRange(0, [@"file/preview/" length]) withString:@"file/"];
-        NSString *urlStr = [NSString stringWithFormat:@"%@/%@", [self serverOrigin], filePath];
-        return [NSURL URLWithString:[urlStr stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
+        NSString *encodedPath = [filePath stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
+        NSString *urlStr = [NSString stringWithFormat:@"%@/%@", [self serverOrigin], encodedPath];
+        return [NSURL URLWithString:urlStr];
     }
     NSString *encodePath = [path stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]];
     if(encodePath) {
@@ -1039,7 +988,7 @@ static  AVAudioPlayer *_silentAudioPlayer;
     
     [self setMethod:WKPOINT_CONVERSATION_SHOW_DEFAULT handler:^id _Nullable(id  _Nonnull param) {
         WKChannel *channel = (WKChannel*)param[@"channel"];
-        if(channel.channelType == WK_GROUP || channel.channelType == WK_PERSON) {
+        if(channel.channelType == WK_GROUP || channel.channelType == WK_PERSON || channel.channelType == WK_COMMUNITY_TOPIC) {
             WKConversationVC *conversationVC =  [WKConversationVC new];
            conversationVC.channel = channel;
            [[WKNavigationManager shared] pushViewController:conversationVC animated:YES];
@@ -1148,6 +1097,10 @@ static  AVAudioPlayer *_silentAudioPlayer;
             vc.channel = channel;
             vc.context = context;
             [[WKNavigationManager shared] pushViewController:vc animated:YES];
+        } else if(channel.channelType == WK_COMMUNITY_TOPIC) {
+            WKThreadSettingVC *vc = [WKThreadSettingVC new];
+            vc.channel = channel;
+            [[WKNavigationManager shared] pushViewController:vc animated:YES];
         } else {
             WKConversationPersonSettingVC *vc = [WKConversationPersonSettingVC new];
             vc.channel = channel;
@@ -1192,12 +1145,12 @@ static  AVAudioPlayer *_silentAudioPlayer;
     // @
     [self setMethod:WKPOINT_CATEGORY_PANELFUNCITEM_MENTION handler:^id _Nullable(id  _Nonnull param) {
         id<WKConversationContext> context = param[@"context"];
-        if(context.channel.channelType != WK_GROUP) {
+        if(context.channel.channelType != WK_GROUP && context.channel.channelType != WK_COMMUNITY_TOPIC) {
             return nil;
         }
         WKPanelDefaultFuncItem *item = [[WKPanelMentionFuncItem alloc] init];
         item.sort = 4000;
-        item.channelType = WK_GROUP;
+        item.channelType = context.channel.channelType;
         return item;
     } category:WKPOINT_CATEGORY_PANELFUNCITEM];
     
@@ -1392,6 +1345,9 @@ static  AVAudioPlayer *_silentAudioPlayer;
     [[WKApp shared] addMessageAllowForward:WK_TEXT];
     [[WKApp shared] addMessageAllowForward:WK_IMAGE];
     [[WKApp shared] addMessageAllowForward:WK_GIF];
+    [[WKApp shared] addMessageAllowForward:WK_FILE];
+    [[WKApp shared] addMessageAllowForward:WK_SMALLVIDEO];
+    [[WKApp shared] addMessageAllowForward:WK_MERGEFORWARD];
     [self setMethod:WKPOINT_LONGMENUS_FORWARD handler:^id _Nullable(id  _Nonnull param) {
         WKMessageModel *message = param[@"message"];
         
@@ -1400,19 +1356,26 @@ static  AVAudioPlayer *_silentAudioPlayer;
         }
         UIImage *icon = [GenerateImageUtils generateTintedImgWithImage:[weakSelf imageName:@"Conversation/ContextMenu/Forward"] color:weakSelf.config.contextMenu.primaryColor backgroundColor:nil];
         return [WKMessageLongMenusItem initWithTitle:LLangW(@"转发", weakSelf) icon:icon onTap:^(id<WKConversationContext> context){
-            WKConversationListSelectVC *vc = [WKConversationListSelectVC new];
-            vc.title = LLangW(@"选择一个聊天", weakSelf);
-            [vc setOnSelect:^(WKChannel * _Nonnull channel) {
-                [[WKNavigationManager shared] popToViewControllerClass:WKConversationVC.class animated:YES];
+            WKForwardSelectVC *vc = [WKForwardSelectVC new];
+            vc.title = LLangW(@"选择聊天", weakSelf);
+            vc.singleSelectMode = YES;
+            [vc setOnSingleConfirm:^(WKChannel *channel, NSString *extraText) {
+                // ForwardSelectVC 确认后会自动 pop，这里不再重复 pop
                 if([channel isEqual:context.channel]) {
                     [context forwardMessage:message.content];
-                }else{
+                } else {
                     [[WKSDK shared].chatManager forwardMessage:message.content channel:channel];
-                   [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLangW(@"发送成功",weakSelf)];
                 }
-               
-                
-                
+                if (extraText.length > 0) {
+                    if([channel isEqual:context.channel]) {
+                        WKTextContent *tc = [[WKTextContent alloc] initWithContent:extraText];
+                        [context forwardMessage:tc];
+                    } else {
+                        WKTextContent *tc = [[WKTextContent alloc] initWithContent:extraText];
+                        [[WKSDK shared].chatManager forwardMessage:tc channel:channel];
+                    }
+                }
+                [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLangW(@"发送成功",weakSelf)];
             }];
             [[WKNavigationManager shared] pushViewController:vc animated:YES];
         }];
@@ -1442,9 +1405,60 @@ static  AVAudioPlayer *_silentAudioPlayer;
             [context setMultipleOn:YES selectedMessage:message];
         }];
     } category:WKPOINT_CATEGORY_MESSAGE_LONGMENUS sort:980];
-    
-    
-  
+
+    // 创建子区
+    [self setMethod:WKPOINT_LONGMENUS_THREAD handler:^id _Nullable(id  _Nonnull param) {
+        WKMessageModel *message = param[@"message"];
+        // 仅群聊 + 非系统消息 + threadOn 开关 + 未创建过子区
+        if(message.channel.channelType != WK_GROUP) return nil;
+        if([[WKSDK shared] isSystemMessage:message.contentType]) return nil;
+        if(![WKApp shared].remoteConfig.threadOn) return nil;
+        // 该消息已创建过子区，不再显示
+        NSString *msgIdStr = [NSString stringWithFormat:@"%llu", message.message.messageId];
+        if([[WKThreadCreatedContent sourceMessageIdSet] containsObject:msgIdStr]) return nil;
+        UIImage *icon = [GenerateImageUtils generateTintedImgWithImage:[weakSelf imageName:@"Conversation/ContextMenu/Forward"] color:weakSelf.config.contextMenu.primaryColor backgroundColor:nil];
+        return [WKMessageLongMenusItem initWithTitle:LLangW(@"创建子区", weakSelf) icon:icon onTap:^(id<WKConversationContext> context){
+            // 弹出创建子区对话框
+            UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLangW(@"创建子区", weakSelf)
+                                                                          message:nil
+                                                                   preferredStyle:UIAlertControllerStyleAlert];
+            [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+                tf.placeholder = LLangW(@"子区名称 (最多50字)", weakSelf);
+                // 默认取消息前10个字符
+                NSString *digest = [message.content conversationDigest];
+                if(digest.length > 10) {
+                    digest = [digest substringToIndex:10];
+                }
+                tf.text = digest;
+            }];
+            UIAlertAction *createAction = [UIAlertAction actionWithTitle:LLangW(@"创建", weakSelf) style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+                NSString *name = alert.textFields.firstObject.text;
+                if(name.length == 0) return;
+                if(name.length > 50) name = [name substringToIndex:50];
+                NSString *msgId = [NSString stringWithFormat:@"%llu", message.message.messageId];
+                // 构建消息正文 payload（与 web 端一致）
+                NSMutableDictionary *payload = [NSMutableDictionary dictionary];
+                if (message.content.contentDict) {
+                    [payload addEntriesFromDictionary:message.content.contentDict];
+                }
+                payload[@"type"] = @(message.contentType);
+                [[WKThreadService shared] createThread:message.channel.channelId name:name sourceMessageId:msgId sourceMessagePayload:payload].then(^(WKThreadModel *thread) {
+                    [[WKThreadService shared] joinThread:thread.shortId].then(^(id result) {
+                        [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:[thread toChannel]];
+                    }).catch(^(NSError *error) {
+                        [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:[thread toChannel]];
+                    });
+                }).catch(^(NSError *error) {
+                    [[[WKNavigationManager shared] topViewController].view showMsg:error.domain];
+                });
+            }];
+            UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:LLangW(@"取消", weakSelf) style:UIAlertActionStyleCancel handler:nil];
+            [alert addAction:cancelAction];
+            [alert addAction:createAction];
+            [[[WKNavigationManager shared] topViewController] presentViewController:alert animated:YES completion:nil];
+        }];
+    } category:WKPOINT_CATEGORY_MESSAGE_LONGMENUS sort:970];
+
     // 个人资料
     [self setMethod:WKPOINT_USER_INFO handler:^id _Nullable(id  _Nonnull param) {
         NSString *uid = param[@"uid"];
@@ -1468,8 +1482,13 @@ static  AVAudioPlayer *_silentAudioPlayer;
             if(![result.type isEqualToString:@"group"]) {
                 return false;
             }
-            WKConversationVC *vc = [WKConversationVC new];
-            vc.channel = [[WKChannel alloc] initWith:result.data[@"group_no"]?:@"" channelType:WK_GROUP];
+            WKGroupScanJoinVC *vc = [WKGroupScanJoinVC new];
+            vc.groupNo = result.data[@"group_no"] ?: @"";
+            vc.authCode = result.data[@"auth_code"] ?: @"";
+            vc.groupName = result.data[@"name"] ?: @"";
+            vc.groupAvatar = result.data[@"avatar"] ?: @"";
+            vc.memberCount = [result.data[@"member_count"] integerValue];
+            vc.isMember = [result.data[@"is_member"] boolValue];
             [[WKNavigationManager shared] replacePushViewController:vc animated:YES];
             return true;
         }];
@@ -1513,7 +1532,13 @@ static  AVAudioPlayer *_silentAudioPlayer;
             [[WKApp shared] invoke:WKPOINT_CONVERSATION_STARTCHAT param:nil];
         }];
     } category:WKPOINT_CATEGORY_CONVERSATION_ADD sort:9000];
-    
+
+    [self setMethod:WKPOINT_CONVERSATION_ADD_CREATECATEGORY handler:^id _Nullable(id  _Nonnull param) {
+        return [WKConversationAddItem title:LLangW(@"创建分组", weakSelf) icon:[WKApp createCategoryIcon] onClick:^{
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"WKShowCreateCategoryDialog" object:nil];
+        }];
+    } category:WKPOINT_CATEGORY_CONVERSATION_ADD sort:8500];
+
     [self setMethod:WKPOINT_CONVERSATION_ADD_ADDFRIEND handler:^id _Nullable(id  _Nonnull param) {
         return [WKConversationAddItem title:LLangW(@"添加朋友", weakSelf) icon:[weakSelf imageName:@"ConversationList/Popmenus/FriendAdd"] onClick:^{
             [[WKApp shared] invoke:WKPOINT_CONVERSATION_ADDCONTACTS param:nil];
@@ -1865,10 +1890,172 @@ static  AVAudioPlayer *_silentAudioPlayer;
     return false;
 }
 
+#pragma mark - Share Extension
+
+static NSString *const kShareAppGroupId = @"group.com.example.octo";
+static NSString *const kShareDataKey = @"WKShareExtensionData";
+static NSString *const kShareDirName = @"ShareExtensionFiles";
+
+-(void) handleShareExtensionData {
+    if (![WKApp shared].isLogined) return;
+
+    NSUserDefaults *shared = [[NSUserDefaults alloc] initWithSuiteName:kShareAppGroupId];
+    NSArray *fileInfos = [shared objectForKey:kShareDataKey];
+    if (!fileInfos || fileInfos.count == 0) return;
+
+    // 清除数据，防止重复处理
+    [shared removeObjectForKey:kShareDataKey];
+    [shared synchronize];
+
+    // 单选模式：点击会话弹确认面板，可附带文本
+    WKForwardSelectVC *vc = [WKForwardSelectVC new];
+    vc.title = LLang(@"选择聊天");
+    vc.singleSelectMode = YES;
+    vc.shareFileInfos = fileInfos;
+    __weak typeof(self) weakSelf = self;
+    [vc setOnSingleConfirm:^(WKChannel *channel, NSString *extraText) {
+        [weakSelf sendShareFiles:fileInfos toChannel:channel extraText:extraText];
+    }];
+
+    // 先关闭所有 modal（如 PDF 浏览器），再 push 转发页面
+    UIViewController *topVC = [WKNavigationManager shared].topViewController;
+    if (topVC.presentedViewController) {
+        [topVC dismissViewControllerAnimated:NO completion:^{
+            [[WKNavigationManager shared] pushViewController:vc animated:YES];
+        }];
+    } else if (topVC) {
+        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+    }
+}
+
+-(void) sendShareFiles:(NSArray *)fileInfos toChannel:(WKChannel *)channel extraText:(NSString *)extraText {
+    NSMutableArray<WKMessage *> *sentMessages = [NSMutableArray array];
+
+    // 先发送文件/图片（文件在前，文本在后，符合阅读习惯）
+    for (NSDictionary *info in fileInfos) {
+        NSString *type = info[@"type"];
+
+        if ([type isEqualToString:@"link"]) {
+            // 链接分享：发送为 [链接] JSON 格式
+            NSString *url = info[@"url"] ?: @"";
+            NSString *title = info[@"title"] ?: @"";
+            NSString *icon = info[@"icon"] ?: @"";
+            NSDictionary *cardData = @{@"title": title, @"url": url, @"icon": icon};
+            NSData *jsonData = [NSJSONSerialization dataWithJSONObject:cardData options:0 error:nil];
+            NSString *jsonStr = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+            NSString *content = [NSString stringWithFormat:@"[链接]%@", jsonStr];
+            WKTextContent *textContent = [[WKTextContent alloc] initWithContent:content];
+            WKMessage *msg = [[WKSDK shared].chatManager forwardMessage:textContent channel:channel];
+            if (msg) [sentMessages addObject:msg];
+        } else if ([type isEqualToString:@"text"]) {
+            NSString *content = info[@"content"];
+            if (content.length > 0) {
+                WKTextContent *textContent = [[WKTextContent alloc] initWithContent:content];
+                WKMessage *msg = [[WKSDK shared].chatManager forwardMessage:textContent channel:channel];
+                if (msg) [sentMessages addObject:msg];
+            }
+        } else if ([type isEqualToString:@"image"]) {
+            NSString *path = info[@"path"];
+            if (path) {
+                UIImage *image = [UIImage imageWithContentsOfFile:path];
+                if (image) {
+                    WKImageContent *imageContent = [WKImageContent initWithImage:image];
+                    // 图片也是媒体消息，用 sendMessage 触发上传
+                    WKMessage *msg = [[WKSDK shared].chatManager sendMessage:imageContent channel:channel];
+                    if (msg) [sentMessages addObject:msg];
+                }
+            }
+        } else {
+            // 文件/视频/音频：先复制到 App 文档目录（共享目录会被清理，导致文件打不开）
+            NSString *path = info[@"path"];
+            if (path && [[NSFileManager defaultManager] fileExistsAtPath:path]) {
+                NSString *docDir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+                NSString *shareDir = [docDir stringByAppendingPathComponent:@"ShareFiles"];
+                [[NSFileManager defaultManager] createDirectoryAtPath:shareDir withIntermediateDirectories:YES attributes:nil error:nil];
+                NSString *destPath = [shareDir stringByAppendingPathComponent:[path lastPathComponent]];
+                // 避免重名
+                if ([[NSFileManager defaultManager] fileExistsAtPath:destPath]) {
+                    NSString *name = [[path lastPathComponent] stringByDeletingPathExtension];
+                    NSString *ext = [path pathExtension];
+                    destPath = [shareDir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@_%@.%@", name, [[NSUUID UUID] UUIDString], ext]];
+                }
+                [[NSFileManager defaultManager] copyItemAtPath:path toPath:destPath error:nil];
+                NSURL *fileURL = [NSURL fileURLWithPath:destPath];
+                NSLog(@"[ShareExt] 文件已复制: src=%@ -> dest=%@, exists=%d, size=%lld",
+                      path, destPath,
+                      [[NSFileManager defaultManager] fileExistsAtPath:destPath],
+                      [[[NSFileManager defaultManager] attributesOfItemAtPath:destPath error:nil] fileSize]);
+                WKFileContent *fileContent = [WKFileContent initWithFileURL:fileURL];
+                NSLog(@"[ShareExt] WKFileContent: name=%@, ext=%@, fileSize=%lld, dataLen=%lu",
+                      fileContent.name, fileContent.fileExtension, fileContent.fileSize,
+                      (unsigned long)[[fileContent valueForKey:@"fileData"] length]);
+                // 文件消息必须用 sendMessage（会触发媒体上传），不能用 forwardMessage（直接发协议包，跳过上传）
+                WKMessage *msg = [[WKSDK shared].chatManager sendMessage:fileContent channel:channel];
+                NSLog(@"[ShareExt] sendMessage result: clientMsgNo=%@, status=%ld",
+                      msg.clientMsgNo, (long)msg.status);
+                if (msg) [sentMessages addObject:msg];
+            }
+        }
+    }
+
+    // 文件发完后立即发附带文本（orderSeq 已保持创建顺序，不会被 sendack 覆盖）
+    if (extraText && extraText.length > 0) {
+        WKTextContent *textContent = [[WKTextContent alloc] initWithContent:extraText];
+        WKMessage *textMsg = [[WKSDK shared].chatManager forwardMessage:textContent channel:channel];
+        if (textMsg) [sentMessages addObject:textMsg];
+        NSLog(@"[ShareExt] 附带文本已发送: clientMsgNo=%@", textMsg.clientMsgNo);
+    }
+
+    // 统一通知聊天页面刷新
+    NSLog(@"[ShareExt] 全部消息发送完成, channel=%@_%d, 消息数=%lu", channel.channelId, channel.channelType, (unsigned long)sentMessages.count);
+    if (sentMessages.count > 0) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [[NSNotificationCenter defaultCenter] postNotificationName:@"WKShareExtensionMessageSent" object:channel userInfo:@{@"messages": [sentMessages copy]}];
+        });
+    }
+
+    [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送成功")];
+
+    // 清理共享目录
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_global_queue(0, 0), ^{
+        NSURL *container = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:kShareAppGroupId];
+        NSURL *dir = [container URLByAppendingPathComponent:kShareDirName];
+        [[NSFileManager defaultManager] removeItemAtURL:dir error:nil];
+    });
+}
+
+
 -(UIImage*) imageName:(NSString*)name {
     return [self loadImage:name moduleID:@"WuKongBase"];
 }
 
+/// 程序化绘制"创建分组"图标（columns-2: 圆角矩形 + 竖线）
++ (UIImage *)createCategoryIcon {
+    CGSize size = CGSizeMake(24, 24);
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    if (!ctx) return nil;
+
+    UIColor *color = [UIColor colorWithWhite:0.2 alpha:1.0];
+    [color setStroke];
+    CGContextSetLineWidth(ctx, 1.5);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+
+    // 圆角矩形 (x=3, y=3, w=18, h=18, rx=2)
+    UIBezierPath *rect = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(3, 3, 18, 18) cornerRadius:2];
+    rect.lineWidth = 1.5;
+    [rect stroke];
+
+    // 竖线 (x=12, y1=3, y2=21)
+    CGContextMoveToPoint(ctx, 12, 3);
+    CGContextAddLineToPoint(ctx, 12, 21);
+    CGContextStrokePath(ctx);
+
+    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return image;
+}
 
 @end
 

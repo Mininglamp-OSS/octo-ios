@@ -3,11 +3,12 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 54;
+	objectVersion = 70;
 	objects = {
 
 /* Begin PBXBuildFile section */
-		184AEBC57484611C42076CF1 /* silence.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = D8B4D131F244672EE8EEAE03 /* silence.mp3 */; };
+		16C552F232D5A008552410EA /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 69A72504AD69BFBD2705F757 /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework */; };
+		4B5FF74C2F908A62005CCF01 /* ShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 4B5FF7412F908A62005CCF01 /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7130BFC524C6817600B9E04B /* NotificationService.m in Sources */ = {isa = PBXBuildFile; fileRef = 7130BFC424C6817600B9E04B /* NotificationService.m */; };
 		7130BFC924C6817600B9E04B /* NotificationService.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 7130BFC124C6817600B9E04B /* NotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7130BFD424C6832F00B9E04B /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7130BFD324C6832F00B9E04B /* UserNotifications.framework */; };
@@ -41,10 +42,18 @@
 		71D6961623926E3700D092BA /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 71D6961523926E3700D092BA /* main.m */; };
 		71DB3FA6239B5DE700181E94 /* WKMainTabController.m in Sources */ = {isa = PBXBuildFile; fileRef = 71DB3FA5239B5DE700181E94 /* WKMainTabController.m */; };
 		71F7E3DC2A47F66900E8D20D /* QUESTION.md in Resources */ = {isa = PBXBuildFile; fileRef = 71F7E3DB2A47F66900E8D20D /* QUESTION.md */; };
-		EE1BF60007AE888BBCD21EE8 /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5CA0841FAD4ACC73F9DC603F /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework */; };
+		AA110003239265E900D092BA /* WKDBRecoveryManager.m in Sources */ = {isa = PBXBuildFile; fileRef = AA110002239265E900D092BA /* WKDBRecoveryManager.m */; };
+		AA110006239265E900D092BA /* WKDBRepairViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = AA110005239265E900D092BA /* WKDBRepairViewController.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		4B5FF74A2F908A62005CCF01 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 71D695FB23926E3500D092BA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4B5FF7402F908A62005CCF01;
+			remoteInfo = ShareExtension;
+		};
 		7130BFC724C6817600B9E04B /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 71D695FB23926E3500D092BA /* Project object */;
@@ -68,6 +77,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
+				4B5FF74C2F908A62005CCF01 /* ShareExtension.appex in Embed App Extensions */,
 				7130BFC924C6817600B9E04B /* NotificationService.appex in Embed App Extensions */,
 				7130BFE124C6832F00B9E04B /* NotificationContent.appex in Embed App Extensions */,
 			);
@@ -77,7 +87,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		5CA0841FAD4ACC73F9DC603F /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		0C771557D3DDC04A6AE9B613 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig"; sourceTree = "<group>"; };
+		4B5FF7412F908A62005CCF01 /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		69A72504AD69BFBD2705F757 /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_TangSengDaoDaoiOSBase_OctoiOS.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		71018ED405ABC6ED8448075E /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig"; sourceTree = "<group>"; };
 		71275E7D240A7BD600A7502C /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		71275E7F240A7BDB00A7502C /* MapKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MapKit.framework; path = System/Library/Frameworks/MapKit.framework; sourceTree = SDKROOT; };
@@ -129,11 +141,36 @@
 		71DB3FA4239B5DE700181E94 /* WKMainTabController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WKMainTabController.h; sourceTree = "<group>"; };
 		71DB3FA5239B5DE700181E94 /* WKMainTabController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMainTabController.m; sourceTree = "<group>"; };
 		71F7E3DB2A47F66900E8D20D /* QUESTION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = QUESTION.md; sourceTree = "<group>"; };
-		D8B4D131F244672EE8EEAE03 /* silence.mp3 */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = audio.mp3; path = silence.mp3; sourceTree = "<group>"; };
+		AA110001239265E900D092BA /* WKDBRecoveryManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WKDBRecoveryManager.h; sourceTree = "<group>"; };
+		AA110002239265E900D092BA /* WKDBRecoveryManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = WKDBRecoveryManager.m; sourceTree = "<group>"; };
+		AA110004239265E900D092BA /* WKDBRepairViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WKDBRepairViewController.h; sourceTree = "<group>"; };
+		AA110005239265E900D092BA /* WKDBRepairViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = WKDBRepairViewController.m; sourceTree = "<group>"; };
 		DE5455F84CCB2C45ED689AA0 /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; sourceTree = "<group>"; };
+		E0C47A5DA8752F76B27D6B91 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		4B5FF74D2F908A62005CCF01 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 4B5FF7402F908A62005CCF01 /* ShareExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		4B5FF7422F908A62005CCF01 /* ShareExtension */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (4B5FF74D2F908A62005CCF01 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = ShareExtension; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
 /* Begin PBXFrameworksBuildPhase section */
+		4B5FF73E2F908A62005CCF01 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		7130BFBE24C6817600B9E04B /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -168,7 +205,7 @@
 				71D140B6251EEAF00000137A /* libz.tbd in Frameworks */,
 				7132A163240ABB92007F9BE2 /* libc.tbd in Frameworks */,
 				7132A15C240AB4B8007F9BE2 /* libc++.tbd in Frameworks */,
-				EE1BF60007AE888BBCD21EE8 /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework in Frameworks */,
+				16C552F232D5A008552410EA /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -197,7 +234,7 @@
 				71275E7D240A7BD600A7502C /* UIKit.framework */,
 				7130BFD324C6832F00B9E04B /* UserNotifications.framework */,
 				7130BFD524C6832F00B9E04B /* UserNotificationsUI.framework */,
-				5CA0841FAD4ACC73F9DC603F /* Pods_TangSengDaoDaoiOSBase_TangSengDaoDaoiOS.framework */,
+				69A72504AD69BFBD2705F757 /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -251,6 +288,7 @@
 				71D6960523926E3500D092BA /* TangSengDaoDao */,
 				7130BFC224C6817600B9E04B /* NotificationService */,
 				7130BFD724C6832F00B9E04B /* NotificationContent */,
+				4B5FF7422F908A62005CCF01 /* ShareExtension */,
 				71D6960423926E3500D092BA /* Products */,
 				D0600169DB45E883707B86A6 /* Pods */,
 				1882D30109100A187BA46643 /* Frameworks */,
@@ -264,6 +302,7 @@
 				71D6960323926E3500D092BA /* TangSengDaoDao.app */,
 				7130BFC124C6817600B9E04B /* NotificationService.appex */,
 				7130BFD224C6832F00B9E04B /* NotificationContent.appex */,
+				4B5FF7412F908A62005CCF01 /* ShareExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -283,8 +322,11 @@
 				71D6961523926E3700D092BA /* main.m */,
 				71DB3FA4239B5DE700181E94 /* WKMainTabController.h */,
 				71DB3FA5239B5DE700181E94 /* WKMainTabController.m */,
+				AA110001239265E900D092BA /* WKDBRecoveryManager.h */,
+				AA110002239265E900D092BA /* WKDBRecoveryManager.m */,
+				AA110004239265E900D092BA /* WKDBRepairViewController.h */,
+				AA110005239265E900D092BA /* WKDBRepairViewController.m */,
 				719FDA5F2595FBFC000C25D6 /* Localizable.strings */,
-				D8B4D131F244672EE8EEAE03 /* silence.mp3 */,
 			);
 			path = TangSengDaoDao;
 			sourceTree = "<group>";
@@ -294,6 +336,8 @@
 			children = (
 				DE5455F84CCB2C45ED689AA0 /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig */,
 				71018ED405ABC6ED8448075E /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig */,
+				0C771557D3DDC04A6AE9B613 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig */,
+				E0C47A5DA8752F76B27D6B91 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig */,
 			);
 			path = Pods;
 			sourceTree = "<group>";
@@ -301,6 +345,26 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		4B5FF7402F908A62005CCF01 /* ShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4B5FF74E2F908A62005CCF01 /* Build configuration list for PBXNativeTarget "ShareExtension" */;
+			buildPhases = (
+				4B5FF73D2F908A62005CCF01 /* Sources */,
+				4B5FF73E2F908A62005CCF01 /* Frameworks */,
+				4B5FF73F2F908A62005CCF01 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				4B5FF7422F908A62005CCF01 /* ShareExtension */,
+			);
+			name = ShareExtension;
+			productName = ShareExtension;
+			productReference = 4B5FF7412F908A62005CCF01 /* ShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		7130BFC024C6817600B9E04B /* NotificationService */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 7130BFCA24C6817600B9E04B /* Build configuration list for PBXNativeTarget "NotificationService" */;
@@ -335,9 +399,9 @@
 			productReference = 7130BFD224C6832F00B9E04B /* NotificationContent.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
-		71D6960223926E3500D092BA /* TangSengDaoDaoiOS */ = {
+		71D6960223926E3500D092BA /* OctoiOS */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 71D6962F23926E3700D092BA /* Build configuration list for PBXNativeTarget "TangSengDaoDaoiOS" */;
+			buildConfigurationList = 71D6962F23926E3700D092BA /* Build configuration list for PBXNativeTarget "OctoiOS" */;
 			buildPhases = (
 				05215A064B84F8912C5000D5 /* [CP] Check Pods Manifest.lock */,
 				71D695FF23926E3500D092BA /* Sources */,
@@ -351,8 +415,9 @@
 			dependencies = (
 				7130BFC824C6817600B9E04B /* PBXTargetDependency */,
 				7130BFE024C6832F00B9E04B /* PBXTargetDependency */,
+				4B5FF74B2F908A62005CCF01 /* PBXTargetDependency */,
 			);
-			name = TangSengDaoDaoiOS;
+			name = OctoiOS;
 			productName = LiMaoIMDemo;
 			productReference = 71D6960323926E3500D092BA /* TangSengDaoDao.app */;
 			productType = "com.apple.product-type.application";
@@ -368,6 +433,9 @@
 				LastUpgradeCheck = 1310;
 				ORGANIZATIONNAME = WK;
 				TargetAttributes = {
+					4B5FF7402F908A62005CCF01 = {
+						CreatedOnToolsVersion = 26.1.1;
+					};
 					7130BFC024C6817600B9E04B = {
 						CreatedOnToolsVersion = 11.6;
 					};
@@ -394,14 +462,22 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				71D6960223926E3500D092BA /* TangSengDaoDaoiOS */,
+				71D6960223926E3500D092BA /* OctoiOS */,
 				7130BFC024C6817600B9E04B /* NotificationService */,
 				7130BFD124C6832F00B9E04B /* NotificationContent */,
+				4B5FF7402F908A62005CCF01 /* ShareExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		4B5FF73F2F908A62005CCF01 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		7130BFBF24C6817600B9E04B /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -427,7 +503,6 @@
 				71D6961023926E3700D092BA /* Assets.xcassets in Resources */,
 				7191FCB323A6139A00FFFDC1 /* README.md in Resources */,
 				71D6960E23926E3600D092BA /* Main.storyboard in Resources */,
-				184AEBC57484611C42076CF1 /* silence.mp3 in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -449,7 +524,7 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(DERIVED_FILE_DIR)/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS-checkManifestLockResult.txt",
+				"$(DERIVED_FILE_DIR)/Pods-TangSengDaoDaoiOSBase-OctoiOS-checkManifestLockResult.txt",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -462,24 +537,31 @@
 			files = (
 			);
 			inputFileListPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS-frameworks-${CONFIGURATION}-input-files.xcfilelist",
+				"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
 			inputPaths = (
 			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+				"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS-frameworks-${CONFIGURATION}-output-files.xcfilelist",
 			);
 			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS-frameworks.sh\"\n";
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS-frameworks.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		4B5FF73D2F908A62005CCF01 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		7130BFBD24C6817600B9E04B /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -506,12 +588,19 @@
 				71D6961623926E3700D092BA /* main.m in Sources */,
 				71D6960823926E3500D092BA /* AppDelegate.m in Sources */,
 				71DB3FA6239B5DE700181E94 /* WKMainTabController.m in Sources */,
+				AA110003239265E900D092BA /* WKDBRecoveryManager.m in Sources */,
+				AA110006239265E900D092BA /* WKDBRepairViewController.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		4B5FF74B2F908A62005CCF01 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4B5FF7402F908A62005CCF01 /* ShareExtension */;
+			targetProxy = 4B5FF74A2F908A62005CCF01 /* PBXContainerItemProxy */;
+		};
 		7130BFC824C6817600B9E04B /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 7130BFC024C6817600B9E04B /* NotificationService */;
@@ -561,6 +650,72 @@
 /* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
+		4B5FF74F2F908A62005CCF01 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = D5G47RYK64;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = ShareExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 WK. All rights reserved.";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example-app.octo.ShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		4B5FF7502F908A62005CCF01 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = D5G47RYK64;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = ShareExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 WK. All rights reserved.";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example-app.octo.ShareExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		7130BFCB24C6817600B9E04B /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -789,7 +944,7 @@
 		};
 		71D6963023926E3700D092BA /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = DE5455F84CCB2C45ED689AA0 /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig */;
+			baseConfigurationReference = 0C771557D3DDC04A6AE9B613 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
@@ -797,7 +952,7 @@
 				CODE_SIGN_ENTITLEMENTS = TangSengDaoDao/TangSengDaoDao.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 46;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = D5G47RYK64;
 				ENABLE_BITCODE = NO;
@@ -819,7 +974,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-Objc",
@@ -890,16 +1045,17 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_OBJC_BRIDGING_HEADER = "TangSengDaoDao-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
 		71D6963123926E3700D092BA /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 71018ED405ABC6ED8448075E /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig */;
+			baseConfigurationReference = E0C47A5DA8752F76B27D6B91 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
@@ -907,7 +1063,7 @@
 				CODE_SIGN_ENTITLEMENTS = TangSengDaoDao/TangSengDaoDao.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 46;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = D5G47RYK64;
 				ENABLE_BITCODE = NO;
@@ -929,7 +1085,7 @@
 					"$(inherited)",
 					"$(PROJECT_DIR)",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-Objc",
@@ -1000,15 +1156,25 @@
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_OBJC_BRIDGING_HEADER = "TangSengDaoDao-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		4B5FF74E2F908A62005CCF01 /* Build configuration list for PBXNativeTarget "ShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4B5FF74F2F908A62005CCF01 /* Debug */,
+				4B5FF7502F908A62005CCF01 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		7130BFCA24C6817600B9E04B /* Build configuration list for PBXNativeTarget "NotificationService" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -1036,7 +1202,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		71D6962F23926E3700D092BA /* Build configuration list for PBXNativeTarget "TangSengDaoDaoiOS" */ = {
+		71D6962F23926E3700D092BA /* Build configuration list for PBXNativeTarget "OctoiOS" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				71D6963023926E3700D092BA /* Debug */,

@@ -96,6 +96,8 @@
     }
     if(isSave) {
         [[WKApp shared].loginInfo save];
+        // 通知 Bugly 等外部模块更新用户标识
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"WKLoginInfoDidSave" object:nil];
     }
 }
 @end
