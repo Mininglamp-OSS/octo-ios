@@ -13,6 +13,7 @@
 #import "WKAvatarUtil.h"
 #import "UIImageView+WK.h"
 #import "WKUserAvatar.h"
+#import "WKExternalViewerResolver.h"
 #define viewHeight 54.0f
 
 @interface WKReplyView ()
@@ -54,20 +55,67 @@
 
 - (void)setMessage:(WKMessage *)message {
     _message = message;
-    
-    self.nameLbl.text = @"---";
+
+    // YUJ-131 · 输入框上方「引用某条消息」预览也要显示 @SpaceName —— 对齐 web PR #1073.
+    // 数据来源：这条 *被引用* 消息自身的 msg-level 外部群字段（WKMessageUtil toMessage 已写入 message.extra）。
+    NSString *baseName = @"---";
     if(message.from) {
-        self.nameLbl.text = message.from.displayName;
+        baseName = message.from.displayName ?: @"---";
+    }
+
+    id homeIdRaw = message.extra[@"from_home_space_id"];
+    id homeNameRaw = message.extra[@"from_home_space_name"];
+    id isExtRaw = message.extra[@"from_is_external"];
+    id sourceNameRaw = message.extra[@"from_source_space_name"];
+    NSString *viewerSpaceId = [WKExternalViewerResolver currentViewerSpaceId];
+    WKExternalResolveResult *res = [WKExternalViewerResolver
+        resolveWithHomeSpaceId:homeIdRaw
+                 homeSpaceName:homeNameRaw
+              isExternalLegacy:isExtRaw
+         sourceSpaceNameLegacy:sourceNameRaw
+                 viewerSpaceId:viewerSpaceId];
+    if (res.isExternal && res.sourceSpaceName.length > 0) {
+        // 硬约束：attributedText 设置时必须清 .text（互斥坑点）
+        self.nameLbl.text = nil;
+        self.nameLbl.attributedText = [self buildNameAttrWithBase:baseName spaceName:res.sourceSpaceName];
+    } else {
+        self.nameLbl.attributedText = nil;
+        self.nameLbl.text = baseName;
     }
     [self.nameLbl sizeToFit];
-    
+
     self.contentLbl.text = [message.content conversationDigest];
     [self.contentLbl sizeToFit];
     if(self.contentLbl.lim_width> WKScreenWidth - 30*2) {
         self.contentLbl.lim_width = WKScreenWidth - 30*2;
     }
     self.replyAvatarIcon.url = [WKAvatarUtil getAvatar:message.fromUid];
-    
+
+}
+
+// YUJ-131 · 拼接「发送者 displayName + 灰色 @SpaceName 后缀」。样式与 WKMemberCell v2 对齐。
+- (NSAttributedString *)buildNameAttrWithBase:(NSString *)baseName
+                                    spaceName:(NSString *)spaceName {
+    UIFont *baseFont = self.nameLbl.font
+        ?: [[WKApp shared].config appFontOfSize:16.0f];
+    UIColor *baseColor = self.nameLbl.textColor
+        ?: [WKApp shared].config.tipColor
+        ?: [UIColor darkGrayColor];
+    NSMutableAttributedString *attr = [[NSMutableAttributedString alloc]
+        initWithString:(baseName ?: @"")
+            attributes:@{NSFontAttributeName: baseFont,
+                         NSForegroundColorAttributeName: baseColor}];
+    UIColor *suffixColor = [UIColor colorWithRed:153.0f/255.0f
+                                           green:153.0f/255.0f
+                                            blue:153.0f/255.0f
+                                           alpha:1.0f];
+    UIFont *suffixFont = [[WKApp shared].config appFontOfSize:14.0f];
+    NSString *suffix = [NSString stringWithFormat:@" @%@", spaceName ?: @""];
+    [attr appendAttributedString:[[NSAttributedString alloc]
+        initWithString:suffix
+            attributes:@{NSFontAttributeName: suffixFont,
+                         NSForegroundColorAttributeName: suffixColor}]];
+    return attr;
 }
 
 - (void)layoutSubviews {
