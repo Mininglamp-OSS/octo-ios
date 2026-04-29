@@ -86,6 +86,15 @@
     if([sourceSpaceNameRaw isKindOfClass:[NSString class]]) {
         model.sourceSpaceName = sourceSpaceNameRaw;
     }
+    // viewer-relative 判定字段（YUJ-63 / web PR #997）
+    id homeSpaceIdRaw = dictory[@"home_space_id"];
+    if([homeSpaceIdRaw isKindOfClass:[NSString class]]) {
+        model.homeSpaceId = homeSpaceIdRaw;
+    }
+    id homeSpaceNameRaw = dictory[@"home_space_name"];
+    if([homeSpaceNameRaw isKindOfClass:[NSString class]]) {
+        model.homeSpaceName = homeSpaceNameRaw;
+    }
 
     return model;
 }
@@ -124,6 +133,15 @@
         if(self.sourceSpaceName && self.sourceSpaceName.length > 0) {
             channelMember.extra[@"source_space_name"] = self.sourceSpaceName;
         }
+    }
+    // viewer-relative 字段对所有成员透传（不止外部）——内部成员也需要 home_space_id
+    // 让客户端比较 viewerSpace == homeSpace 时显式判定「同 Space」，避免老数据
+    // 仅靠 is_external 做绝对判定（对齐 web PR #997）。
+    if(self.homeSpaceId && self.homeSpaceId.length > 0) {
+        channelMember.extra[@"home_space_id"] = self.homeSpaceId;
+    }
+    if(self.homeSpaceName && self.homeSpaceName.length > 0) {
+        channelMember.extra[@"home_space_name"] = self.homeSpaceName;
     }
 
     return channelMember;

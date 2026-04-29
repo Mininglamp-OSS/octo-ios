@@ -53,6 +53,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,assign) BOOL isExternal; // 是否为外部成员（来自其他 Space）
 @property(nonatomic,copy)   NSString *sourceSpaceId; // 来源 space id（外部成员）
 @property(nonatomic,copy)   NSString *sourceSpaceName; // 来源 space 名称（外部成员）
+@property(nonatomic,copy)   NSString *homeSpaceId; // 视角相对判定使用：成员 home space（YUJ-63）
+@property(nonatomic,copy)   NSString *homeSpaceName; // 视角相对判定使用：成员 home space 名称
 
 
 
