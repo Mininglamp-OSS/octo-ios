@@ -13,9 +13,24 @@
 @implementation WKMergeForwardDetailVM
 
 - (NSArray<NSDictionary *> *)tableSectionMaps {
-    
+
     NSMutableArray *items = [NSMutableArray array];
     NSString *title = @"";
+
+    // YUJ-130 / Web PR#981-982 对齐：把 WKMergeForwardContent.users 里每个
+    // 成员的外部群字段（is_external / source_space_name / home_space_*）按
+    // uid 建立 map，后续传给 Cell 做 viewer-relative「 @SpaceName」渲染。
+    NSMutableDictionary<NSString*, NSDictionary*> *uidToUserExtras = [NSMutableDictionary dictionary];
+    if(self.mergeForwardContent.users && self.mergeForwardContent.users.count > 0) {
+        for (NSDictionary *userDict in self.mergeForwardContent.users) {
+            if(![userDict isKindOfClass:[NSDictionary class]]) continue;
+            NSString *uid = userDict[@"uid"];
+            if([uid isKindOfClass:[NSString class]] && uid.length > 0) {
+                uidToUserExtras[uid] = userDict;
+            }
+        }
+    }
+
     if(self.mergeForwardContent.msgs && self.mergeForwardContent.msgs.count>0) {
         NSInteger firstTime = self.mergeForwardContent.msgs[0].timestamp;
         NSInteger lastTime = self.mergeForwardContent.msgs[self.mergeForwardContent.msgs.count-1].timestamp;
@@ -86,6 +101,7 @@
                 @"class":modelCls,
                 @"message": message,
                 @"hideAvatar": @(hideAvatar),
+                @"userExtras": (message.fromUid && uidToUserExtras[message.fromUid]) ? uidToUserExtras[message.fromUid] : [NSNull null],
             }];
             preMessage = message;
         }

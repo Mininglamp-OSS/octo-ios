@@ -21,6 +21,7 @@
 #import "WKNavigationManager.h"
 #import "WKMergeForwardContent.h"
 #import "WKMergeForwardDetailVC.h"
+#import "WKExternalViewerResolver.h"
 #import <AVKit/AVKit.h>
 #import <WebKit/WebKit.h>
 #import <WuKongBase/WuKongBase-Swift.h>
@@ -283,19 +284,45 @@ static void cancelDownloadForMessage(WKMessage *message) {
 - (void)refresh:(WKMergeForwardDetailModel *)model {
     [super refresh:model];
     self.model = model;
-    
+
     self.avatarImgView.hidden = model.hideAvatar;
-    
+
     [self.avatarImgView lim_setImageWithURL:[NSURL URLWithString:[WKAvatarUtil getAvatar:model.message.fromUid]] placeholderImage:[WKApp shared].config.defaultAvatar];
+
+    // YUJ-130 / Web PR#981-982 / Android ChatMultiForwardDetailAdapter:682-699 对齐：
+    // 合并转发详情里按 viewer-relative 判定作者是否外部，外部 → 名字后拼接
+    // 灰色「 @SpaceName」后缀。judge 走统一的 WKExternalViewerResolver，保证和
+    // 会话设置 / 群成员列表 / 用户资料页行为一致。
+    NSString *baseName = @"";
     if(model.message.from) {
-        self.nameLbl.text = model.message.from.displayName;
+        baseName = model.message.from.displayName ?: @"";
     }else{
         [[WKSDK shared].channelManager fetchChannelInfo:[[WKChannel alloc] initWith:model.message.fromUid channelType:WK_PERSON]];
     }
-    
+
+    NSString *viewerSpaceId = [WKExternalViewerResolver currentViewerSpaceId];
+    WKExternalResolveResult *ext = [WKExternalViewerResolver resolveFromExtras:model.userExtras
+                                                                 viewerSpaceId:viewerSpaceId];
+    if (ext.isExternal && ext.sourceSpaceName.length > 0 && baseName.length > 0) {
+        UIColor *nameColor = self.nameLbl.textColor ?: [UIColor grayColor];
+        UIFont *nameFont = self.nameLbl.font ?: [[WKApp shared].config appFontOfSize:15.0f];
+        NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:baseName
+                                                                                 attributes:@{NSFontAttributeName: nameFont,
+                                                                                              NSForegroundColorAttributeName: nameColor}];
+        UIColor *suffixColor = [UIColor colorWithRed:153.0f/255.0f green:153.0f/255.0f blue:153.0f/255.0f alpha:1.0f];
+        [attr appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@" @%@", ext.sourceSpaceName]
+                                                                     attributes:@{NSFontAttributeName: nameFont,
+                                                                                  NSForegroundColorAttributeName: suffixColor}]];
+        self.nameLbl.attributedText = attr;
+        self.nameLbl.lineBreakMode = NSLineBreakByTruncatingTail;
+    } else {
+        self.nameLbl.attributedText = nil;
+        self.nameLbl.text = baseName;
+    }
+
     self.timeLbl.text = [WKTimeTool getTimeStringAutoShort2:[NSDate dateWithTimeIntervalSince1970:model.message.timestamp] mustIncludeTime:YES];
     [self.timeLbl sizeToFit];
-    
+
 }
 
 - (void)layoutSubviews {
