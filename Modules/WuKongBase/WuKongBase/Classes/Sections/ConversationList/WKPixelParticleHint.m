@@ -388,7 +388,7 @@ static NSTimeInterval _lastShowTime = 0;
 }
 
 - (void)scheduleDismiss {
-    _dismissTimer = [NSTimer timerWithTimeInterval:2.0 target:self selector:@selector(dismissFired) userInfo:nil repeats:NO];
+    _dismissTimer = [NSTimer timerWithTimeInterval:3.0 target:self selector:@selector(dismissFired) userInfo:nil repeats:NO];
     [[NSRunLoop mainRunLoop] addTimer:_dismissTimer forMode:NSRunLoopCommonModes];
 }
 
