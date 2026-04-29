@@ -15,6 +15,7 @@
 #import "WKReactionBaseView.h"
 #import "UILabel+WK.h"
 #import "NSMutableAttributedString+WK.h"
+#import "WKExternalViewerResolver.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKTapLongTapOrDoubleTapGestureRecognizerEvent.h"
 
@@ -458,7 +459,12 @@ static NSMutableDictionary *flameNodeCacheDict;
         }else {
             self.nameLbl.textColor =  [WKUserColorUtil userColor:model.from.channel.channelId];
         }
-        self.nameLbl.text = [[self class] getFromName:self.messageModel];
+        // YUJ-129 / web PR #1084 对齐：昵称后追加灰紫色「@SpaceName」跨 Space 后缀。
+        // attributedText 与 text 互斥，先清 text 再赋 attributedText，避免 UILabel
+        // 双写坑（iOS 底层在同一帧 set 两次会以后者为准，但脏数据残留会导致 sizeToFit 异常）。
+        self.nameLbl.text = nil;
+        self.nameLbl.attributedText = [[self class] getFromNameAttributed:self.messageModel
+                                                             viewerSpaceId:[WKExternalViewerResolver currentViewerSpaceId]];
         [self.nameLbl sizeToFit];
     }else {
         self.nameLbl.hidden = YES;
@@ -614,8 +620,44 @@ static NSMutableDictionary *flameNodeCacheDict;
             name = [NSString stringWithFormat:@"%@/%@",name,deviceName];
         }
     }
-   
+
     return name;
+}
+
+// 获取发送者名字（富文本版）— YUJ-129 iOS 对齐 Web PR #1084 / Android WKChatBaseProvider
+// `resolveExternalSpaceSuffix`。当 sender 相对 viewer 属于外部（跨 Space）时，在基础
+// 名字后追加灰紫色 ` @{sourceSpaceName}` 后缀，与 Android 0xFF8B5CF6 保持像素级一致。
+//
+// 颜色选择说明：灰紫 0x8B5CF6 —— 在浅色与深色主题下都能和常规昵称颜色形成足够对比，
+// 又不抢镜；选择与 Android ForegroundColorSpan 一致的色值，避免平台间视觉漂移。
++(NSAttributedString*) getFromNameAttributed:(WKMessageModel*)messageModel
+                               viewerSpaceId:(NSString*)viewerSpaceId {
+    NSString *baseName = [self getFromName:messageModel] ?: @"";
+
+    // 私聊 / 系统账号 / 文件助手 → 不渲染 @，返回纯文本富文本（保留原 font/color 继承）。
+    if(!messageModel || messageModel.channel.channelType == WK_PERSON) {
+        return [[NSAttributedString alloc] initWithString:baseName];
+    }
+
+    WKExternalResolveResult *ext = [WKExternalViewerResolver
+        resolveWithHomeSpaceId:messageModel.fromHomeSpaceId
+                 homeSpaceName:messageModel.fromHomeSpaceName
+              isExternalLegacy:@(messageModel.fromIsExternal ? 1 : 0)
+         sourceSpaceNameLegacy:messageModel.fromSourceSpaceName
+                 viewerSpaceId:viewerSpaceId];
+
+    if(!(ext.isExternal && ext.sourceSpaceName.length > 0)) {
+        return [[NSAttributedString alloc] initWithString:baseName];
+    }
+
+    // 灰紫后缀：0xFF8B5CF6 与 Android ForegroundColorSpan 对齐。
+    // 保留 nameLbl 当前 font，避免字号跳动导致 layoutName 里的 sizeThatFits 抖动。
+    UIColor *suffixColor = [UIColor colorWithRed:0x8B/255.0 green:0x5C/255.0 blue:0xF6/255.0 alpha:1.0];
+    NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:baseName];
+    NSString *suffix = [NSString stringWithFormat:@" @%@", ext.sourceSpaceName];
+    [attr appendAttributedString:[[NSAttributedString alloc] initWithString:suffix
+                                                                 attributes:@{NSForegroundColorAttributeName: suffixColor}]];
+    return attr;
 }
 
 
