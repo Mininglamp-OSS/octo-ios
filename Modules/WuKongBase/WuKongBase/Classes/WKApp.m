@@ -24,6 +24,7 @@
 #import "WKMoreItemClickEvent.h"
 #import "WKImageMessageCell.h"
 #import "WKConversationContext.h"
+#import "WKSpaceFilter.h"
 #import "WKVoicePanel.h"
 #import "WKVoiceMessageCell.h"
 #import "WKGroupManager.h"
@@ -565,10 +566,14 @@ static WKApp *_instance;
         [header setObject:[self config].bundleID forKey:@"bundle_id"];
         if([WKApp shared].isLogined) {
             [header setObject:[WKApp shared].loginInfo.token forKey:@"token"];
-            return header;
         }
+        // X-Space-Id header — 动态注入（对齐 dmwork-web PR #1039）
+        // 每次请求都读 WKSpaceFilter.currentSpaceId，Space 切换立即生效。
+        // 空值时以空字串标记，由 WKAPIClient resetPublicHeader 负责移除 stale header。
+        NSString *currentSpaceId = [[WKSpaceFilter shared] currentSpaceId];
+        [header setObject:(currentSpaceId.length > 0 ? currentSpaceId : @"") forKey:@"X-Space-Id"];
         return  header;
-        
+
     }];
     // 路径替换
     [config setRequestPathReplace:^NSString *(NSString *requestPath) {
