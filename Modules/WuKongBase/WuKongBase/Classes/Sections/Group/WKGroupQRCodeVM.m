@@ -15,6 +15,14 @@
     model.day = [dictory[@"day"] integerValue];
     model.expire = dictory[@"expire"];
     model.qrcode = dictory[@"qrcode"];
+    // YUJ-97: 读 ChannelQrcodeResp.invite_url（跨 Space 扫码入群链接）。
+    // 防御 YUJ-53 静默失败模式：显式 NSNull / 非 NSString 都归一为 nil。
+    id rawInvite = dictory[@"invite_url"];
+    if ([rawInvite isKindOfClass:[NSString class]]) {
+        model.inviteUrl = rawInvite;
+    } else {
+        model.inviteUrl = nil;
+    }
     return model;
 }
 
