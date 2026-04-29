@@ -879,7 +879,12 @@
                 contain = true;
             }
             if(contain) {
-                [users addObject:[WKMentionUserCellModel uid:member.memberUid name:member.displayName avatarURL:[NSURL URLWithString: [WKAvatarUtil getAvatar:member.memberUid]] robot:member.robot]];
+                // YUJ-135 透传 member.extra 给 cell model，供 WKExternalViewerResolver 判定 @SpaceName 后缀。
+                [users addObject:[WKMentionUserCellModel uid:member.memberUid
+                                                        name:member.displayName
+                                                   avatarURL:[NSURL URLWithString: [WKAvatarUtil getAvatar:member.memberUid]]
+                                                       robot:member.robot
+                                                      extras:member.extra]];
             }
         }
     }
