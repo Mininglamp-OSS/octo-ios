@@ -201,9 +201,16 @@
     [channelInfo setSettingValue:groupModel.revokeRemind forKey:WKChannelExtraKeyRevokeRemind];
     [channelInfo setSettingValue:groupModel.chatPwdOn forKey:WKChannelExtraKeyChatPwd];
     [channelInfo setSettingValue:groupModel.allowViewHistoryMsg forKey:WKChannelExtraKeyAllowViewHistoryMsg];
-    // groups/{groupNo} 也会返回 is_external_group，仅在后端显式返回该字段时覆盖（nil 表示未返回，保留旧值）
+    // groups/{groupNo} 也会返回 is_external_group / allow_external / space_id，
+    // 仅在后端显式返回该字段时覆盖（nil 表示未返回，保留旧值，避免增量 group_update 清零）
     if(groupModel.isExternalGroup != nil) {
-        channelInfo.extra[@"is_external_group"] = groupModel.isExternalGroup;
+        channelInfo.extra[@"is_external_group"] = @([groupModel.isExternalGroup integerValue] == 1 ? 1 : 0);
+    }
+    if(groupModel.allowExternal != nil) {
+        channelInfo.extra[@"allow_external"] = @([groupModel.allowExternal integerValue] == 1 ? 1 : 0);
+    }
+    if(groupModel.spaceId && groupModel.spaceId.length > 0) {
+        channelInfo.extra[@"space_id"] = groupModel.spaceId;
     }
 
     [[WKSDK shared].channelManager addOrUpdateChannelInfo:channelInfo];

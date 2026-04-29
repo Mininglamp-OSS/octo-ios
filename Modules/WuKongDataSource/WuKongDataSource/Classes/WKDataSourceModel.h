@@ -31,6 +31,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,assign) BOOL allowViewHistoryMsg; //允许新成员查看历史消息
 @property(nonatomic,assign) long version; // 群版本号
 @property(nonatomic,strong,nullable) NSNumber *isExternalGroup; // 外部群标识；nil 表示后端未返回，下游应保留旧值
+// ---------- 外部群 (External Group) Phase 1 扩展字段 ----------
+@property(nonatomic,strong,nullable) NSNumber *allowExternal;   // 是否允许邀请外部成员 (0|1)；nil 表示后端未返回，下游应保留旧值 (YUJ-27)
+@property(nonatomic,copy,nullable)   NSString *spaceId;         // 群归属 Space ID
 @end
 
 @interface WKGroupMemberModel : WKModel

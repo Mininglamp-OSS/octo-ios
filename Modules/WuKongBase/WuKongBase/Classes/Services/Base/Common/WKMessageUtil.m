@@ -143,11 +143,33 @@
         message.fromUid = messageContent.senderUserInfo?messageContent.senderUserInfo.uid:@"";
     }
     message.isDeleted = messageDict[@"is_deleted"]?[messageDict[@"is_deleted"] integerValue]:0;
-    
+
     if(!message.isDeleted && message.content.visibles && message.content.visibles.count>0) {
         message.isDeleted  =  ![message.content.visibles containsObject:[WKApp shared].loginInfo.uid];
     }
-    
+
+    // ---------- 外部群 (External Group) Phase 1：消息级字段透传 ----------
+    // 来源：后端下发的消息字典顶层字段 from_is_external / from_source_space_name / from_home_space_id / from_home_space_name
+    // 目标：写入 message.extra，上层 MessageWrap 风格的 getter（见 WKMessageModel.externalGroup.h）可直接读取
+    // 策略 B 兜底：即使后端 SetEffectiveSpaceID 没给，UI 层仍可结合 memberOfFrom.extra 做一次本地判定
+    id fromIsExternalRaw = messageDict[@"from_is_external"];
+    if([fromIsExternalRaw isKindOfClass:[NSNumber class]] || [fromIsExternalRaw isKindOfClass:[NSString class]]) {
+        message.extra[@"from_is_external"] = @([fromIsExternalRaw integerValue] == 1 ? 1 : 0);
+    }
+    id fromSourceSpaceNameRaw = messageDict[@"from_source_space_name"];
+    if([fromSourceSpaceNameRaw isKindOfClass:[NSString class]] && [(NSString*)fromSourceSpaceNameRaw length] > 0) {
+        message.extra[@"from_source_space_name"] = fromSourceSpaceNameRaw;
+    }
+    // YUJ-63 viewer-relative home space
+    id fromHomeSpaceIdRaw = messageDict[@"from_home_space_id"];
+    if([fromHomeSpaceIdRaw isKindOfClass:[NSString class]] && [(NSString*)fromHomeSpaceIdRaw length] > 0) {
+        message.extra[@"from_home_space_id"] = fromHomeSpaceIdRaw;
+    }
+    id fromHomeSpaceNameRaw = messageDict[@"from_home_space_name"];
+    if([fromHomeSpaceNameRaw isKindOfClass:[NSString class]] && [(NSString*)fromHomeSpaceNameRaw length] > 0) {
+        message.extra[@"from_home_space_name"] = fromHomeSpaceNameRaw;
+    }
+
     // 回应
     if(messageDict[@"reactions"]) {
         NSArray<NSDictionary*> *reactionDicts = messageDict[@"reactions"];
