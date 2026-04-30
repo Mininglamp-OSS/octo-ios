@@ -48,6 +48,7 @@ NS_ASSUME_NONNULL_BEGIN
 +(instancetype) initWithMaxWidth:(CGFloat) maxWidth numberOfLine:(NSInteger)number;
 +(instancetype) initWithMaxWidth:(CGFloat) maxWidth numberOfLine:(NSInteger)number hasMore:(BOOL)hasMore;
 @property(nonatomic,assign) BOOL hasMore; // 是否有更多
+@property(nonatomic,copy,nullable) NSString *moreBtnTitle; // 自定义"查看更多"按钮文案
 @property(nonatomic,weak) id<WKSettingMemberGridViewDelegate> delegate;
 
 // 更多点击

@@ -47,7 +47,8 @@
     if(!_moreBtn) {
         _moreBtn = [[UIButton alloc] init];
         [[_moreBtn titleLabel] setFont:[[WKApp shared].config appFontOfSize:15.0f]];
-        [_moreBtn setTitle:LLang(@"查看更多群成员") forState:UIControlStateNormal];
+        NSString *title = self.moreBtnTitle.length > 0 ? self.moreBtnTitle : LLang(@"查看更多群成员");
+        [_moreBtn setTitle:title forState:UIControlStateNormal];
         [_moreBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
         [_moreBtn sizeToFit];
         [_moreBtn addTarget:self action:@selector(morePressed) forControlEvents:UIControlEventTouchUpInside];

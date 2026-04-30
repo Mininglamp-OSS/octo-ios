@@ -7,6 +7,7 @@
 #import "WKThreadService.h"
 #import "WKThreadModel.h"
 #import "WKSettingMemberGridView.h"
+#import "WKThreadMemberListVC.h"
 #import "WKNavigationManager.h"
 #import "WKAvatarUtil.h"
 #import "WKUserAvatar.h"
@@ -368,13 +369,20 @@
         _memberGridView = [WKSettingMemberGridView initWithMaxWidth:self.view.lim_width - 10.0f numberOfLine:5 hasMore:NO];
         _memberGridView.delegate = self;
         _memberGridView.lim_left = 5.0f;
+        _memberGridView.moreBtnTitle = LLang(@"查看更多子区成员");
         __weak typeof(self) weakSelf = self;
         [_memberGridView setOnMore:^{
-            // 查看全部成员 - 暂时重新加载全部
-            [weakSelf loadMembers];
+            [weakSelf showAllThreadMembers];
         }];
     }
     return _memberGridView;
+}
+
+- (void)showAllThreadMembers {
+    WKThreadMemberListVC *memberVC = [WKThreadMemberListVC new];
+    memberVC.groupNo = self.groupNo;
+    memberVC.shortId = self.shortId;
+    [WKNavigationManager.shared pushViewController:memberVC animated:YES];
 }
 
 @end
