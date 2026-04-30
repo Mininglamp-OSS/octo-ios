@@ -9,6 +9,7 @@
 #import <SDWebImage/SDWebImage.h>
 #import "WKApp.h"
 #import "WuKongBase.h"
+#import "WKExternalViewerResolver.h"
 @implementation WKSearchMessageModel
 
 - (Class)cell {
@@ -75,7 +76,36 @@
     }
     
     self.avatarImgView.url = avatar;
-    self.nameLbl.text = name;
+
+    // YUJ-156 搜索结果外部群/发送者 `@SpaceName` 跨 Space 后缀 — Pattern 复用
+    // YUJ-135 (WKMentionUserCell) 已做的 WKExternalViewerResolver，字段契约与
+    // WKExternalExtrasKey* 对齐。isExternal && sourceSpaceName 非空 → nameLbl 走
+    // attributedText 路径（baseName + 灰紫 " @SpaceName"）；否则回归 plain text，
+    // 并显式清空 attributedText —— YUJ-98 坑点：cell 复用时 attributedText 与 text
+    // 互斥，不重置会残留上一条外部富文本。
+    WKExternalResolveResult *ext = [WKExternalViewerResolver
+        resolveWithHomeSpaceId:model.home_space_id
+                 homeSpaceName:model.home_space_name
+              isExternalLegacy:model.is_external
+         sourceSpaceNameLegacy:model.source_space_name
+                 viewerSpaceId:[WKExternalViewerResolver currentViewerSpaceId]];
+    if (ext.isExternal && ext.sourceSpaceName.length > 0) {
+        UIFont *nameFont = self.nameLbl.font ?: [[WKApp shared].config appFontOfSize:16.0f];
+        UIColor *nameColor = self.nameLbl.textColor ?: [WKApp shared].config.defaultTextColor ?: [UIColor blackColor];
+        NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:name ?: @""
+                                                                                 attributes:@{NSFontAttributeName: nameFont,
+                                                                                              NSForegroundColorAttributeName: nameColor}];
+        // 灰紫 0x8B5CF6 与 WKMessageCell (YUJ-129) / Android ForegroundColorSpan 像素级一致。
+        UIColor *suffixColor = [UIColor colorWithRed:0x8B/255.0 green:0x5C/255.0 blue:0xF6/255.0 alpha:1.0];
+        NSString *suffix = [NSString stringWithFormat:@" @%@", ext.sourceSpaceName];
+        [attr appendAttributedString:[[NSAttributedString alloc] initWithString:suffix
+                                                                     attributes:@{NSFontAttributeName: nameFont,
+                                                                                  NSForegroundColorAttributeName: suffixColor}]];
+        self.nameLbl.attributedText = attr;
+    } else {
+        self.nameLbl.attributedText = nil;
+        self.nameLbl.text = name;
+    }
     self.contentLbl.attributedText = nil;
     if(model.content && ![model.content isEqualToString:@""]) {
         if (model.keyword && model.keyword.length > 0 && [model.content rangeOfString:@"<mark>"].location == NSNotFound) {
