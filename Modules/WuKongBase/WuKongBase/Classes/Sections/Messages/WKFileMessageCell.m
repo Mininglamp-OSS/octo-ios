@@ -11,12 +11,13 @@
 #import <WuKongIMSDK/WKFileContent.h>
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKNavigationManager.h"
+#import <QuickLook/QuickLook.h>
 
 #define WKFileCellWidth 250.0f
 #define WKFileCellHeight 72.0f
 #define WKFileIconSize 40.0f
 
-@interface WKFileMessageCell () <UIDocumentInteractionControllerDelegate>
+@interface WKFileMessageCell () <UIDocumentInteractionControllerDelegate, QLPreviewControllerDataSource, QLPreviewControllerDelegate>
 
 @property(nonatomic,strong) UIImageView *fileIconView;
 @property(nonatomic,strong) UILabel *fileNameLbl;
@@ -24,6 +25,7 @@
 @property(nonatomic,strong) WKLoadProgressView *progressView;
 @property(nonatomic,strong) WKMessageFileUploadTask *uploadTask;
 @property(nonatomic,strong) UIDocumentInteractionController *documentController;
+@property(nonatomic,strong) NSURL *previewFileURL;
 @property(nonatomic,assign) BOOL isFileDownloading;
 
 @end
@@ -251,13 +253,10 @@
     }
 
     NSURL *fileURL = [NSURL fileURLWithPath:previewPath];
-    NSLog(@"[File] preview path=%@, fileSize=%lld", previewPath,
-          [[[NSFileManager defaultManager] attributesOfItemAtPath:previewPath error:nil] fileSize]);
     self.documentController = [UIDocumentInteractionController interactionControllerWithURL:fileURL];
     self.documentController.delegate = self;
     UIViewController *topVC = [WKNavigationManager shared].topViewController;
     BOOL canPreview = [self.documentController presentPreviewAnimated:YES];
-    NSLog(@"[File] presentPreview=%d, UTI=%@", canPreview, self.documentController.UTI ?: @"(nil)");
     if (!canPreview) {
         [self.documentController presentOptionsMenuFromRect:topVC.view.bounds inView:topVC.view animated:YES];
     }
@@ -270,19 +269,71 @@
 }
 
 - (void)documentInteractionControllerWillBeginPreview:(UIDocumentInteractionController *)controller {
-    // 预览期间禁用手势返回（QLPreviewController 内部 WebKit 在手势返回时会触发嵌套 RunLoop 死锁）
-    UINavigationController *nav = [WKNavigationManager shared].topViewController.navigationController;
-    if (nav) {
-        nav.interactivePopGestureRecognizer.enabled = NO;
+    // QLPreviewController 内部 WebKit 在交互式转场时会嵌套 RunLoop 导致死锁。
+    // 解法：转场期间用截图遮盖 WebView，阻止 WebKit layout，转场结束后移除截图。
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIViewController *topVC = [WKNavigationManager shared].topViewController;
+        UIViewController *presented = topVC.presentedViewController;
+        if (!presented) return;
+
+        UIViewController *qlVC = presented;
+        if ([presented isKindOfClass:[UINavigationController class]]) {
+            qlVC = ((UINavigationController *)presented).topViewController ?: presented;
+        }
+
+        // 监听转场：开始时加截图遮盖，结束时移除
+        id<UIViewControllerTransitionCoordinator> coordinator = qlVC.transitionCoordinator;
+        if (!coordinator) {
+            // 首次呈现时还没有 coordinator，监听后续的 viewWillDisappear
+            [self observeTransitionForVC:qlVC];
+        }
+    });
+}
+
+static const NSInteger kSnapshotTag = 99871;
+
+- (void)observeTransitionForVC:(UIViewController *)qlVC {
+    // 用 KVO 或 runtime 监听 viewWillDisappear 不方便，改用更轻量的方案：
+    // 直接在 QLPreviewController 的 navigationController 上添加 delegate
+    // 来拦截 interactive pop 的开始和结束
+    UINavigationController *nav = qlVC.navigationController;
+    if (!nav) return;
+
+    // 监听 nav 的 interactivePopGestureRecognizer 的状态变化
+    UIGestureRecognizer *popGesture = nav.interactivePopGestureRecognizer;
+    if (!popGesture) return;
+
+    [popGesture addTarget:self action:@selector(handleQLInteractivePop:)];
+}
+
+- (void)handleQLInteractivePop:(UIGestureRecognizer *)gesture {
+    UIViewController *topVC = [WKNavigationManager shared].topViewController;
+    UIViewController *presented = topVC.presentedViewController;
+    if (!presented) return;
+
+    UIViewController *qlVC = presented;
+    if ([presented isKindOfClass:[UINavigationController class]]) {
+        qlVC = ((UINavigationController *)presented).topViewController ?: presented;
+    }
+
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        // 转场开始：截图遮盖 WebView，阻止 WebKit layout
+        if (![qlVC.view viewWithTag:kSnapshotTag]) {
+            UIView *snapshot = [qlVC.view snapshotViewAfterScreenUpdates:NO];
+            snapshot.tag = kSnapshotTag;
+            snapshot.frame = qlVC.view.bounds;
+            snapshot.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            [qlVC.view addSubview:snapshot];
+        }
+    } else if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled) {
+        // 转场结束或取消：移除截图
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [[qlVC.view viewWithTag:kSnapshotTag] removeFromSuperview];
+        });
     }
 }
 
 - (void)documentInteractionControllerDidEndPreview:(UIDocumentInteractionController *)controller {
-    // 恢复手势返回
-    UINavigationController *nav = [WKNavigationManager shared].topViewController.navigationController;
-    if (nav) {
-        nav.interactivePopGestureRecognizer.enabled = YES;
-    }
     controller.delegate = nil;
     self.documentController = nil;
 }

@@ -507,6 +507,7 @@
 
 -(void) pulldown {
     __weak typeof(self) weakSelf = self;
+    NSLog(@"[PullDebug] pulldown START, mj_header.state=%ld, isPulldownInProgress=%d", (long)self.tableView.mj_header.state, self.isPulldownInProgress);
 
     // 标记 pulldown 进行中，阻止新消息并发修改 tableView
     self.isPulldownInProgress = YES;
@@ -519,6 +520,7 @@
     }
 
     [self.dataProvider pulldown:^(bool hasMore) {
+        NSLog(@"[PullDebug] pulldown callback: hasMore=%d", hasMore);
         if(!hasMore) {
             [weakSelf pulldownFinished];
         }
@@ -534,6 +536,7 @@
         }
 
         BOOL hasInsertions = (newSectionsAdded > 0 || newRowsInOldFirstSection > 0);
+        NSLog(@"[PullDebug] pulldown: hasInsertions=%d newSections=%ld newRows=%ld", hasInsertions, (long)newSectionsAdded, (long)newRowsInOldFirstSection);
 
         if (hasInsertions) {
             // 记录当前可见位置
@@ -579,12 +582,14 @@
             // 后台线程预计算高度，完成后回主线程刷新 UI
             NSIndexPath *targetCopy = targetAfterReload;
             CGFloat offsetCopy = cellOffsetInView;
+            NSLog(@"[PullDebug] pulldown: dispatching precache for %lu msgs", (unsigned long)newMsgs.count);
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                 CFAbsoluteTime t_precache = CFAbsoluteTimeGetCurrent();
                 for (WKMessageModel *msg in newMsgs) {
                     [weakSelf precacheHeightForMessage:msg];
                 }
                 CGFloat precacheMs = (CFAbsoluteTimeGetCurrent() - t_precache) * 1000;
+                NSLog(@"[PullDebug] pulldown: precache done %.1fms, dispatching to main", precacheMs);
 
                 dispatch_async(dispatch_get_main_queue(), ^{
                     CFAbsoluteTime t_reload = CFAbsoluteTimeGetCurrent();
@@ -604,12 +609,14 @@
 
                     [weakSelf.tableView.mj_header endRefreshing];
                     weakSelf.isPulldownInProgress = NO;
+                    NSLog(@"[PullDebug] pulldown: COMPLETE (hasInsertions path), mj_header.state=%ld", (long)weakSelf.tableView.mj_header.state);
                     [weakSelf processPendingRecvMessages];
                 });
             });
         } else {
             [weakSelf.tableView.mj_header endRefreshing];
             weakSelf.isPulldownInProgress = NO;
+            NSLog(@"[PullDebug] pulldown: COMPLETE (no insertions), mj_header.state=%ld", (long)weakSelf.tableView.mj_header.state);
             [weakSelf processPendingRecvMessages];
         }
     }];
@@ -622,6 +629,7 @@
 
 -(void) pullup:(void(^)(bool more))complete {
     __weak typeof(self) weakSelf = self;
+    NSLog(@"[PullDebug] pullup START, mj_footer.state=%ld", (long)self.tableView.mj_footer.state);
 
     NSInteger oldSectionCount = [self.dataProvider dateCount];
     NSInteger oldLastSectionRowCount = 0;
@@ -630,6 +638,7 @@
     }
 
     [self.dataProvider pullup:^(bool hasMore) {
+        NSLog(@"[PullDebug] pullup callback: hasMore=%d", hasMore);
         if(!hasMore) {
             [weakSelf pullupFinished];
         }else {
@@ -657,6 +666,7 @@
             }
         }
 
+        NSLog(@"[PullDebug] pullup: newMsgs=%lu newSections=%ld", (unsigned long)newMsgs.count, (long)newSectionsAdded);
         if (newMsgs.count > 0) {
             // 后台预计算高度，完成后回主线程插入行
             NSInteger newSectionsAddedCopy = newSectionsAdded;
@@ -711,6 +721,7 @@
                     NSLog(@"[Perf] pullup: %lu msgs | precache=%.1fms(bg) insert=%.1fms(main)", (unsigned long)newMsgs.count, precacheMs, insertMs);
 
                     [weakSelf.tableView.mj_footer endRefreshing];
+                    NSLog(@"[PullDebug] pullup: COMPLETE (hasData path), mj_footer.state=%ld", (long)weakSelf.tableView.mj_footer.state);
                     if(complete) {
                         complete(hasMore);
                     }
@@ -718,9 +729,11 @@
             });
         } else {
             [weakSelf.tableView.mj_footer endRefreshing];
+            NSLog(@"[PullDebug] pullup: COMPLETE (noData path), hasMore=%d, mj_footer.state=%ld", hasMore, (long)weakSelf.tableView.mj_footer.state);
 
             // 去重跳过后重试
             if(hasMore && newMsgs.count == 0) {
+                NSLog(@"[PullDebug] pullup: retrying (dedup skip)");
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [weakSelf pullup:complete];
                 });
