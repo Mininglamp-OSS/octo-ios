@@ -49,6 +49,20 @@
 @property (nonatomic, copy) NSString *botDescription;
 @property (nonatomic, copy) NSString *botCreatorName;
 
+// --- YUJ-146 (GH#76) external-user fields ---
+// homeSpaceId: 用户的归属 Space，跨 Space 判定的权威字段（来自后端
+// /users/<uid> 响应里的 home_space_id）。对齐 web PR #977。
+// isExternal: 老的 flag，保留做兼容 fallback；当后端未回 home_space_id
+// 时才参与判定（isExternalUser helper）。
+@property (nonatomic, copy) NSString *homeSpaceId;
+@property (nonatomic, assign) NSInteger isExternal;
+
+// YUJ-146: viewer-relative 判定「当前用户是否对观察者是外部」。
+// 优先用 homeSpaceId vs 当前 viewer space；没有时 fallback 到 legacy
+// is_external。注意：不做 loginInfo.uid 自我判定，调用方已在各 handler
+// 头部自己过滤了 self。
+- (BOOL)isExternalUser;
+
 @end
 
 @interface WKUserInfoVM ()<WKChannelManagerDelegate>
@@ -61,6 +75,12 @@
 @property(nonatomic,copy) NSString *introEndpointID;
 @property(nonatomic,copy) NSString *botDescription;
 @property(nonatomic,copy) NSString *botCreatorName;
+
+// YUJ-146: 缓存当前 uid 的 home_space_id / is_external，供
+// user.info.addBlack / user.info.freeFriend handler 做同 Space 判定。
+// 每次 loadPersonChannelInfo 完成后覆写一次。
+@property(nonatomic,copy) NSString *userHomeSpaceId;
+@property(nonatomic,assign) NSInteger userIsExternalLegacy;
 
 @end
 
@@ -106,6 +126,11 @@
         // 保存 Bot 信息
         weakSelf.botDescription = user.botDescription ?: @"";
         weakSelf.botCreatorName = user.botCreatorName ?: @"";
+
+        // YUJ-146: 缓存 home_space_id / is_external，供
+        // user.info.addBlack / user.info.freeFriend handler 判同 Space。
+        weakSelf.userHomeSpaceId = user.homeSpaceId ?: @"";
+        weakSelf.userIsExternalLegacy = user.isExternal;
 
         // 重新缓存用户的channelInfo
         WKChannelInfo *channelInfo = [weakSelf channelInfoFromUser:user];
@@ -298,6 +323,12 @@
         if([uid isEqualToString:[WKApp shared].loginInfo.uid]) {
             return nil;
         }
+        // YUJ-146 (GH#76)：同 Space 用户资料页整行隐藏「解除好友关系」。
+        // 跨 Space 才允许出现此 row。判定失败（缺字段）时按 legacy
+        // is_external fallback，保持老数据的旧行为。
+        if(![weakSelf isExternalUser]) {
+            return nil;
+        }
         return  @{
             @"height":@(10.0f),
             @"items":@[
@@ -320,6 +351,11 @@
         WKChannelInfo *channelInfo = param[@"channel_info"];
         NSString *uid = param[@"uid"];
         if([uid isEqualToString:[WKApp shared].loginInfo.uid]) {
+            return nil;
+        }
+        // YUJ-146 (GH#76)：同 Space 用户资料页整行隐藏「拉入黑名单/拉出
+        // 黑名单」。对齐 web PR #977 UserInfo 同 Space 收敛。
+        if(![weakSelf isExternalUser]) {
             return nil;
         }
         return  @{
@@ -540,6 +576,24 @@
     return  self.channelInfo && self.channelInfo.status == WKChannelStatusBlacklist;
 }
 
+// YUJ-146 (GH#76): 当前页面的 uid 对观察者是否「外部」。规则对齐
+// web `resolveExternalForViewer` / android ExternalViewerResolver：
+//   - 有 home_space_id 时权威：home_space_id != viewer_space_id → 外部
+//   - 无 home_space_id 时 fallback：legacy is_external == 1 → 外部
+//   - viewer_space_id 为空（非 Space 模式）→ 视为外部（保留老行为，
+//     不隐藏解除好友 / 拉黑）
+-(BOOL) isExternalUser {
+    NSString *cur = [WKExternalViewerResolver currentViewerSpaceId];
+    if(self.userHomeSpaceId.length > 0 && cur.length > 0) {
+        return ![self.userHomeSpaceId isEqualToString:cur];
+    }
+    // 没有 viewer space（非 Space 模式）→ 保留旧行为（非同 Space 判定）。
+    if(cur.length == 0) {
+        return YES;
+    }
+    return self.userIsExternalLegacy == 1;
+}
+
 -(void) checkFriendRelation:(NSString*)uid completion:(void(^)(BOOL isFriend))completion {
     [[WKAPIClient sharedClient] GET:@"friend/relation" parameters:@{@"uid":uid?:@""} ].then(^(NSDictionary *result){
         BOOL isFriend = NO;
@@ -655,7 +709,24 @@
     u.flameSecond = [[dictory objectForKey:@"flame_second"] integerValue];
     u.botDescription = [dictory objectForKey:@"bot_description"] ?: @"";
     u.botCreatorName = [dictory objectForKey:@"bot_creator_name"] ?: @"";
+    // YUJ-146 (GH#76) external-user fields
+    u.homeSpaceId = [dictory objectForKey:@"home_space_id"] ?: @"";
+    u.isExternal = [[dictory objectForKey:@"is_external"] integerValue];
     return u;
+}
+
+// YUJ-146 (GH#76): UserModel 本地判定「相对当前 viewer space 是否外部」。
+// 规则与 WKUserInfoVM 上的同名 helper 保持一致，便于以后的调用方（非
+// VM 上下文）复用。
+-(BOOL) isExternalUser {
+    NSString *cur = [WKExternalViewerResolver currentViewerSpaceId];
+    if(self.homeSpaceId.length > 0 && cur.length > 0) {
+        return ![self.homeSpaceId isEqualToString:cur];
+    }
+    if(cur.length == 0) {
+        return YES;
+    }
+    return self.isExternal == 1;
 }
 
 
