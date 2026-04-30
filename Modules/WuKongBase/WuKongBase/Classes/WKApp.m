@@ -1489,6 +1489,10 @@ static WKApp *_instance;
             vc.groupAvatar = result.data[@"avatar"] ?: @"";
             vc.memberCount = [result.data[@"member_count"] integerValue];
             vc.isMember = [result.data[@"is_member"] boolValue];
+            // YUJ-141: 扫码/邀请链接携带的目标 Space 上下文（后端契约：space_id / space_name）。
+            // 允许字段缺失 — 缺失时走 legacy 同 Space 路径，不弹切换 dialog。
+            vc.targetSpaceId = [result.data[@"space_id"] isKindOfClass:[NSString class]] ? result.data[@"space_id"] : nil;
+            vc.targetSpaceName = [result.data[@"space_name"] isKindOfClass:[NSString class]] ? result.data[@"space_name"] : nil;
             [[WKNavigationManager shared] replacePushViewController:vc animated:YES];
             return true;
         }];

@@ -6,6 +6,7 @@
 #import "WKGroupScanJoinVC.h"
 #import "WuKongBase.h"
 #import "WKAvatarUtil.h"
+#import "WKJoinGroupSuccessHelper.h"
 
 @interface WKGroupScanJoinVC ()
 
@@ -71,6 +72,24 @@
     __weak typeof(self) weakSelf = self;
     [[WKAPIClient sharedClient] GET:path parameters:nil].then(^{
         [weakSelf.view hideHud];
+
+        // YUJ-141: 如果目标群属于另一个 Space，不能直接把用户推进群，
+        // 否则 iOS 会把 viewer 当前 Space 的上下文错位带进去（Web 对齐
+        // PR#1068 已修复）。先记下"跨 Space 加群成功"通知，pop 回主列表
+        // 由 WKConversationListVC viewDidAppear 弹双行 Toast + 紫色
+        // 「切换过去」按钮。用户显式点击才切 Space + 进群。
+        BOOL crossSpaceNoticeSaved =
+            [WKJoinGroupSuccessHelper computeAndSaveWithGroupNo:weakSelf.groupNo
+                                                  targetSpaceId:weakSelf.targetSpaceId
+                                                      groupName:weakSelf.groupName
+                                                      spaceName:weakSelf.targetSpaceName];
+        if (crossSpaceNoticeSaved) {
+            // 不进群，直接 pop 回主列表，让 Dialog 在主页面消费。
+            [[WKNavigationManager shared] popViewControllerAnimated:YES];
+            return;
+        }
+
+        // 同 Space / 无 Space 识别 → 维持旧行为（直接进群）。
         WKConversationVC *vc = [WKConversationVC new];
         vc.channel = [[WKChannel alloc] initWith:weakSelf.groupNo channelType:WK_GROUP];
         [[WKNavigationManager shared] replacePushViewController:vc animated:YES];
