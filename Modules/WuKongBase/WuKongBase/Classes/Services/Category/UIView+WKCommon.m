@@ -72,7 +72,7 @@ static const void *HttpRequestHUDKey = &HttpRequestHUDKey;
     MBProgressHUD *hud = [self HUD];
     UIImage *image = [[self imageName:@"Common/Index/HudSuccess"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
     UIImageView *imageView = [[UIImageView alloc] initWithImage:image];
-    
+
     hud.customView = imageView;
     hud.mode = MBProgressHUDModeCustomView;
     hud.label.text = text;

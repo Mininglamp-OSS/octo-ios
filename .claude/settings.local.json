@@ -96,7 +96,8 @@
       "Bash(gh api *)",
       "Bash(gh auth *)",
       "Bash(git stash *)",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(go env *)"
     ]
   }
 }
