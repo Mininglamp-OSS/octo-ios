@@ -1035,6 +1035,9 @@
                     [weakSelf.conversationListVM snapshotSyncedGroupIds];
                     // YUJ-215: snapshot 后再 prune 一遍，对齐 performSwitchToSpaceId 流程
                     [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
+                    // YUJ-218: backend sync 可能不返回 botfather（按 X-Space-Id 过滤时）—
+                    // 本地兜底合成占位 entry，保证系统 bot 可见；已存在则无操作。
+                    [weakSelf.conversationListVM ensureSystemBotsVisible];
                     [weakSelf rebuildGroupDisplayAndReload];
                     [weakSelf refreshBadge];
                     [weakSelf loadCategories];
@@ -1047,6 +1050,8 @@
                 [weakSelf.conversationListVM snapshotSyncedGroupIds];
                 // YUJ-215: prune 残留（见 performSwitchToSpaceId 注释）
                 [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
+                // YUJ-218: DB 冷启动也兜底（上次 sync 若未写入 botfather，DB 同样缺失）。
+                [weakSelf.conversationListVM ensureSystemBotsVisible];
                 [weakSelf rebuildGroupDisplayAndReload];
                 [weakSelf refreshBadge];
                 [weakSelf loadCategories];
@@ -1152,6 +1157,9 @@
                 // 可能把不该属于当前 Space 的群带回来——最后一次 prune 保证 snapshot
                 // 之后的单例内存是干净的。
                 [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
+                // YUJ-218: 切 Space 后若 backend sync 在新 Space 未返回 botfather，
+                // 本地兜底合成占位 entry，保证用户立即看到系统 bot 入口。
+                [weakSelf.conversationListVM ensureSystemBotsVisible];
                 [weakSelf rebuildGroupDisplayAndReload];
                 [weakSelf refreshBadge];
                 [weakSelf loadCategories];

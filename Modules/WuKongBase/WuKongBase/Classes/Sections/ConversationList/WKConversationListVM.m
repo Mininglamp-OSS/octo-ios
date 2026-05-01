@@ -149,6 +149,49 @@ static WKConversationListVM *_instance;
     return removed;
 }
 
+-(BOOL) ensureSystemBotsVisible {
+    // YUJ-218: 后端 sync 在当前 Space 不返回 botfather 时的本地兜底。
+    // 对齐 Android Round-3 Fix C：只合成 VM 层占位条目，绝不写入 WKSDK cache / DB，
+    // 以免与 YUJ-215 的群聊 cache pollution 修复策略冲突（后者针对持久化层）。
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    if(!botfatherUID || botfatherUID.length == 0) {
+        return NO;
+    }
+
+    // 尊重用户主动删除过 BotFather 的意图（hidden 标记与 shouldShowConversation 语义一致）。
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(currentSpaceId.length > 0) {
+        NSString *hiddenKey = [NSString stringWithFormat:@"WKBotFatherHidden_%@", currentSpaceId];
+        if([[NSUserDefaults standardUserDefaults] boolForKey:hiddenKey]) {
+            return NO;
+        }
+    }
+
+    WKChannel *botfatherChannel = [WKChannel personWithChannelID:botfatherUID];
+    // 已存在（sync 正常返回 / 新消息路径已 upsert）直接放行
+    if([self modelAtChannel:botfatherChannel]) {
+        return NO;
+    }
+
+    // 合成占位 conversation — 仅放在 VM 层；不调 [[WKSDK shared] conversationManager] 写入。
+    // timestamp=0 会把它排到列表底部，与真实历史会话顺序不冲突。
+    WKConversation *placeholder = [[WKConversation alloc] init];
+    placeholder.channel = botfatherChannel;
+    placeholder.unreadCount = 0;
+    placeholder.lastMsgTimestamp = 0;
+    WKConversationWrapModel *wrap = [[WKConversationWrapModel alloc] initWithConversation:placeholder];
+
+    if(!self.conversationWrapModels) {
+        self.conversationWrapModels = [NSMutableArray array];
+    }
+    [self.conversationWrapModels addObject:wrap];
+    self.channelIndex[[self channelKey:botfatherChannel]] = wrap;
+    [self sortConversationList]; // 内部会 rebuildFilteredList
+    NSLog(@"🤖 [YUJ-218] 本地合成 BotFather 兜底 conversation（backend sync 未返回；spaceId=%@）",
+          currentSpaceId ?: @"<none>");
+    return YES;
+}
+
 -(void) loadConversationList:(void(^)(void)) finished {
     CFAbsoluteTime _lcStart = CFAbsoluteTimeGetCurrent();
 

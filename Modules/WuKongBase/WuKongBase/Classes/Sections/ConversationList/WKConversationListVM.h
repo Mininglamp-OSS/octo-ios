@@ -64,6 +64,20 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 在 Space 切换完成（snapshotSyncedGroupIds 之后）和 filter 批次结束时调用。
 /// 返回被移除的 channelId 列表（便于 caller 触发 UI 刷新 / 记日志）。
 -(NSArray<NSString*>*) pruneNonCurrentSpaceGroups;
+
+/// YUJ-218: 后端 sync 在当前 Space 不返回 botfather 时本地兜底合成占位 conversation，
+/// 保证用户能看到系统 bot 入口（对齐 Android Round-3 Fix C）。
+/// 调用时机：sync 完成 / Space 切换后的 loadConversationList 之后，
+/// 即在 snapshotSyncedGroupIds + pruneNonCurrentSpaceGroups 之后 / UI 刷新之前。
+/// 硬约束：
+///   1. 只挂在 VM 层 conversationWrapModels，不写入 WKSDK conversationManager / DB —
+///      避免污染 YUJ-215 修复的持久化层（群聊 cache 清理策略针对 DB，不影响此 VM-only
+///      合成条目）；占位 conversation 随下次 reset / loadConversationList 自然丢弃。
+///   2. 尊重 WKBotFatherHidden_<spaceId> 用户隐藏标记 — 已删除过的 Space 不自动恢复，
+///      对齐 shouldShowConversation / filterConversationsBySpace 的既有语义。
+///   3. 已存在 botfather entry（sync 正常返回 / 新消息路径先到）时无操作。
+/// 返回 YES 表示实际合成了 entry（caller 可据此决定是否额外刷新 UI）。
+-(BOOL) ensureSystemBotsVisible;
 /**
  加载最近会话列表
  */
