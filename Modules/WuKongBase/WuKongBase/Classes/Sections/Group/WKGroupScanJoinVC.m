@@ -70,26 +70,61 @@
 
     NSString *path = [NSString stringWithFormat:@"groups/%@/scanjoin?auth_code=%@", self.groupNo, self.authCode];
     __weak typeof(self) weakSelf = self;
-    [[WKAPIClient sharedClient] GET:path parameters:nil].then(^{
+    // YUJ-213: scanjoin 成功响应现在由后端 (dmworkim PR#1250) 直接返回
+    //   { status, group_no, group_name, space_id, space_name, is_external }
+    // 以前 `.then(^{ })` 忽略 body — 现在按 NSDictionary 接住，便于就地判断
+    // 跨 Space + is_external。若未来服务端版本不带这些字段，回退到 VC
+    // 构造时由扫码/邀请链接解析器注入的 `self.targetSpaceId / Name` 字段
+    // （YUJ-141 的 legacy 通道），保持旧客户端 + 新服务端 / 新客户端 + 旧服务端
+    // 两个方向都不 crash。
+    [[WKAPIClient sharedClient] GET:path parameters:nil].then(^(id _Nullable resp) {
         [weakSelf.view hideHud];
 
-        // YUJ-141: 如果目标群属于另一个 Space，不能直接把用户推进群，
-        // 否则 iOS 会把 viewer 当前 Space 的上下文错位带进去（Web 对齐
-        // PR#1068 已修复）。先记下"跨 Space 加群成功"通知，pop 回主列表
-        // 由 WKConversationListVC viewDidAppear 弹双行 Toast + 紫色
-        // 「切换过去」按钮。用户显式点击才切 Space + 进群。
-        BOOL crossSpaceNoticeSaved =
-            [WKJoinGroupSuccessHelper computeAndSaveWithGroupNo:weakSelf.groupNo
-                                                  targetSpaceId:weakSelf.targetSpaceId
-                                                      groupName:weakSelf.groupName
-                                                      spaceName:weakSelf.targetSpaceName];
+        NSDictionary *respDict = [resp isKindOfClass:[NSDictionary class]] ? (NSDictionary *)resp : nil;
+
+        // -------- 响应字段优先，VC 入参（legacy）兜底 --------
+        NSString *(^pickStr)(NSString *, NSString *) = ^NSString *(NSString *key, NSString *fallback) {
+            id v = respDict[key];
+            if ([v isKindOfClass:[NSString class]] && ((NSString *)v).length > 0) {
+                return (NSString *)v;
+            }
+            return fallback;
+        };
+        NSString *targetSpaceId   = pickStr(@"space_id",   weakSelf.targetSpaceId);
+        NSString *targetSpaceName = pickStr(@"space_name", weakSelf.targetSpaceName);
+        // group_name 后端可能返回 canonical 最新名 — 优先响应值，退回扫码名。
+        NSString *effectiveGroupName = pickStr(@"group_name", weakSelf.groupName);
+
+        // 硬约束：is_external=1 的外部群不走跨 Space Toast（外部群会作为当前
+        // Space 下的外部会话出现在本地列表，没必要提醒"切过去"；Web/Android 对齐）。
+        BOOL isExternal = NO;
+        id externalRaw = respDict[@"is_external"];
+        if ([externalRaw isKindOfClass:[NSNumber class]] || [externalRaw isKindOfClass:[NSString class]]) {
+            isExternal = ([externalRaw integerValue] == 1);
+        }
+
+        // YUJ-141 / YUJ-213: 跨 Space 加群（非 external）— 不能直接把用户推进群，
+        // 否则 iOS 会把 viewer 当前 Space 的上下文错位带进去（Web 对齐 PR#1068）。
+        // 先记"跨 Space 加群成功"通知，pop 回主列表，由 WKConversationListVC
+        // viewDidAppear 弹双行 Toast + 紫色「切换过去」按钮。用户显式点击才切
+        // Space + 进群。硬约束：公共群/同 Space 不弹（Helper 内判定）；is_external=1
+        // 不走此 Toast（本层判定）。
+        // 统一 i18n key (三端一致): group_join_cross_space_notice
+        BOOL crossSpaceNoticeSaved = NO;
+        if (!isExternal) {
+            crossSpaceNoticeSaved =
+                [WKJoinGroupSuccessHelper computeAndSaveWithGroupNo:weakSelf.groupNo
+                                                      targetSpaceId:targetSpaceId
+                                                          groupName:effectiveGroupName
+                                                          spaceName:targetSpaceName];
+        }
         if (crossSpaceNoticeSaved) {
             // 不进群，直接 pop 回主列表，让 Dialog 在主页面消费。
             [[WKNavigationManager shared] popViewControllerAnimated:YES];
             return;
         }
 
-        // 同 Space / 无 Space 识别 → 维持旧行为（直接进群）。
+        // 同 Space / 无 Space 识别 / 外部群 → 维持旧行为（直接进群）。
         WKConversationVC *vc = [WKConversationVC new];
         vc.channel = [[WKChannel alloc] initWith:weakSelf.groupNo channelType:WK_GROUP];
         [[WKNavigationManager shared] replacePushViewController:vc animated:YES];
