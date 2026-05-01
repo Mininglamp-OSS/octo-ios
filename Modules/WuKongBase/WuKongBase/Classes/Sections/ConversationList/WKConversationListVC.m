@@ -7,6 +7,7 @@
 
 #import "WKConversationListVC.h"
 #import "WKConversationListVM.h"
+#import "WKSpaceFilter.h"
 #import "WKThreadCreatedContent.h"
 #import "WKConversationListCell.h"
 #import "WKConversationGroupThreadCell.h"
@@ -1216,6 +1217,35 @@
             [filtered addObject:conversation];
             continue;
         }
+        // YUJ-209: 新消息到达路径必须与冷启动 / Space 切换路径（WKConversationListVM.shouldShowConversation）
+        // 对齐——两者都走 WKSpaceFilter。否则外部群收到新消息时会被错挂到 viewer 当前 Space 列表，
+        // 污染 conversationListVM 单例的内存状态（DB / SDK 层已正确，见 YUJ-209 根因）。
+        //   - Keep: channelInfo.space_id == currentSpaceId 或 member.source_space_id == currentSpaceId
+        //   - Skip: channelInfo.space_id 明确不匹配且我不是外部成员 → 不加入当前 Space 列表
+        //   - FailOpen: channelInfo/member 未缓存，降级走下方白名单 / existsInList 原有逻辑（fail-open 原则）
+        if(conversation.channel.channelType == WK_GROUP) {
+            WKSpaceFilterDecision decision = [[WKSpaceFilter shared]
+                                               decideChannel:channelId
+                                                 channelType:conversation.channel.channelType];
+            if(decision == WKSpaceFilterDecisionSkip) {
+                // 明确归属其它 Space 且我不是当前 Space 的外部成员：
+                // 若单例内存中残留该群（历史串台或并发写入导致），同步清理，避免下次
+                // sortConversationList / refreshTable 再次浮到顶部。
+                if([self.conversationListVM indexAtChannel:conversation.channel] != -1) {
+                    [self.conversationListVM removeAtChannnel:conversation.channel];
+                }
+                continue;
+            }
+            if(decision == WKSpaceFilterDecisionKeep) {
+                // 明确归属当前 Space（owning 或 external-member）→ 直接通过，
+                // 不再绕 whitelist / verifyAndAddGroupsToList 走 sync 回兜。
+                [filtered addObject:conversation];
+                continue;
+            }
+            // FailOpen：WKChannelInfo 或 member.extra 未缓存（EP1 尚未回写）
+            // → 继续走下方原有 existsInList / whitelist / verifyAndAddGroupsToList 兜底路径。
+        }
+
         // 检查该会话是否已在当前列表中
         BOOL existsInList = [self.conversationListVM indexAtChannel:conversation.channel] != -1;
         if(existsInList) {
@@ -1397,8 +1427,19 @@
         return YES;
     }
 
-    // 群聊：检查白名单确定是否属于当前空间
+    // 群聊：先走 WKSpaceFilter（支持外部群 source_space_id 兜底，对齐 shouldShowConversation 与
+    // YUJ-209 的串台修复）。FailOpen 场景下再降级到 sync 白名单，保持兜底一致性。
     if(conversation.channel.channelType == WK_GROUP) {
+        WKSpaceFilterDecision decision = [[WKSpaceFilter shared]
+                                           decideChannel:channelId
+                                             channelType:conversation.channel.channelType];
+        if(decision == WKSpaceFilterDecisionKeep) {
+            return YES;
+        }
+        if(decision == WKSpaceFilterDecisionSkip) {
+            return NO;
+        }
+        // FailOpen：channelInfo / member 未缓存 → 走白名单兜底
         return [self.conversationListVM isGroupInWhitelist:conversation.channel.channelId];
     }
 
