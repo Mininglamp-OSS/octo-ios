@@ -52,9 +52,16 @@
         // home=当前 viewerSpaceId 匹配时 isExternal 已是 NO；无需额外判定。
         // viewerSpaceId 为空（未选空间）时 resolver 返回 isExternal=YES，但
         // 这种场景 sourceSpaceName 仍可显示，语义与 web 一致。
-        suffix = [NSString stringWithFormat:@" @%@", ext.sourceSpaceName];
+        //
+        // YUJ-190: 对齐 android PR#141 (YUJ-184) 换行方案 — @SpaceName 前
+        // 插入 `\n` 强制换到第二行，避免长 baseName + @SpaceName 被 tail
+        // truncate 折断（企微样式）。
+        suffix = [NSString stringWithFormat:@"\n@%@", ext.sourceSpaceName];
     }
     if (suffix.length > 0) {
+        // 多行 + word wrapping 以容纳第二行 @SpaceName
+        self.nameLbl.numberOfLines = 2;
+        self.nameLbl.lineBreakMode = NSLineBreakByTruncatingTail;
         NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:baseName
                                                                                 attributes:@{NSFontAttributeName: self.nameLbl.font ?: [[WKApp shared].config appFontOfSize:16.0f],
                                                                                              NSForegroundColorAttributeName: [WKApp shared].config.defaultTextColor ?: [UIColor blackColor]}];
@@ -64,6 +71,9 @@
                                                                                   NSForegroundColorAttributeName: suffixColor}]];
         self.nameLbl.attributedText = attr;
     } else {
+        // 非外部成员：保持单行显示（避免影响常规群布局）
+        self.nameLbl.numberOfLines = 1;
+        self.nameLbl.lineBreakMode = NSLineBreakByTruncatingTail;
         self.nameLbl.attributedText = nil;
         self.nameLbl.text = baseName;
     }

@@ -670,6 +670,50 @@
     }
 }
 
+#pragma mark - YUJ-190 external-for-viewer
+
+// YUJ-190: 公共入口。对齐 web `resolveExternalForViewer` (PR #1013/#1091)
+// 和 android `ExternalViewerResolver.isExternalForViewer` (YUJ-189 PR #135)。
+// 优先级：
+//   1) 群内路径：memberOfUser.extra 有 home_space_id 时权威
+//   2) 个人详情缓存：userHomeSpaceId（loadPersonChannelInfo 回填）
+//   3) legacy fallback：memberOfUser.extra / userIsExternalLegacy 的 is_external
+// 非 Space 模式（viewerSpaceId 为空）一律视为非外部，避免单 Space 场景误伤。
+-(BOOL) isExternalForViewer {
+    NSString *viewerSpaceId = [WKExternalViewerResolver currentViewerSpaceId];
+    // 非 Space 模式：跨 Space 判定不成立，按 Android `isExternalForViewer`
+    // 行为返回 NO（按钮走原有 isFriend / follow 分支）。
+    if (viewerSpaceId.length == 0) {
+        return NO;
+    }
+
+    // 1) 群内路径：优先用 memberOfUser.extra
+    if (self.memberOfUser && self.memberOfUser.extra) {
+        id homeId = self.memberOfUser.extra[WKExternalExtrasKeyHomeSpaceId];
+        if ([homeId isKindOfClass:[NSString class]] && [(NSString*)homeId length] > 0) {
+            WKExternalResolveResult *ext = [WKExternalViewerResolver resolveFromExtras:self.memberOfUser.extra
+                                                                         viewerSpaceId:viewerSpaceId];
+            return ext.isExternal;
+        }
+    }
+
+    // 2) 个人详情缓存（/users/<uid> 回填）
+    if (self.userHomeSpaceId.length > 0) {
+        return ![self.userHomeSpaceId isEqualToString:viewerSpaceId];
+    }
+
+    // 3) legacy fallback：member.extra 的 is_external，或 /users/<uid> 的 is_external
+    if (self.memberOfUser && self.memberOfUser.extra) {
+        id legacy = self.memberOfUser.extra[WKExternalExtrasKeyIsExternal];
+        if (legacy) {
+            WKExternalResolveResult *ext = [WKExternalViewerResolver resolveFromExtras:self.memberOfUser.extra
+                                                                         viewerSpaceId:viewerSpaceId];
+            return ext.isExternal;
+        }
+    }
+    return self.userIsExternalLegacy == 1;
+}
+
 @end
 
 

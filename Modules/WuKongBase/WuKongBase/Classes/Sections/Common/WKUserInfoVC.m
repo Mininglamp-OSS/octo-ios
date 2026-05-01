@@ -199,14 +199,21 @@
     if([self isSelf]) {
         self.footerHeader.hidden = YES;
     } else if (isSpaceMode) {
-        // Space 模式：根据实际好友关系决定按钮显示
-        if (self.viewModel.isActualFriend) {
-            // 实际好友 → 显示"发消息"
+        // YUJ-190: 对齐 web PR#1013/#1091 与 android PR#135 —
+        // 跨 Space 外部成员在 UserInfo 页不显示任何 footer 按钮（发消息 /
+        // 申请加好友），外部成员仅限群内沟通。
+        BOOL isExternal = [self.viewModel isExternalForViewer];
+        if (isExternal) {
+            self.sendBtn.hidden = YES;
+            self.addFriendBtn.hidden = YES;
+            self.footerHeader.hidden = YES;
+        } else if (self.viewModel.isActualFriend) {
+            // 同 Space 实际好友 → 显示"发消息"
             self.sendBtn.hidden = NO;
             self.addFriendBtn.hidden = YES;
             self.footerHeader.hidden = NO;
         } else {
-            // 非好友 Space 成员 → 显示"添加好友"（无需 vercode）
+            // 同 Space 非好友 → 显示"添加好友"（无需 vercode）
             self.sendBtn.hidden = YES;
             self.addFriendBtn.hidden = NO;
             self.footerHeader.hidden = NO;
