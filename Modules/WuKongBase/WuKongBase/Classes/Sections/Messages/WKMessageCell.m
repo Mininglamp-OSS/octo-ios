@@ -723,9 +723,6 @@ static NSMutableDictionary *flameNodeCacheDict;
     if([self isSystemOrRevoke:messageModel]) {
         return WKBubblePostionSingle;
     }
-    if(messageModel.hasSensitiveWord && !messageModel.isSend) { // 有敏感词
-        return  WKBubblePostionSingle;
-    }
     if(messageModel.reason) {
         return WKBubblePostionSingle;
     }

@@ -8,6 +8,7 @@
 #import "WKTextMessageCell.h"
 #import "WKMessageTextView.h"
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import "WKApp.h"
 #import "UIView+WK.h"
 #import "WKMentionService.h"
@@ -23,6 +24,7 @@
 #import <WebKit/WebKit.h>
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKExternalViewerResolver.h"
+#import "WKMessageListView.h"
 #import "WKReply+ExternalGroup.h"
 
 #define replyNameFontSize    13.0f
@@ -229,13 +231,7 @@ static NSMutableDictionary *_jsTableHeights;
 
 + (CGSize)sizeForMessage:(WKMessageModel *)model {
    CGSize size = [super sizeForMessage:model];
-    CGFloat securityTipHeight = 0.0f;
-    if(model.hasSensitiveWord && !model.isSend) {
-        securityTipHeight +=securityTipTopSpace;
-        CGSize tipSize = [[self class] getTextSize:[WKSecurityTipManager shared].tip maxWidth:[WKApp shared].config.messageContentMaxWidth fontSize:securityTipFontSize];
-        securityTipHeight += tipSize.height + 5.0f + 5.0f; // 5.0f+5.0f 为上下边距
-    }
-    return CGSizeMake(size.width, size.height + securityTipHeight);
+    return size;
 }
 
 +(WKMemoryCache*) textAttrCache {
@@ -1641,8 +1637,20 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
 
 
 -(void) layoutSubviews {
+    // 选区模式且临时切换为全文本时，跳过分段布局重算（保持手动设置的尺寸）
+    BOOL selHadSegments = [objc_getAssociatedObject(self, "kSelHadSegments") boolValue];
+    if (selHadSegments && [self wk_isInSelectionMode]) {
+        NSLog(@"[SelDebug] layoutSubviews SKIPPED (selection mode). bubble=%@ textLbl=%@ cell=%@",
+              NSStringFromCGSize(self.bubbleBackgroundView.lim_size),
+              NSStringFromCGSize(self.textLbl.lim_size),
+              NSStringFromCGSize(self.frame.size));
+        struct objc_super superSuper = { self, [UITableViewCell class] };
+        ((void(*)(struct objc_super*, SEL))objc_msgSendSuper)(&superSuper, @selector(layoutSubviews));
+        return;
+    }
+
     [super layoutSubviews];
-    
+
     if(!self.messageModel) {
         return;
     }
@@ -1794,14 +1802,7 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         self.viewFullTextBtn.frame = CGRectMake(0, btnTop, self.messageContentView.lim_width, kViewFullTextBtnHeight);
     }
 
-    self.securityTipLbl.lim_top = self.messageContentView.lim_bottom + securityTipTopSpace;
-    self.securityTipLbl.lim_centerX_parent = self.contentView;
-    
-    if(self.messageModel.hasSensitiveWord && !self.messageModel.isSend) {
-        self.securityTipLbl.hidden = NO;
-    }else{
-        self.securityTipLbl.hidden = YES;
-    }
+    self.securityTipLbl.hidden = YES;
     
    
 
@@ -2375,6 +2376,98 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
 
     self.transform = CGAffineTransformIdentity;
 
+    // 含表格的分段消息：临时切换为纯文本模式
+    BOOL hasSegments = self.segmentsBuilt && self.segmentViews.count > 1;
+    if (hasSegments) {
+        NSString *fullRawText = [[self class] getRawContent:self.messageModel];
+        if (fullRawText.length > 0) {
+            objc_setAssociatedObject(self, "kSelHadSegments", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(self, "kSelOrigSegAttrText", [self.textLbl.attributedText copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(self, "kSelOrigSegSize", [NSValue valueWithCGSize:self.textLbl.lim_size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+            // 隐藏分段视图
+            for (UIView *v in self.segmentViews) {
+                if (v != self.textLbl) v.hidden = YES;
+            }
+            for (UIScrollView *o in self.tableOverlays) { o.hidden = YES; }
+
+            // 用完整文本替换 textLbl
+            self.textLbl.attributedText = nil;
+            self.textLbl.text = fullRawText;
+            self.textLbl.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+            self.textLbl.textColor = self.messageModel.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
+            self.textLbl.hidden = NO;
+            CGSize fullSize = [self.textLbl sizeThatFits:CGSizeMake([WKApp shared].config.messageContentMaxWidth, CGFLOAT_MAX)];
+            self.textLbl.lim_size = fullSize;
+
+            // 构建与 heightForRowAtIndexPath 一致的缓存 key
+            NSInteger bubblePos = [[self class] bubblePosition:self.messageModel];
+            NSString *heightKey = [NSString stringWithFormat:@"%@-bp%ld", self.messageModel.clientMsgNo, (long)bubblePos];
+            if (self.messageModel.remoteExtra.contentEdit) {
+                heightKey = [NSString stringWithFormat:@"%@-e%lu", heightKey, (unsigned long)self.messageModel.remoteExtra.editedAt];
+            }
+
+            UIEdgeInsets contentInsets = [[self class] contentEdgeInsets:self.messageModel];
+            UIEdgeInsets bubbleInsets = [[self class] bubbleEdgeInsets:self.messageModel contentSize:fullSize];
+            CGFloat newCellHeight = fullSize.height + contentInsets.top + contentInsets.bottom + bubbleInsets.top + bubbleInsets.bottom;
+
+            NSNumber *origH = [[WKMessageListView cellHeightCache] objectForKey:heightKey];
+            NSLog(@"[SelDebug] key=%@ origHeight=%@ newHeight=%.1f", heightKey, origH, newCellHeight);
+            objc_setAssociatedObject(self, "kSelOrigHeight", origH, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(self, "kSelHeightKey", heightKey, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [[WKMessageListView cellHeightCache] setObject:@(newCellHeight) forKey:heightKey];
+
+            // 更新气泡大小
+            self.messageContentView.lim_size = fullSize;
+            self.bubbleBackgroundView.lim_size = CGSizeMake(
+                fullSize.width + contentInsets.left + contentInsets.right,
+                fullSize.height + contentInsets.top + contentInsets.bottom
+            );
+
+            NSLog(@"[SelDebug] BEFORE tableView update: cell.frame=%@ bubble=%@ contentView=%@ textLbl=%@",
+                  NSStringFromCGRect(self.frame),
+                  NSStringFromCGSize(self.bubbleBackgroundView.lim_size),
+                  NSStringFromCGSize(self.messageContentView.lim_size),
+                  NSStringFromCGSize(self.textLbl.lim_size));
+
+            // wk_isInSelectionMode 此时还未设置（后面才设置 kSelRangeLocKey），
+            // 所以需要提前设置标记让 layoutSubviews 跳过重算
+            // kSelHadSegments 已设置，但 wk_isInSelectionMode 依赖 kSelRangeLocKey
+            // → 先设置 kSelRangeLocKey/kSelRangeLenKey，让 wk_isInSelectionMode 返回 YES
+            NSUInteger textLen = self.textLbl.text.length;
+            objc_setAssociatedObject(self, &kSelRangeLocKey, @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(self, &kSelRangeLenKey, @(textLen), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+            // 触发 tableView 更新高度
+            UIView *v = self.superview;
+            while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
+            if ([v isKindOfClass:[UITableView class]]) {
+                UITableView *tv = (UITableView *)v;
+                [UIView performWithoutAnimation:^{
+                    [tv beginUpdates];
+                    [tv endUpdates];
+                }];
+
+                // beginUpdates/endUpdates 期间 layoutSubviews 可能被触发并覆盖气泡大小
+                // 重新强制设置正确的尺寸
+                self.textLbl.lim_size = fullSize;
+                self.messageContentView.lim_size = fullSize;
+                self.bubbleBackgroundView.lim_size = CGSizeMake(
+                    fullSize.width + contentInsets.left + contentInsets.right,
+                    fullSize.height + contentInsets.top + contentInsets.bottom
+                );
+
+                NSLog(@"[SelDebug] AFTER fix: cell.frame=%@ bubble=%@ contentView=%@ textLbl=%@",
+                      NSStringFromCGRect(self.frame),
+                      NSStringFromCGSize(self.bubbleBackgroundView.lim_size),
+                      NSStringFromCGSize(self.messageContentView.lim_size),
+                      NSStringFromCGSize(self.textLbl.lim_size));
+            } else {
+                NSLog(@"[SelDebug] ERROR: tableView not found in superview chain");
+            }
+        }
+    }
+
     UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
     CGFloat bottomMargin = 80.0f + window.safeAreaInsets.bottom;
     CGRect visibleArea = CGRectMake(0, window.safeAreaInsets.top, window.frame.size.width,
@@ -2390,10 +2483,13 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     // 保存原始 attributedText
     objc_setAssociatedObject(self, &kSelOrigAttrTextKey, [self.textLbl.attributedText copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 设置全选范围
+    // 全选范围（分段模式已提前设置，非分段模式在这里设置）
+    if (!hasSegments) {
+        NSUInteger textLen = self.textLbl.text.length;
+        objc_setAssociatedObject(self, &kSelRangeLocKey, @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(self, &kSelRangeLenKey, @(textLen), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
     NSUInteger textLen = self.textLbl.text.length;
-    objc_setAssociatedObject(self, &kSelRangeLocKey, @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, &kSelRangeLenKey, @(textLen), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     // 应用高亮
     [self wk_applyHighlightForRange:NSMakeRange(0, textLen)];
@@ -2507,6 +2603,47 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     objc_setAssociatedObject(self, &kSelectionVisibleKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelRangeLocKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelRangeLenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 恢复分段视图和高度
+    BOOL hadSegments = [objc_getAssociatedObject(self, "kSelHadSegments") boolValue];
+    if (hadSegments) {
+        // 恢复 textLbl 原始内容和大小
+        NSAttributedString *origAttr = objc_getAssociatedObject(self, "kSelOrigSegAttrText");
+        if (origAttr) self.textLbl.attributedText = origAttr;
+        NSValue *origSizeVal = objc_getAssociatedObject(self, "kSelOrigSegSize");
+        if (origSizeVal) self.textLbl.lim_size = [origSizeVal CGSizeValue];
+
+        // 显示分段视图
+        for (UIView *v in self.segmentViews) { v.hidden = NO; }
+        for (UIScrollView *o in self.tableOverlays) { o.hidden = NO; }
+
+        // 恢复高度缓存（用保存的完整 key）
+        NSString *heightKey = objc_getAssociatedObject(self, "kSelHeightKey");
+        NSNumber *origHeight = objc_getAssociatedObject(self, "kSelOrigHeight");
+        if (heightKey.length > 0 && origHeight) {
+            [[WKMessageListView cellHeightCache] setObject:origHeight forKey:heightKey];
+        }
+
+        // 触发 tableView 恢复高度
+        UIView *v = self.superview;
+        while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
+        if ([v isKindOfClass:[UITableView class]]) {
+            UITableView *tv = (UITableView *)v;
+            [UIView performWithoutAnimation:^{
+                [tv beginUpdates];
+                [tv endUpdates];
+            }];
+        }
+
+        [self setNeedsLayout];
+        [self layoutIfNeeded];
+    }
+    objc_setAssociatedObject(self, "kSelHadSegments", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, "kSelOrigSegAttrText", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, "kSelOrigSegSize", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, "kSelOrigHeight", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, "kSelHeightKey", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
 }
 
 #pragma mark - 自定义选区：高亮、句柄定位、拖拽
@@ -2635,6 +2772,15 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
 -(void) observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
     if (context != kSelScrollKVOCtx) { [super observeValueForKeyPath:keyPath ofObject:object change:change context:context]; return; }
     if (![self wk_isInSelectionMode]) return;
+
+    // cell 完全滑出屏幕时自动退出选区模式
+    CGRect cellInWindow = [self convertRect:self.bounds toView:nil];
+    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+    if (window && !CGRectIntersectsRect(cellInWindow, window.bounds)) {
+        [self endInBubbleTextSelection];
+        return;
+    }
+
     [self wk_hideSelectionPopup];
     [self wk_updateHandlePositions];
     // 滚动停止后重新显示菜单
@@ -2695,15 +2841,16 @@ static const NSInteger kSelectionPopupTag = 0x574B5350;
             }];
         }
     } else {
-        // 复制选中文字
+        // 复制选中文字（先快照 range 和 text，因为 dismiss 会清除选区）
+        NSRange capturedRange = selRange;
+        NSString *capturedText = [self.textLbl.text copy];
         UIImage *copyIcon = [GenerateImageUtils generateTintedImgWithImage:[[WKApp shared] loadImage:@"Conversation/ContextMenu/Copy" moduleID:@"WuKongBase"] color:iconTintColor backgroundColor:nil];
         [btns addObject:@{
             @"title": LLang(@"复制"),
             @"icon": copyIcon ?: [NSNull null],
             @"action": ^{
-                NSRange r = [weakSelf wk_currentSelRange];
-                if (r.length > 0 && NSMaxRange(r) <= weakSelf.textLbl.text.length) {
-                    [[UIPasteboard generalPasteboard] setString:[weakSelf.textLbl.text substringWithRange:r]];
+                if (capturedRange.length > 0 && NSMaxRange(capturedRange) <= capturedText.length) {
+                    [[UIPasteboard generalPasteboard] setString:[capturedText substringWithRange:capturedRange]];
                 }
             }
         }];
@@ -2810,9 +2957,22 @@ static const NSInteger kSelectionPopupTag = 0x574B5350;
         }
     }
 
-    // 菜单定位
-    NSValue *visibleVal = objc_getAssociatedObject(self, &kSelectionVisibleKey);
-    CGRect visFrame = visibleVal ? [visibleVal CGRectValue] : [self.textLbl convertRect:self.textLbl.bounds toView:nil];
+    // 菜单定位（实时计算选区位置，跟随滚动）
+    CGRect visFrame;
+    NSRange selRangeForPos = selRange;
+    if (selRangeForPos.length > 0 && selRangeForPos.location + selRangeForPos.length <= self.textLbl.text.length) {
+        NSLayoutManager *lm = self.textLbl.layoutManager;
+        NSTextContainer *tc = self.textLbl.textContainer;
+        [lm ensureLayoutForTextContainer:tc];
+        NSUInteger startGlyph = [lm glyphIndexForCharacterAtIndex:selRangeForPos.location];
+        NSUInteger endGlyph = [lm glyphIndexForCharacterAtIndex:NSMaxRange(selRangeForPos) - 1];
+        CGRect startRect = [lm boundingRectForGlyphRange:NSMakeRange(startGlyph, 1) inTextContainer:tc];
+        CGRect endRect = [lm boundingRectForGlyphRange:NSMakeRange(endGlyph, 1) inTextContainer:tc];
+        CGRect unionRect = CGRectUnion(startRect, endRect);
+        visFrame = [self.textLbl convertRect:unionRect toView:nil];
+    } else {
+        visFrame = [self.textLbl convertRect:self.textLbl.bounds toView:nil];
+    }
     CGFloat safeTop = window.safeAreaInsets.top + 8;
     CGFloat safeBot = window.frame.size.height - window.safeAreaInsets.bottom - 80;
     CGFloat cardX = MAX(8, MIN(visFrame.origin.x, window.frame.size.width - cardW - 8));
@@ -2842,6 +3002,88 @@ static const NSInteger kSelectionPopupTag = 0x574B5350;
     } else {
         block();
     }
+}
+
+/// 含表格消息的全屏文本选择浮层
+-(void) showFullTextSelectionOverlayWithMenuItems:(NSArray*)menuItems {
+    NSString *rawText = [[self class] getRawContent:self.messageModel];
+    if (!rawText.length) return;
+
+    UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+
+    UIView *dimView = [[UIView alloc] initWithFrame:window.bounds];
+    dimView.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35f];
+    dimView.alpha = 0;
+    dimView.tag = 99887;
+
+    CGFloat padding = 16.0f;
+    CGFloat maxW = window.bounds.size.width - padding * 2;
+    UITextView *tv = [[UITextView alloc] init];
+    tv.text = rawText;
+    tv.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
+    tv.textColor = [WKApp shared].config.defaultTextColor;
+    tv.backgroundColor = [WKApp shared].config.cellBackgroundColor;
+    tv.layer.cornerRadius = 12.0f;
+    tv.clipsToBounds = YES;
+    tv.editable = NO;
+    tv.selectable = YES;
+    tv.scrollEnabled = YES;
+    tv.textContainerInset = UIEdgeInsetsMake(12, 12, 12, 12);
+    CGFloat tvMaxH = window.bounds.size.height * 0.5f;
+    CGFloat tvH = MIN([tv sizeThatFits:CGSizeMake(maxW, CGFLOAT_MAX)].height + 24.0f, tvMaxH);
+    tv.frame = CGRectMake(padding, window.bounds.size.height - tvH - 60.0f, maxW, tvH);
+
+    UIButton *copyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [copyBtn setTitle:LLang(@"复制") forState:UIControlStateNormal];
+    copyBtn.titleLabel.font = [[WKApp shared].config appFontOfSizeMedium:16.0f];
+    copyBtn.backgroundColor = [WKApp shared].config.themeColor;
+    [copyBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    copyBtn.layer.cornerRadius = 10.0f;
+    copyBtn.clipsToBounds = YES;
+    copyBtn.frame = CGRectMake(padding, tv.frame.origin.y + tv.frame.size.height + 10.0f, maxW, 44.0f);
+
+    [dimView addSubview:tv];
+    [dimView addSubview:copyBtn];
+    [window addSubview:dimView];
+
+    __weak UIView *weakDim = dimView;
+    __weak UITextView *weakTV = tv;
+    void(^dismiss)(void) = ^{
+        [UIView animateWithDuration:0.2 animations:^{ weakDim.alpha = 0; } completion:^(BOOL f) { [weakDim removeFromSuperview]; }];
+    };
+    void(^copyAndDismiss)(void) = ^{
+        UITextView *strongTV = weakTV;
+        NSString *selectedText = nil;
+        if (strongTV && strongTV.selectedRange.length > 0) {
+            selectedText = [strongTV.text substringWithRange:strongTV.selectedRange];
+        }
+        if (!selectedText.length) selectedText = strongTV.text;
+        if (selectedText.length > 0) {
+            [[UIPasteboard generalPasteboard] setString:selectedText];
+            [weakDim.superview showHUDWithHide:LLang(@"已复制")];
+        }
+        dismiss();
+    };
+    objc_setAssociatedObject(copyBtn, "copyAndDismiss", copyAndDismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    [copyBtn addTarget:self action:@selector(wk_fullTextCopyTapped:) forControlEvents:UIControlEventTouchUpInside];
+
+    UITapGestureRecognizer *bgTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(wk_fullTextBgTap:)];
+    objc_setAssociatedObject(bgTap, "dismissBlock", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    [dimView addGestureRecognizer:bgTap];
+
+    [UIView animateWithDuration:0.2 animations:^{ dimView.alpha = 1; }];
+    [tv becomeFirstResponder];
+    [tv selectAll:nil];
+}
+
+-(void) wk_fullTextCopyTapped:(UIButton *)btn {
+    void(^block)(void) = objc_getAssociatedObject(btn, "copyAndDismiss");
+    if (block) block();
+}
+
+-(void) wk_fullTextBgTap:(UITapGestureRecognizer *)gr {
+    void(^block)(void) = objc_getAssociatedObject(gr, "dismissBlock");
+    if (block) block();
 }
 
 -(UIImage *) wk_imageWithColor:(UIColor *)color {
