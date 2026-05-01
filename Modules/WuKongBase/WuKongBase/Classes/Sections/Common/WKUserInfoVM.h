@@ -88,6 +88,16 @@ NS_ASSUME_NONNULL_BEGIN
 /// 检查与指定用户的实际好友关系（通过 friend/relation API）
 -(void) checkFriendRelation:(NSString*)uid completion:(void(^)(BOOL isFriend))completion;
 
+/// YUJ-190: viewer-relative 判定「当前页面 uid 对当前观察者（currentSpaceId）是否外部」。
+/// 规则对齐 web `resolveExternalForViewer` (PR #1013/#1091) 与 android
+/// `ExternalViewerResolver` (YUJ-189 PR #135)：
+///   - 群内路径（有 memberOfUser.extra）：优先取 member.extra 里的
+///     home_space_id / is_external 走 `WKExternalViewerResolver`
+///   - 个人详情路径：走 loadPersonChannelInfo 缓存的 userHomeSpaceId /
+///     userIsExternalLegacy（/users/<uid> 响应）
+/// 用于 WKUserInfoVC 隐藏「申请加好友」按钮（外部成员仅限群内沟通）。
+-(BOOL) isExternalForViewer;
+
 -(void) initData;
 
 @end

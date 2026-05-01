@@ -1,0 +1,201 @@
+//
+//  WKSpaceFilter.m
+//  WuKongBase
+//
+//  Created by Titan on 2026-04-29.
+//
+
+#import "WKSpaceFilter.h"
+#import <WuKongIMSDK/WuKongIMSDK.h>
+#import "WKApp.h"
+
+static NSString *const kSpaceIdUserDefaultsKey = @"currentSpaceId";
+static NSString *const kChannelSpaceIdExtraKey = @"space_id";
+static NSString *const kMemberSourceSpaceIdExtraKey = @"source_space_id";
+
+#pragma mark - Default Provider
+
+@interface WKDefaultSpaceFilterDataProvider : NSObject <WKSpaceFilterDataProvider>
+@end
+
+@implementation WKDefaultSpaceFilterDataProvider
+
+- (nullable NSString *)spaceIdForChannelId:(NSString *)channelId
+                               channelType:(uint8_t)channelType {
+    if (channelId.length == 0) return nil;
+    WKChannel *channel = [WKChannel channelID:channelId channelType:channelType];
+    WKChannelInfo *info = [[WKChannelInfoDB shared] queryChannelInfo:channel];
+    if (!info || !info.extra) return nil;
+    // 依赖 EP1（YUJ-92）在 channelInfo.extra 中持久化 `space_id` 字段。
+    // EP1 合并前此处恒为 nil，SpaceFilter 会 fail-open 降级到白名单。
+    id value = info.extra[kChannelSpaceIdExtraKey];
+    if ([value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0) {
+        return (NSString *)value;
+    }
+    return nil;
+}
+
+- (nullable NSString *)mySourceSpaceIdForChannelId:(NSString *)channelId
+                                       channelType:(uint8_t)channelType {
+    if (channelId.length == 0) return nil;
+    if (channelType != WK_GROUP) return nil; // 私聊无 subscriber
+    NSString *myUID = [WKApp shared].loginInfo.uid;
+    if (![myUID isKindOfClass:[NSString class]] || myUID.length == 0) return nil;
+    WKChannel *channel = [WKChannel channelID:channelId channelType:channelType];
+    WKChannelMember *member = [[WKChannelMemberDB shared] get:channel memberUID:myUID];
+    if (!member || !member.extra) return nil;
+    // 依赖 EP1（YUJ-92）在 WKGroupMemberModel.toChannelMember 中把
+    // `source_space_id` 写入 member.extra。EP1 合并前此处恒为 nil，
+    // WKSpaceFilter 会 fail-open 降级到 WKConversationListVM 的
+    // syncedGroupChannelIds 白名单兜底，行为等价当前 develop。
+    id value = member.extra[kMemberSourceSpaceIdExtraKey];
+    if ([value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0) {
+        return (NSString *)value;
+    }
+    return nil;
+}
+
+@end
+
+
+#pragma mark - WKSpaceFilter
+
+@implementation WKSpaceFilter
+
++ (instancetype)shared {
+    static WKSpaceFilter *_instance;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        _instance = [[WKSpaceFilter alloc] init];
+        _instance.provider = [[WKDefaultSpaceFilterDataProvider alloc] init];
+    });
+    return _instance;
+}
+
+- (nullable NSString *)currentSpaceId {
+    NSString *sid = [[NSUserDefaults standardUserDefaults] stringForKey:kSpaceIdUserDefaultsKey];
+    if (![sid isKindOfClass:[NSString class]] || sid.length == 0) return nil;
+    return sid;
+}
+
+#pragma mark - 前缀辅助
+
++ (BOOL)_isHex32:(NSString *)s {
+    if (s.length != 32) return NO;
+    for (NSUInteger i = 0; i < 32; i++) {
+        unichar c = [s characterAtIndex:i];
+        BOOL ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+        if (!ok) return NO;
+    }
+    return YES;
+}
+
+/// 检测并返回 `s{32hex}_rest` 格式中的 spaceId
++ (nullable NSString *)_spaceIdFromChannelPrefix:(NSString *)channelId {
+    if (channelId.length < 34) return nil;
+    if ([channelId characterAtIndex:0] != 's') return nil;
+    if ([channelId characterAtIndex:33] != '_') return nil;
+    NSString *hex = [channelId substringWithRange:NSMakeRange(1, 32)];
+    if (![self _isHex32:hex]) return nil;
+    return hex;
+}
+
+#pragma mark - 纯函数
+
++ (WKSpaceFilterDecision)decideWithChannelId:(nullable NSString *)channelId
+                                  channelType:(uint8_t)channelType
+                               currentSpaceId:(nullable NSString *)currentSpaceId
+                               channelSpaceId:(nullable NSString *)channelSpaceId
+                              mySourceSpaceId:(nullable NSString *)mySourceSpaceId {
+    // 1. space-empty-pass
+    if (currentSpaceId.length == 0) return WKSpaceFilterDecisionKeep;
+    if (channelId.length == 0) return WKSpaceFilterDecisionKeep;
+
+    // 2. space-prefix：`s{32hex}_*` 仅作为 Keep 的**快速路径**。
+    //    前缀不匹配时**不**直接 Skip —— 必须继续跑 Person/Group 判定，
+    //    否则外部群（owning Space 前缀与当前 Space 不同，但我以当前 Space 身份
+    //    加入为外部成员）会被错杀。真正的 Skip 由 cached-mismatch 分支作出。
+    NSString *prefixSpace = [self _spaceIdFromChannelPrefix:channelId];
+    if (prefixSpace && [prefixSpace isEqualToString:currentSpaceId]) {
+        return WKSpaceFilterDecisionKeep;
+    }
+
+    // 3. person-pass：私聊不按 channelId 过滤（另有消息级过滤）
+    if (channelType == WK_PERSON) return WKSpaceFilterDecisionKeep;
+
+    BOOL hasChannelSpace = (channelSpaceId.length > 0);
+    BOOL hasMySource = (mySourceSpaceId.length > 0);
+
+    // 4. cached-match / cached-external-member / cached-mismatch
+    //    注意：只有在 `mySourceSpaceId` 已知（member record 已缓存）时才能作出
+    //    Skip 判断；如果 member 数据尚未就绪，无法区分"非成员"和"member 未加载"，
+    //    必须 fail-open 让 caller 走 whitelist / channelInfo 二次回调兜底，
+    //    否则外部群在 member sync 期间会短暂消失（codex P2 回归）。
+    if (hasChannelSpace) {
+        if ([channelSpaceId isEqualToString:currentSpaceId]) {
+            return WKSpaceFilterDecisionKeep;           // cached-match
+        }
+        if (hasMySource) {
+            if ([mySourceSpaceId isEqualToString:currentSpaceId]) {
+                return WKSpaceFilterDecisionKeep;       // cached-external-member
+            }
+            return WKSpaceFilterDecisionSkip;           // cached-mismatch（确知非当前 Space 成员）
+        }
+        // member 未缓存：不能武断 Skip，降级给 whitelist 判定
+        return WKSpaceFilterDecisionFailOpen;
+    }
+
+    // 5. 仅成员缓存就绪（info 未回）但是我是当前 Space 的外部成员 → 放行
+    if (hasMySource && [mySourceSpaceId isEqualToString:currentSpaceId]) {
+        return WKSpaceFilterDecisionKeep;
+    }
+
+    // 6. fail-open：等 channelInfo 回调后二次检查
+    return WKSpaceFilterDecisionFailOpen;
+}
+
+#pragma mark - 实例判定
+
+- (WKSpaceFilterDecision)decideChannel:(NSString *)channelId
+                           channelType:(uint8_t)channelType {
+    NSString *current = [self currentSpaceId];
+    NSString *channelSpace = [self.provider spaceIdForChannelId:channelId
+                                                    channelType:channelType];
+    NSString *mySource = [self.provider mySourceSpaceIdForChannelId:channelId
+                                                        channelType:channelType];
+    return [WKSpaceFilter decideWithChannelId:channelId
+                                  channelType:channelType
+                               currentSpaceId:current
+                               channelSpaceId:channelSpace
+                              mySourceSpaceId:mySource];
+}
+
+- (BOOL)shouldSkipChannelForSpace:(NSString *)channelId
+                      channelType:(uint8_t)channelType {
+    return [self decideChannel:channelId channelType:channelType] == WKSpaceFilterDecisionSkip;
+}
+
+#pragma mark - 消息级
+
+- (BOOL)shouldSkipMessageForSpace:(WKMessage *)message
+                      channelType:(uint8_t)channelType {
+    if (channelType != WK_PERSON) return NO;
+    NSString *current = [self currentSpaceId];
+    if (current.length == 0) return NO;
+    if (!message || !message.content) return NO;
+    id value = message.content.contentDict[kChannelSpaceIdExtraKey];
+    if (![value isKindOfClass:[NSString class]] || [(NSString *)value length] == 0) {
+        return NO; // 历史/旧消息无 space_id → 放行（向前兼容）
+    }
+    return ![(NSString *)value isEqualToString:current];
+}
+
+#pragma mark - 外部群身份
+
+- (nullable NSString *)getMyMembershipSourceSpaceId:(WKChannel *)channel {
+    if (!channel || channel.channelId.length == 0) return nil;
+    return [self.provider mySourceSpaceIdForChannelId:channel.channelId
+                                          channelType:channel.channelType];
+}
+
+@end

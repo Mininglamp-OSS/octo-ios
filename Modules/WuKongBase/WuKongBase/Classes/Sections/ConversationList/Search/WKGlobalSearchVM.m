@@ -300,7 +300,10 @@
             NSString *rawName = friend[@"channel_name"]?:@"";
             NSString *name = (remark.length > 0) ? [self stripHTMLTags:remark] : [self stripHTMLTags:rawName];
             NSString *uid = friend[@"channel_id"]?:@"";
-            [friendItems addObject:@{
+            // YUJ-156 外部成员 @SpaceName 字段透传：后端若返回 home_space_* / is_external
+            // / source_space_name 则原样挂到 cell model，cell 侧走 WKExternalViewerResolver
+            // 判定。字段缺失保持 nil → 非外部行为，向后兼容。
+            NSMutableDictionary *friendItem = [@{
                       @"class":WKSearchContactsModel.class,
                       @"name":name,
                       @"avatar":[WKAvatarUtil getAvatar:uid],
@@ -310,7 +313,9 @@
                       @"onClick":^{
                         [[WKApp shared] invoke:WKPOINT_USER_INFO param:@{@"uid":uid}];
                       }
-                   }];
+                   } mutableCopy];
+            [self applyExternalFieldsTo:friendItem from:friend];
+            [friendItems addObject:friendItem];
         }
         [items addObject:@{
             @"height":WKSectionHeight,
@@ -335,7 +340,8 @@
             NSString *gRawName = group[@"channel_name"]?:@"";
             NSString *name = (gRemark.length > 0) ? [self stripHTMLTags:gRemark] : [self stripHTMLTags:gRawName];
             NSString *groupNo = group[@"channel_id"]?:@"";
-            [groupsItems addObject:@{
+            // YUJ-156 外部群 @SpaceName：与 friends 一致，字段透传不改搜索逻辑。
+            NSMutableDictionary *groupItem = [@{
                @"class":WKSearchContactsModel.class,
                @"name":name?:@"",
                @"avatar":[WKAvatarUtil getGroupAvatar:groupNo],
@@ -345,7 +351,9 @@
                @"onClick":^{
                 [[WKApp shared] pushConversation:[WKChannel groupWithChannelID:groupNo]];
             }
-            }];
+            } mutableCopy];
+            [self applyExternalFieldsTo:groupItem from:group];
+            [groupsItems addObject:groupItem];
         }
         
         
@@ -491,6 +499,14 @@
            
             
             
+            NSString *msgHomeSpaceId   = [self firstNonEmptyString:@[message[@"from_home_space_id"]?:@"",
+                                                                      (message[@"channel"]&&message[@"channel"]!=[NSNull null])?(message[@"channel"][@"home_space_id"]?:@""):@""]];
+            NSString *msgHomeSpaceName = [self firstNonEmptyString:@[message[@"from_home_space_name"]?:@"",
+                                                                      (message[@"channel"]&&message[@"channel"]!=[NSNull null])?(message[@"channel"][@"home_space_name"]?:@""):@""]];
+            NSString *msgSrcSpaceName  = [self firstNonEmptyString:@[message[@"from_source_space_name"]?:@"",
+                                                                      message[@"source_space_name"]?:@""]];
+            NSNumber *msgIsExternal    = message[@"from_is_external"]?:(message[@"is_external"]?:@(0));
+
             [messagesItems addObject:@{
                 @"class":WKSearchMessageModel.class,
                 @"channel":requestChannel,
@@ -500,6 +516,13 @@
                 @"showBottomLine":@(NO),
                 @"showTopLine":@(NO),
                 @"bottomLeftSpace":@(0.0),
+                // YUJ-156 外部群/发送者 @SpaceName：消息级 from_home_space_* 优先
+                // （sender 维度），回退 channel 级 home_space_* （会话维度），最后
+                // legacy is_external / source_space_name。三端字段契约一致。
+                @"home_space_id": msgHomeSpaceId?:@"",
+                @"home_space_name": msgHomeSpaceName?:@"",
+                @"is_external": msgIsExternal,
+                @"source_space_name": msgSrcSpaceName?:@"",
                 @"onClick":^{
                 WKConversationVC *vc = [[WKConversationVC alloc] init];
                 vc.channel = channel;
@@ -577,6 +600,33 @@
     }
         
     return items;
+}
+
+// YUJ-156 帮助方法：将后端返回的 home_space_id / home_space_name / is_external /
+// source_space_name 字段透传到 cell model dict。字段全部可选，缺失保留 nil → cell
+// 侧 resolver 判定为非外部，向后兼容。"不改搜索逻辑本身" 硬约束：此方法只负责
+// 字段拷贝，不做任何业务判断。
+- (void)applyExternalFieldsTo:(NSMutableDictionary *)item from:(NSDictionary *)raw {
+    if (!item || !raw) return;
+    id homeId   = raw[@"home_space_id"];
+    id homeName = raw[@"home_space_name"];
+    id isExt    = raw[@"is_external"];
+    id srcName  = raw[@"source_space_name"];
+    if (homeId   && homeId   != [NSNull null]) item[@"home_space_id"]   = homeId;
+    if (homeName && homeName != [NSNull null]) item[@"home_space_name"] = homeName;
+    if (isExt    && isExt    != [NSNull null]) item[@"is_external"]     = isExt;
+    if (srcName  && srcName  != [NSNull null]) item[@"source_space_name"] = srcName;
+}
+
+// 返回候选字符串数组中第一个非空字符串；全空返回 nil。messages 场景用于
+// "sender-level 优先，channel-level 回退" 的字段优先级解析。
+- (nullable NSString *)firstNonEmptyString:(NSArray *)candidates {
+    for (id s in candidates) {
+        if ([s isKindOfClass:[NSString class]] && ((NSString *)s).length > 0) {
+            return (NSString *)s;
+        }
+    }
+    return nil;
 }
 
 

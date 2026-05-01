@@ -440,7 +440,13 @@
         __weak typeof(self) weakSelf = self;
         if(headers){
             [headers enumerateKeysAndObjectsUsingBlock:^(id  _Nonnull key, id  _Nonnull obj, BOOL * _Nonnull stop) {
-                [weakSelf.sessionManager.requestSerializer setValue:obj forHTTPHeaderField:key];
+                // 空字串代表 caller 希望清除该 header（避免 stale value 粘在 requestSerializer 上）
+                NSString *valueStr = [obj isKindOfClass:[NSString class]] ? (NSString *)obj : [obj description];
+                if (valueStr.length == 0) {
+                    [weakSelf.sessionManager.requestSerializer setValue:nil forHTTPHeaderField:key];
+                } else {
+                    [weakSelf.sessionManager.requestSerializer setValue:valueStr forHTTPHeaderField:key];
+                }
             }];
         }
     }

@@ -14,6 +14,7 @@
 #import "WKCategoryEntity.h"
 #import "WKCategoryService.h"
 #import <WuKongIMSDK/WKReminderDB.h>
+#import "WKSpaceFilter.h"
 @interface WKConversationListVM ()
 @property(nonatomic,strong) NSMutableArray<WKConversationWrapModel*> *conversationWrapModels;
 @property(nonatomic,strong) NSMutableDictionary<NSString*, WKConversationWrapModel*> *channelIndex; // channel key → model, O(1) lookup
@@ -413,12 +414,23 @@ static WKConversationListVM *_instance;
         }
         return YES;
     }
-    // 群聊：群聊消息不带space_id，无法通过消息内容判断归属空间
-    // 使用sync后记录的白名单过滤：
-    //   - nil: 尚未sync（首次启动DB清空后），暂不过滤
-    //   - 空集合: sync完成但当前空间无群聊，过滤掉所有群聊
-    //   - 非空: 只显示白名单中的群聊
+    // 群聊：优先走 WKSpaceFilter（支持外部群 source_space_id 兜底，对齐 dmwork-web PR #1036 #1037）
+    //   - Keep: channelInfo.space_id == currentSpaceId 或 member.source_space_id == currentSpaceId
+    //   - Skip: channelInfo.space_id 明确不匹配且我不是外部成员
+    //   - FailOpen: channelInfo 未缓存，降级走白名单（iOS 原有兼容路径）
     if(conversation.channel.channelType == WK_GROUP) {
+        WKSpaceFilterDecision decision = [[WKSpaceFilter shared] decideChannel:conversation.channel.channelId
+                                                                  channelType:conversation.channel.channelType];
+        if(decision == WKSpaceFilterDecisionKeep) {
+            return YES;
+        }
+        if(decision == WKSpaceFilterDecisionSkip) {
+            return NO;
+        }
+        // fail-open：用 sync 白名单兜底
+        //   - nil: 尚未sync（首次启动DB清空后），暂不过滤
+        //   - 空集合: sync完成但当前空间无群聊，过滤掉所有群聊
+        //   - 非空: 只显示白名单中的群聊
         if(self.syncedGroupChannelIds) {
             return [self.syncedGroupChannelIds containsObject:conversation.channel.channelId];
         }

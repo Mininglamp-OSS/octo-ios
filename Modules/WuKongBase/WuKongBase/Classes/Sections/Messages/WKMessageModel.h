@@ -151,6 +151,15 @@ typedef enum : NSUInteger {
 
 @property(nonatomic,copy,readonly) NSString *streamNo;
 
+// ---------- 外部群 (External Group) Phase 1 消息级 getter ----------
+// 对齐 web MessageWrap 语义（from_is_external / from_source_space_name / from_home_space_id / from_home_space_name）
+// 数据流：WKMessageUtil.toMessage 把后端顶层字段写进 message.extra, 这里暴露给 UI 层.
+// 兜底策略（策略 B）：extra 没有时, 回落到 memberOfFrom.extra 对应键, 避免 SetEffectiveSpaceID 漏发时 UI 静默失败.
+@property(nonatomic,assign,readonly) BOOL fromIsExternal;              // 发送者是否为外部成员
+@property(nonatomic,copy,readonly,nullable)   NSString *fromSourceSpaceName; // 发送者来源 space 名称
+@property(nonatomic,copy,readonly,nullable)   NSString *fromHomeSpaceId;     // 发送者归属 space id (YUJ-63)
+@property(nonatomic,copy,readonly,nullable)   NSString *fromHomeSpaceName;   // 发送者归属 space 名称 (YUJ-63)
+
 @property(nonatomic,assign) WKStreamFlag streamFlag;
 
 @property(nonatomic,strong,readonly) NSMutableArray<WKStream*> *streams;

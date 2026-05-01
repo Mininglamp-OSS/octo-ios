@@ -21,6 +21,7 @@
 #import "UIView+WK.h"
 #import "UIView+WKCommon.h"
 #import "WKAPIClient.h"
+#import "WKSpaceFilter.h"
 #import "WKModel.h"
 #import "WKLogs.h"
 #import "WKKitDB.h"

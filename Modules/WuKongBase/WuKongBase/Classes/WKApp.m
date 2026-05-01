@@ -24,6 +24,7 @@
 #import "WKMoreItemClickEvent.h"
 #import "WKImageMessageCell.h"
 #import "WKConversationContext.h"
+#import "WKSpaceFilter.h"
 #import "WKVoicePanel.h"
 #import "WKVoiceMessageCell.h"
 #import "WKGroupManager.h"
@@ -565,10 +566,14 @@ static WKApp *_instance;
         [header setObject:[self config].bundleID forKey:@"bundle_id"];
         if([WKApp shared].isLogined) {
             [header setObject:[WKApp shared].loginInfo.token forKey:@"token"];
-            return header;
         }
+        // X-Space-Id header — 动态注入（对齐 dmwork-web PR #1039）
+        // 每次请求都读 WKSpaceFilter.currentSpaceId，Space 切换立即生效。
+        // 空值时以空字串标记，由 WKAPIClient resetPublicHeader 负责移除 stale header。
+        NSString *currentSpaceId = [[WKSpaceFilter shared] currentSpaceId];
+        [header setObject:(currentSpaceId.length > 0 ? currentSpaceId : @"") forKey:@"X-Space-Id"];
         return  header;
-        
+
     }];
     // 路径替换
     [config setRequestPathReplace:^NSString *(NSString *requestPath) {
@@ -1484,6 +1489,10 @@ static WKApp *_instance;
             vc.groupAvatar = result.data[@"avatar"] ?: @"";
             vc.memberCount = [result.data[@"member_count"] integerValue];
             vc.isMember = [result.data[@"is_member"] boolValue];
+            // YUJ-141: 扫码/邀请链接携带的目标 Space 上下文（后端契约：space_id / space_name）。
+            // 允许字段缺失 — 缺失时走 legacy 同 Space 路径，不弹切换 dialog。
+            vc.targetSpaceId = [result.data[@"space_id"] isKindOfClass:[NSString class]] ? result.data[@"space_id"] : nil;
+            vc.targetSpaceName = [result.data[@"space_name"] isKindOfClass:[NSString class]] ? result.data[@"space_name"] : nil;
             [[WKNavigationManager shared] replacePushViewController:vc animated:YES];
             return true;
         }];

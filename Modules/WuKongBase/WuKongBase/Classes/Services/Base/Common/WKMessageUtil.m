@@ -10,6 +10,7 @@
 #import "WKApp.h"
 #import <WuKongIMSDK/WKSignalErrorContent.h>
 #import "WuKongBase.h"
+#import "WKReply+ExternalGroup.h"
 @implementation WKMessageUtil
 
 
@@ -143,11 +144,44 @@
         message.fromUid = messageContent.senderUserInfo?messageContent.senderUserInfo.uid:@"";
     }
     message.isDeleted = messageDict[@"is_deleted"]?[messageDict[@"is_deleted"] integerValue]:0;
-    
+
     if(!message.isDeleted && message.content.visibles && message.content.visibles.count>0) {
         message.isDeleted  =  ![message.content.visibles containsObject:[WKApp shared].loginInfo.uid];
     }
-    
+
+    // ---------- 外部群 (External Group) Phase 1：消息级字段透传 ----------
+    // 来源：后端下发的消息字典顶层字段 from_is_external / from_source_space_name / from_home_space_id / from_home_space_name
+    // 目标：写入 message.extra，上层 MessageWrap 风格的 getter（见 WKMessageModel.externalGroup.h）可直接读取
+    // 策略 B 兜底：即使后端 SetEffectiveSpaceID 没给，UI 层仍可结合 memberOfFrom.extra 做一次本地判定
+    id fromIsExternalRaw = messageDict[@"from_is_external"];
+    if([fromIsExternalRaw isKindOfClass:[NSNumber class]] || [fromIsExternalRaw isKindOfClass:[NSString class]]) {
+        message.extra[@"from_is_external"] = @([fromIsExternalRaw integerValue] == 1 ? 1 : 0);
+    }
+    id fromSourceSpaceNameRaw = messageDict[@"from_source_space_name"];
+    if([fromSourceSpaceNameRaw isKindOfClass:[NSString class]] && [(NSString*)fromSourceSpaceNameRaw length] > 0) {
+        message.extra[@"from_source_space_name"] = fromSourceSpaceNameRaw;
+    }
+    // YUJ-63 viewer-relative home space
+    id fromHomeSpaceIdRaw = messageDict[@"from_home_space_id"];
+    if([fromHomeSpaceIdRaw isKindOfClass:[NSString class]] && [(NSString*)fromHomeSpaceIdRaw length] > 0) {
+        message.extra[@"from_home_space_id"] = fromHomeSpaceIdRaw;
+    }
+    id fromHomeSpaceNameRaw = messageDict[@"from_home_space_name"];
+    if([fromHomeSpaceNameRaw isKindOfClass:[NSString class]] && [(NSString*)fromHomeSpaceNameRaw length] > 0) {
+        message.extra[@"from_home_space_name"] = fromHomeSpaceNameRaw;
+    }
+
+    // ---------- 外部群 · Reply 子字典字段（YUJ-131，对齐 web PR #1073） ----------
+    // payloadDict 是协议层 content 原始 dict。decodeReply 把 reply 展开成 WKReply 对象
+    // 但不保留同类外部群字段；这里从 payloadDict[@"reply"] 再读一次，把 4 个字段
+    // 安置到 WKReply 关联属性上，供消息气泡内的 Reply 预览 + 输入框 Reply 预览统一使用。
+    if(messageContent.reply && [payloadDict isKindOfClass:[NSDictionary class]]) {
+        id replyRaw = payloadDict[@"reply"];
+        if([replyRaw isKindOfClass:[NSDictionary class]]) {
+            [self applyMsgLevelExternalFieldsToReply:messageContent.reply dict:replyRaw];
+        }
+    }
+
     // 回应
     if(messageDict[@"reactions"]) {
         NSArray<NSDictionary*> *reactionDicts = messageDict[@"reactions"];
@@ -253,9 +287,40 @@
         messageExtra.contentEditData = planPayloadData;
         messageExtra.contentEdit = messageContent;
     }
-    
+
     return messageExtra;
 }
 
+#pragma mark - YUJ-131 · Reply external-group helper
+
++ (void)applyMsgLevelExternalFieldsToReply:(WKReply*)reply dict:(NSDictionary*)dict {
+    if(!reply || ![dict isKindOfClass:[NSDictionary class]]) {
+        return;
+    }
+
+    // from_home_space_id —— 新路径优先（YUJ-63 viewer-relative）
+    id homeIdRaw = dict[@"from_home_space_id"];
+    if([homeIdRaw isKindOfClass:[NSString class]] && [(NSString*)homeIdRaw length] > 0) {
+        reply.fromHomeSpaceId = homeIdRaw;
+    }
+
+    // from_home_space_name
+    id homeNameRaw = dict[@"from_home_space_name"];
+    if([homeNameRaw isKindOfClass:[NSString class]] && [(NSString*)homeNameRaw length] > 0) {
+        reply.fromHomeSpaceName = homeNameRaw;
+    }
+
+    // from_is_external —— legacy 兼容
+    id isExtRaw = dict[@"from_is_external"];
+    if([isExtRaw isKindOfClass:[NSNumber class]] || [isExtRaw isKindOfClass:[NSString class]]) {
+        reply.fromIsExternal = ([isExtRaw integerValue] == 1);
+    }
+
+    // from_source_space_name —— legacy 兼容 + resolver 兜底用
+    id sourceNameRaw = dict[@"from_source_space_name"];
+    if([sourceNameRaw isKindOfClass:[NSString class]] && [(NSString*)sourceNameRaw length] > 0) {
+        reply.fromSourceSpaceName = sourceNameRaw;
+    }
+}
 
 @end

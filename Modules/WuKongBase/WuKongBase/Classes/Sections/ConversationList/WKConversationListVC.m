@@ -38,6 +38,9 @@
 #import "WKSpaceModel.h"
 #import "WKSpacePopupView.h"
 #import "WKSyncService.h"
+#import "WKJoinGroupSuccessHelper.h"
+#import "WKJoinGroupSuccessDialog.h"
+#import "WKConversationVC.h"
 #import "WKSpaceConversationCache.h"
 #import "WKPCOnlineVC.h"
 #import "WKPixelParticleHint.h"
@@ -365,6 +368,33 @@
 
     // 启动 PC 在线状态轮询（服务器只推送登录不推送退出，需要轮询检测退出）
     [self startPCOnlineCheckTimer];
+
+    // YUJ-141: 消费跨 Space 加群通知（见 WKGroupScanJoinVC.joinBtnPressed）。
+    // 放在 viewDidAppear 而非 viewWillAppear — WKGroupScanJoinVC pop 的动画
+    // 完成后主列表才真正回到前台，这时候 window 才有资格承载 Dialog。
+    [self consumeJoinGroupSuccessNoticeIfAny];
+}
+
+/// YUJ-141: 消费一次性「跨 Space 加群成功」通知 — 弹双行 dialog + 紫色切换按钮。
+/// 本方法被设计成幂等且每次 viewDidAppear 调用 — Helper 的 consumeNotice 保证
+/// 读后即清，不会重复弹窗。
+- (void)consumeJoinGroupSuccessNoticeIfAny {
+    WKJoinGroupSuccessNotice *notice = [WKJoinGroupSuccessHelper consumeNotice];
+    if (!notice) { return; }
+
+    __weak typeof(self) weakSelf = self;
+    [WKJoinGroupSuccessDialog showWithNotice:notice onSwitch:^{
+        // 先切 Space — 切换完成后 push 到目标群。
+        // 硬约束：只有用户显式点击才走到这里，dialog 的 cancel/backdrop 分支不会触发。
+        [weakSelf performSwitchToSpaceId:notice.targetSpaceId
+                               spaceName:notice.spaceName
+                              completion:^{
+            // 切换后直接进入目标群。用 replacePush 避免栈里堆积空壳。
+            WKConversationVC *vc = [WKConversationVC new];
+            vc.channel = [[WKChannel alloc] initWith:notice.groupNo channelType:WK_GROUP];
+            [[WKNavigationManager shared] pushViewController:vc animated:YES];
+        }];
+    }];
 }
 
 -(void) viewDidDisappear:(BOOL)animated {
@@ -659,81 +689,102 @@
         if (!space || !space.space_id || space.space_id.length == 0) {
             return;
         }
-
-        // 检查是否是当前Space
-        if ([space.space_id isEqualToString:weakSelf.currentSpaceId]) {
-            NSLog(@"ℹ️ 选中的是当前Space，无需切换");
-            return;
-        }
-
-        weakSelf.currentSpaceName = space.name;
-        weakSelf.currentSpaceId = space.space_id;
-
-        // 清除分组缓存
-        [[WKCategoryService shared] invalidateCache];
-
-        // 先保存新的 Space ID（conversation/sync 会从 NSUserDefaults 读取）
-        [[NSUserDefaults standardUserDefaults] setObject:space.space_id forKey:@"currentSpaceId"];
-        [[NSUserDefaults standardUserDefaults] setObject:space.space_id forKey:@"WKLastLoadedSpaceId"];
-        [[NSUserDefaults standardUserDefaults] synchronize];
-
-        // 清空 space_unread / space_last_message 缓存（新空间会重新同步）
-        [[WKSpaceConversationCache shared] clearAll];
-
-        // 更新标题
-        [weakSelf refreshTitle];
-
-        // 参考 Web/Android 端：清空本地会话数据后重新从服务器同步
-        // 1. 清空 VM 数据和本地会话数据库
-        [weakSelf.conversationListVM reset];
-        [[WKConversationDB shared] deleteAllConversation];
-
-        // 2. 先刷新 UI 显示空列表
-        [weakSelf rebuildGroupDisplayAndReload];
-
-        // 3. 通过 syncConversationProvider 重新同步会话（会带上新的 space_id）
-        WKSyncConversationProvider provider = [WKSDK shared].conversationManager.syncConversationProvider;
-        WKSyncConversationAck ack = [WKSDK shared].conversationManager.syncConversationAck;
-        if (provider) {
-            long long version = [[WKConversationDB shared] getConversationMaxVersion];
-            NSString *syncKey = [[WKConversationDB shared] getConversationSyncKey];
-            provider(version, syncKey, ^(WKSyncConversationWrapModel * _Nullable model, NSError * _Nullable error) {
-                if (error) {
-                    NSLog(@"❌ Space会话同步失败: %@", error);
-                    return;
-                }
-                // 保存到本地数据库并触发回调
-                if (model) {
-                    [[WKSDK shared].conversationManager handleSyncConversation:model];
-                }
-                // 回执
-                if (ack) {
-                    ack(0, ^(NSError * _Nullable ackError) {
-                        if (ackError) {
-                            NSLog(@"❌ 会话同步回执失败: %@", ackError);
-                        }
-                    });
-                }
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    // 不直接调 loadConversationList：handleSyncConversation 是异步的，
-                    // DB 写入还没完成，此时查 DB 会返回空数据。
-                    // 设标记，等 onConversationUpdate 回调（DB 写入完成后触发）再加载。
-                    weakSelf.pendingSpaceSwitchLoad = YES;
-                });
-            });
-        }
-
-        // 4. 触发联系人重新同步
-        [[WKSyncService shared] syncContacts:^(NSError * _Nullable error) {
-            if (error) {
-                NSLog(@"❌ 联系人同步失败: %@", error);
-            } else {
-                NSLog(@"✅ 联系人同步成功");
-            }
-        }];
+        [weakSelf performSwitchToSpaceId:space.space_id spaceName:space.name completion:nil];
     };
 
     [popupView showFromView:_navLeftView ?: self.navigationBar.titleLabel];
+}
+
+/// YUJ-141: 抽出的 Space 切换执行体 — 原 `onSpaceSelected` 闭包内的实现，
+/// 由 popup 选择 + 跨 Space 加群 dialog「切换过去」按钮共用，行为必须完全一致
+/// （清缓存 → 重置 VM → 重新同步会话 + 联系人）。
+- (void)performSwitchToSpaceId:(NSString *)spaceId
+                     spaceName:(nullable NSString *)spaceName
+                    completion:(nullable void(^)(void))completion {
+    if (!spaceId || spaceId.length == 0) {
+        if (completion) { completion(); }
+        return;
+    }
+
+    // 检查是否是当前Space
+    if ([spaceId isEqualToString:self.currentSpaceId]) {
+        NSLog(@"ℹ️ 目标即当前 Space，无需切换");
+        if (completion) { completion(); }
+        return;
+    }
+
+    self.currentSpaceName = spaceName ?: @"";
+    self.currentSpaceId = spaceId;
+
+    // 清除分组缓存
+    [[WKCategoryService shared] invalidateCache];
+
+    // 先保存新的 Space ID（conversation/sync 会从 NSUserDefaults 读取）
+    [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+    [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"WKLastLoadedSpaceId"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
+    // 清空 space_unread / space_last_message 缓存（新空间会重新同步）
+    [[WKSpaceConversationCache shared] clearAll];
+
+    // 更新标题
+    [self refreshTitle];
+
+    // 参考 Web/Android 端：清空本地会话数据后重新从服务器同步
+    // 1. 清空 VM 数据和本地会话数据库
+    [self.conversationListVM reset];
+    [[WKConversationDB shared] deleteAllConversation];
+
+    // 2. 先刷新 UI 显示空列表
+    [self rebuildGroupDisplayAndReload];
+
+    // 3. 通过 syncConversationProvider 重新同步会话（会带上新的 space_id）
+    __weak typeof(self) weakSelf = self;
+    WKSyncConversationProvider provider = [WKSDK shared].conversationManager.syncConversationProvider;
+    WKSyncConversationAck ack = [WKSDK shared].conversationManager.syncConversationAck;
+    if (provider) {
+        long long version = [[WKConversationDB shared] getConversationMaxVersion];
+        NSString *syncKey = [[WKConversationDB shared] getConversationSyncKey];
+        provider(version, syncKey, ^(WKSyncConversationWrapModel * _Nullable model, NSError * _Nullable error) {
+            if (error) {
+                NSLog(@"❌ Space会话同步失败: %@", error);
+                return;
+            }
+            // 保存到本地数据库并触发回调
+            if (model) {
+                [[WKSDK shared].conversationManager handleSyncConversation:model];
+            }
+            // 回执
+            if (ack) {
+                ack(0, ^(NSError * _Nullable ackError) {
+                    if (ackError) {
+                        NSLog(@"❌ 会话同步回执失败: %@", ackError);
+                    }
+                });
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                // 不直接调 loadConversationList：handleSyncConversation 是异步的，
+                // DB 写入还没完成，此时查 DB 会返回空数据。
+                // 设标记，等 onConversationUpdate 回调（DB 写入完成后触发）再加载。
+                weakSelf.pendingSpaceSwitchLoad = YES;
+            });
+        });
+    }
+
+    // 4. 触发联系人重新同步
+    [[WKSyncService shared] syncContacts:^(NSError * _Nullable error) {
+        if (error) {
+            NSLog(@"❌ 联系人同步失败: %@", error);
+        } else {
+            NSLog(@"✅ 联系人同步成功");
+        }
+    }];
+
+    if (completion) {
+        // 切换是异步（后台同步），但 UserDefaults 和 VM 状态都已同步就绪，
+        // caller push 目标群聊可立即进行 — 进群视图会拿到新 space_id 查询。
+        completion();
+    }
 }
 
 /// 创建固定在顶部的搜索栏容器（不随 tableView 滚动）

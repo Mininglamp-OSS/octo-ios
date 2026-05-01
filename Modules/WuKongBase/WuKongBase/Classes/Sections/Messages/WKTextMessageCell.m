@@ -22,6 +22,8 @@
 #import "WKMarkdownParser.h"
 #import <WebKit/WebKit.h>
 #import <WuKongBase/WuKongBase-Swift.h>
+#import "WKExternalViewerResolver.h"
+#import "WKReply+ExternalGroup.h"
 
 #define replyNameFontSize    13.0f
 #define replyContentFontSize 13.0f
@@ -1481,15 +1483,31 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
     self.replyBox.hidden = YES;
     if([[self class] hasReply:model]) {
         self.replyBox.hidden = NO;
-        self.replyNameLbl.text = model.content.reply.fromName.length > 0
+        // YUJ-131 · 消息气泡内的引用预览追加 @SpaceName —— 对齐 web PR #1073 / Android ReplyExternalFieldsHelper
+        NSString *baseName = model.content.reply.fromName.length > 0
             ? model.content.reply.fromName : LLang(@"未知用户");
+        NSString *viewerSpaceId = [WKExternalViewerResolver currentViewerSpaceId];
+        WKExternalResolveResult *res = [WKExternalViewerResolver
+            resolveWithHomeSpaceId:model.content.reply.fromHomeSpaceId
+                     homeSpaceName:model.content.reply.fromHomeSpaceName
+                  isExternalLegacy:@(model.content.reply.fromIsExternal ? 1 : 0)
+             sourceSpaceNameLegacy:model.content.reply.fromSourceSpaceName
+                     viewerSpaceId:viewerSpaceId];
+        if (res.isExternal && res.sourceSpaceName.length > 0) {
+            // 硬约束：attributedText 设置时必须先清 .text，避免 UIKit 互斥坑
+            self.replyNameLbl.text = nil;
+            self.replyNameLbl.attributedText = [self buildReplyNameAttrWithBase:baseName spaceName:res.sourceSpaceName];
+        } else {
+            self.replyNameLbl.attributedText = nil;
+            self.replyNameLbl.text = baseName;
+        }
         self.replyAvatarIcon.url = [WKAvatarUtil getAvatar:model.content.reply.fromUID];
         if(model.content.reply.revoke) {
             self.replyContentLbl.text = LLang(@"消息已被撤回");
         }else {
             self.replyContentLbl.text = [model.content.reply.content conversationDigest];
         }
-        
+
     }
     
     if([self.messageModel isSend]) {
@@ -1880,6 +1898,35 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         _replyNameLbl.lineBreakMode = NSLineBreakByTruncatingTail;
     }
     return _replyNameLbl;
+}
+
+// YUJ-131 · 拼接「发送者名 + 灰色 @SpaceName 后缀」的 NSAttributedString。
+// 样式对齐 WKMemberCell v2（YUJ-66）：基名用 isSend-aware 主色，@Space 用浅灰 + 更小字号。
+// 传入 baseColor 而不是读 replyNameLbl.textColor —— 调用方在 build 之后才 set textColor，
+// 这里直接计算最终色以避免依赖顺序。
+- (NSAttributedString *)buildReplyNameAttrWithBase:(NSString *)baseName
+                                         spaceName:(NSString *)spaceName {
+    UIColor *baseColor = [self.messageModel isSend]
+        ? [WKApp shared].config.messageTipColor
+        : [WKApp shared].config.tipColor;
+    if (!baseColor) { baseColor = [UIColor darkGrayColor]; }
+    UIFont *baseFont = self.replyNameLbl.font
+        ?: [[WKApp shared].config appFontOfSize:replyNameFontSize];
+    NSMutableAttributedString *attr = [[NSMutableAttributedString alloc]
+        initWithString:(baseName ?: @"")
+            attributes:@{NSFontAttributeName: baseFont,
+                         NSForegroundColorAttributeName: baseColor}];
+    UIColor *suffixColor = [UIColor colorWithRed:153.0f/255.0f
+                                           green:153.0f/255.0f
+                                            blue:153.0f/255.0f
+                                           alpha:1.0f];
+    UIFont *suffixFont = [[WKApp shared].config appFontOfSize:replyNameFontSize - 1.0f];
+    NSString *suffix = [NSString stringWithFormat:@" @%@", spaceName ?: @""];
+    [attr appendAttributedString:[[NSAttributedString alloc]
+        initWithString:suffix
+            attributes:@{NSFontAttributeName: suffixFont,
+                         NSForegroundColorAttributeName: suffixColor}]];
+    return attr;
 }
 
 - (UILabel *)replyContentLbl {

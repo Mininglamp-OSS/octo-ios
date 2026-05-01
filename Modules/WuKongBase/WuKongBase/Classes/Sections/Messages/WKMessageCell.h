@@ -131,8 +131,26 @@ typedef enum :NSUInteger {
 +(BOOL) isShowName:(WKMessageModel*)model;
 
 
-// 获取发送者名字
+// 获取发送者名字（纯文本，fallback 场景）
 +(NSString*) getFromName:(WKMessageModel*)messageModel;
+
+/**
+ 获取发送者名字（富文本版，带 @SpaceName 跨 Space 后缀）。
+ 对齐 web PR #1084 `wk-msg-row-header` / android `WKChatBaseProvider`
+ `resolveExternalSpaceSuffix`。内部走 viewer-relative 的
+ `WKExternalViewerResolver`。
+
+ 语义：
+ - 同 Space（viewer.homeSpaceId == sender.homeSpaceId）→ 不拼 @
+ - 跨 Space 新字段（fromHomeSpaceId 非空 + 与 viewerSpaceId 不同）→ 拼 @fromHomeSpaceName
+ - legacy 降级（fromHomeSpaceId 为空 + fromIsExternal=1）→ 拼 @fromSourceSpaceName
+ - 空字符串 / 私聊 / 系统账号 → 纯名字，无 @
+
+ `viewerSpaceId` 传 `[WKExternalViewerResolver currentViewerSpaceId]`，
+ nil/空表示未选 Space（此时跨 Space 视为 external，会渲染 @）。
+ */
++(NSAttributedString*) getFromNameAttributed:(WKMessageModel*)messageModel
+                               viewerSpaceId:(nullable NSString*)viewerSpaceId;
 
 // 获取昵称大小
 +(CGSize) getNicknameSize:(WKMessageModel*)messageModel;

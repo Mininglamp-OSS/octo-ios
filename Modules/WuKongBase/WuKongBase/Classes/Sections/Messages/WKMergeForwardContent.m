@@ -29,9 +29,18 @@
 
 
 - (void)decodeWithJSON:(NSDictionary *)contentDic {
-    
+
     self.channelType = [contentDic[@"channel_type"] intValue];
-    self.users = contentDic[@"users"];
+    // 外部群 Phase 1：users 数组对齐 web PR #981, 将 is_external / source_space_name 原样透传
+    // 后端 payload 已把这两个字段塞在每个 user 字典里，这里只需确保不被字段白名单过滤掉即可。
+    // WKMergeForwardDetailVM 渲染头像/名称时可以读取 user[@"is_external"] / user[@"source_space_name"]
+    // 来决定是否显示外部 badge + @SpaceName 后缀（与群成员列表一致）。
+    NSArray *rawUsers = contentDic[@"users"];
+    if([rawUsers isKindOfClass:[NSArray class]]) {
+        self.users = rawUsers;
+    } else {
+        self.users = nil;
+    }
     NSArray<NSDictionary*> *msgDicts = contentDic[@"msgs"];
     NSMutableArray<WKMessage*> *messages = [NSMutableArray array];
     if(msgDicts && [msgDicts isKindOfClass:[NSArray class]] && msgDicts.count>0) {
@@ -48,7 +57,7 @@
         }
     }
     self.msgs = messages;
-    
+
 }
 
 - (NSDictionary *)encodeWithJSON {
