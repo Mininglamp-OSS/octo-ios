@@ -1033,6 +1033,8 @@
                     // 不再从 DB 重新加载（handleSyncConversation 的 delegate 已更新内存数据）
                     // 直接记录白名单并刷新分组
                     [weakSelf.conversationListVM snapshotSyncedGroupIds];
+                    // YUJ-215: snapshot 后再 prune 一遍，对齐 performSwitchToSpaceId 流程
+                    [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
                     [weakSelf rebuildGroupDisplayAndReload];
                     [weakSelf refreshBadge];
                     [weakSelf loadCategories];
@@ -1043,6 +1045,8 @@
             [self.conversationListVM loadConversationList:^{
                 // 无sync时也记录白名单（DB中的数据视为当前空间的）
                 [weakSelf.conversationListVM snapshotSyncedGroupIds];
+                // YUJ-215: prune 残留（见 performSwitchToSpaceId 注释）
+                [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
                 [weakSelf rebuildGroupDisplayAndReload];
                 [weakSelf refreshBadge];
                 [weakSelf loadCategories];
@@ -1142,6 +1146,12 @@
             __weak typeof(self) weakSelf = self;
             [self.conversationListVM loadConversationList:^{
                 [weakSelf.conversationListVM snapshotSyncedGroupIds];
+                // YUJ-215: Space 切换完成后再扫一遍 VM，把任何 WKSpaceFilter 明确 Skip
+                // 的群聊从 conversation array 踢出。reset() 已清空，但 sync 回来的批次
+                // 以及中间 onConversationUpdate 里 FailOpen 走回 existsInList 分支都
+                // 可能把不该属于当前 Space 的群带回来——最后一次 prune 保证 snapshot
+                // 之后的单例内存是干净的。
+                [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
                 [weakSelf rebuildGroupDisplayAndReload];
                 [weakSelf refreshBadge];
                 [weakSelf loadCategories];
@@ -1244,6 +1254,20 @@
             }
             // FailOpen：WKChannelInfo 或 member.extra 未缓存（EP1 尚未回写）
             // → 继续走下方原有 existsInList / whitelist / verifyAndAddGroupsToList 兜底路径。
+            //
+            // YUJ-215: 清残留 + 禁走 existsInList 裸放行。
+            // 真机复现：user 在 Space A 打开外部群 EDF，切到 Space B，EDF 新消息 → 错挂 B。
+            // 原因：访问 EDF 会触发 SDK 内存/DB 层把 EDF 的 WKConversation 物化到当前进程
+            // 的 conversation list 里（即使 Space 切换 reset 了 VM，某些路径——如 SDK
+            // conversationManager in-memory cache、后续 re-sync 重放等——仍可能把 EDF
+            // 条目带回 VM）。Round-1 只在 Skip 分支做 removeAtChannnel，但 FailOpen 会
+            // 直接走到下方 existsInList==YES → [filtered addObject:conversation]，等于
+            // 跨 Space 裸放行。现在即便 FailOpen，也先清掉非白名单的残留，再交 unknown
+            // 路径 verifyAndAddGroupsToList 异步核验。
+            if([self.conversationListVM indexAtChannel:conversation.channel] != -1 &&
+               ![self.conversationListVM isGroupInWhitelist:channelId]) {
+                [self.conversationListVM removeAtChannnel:conversation.channel];
+            }
         }
 
         // 检查该会话是否已在当前列表中
@@ -1277,12 +1301,21 @@
         } else {
             // 群聊不在列表中：检查白名单决定是否允许添加
             if(conversation.channel.channelType == WK_GROUP) {
-                if([self.conversationListVM isGroupInWhitelist:channelId]) {
-                    // 群聊在白名单中（通过sync或创建时添加），允许通过
+                // YUJ-215 (对齐 Android Round-2 PR#155): 白名单未初始化（nil）时
+                // 不再裸放行——强制走 verifyAndAddGroupsToList 回兜。
+                // 背景：iOS 原 isGroupInWhitelist 对 nil 返回 YES（pre-sync fail-open），
+                // 与 Android 原 spaceConversationKeys.isEmpty() 短路等价。Android PR#155
+                // 已证实该短路是跨 Space 串台的 race 窗口：Space 切换后 reset() → nil，
+                // sync 完成并 snapshot 之前若 EDF 新消息命中 FailOpen，此处短路放行 →
+                // EDF 被 Space B 错挂。
+                //   已初始化 + 命中 → 放行（兼容已有流程）
+                //   已初始化 + 未命中 → 收集 verify（原行为）
+                //   未初始化（race 窗口）→ 也收集 verify，由异步 sync API 核验是否真属于当前 Space
+                BOOL whitelistKnows = [self.conversationListVM isGroupWhitelistInitialized] &&
+                                      [self.conversationListVM isGroupInWhitelist:channelId];
+                if(whitelistKnows) {
                     [filtered addObject:conversation];
                 } else {
-                    // 群聊不在白名单中，可能是被人拉入的新群聊
-                    // 收集起来，循环结束后统一后台验证
                     [unknownGroupChannelIds addObject:channelId];
                 }
                 continue;
@@ -1437,9 +1470,21 @@
             return YES;
         }
         if(decision == WKSpaceFilterDecisionSkip) {
+            // YUJ-215: Skip 时若 VM 中仍残留该 channel，同步清掉，保证
+            // "Skip 决定 ⇒ 从 conversation array 移除"这一语义在所有 Skip 入口
+            // （filter 批次 + 单条判定）上一致。避免访问过群后单例内存仍持有该条
+            // 目，下次 sort / rebuildGroupDisplayAndReload 再把它浮回当前 Space。
+            if([self.conversationListVM indexAtChannel:conversation.channel] != -1) {
+                [self.conversationListVM removeAtChannnel:conversation.channel];
+            }
             return NO;
         }
-        // FailOpen：channelInfo / member 未缓存 → 走白名单兜底
+        // FailOpen：channelInfo / member 未缓存 → 走白名单兜底。
+        // YUJ-215: 白名单未初始化（nil）时不再默认 YES——Space 切换 race 窗口需要
+        // 严格过滤（对齐 Android Round-2 PR#155 去 isEmpty() 短路模式）。
+        if(![self.conversationListVM isGroupWhitelistInitialized]) {
+            return NO;
+        }
         return [self.conversationListVM isGroupInWhitelist:conversation.channel.channelId];
     }
 

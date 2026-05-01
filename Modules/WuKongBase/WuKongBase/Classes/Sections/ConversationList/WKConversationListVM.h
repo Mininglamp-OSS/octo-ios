@@ -51,6 +51,19 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 检查群聊是否在当前空间白名单中
 /// 白名单未初始化（首次sync前）时返回YES（暂不过滤）
 -(BOOL) isGroupInWhitelist:(NSString*)channelId;
+
+/// 白名单是否已被 snapshot/sync 初始化过。
+/// YUJ-215: 新消息路径需要区分「白名单 nil（race / 重置中）」vs「白名单空集（明确无群）」——
+/// 前者不能再作 fail-open 默认通过，必须走 verifyAndAddGroupsToList 回兜，
+/// 否则外部群新消息会在 Space 切换瞬态窗口里绕过 SpaceFilter 污染当前 Space 列表。
+-(BOOL) isGroupWhitelistInitialized;
+
+/// YUJ-215: 从当前 VM 的 conversationWrapModels 中裁剪掉当前 Space 不应展示的群聊。
+/// 扫描所有 WK_GROUP 条目，对每一条调 WKSpaceFilter —— 拿到 Skip 就移除残留，
+/// 避免「访问过群后内存层 / SDK cache 残留 → 新消息路径将其浮到当前 Space 列表顶部」。
+/// 在 Space 切换完成（snapshotSyncedGroupIds 之后）和 filter 批次结束时调用。
+/// 返回被移除的 channelId 列表（便于 caller 触发 UI 刷新 / 记日志）。
+-(NSArray<NSString*>*) pruneNonCurrentSpaceGroups;
 /**
  加载最近会话列表
  */

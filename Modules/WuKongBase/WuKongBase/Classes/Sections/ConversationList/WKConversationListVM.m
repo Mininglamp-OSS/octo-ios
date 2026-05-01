@@ -115,6 +115,40 @@ static WKConversationListVM *_instance;
     return [self.syncedGroupChannelIds containsObject:channelId];
 }
 
+-(BOOL) isGroupWhitelistInitialized {
+    // YUJ-215: 在新消息路径 + Space 切换瞬态窗口中严格区分
+    // "白名单尚未 snapshot（nil）" vs "已 snapshot 但该 Space 无群（非 nil 空集）"。
+    // 前者 caller 应走 verifyAndAddGroupsToList 回兜，而不是裸放行。
+    return self.syncedGroupChannelIds != nil;
+}
+
+-(NSArray<NSString*>*) pruneNonCurrentSpaceGroups {
+    // YUJ-215: 清 VM 残留——对每个 WK_GROUP 查一次 SpaceFilter，
+    // 明确 Skip 的群从 conversationWrapModels 踢出。Keep / FailOpen 保持不变。
+    // 调用时机：Space 切换完成后 + 新消息 filter 批次结束前，确保单例内存不存"已归属
+    // 其它 Space 的群"，防止下次 sort/refresh 再把它浮到顶部（YUJ-209 Round-1 只覆盖
+    // filter 入口一次，漏了残留清理）。
+    NSMutableArray<NSString*> *removed = [NSMutableArray array];
+    if(self.conversationWrapModels.count == 0) return removed;
+    // 先拷贝一份 snapshot，避免遍历中修改原数组
+    NSArray<WKConversationWrapModel*> *snapshot = [self.conversationWrapModels copy];
+    for(WKConversationWrapModel *m in snapshot) {
+        WKChannel *ch = m.channel;
+        if(ch.channelType != WK_GROUP) continue;
+        WKSpaceFilterDecision d = [[WKSpaceFilter shared] decideChannel:ch.channelId
+                                                            channelType:ch.channelType];
+        if(d == WKSpaceFilterDecisionSkip) {
+            [self removeAtChannnel:ch];
+            [removed addObject:ch.channelId];
+        }
+    }
+    if(removed.count > 0) {
+        NSLog(@"🧹 [YUJ-215] 清理当前 Space 不应展示的残留群聊 %lu 个: %@",
+              (unsigned long)removed.count, removed);
+    }
+    return removed;
+}
+
 -(void) loadConversationList:(void(^)(void)) finished {
     CFAbsoluteTime _lcStart = CFAbsoluteTimeGetCurrent();
 
@@ -428,7 +462,10 @@ static WKConversationListVM *_instance;
             return NO;
         }
         // fail-open：用 sync 白名单兜底
-        //   - nil: 尚未sync（首次启动DB清空后），暂不过滤
+        //   - nil: 尚未sync（首次启动DB清空后），暂不过滤（shouldShowConversation 主要在
+        //         loadConversationList 的 DB 冷启动路径调用；DB 是上次 sync 的持久化真值，
+        //         此时放行不会带来跨 Space 串台。新消息路径不走本方法——它走
+        //         WKConversationListVC.filterConversationsBySpace，那里已按 YUJ-215 收紧。）
         //   - 空集合: sync完成但当前空间无群聊，过滤掉所有群聊
         //   - 非空: 只显示白名单中的群聊
         if(self.syncedGroupChannelIds) {
