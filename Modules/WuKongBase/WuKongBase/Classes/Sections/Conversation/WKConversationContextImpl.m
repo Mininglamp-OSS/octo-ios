@@ -786,9 +786,9 @@
     CGFloat tvH = MIN([tv sizeThatFits:CGSizeMake(maxW, CGFLOAT_MAX)].height + 24.0f, tvMaxH);
     tv.frame = CGRectMake(padding, topVC.view.bounds.size.height - tvH - 60.0f, maxW, tvH);
 
-    // 「完成」按钮
+    // 「复制」按钮
     UIButton *doneBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [doneBtn setTitle:LLang(@"完成") forState:UIControlStateNormal];
+    [doneBtn setTitle:LLang(@"复制") forState:UIControlStateNormal];
     doneBtn.titleLabel.font = [[WKApp shared].config appFontOfSizeMedium:16.0f];
     doneBtn.backgroundColor = [WKApp shared].config.themeColor;
     [doneBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
@@ -800,22 +800,46 @@
     [dimView addSubview:doneBtn];
     [topVC.view addSubview:dimView];
 
-    void(^dismiss)(void) = ^{
-        [UIView animateWithDuration:0.2 animations:^{ dimView.alpha = 0; } completion:^(BOOL f) { [dimView removeFromSuperview]; }];
+    // 用 block 捕获 tv，dismiss 时自动复制选中文字
+    __weak UITextView *weakTV = tv;
+    __weak UIView *weakDimView = dimView;
+    void(^copyAndDismiss)(void) = ^{
+        UITextView *strongTV = weakTV;
+        if (strongTV) {
+            NSString *selectedText = nil;
+            if (strongTV.selectedRange.length > 0) {
+                selectedText = [strongTV.text substringWithRange:strongTV.selectedRange];
+            }
+            if (!selectedText.length) {
+                selectedText = strongTV.text;
+            }
+            if (selectedText.length > 0) {
+                [UIPasteboard generalPasteboard].string = selectedText;
+                [weakDimView.superview showHUDWithHide:LLang(@"已复制")];
+            }
+        }
+        UIView *strongDim = weakDimView;
+        [UIView animateWithDuration:0.2 animations:^{ strongDim.alpha = 0; } completion:^(BOOL f) { [strongDim removeFromSuperview]; }];
     };
-    objc_setAssociatedObject(doneBtn, "dismissBlock", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    objc_setAssociatedObject(doneBtn, "copyAndDismiss", copyAndDismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
     [doneBtn addTarget:self action:@selector(onTextSelectionDone:) forControlEvents:UIControlEventTouchUpInside];
+    // 背景点击只关闭不复制
+    void(^justDismiss)(void) = ^{
+        UIView *strongDim = weakDimView;
+        [UIView animateWithDuration:0.2 animations:^{ strongDim.alpha = 0; } completion:^(BOOL f) { [strongDim removeFromSuperview]; }];
+    };
     UITapGestureRecognizer *bgTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTextSelectionBgTap:)];
-    objc_setAssociatedObject(bgTap, "dismissBlock", dismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    objc_setAssociatedObject(bgTap, "dismissBlock", justDismiss, OBJC_ASSOCIATION_COPY_NONATOMIC);
     [dimView addGestureRecognizer:bgTap];
 
     [UIView animateWithDuration:0.2 animations:^{ dimView.alpha = 1; }];
-    [tv selectAll:nil]; // 默认全选，用户可拖动调整范围
+    [tv becomeFirstResponder];
+    [tv selectAll:nil];
 }
 
 -(void) onTextSelectionDone:(UIButton *)btn {
-    void(^dismiss)(void) = objc_getAssociatedObject(btn, "dismissBlock");
-    if (dismiss) dismiss();
+    void(^copyAndDismiss)(void) = objc_getAssociatedObject(btn, "copyAndDismiss");
+    if (copyAndDismiss) copyAndDismiss();
 }
 
 -(void) onTextSelectionBgTap:(UITapGestureRecognizer *)gr {
