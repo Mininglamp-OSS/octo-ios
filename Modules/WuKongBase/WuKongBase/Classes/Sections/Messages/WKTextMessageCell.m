@@ -231,13 +231,7 @@ static NSMutableDictionary *_jsTableHeights;
 
 + (CGSize)sizeForMessage:(WKMessageModel *)model {
    CGSize size = [super sizeForMessage:model];
-    CGFloat securityTipHeight = 0.0f;
-    if(model.hasSensitiveWord && !model.isSend) {
-        securityTipHeight +=securityTipTopSpace;
-        CGSize tipSize = [[self class] getTextSize:[WKSecurityTipManager shared].tip maxWidth:[WKApp shared].config.messageContentMaxWidth fontSize:securityTipFontSize];
-        securityTipHeight += tipSize.height + 5.0f + 5.0f; // 5.0f+5.0f 为上下边距
-    }
-    return CGSizeMake(size.width, size.height + securityTipHeight);
+    return size;
 }
 
 +(WKMemoryCache*) textAttrCache {
@@ -1808,14 +1802,7 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         self.viewFullTextBtn.frame = CGRectMake(0, btnTop, self.messageContentView.lim_width, kViewFullTextBtnHeight);
     }
 
-    self.securityTipLbl.lim_top = self.messageContentView.lim_bottom + securityTipTopSpace;
-    self.securityTipLbl.lim_centerX_parent = self.contentView;
-    
-    if(self.messageModel.hasSensitiveWord && !self.messageModel.isSend) {
-        self.securityTipLbl.hidden = NO;
-    }else{
-        self.securityTipLbl.hidden = YES;
-    }
+    self.securityTipLbl.hidden = YES;
     
    
 
