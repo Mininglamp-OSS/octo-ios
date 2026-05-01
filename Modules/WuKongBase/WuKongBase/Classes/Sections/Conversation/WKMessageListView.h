@@ -120,6 +120,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 -(void) refreshCell:(WKMessageModel*) messageModel;
 
++(NSCache<NSString*, NSNumber*>*) cellHeightCache;
+
 @end
 
 NS_ASSUME_NONNULL_END
