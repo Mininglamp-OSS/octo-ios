@@ -1341,8 +1341,21 @@
         return YES;
     }
     NSString *msgSpaceId = message.content.contentDict[@"space_id"];
-    if(!msgSpaceId || [msgSpaceId isKindOfClass:[NSNull class]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0)) {
-        return YES; // 无space_id的历史消息，所有空间可见
+    BOOL hasSpaceId = msgSpaceId
+        && ![msgSpaceId isKindOfClass:[NSNull class]]
+        && ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0);
+    if(!hasSpaceId) {
+        // YUJ-219-A4: 系统bot(botfather/u_10000/fileHelper 等 appconfig.system_bot_uids)
+        // 的无 space_id 消息在空间模式下隐藏；普通个人聊天保持向前兼容（可见）。
+        NSArray<NSString*> *systemBotUIDs = [WKApp shared].config.systemBotUIDs;
+        NSString *channelId = self.channel.channelId;
+        BOOL isSystemBot = channelId.length > 0
+            && systemBotUIDs.count > 0
+            && [systemBotUIDs containsObject:channelId];
+        if(isSystemBot) {
+            return NO;
+        }
+        return YES; // 无space_id的历史消息，非系统bot的所有空间可见
     }
     return [msgSpaceId isEqualToString:currentSpaceId];
 }

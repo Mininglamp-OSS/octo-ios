@@ -94,6 +94,10 @@
         self.systemUID = @"u_10000";
         self.fileHelperUID = @"fileHelper";
         self.botfatherUID = @"botfather";
+        // YUJ-219-A4: default when backend appconfig.system_bot_uids is missing
+        // (e.g. A2 backend not deployed). Keep these three UIDs treated as
+        // system bots so per-Space filtering still works locally.
+        self.systemBotUIDs = @[@"botfather", @"u_10000", @"fileHelper"];
         
         self.contextMenu = [[WKThemeContextMenu alloc] init];
         
@@ -503,6 +507,23 @@
             }
             if(resultDict[@"thread_on"]) {
                 weakSelf.threadOn = [resultDict[@"thread_on"] boolValue];
+            }
+
+            // YUJ-219-A4: consume system_bot_uids from backend appconfig.
+            // Response shape (A2): {"system_bot_uids": ["botfather", "u_10000", "fileHelper"]}.
+            // When the field is missing (A2 not deployed), keep the fallback
+            // configured in WKAppConfig's -init.
+            id systemBotUIDsRaw = resultDict[@"system_bot_uids"];
+            if([systemBotUIDsRaw isKindOfClass:[NSArray class]]) {
+                NSMutableArray<NSString*> *uids = [NSMutableArray array];
+                for(id item in (NSArray*)systemBotUIDsRaw) {
+                    if([item isKindOfClass:[NSString class]] && ((NSString*)item).length > 0) {
+                        [uids addObject:item];
+                    }
+                }
+                if(uids.count > 0) {
+                    [WKApp shared].config.systemBotUIDs = [uids copy];
+                }
             }
            
             
