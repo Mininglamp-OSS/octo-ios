@@ -1423,8 +1423,74 @@
     [self rebuildGroupDisplayAndReload];
 }
 
+/// YUJ-219-C: 判断 channel 是否为系统 Bot（botfather / u_10000 / fileHelper 等）。
+/// SYSTEM_BOTS 集合在本单先取 WKAppConfig 已有的三个 UID，口径与
+/// `isConversationInCurrentSpace` 放行"全局可见"的那三项保持一致。
+/// 后续 YUJ-219-A4 会把集合迁到 appconfig system_bot_uids 下发，本单不触碰。
+-(BOOL) isSystemBotChannel:(WKChannel*)channel {
+    NSString *channelId = channel.channelId;
+    if(!channelId || channelId.length == 0) {
+        return NO;
+    }
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    NSString *systemUID = [WKApp shared].config.systemUID;
+    NSString *fileHelperUID = [WKApp shared].config.fileHelperUID;
+    return (botfatherUID.length > 0 && [channelId isEqualToString:botfatherUID])
+        || (systemUID.length > 0 && [channelId isEqualToString:systemUID])
+        || (fileHelperUID.length > 0 && [channelId isEqualToString:fileHelperUID]);
+}
+
+/// YUJ-219-C: 判断 message.content.contentDict[@"space_id"] 是否精确匹配当前 Space。
+/// 无 space_id / 非字符串类型 → 视为非当前 Space（防止 SystemBot 无 space_id 的跨 Space
+/// 消息 bump 当前 Space 的 lastMsg timestamp / unread / 排序）。
+-(BOOL) isMessageFromCurrentSpace:(WKMessage*)message spaceId:(NSString*)spaceId {
+    if(!message) {
+        // 无 lastMessage 不做 bump 判定（上层其他 gate 已决定是否放行）
+        return YES;
+    }
+    id raw = message.content.contentDict[@"space_id"];
+    if(![raw isKindOfClass:[NSString class]]) {
+        return NO;
+    }
+    NSString *msgSpaceId = (NSString*)raw;
+    if(msgSpaceId.length == 0) {
+        return NO;
+    }
+    return [msgSpaceId isEqualToString:spaceId];
+}
+
 // 单个会话添加或更新
 -(void) uiAddOrUpdateConversationForOne:(WKConversation*)conversation {
+    // YUJ-219-C: push 路径对称 gate —— 必须在 getRealShowConversationWrap 之前做判定。
+    // validation-report.md §3 / §5 判定 iOS 是"半保险"：spaceFilteredLastMessage 能擦
+    // preview 文字，但 replaceAtChannel 裸替换会照常 bump lastMessage.timestamp 和
+    // unreadCount → 当前 Space 列表被他 Space push 冒顶 + 红点。
+    // `uiAddConversation`（新增分支）已有 isConversationInCurrentSpace 检查，
+    // 这里"已存在 → replace/sort"分支补上对称 gate，与 Android `resetData` 同源。
+    //
+    // ⚠️ getRealShowConversationWrap 对子区/thread 消息会调用父会话的 addOrUpdateChildren，
+    // 从而变更父行的 children / lastChildConversation 状态。因此 gate 必须放在它之前，
+    // 否则即便 return 也已产生副作用。通过 conversation.parentChannel ?: conversation.channel
+    // 判断对应行是否已存在。
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(currentSpaceId && currentSpaceId.length > 0) {
+        WKChannel *targetChannel = conversation.parentChannel ?: conversation.channel;
+        if(targetChannel && [self.conversationListVM indexAtChannel:targetChannel] != -1) {
+            // 1) 基础 gate：不属于当前 Space → 保持旧状态，不触发任何 wrap/sort/replace。
+            if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
+                return;
+            }
+            // 2) 系统 Bot bump 保护：SystemBot entry 全局可见
+            //    （isConversationInCurrentSpace 对 botfather / systemUID / fileHelper 放行），
+            //    但 lastMessage 若来自他 Space / 无 space_id，不应 bump 当前 Space 的
+            //    lastMsgTimestamp / unread / 排序。
+            if([self isSystemBotChannel:conversation.channel]
+               && ![self isMessageFromCurrentSpace:conversation.lastMessage spaceId:currentSpaceId]) {
+                return;
+            }
+        }
+    }
+
     WKConversationWrapModel *newModel = [self.conversationListVM getRealShowConversationWrap:[[WKConversationWrapModel alloc] initWithConversation:conversation]];
 
     NSInteger oldIndex = [self.conversationListVM indexAtChannel:newModel.channel];
