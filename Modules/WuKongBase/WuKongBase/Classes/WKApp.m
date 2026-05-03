@@ -1305,14 +1305,14 @@ static WKApp *_instance;
     // 撤回
     [self setMethod:WKPOINT_LONGMENUS_REVOKE handler:^id _Nullable(id  _Nonnull param) {
         WKMessageModel *message = param[@"message"];
-        
+
         if(message.status != WK_MESSAGE_SUCCESS) {
             return nil;
         }
         if(message.messageId == 0) { // 本地消息
             return nil;
         }
-        
+
         BOOL isManager = false;
         if(message.channel.channelType == WK_GROUP) {
             isManager = [[WKSDK shared].channelManager isManager:message.channel memberUID:[WKApp shared].loginInfo.uid];
@@ -1327,7 +1327,7 @@ static WKApp *_instance;
             } else if(WKApp.shared.remoteConfig.revokeSecond>0) {
                 revokeSecond = WKApp.shared.remoteConfig.revokeSecond;
             }
-            
+
             if(revokeSecond>0) {
                 if(  [[NSDate date] timeIntervalSince1970] - message.timestamp > revokeSecond) { // 超过两分钟则不显示撤回
                     return nil;
