@@ -1140,9 +1140,10 @@ static NSMutableDictionary<NSString*, UIImage*> *_bubbleImageCache;
         // 气泡消息正文最大宽度 (messageContentMaxWidth)，避免 100pt 硬限截断；
         // 若仍溢出，refreshModel: 已切到 byTruncatingHead 保留尾部 @SpaceName。
         // 普通群气泡维持 WK_NICKNAME_MAX_WIDTH，避免行内布局回归。
-        BOOL hasExternalSuffix = (self.nameLbl.lineBreakMode == NSLineBreakByTruncatingHead);
-        CGFloat nicknameMaxW = hasExternalSuffix ? [WKApp shared].config.messageContentMaxWidth
-                                                 : WK_NICKNAME_MAX_WIDTH;
+        CGFloat contentW = self.messageContentView.lim_width;
+        if (contentW < 1) contentW = self.bubbleBackgroundView.lim_width;
+        CGFloat nicknameMaxW = MAX(contentW, 200.0f);
+        nicknameMaxW = MIN(nicknameMaxW, [WKApp shared].config.messageContentMaxWidth);
         CGSize fitSize = [self.nameLbl sizeThatFits:CGSizeMake(nicknameMaxW, WK_NICKNAME_HEIGHT)];
         self.nameLbl.lim_width = MIN(fitSize.width, nicknameMaxW);
     }
