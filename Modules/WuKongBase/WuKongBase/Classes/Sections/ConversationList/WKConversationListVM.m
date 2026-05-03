@@ -330,7 +330,6 @@ static WKConversationListVM *_instance;
 }
 
 /// 通过 API 获取每个群组的子区真实数量（带完成回调）
-/// 并发限流：最多同时 3 个请求，避免启动时瞬间打出 N 个并发
 -(void) fetchThreadCountsForGroupsWithCompletion:(void(^)(void))completion {
     NSMutableArray<WKConversationWrapModel *> *groupModels = [NSMutableArray array];
     for (WKConversationWrapModel *model in self.conversationWrapModels) {
@@ -344,40 +343,34 @@ static WKConversationListVM *_instance;
     }
 
     dispatch_group_t group = dispatch_group_create();
-    dispatch_semaphore_t rateLimiter = dispatch_semaphore_create(3);
 
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        for (WKConversationWrapModel *model in groupModels) {
-            NSString *groupNo = model.channel.channelId;
-            dispatch_semaphore_wait(rateLimiter, DISPATCH_TIME_FOREVER);
-            dispatch_group_enter(group);
-            [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
-                NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
-                NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
-                NSMutableArray *recentPreviews = [NSMutableArray array];
-                NSInteger inactiveCount = 0;
-                for (WKThreadModel *t in sorted) {
-                    if (t.status != WKThreadStatusActive) continue;
-                    WKConversation *conv = [[WKSDK shared].conversationManager getConversation:[t toChannel]];
-                    NSTimeInterval ts = conv ? conv.lastMsgTimestamp : 0;
-                    if (ts > threeDaysAgo) {
-                        [recentPreviews addObject:t];
-                    } else {
-                        inactiveCount++;
-                    }
+    for (WKConversationWrapModel *model in groupModels) {
+        NSString *groupNo = model.channel.channelId;
+        dispatch_group_enter(group);
+        [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
+            NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
+            NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
+            NSMutableArray *recentPreviews = [NSMutableArray array];
+            NSInteger inactiveCount = 0;
+            for (WKThreadModel *t in sorted) {
+                if (t.status != WKThreadStatusActive) continue;
+                WKConversation *conv = [[WKSDK shared].conversationManager getConversation:[t toChannel]];
+                NSTimeInterval ts = conv ? conv.lastMsgTimestamp : 0;
+                if (ts > threeDaysAgo) {
+                    [recentPreviews addObject:t];
+                } else {
+                    inactiveCount++;
                 }
-                model.threadPreviews = [recentPreviews copy];
-                model.threadCount = (NSInteger)recentPreviews.count + inactiveCount;
-                dispatch_semaphore_signal(rateLimiter);
-                dispatch_group_leave(group);
-            }).catch(^(NSError *error) {
-                dispatch_semaphore_signal(rateLimiter);
-                dispatch_group_leave(group);
-            });
-        }
-        dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-            if (completion) completion();
+            }
+            model.threadPreviews = [recentPreviews copy];
+            model.threadCount = (NSInteger)recentPreviews.count + inactiveCount;
+            dispatch_group_leave(group);
+        }).catch(^(NSError *error) {
+            dispatch_group_leave(group);
         });
+    }
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        if (completion) completion();
     });
 }
 
@@ -398,7 +391,7 @@ static WKConversationListVM *_instance;
     return count;
 }
 
-/// 刷新指定群组的子区数量（批量请求，统一刷新，最多 3 个并发）
+/// 刷新指定群组的子区数量（批量请求，统一刷新）
 -(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos {
     NSMutableArray<WKConversationWrapModel *> *models = [NSMutableArray array];
     for (NSString *groupNo in groupNos) {
@@ -408,48 +401,42 @@ static WKConversationListVM *_instance;
     if (models.count == 0) return;
 
     dispatch_group_t batchGroup = dispatch_group_create();
-    dispatch_semaphore_t rateLimiter = dispatch_semaphore_create(3);
 
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        for (WKConversationWrapModel *model in models) {
-            NSString *groupNo = model.channel.channelId;
-            dispatch_semaphore_wait(rateLimiter, DISPATCH_TIME_FOREVER);
-            dispatch_group_enter(batchGroup);
-            [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
-                NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
-                NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
-                NSMutableArray *recentPreviews = [NSMutableArray array];
-                NSInteger inactiveCount = 0;
-                for (WKThreadModel *t in sorted) {
-                    if (t.status != WKThreadStatusActive) continue;
-                    WKConversation *conv = [[WKSDK shared].conversationManager getConversation:[t toChannel]];
-                    NSTimeInterval ts = conv ? conv.lastMsgTimestamp : 0;
-                    if (ts > threeDaysAgo) {
-                        [recentPreviews addObject:t];
-                    } else {
-                        inactiveCount++;
-                    }
+    for (WKConversationWrapModel *model in models) {
+        NSString *groupNo = model.channel.channelId;
+        dispatch_group_enter(batchGroup);
+        [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
+            NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
+            NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
+            NSMutableArray *recentPreviews = [NSMutableArray array];
+            NSInteger inactiveCount = 0;
+            for (WKThreadModel *t in sorted) {
+                if (t.status != WKThreadStatusActive) continue;
+                WKConversation *conv = [[WKSDK shared].conversationManager getConversation:[t toChannel]];
+                NSTimeInterval ts = conv ? conv.lastMsgTimestamp : 0;
+                if (ts > threeDaysAgo) {
+                    [recentPreviews addObject:t];
+                } else {
+                    inactiveCount++;
                 }
-                WKConversationWrapModel *currentModel = [self modelAtChannel:[WKChannel groupWithChannelID:groupNo]];
-                if (!currentModel) currentModel = model;
-                currentModel.threadPreviews = [recentPreviews copy];
-                currentModel.threadCount = (NSInteger)recentPreviews.count + inactiveCount;
-                for (WKThreadModel *t in recentPreviews) {
-                    if (t.channelId.length > 0) {
-                        [WKThreadCreatedContent messageCountCache][t.channelId] = @(t.messageCount);
-                    }
+            }
+            WKConversationWrapModel *currentModel = [self modelAtChannel:[WKChannel groupWithChannelID:groupNo]];
+            if (!currentModel) currentModel = model;
+            currentModel.threadPreviews = [recentPreviews copy];
+            currentModel.threadCount = (NSInteger)recentPreviews.count + inactiveCount;
+            for (WKThreadModel *t in recentPreviews) {
+                if (t.channelId.length > 0) {
+                    [WKThreadCreatedContent messageCountCache][t.channelId] = @(t.messageCount);
                 }
-                dispatch_semaphore_signal(rateLimiter);
-                dispatch_group_leave(batchGroup);
-            }).catch(^(NSError *error) {
-                dispatch_semaphore_signal(rateLimiter);
-                dispatch_group_leave(batchGroup);
-            });
-        }
-        dispatch_group_notify(batchGroup, dispatch_get_main_queue(), ^{
-            [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountBatchUpdated" object:nil];
-            [[NSNotificationCenter defaultCenter] postNotificationName:WKThreadMessageCountUpdatedNotification object:nil];
+            }
+            dispatch_group_leave(batchGroup);
+        }).catch(^(NSError *error) {
+            dispatch_group_leave(batchGroup);
         });
+    }
+    dispatch_group_notify(batchGroup, dispatch_get_main_queue(), ^{
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountBatchUpdated" object:nil];
+        [[NSNotificationCenter defaultCenter] postNotificationName:WKThreadMessageCountUpdatedNotification object:nil];
     });
 }
 

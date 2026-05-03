@@ -100,6 +100,7 @@
 @property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeLeft;
 @property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeRight;
 @property(nonatomic,assign) BOOL pendingSpaceSwitchLoad;
+@property(nonatomic,assign) BOOL pendingRebuild;
 
 @end
 
@@ -179,6 +180,9 @@
 
     // 初始化标题（即使异步加载未完成也先显示默认标题）
     [self refreshTitle];
+
+    // ⚠️ 临时调试按钮（已隐藏）
+    // [self setupStressTestButton];
 }
 
 // 给标题添加点击手势
@@ -3305,6 +3309,184 @@
         }
         [[WKNavigationManager shared] pushViewController:vc animated:YES];
     }];
+}
+
+#pragma mark - ⚠️ 临时压力测试（上线前删除）
+
+- (void)setupStressTestButton {
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+    btn.frame = CGRectMake(16, WKScreenHeight - 160, 56, 56);
+    btn.backgroundColor = [UIColor colorWithRed:0.9 green:0.1 blue:0.1 alpha:0.9];
+    btn.layer.cornerRadius = 28;
+    btn.layer.shadowColor = [UIColor blackColor].CGColor;
+    btn.layer.shadowOpacity = 0.3;
+    btn.layer.shadowRadius = 4;
+    btn.layer.shadowOffset = CGSizeMake(0, 2);
+    btn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    btn.titleLabel.numberOfLines = 2;
+    btn.titleLabel.textAlignment = NSTextAlignmentCenter;
+    [btn setTitle:@"压力\n测试" forState:UIControlStateNormal];
+    [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [btn addTarget:self action:@selector(stressTestTapped:) forControlEvents:UIControlEventTouchUpInside];
+    btn.tag = 99999;
+    [self.view addSubview:btn];
+}
+
+- (void)stressTestTapped:(UIButton *)btn {
+    if (!btn.enabled) return;
+    btn.enabled = NO;
+    btn.userInteractionEnabled = NO;
+    [btn setTitle:@"运行中" forState:UIControlStateDisabled];
+    btn.backgroundColor = [UIColor grayColor];
+
+    NSLog(@"========== [StressTest] START — 极限压力 ==========");
+    __weak typeof(self) weakSelf = self;
+
+    // ──────────────────────────────────────────────────────────────
+    // 场景 A: 模拟网络恢复后 WebSocket 瞬间推送大量消息
+    //
+    // 真实路径:
+    //   WebSocket IO线程 → WKChatManager.onRecvMessages(bg)
+    //     → callRecvMessagesDelegate → dispatch_async(main)
+    //     → WKConversationManager 写DB → callOnConversationUpdateDelegate(bg)
+    //       → dispatch_async(main) → onConversationUpdate(main)
+    //         → fetchThreadCountsForGroups (老代码: bg线程semaphore死锁)
+    //         → rebuildGroupDisplayAndReload
+    //
+    // 模拟: 从多个后台线程并发通过 WKConversationManager 真实 delegate 通道
+    //        发射 100 条会话更新（使用当前列表中的真实会话数据）
+    // ──────────────────────────────────────────────────────────────
+    NSArray<WKConversationWrapModel *> *existingModels = [self.conversationListVM conversationList];
+    NSInteger convCount = existingModels.count;
+    NSInteger sceneA_count = 100;
+    NSLog(@"[StressTest] 场景A: 模拟WebSocket批量推送 → onConversationUpdate x%ld (现有会话%ld个)", (long)sceneA_count, (long)convCount);
+    if (convCount > 0) {
+        for (NSInteger i = 0; i < sceneA_count; i++) {
+            WKConversationWrapModel *model = existingModels[i % convCount];
+            WKConversation *conv = [model getConversation];
+            if (!conv) continue;
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                [[WKSDK shared].conversationManager callOnConversationUpdateDelegate:conv];
+            });
+        }
+    } else {
+        NSLog(@"[StressTest] 警告: 会话列表为空，场景A跳过");
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // 场景 B: 模拟高频 CMD 消息（typing + onlineStatus）
+    //
+    // 真实路径:
+    //   WebSocket IO线程 → WKCMDManager.callOnCMDDelegate(bg)
+    //     → dispatch_async(main)
+    //       → WKSystemMessageHandler.cmdManager:onCMD:(main)
+    //         → WKTypingManager / WKOnlineStatusManager
+    //           (老代码: dispatch_sync(main) 阻塞bg线程)
+    //
+    // 模拟: 50个typing + 50个onlineStatus CMD 从后台线程并发发射
+    // ──────────────────────────────────────────────────────────────
+    NSInteger sceneB_count = 50;
+    NSLog(@"[StressTest] 场景B: 模拟CMD批量推送 (typing x%ld + onlineStatus x%ld)", (long)sceneB_count, (long)sceneB_count);
+    for (NSInteger i = 0; i < sceneB_count; i++) {
+        NSString *uid = [NSString stringWithFormat:@"stress_user_%ld", (long)i];
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            WKCMDModel *typingCmd = [[WKCMDModel alloc] init];
+            typingCmd.cmd = @"typing";
+            typingCmd.param = @{
+                @"channel_id": uid,
+                @"channel_type": @1,
+                @"from_uid": uid,
+                @"from_name": [NSString stringWithFormat:@"StressBot%ld", (long)i],
+            };
+            [[WKSDK shared].cmdManager callOnCMDDelegate:typingCmd];
+        });
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            WKCMDModel *onlineCmd = [[WKCMDModel alloc] init];
+            onlineCmd.cmd = @"onlineStatus";
+            onlineCmd.param = @{
+                @"uid": uid,
+                @"all_offline": @0,
+                @"main_device_flag": @0,
+            };
+            [[WKSDK shared].cmdManager callOnCMDDelegate:onlineCmd];
+        });
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // 场景 C: 模拟网络状态频繁抖动
+    //
+    // 真实路径:
+    //   AFNetworking Reachability 回调(bg线程)
+    //     → WKNetworkListener.callNetworkListenerStatusChangeDelegate
+    //       (老代码: dispatch_sync(main_queue) 阻塞bg线程等主线程)
+    //
+    // 模拟: 20次网络状态变化从后台线程并发触发
+    // ──────────────────────────────────────────────────────────────
+    NSInteger sceneC_count = 20;
+    NSLog(@"[StressTest] 场景C: 模拟网络状态抖动 x%ld", (long)sceneC_count);
+    for (NSInteger i = 0; i < sceneC_count; i++) {
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wundeclared-selector"
+            [[WKNetworkListener shared] performSelector:@selector(callNetworkListenerStatusChangeDelegate)];
+#pragma clang diagnostic pop
+        });
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // 场景 D: 模拟 A+B+C 叠加后再追加一波更猛的冲击
+    //         延迟 0.5s 发射第二波，确保第一波正在处理时遭遇叠加
+    // ──────────────────────────────────────────────────────────────
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSLog(@"[StressTest] 场景D: 第二波叠加冲击 (conv x50 + CMD x30 + network x10)");
+        if (convCount > 0) {
+            for (NSInteger i = 0; i < 50; i++) {
+                WKConversationWrapModel *model = existingModels[i % convCount];
+                WKConversation *conv = [model getConversation];
+                if (!conv) continue;
+                dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                    [[WKSDK shared].conversationManager callOnConversationUpdateDelegate:conv];
+                });
+            }
+        }
+        for (NSInteger i = 0; i < 30; i++) {
+            NSString *uid = [NSString stringWithFormat:@"stress_wave2_%ld", (long)i];
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                WKCMDModel *cmd = [[WKCMDModel alloc] init];
+                cmd.cmd = @"typing";
+                cmd.param = @{ @"channel_id": uid, @"channel_type": @1, @"from_uid": uid, @"from_name": @"Wave2Bot" };
+                [[WKSDK shared].cmdManager callOnCMDDelegate:cmd];
+            });
+        }
+        for (NSInteger i = 0; i < 10; i++) {
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wundeclared-selector"
+                [[WKNetworkListener shared] performSelector:@selector(callNetworkListenerStatusChangeDelegate)];
+#pragma clang diagnostic pop
+            });
+        }
+    });
+
+    // ──────────────────────────────────────────────────────────────
+    // 检查点: 5秒后验证主线程是否存活
+    // 老代码下主线程大概率已死锁，这个 block 永远不会执行
+    // ──────────────────────────────────────────────────────────────
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSLog(@"[StressTest] === 5秒检查点: 主线程存活 ===");
+        NSLog(@"[StressTest] 总计发射: conv更新=%ld, CMD=%ld, 网络抖动=%ld",
+              (long)(sceneA_count + 50), (long)(sceneB_count * 2 + 30), (long)(sceneC_count + 10));
+        [btn setTitle:@"通过" forState:UIControlStateNormal];
+        btn.backgroundColor = [UIColor colorWithRed:0.1 green:0.7 blue:0.2 alpha:0.9];
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            btn.enabled = YES;
+            btn.userInteractionEnabled = YES;
+            [btn setTitle:@"压力\n测试" forState:UIControlStateNormal];
+            btn.backgroundColor = [UIColor colorWithRed:0.9 green:0.1 blue:0.1 alpha:0.9];
+            NSLog(@"========== [StressTest] END ==========");
+        });
+    });
 }
 
 @end

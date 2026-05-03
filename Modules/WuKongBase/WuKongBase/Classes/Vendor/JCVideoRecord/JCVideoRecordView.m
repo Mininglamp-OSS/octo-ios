@@ -82,7 +82,7 @@
         //        }];
         [showAlertView requesetVideoPermissionCompletion:^(BOOL permission) {
             if (!permission) {
-                dispatch_sync(dispatch_get_main_queue(), ^{
+                dispatch_async(dispatch_get_main_queue(), ^{
                     [weakSelf dismissViewControllerAnimated:YES completion:nil];
                 });
                

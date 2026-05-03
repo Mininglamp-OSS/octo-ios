@@ -178,7 +178,7 @@ static WKTypingManager *_instance = nil;
         }
         if ([delegate respondsToSelector:@selector(typingAdd:message:)]) {
             if (![NSThread isMainThread]) {
-                dispatch_sync(dispatch_get_main_queue(), ^{
+                dispatch_async(dispatch_get_main_queue(), ^{
                     [delegate typingAdd:self message:message];
                 });
             }else {
@@ -198,7 +198,7 @@ static WKTypingManager *_instance = nil;
         }
         if ([delegate respondsToSelector:@selector(typingReplace:newmessage:oldmessage:)]) {
             if (![NSThread isMainThread]) {
-                dispatch_sync(dispatch_get_main_queue(), ^{
+                dispatch_async(dispatch_get_main_queue(), ^{
                     [delegate typingReplace:self newmessage:newmessage oldmessage:oldMessage];
                 });
             }else {
@@ -218,7 +218,7 @@ static WKTypingManager *_instance = nil;
         }
         if ([delegate respondsToSelector:@selector(typingRemove:message:newMessage:)]) {
             if (![NSThread isMainThread]) {
-                dispatch_sync(dispatch_get_main_queue(), ^{
+                dispatch_async(dispatch_get_main_queue(), ^{
                     [delegate typingRemove:self message:message newMessage:newMessage];
                 });
             }else {

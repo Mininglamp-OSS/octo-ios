@@ -26,6 +26,7 @@
 #import <WebKit/WebKit.h>
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "UIColor+WK.h"
+#import "WKSafeFilePreviewVC.h"
 
 // 下载进度遮罩（黑色半透明蒙版 + 转圈 + 百分比）
 @interface WKDownloadProgressOverlay : UIView
@@ -1184,12 +1185,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         }
     }
     NSURL *fileURL = [NSURL fileURLWithPath:previewPath];
-    self.documentController = [UIDocumentInteractionController interactionControllerWithURL:fileURL];
-    self.documentController.delegate = self;
-    UIViewController *topVC = [WKNavigationManager shared].topViewController;
-    if (![self.documentController presentPreviewAnimated:YES]) {
-        [self.documentController presentOptionsMenuFromRect:topVC.view.bounds inView:topVC.view animated:YES];
-    }
+    [WKSafeFilePreviewVC showFilePreview:fileURL title:fileURL.lastPathComponent];
 }
 
 - (UIViewController *)documentInteractionControllerViewControllerForPreview:(UIDocumentInteractionController *)controller {

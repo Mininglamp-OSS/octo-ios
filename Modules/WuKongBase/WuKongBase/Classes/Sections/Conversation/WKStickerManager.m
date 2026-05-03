@@ -104,7 +104,7 @@
         }
         if ([delegate respondsToSelector:@selector(stickerUserCategoryLoadFinished:)]) {
             if (![NSThread isMainThread]) {
-                dispatch_sync(dispatch_get_main_queue(), ^{
+                dispatch_async(dispatch_get_main_queue(), ^{
                     [delegate stickerUserCategoryLoadFinished:self];
                 });
             }else {

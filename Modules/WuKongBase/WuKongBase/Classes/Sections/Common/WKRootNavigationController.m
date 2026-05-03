@@ -24,11 +24,11 @@
 //    [self.navigationBar setBackgroundImage:[[UIImage alloc]init]
 //                                                  forBarMetrics:UIBarMetricsDefault];
 //    [self.navigationBar setShadowImage:[[UIImage alloc]init]];
-    
+
     __weak typeof(self) weakSelf = self;
-    
+
     if ([self respondsToSelector:@selector(interactivePopGestureRecognizer)]) {
-        
+
         self.interactivePopGestureRecognizer.delegate = weakSelf;
     }
 }
@@ -43,7 +43,7 @@
 }
 
 - (void)navigationController:(UINavigationController *)navigationController didShowViewController:(UIViewController *)viewController animated:(BOOL)animated{
-    
+
     if ([navigationController respondsToSelector:@selector(interactivePopGestureRecognizer)]) {
         navigationController.interactivePopGestureRecognizer.enabled = YES;
     }
