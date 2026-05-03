@@ -61,19 +61,18 @@
 
 
 -(void) didTipClick:(UITapGestureRecognizer*)gesture {
-    NSString *editStr = [self editText];
-    if( [self.tipTextLbl didTapAttributedTextInLabel:gesture inRange:NSMakeRange(self.tipTextLbl.text.length-editStr.length, editStr.length)]) {
-        if (self.messageModel.contentType == WK_TEXT) {
-            WKTextContent *content = (WKTextContent*)self.messageModel.content;
-            [self.conversationContext inputSetText:content.content];
-            if(content.reply) {
-                WKMessage *message = [WKMessageDB.shared getMessageWithMessageId:[content.reply.messageID longLongValue]];
-                [self.conversationContext replyTo:message];
-            }
-           
-            [self.conversationContext inputBecomeFirstResponder];
-        }
+    if (![[self class] canEdit:self.messageModel]) return;
+    if (self.messageModel.contentType != WK_TEXT) return;
+
+    WKTextContent *textContent = (WKTextContent*)self.messageModel.content;
+    if (!textContent.content) return;
+
+    [self.conversationContext inputSetText:textContent.content];
+    if(textContent.reply) {
+        WKMessage *message = [WKMessageDB.shared getMessageWithMessageId:[textContent.reply.messageID longLongValue]];
+        [self.conversationContext replyTo:message];
     }
+    [self.conversationContext inputBecomeFirstResponder];
 }
 
 
@@ -96,7 +95,13 @@
 
 +(BOOL) canEdit:(WKMessageModel*)model {
     if([model.fromUid isEqualToString:[WKApp shared].loginInfo.uid] && [[self class] revokerIsSelf:model.message] && model.contentType == WK_TEXT) {
-        if([[NSDate date] timeIntervalSince1970] - model.timestamp < 2 * 60) {
+        NSInteger revokeSecond = 2*60;
+        if(WKApp.shared.remoteConfig.revokeSecond == -1) {
+            return true;
+        } else if(WKApp.shared.remoteConfig.revokeSecond > 0) {
+            revokeSecond = WKApp.shared.remoteConfig.revokeSecond;
+        }
+        if([[NSDate date] timeIntervalSince1970] - model.timestamp < revokeSecond) {
             return true;
         }
     }
