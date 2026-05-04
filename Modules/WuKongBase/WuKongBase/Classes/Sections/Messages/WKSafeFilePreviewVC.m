@@ -157,10 +157,12 @@ static UIWindow *_previousKeyWindow = nil;
     self.webView = [[WKWebView alloc] initWithFrame:frame configuration:config];
     self.webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.webView.opaque = NO;
+    BOOL isDark = [WKApp shared].config.style == WKSystemStyleDark;
+    UIColor *bgColor = isDark ? [UIColor colorWithRed:0.11 green:0.11 blue:0.12 alpha:1] : [UIColor whiteColor];
+    self.webView.backgroundColor = bgColor;
+    self.webView.scrollView.backgroundColor = bgColor;
     if (@available(iOS 13.0, *)) {
-        self.webView.backgroundColor = [UIColor systemBackgroundColor];
-        self.webView.underPageBackgroundColor = [UIColor systemBackgroundColor];
-        self.webView.scrollView.backgroundColor = [UIColor systemBackgroundColor];
+        self.webView.underPageBackgroundColor = bgColor;
     }
 
     NSString *ext = self.fileURL.pathExtension.lowercaseString;
