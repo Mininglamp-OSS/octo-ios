@@ -4,6 +4,8 @@
 #import "WKApp.h"
 #import "WKNavigationManager.h"
 #import "WKRootNavigationController.h"
+#include <libcmark_gfm/cmark-gfm.h>
+#include <libcmark_gfm/cmark-gfm-core-extensions.h>
 
 static UIWindow *_previewWindow = nil;
 static UIWindow *_previousKeyWindow = nil;
@@ -154,8 +156,98 @@ static UIWindow *_previousKeyWindow = nil;
     if (@available(iOS 13.0, *)) {
         self.webView.backgroundColor = [UIColor systemBackgroundColor];
     }
-    [self.webView loadFileURL:self.fileURL allowingReadAccessToURL:self.fileURL.URLByDeletingLastPathComponent];
+
+    NSString *ext = self.fileURL.pathExtension.lowercaseString;
+    BOOL isMarkdown = [ext isEqualToString:@"md"] || [ext isEqualToString:@"markdown"];
+    BOOL isPlainText = [ext isEqualToString:@"txt"] || [ext isEqualToString:@"log"] ||
+        [ext isEqualToString:@"json"] || [ext isEqualToString:@"xml"] ||
+        [ext isEqualToString:@"csv"] || [ext isEqualToString:@"yml"] ||
+        [ext isEqualToString:@"yaml"] || [ext isEqualToString:@"ini"] ||
+        [ext isEqualToString:@"conf"] || [ext isEqualToString:@"sh"] ||
+        [ext isEqualToString:@"swift"] || [ext isEqualToString:@"java"] ||
+        [ext isEqualToString:@"py"] || [ext isEqualToString:@"js"] ||
+        [ext isEqualToString:@"ts"] || [ext isEqualToString:@"css"] ||
+        [ext isEqualToString:@"html"] || [ext isEqualToString:@"htm"];
+
+    if (isMarkdown) {
+        [self loadMarkdownFile];
+    } else if (isPlainText) {
+        [self loadPlainTextFile];
+    } else {
+        [self.webView loadFileURL:self.fileURL allowingReadAccessToURL:self.fileURL.URLByDeletingLastPathComponent];
+    }
     [self.view addSubview:self.webView];
+}
+
+#pragma mark - Markdown (cmark-gfm 渲染)
+
+- (void)loadMarkdownFile {
+    NSData *data = [NSData dataWithContentsOfURL:self.fileURL];
+    if (!data) return;
+    NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (!text) text = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding];
+    if (!text) return;
+
+    cmark_gfm_core_extensions_ensure_registered();
+    cmark_parser *parser = cmark_parser_new(CMARK_OPT_DEFAULT);
+    const char *extNames[] = {"strikethrough", "table", "autolink", "tagfilter"};
+    for (int i = 0; i < 4; i++) {
+        cmark_syntax_extension *ext = cmark_find_syntax_extension(extNames[i]);
+        if (ext) cmark_parser_attach_syntax_extension(parser, ext);
+    }
+    const char *utf8 = [text UTF8String];
+    cmark_parser_feed(parser, utf8, strlen(utf8));
+    cmark_node *doc = cmark_parser_finish(parser);
+    char *htmlCStr = cmark_render_html(doc, CMARK_OPT_DEFAULT, cmark_parser_get_syntax_extensions(parser));
+    NSString *body = [NSString stringWithUTF8String:htmlCStr];
+    free(htmlCStr);
+    cmark_node_free(doc);
+    cmark_parser_free(parser);
+
+    NSString *html = [NSString stringWithFormat:
+        @"<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        @"<style>"
+        @"body{font-family:-apple-system,system-ui;font-size:16px;line-height:1.6;padding:16px;color:#333;max-width:100%%}"
+        @"h1,h2,h3,h4{margin-top:1.2em;margin-bottom:0.4em}"
+        @"h1{font-size:1.6em;border-bottom:1px solid #eee;padding-bottom:6px}"
+        @"h2{font-size:1.4em;border-bottom:1px solid #eee;padding-bottom:4px}"
+        @"h3{font-size:1.2em}"
+        @"code{background:#f5f5f5;padding:2px 5px;border-radius:3px;font-family:Menlo,monospace;font-size:0.9em}"
+        @"pre{background:#f5f5f5;padding:12px;border-radius:6px;overflow-x:auto}"
+        @"pre code{background:none;padding:0}"
+        @"blockquote{border-left:4px solid #ddd;margin:0;padding:4px 12px;color:#666}"
+        @"table{border-collapse:collapse;width:100%%}th,td{border:1px solid #ddd;padding:6px 10px;text-align:left}"
+        @"th{background:#f5f5f5;font-weight:600}"
+        @"img{max-width:100%%}"
+        @"a{color:#0366d6}"
+        @"@media(prefers-color-scheme:dark){"
+        @"body{background:#1c1c1e;color:#e5e5e7}"
+        @"code,pre{background:#2c2c2e}blockquote{border-color:#555;color:#aaa}"
+        @"th{background:#2c2c2e}th,td{border-color:#444}a{color:#58a6ff}"
+        @"h1,h2{border-color:#333}}"
+        @"</style></head><body>%@</body></html>", body];
+
+    [self.webView loadHTMLString:html baseURL:self.fileURL.URLByDeletingLastPathComponent];
+}
+
+#pragma mark - 纯文本
+
+- (void)loadPlainTextFile {
+    NSData *data = [NSData dataWithContentsOfURL:self.fileURL];
+    if (!data) return;
+    NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (!text) text = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding];
+    if (!text) return;
+
+    NSString *escaped = [text stringByReplacingOccurrencesOfString:@"&" withString:@"&amp;"];
+    escaped = [escaped stringByReplacingOccurrencesOfString:@"<" withString:@"&lt;"];
+    escaped = [escaped stringByReplacingOccurrencesOfString:@">" withString:@"&gt;"];
+    NSString *html = [NSString stringWithFormat:
+        @"<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        @"<style>body{font-family:-apple-system;font-size:15px;padding:12px;word-wrap:break-word;white-space:pre-wrap;color:#333}"
+        @"@media(prefers-color-scheme:dark){body{background:#1c1c1e;color:#e5e5e7}}</style></head>"
+        @"<body>%@</body></html>", escaped];
+    [self.webView loadHTMLString:html baseURL:self.fileURL.URLByDeletingLastPathComponent];
 }
 
 @end
