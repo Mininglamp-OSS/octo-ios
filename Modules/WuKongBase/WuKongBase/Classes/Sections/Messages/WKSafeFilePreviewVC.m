@@ -143,6 +143,9 @@ static UIWindow *_previousKeyWindow = nil;
     PDFView *pdfView = [[PDFView alloc] initWithFrame:frame];
     pdfView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     pdfView.autoScales = YES;
+    BOOL isDark = [WKApp shared].config.style == WKSystemStyleDark;
+    UIColor *bgColor = isDark ? [UIColor colorWithRed:0.11 green:0.11 blue:0.12 alpha:1] : [UIColor whiteColor];
+    pdfView.backgroundColor = bgColor;
     pdfView.document = [[PDFDocument alloc] initWithURL:self.fileURL];
     [self.view addSubview:pdfView];
 }
@@ -153,8 +156,11 @@ static UIWindow *_previousKeyWindow = nil;
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     self.webView = [[WKWebView alloc] initWithFrame:frame configuration:config];
     self.webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.webView.opaque = NO;
     if (@available(iOS 13.0, *)) {
         self.webView.backgroundColor = [UIColor systemBackgroundColor];
+        self.webView.underPageBackgroundColor = [UIColor systemBackgroundColor];
+        self.webView.scrollView.backgroundColor = [UIColor systemBackgroundColor];
     }
 
     NSString *ext = self.fileURL.pathExtension.lowercaseString;
@@ -177,6 +183,38 @@ static UIWindow *_previousKeyWindow = nil;
         [self.webView loadFileURL:self.fileURL allowingReadAccessToURL:self.fileURL.URLByDeletingLastPathComponent];
     }
     [self.view addSubview:self.webView];
+}
+
+- (NSString *)markdownCSS {
+    BOOL isDark = [WKApp shared].config.style == WKSystemStyleDark;
+    if (isDark) {
+        return @"body{font-family:-apple-system,system-ui;font-size:16px;line-height:1.6;padding:16px;max-width:100%;"
+               @"background:#1c1c1e;color:#e5e5e7}"
+               @"h1,h2,h3,h4{margin-top:1.2em;margin-bottom:0.4em}"
+               @"h1{font-size:1.6em;border-bottom:1px solid #333;padding-bottom:6px}"
+               @"h2{font-size:1.4em;border-bottom:1px solid #333;padding-bottom:4px}"
+               @"h3{font-size:1.2em}"
+               @"code{background:#2c2c2e;padding:2px 5px;border-radius:3px;font-family:Menlo,monospace;font-size:0.9em}"
+               @"pre{background:#2c2c2e;padding:12px;border-radius:6px;overflow-x:auto}"
+               @"pre code{background:none;padding:0}"
+               @"blockquote{border-left:4px solid #555;margin:0;padding:4px 12px;color:#aaa}"
+               @"table{border-collapse:collapse;width:100%}th,td{border:1px solid #444;padding:6px 10px;text-align:left}"
+               @"th{background:#2c2c2e;font-weight:600}"
+               @"img{max-width:100%}a{color:#58a6ff}";
+    }
+    return @"body{font-family:-apple-system,system-ui;font-size:16px;line-height:1.6;padding:16px;color:#333;max-width:100%;"
+           @"background:#fff}"
+           @"h1,h2,h3,h4{margin-top:1.2em;margin-bottom:0.4em}"
+           @"h1{font-size:1.6em;border-bottom:1px solid #eee;padding-bottom:6px}"
+           @"h2{font-size:1.4em;border-bottom:1px solid #eee;padding-bottom:4px}"
+           @"h3{font-size:1.2em}"
+           @"code{background:#f5f5f5;padding:2px 5px;border-radius:3px;font-family:Menlo,monospace;font-size:0.9em}"
+           @"pre{background:#f5f5f5;padding:12px;border-radius:6px;overflow-x:auto}"
+           @"pre code{background:none;padding:0}"
+           @"blockquote{border-left:4px solid #ddd;margin:0;padding:4px 12px;color:#666}"
+           @"table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:6px 10px;text-align:left}"
+           @"th{background:#f5f5f5;font-weight:600}"
+           @"img{max-width:100%}a{color:#0366d6}";
 }
 
 #pragma mark - Markdown (cmark-gfm 渲染)
@@ -206,26 +244,7 @@ static UIWindow *_previousKeyWindow = nil;
 
     NSString *html = [NSString stringWithFormat:
         @"<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-        @"<style>"
-        @"body{font-family:-apple-system,system-ui;font-size:16px;line-height:1.6;padding:16px;color:#333;max-width:100%%}"
-        @"h1,h2,h3,h4{margin-top:1.2em;margin-bottom:0.4em}"
-        @"h1{font-size:1.6em;border-bottom:1px solid #eee;padding-bottom:6px}"
-        @"h2{font-size:1.4em;border-bottom:1px solid #eee;padding-bottom:4px}"
-        @"h3{font-size:1.2em}"
-        @"code{background:#f5f5f5;padding:2px 5px;border-radius:3px;font-family:Menlo,monospace;font-size:0.9em}"
-        @"pre{background:#f5f5f5;padding:12px;border-radius:6px;overflow-x:auto}"
-        @"pre code{background:none;padding:0}"
-        @"blockquote{border-left:4px solid #ddd;margin:0;padding:4px 12px;color:#666}"
-        @"table{border-collapse:collapse;width:100%%}th,td{border:1px solid #ddd;padding:6px 10px;text-align:left}"
-        @"th{background:#f5f5f5;font-weight:600}"
-        @"img{max-width:100%%}"
-        @"a{color:#0366d6}"
-        @"@media(prefers-color-scheme:dark){"
-        @"body{background:#1c1c1e;color:#e5e5e7}"
-        @"code,pre{background:#2c2c2e}blockquote{border-color:#555;color:#aaa}"
-        @"th{background:#2c2c2e}th,td{border-color:#444}a{color:#58a6ff}"
-        @"h1,h2{border-color:#333}}"
-        @"</style></head><body>%@</body></html>", body];
+        @"<style>%@</style></head><body>%@</body></html>", [self markdownCSS], body];
 
     [self.webView loadHTMLString:html baseURL:self.fileURL.URLByDeletingLastPathComponent];
 }
@@ -242,11 +261,15 @@ static UIWindow *_previousKeyWindow = nil;
     NSString *escaped = [text stringByReplacingOccurrencesOfString:@"&" withString:@"&amp;"];
     escaped = [escaped stringByReplacingOccurrencesOfString:@"<" withString:@"&lt;"];
     escaped = [escaped stringByReplacingOccurrencesOfString:@">" withString:@"&gt;"];
+    BOOL isDark = [WKApp shared].config.style == WKSystemStyleDark;
     NSString *html = [NSString stringWithFormat:
         @"<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-        @"<style>body{font-family:-apple-system;font-size:15px;padding:12px;word-wrap:break-word;white-space:pre-wrap;color:#333}"
-        @"@media(prefers-color-scheme:dark){body{background:#1c1c1e;color:#e5e5e7}}</style></head>"
-        @"<body>%@</body></html>", escaped];
+        @"<style>body{font-family:-apple-system;font-size:15px;padding:12px;word-wrap:break-word;white-space:pre-wrap;"
+        @"background:%@;color:%@}</style></head>"
+        @"<body>%@</body></html>",
+        isDark ? @"#1c1c1e" : @"#fff",
+        isDark ? @"#e5e5e7" : @"#333",
+        escaped];
     [self.webView loadHTMLString:html baseURL:self.fileURL.URLByDeletingLastPathComponent];
 }
 
