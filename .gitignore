@@ -1,2 +1,3 @@
 # Merge conflict artifacts
 *.orig
+.claude

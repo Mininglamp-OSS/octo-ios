@@ -2599,6 +2599,9 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     // 隐藏菜单
     [self wk_hideSelectionPopup];
 
+    // 恢复系统编辑菜单（自定义选区可能污染了全局 UIMenuController 状态）
+    [UIMenuController sharedMenuController].menuItems = nil;
+
     objc_setAssociatedObject(self, &kSelectionMenusKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelectionVisibleKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelRangeLocKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);

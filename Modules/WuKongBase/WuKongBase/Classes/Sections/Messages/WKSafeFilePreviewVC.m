@@ -50,7 +50,7 @@ static UIWindow *_previousKeyWindow = nil;
     UIWindow *window = scene
         ? [[UIWindow alloc] initWithWindowScene:scene]
         : [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    window.windowLevel = UIWindowLevelNormal + 1;
+    window.windowLevel = UIWindowLevelNormal;
     window.rootViewController = nav;
     _previewWindow = window;
 
@@ -123,6 +123,38 @@ static UIWindow *_previousKeyWindow = nil;
     UISwipeGestureRecognizer *swipe = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(backPressed)];
     swipe.direction = UISwipeGestureRecognizerDirectionRight;
     [self.view addGestureRecognizer:swipe];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [UIMenuController sharedMenuController].menuItems = nil;
+    NSLog(@"[FilePreview] viewWillAppear: menuItems=%@, window=%@, windowLevel=%.1f, keyWindow=%d",
+          [UIMenuController sharedMenuController].menuItems,
+          self.view.window,
+          self.view.window.windowLevel,
+          self.view.window.isKeyWindow);
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    NSLog(@"[FilePreview] viewDidAppear: window=%@, windowLevel=%.1f, keyWindow=%d, subviews=%lu",
+          self.view.window,
+          self.view.window.windowLevel,
+          self.view.window.isKeyWindow,
+          (unsigned long)self.view.subviews.count);
+    // 列出所有子view的层级
+    for (UIView *v in self.view.subviews) {
+        NSLog(@"[FilePreview]   subview: %@ frame=%@ userInteraction=%d",
+              NSStringFromClass([v class]), NSStringFromCGRect(v.frame), v.userInteractionEnabled);
+    }
+}
+
+- (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
+    return [super canPerformAction:action withSender:sender];
+}
+
+- (BOOL)canBecomeFirstResponder {
+    return NO;
 }
 
 - (void)backPressed {
