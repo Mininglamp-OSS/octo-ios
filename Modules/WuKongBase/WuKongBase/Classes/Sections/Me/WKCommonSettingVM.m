@@ -13,6 +13,8 @@
 #import "WKModuleVC.h"
 #import "WKAboutVC.h"
 #import "WKDestroyAccountVC.h"
+#import "WKRealnameVerifyManager.h"
+#import "WKNavigationManager.h"
 
 @interface WKCommonSettingVM ()
 
@@ -35,6 +37,59 @@
 }
 
 -(void) registerItems {
+    // 实名认证（OCTO）
+    [[WKApp shared] setMethod:WKPOINT_COMMONSETTING_REALNAME handler:^id _Nullable(id  _Nonnull param) {
+        WKLoginInfo *loginInfo = [WKApp shared].loginInfo;
+        BOOL verified = loginInfo.realnameVerified;
+
+        NSString *valueText;
+        if(verified) {
+            // "已认证 · YYYY-MM"
+            NSTimeInterval ts = loginInfo.realnameVerifiedAt;
+            NSString *ym = @"";
+            if(ts > 0) {
+                NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
+                fmt.dateFormat = @"yyyy-MM";
+                ym = [fmt stringFromDate:[NSDate dateWithTimeIntervalSince1970:ts]];
+            }
+            if(ym.length > 0) {
+                valueText = [NSString stringWithFormat:@"%@ · %@", LLang(@"已认证"), ym];
+            } else {
+                valueText = LLang(@"已认证");
+            }
+        } else {
+            valueText = LLang(@"去认证");
+        }
+
+        id onClick;
+        if(verified) {
+            // 已认证不可再点
+            onClick = [NSNull null];
+        } else {
+            onClick = ^{
+                UIViewController *topVC = [WKNavigationManager shared].topViewController;
+                if(!topVC) {
+                    topVC = [UIApplication sharedApplication].keyWindow.rootViewController;
+                    while(topVC.presentedViewController) { topVC = topVC.presentedViewController; }
+                }
+                [[WKRealnameVerifyManager shared] startVerificationFromVC:topVC];
+            };
+        }
+
+        return  @{
+            @"height":WKSectionHeight,
+            @"items":@[
+                @{
+                    @"class":WKLabelItemModel.class,
+                    @"label":LLang(@"实名认证"),
+                    @"value":valueText,
+                    @"showArrow":@(!verified),
+                    @"onClick":onClick,
+                },
+            ],
+        };
+    } category:WKPOINT_CATEGORY_COMMONSETTING sort:99000];
+
     // 深色模式
     [[WKApp shared] setMethod:@"commonsetting.notify" handler:^id _Nullable(id  _Nonnull param) {
         BOOL supportDarkMode = NO;

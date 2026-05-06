@@ -38,6 +38,26 @@ NS_ASSUME_NONNULL_BEGIN
  */
 @property(nonatomic,strong) NSMutableDictionary *extra;
 
+#pragma mark - 实名认证（OCTO OCTO realname verification）
+
+/// 是否已完成实名认证（后端 /v1/internal/verification/complete 回写）
+/// 存储位置：extra[@"realname_verified"]
+@property(nonatomic,assign) BOOL realnameVerified;
+
+/// 真实姓名（仅在 realnameVerified == YES 时有值）
+/// 存储位置：extra[@"real_name"]
+@property(nonatomic,copy,nullable) NSString *realName;
+
+/// 实名认证通过的时间（unix 秒，用于"已认证 · {年-月}"展示）
+/// 存储位置：extra[@"realname_verified_at"]
+@property(nonatomic,assign) NSTimeInterval realnameVerifiedAt;
+
+/// 展示名：
+///   - 已实名：real_name（非空）
+///   - 未实名 / 降级：extra[@"name"]
+/// 所有原先使用 `loginInfo.extra[@"name"]` 的 UI 路径应迁移到此接口。
+@property(nonatomic,copy,readonly) NSString *displayName;
+
 -(void) save;
 
 -(void) load;

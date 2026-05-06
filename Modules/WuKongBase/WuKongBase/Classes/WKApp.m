@@ -13,6 +13,7 @@
 #import "WKConversationVC.h"
 #import "WKNavigationManager.h"
 #import "WKLocalNotificationManager.h"
+#import "WKRealnameVerifyManager.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 #import "WKMessageRegistry.h"
 #import "WKTextMessageCell.h"
@@ -278,11 +279,23 @@ static WKApp *_instance;
         });
         return YES;
     }
+    // 实名认证回跳 octo://verified
+    if([WKRealnameVerifyManager isVerifiedCallbackURL:url]) {
+        [WKRealnameVerifyManager handleVerifiedCallback:url];
+        return YES;
+    }
     return [[WKSwiftModuleManager shared] didOpen:url options:options];
 }
 
 -(BOOL) appContinueUserActivity:(NSUserActivity *)userActivity restorationHandler:(void (^)(NSArray<id<UIUserActivityRestoring>> * _Nullable))restorationHandler {
-    
+    // Universal Links：accounts.example.com/…/verified → 同样走实名认证回跳
+    if([userActivity.activityType isEqualToString:NSUserActivityTypeBrowsingWeb]) {
+        NSURL *url = userActivity.webpageURL;
+        if([WKRealnameVerifyManager isVerifiedCallbackURL:url]) {
+            [WKRealnameVerifyManager handleVerifiedCallback:url];
+            return YES;
+        }
+    }
     return [[WKSwiftModuleManager shared] didContinue:userActivity restorationHandler:restorationHandler];
 }
 

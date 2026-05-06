@@ -588,3 +588,10 @@
 "语音识别不可用"="Speech recognition unavailable";
 "请在设置中允许语音识别"="Please allow speech recognition in Settings";
 "识别中..."="Recognizing...";
+"实名认证"="Real-name verification";
+"已认证"="Verified";
+"去认证"="Verify now";
+"已实名"="Verified";
+"获取实名认证地址失败"="Failed to get verification URL";
+"实名认证地址不合法"="Invalid verification URL";
+"实名认证需要 iOS 11 及以上版本"="Real-name verification requires iOS 11 or later";

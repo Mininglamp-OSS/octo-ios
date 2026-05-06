@@ -100,6 +100,71 @@ static WKLoginInfo *_instance;
 }
 
 
+#pragma mark - 实名认证（realname verification）
+
+// extra 字段键名（与后端 /v1/internal/verification/complete 以及 channelInfo.extra 对齐）
+static NSString *const kRealnameVerifiedKey   = @"realname_verified";
+static NSString *const kRealNameKey           = @"real_name";
+static NSString *const kRealnameVerifiedAtKey = @"realname_verified_at";
+
+- (BOOL)realnameVerified {
+    id v = self.extra[kRealnameVerifiedKey];
+    return v ? [v boolValue] : NO;
+}
+
+- (void)setRealnameVerified:(BOOL)realnameVerified {
+    if(!self.extra) {
+        self.extra = [[NSMutableDictionary alloc] init];
+    }
+    self.extra[kRealnameVerifiedKey] = @(realnameVerified);
+}
+
+- (NSString *)realName {
+    id v = self.extra[kRealNameKey];
+    if([v isKindOfClass:[NSString class]]) {
+        NSString *s = (NSString *)v;
+        return s.length > 0 ? s : nil;
+    }
+    return nil;
+}
+
+- (void)setRealName:(NSString *)realName {
+    if(!self.extra) {
+        self.extra = [[NSMutableDictionary alloc] init];
+    }
+    if(realName) {
+        self.extra[kRealNameKey] = [realName copy];
+    } else {
+        [self.extra removeObjectForKey:kRealNameKey];
+    }
+}
+
+- (NSTimeInterval)realnameVerifiedAt {
+    id v = self.extra[kRealnameVerifiedAtKey];
+    return v ? [v doubleValue] : 0;
+}
+
+- (void)setRealnameVerifiedAt:(NSTimeInterval)ts {
+    if(!self.extra) {
+        self.extra = [[NSMutableDictionary alloc] init];
+    }
+    self.extra[kRealnameVerifiedAtKey] = @(ts);
+}
+
+- (NSString *)displayName {
+    // 已实名 && 真实姓名非空 → 展示真实姓名；否则回落到昵称
+    NSString *rn = self.realName;
+    if(self.realnameVerified && rn.length > 0) {
+        return rn;
+    }
+    id n = self.extra[@"name"];
+    if([n isKindOfClass:[NSString class]]) {
+        return (NSString *)n;
+    }
+    return @"";
+}
+
+
 
 - (NSString *)deviceUUID {
     if(!_deviceUUID) {

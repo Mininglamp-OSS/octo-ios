@@ -58,7 +58,7 @@
                     @{
                         @"class":WKLabelItemModel.class,
                         @"label":LLang(@"名字"),
-                        @"value":loginInfo.extra[@"name"]?:@"",
+                        @"value":loginInfo.displayName?:@"",
                         @"onClick":^{
                             if(weakSelf.delegate && [weakSelf.delegate respondsToSelector:@selector(meInfoVMUpdateName:)]) {
                                 [weakSelf.delegate meInfoVMUpdateName:weakSelf];

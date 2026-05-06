@@ -37,6 +37,7 @@
 #import "WKContactsSelectCell.h"
 #import "WKSystemMessageHandler.h"
 #import "WKLocalNotificationManager.h"
+#import "WKRealnameVerifyManager.h"
 #import "WKMessageLongMenusItem.h"
 #import "WKMessageManager.h"
 #import "WKAlertUtil.h"

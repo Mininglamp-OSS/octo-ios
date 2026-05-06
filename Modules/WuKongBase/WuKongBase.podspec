@@ -112,7 +112,7 @@ TODO: Add long description of the pod here.
   # s.public_header_files = 'Pod/Classes/**/*.h'
   # s.frameworks = 'UIKit', 'MapKit'
 #  s.xcconfig = { 'LIBRARY_SEARCH_PATHS' => '/Users/tt/work/projects/mos/WuKongIMDemo/Modules/WuKongBase/ios/arm',"OTHER_LDFLAGS" => "-ObjC" }
-  s.frameworks = 'UIKit', 'MapKit', 'AVFoundation', 'Speech'
+  s.frameworks = 'UIKit', 'MapKit', 'AVFoundation', 'Speech', 'SafariServices'
   # s.dependency 'AFNetworking', '~> 2.3'
   
   

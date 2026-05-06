@@ -298,6 +298,11 @@
 #define WKNOTIFY_CHANNEL_AVATAR_UPDATE @"channel.avatarupdate"
 // 标签列表刷新
 #define WK_NOTIFY_LABELLIST_REFRESH @"lim.notify.labellist.refresh"
+// 实名认证状态更新（userInfo 可包含 @{"verified": @(YES), "real_name": @"..."})
+#define WKNOTIFY_REALNAME_VERIFIED @"user.realname.verified"
+
+// 通用设置 · 实名认证入口（WKPOINT_CATEGORY_COMMONSETTING 注册点）
+#define WKPOINT_COMMONSETTING_REALNAME @"commonsetting.realname"
 
 // 消息类型
 typedef enum : NSUInteger {
