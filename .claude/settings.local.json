@@ -1,11 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git add *)",
-      "Bash(git commit -m ' *)",
-      "Bash(git commit *)",
-      "Bash(git *)",
-      "Bash(xcrun swiftc *)"
+      "Bash(git commit *)"
     ]
   }
 }
