@@ -88,10 +88,52 @@
 
   // 设置频道资料更新函数
 -(void) setChannelInfoUpdate {
-    
-    
+
+
     [[WKSDK shared] setChannelInfoUpdate:^WKTaskOperator * (WKChannel * _Nonnull channel, WKChannelInfoCallback  _Nonnull callback) {
-        
+
+        // 子区(topic)不走通用 channels/{id}/{type} 接口 —— 通用接口不返回 thread_setting 里的用户维度 mute,
+        // 会把刚写入的 thread mute 覆盖回 0。改走 thread 详情接口,和 web 端 channelInfoCallback 保持一致。
+        if (channel.channelType == WK_COMMUNITY_TOPIC) {
+            NSRange sep = [channel.channelId rangeOfString:@"____"];
+            if (sep.location != NSNotFound) {
+                NSString *groupNo = [channel.channelId substringToIndex:sep.location];
+                NSString *shortID = [channel.channelId substringFromIndex:NSMaxRange(sep)];
+                if (groupNo.length > 0 && shortID.length > 0) {
+                    NSURLSessionDataTask *threadTask = [[WKAPIClient sharedClient] taskGET:[NSString stringWithFormat:@"groups/%@/threads/%@", groupNo, shortID] parameters:nil callback:^(NSError * _Nullable tErr, NSDictionary *threadDict) {
+                        if (tErr) {
+                            WKLogError(@"获取子区详情失败！-> %@", tErr);
+                            if (callback) callback(tErr, false);
+                            return;
+                        }
+                        WKChannelInfo *channelInfo = [[WKChannelInfo alloc] init];
+                        channelInfo.channel = channel;
+                        channelInfo.name = threadDict[@"name"] ?: @"";
+                        // 子区沿用父群头像
+                        channelInfo.logo = [NSString stringWithFormat:@"groups/%@/avatar", groupNo];
+                        // tri-state mute:存在且为 1 → YES;存在且为 0 → NO;缺失/NULL → 继承父群 mute
+                        id muteVal = threadDict[@"mute"];
+                        if ([muteVal isKindOfClass:[NSNumber class]]) {
+                            channelInfo.mute = [muteVal boolValue];
+                        } else {
+                            WKChannel *parentChannel = [WKChannel channelID:groupNo channelType:WK_GROUP];
+                            WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parentChannel];
+                            channelInfo.mute = parentInfo ? parentInfo.mute : NO;
+                        }
+                        [[WKSDK shared].channelManager addOrUpdateChannelInfo:channelInfo];
+                        if (callback) callback(nil, false);
+                    }];
+                    return [WKTaskOperator cancel:^{
+                        if (threadTask) [threadTask cancel];
+                    } suspend:^{
+                        if (threadTask) [threadTask suspend];
+                    } resume:^{
+                        if (threadTask) [threadTask resume];
+                    }];
+                }
+            }
+        }
+
         NSURLSessionDataTask *sessionDataTask = [[WKAPIClient sharedClient] taskGET:[NSString stringWithFormat:@"channels/%@/%d",channel.channelId,channel.channelType] parameters:nil callback:^(NSError * _Nullable error, NSDictionary  *resultDict) {
             if(error) {
                 WKLogError(@"获取频道信息失败！-> %@",error);
@@ -99,18 +141,18 @@
                 return;
             }
             WKChannelInfo *channelInfo  = [WKChannelUtil toChannelInfo2:resultDict];
-            
+
             [[WKSDK shared].channelManager addOrUpdateChannelInfo:channelInfo];
             if(callback) {
                 callback(nil,false);
             }
-            
+
         }];
         return [WKTaskOperator cancel:^{
             if(sessionDataTask) {
                 [sessionDataTask cancel];
             }
-            
+
         } suspend:^{
             if(sessionDataTask) {
                 [sessionDataTask suspend];
@@ -121,8 +163,8 @@
             }
         }];
     }];
-    
-    
+
+
     return;
 }
 

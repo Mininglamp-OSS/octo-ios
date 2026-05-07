@@ -1745,28 +1745,19 @@
 
 -(void) channelInfoUpdate:(WKChannelInfo *)channelInfo oldChannelInfo:(WKChannelInfo *)oldChannelInfo{
    //[self refreshTable];
-    NSLog(@"[ThreadMute] channelInfoUpdate: channelId=%@ channelType=%d mute=%d oldMute=%d", channelInfo.channel.channelId, channelInfo.channel.channelType, channelInfo.mute, oldChannelInfo ? oldChannelInfo.mute : -1);
     // 子区的 channelInfo 变化(例如子区免打扰切换)在会话列表里没有顶层行,
     // 需要定位到父群行并刷新,子区预览才会重新读取 threadInfo.mute 渲染静音图标。
     if (channelInfo.channel.channelType == WK_COMMUNITY_TOPIC) {
-        NSLog(@"[ThreadMute] channelInfoUpdate: TOPIC branch");
         NSRange sep = [channelInfo.channel.channelId rangeOfString:@"____"];
         if (sep.location != NSNotFound) {
             NSString *parentGroupNo = [channelInfo.channel.channelId substringToIndex:sep.location];
-            NSLog(@"[ThreadMute] channelInfoUpdate: parentGroupNo=%@", parentGroupNo);
             if (parentGroupNo.length > 0) {
                 WKChannel *parentChannel = [WKChannel channelID:parentGroupNo channelType:WK_GROUP];
                 NSInteger parentIndex = [self.conversationListVM indexAtChannel:parentChannel];
-                NSLog(@"[ThreadMute] channelInfoUpdate: parentIndex=%ld", (long)parentIndex);
                 if (parentIndex != -1) {
-                    NSLog(@"[ThreadMute] channelInfoUpdate: reloading parent row at index=%ld", (long)parentIndex);
                     [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:parentIndex inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
-                } else {
-                    NSLog(@"[ThreadMute] channelInfoUpdate: parent not found in list, SKIP reload");
                 }
             }
-        } else {
-            NSLog(@"[ThreadMute] channelInfoUpdate: no '____' in topic channelId, SKIP");
         }
         return;
     }
@@ -2173,7 +2164,6 @@
 -(void) showThreadMuteMenuForChannelId:(NSString *)threadChannelId threadName:(NSString *)threadName atPoint:(CGPoint)point {
     WKChannel *threadChannel = [WKChannel channelID:threadChannelId channelType:WK_COMMUNITY_TOPIC];
     BOOL isMuted = [[WKChannelSettingManager shared] mute:threadChannel];
-    NSLog(@"[ThreadMute] showThreadMuteMenu channelId=%@ name=%@ isMuted=%d", threadChannelId, threadName, isMuted);
 
     NSString *muteTitle = isMuted ? LLang(@"打开通知") : LLang(@"关闭通知");
     NSMutableArray<NSDictionary *> *menuItems = [NSMutableArray array];
@@ -2182,7 +2172,6 @@
         @"icon": [WKConversationListVC iconMute:isMuted],
         @"action": ^{
             BOOL newMute = !isMuted;
-            NSLog(@"[ThreadMute] menu action tapped newMute=%d -> WKChannelSettingManager channel:mute:", newMute);
             // 依赖服务端 PUT groups/{groupNo}/threads/{shortID}/setting 成功后,
             // 通过 SendChannelUpdate 推送 channel update CMD,客户端拉取最新 channelInfo 并刷新 UI。
             [[WKChannelSettingManager shared] channel:threadChannel mute:newMute];

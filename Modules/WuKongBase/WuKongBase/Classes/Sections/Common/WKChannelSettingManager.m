@@ -28,18 +28,43 @@
 -(void) channel:(WKChannel*)channel mute:(BOOL) on {
     if(channel.channelType == WK_PERSON) {
         [self updateUserSetting:channel.channelId settingDict:@{@"mute":@(on?1:0)}];
+    }else if(channel.channelType == WK_COMMUNITY_TOPIC) {
+        // 子区使用 thread 专属接口,落库到 thread_setting 表。
+        // 父群 mute 变化时由服务端按"无子区显式设置则降级父群 mute"的语义处理,无需客户端 iterate。
+        [self updateThreadSetting:channel.channelId mute:on];
     }else {
         [self updateGroupSetting:WKGroupSettingKeyMute on:on groupNo:channel.channelId];
-        // 同步群聊下所有子区的通知设置
-        NSString *prefix = [NSString stringWithFormat:@"%@____", channel.channelId];
-        NSArray<WKConversation *> *allConvs = [[WKSDK shared].conversationManager getConversationList];
-        for (WKConversation *conv in allConvs) {
-            if (conv.channel.channelType == WK_COMMUNITY_TOPIC && [conv.channel.channelId hasPrefix:prefix]) {
-                [self updateGroupSetting:WKGroupSettingKeyMute on:on groupNo:conv.channel.channelId];
-            }
-        }
     }
 
+}
+
+// 更新子区免打扰设置
+// threadChannelId 形如 "groupNo____shortID"
+-(void) updateThreadSetting:(NSString*)threadChannelId mute:(BOOL)on {
+    NSRange sep = [threadChannelId rangeOfString:@"____"];
+    if (sep.location == NSNotFound) {
+        return;
+    }
+    NSString *groupNo = [threadChannelId substringToIndex:sep.location];
+    NSString *shortID = [threadChannelId substringFromIndex:NSMaxRange(sep)];
+    if (groupNo.length == 0 || shortID.length == 0) {
+        return;
+    }
+    NSString *url = [NSString stringWithFormat:@"groups/%@/threads/%@/setting", groupNo, shortID];
+    [[WKAPIClient sharedClient] PUT:url parameters:@{@"mute":@(on?1:0)}].then(^{
+        // 服务端 thread_setting 落库成功后,主动同步本地 channelInfo 以驱动 UI 刷新和在线消息免打扰过滤。
+        // 后续 channelUpdate CMD 触发的 fetchChannelInfo 会走 thread 详情接口再确认一次。
+        WKChannel *threadChannel = [WKChannel channelID:threadChannelId channelType:WK_COMMUNITY_TOPIC];
+        WKChannelInfo *channelInfo = [[WKSDK shared].channelManager getChannelInfo:threadChannel];
+        if (!channelInfo) {
+            channelInfo = [[WKChannelInfo alloc] init];
+            channelInfo.channel = threadChannel;
+        }
+        channelInfo.mute = on;
+        [[WKSDK shared].channelManager addOrUpdateChannelInfo:channelInfo];
+    }).catch(^(NSError *error){
+        [[WKNavigationManager shared].topViewController.view showMsg:error.domain];
+    });
 }
 // 设置-置顶
 -(void) channel:(WKChannel*)channel stick:(BOOL) on {
