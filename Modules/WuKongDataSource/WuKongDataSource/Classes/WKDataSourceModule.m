@@ -106,15 +106,24 @@
                             if (callback) callback(tErr, false);
                             return;
                         }
+                        // 保留本地 channelInfo 的 mute 值作为"当前已知状态",避免 null 覆盖为错误值。
+                        WKChannelInfo *existingInfo = [[WKSDK shared].channelManager getChannelInfo:channel];
                         WKChannelInfo *channelInfo = [[WKChannelInfo alloc] init];
                         channelInfo.channel = channel;
                         channelInfo.name = threadDict[@"name"] ?: @"";
                         // 子区沿用父群头像
                         channelInfo.logo = [NSString stringWithFormat:@"groups/%@/avatar", groupNo];
-                        // tri-state mute:存在且为 1 → YES;存在且为 0 → NO;缺失/NULL → 继承父群 mute
+                        // tri-state mute 处理:
+                        //   NSNumber → 服务端显式值,权威,直接采用
+                        //   NSNull/missing → 服务端无显式 thread_setting 记录(或 QuerySetting 失败被吞错)。
+                        //     此时不覆盖本地现有值 —— 因为冷启动父群 channelInfo 不一定已加载,
+                        //     直接 fallback 到 parentInfo.mute 会在 parentInfo==nil 时变成 NO,
+                        //     把用户明确设置过的"静音"误覆盖。仅当本地也没有 channelInfo 时,才用父群做初始化。
                         id muteVal = threadDict[@"mute"];
                         if ([muteVal isKindOfClass:[NSNumber class]]) {
                             channelInfo.mute = [muteVal boolValue];
+                        } else if (existingInfo) {
+                            channelInfo.mute = existingInfo.mute;
                         } else {
                             WKChannel *parentChannel = [WKChannel channelID:groupNo channelType:WK_GROUP];
                             WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parentChannel];
