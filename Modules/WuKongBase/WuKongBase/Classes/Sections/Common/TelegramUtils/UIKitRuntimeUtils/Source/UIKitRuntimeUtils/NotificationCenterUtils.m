@@ -54,14 +54,15 @@ static NSMutableArray *notificationHandlers() {
 
 @implementation NotificationCenterUtils
 
-+ (void)load {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        [RuntimeUtils swizzleInstanceMethodOfClass:[NSNotificationCenter class] currentSelector:@selector(postNotificationName:object:userInfo:) newSelector:@selector(_a65afc19_postNotificationName:object:userInfo:)];
-        
-        //[RuntimeUtils swizzleClassMethodOfClass:[CATransaction class] currentSelector:@selector(flush) newSelector:@selector(swizzle_flush)];
-    });
-}
+// Disabled: 此 swizzle 唯一消费方 (TelegramUtils/Display/WindowContent 等)
+// 整块未被实例化，swizzle 在每次 postNotificationName 上增加栈深度且无业务用途。
+// 参见 CLAUDE.md "swizzle 白名单" 规则。
+//+ (void)load {
+//    static dispatch_once_t onceToken;
+//    dispatch_once(&onceToken, ^{
+//        [RuntimeUtils swizzleInstanceMethodOfClass:[NSNotificationCenter class] currentSelector:@selector(postNotificationName:object:userInfo:) newSelector:@selector(_a65afc19_postNotificationName:object:userInfo:)];
+//    });
+//}
 
 + (void)addNotificationHandler:(NotificationHandlerBlock)handler {
     [notificationHandlers() addObject:[handler copy]];
