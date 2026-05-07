@@ -259,6 +259,13 @@
 
             // 将同步的 stick/mute 状态写入 channel 表
             for (WKSyncConversationModel *syncModel in syncConversations) {
+                // 子区(WK_COMMUNITY_TOPIC)的 mute/stick 服务端 conversation/sync 路径不查 thread_setting,
+                // 对子区一律返回父群值(实际上 groupMap[topicChannelId] 找不到,返回 0),
+                // 如果在这里写回本地 channelInfo.mute,会把用户已设置的子区静音状态覆盖掉。
+                // 子区的 mute/stick 仅信任 thread 详情接口(WKDataSourceModule setChannelInfoUpdate 的 topic 分支)。
+                if (syncModel.channel.channelType == WK_COMMUNITY_TOPIC) {
+                    continue;
+                }
                 WKChannelInfo *channelInfo = [[WKSDK shared].channelManager getChannelInfo:syncModel.channel];
                 if (channelInfo) {
                     BOOL needUpdate = NO;

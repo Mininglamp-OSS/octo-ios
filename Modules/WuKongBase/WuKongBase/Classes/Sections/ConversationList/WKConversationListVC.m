@@ -7,6 +7,7 @@
 
 #import "WKConversationListVC.h"
 #import "WKConversationListVM.h"
+#import "WKSpaceFilter.h"
 #import "WKThreadCreatedContent.h"
 #import "WKConversationListCell.h"
 #import "WKConversationGroupThreadCell.h"
@@ -99,6 +100,9 @@
 @property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeLeft;
 @property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeRight;
 @property(nonatomic,assign) BOOL pendingSpaceSwitchLoad;
+@property(nonatomic,assign) BOOL pendingRebuild;
+@property(nonatomic,assign) CGPoint privateTabScrollOffset;
+@property(nonatomic,assign) CGPoint groupTabScrollOffset;
 
 @end
 
@@ -178,6 +182,9 @@
 
     // 初始化标题（即使异步加载未完成也先显示默认标题）
     [self refreshTitle];
+
+    // ⚠️ 临时调试按钮（已隐藏）
+    // [self setupStressTestButton];
 }
 
 // 给标题添加点击手势
@@ -1032,6 +1039,11 @@
                     // 不再从 DB 重新加载（handleSyncConversation 的 delegate 已更新内存数据）
                     // 直接记录白名单并刷新分组
                     [weakSelf.conversationListVM snapshotSyncedGroupIds];
+                    // YUJ-215: snapshot 后再 prune 一遍，对齐 performSwitchToSpaceId 流程
+                    [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
+                    // YUJ-218: backend sync 可能不返回 botfather（按 X-Space-Id 过滤时）—
+                    // 本地兜底合成占位 entry，保证系统 bot 可见；已存在则无操作。
+                    [weakSelf.conversationListVM ensureSystemBotsVisible];
                     [weakSelf rebuildGroupDisplayAndReload];
                     [weakSelf refreshBadge];
                     [weakSelf loadCategories];
@@ -1042,6 +1054,10 @@
             [self.conversationListVM loadConversationList:^{
                 // 无sync时也记录白名单（DB中的数据视为当前空间的）
                 [weakSelf.conversationListVM snapshotSyncedGroupIds];
+                // YUJ-215: prune 残留（见 performSwitchToSpaceId 注释）
+                [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
+                // YUJ-218: DB 冷启动也兜底（上次 sync 若未写入 botfather，DB 同样缺失）。
+                [weakSelf.conversationListVM ensureSystemBotsVisible];
                 [weakSelf rebuildGroupDisplayAndReload];
                 [weakSelf refreshBadge];
                 [weakSelf loadCategories];
@@ -1141,6 +1157,15 @@
             __weak typeof(self) weakSelf = self;
             [self.conversationListVM loadConversationList:^{
                 [weakSelf.conversationListVM snapshotSyncedGroupIds];
+                // YUJ-215: Space 切换完成后再扫一遍 VM，把任何 WKSpaceFilter 明确 Skip
+                // 的群聊从 conversation array 踢出。reset() 已清空，但 sync 回来的批次
+                // 以及中间 onConversationUpdate 里 FailOpen 走回 existsInList 分支都
+                // 可能把不该属于当前 Space 的群带回来——最后一次 prune 保证 snapshot
+                // 之后的单例内存是干净的。
+                [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
+                // YUJ-218: 切 Space 后若 backend sync 在新 Space 未返回 botfather，
+                // 本地兜底合成占位 entry，保证用户立即看到系统 bot 入口。
+                [weakSelf.conversationListVM ensureSystemBotsVisible];
                 [weakSelf rebuildGroupDisplayAndReload];
                 [weakSelf refreshBadge];
                 [weakSelf loadCategories];
@@ -1216,6 +1241,49 @@
             [filtered addObject:conversation];
             continue;
         }
+        // YUJ-209: 新消息到达路径必须与冷启动 / Space 切换路径（WKConversationListVM.shouldShowConversation）
+        // 对齐——两者都走 WKSpaceFilter。否则外部群收到新消息时会被错挂到 viewer 当前 Space 列表，
+        // 污染 conversationListVM 单例的内存状态（DB / SDK 层已正确，见 YUJ-209 根因）。
+        //   - Keep: channelInfo.space_id == currentSpaceId 或 member.source_space_id == currentSpaceId
+        //   - Skip: channelInfo.space_id 明确不匹配且我不是外部成员 → 不加入当前 Space 列表
+        //   - FailOpen: channelInfo/member 未缓存，降级走下方白名单 / existsInList 原有逻辑（fail-open 原则）
+        if(conversation.channel.channelType == WK_GROUP) {
+            WKSpaceFilterDecision decision = [[WKSpaceFilter shared]
+                                               decideChannel:channelId
+                                                 channelType:conversation.channel.channelType];
+            if(decision == WKSpaceFilterDecisionSkip) {
+                // 明确归属其它 Space 且我不是当前 Space 的外部成员：
+                // 若单例内存中残留该群（历史串台或并发写入导致），同步清理，避免下次
+                // sortConversationList / refreshTable 再次浮到顶部。
+                if([self.conversationListVM indexAtChannel:conversation.channel] != -1) {
+                    [self.conversationListVM removeAtChannnel:conversation.channel];
+                }
+                continue;
+            }
+            if(decision == WKSpaceFilterDecisionKeep) {
+                // 明确归属当前 Space（owning 或 external-member）→ 直接通过，
+                // 不再绕 whitelist / verifyAndAddGroupsToList 走 sync 回兜。
+                [filtered addObject:conversation];
+                continue;
+            }
+            // FailOpen：WKChannelInfo 或 member.extra 未缓存（EP1 尚未回写）
+            // → 继续走下方原有 existsInList / whitelist / verifyAndAddGroupsToList 兜底路径。
+            //
+            // YUJ-215: 清残留 + 禁走 existsInList 裸放行。
+            // 真机复现：user 在 Space A 打开外部群 EDF，切到 Space B，EDF 新消息 → 错挂 B。
+            // 原因：访问 EDF 会触发 SDK 内存/DB 层把 EDF 的 WKConversation 物化到当前进程
+            // 的 conversation list 里（即使 Space 切换 reset 了 VM，某些路径——如 SDK
+            // conversationManager in-memory cache、后续 re-sync 重放等——仍可能把 EDF
+            // 条目带回 VM）。Round-1 只在 Skip 分支做 removeAtChannnel，但 FailOpen 会
+            // 直接走到下方 existsInList==YES → [filtered addObject:conversation]，等于
+            // 跨 Space 裸放行。现在即便 FailOpen，也先清掉非白名单的残留，再交 unknown
+            // 路径 verifyAndAddGroupsToList 异步核验。
+            if([self.conversationListVM indexAtChannel:conversation.channel] != -1 &&
+               ![self.conversationListVM isGroupInWhitelist:channelId]) {
+                [self.conversationListVM removeAtChannnel:conversation.channel];
+            }
+        }
+
         // 检查该会话是否已在当前列表中
         BOOL existsInList = [self.conversationListVM indexAtChannel:conversation.channel] != -1;
         if(existsInList) {
@@ -1247,12 +1315,21 @@
         } else {
             // 群聊不在列表中：检查白名单决定是否允许添加
             if(conversation.channel.channelType == WK_GROUP) {
-                if([self.conversationListVM isGroupInWhitelist:channelId]) {
-                    // 群聊在白名单中（通过sync或创建时添加），允许通过
+                // YUJ-215 (对齐 Android Round-2 PR#155): 白名单未初始化（nil）时
+                // 不再裸放行——强制走 verifyAndAddGroupsToList 回兜。
+                // 背景：iOS 原 isGroupInWhitelist 对 nil 返回 YES（pre-sync fail-open），
+                // 与 Android 原 spaceConversationKeys.isEmpty() 短路等价。Android PR#155
+                // 已证实该短路是跨 Space 串台的 race 窗口：Space 切换后 reset() → nil，
+                // sync 完成并 snapshot 之前若 EDF 新消息命中 FailOpen，此处短路放行 →
+                // EDF 被 Space B 错挂。
+                //   已初始化 + 命中 → 放行（兼容已有流程）
+                //   已初始化 + 未命中 → 收集 verify（原行为）
+                //   未初始化（race 窗口）→ 也收集 verify，由异步 sync API 核验是否真属于当前 Space
+                BOOL whitelistKnows = [self.conversationListVM isGroupWhitelistInitialized] &&
+                                      [self.conversationListVM isGroupInWhitelist:channelId];
+                if(whitelistKnows) {
                     [filtered addObject:conversation];
                 } else {
-                    // 群聊不在白名单中，可能是被人拉入的新群聊
-                    // 收集起来，循环结束后统一后台验证
                     [unknownGroupChannelIds addObject:channelId];
                 }
                 continue;
@@ -1352,8 +1429,74 @@
     [self rebuildGroupDisplayAndReload];
 }
 
+/// YUJ-219-C: 判断 channel 是否为系统 Bot（botfather / u_10000 / fileHelper 等）。
+/// SYSTEM_BOTS 集合在本单先取 WKAppConfig 已有的三个 UID，口径与
+/// `isConversationInCurrentSpace` 放行"全局可见"的那三项保持一致。
+/// 后续 YUJ-219-A4 会把集合迁到 appconfig system_bot_uids 下发，本单不触碰。
+-(BOOL) isSystemBotChannel:(WKChannel*)channel {
+    NSString *channelId = channel.channelId;
+    if(!channelId || channelId.length == 0) {
+        return NO;
+    }
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    NSString *systemUID = [WKApp shared].config.systemUID;
+    NSString *fileHelperUID = [WKApp shared].config.fileHelperUID;
+    return (botfatherUID.length > 0 && [channelId isEqualToString:botfatherUID])
+        || (systemUID.length > 0 && [channelId isEqualToString:systemUID])
+        || (fileHelperUID.length > 0 && [channelId isEqualToString:fileHelperUID]);
+}
+
+/// YUJ-219-C: 判断 message.content.contentDict[@"space_id"] 是否精确匹配当前 Space。
+/// 无 space_id / 非字符串类型 → 视为非当前 Space（防止 SystemBot 无 space_id 的跨 Space
+/// 消息 bump 当前 Space 的 lastMsg timestamp / unread / 排序）。
+-(BOOL) isMessageFromCurrentSpace:(WKMessage*)message spaceId:(NSString*)spaceId {
+    if(!message) {
+        // 无 lastMessage 不做 bump 判定（上层其他 gate 已决定是否放行）
+        return YES;
+    }
+    id raw = message.content.contentDict[@"space_id"];
+    if(![raw isKindOfClass:[NSString class]]) {
+        return NO;
+    }
+    NSString *msgSpaceId = (NSString*)raw;
+    if(msgSpaceId.length == 0) {
+        return NO;
+    }
+    return [msgSpaceId isEqualToString:spaceId];
+}
+
 // 单个会话添加或更新
 -(void) uiAddOrUpdateConversationForOne:(WKConversation*)conversation {
+    // YUJ-219-C: push 路径对称 gate —— 必须在 getRealShowConversationWrap 之前做判定。
+    // validation-report.md §3 / §5 判定 iOS 是"半保险"：spaceFilteredLastMessage 能擦
+    // preview 文字，但 replaceAtChannel 裸替换会照常 bump lastMessage.timestamp 和
+    // unreadCount → 当前 Space 列表被他 Space push 冒顶 + 红点。
+    // `uiAddConversation`（新增分支）已有 isConversationInCurrentSpace 检查，
+    // 这里"已存在 → replace/sort"分支补上对称 gate，与 Android `resetData` 同源。
+    //
+    // ⚠️ getRealShowConversationWrap 对子区/thread 消息会调用父会话的 addOrUpdateChildren，
+    // 从而变更父行的 children / lastChildConversation 状态。因此 gate 必须放在它之前，
+    // 否则即便 return 也已产生副作用。通过 conversation.parentChannel ?: conversation.channel
+    // 判断对应行是否已存在。
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(currentSpaceId && currentSpaceId.length > 0) {
+        WKChannel *targetChannel = conversation.parentChannel ?: conversation.channel;
+        if(targetChannel && [self.conversationListVM indexAtChannel:targetChannel] != -1) {
+            // 1) 基础 gate：不属于当前 Space → 保持旧状态，不触发任何 wrap/sort/replace。
+            if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
+                return;
+            }
+            // 2) 系统 Bot bump 保护：SystemBot entry 全局可见
+            //    （isConversationInCurrentSpace 对 botfather / systemUID / fileHelper 放行），
+            //    但 lastMessage 若来自他 Space / 无 space_id，不应 bump 当前 Space 的
+            //    lastMsgTimestamp / unread / 排序。
+            if([self isSystemBotChannel:conversation.channel]
+               && ![self isMessageFromCurrentSpace:conversation.lastMessage spaceId:currentSpaceId]) {
+                return;
+            }
+        }
+    }
+
     WKConversationWrapModel *newModel = [self.conversationListVM getRealShowConversationWrap:[[WKConversationWrapModel alloc] initWithConversation:conversation]];
 
     NSInteger oldIndex = [self.conversationListVM indexAtChannel:newModel.channel];
@@ -1397,8 +1540,31 @@
         return YES;
     }
 
-    // 群聊：检查白名单确定是否属于当前空间
+    // 群聊：先走 WKSpaceFilter（支持外部群 source_space_id 兜底，对齐 shouldShowConversation 与
+    // YUJ-209 的串台修复）。FailOpen 场景下再降级到 sync 白名单，保持兜底一致性。
     if(conversation.channel.channelType == WK_GROUP) {
+        WKSpaceFilterDecision decision = [[WKSpaceFilter shared]
+                                           decideChannel:channelId
+                                             channelType:conversation.channel.channelType];
+        if(decision == WKSpaceFilterDecisionKeep) {
+            return YES;
+        }
+        if(decision == WKSpaceFilterDecisionSkip) {
+            // YUJ-215: Skip 时若 VM 中仍残留该 channel，同步清掉，保证
+            // "Skip 决定 ⇒ 从 conversation array 移除"这一语义在所有 Skip 入口
+            // （filter 批次 + 单条判定）上一致。避免访问过群后单例内存仍持有该条
+            // 目，下次 sort / rebuildGroupDisplayAndReload 再把它浮回当前 Space。
+            if([self.conversationListVM indexAtChannel:conversation.channel] != -1) {
+                [self.conversationListVM removeAtChannnel:conversation.channel];
+            }
+            return NO;
+        }
+        // FailOpen：channelInfo / member 未缓存 → 走白名单兜底。
+        // YUJ-215: 白名单未初始化（nil）时不再默认 YES——Space 切换 race 窗口需要
+        // 严格过滤（对齐 Android Round-2 PR#155 去 isEmpty() 短路模式）。
+        if(![self.conversationListVM isGroupWhitelistInitialized]) {
+            return NO;
+        }
         return [self.conversationListVM isGroupInWhitelist:conversation.channel.channelId];
     }
 
@@ -1526,9 +1692,19 @@
 
     __weak typeof(self) weakSelf = self;
     _conversationTabView.onTabChanged = ^(NSInteger index) {
+        NSInteger oldIndex = weakSelf.conversationListVM.filterType;
+        // 保存当前 tab 滚动位置
+        if (oldIndex == WKConversationFilterGroup) {
+            weakSelf.groupTabScrollOffset = weakSelf.tableView.contentOffset;
+        } else {
+            weakSelf.privateTabScrollOffset = weakSelf.tableView.contentOffset;
+        }
         weakSelf.conversationListVM.filterType = index;
         [weakSelf.conversationListVM rebuildFilteredList];
         [weakSelf rebuildGroupDisplayAndReload];
+        // 恢复目标 tab 的滚动位置
+        CGPoint savedOffset = (index == WKConversationFilterGroup) ? weakSelf.groupTabScrollOffset : weakSelf.privateTabScrollOffset;
+        [weakSelf.tableView setContentOffset:savedOffset animated:NO];
         [weakSelf updateTabUnreadCounts];
         [[NSUserDefaults standardUserDefaults] setInteger:index forKey:@"WKConversationTabIndex"];
     };
@@ -1569,6 +1745,22 @@
 
 -(void) channelInfoUpdate:(WKChannelInfo *)channelInfo oldChannelInfo:(WKChannelInfo *)oldChannelInfo{
    //[self refreshTable];
+    // 子区的 channelInfo 变化(例如子区免打扰切换)在会话列表里没有顶层行,
+    // 需要定位到父群行并刷新,子区预览才会重新读取 threadInfo.mute 渲染静音图标。
+    if (channelInfo.channel.channelType == WK_COMMUNITY_TOPIC) {
+        NSRange sep = [channelInfo.channel.channelId rangeOfString:@"____"];
+        if (sep.location != NSNotFound) {
+            NSString *parentGroupNo = [channelInfo.channel.channelId substringToIndex:sep.location];
+            if (parentGroupNo.length > 0) {
+                WKChannel *parentChannel = [WKChannel channelID:parentGroupNo channelType:WK_GROUP];
+                NSInteger parentIndex = [self.conversationListVM indexAtChannel:parentChannel];
+                if (parentIndex != -1) {
+                    [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:parentIndex inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+                }
+            }
+        }
+        return;
+    }
     NSInteger index = [self.conversationListVM indexAtChannel:channelInfo.channel];
     if(index!= -1) {
         WKConversationWrapModel *oldModel = [self.conversationListVM modelAtIndex:index];
@@ -1973,7 +2165,6 @@
     WKChannel *threadChannel = [WKChannel channelID:threadChannelId channelType:WK_COMMUNITY_TOPIC];
     BOOL isMuted = [[WKChannelSettingManager shared] mute:threadChannel];
 
-    __weak typeof(self) weakSelf = self;
     NSString *muteTitle = isMuted ? LLang(@"打开通知") : LLang(@"关闭通知");
     NSMutableArray<NSDictionary *> *menuItems = [NSMutableArray array];
     [menuItems addObject:@{
@@ -1981,16 +2172,9 @@
         @"icon": [WKConversationListVC iconMute:isMuted],
         @"action": ^{
             BOOL newMute = !isMuted;
+            // 依赖服务端 PUT groups/{groupNo}/threads/{shortID}/setting 成功后,
+            // 通过 SendChannelUpdate 推送 channel update CMD,客户端拉取最新 channelInfo 并刷新 UI。
             [[WKChannelSettingManager shared] channel:threadChannel mute:newMute];
-            WKChannelInfo *threadInfo = [[WKSDK shared].channelManager getChannelInfo:threadChannel];
-            if (!threadInfo) {
-                threadInfo = [[WKChannelInfo alloc] init];
-                threadInfo.channel = threadChannel;
-                threadInfo.name = threadName;
-            }
-            threadInfo.mute = newMute;
-            [[WKSDK shared].channelManager addOrUpdateChannelInfo:threadInfo];
-            [weakSelf rebuildGroupDisplayAndReload];
         }
     }];
     [self showFloatingMenu:menuItems atPoint:point];
@@ -3145,6 +3329,184 @@
         }
         [[WKNavigationManager shared] pushViewController:vc animated:YES];
     }];
+}
+
+#pragma mark - ⚠️ 临时压力测试（上线前删除）
+
+- (void)setupStressTestButton {
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+    btn.frame = CGRectMake(16, WKScreenHeight - 160, 56, 56);
+    btn.backgroundColor = [UIColor colorWithRed:0.9 green:0.1 blue:0.1 alpha:0.9];
+    btn.layer.cornerRadius = 28;
+    btn.layer.shadowColor = [UIColor blackColor].CGColor;
+    btn.layer.shadowOpacity = 0.3;
+    btn.layer.shadowRadius = 4;
+    btn.layer.shadowOffset = CGSizeMake(0, 2);
+    btn.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+    btn.titleLabel.numberOfLines = 2;
+    btn.titleLabel.textAlignment = NSTextAlignmentCenter;
+    [btn setTitle:@"压力\n测试" forState:UIControlStateNormal];
+    [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [btn addTarget:self action:@selector(stressTestTapped:) forControlEvents:UIControlEventTouchUpInside];
+    btn.tag = 99999;
+    [self.view addSubview:btn];
+}
+
+- (void)stressTestTapped:(UIButton *)btn {
+    if (!btn.enabled) return;
+    btn.enabled = NO;
+    btn.userInteractionEnabled = NO;
+    [btn setTitle:@"运行中" forState:UIControlStateDisabled];
+    btn.backgroundColor = [UIColor grayColor];
+
+    NSLog(@"========== [StressTest] START — 极限压力 ==========");
+    __weak typeof(self) weakSelf = self;
+
+    // ──────────────────────────────────────────────────────────────
+    // 场景 A: 模拟网络恢复后 WebSocket 瞬间推送大量消息
+    //
+    // 真实路径:
+    //   WebSocket IO线程 → WKChatManager.onRecvMessages(bg)
+    //     → callRecvMessagesDelegate → dispatch_async(main)
+    //     → WKConversationManager 写DB → callOnConversationUpdateDelegate(bg)
+    //       → dispatch_async(main) → onConversationUpdate(main)
+    //         → fetchThreadCountsForGroups (老代码: bg线程semaphore死锁)
+    //         → rebuildGroupDisplayAndReload
+    //
+    // 模拟: 从多个后台线程并发通过 WKConversationManager 真实 delegate 通道
+    //        发射 100 条会话更新（使用当前列表中的真实会话数据）
+    // ──────────────────────────────────────────────────────────────
+    NSArray<WKConversationWrapModel *> *existingModels = [self.conversationListVM conversationList];
+    NSInteger convCount = existingModels.count;
+    NSInteger sceneA_count = 100;
+    NSLog(@"[StressTest] 场景A: 模拟WebSocket批量推送 → onConversationUpdate x%ld (现有会话%ld个)", (long)sceneA_count, (long)convCount);
+    if (convCount > 0) {
+        for (NSInteger i = 0; i < sceneA_count; i++) {
+            WKConversationWrapModel *model = existingModels[i % convCount];
+            WKConversation *conv = [model getConversation];
+            if (!conv) continue;
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                [[WKSDK shared].conversationManager callOnConversationUpdateDelegate:conv];
+            });
+        }
+    } else {
+        NSLog(@"[StressTest] 警告: 会话列表为空，场景A跳过");
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // 场景 B: 模拟高频 CMD 消息（typing + onlineStatus）
+    //
+    // 真实路径:
+    //   WebSocket IO线程 → WKCMDManager.callOnCMDDelegate(bg)
+    //     → dispatch_async(main)
+    //       → WKSystemMessageHandler.cmdManager:onCMD:(main)
+    //         → WKTypingManager / WKOnlineStatusManager
+    //           (老代码: dispatch_sync(main) 阻塞bg线程)
+    //
+    // 模拟: 50个typing + 50个onlineStatus CMD 从后台线程并发发射
+    // ──────────────────────────────────────────────────────────────
+    NSInteger sceneB_count = 50;
+    NSLog(@"[StressTest] 场景B: 模拟CMD批量推送 (typing x%ld + onlineStatus x%ld)", (long)sceneB_count, (long)sceneB_count);
+    for (NSInteger i = 0; i < sceneB_count; i++) {
+        NSString *uid = [NSString stringWithFormat:@"stress_user_%ld", (long)i];
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            WKCMDModel *typingCmd = [[WKCMDModel alloc] init];
+            typingCmd.cmd = @"typing";
+            typingCmd.param = @{
+                @"channel_id": uid,
+                @"channel_type": @1,
+                @"from_uid": uid,
+                @"from_name": [NSString stringWithFormat:@"StressBot%ld", (long)i],
+            };
+            [[WKSDK shared].cmdManager callOnCMDDelegate:typingCmd];
+        });
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            WKCMDModel *onlineCmd = [[WKCMDModel alloc] init];
+            onlineCmd.cmd = @"onlineStatus";
+            onlineCmd.param = @{
+                @"uid": uid,
+                @"all_offline": @0,
+                @"main_device_flag": @0,
+            };
+            [[WKSDK shared].cmdManager callOnCMDDelegate:onlineCmd];
+        });
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // 场景 C: 模拟网络状态频繁抖动
+    //
+    // 真实路径:
+    //   AFNetworking Reachability 回调(bg线程)
+    //     → WKNetworkListener.callNetworkListenerStatusChangeDelegate
+    //       (老代码: dispatch_sync(main_queue) 阻塞bg线程等主线程)
+    //
+    // 模拟: 20次网络状态变化从后台线程并发触发
+    // ──────────────────────────────────────────────────────────────
+    NSInteger sceneC_count = 20;
+    NSLog(@"[StressTest] 场景C: 模拟网络状态抖动 x%ld", (long)sceneC_count);
+    for (NSInteger i = 0; i < sceneC_count; i++) {
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wundeclared-selector"
+            [[WKNetworkListener shared] performSelector:@selector(callNetworkListenerStatusChangeDelegate)];
+#pragma clang diagnostic pop
+        });
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // 场景 D: 模拟 A+B+C 叠加后再追加一波更猛的冲击
+    //         延迟 0.5s 发射第二波，确保第一波正在处理时遭遇叠加
+    // ──────────────────────────────────────────────────────────────
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSLog(@"[StressTest] 场景D: 第二波叠加冲击 (conv x50 + CMD x30 + network x10)");
+        if (convCount > 0) {
+            for (NSInteger i = 0; i < 50; i++) {
+                WKConversationWrapModel *model = existingModels[i % convCount];
+                WKConversation *conv = [model getConversation];
+                if (!conv) continue;
+                dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                    [[WKSDK shared].conversationManager callOnConversationUpdateDelegate:conv];
+                });
+            }
+        }
+        for (NSInteger i = 0; i < 30; i++) {
+            NSString *uid = [NSString stringWithFormat:@"stress_wave2_%ld", (long)i];
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                WKCMDModel *cmd = [[WKCMDModel alloc] init];
+                cmd.cmd = @"typing";
+                cmd.param = @{ @"channel_id": uid, @"channel_type": @1, @"from_uid": uid, @"from_name": @"Wave2Bot" };
+                [[WKSDK shared].cmdManager callOnCMDDelegate:cmd];
+            });
+        }
+        for (NSInteger i = 0; i < 10; i++) {
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wundeclared-selector"
+                [[WKNetworkListener shared] performSelector:@selector(callNetworkListenerStatusChangeDelegate)];
+#pragma clang diagnostic pop
+            });
+        }
+    });
+
+    // ──────────────────────────────────────────────────────────────
+    // 检查点: 5秒后验证主线程是否存活
+    // 老代码下主线程大概率已死锁，这个 block 永远不会执行
+    // ──────────────────────────────────────────────────────────────
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSLog(@"[StressTest] === 5秒检查点: 主线程存活 ===");
+        NSLog(@"[StressTest] 总计发射: conv更新=%ld, CMD=%ld, 网络抖动=%ld",
+              (long)(sceneA_count + 50), (long)(sceneB_count * 2 + 30), (long)(sceneC_count + 10));
+        [btn setTitle:@"通过" forState:UIControlStateNormal];
+        btn.backgroundColor = [UIColor colorWithRed:0.1 green:0.7 blue:0.2 alpha:0.9];
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            btn.enabled = YES;
+            btn.userInteractionEnabled = YES;
+            [btn setTitle:@"压力\n测试" forState:UIControlStateNormal];
+            btn.backgroundColor = [UIColor colorWithRed:0.9 green:0.1 blue:0.1 alpha:0.9];
+            NSLog(@"========== [StressTest] END ==========");
+        });
+    });
 }
 
 @end

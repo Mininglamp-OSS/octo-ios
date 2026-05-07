@@ -190,7 +190,7 @@
         [self.uploadTask addListener:^{
             if(weakSelf.uploadTask.status == WKTaskStatusProgressing) {
                 if (![NSThread isMainThread]) {
-                     dispatch_sync(dispatch_get_main_queue(), ^{
+                     dispatch_async(dispatch_get_main_queue(), ^{
                          weakSelf.progressView.hidden = NO;
                          [weakSelf.progressView setProgress:weakSelf.uploadTask.progress];
                      });

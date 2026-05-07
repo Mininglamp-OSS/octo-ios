@@ -50,6 +50,22 @@
     return NO;
 }
 
++ (BOOL)shouldUseSpaceModeSendMessageWithIsExternal:(BOOL)isExternalUser
+                                      viewerSpaceId:(NSString *)viewerSpaceId
+                                              isBot:(BOOL)isBot
+                                             follow:(NSInteger)follow {
+    if (isExternalUser) {
+        return NO;
+    }
+    if (follow != 0) {
+        return NO;
+    }
+    if (isBot) {
+        return NO;
+    }
+    return viewerSpaceId != nil && viewerSpaceId.length > 0;
+}
+
 + (BOOL)hasAuthoritativeHomeSpaceId:(NSDictionary *)extras {
     id raw = extras[WKExternalExtrasKeyHomeSpaceId];
     if ([raw isKindOfClass:[NSString class]]) {

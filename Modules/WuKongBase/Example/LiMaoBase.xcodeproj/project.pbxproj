@@ -24,10 +24,14 @@
 		A97C0DE197001001E7B8C3A1 /* WKGroupQRCodeInfoModelTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A97C0DE197001001E7B8C3A2 /* WKGroupQRCodeInfoModelTests.m */; };
 		B49640EA6FC4C273CD92871A /* WKMentionUserCellTests.m in Sources */ = {isa = PBXBuildFile; fileRef = B2CA62921B187BCA0DFC746C /* WKMentionUserCellTests.m */; };
 		C129ABC0AF00000000000001 /* WKMessageCellAttributedNameTests.m in Sources */ = {isa = PBXBuildFile; fileRef = C129ABC0AF00000000000002 /* WKMessageCellAttributedNameTests.m */; };
+		C210ABC0AF00000000000001 /* WKMessageCellNicknameTruncationTests.m in Sources */ = {isa = PBXBuildFile; fileRef = C210ABC0AF00000000000002 /* WKMessageCellNicknameTruncationTests.m */; };
 		E131A7B4F1310001000001E1 /* WKMessageUtilReplyExternalTests.m in Sources */ = {isa = PBXBuildFile; fileRef = E131A7B4F1310001000001E2 /* WKMessageUtilReplyExternalTests.m */; };
 		F1900190F19001000190F101 /* WKMemberCellExternalTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F1900190F19001000190F102 /* WKMemberCellExternalTests.m */; };
 		F1900190F19001000190F201 /* WKUserInfoVMExternalTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F1900190F19001000190F202 /* WKUserInfoVMExternalTests.m */; };
 		F1900190F19001000190F301 /* WKUserInfoExternalGateTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F1900190F19001000190F302 /* WKUserInfoExternalGateTests.m */; };
+		A1410000000000000000F001 /* WKJoinGroupSuccessHelperTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A1410000000000000000F002 /* WKJoinGroupSuccessHelperTests.m */; };
+		A2130000000000000000F001 /* WKGroupScanJoinResponseParsingTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */; };
+		B2180000000000000000F001 /* WKConversationListVMSystemBotsTests.m in Sources */ = {isa = PBXBuildFile; fileRef = B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */; };
 		71719F9F1E33DC2100824A3D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 71719F9D1E33DC2100824A3D /* LaunchScreen.storyboard */; };
 		7CFCAE9A9883FDF5BD053505 /* Pods_LiMaoBase_Tests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7E3C41DA1F0876AA7579845F /* Pods_LiMaoBase_Tests.framework */; };
 		873B8AEB1B1F5CCA007FD442 /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 873B8AEA1B1F5CCA007FD442 /* Main.storyboard */; };
@@ -72,10 +76,14 @@
 		A97C0DE197001001E7B8C3A2 /* WKGroupQRCodeInfoModelTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKGroupQRCodeInfoModelTests.m; sourceTree = "<group>"; };
 		B2CA62921B187BCA0DFC746C /* WKMentionUserCellTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMentionUserCellTests.m; sourceTree = "<group>"; };
 		C129ABC0AF00000000000002 /* WKMessageCellAttributedNameTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMessageCellAttributedNameTests.m; sourceTree = "<group>"; };
+		C210ABC0AF00000000000002 /* WKMessageCellNicknameTruncationTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMessageCellNicknameTruncationTests.m; sourceTree = "<group>"; };
 		E131A7B4F1310001000001E2 /* WKMessageUtilReplyExternalTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMessageUtilReplyExternalTests.m; sourceTree = "<group>"; };
 		F1900190F19001000190F102 /* WKMemberCellExternalTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMemberCellExternalTests.m; sourceTree = "<group>"; };
 		F1900190F19001000190F202 /* WKUserInfoVMExternalTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKUserInfoVMExternalTests.m; sourceTree = "<group>"; };
 		F1900190F19001000190F302 /* WKUserInfoExternalGateTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKUserInfoExternalGateTests.m; sourceTree = "<group>"; };
+		A1410000000000000000F002 /* WKJoinGroupSuccessHelperTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKJoinGroupSuccessHelperTests.m; sourceTree = "<group>"; };
+		A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKGroupScanJoinResponseParsingTests.m; sourceTree = "<group>"; };
+		B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKConversationListVMSystemBotsTests.m; sourceTree = "<group>"; };
 		606FC2411953D9B200FFA9A0 /* Tests-Prefix.pch */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Tests-Prefix.pch"; sourceTree = "<group>"; };
 		71719F9E1E33DC2100824A3D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		7E3C41DA1F0876AA7579845F /* Pods_LiMaoBase_Tests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_LiMaoBase_Tests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -180,10 +188,14 @@
 				A97C0DE197001001E7B8C3A2 /* WKGroupQRCodeInfoModelTests.m */,
 				B2CA62921B187BCA0DFC746C /* WKMentionUserCellTests.m */,
 				C129ABC0AF00000000000002 /* WKMessageCellAttributedNameTests.m */,
+				C210ABC0AF00000000000002 /* WKMessageCellNicknameTruncationTests.m */,
 				E131A7B4F1310001000001E2 /* WKMessageUtilReplyExternalTests.m */,
 				F1900190F19001000190F102 /* WKMemberCellExternalTests.m */,
 				F1900190F19001000190F202 /* WKUserInfoVMExternalTests.m */,
 				F1900190F19001000190F302 /* WKUserInfoExternalGateTests.m */,
+				A1410000000000000000F002 /* WKJoinGroupSuccessHelperTests.m */,
+				A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */,
+				B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */,
 				6003F5B6195388D20070C39A /* Supporting Files */,
 			);
 			path = Tests;
@@ -422,10 +434,14 @@
 				A97C0DE197001001E7B8C3A1 /* WKGroupQRCodeInfoModelTests.m in Sources */,
 				B49640EA6FC4C273CD92871A /* WKMentionUserCellTests.m in Sources */,
 				C129ABC0AF00000000000001 /* WKMessageCellAttributedNameTests.m in Sources */,
+				C210ABC0AF00000000000001 /* WKMessageCellNicknameTruncationTests.m in Sources */,
 				E131A7B4F1310001000001E1 /* WKMessageUtilReplyExternalTests.m in Sources */,
 				F1900190F19001000190F101 /* WKMemberCellExternalTests.m in Sources */,
 				F1900190F19001000190F201 /* WKUserInfoVMExternalTests.m in Sources */,
 				F1900190F19001000190F301 /* WKUserInfoExternalGateTests.m in Sources */,
+				A1410000000000000000F001 /* WKJoinGroupSuccessHelperTests.m in Sources */,
+				A2130000000000000000F001 /* WKGroupScanJoinResponseParsingTests.m in Sources */,
+				B2180000000000000000F001 /* WKConversationListVMSystemBotsTests.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -168,7 +168,7 @@ static WKOnlineStatusManager *_instance = nil;
         }
         if ([delegate respondsToSelector:@selector(onlineStatusManagerChange:status:)]) {
             if (![NSThread isMainThread]) {
-                dispatch_sync(dispatch_get_main_queue(), ^{
+                dispatch_async(dispatch_get_main_queue(), ^{
                     [delegate onlineStatusManagerChange:self status:status];
                 });
             }else {
@@ -188,7 +188,7 @@ static WKOnlineStatusManager *_instance = nil;
         }
         if ([delegate respondsToSelector:@selector(onlineStatusManagerMyPCOnlineChange:status:)]) {
             if (![NSThread isMainThread]) {
-                dispatch_sync(dispatch_get_main_queue(), ^{
+                dispatch_async(dispatch_get_main_queue(), ^{
                     [delegate onlineStatusManagerMyPCOnlineChange:self status:status];
                 });
             }else {

@@ -154,7 +154,7 @@
         NSString *msgSpaceId = message.content.contentDict[@"space_id"];
         BOOL hasSpaceId = msgSpaceId && ![msgSpaceId isKindOfClass:[NSNull class]] && ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0);
         if(!hasSpaceId) {
-            // 无space_id的消息：系统bot(botfather)在空间模式下隐藏，普通聊天向前兼容显示
+            // 无space_id的消息：系统bot(botfather/u_10000/fileHelper)在空间模式下隐藏，普通聊天向前兼容显示
             if(!isSystemBot) {
                 [filtered addObject:message];
             }
@@ -165,10 +165,18 @@
     return filtered;
 }
 
-/// 判断是否为系统bot频道（botfather等）
+/// YUJ-219-A4: 判断当前频道是否为系统bot频道。
+/// 从 appconfig.system_bot_uids 读取（fallback `@[@"botfather", @"u_10000", @"fileHelper"]`），
+/// 让 u_10000、fileHelper 跨 Space 历史消息也按空间过滤。
 -(BOOL) isSystemBotChannel {
-    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
-    return botfatherUID && [self.channel.channelId isEqualToString:botfatherUID];
+    if(!self.channel.channelId || self.channel.channelId.length == 0) {
+        return NO;
+    }
+    NSArray<NSString*> *systemBotUIDs = [WKApp shared].config.systemBotUIDs;
+    if(systemBotUIDs.count == 0) {
+        return NO;
+    }
+    return [systemBotUIDs containsObject:self.channel.channelId];
 }
 
 /// 判断单条消息是否应在当前空间显示（用于实时消息过滤）

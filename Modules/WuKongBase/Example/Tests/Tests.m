@@ -548,4 +548,162 @@ static NSString * const SP_B = @"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; // 32 × 'b'
     }
 }
 
+#pragma mark YUJ-209 — 新消息 + 外部群 + 非当前 Space 串台分支
+
+/// viewer 停留 Space A，Space B 的外部群有新消息到达：
+/// channelInfo.space_id=B 且 member.source_space_id=B（我不是 A 的外部成员）
+/// → cached-mismatch，必须 Skip，防止该群污染 A 的会话列表（YUJ-209 串台 bug）。
+- (void)testYUJ209_NewMessageForOtherSpaceExternalGroup_ReturnsSkip {
+    WKStubSpaceFilterProvider *stub = [WKStubSpaceFilterProvider new];
+    [stub setChannelSpace:SP_B forChannelId:@"ext_group_b" type:WK_GROUP];
+    [stub setMySourceSpace:SP_B forChannelId:@"ext_group_b" type:WK_GROUP];
+
+    [[NSUserDefaults standardUserDefaults] setObject:SP_A forKey:@"currentSpaceId"];
+    id<WKSpaceFilterDataProvider> original = [WKSpaceFilter shared].provider;
+    [WKSpaceFilter shared].provider = stub;
+    @try {
+        WKSpaceFilterDecision d = [[WKSpaceFilter shared]
+                                    decideChannel:@"ext_group_b"
+                                      channelType:WK_GROUP];
+        XCTAssertEqual(d, WKSpaceFilterDecisionSkip,
+                       @"YUJ-209: 外部群归属 B + 我在 B 的身份 → 在 A 视角必须 Skip");
+        XCTAssertTrue([[WKSpaceFilter shared] shouldSkipChannelForSpace:@"ext_group_b"
+                                                            channelType:WK_GROUP]);
+    } @finally {
+        [WKSpaceFilter shared].provider = original;
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"currentSpaceId"];
+    }
+}
+
+/// 同一外部群，viewer 是以 A 身份扫码加入的（member.source=A，但群 owning Space 仍为 B）
+/// → cached-external-member，Keep。新消息到达时必须允许浮到 A 列表顶部（验收条件 2）。
+- (void)testYUJ209_NewMessageForMyExternalGroup_ReturnsKeep {
+    WKStubSpaceFilterProvider *stub = [WKStubSpaceFilterProvider new];
+    [stub setChannelSpace:SP_B forChannelId:@"ext_group_b" type:WK_GROUP];
+    [stub setMySourceSpace:SP_A forChannelId:@"ext_group_b" type:WK_GROUP];
+
+    [[NSUserDefaults standardUserDefaults] setObject:SP_A forKey:@"currentSpaceId"];
+    id<WKSpaceFilterDataProvider> original = [WKSpaceFilter shared].provider;
+    [WKSpaceFilter shared].provider = stub;
+    @try {
+        WKSpaceFilterDecision d = [[WKSpaceFilter shared]
+                                    decideChannel:@"ext_group_b"
+                                      channelType:WK_GROUP];
+        XCTAssertEqual(d, WKSpaceFilterDecisionKeep,
+                       @"YUJ-209: A 身份的外部群新消息必须出现在 A 列表");
+        XCTAssertFalse([[WKSpaceFilter shared] shouldSkipChannelForSpace:@"ext_group_b"
+                                                             channelType:WK_GROUP]);
+    } @finally {
+        [WKSpaceFilter shared].provider = original;
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"currentSpaceId"];
+    }
+}
+
+/// 新消息路径 fail-open：channelInfo 尚未缓存（EP1 未回写）→ FailOpen。
+/// 此时 WKConversationListVC.filterConversationsBySpace 会降级走原有白名单，
+/// 保证行为等价 develop（不会比现状更糟），满足「source_space_id 未加载按 fail-open 降级」约束。
+- (void)testYUJ209_NewMessageFailOpenWhenChannelInfoMissing {
+    WKStubSpaceFilterProvider *stub = [WKStubSpaceFilterProvider new];
+    // 不设置 spaceMap 也不设置 sourceMap → 两者均 nil
+    [[NSUserDefaults standardUserDefaults] setObject:SP_A forKey:@"currentSpaceId"];
+    id<WKSpaceFilterDataProvider> original = [WKSpaceFilter shared].provider;
+    [WKSpaceFilter shared].provider = stub;
+    @try {
+        WKSpaceFilterDecision d = [[WKSpaceFilter shared]
+                                    decideChannel:@"unknown_group"
+                                      channelType:WK_GROUP];
+        XCTAssertEqual(d, WKSpaceFilterDecisionFailOpen,
+                       @"YUJ-209: EP1 未就绪 → FailOpen，让调用方走 whitelist 兜底");
+        XCTAssertFalse([[WKSpaceFilter shared] shouldSkipChannelForSpace:@"unknown_group"
+                                                             channelType:WK_GROUP],
+                       @"FailOpen 状态不应被 shouldSkip 误判为 Skip");
+    } @finally {
+        [WKSpaceFilter shared].provider = original;
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"currentSpaceId"];
+    }
+}
+
+#pragma mark YUJ-215 — 访问过群后切 Space 仍串台（缓存污染 regression）
+
+/// 复现 Yu 真机场景：user 在 Space A 打开外部群 EDF（populates channelInfo.extra[space_id]=A
+/// 以及 member.extra[source_space_id]=A），切到 Space B，EDF 新消息到达。
+/// 在 viewer=B 的判定中必须 Skip（EP1 两端都已缓存，走 cached-mismatch）。
+- (void)testYUJ215_VisitedExternalGroupInOtherSpace_NewMessageInSpaceB_ReturnsSkip {
+    NSString *const SP_HUASHAN = @"spA_huashan_abc";
+    NSString *const SP_PLACEHOLDER = @"spB_placeholder_xyz";
+    NSString *const EDF_CID = @"edf_group_channel_id";
+
+    WKStubSpaceFilterProvider *stub = [WKStubSpaceFilterProvider new];
+    // 模拟访问过 EDF 后的 DB 持久化：channelInfo / member 两端都已缓存到华山派
+    [stub setChannelSpace:SP_HUASHAN forChannelId:EDF_CID type:WK_GROUP];
+    [stub setMySourceSpace:SP_HUASHAN forChannelId:EDF_CID type:WK_GROUP];
+
+    [[NSUserDefaults standardUserDefaults] setObject:SP_PLACEHOLDER forKey:@"currentSpaceId"];
+    id<WKSpaceFilterDataProvider> original = [WKSpaceFilter shared].provider;
+    [WKSpaceFilter shared].provider = stub;
+    @try {
+        WKSpaceFilterDecision d = [[WKSpaceFilter shared]
+                                    decideChannel:EDF_CID
+                                      channelType:WK_GROUP];
+        XCTAssertEqual(d, WKSpaceFilterDecisionSkip,
+                       @"YUJ-215: 访问过的外部群归属华山派、我也是华山派身份 → 在占位符视角必须 Skip");
+        XCTAssertTrue([[WKSpaceFilter shared] shouldSkipChannelForSpace:EDF_CID
+                                                            channelType:WK_GROUP]);
+    } @finally {
+        [WKSpaceFilter shared].provider = original;
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"currentSpaceId"];
+    }
+}
+
+/// 反例锁定：未访问过华山派（channelInfo/member 均未缓存），新消息到达时必须 FailOpen——
+/// 这是 YUJ-209 原场景仍然依赖的行为。由调用方走 whitelist / verifyAndAddGroupsToList 回兜。
+- (void)testYUJ215_NeverVisited_NewMessageFailsOpenForWhitelistFallback {
+    NSString *const EDF_CID = @"edf_never_visited";
+    NSString *const SP_PLACEHOLDER = @"spB_placeholder_xyz";
+
+    WKStubSpaceFilterProvider *stub = [WKStubSpaceFilterProvider new];
+    // 两端都不 set → 模拟未访问过此群的 EP1 缓存缺失状态
+
+    [[NSUserDefaults standardUserDefaults] setObject:SP_PLACEHOLDER forKey:@"currentSpaceId"];
+    id<WKSpaceFilterDataProvider> original = [WKSpaceFilter shared].provider;
+    [WKSpaceFilter shared].provider = stub;
+    @try {
+        WKSpaceFilterDecision d = [[WKSpaceFilter shared]
+                                    decideChannel:EDF_CID
+                                      channelType:WK_GROUP];
+        XCTAssertEqual(d, WKSpaceFilterDecisionFailOpen,
+                       @"YUJ-215 反例：未访问过 → EP1 两端 nil → FailOpen，由 whitelist/verify 兜底");
+    } @finally {
+        [WKSpaceFilter shared].provider = original;
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"currentSpaceId"];
+    }
+}
+
+/// 访问过且我是华山派的外部成员但占位符不是我的 Space —— 仍然必须 Skip。
+/// 覆盖 hasChannelSpace=YES + hasMySource=YES + 二者均 ≠ 当前 Space 的判定分支。
+- (void)testYUJ215_VisitedWithExternalMembership_StillSkipsInUnrelatedSpace {
+    NSString *const SP_A = @"spA_huashan";
+    NSString *const SP_C = @"spC_third";
+    NSString *const SP_PLACEHOLDER = @"spB_placeholder";
+    NSString *const EDF_CID = @"edf_owned_by_C_joined_from_A";
+
+    WKStubSpaceFilterProvider *stub = [WKStubSpaceFilterProvider new];
+    [stub setChannelSpace:SP_C forChannelId:EDF_CID type:WK_GROUP];
+    [stub setMySourceSpace:SP_A forChannelId:EDF_CID type:WK_GROUP];
+
+    [[NSUserDefaults standardUserDefaults] setObject:SP_PLACEHOLDER forKey:@"currentSpaceId"];
+    id<WKSpaceFilterDataProvider> original = [WKSpaceFilter shared].provider;
+    [WKSpaceFilter shared].provider = stub;
+    @try {
+        WKSpaceFilterDecision d = [[WKSpaceFilter shared]
+                                    decideChannel:EDF_CID
+                                      channelType:WK_GROUP];
+        XCTAssertEqual(d, WKSpaceFilterDecisionSkip,
+                       @"YUJ-215: 群归 C，我以 A 身份加入，但当前 Space 是占位符 → Skip（不污染占位符）");
+    } @finally {
+        [WKSpaceFilter shared].provider = original;
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"currentSpaceId"];
+    }
+}
+
 @end

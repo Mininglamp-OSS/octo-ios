@@ -463,6 +463,11 @@ static NSMutableDictionary *flameNodeCacheDict;
         // attributedText 与 text 互斥，先清 text 再赋 attributedText，避免 UILabel
         // 双写坑（iOS 底层在同一帧 set 两次会以后者为准，但脏数据残留会导致 sizeToFit 异常）。
         self.nameLbl.text = nil;
+        // YUJ-210: 外部消息（含 @SpaceName 后缀）使用 byTruncatingHead 保留尾部
+        // @SpaceName；普通群气泡维持 byTruncatingTail 不受影响。
+        BOOL hasExternalSuffix = [[self class] hasExternalSpaceSuffix:model];
+        self.nameLbl.numberOfLines = 1;
+        self.nameLbl.lineBreakMode = hasExternalSuffix ? NSLineBreakByTruncatingHead : NSLineBreakByTruncatingTail;
         self.nameLbl.attributedText = [[self class] getFromNameAttributed:self.messageModel
                                                              viewerSpaceId:[WKExternalViewerResolver currentViewerSpaceId]];
         [self.nameLbl sizeToFit];
@@ -634,9 +639,14 @@ static NSMutableDictionary *flameNodeCacheDict;
                                viewerSpaceId:(NSString*)viewerSpaceId {
     NSString *baseName = [self getFromName:messageModel] ?: @"";
 
+    // YUJ-210: 显式写入 NSFontAttributeName，让 `boundingRectWithSize:` / `sizeThatFits:`
+    // 在测量气泡宽度与 nameLbl 布局时能算到真实 width，避免 UILabel 截断。
+    UIFont *nameFont = WK_NICKNAME_FONT;
+    NSDictionary *baseAttrs = nameFont ? @{NSFontAttributeName: nameFont} : @{};
+
     // 私聊 / 系统账号 / 文件助手 → 不渲染 @，返回纯文本富文本（保留原 font/color 继承）。
     if(!messageModel || messageModel.channel.channelType == WK_PERSON) {
-        return [[NSAttributedString alloc] initWithString:baseName];
+        return [[NSAttributedString alloc] initWithString:baseName attributes:baseAttrs];
     }
 
     WKExternalResolveResult *ext = [WKExternalViewerResolver
@@ -647,17 +657,35 @@ static NSMutableDictionary *flameNodeCacheDict;
                  viewerSpaceId:viewerSpaceId];
 
     if(!(ext.isExternal && ext.sourceSpaceName.length > 0)) {
-        return [[NSAttributedString alloc] initWithString:baseName];
+        return [[NSAttributedString alloc] initWithString:baseName attributes:baseAttrs];
     }
 
     // 灰紫后缀：0xFF8B5CF6 与 Android ForegroundColorSpan 对齐。
     // 保留 nameLbl 当前 font，避免字号跳动导致 layoutName 里的 sizeThatFits 抖动。
     UIColor *suffixColor = [UIColor colorWithRed:0x8B/255.0 green:0x5C/255.0 blue:0xF6/255.0 alpha:1.0];
-    NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:baseName];
+    NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:baseName attributes:baseAttrs];
     NSString *suffix = [NSString stringWithFormat:@" @%@", ext.sourceSpaceName];
+    NSMutableDictionary *suffixAttrs = [NSMutableDictionary dictionaryWithDictionary:baseAttrs];
+    suffixAttrs[NSForegroundColorAttributeName] = suffixColor;
     [attr appendAttributedString:[[NSAttributedString alloc] initWithString:suffix
-                                                                 attributes:@{NSForegroundColorAttributeName: suffixColor}]];
+                                                                 attributes:suffixAttrs]];
     return attr;
+}
+
+// YUJ-210: 判定 messageModel 相对当前 viewer 是否应渲染 @SpaceName 后缀。
+// 用在 refreshModel: / layoutName: 决定 nameLbl 的 lineBreakMode 与 max width
+// ——保留 @SpaceName 后缀（byTruncatingHead）仅在外部消息场景开启，避免影响普通群气泡。
++(BOOL) hasExternalSpaceSuffix:(WKMessageModel*)messageModel {
+    if(!messageModel || messageModel.channel.channelType == WK_PERSON) {
+        return NO;
+    }
+    WKExternalResolveResult *ext = [WKExternalViewerResolver
+        resolveWithHomeSpaceId:messageModel.fromHomeSpaceId
+                 homeSpaceName:messageModel.fromHomeSpaceName
+              isExternalLegacy:@(messageModel.fromIsExternal ? 1 : 0)
+         sourceSpaceNameLegacy:messageModel.fromSourceSpaceName
+                 viewerSpaceId:[WKExternalViewerResolver currentViewerSpaceId]];
+    return ext.isExternal && ext.sourceSpaceName.length > 0;
 }
 
 
@@ -687,8 +715,21 @@ static NSMutableDictionary *flameNodeCacheDict;
 }
 
 +(CGSize) getNicknameSize:(WKMessageModel*)messageModel {
+    // YUJ-210: 优先用 attributed name（含 @SpaceName 后缀）测宽，避免
+    // WKTextMessageCell.getContentSize 用 `MAX(size.width, nicknameWidth)`
+    // 算气泡宽度时漏掉后缀，导致 nameLbl 被 messageContentView.lim_width 截断。
+    CGFloat maxWidth = [WKApp shared].config.messageContentMaxWidth;
+    NSAttributedString *attrName = [self getFromNameAttributed:messageModel
+                                                 viewerSpaceId:[WKExternalViewerResolver currentViewerSpaceId]];
+    if(attrName.length > 0) {
+        CGRect r = [attrName boundingRectWithSize:CGSizeMake(maxWidth, CGFLOAT_MAX)
+                                          options:NSStringDrawingUsesLineFragmentOrigin
+                                          context:nil];
+        return CGSizeMake(ceilf(r.size.width), WK_NICKNAME_HEIGHT);
+    }
+    // fallback — 保留旧纯文本路径，避免 attributed 构造失败时气泡宽度丢失。
     NSString *nickname = [self getFromName:messageModel];
-    CGSize nicknameSize =  [self getTextSize:nickname maxWidth:[WKApp shared].config.messageContentMaxWidth font:WK_NICKNAME_FONT];
+    CGSize nicknameSize = [self getTextSize:nickname maxWidth:maxWidth font:WK_NICKNAME_FONT];
     return nicknameSize;
 }
 
@@ -1093,11 +1134,18 @@ static NSMutableDictionary<NSString*, UIImage*> *_bubbleImageCache;
         }else{
             self.nameLbl.lim_left = 0.0f;
         }
-        
+
         self.nameLbl.lim_top =  -self.nameLbl.lim_height - 4.0f;
-        // 收缩nameLbl宽度为文字实际宽度
-        CGSize fitSize = [self.nameLbl sizeThatFits:CGSizeMake(WK_NICKNAME_MAX_WIDTH, WK_NICKNAME_HEIGHT)];
-        self.nameLbl.lim_width = MIN(fitSize.width, WK_NICKNAME_MAX_WIDTH);
+        // YUJ-210: 外部消息昵称拼 @SpaceName 后缀时，nameLbl 允许的最大宽度放宽到
+        // 气泡消息正文最大宽度 (messageContentMaxWidth)，避免 100pt 硬限截断；
+        // 若仍溢出，refreshModel: 已切到 byTruncatingHead 保留尾部 @SpaceName。
+        // 普通群气泡维持 WK_NICKNAME_MAX_WIDTH，避免行内布局回归。
+        CGFloat contentW = self.messageContentView.lim_width;
+        if (contentW < 1) contentW = self.bubbleBackgroundView.lim_width;
+        CGFloat nicknameMaxW = MAX(contentW, 200.0f);
+        nicknameMaxW = MIN(nicknameMaxW, [WKApp shared].config.messageContentMaxWidth);
+        CGSize fitSize = [self.nameLbl sizeThatFits:CGSizeMake(nicknameMaxW, WK_NICKNAME_HEIGHT)];
+        self.nameLbl.lim_width = MIN(fitSize.width, nicknameMaxW);
     }
 
     // Bot标识布局：在 layoutName 中计算尺寸再定位，避免 channel info 异步加载时

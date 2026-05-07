@@ -26,6 +26,14 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = LLang(@"通用");
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(realnameUpdated:)
+                                                 name:WKNOTIFY_REALNAME_VERIFIED
+                                               object:nil];
+}
+
+- (void)realnameUpdated:(NSNotification*)noti {
+    [self reloadData];
 }
 
 
@@ -41,6 +49,7 @@
 #pragma mark - WKCommonSettingVMDelegate
 - (void)dealloc
 {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     WKLogDebug(@"WKCommonSettingVC dealloc!");
 }
 

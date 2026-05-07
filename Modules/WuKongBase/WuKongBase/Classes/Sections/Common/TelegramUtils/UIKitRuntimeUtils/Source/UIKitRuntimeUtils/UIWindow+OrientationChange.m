@@ -28,6 +28,10 @@ static bool _isDeviceRotating = false;
 @implementation UIWindow (OrientationChange)
 
 + (void)load {
+    // Disabled: 此 handler 依赖 NotificationCenterUtils 的 swizzle，且 isRotating/
+    // isDeviceRotating 的消费方 (TelegramUtils/Display 下的 WindowContent/HostView)
+    // 在 App 内未被实例化。见 CLAUDE.md "swizzle 白名单" 规则。
+    return;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^ {
         [NotificationCenterUtils addNotificationHandler:^bool(NSString *name, id object, NSDictionary *userInfo, void (^passNotification)()) {

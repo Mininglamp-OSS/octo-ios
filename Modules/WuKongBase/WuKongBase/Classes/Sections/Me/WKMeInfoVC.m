@@ -26,9 +26,10 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    
+
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(avatarUpdate:) name:WKNOTIFY_USER_AVATAR_UPDATE object:nil];
-    
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(realnameUpdated:) name:WKNOTIFY_REALNAME_VERIFIED object:nil];
+
     [WKSDK.shared.channelManager addDelegate:self];
 }
 
@@ -53,6 +54,7 @@
 - (void)dealloc {
     [WKSDK.shared.channelManager removeDelegate:self];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WKNOTIFY_USER_AVATAR_UPDATE object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:WKNOTIFY_REALNAME_VERIFIED object:nil];
 }
 
 -(void) avatarUpdate:(NSNotification*)noti {
@@ -61,6 +63,10 @@
         NSLog(@"[Avatar] WKMeInfoVC received avatarUpdate notification");
         [self.tableView reloadData];
     }
+}
+
+-(void) realnameUpdated:(NSNotification*)noti {
+    [self reloadData];
 }
 
 #pragma mark - 委托
@@ -153,8 +159,23 @@
     WKApp.shared.loginInfo.extra[@"name"] = channelInfo.name;
     [WKApp shared].loginInfo.extra[@"short_no"] = channelInfo.extra[@"short_no"];
     [WKApp shared].loginInfo.extra[@"sex"] = channelInfo.extra[@"sex"];
-//    [[WKApp shared].loginInfo save];
-    
+    // 同步实名认证状态
+    id vVal = channelInfo.extra[@"realname_verified"];
+    if(vVal) {
+        [WKApp shared].loginInfo.realnameVerified = [vVal boolValue];
+    }
+    id rnVal = channelInfo.extra[@"real_name"];
+    if([rnVal isKindOfClass:[NSString class]]) {
+        [WKApp shared].loginInfo.realName = (NSString *)rnVal;
+    }
+    id tsVal = channelInfo.extra[@"realname_verified_at"];
+    if(tsVal) {
+        [WKApp shared].loginInfo.realnameVerifiedAt = [tsVal doubleValue];
+    }
+    // 与 WKMeVC.m:149 行为一致：同步完实名状态后持久化，避免
+    // 用户在个人信息页收到 channel update 后杀 App 导致下次启动丢失实名状态。
+    [[WKApp shared].loginInfo save];
+
     [self reloadData];
 }
 

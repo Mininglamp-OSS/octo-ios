@@ -174,6 +174,15 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,copy) NSString *systemUID; // 系统通知的uid
 @property(nonatomic,copy) NSString *botfatherUID; // BotFather的uid
 
+// YUJ-219-A4: System bot UIDs whose conversations require per-Space message
+// isolation. Comes from backend `common/appconfig` -> `system_bot_uids`;
+// defaults to @[@"botfather", @"u_10000", @"fileHelper"] when the appconfig
+// response does not include the field (keeps behavior usable when A2 backend
+// isn't deployed yet). Callers should use
+// `[[WKApp shared].config.systemBotUIDs containsObject:channelId]` instead of
+// comparing against `botfatherUID` alone.
+@property(nonatomic,copy) NSArray<NSString*> *systemBotUIDs;
+
 // 对按钮增加主题样式
 -(void) setThemeStyleButton:(UIButton*)btn;
 // 导航栏增加样式

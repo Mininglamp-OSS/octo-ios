@@ -133,6 +133,19 @@
     WKApp.shared.loginInfo.extra[@"name"] = channelInfo.name;
     [WKApp shared].loginInfo.extra[@"short_no"] = channelInfo.extra[@"short_no"];
     [WKApp shared].loginInfo.extra[@"sex"] = channelInfo.extra[@"sex"];
+    // 同步实名认证状态
+    id vVal = channelInfo.extra[@"realname_verified"];
+    if(vVal) {
+        [WKApp shared].loginInfo.realnameVerified = [vVal boolValue];
+    }
+    id rnVal = channelInfo.extra[@"real_name"];
+    if([rnVal isKindOfClass:[NSString class]]) {
+        [WKApp shared].loginInfo.realName = (NSString *)rnVal;
+    }
+    id tsVal = channelInfo.extra[@"realname_verified_at"];
+    if(tsVal) {
+        [WKApp shared].loginInfo.realnameVerifiedAt = [tsVal doubleValue];
+    }
     [[WKApp shared].loginInfo save];
 
     [self.meHeader reloadData];
@@ -146,6 +159,9 @@
 @property(nonatomic,strong) UIView *cardView;
 @property(nonatomic,strong) WKUserAvatar *avatarImgView;
 @property(nonatomic,strong) UILabel *nameLbl;
+@property(nonatomic,strong) UIImageView *verifiedCheckImgView; // 已实名 ✓ 勾
+@property(nonatomic,strong) UIView *verifiedTagView;           // 已实名 tag
+@property(nonatomic,strong) UILabel *verifiedTagLbl;
 @property(nonatomic,strong) UILabel *shortNoLbl;
 @property(nonatomic,strong) UILabel *statusLbl;
 @property(nonatomic,strong) UIView *onlineDot;
@@ -160,6 +176,8 @@
         [self addSubview:self.cardView];
         [self.cardView addSubview:self.avatarImgView];
         [self.cardView addSubview:self.nameLbl];
+        [self.cardView addSubview:self.verifiedCheckImgView];
+        [self.cardView addSubview:self.verifiedTagView];
         [self.cardView addSubview:self.shortNoLbl];
         [self.cardView addSubview:self.onlineDot];
         [self.cardView addSubview:self.statusLbl];
@@ -174,12 +192,14 @@
 
         [self reloadData];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(avatarUpdate:) name:WKNOTIFY_USER_AVATAR_UPDATE object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(realnameVerified:) name:WKNOTIFY_REALNAME_VERIFIED object:nil];
     }
     return self;
 }
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WKNOTIFY_USER_AVATAR_UPDATE object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:WKNOTIFY_REALNAME_VERIFIED object:nil];
 }
 
 -(void) avatarUpdate:(NSNotification*)noti {
@@ -189,6 +209,10 @@
         WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:[WKApp shared].loginInfo.uid]];
         self.avatarImgView.url = [WKAvatarUtil getAvatar:[WKApp shared].loginInfo.uid cacheKey:info.avatarCacheKey];
     }
+}
+
+-(void) realnameVerified:(NSNotification*)noti {
+    [self reloadData];
 }
 
 - (UIView *)cardView {
@@ -220,9 +244,14 @@
     self.shortNoLbl.textColor = [WKApp shared].config.tipColor;
     self.statusLbl.textColor = [WKApp shared].config.tipColor;
 
-    NSString *name = [WKApp shared].loginInfo.extra[@"name"];
-    self.nameLbl.text = name ?: LLang(@"我");
+    NSString *displayName = [WKApp shared].loginInfo.displayName;
+    self.nameLbl.text = displayName.length > 0 ? displayName : LLang(@"我");
     [self.nameLbl sizeToFit];
+
+    // 实名认证 ✓ + 已实名 tag
+    BOOL verified = [WKApp shared].loginInfo.realnameVerified;
+    self.verifiedCheckImgView.hidden = !verified;
+    self.verifiedTagView.hidden = !verified;
 
     NSString *shortNo = [WKApp shared].loginInfo.extra[@"short_no"];
     if(shortNo && ![shortNo isEqualToString:@""]) {
@@ -267,6 +296,41 @@
         [_nameLbl setFont:[[WKApp shared].config appFontOfSizeSemibold:18.0f]];
     }
     return _nameLbl;
+}
+
+-(UIImageView*) verifiedCheckImgView {
+    if(!_verifiedCheckImgView) {
+        _verifiedCheckImgView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 16.0f, 16.0f)];
+        _verifiedCheckImgView.contentMode = UIViewContentModeScaleAspectFit;
+        UIImage *img = nil;
+        if (@available(iOS 13.0, *)) {
+            UIImage *sys = [UIImage systemImageNamed:@"checkmark.seal.fill"];
+            if(sys) {
+                img = [sys imageWithTintColor:[UIColor colorWithRed:0 green:122.0f/255.0f blue:1.0f alpha:1.0f]
+                                renderingMode:UIImageRenderingModeAlwaysOriginal];
+            }
+        }
+        _verifiedCheckImgView.image = img;
+        _verifiedCheckImgView.hidden = YES; // 默认隐藏，reloadData 控制
+    }
+    return _verifiedCheckImgView;
+}
+
+-(UIView*) verifiedTagView {
+    if(!_verifiedTagView) {
+        _verifiedTagView = [[UIView alloc] initWithFrame:CGRectZero];
+        _verifiedTagView.layer.cornerRadius = 8.0f;
+        _verifiedTagView.layer.masksToBounds = YES;
+        _verifiedTagView.backgroundColor = [UIColor colorWithRed:0 green:122.0f/255.0f blue:1.0f alpha:0.12f];
+        _verifiedTagLbl = [[UILabel alloc] init];
+        _verifiedTagLbl.text = LLang(@"已实名");
+        _verifiedTagLbl.font = [UIFont systemFontOfSize:11.0f];
+        _verifiedTagLbl.textColor = [UIColor colorWithRed:0 green:122.0f/255.0f blue:1.0f alpha:1.0f];
+        [_verifiedTagLbl sizeToFit];
+        [_verifiedTagView addSubview:_verifiedTagLbl];
+        _verifiedTagView.hidden = YES;
+    }
+    return _verifiedTagView;
 }
 
 -(UILabel*) shortNoLbl {
@@ -315,6 +379,24 @@
 
     self.nameLbl.lim_left = textLeft;
     self.nameLbl.lim_top = self.avatarImgView.lim_top + 2.0f;
+
+    // ✓ 勾放在昵称右侧
+    if(!self.verifiedCheckImgView.hidden) {
+        self.verifiedCheckImgView.lim_left = self.nameLbl.lim_right + 6.0f;
+        self.verifiedCheckImgView.lim_top  = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.verifiedCheckImgView.lim_height) / 2.0f;
+    }
+
+    // "已实名" tag 放在勾右侧；若勾隐藏则紧贴昵称
+    if(!self.verifiedTagView.hidden) {
+        CGFloat tagPadH = 6.0f;
+        CGFloat tagPadV = 2.0f;
+        CGSize lblSize = [self.verifiedTagLbl sizeThatFits:CGSizeMake(120.0f, 20.0f)];
+        self.verifiedTagLbl.frame = CGRectMake(tagPadH, tagPadV, lblSize.width, lblSize.height);
+        self.verifiedTagView.frame = CGRectMake(0, 0, lblSize.width + tagPadH * 2, lblSize.height + tagPadV * 2);
+        CGFloat anchorRight = self.verifiedCheckImgView.hidden ? self.nameLbl.lim_right : self.verifiedCheckImgView.lim_right;
+        self.verifiedTagView.lim_left = anchorRight + 6.0f;
+        self.verifiedTagView.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.verifiedTagView.lim_height) / 2.0f;
+    }
 
     self.shortNoLbl.lim_left = textLeft;
     self.shortNoLbl.lim_top = self.nameLbl.lim_bottom + 4.0f;

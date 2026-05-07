@@ -263,10 +263,32 @@
             self.addFriendBtn.hidden = YES;
             self.footerHeader.hidden = NO;
         } else {
-            // 同 Space 非好友 → 显示"添加好友"（无需 vercode）
-            self.sendBtn.hidden = YES;
-            self.addFriendBtn.hidden = NO;
-            self.footerHeader.hidden = NO;
+            // YUJ-206：同 Space 非好友 → 直接"发送消息"（对齐 web
+            // UserInfo/index.tsx:52-55 / 企微语义）。
+            //
+            // 嘉伟 2026-05-01 Android 真机实测复现：外部群里点成员显示
+            // 「申请加好友」；iOS 此分支此前误显 addFriendBtn，同一类根因。
+            // 判定委托给 WKUserInfoExternalGate 的纯函数静态方法以便 XCTest
+            // 覆盖，并与 Android UserDetailExternalHelper.shouldUseSpaceModeSendMessage
+            // 锁定同一优先级：
+            //   external hint > self > Space-mode 非bot → sendMsg >
+            //   Space-mode bot > 非Space-mode follow
+            BOOL useSendMessage = [WKUserInfoExternalGate
+                shouldUseSpaceModeSendMessageWithIsExternal:isExternal
+                                              viewerSpaceId:currentSpaceId
+                                                      isBot:self.viewModel.channelInfo.robot
+                                                     follow:self.viewModel.channelInfo.follow];
+            if (useSendMessage) {
+                self.sendBtn.hidden = NO;
+                self.addFriendBtn.hidden = YES;
+                self.footerHeader.hidden = NO;
+            } else {
+                // Bot / legacy 兜底：保持原有「同 Space 非好友 → 添加好友」行为，
+                // 让 bot 走 bot_add_friend 审批流，不改变任务之前已有的语义。
+                self.sendBtn.hidden = YES;
+                self.addFriendBtn.hidden = NO;
+                self.footerHeader.hidden = NO;
+            }
         }
     } else if([self isFriend]) {
         self.sendBtn.hidden = NO;

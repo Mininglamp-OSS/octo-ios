@@ -13,6 +13,7 @@
 #import "WKConversationVC.h"
 #import "WKNavigationManager.h"
 #import "WKLocalNotificationManager.h"
+#import "WKRealnameVerifyManager.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 #import "WKMessageRegistry.h"
 #import "WKTextMessageCell.h"
@@ -97,6 +98,7 @@
 #import <Bugly/Bugly.h>
 #import "WKMyInviteCodeVC.h"
 #import "WKProhibitwordsService.h"
+// #import "WKANRWatchdog.h"  // Disabled: 调试期完成使命，见 CLAUDE.md
 
 @import FPSCounter.Swift;
 //#import <PINRemoteImage/PINImageView+PINRemoteImage.h>
@@ -277,11 +279,23 @@ static WKApp *_instance;
         });
         return YES;
     }
+    // 实名认证回跳 octo://verified
+    if([WKRealnameVerifyManager isVerifiedCallbackURL:url]) {
+        [WKRealnameVerifyManager handleVerifiedCallback:url];
+        return YES;
+    }
     return [[WKSwiftModuleManager shared] didOpen:url options:options];
 }
 
 -(BOOL) appContinueUserActivity:(NSUserActivity *)userActivity restorationHandler:(void (^)(NSArray<id<UIUserActivityRestoring>> * _Nullable))restorationHandler {
-    
+    // Universal Links：accounts.example.com/…/verified → 同样走实名认证回跳
+    if([userActivity.activityType isEqualToString:NSUserActivityTypeBrowsingWeb]) {
+        NSURL *url = userActivity.webpageURL;
+        if([WKRealnameVerifyManager isVerifiedCallbackURL:url]) {
+            [WKRealnameVerifyManager handleVerifiedCallback:url];
+            return YES;
+        }
+    }
     return [[WKSwiftModuleManager shared] didContinue:userActivity restorationHandler:restorationHandler];
 }
 
@@ -319,6 +333,8 @@ static WKApp *_instance;
     [[WKNetworkListener shared] addDelegate:self];
     // 开启网络监听
     [[WKNetworkListener shared] start];
+    // Disabled: ANR 主线程卡死检测 (调试工具，见 CLAUDE.md)
+    // [[WKANRWatchdog shared] startWithThreshold:3.0];
     // 初始化日志
     [WKLogsManager setup:nil];
     
@@ -1302,14 +1318,14 @@ static WKApp *_instance;
     // 撤回
     [self setMethod:WKPOINT_LONGMENUS_REVOKE handler:^id _Nullable(id  _Nonnull param) {
         WKMessageModel *message = param[@"message"];
-        
+
         if(message.status != WK_MESSAGE_SUCCESS) {
             return nil;
         }
         if(message.messageId == 0) { // 本地消息
             return nil;
         }
-        
+
         BOOL isManager = false;
         if(message.channel.channelType == WK_GROUP) {
             isManager = [[WKSDK shared].channelManager isManager:message.channel memberUID:[WKApp shared].loginInfo.uid];
@@ -1324,7 +1340,7 @@ static WKApp *_instance;
             } else if(WKApp.shared.remoteConfig.revokeSecond>0) {
                 revokeSecond = WKApp.shared.remoteConfig.revokeSecond;
             }
-            
+
             if(revokeSecond>0) {
                 if(  [[NSDate date] timeIntervalSince1970] - message.timestamp > revokeSecond) { // 超过两分钟则不显示撤回
                     return nil;

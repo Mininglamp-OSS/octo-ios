@@ -130,18 +130,16 @@
     }else {
         messageID = message.clientMsgNo;
     }
-    
-    // 先本地执行假的撤回逻辑（为了使前端页面看着顺畅），后面收到撤回的消息才会执行真的逻辑
-    if(![[WKChannelSettingManager shared] revokeRemind:message.channel]) {
-        message.message.isDeleted = true; // 如果设置了不撤回不提醒则直接删除消息
-    }else{
-        message.message.remoteExtra.revoke = true;
-        message.message.remoteExtra.revoker = [WKApp shared].loginInfo.uid;
-    }
-    [[WKSDK shared].chatManager callMessageUpdateDelegate:message.message];
-    
-    
+
+    // 先请求服务端，成功后再执行本地撤回，避免超时后本地假撤回但服务端拒绝
     [[WKAPIClient sharedClient] POST:[NSString stringWithFormat:@"message/revoke?channel_id=%@&channel_type=%hhu&message_id=%@&client_msg_no=%@",message.channel.channelId,message.channel.channelType,messageID,message.clientMsgNo] parameters:nil].then(^{
+        if(![[WKChannelSettingManager shared] revokeRemind:message.channel]) {
+            message.message.isDeleted = true;
+        }else{
+            message.message.remoteExtra.revoke = true;
+            message.message.remoteExtra.revoker = [WKApp shared].loginInfo.uid;
+        }
+        [[WKSDK shared].chatManager callMessageUpdateDelegate:message.message];
         if(complete) {
             complete(nil);
         }

@@ -152,6 +152,14 @@ typedef enum :NSUInteger {
 +(NSAttributedString*) getFromNameAttributed:(WKMessageModel*)messageModel
                                viewerSpaceId:(nullable NSString*)viewerSpaceId;
 
+/**
+ YUJ-210: 判定 messageModel 相对当前 viewer 是否属于外部（即 nameLbl 是否
+ 会拼 `@SpaceName` 后缀）。refreshModel: / layoutName: 用它决定
+ `numberOfLines` / `lineBreakMode` / 宽度上限是否放宽——
+ 普通群气泡维持 byTruncatingTail + WK_NICKNAME_MAX_WIDTH，不受影响。
+ */
++(BOOL) hasExternalSpaceSuffix:(WKMessageModel*)messageModel;
+
 // 获取昵称大小
 +(CGSize) getNicknameSize:(WKMessageModel*)messageModel;
 // 获取昵称行总宽度（包括AI标识）

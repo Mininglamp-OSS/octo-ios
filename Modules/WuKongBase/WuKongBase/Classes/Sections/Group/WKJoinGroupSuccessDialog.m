@@ -82,6 +82,9 @@
     [self addSubview:_cardView];
 
     // 第一行：已加入 "xxx"
+    // YUJ-213: 三端统一 i18n key 命名 `group_join_cross_space_notice` — iOS 的
+    // Localizable.strings 采用"中文即 key"约定，这里保持中文源串作为 key，
+    // 逻辑 key 在注释中记录便于跨端检索。首行对应 `group_join_cross_space_notice.title`。
     _line1Lbl = [[UILabel alloc] init];
     _line1Lbl.numberOfLines = 2;
     _line1Lbl.font = [[WKApp shared].config appFontOfSizeSemibold:16.0f] ?: [UIFont boldSystemFontOfSize:16.0f];
@@ -93,6 +96,7 @@
     [_cardView addSubview:_line1Lbl];
 
     // 第二行：此群位于 xxx Space
+    // 对应 `group_join_cross_space_notice.subtitle`。
     _line2Lbl = [[UILabel alloc] init];
     _line2Lbl.numberOfLines = 2;
     _line2Lbl.font = [UIFont systemFontOfSize:14.0f];
