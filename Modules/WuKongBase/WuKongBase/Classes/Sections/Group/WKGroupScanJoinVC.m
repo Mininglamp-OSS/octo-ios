@@ -70,10 +70,12 @@
 
     NSString *path = [NSString stringWithFormat:@"groups/%@/scanjoin?auth_code=%@", self.groupNo, self.authCode];
     __weak typeof(self) weakSelf = self;
-    // YUJ-213: scanjoin 成功响应现在由后端 (dmworkim PR#1250) 直接返回
-    //   { status, group_no, group_name, space_id, space_name, is_external }
+    // YUJ-213 / YUJ-372: scanjoin 成功响应现在由后端直接返回一个 JSON object
+    //   YUJ-213 (dmworkim PR#1250): { status, group_no, group_name, space_id, space_name, is_external }
+    //   YUJ-372 Phase 2 (dmworkim PR#1320): 当调用者无 Space 时返回
+    //     { status: "need_space", msg: "请先加入一个 Space 后再入群" }
     // 以前 `.then(^{ })` 忽略 body — 现在按 NSDictionary 接住，便于就地判断
-    // 跨 Space + is_external。若未来服务端版本不带这些字段，回退到 VC
+    // status/跨 Space/is_external。若未来服务端版本不带这些字段，回退到 VC
     // 构造时由扫码/邀请链接解析器注入的 `self.targetSpaceId / Name` 字段
     // （YUJ-141 的 legacy 通道），保持旧客户端 + 新服务端 / 新客户端 + 旧服务端
     // 两个方向都不 crash。
@@ -81,6 +83,44 @@
         [weakSelf.view hideHud];
 
         NSDictionary *respDict = [resp isKindOfClass:[NSDictionary class]] ? (NSDictionary *)resp : nil;
+
+        // YUJ-372 Phase 2: 后端契约（dmworkim PR#1320）— 调用者无 Space 时
+        //   scanjoin 返回 { status: "need_space", msg: "请先加入一个 Space 后再入群" }。
+        // 命中 need_space 时：
+        //   1) 不入群，不走跨 Space Toast / success dialog
+        //   2) 把群邀请上下文（groupNo / authCode / 扫码元信息）暂存到
+        //      NSUserDefaults `pendingGroupInvite`
+        //   3) 推 WKSpaceGateVC (pushViewController，保留当前栈，方便加完 Space
+        //      后回到主列表再重放 scan handler 重试入群)
+        // 参考：Web / Android 三端统一处理；WKLoginVC::checkSpaceBeforeEnter 是
+        // 登录后首次拉起 Space Gate 的用法，此处是运行时从扫码入口触发。
+        NSString *respStatus = nil;
+        id statusRaw = respDict[@"status"];
+        if ([statusRaw isKindOfClass:[NSString class]]) {
+            respStatus = (NSString *)statusRaw;
+        }
+        if ([respStatus isEqualToString:@"need_space"]) {
+            NSDictionary *pending = @{
+                @"group_no":     weakSelf.groupNo     ?: @"",
+                @"auth_code":    weakSelf.authCode    ?: @"",
+                @"name":         weakSelf.groupName   ?: @"",
+                @"avatar":       weakSelf.groupAvatar ?: @"",
+                @"member_count": @(weakSelf.memberCount),
+                @"is_member":    @(weakSelf.isMember),
+                // 扫码/邀请解析器注入的 Space 上下文 — 加 Space 后重放仍然可用。
+                @"space_id":     weakSelf.targetSpaceId   ?: @"",
+                @"space_name":   weakSelf.targetSpaceName ?: @"",
+            };
+            [[NSUserDefaults standardUserDefaults] setObject:pending forKey:@"pendingGroupInvite"];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+
+            // 跨 module push WKSpaceGateVC（WKSpaceGateVC 在 WuKongLogin，这里
+            // 走 invoke point；mode=push 让 handler 用 pushViewController 而非
+            // resetRootViewController，以便加 Space 完成后自然 pop 回来重放。
+            [[WKApp shared] invoke:WKPOINT_SPACEGATE_SHOW param:@{@"mode": @"push"}];
+            weakSelf.joinBtn.enabled = YES;
+            return;
+        }
 
         // -------- 响应字段优先，VC 入参（legacy）兜底 --------
         NSString *(^pickStr)(NSString *, NSString *) = ^NSString *(NSString *key, NSString *fallback) {
