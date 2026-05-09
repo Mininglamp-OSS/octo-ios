@@ -270,6 +270,16 @@
 }
 
 -(void) handleLoadMessages:(BOOL)animation firstLoad:(BOOL)firstLoad hasMore:(bool)hasMore complete:(void(^)(void))complete {
+    // Bugly #9375: dataProvider.pullFirst 的 PromiseKit 回调在部分路径（thenOn 指定 bg 队列 / 错误重试等）
+    // 会落到非主线程，随后 reloadData → heightForRowAtIndexPath → sharedMeasureTV 首次懒加载在 bg 线程
+    // [UITextView initWithFrame:] 被 iOS 18 主线程契约直接 abort。此处统一 hop 回主线程。
+    if (![NSThread isMainThread]) {
+        __weak typeof(self) weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf handleLoadMessages:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
+        });
+        return;
+    }
     if (!self.tableView) return; // 防止 view 已释放后继续操作
     if(!hasMore) {
         [self pullupFinished];
@@ -1783,6 +1793,25 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 }
 
 
+// 检查 tableView 当前记住的 section/行数是否与 dataProvider 一致。
+// 不一致说明正处于 pulldown/pullup 改完数据源但尚未 insertRows 的间隙，
+// 此时调用 reloadRows/performBatchUpdates 会触发 UITableView 行数断言崩溃。
+-(BOOL) isTableViewRowCountInSyncWithDataProvider {
+    NSInteger tvSectionCount = [self.tableView numberOfSections];
+    NSInteger dsSectionCount = [self.dataProvider dateCount];
+    if (tvSectionCount != dsSectionCount) {
+        return NO;
+    }
+    for (NSInteger s = 0; s < tvSectionCount; s++) {
+        NSInteger tvRows = [self.tableView numberOfRowsInSection:s];
+        NSInteger dsRows = [self.dataProvider messagesAtSection:s].count;
+        if (tvRows != dsRows) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
 // 消息更新
 -(void) onMessageUpdate:(WKMessage*) message left:(NSInteger)left total:(NSInteger)total{
     WKLogDebug(@"onMessageUpdate-->%u",message.messageSeq);
@@ -1824,13 +1853,19 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         }else if(total == 1) {
             needRelodData = false;
             WKMessageBaseCell *cell = (WKMessageBaseCell *)[self.tableView cellForRowAtIndexPath:indexPath];
-            
+
             [self animateMessageWithBlock:^{
                 [cell refresh:newMessageModel];
                 [cell layoutSubviews];
             }];
-            [self.tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
-           
+            // Bugly #9388: pulldown/pullup 在"dataProvider 已加行但尚未 insertRows"的间隙会让出主线程，
+            // 此时 tableView 记住的行数与 dataProvider 不一致，直接 reloadRows 会抛 NSInternalInconsistencyException。
+            // 漂移时跳过 reloadRows —— cell 内容已在上面 refresh，pulldown/pullup 自身的 insertRows 完成后会恢复一致。
+            if ([self isTableViewRowCountInSyncWithDataProvider]) {
+                [self.tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+            } else {
+                WKLogDebug(@"onMessageUpdate skip reloadRows: tableView/dataProvider row-count drift");
+            }
         }
         
         if(self.lastMessage) {
