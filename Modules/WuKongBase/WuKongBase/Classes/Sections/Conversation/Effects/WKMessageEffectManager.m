@@ -5,9 +5,11 @@
 #import "WKMessageEffectManager.h"
 #import "WKMessageEffectView.h"
 #import "WKRocketEffect.h"
+#import "WKRocketLaunchEffect.h"
 #import "WKStarburstEffect.h"
 #import "WKHeartEffect.h"
 #import "WKPartyEffect.h"
+#import "WKClassyEffect.h"
 #import "WKMessageModel.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 
@@ -58,6 +60,7 @@ static const NSInteger kMaxTriggeredIds = 1000;
             @"❤": @"heart",
             @"🎉": @"party",
             @"🎊": @"party",
+            @"[使命必达]": @"rocketLaunch",
         };
 
         _triggeredMessageIds = [NSMutableOrderedSet orderedSet];
@@ -182,6 +185,10 @@ static const NSInteger kMaxTriggeredIds = 1000;
         [WKHeartEffect playInView:effectView sourceRect:sourceRect];
     } else if ([effectType isEqualToString:@"party"]) {
         [WKPartyEffect playInView:effectView sourceRect:sourceRect];
+    } else if ([effectType isEqualToString:@"rocketLaunch"]) {
+        [WKRocketLaunchEffect playInView:effectView sourceRect:sourceRect];
+    } else if ([effectType isEqualToString:@"classy"]) {
+        [WKClassyEffect playInView:effectView sourceRect:sourceRect];
     }
 
     self.pendingEffectType = nil;
