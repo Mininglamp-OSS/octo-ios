@@ -9,6 +9,7 @@
 #import "WKModel.h"
 #import "WKRTCIceServer.h"
 @class WKAppModuleResp;
+@class WKOidcProviderConfig;
 
 @class WKThemeContextMenu;
 typedef enum : NSUInteger {
@@ -209,6 +210,11 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,assign) BOOL threadOn; // 子区功能开关
 
+// Aegis OIDC SSO providers downloaded from `common/appconfig` -> `oidc_providers`.
+// Empty/absent means SSO is not configured; login page hides the SSO button.
+// Mirrors web dmworkbase OidcProviderConfig / dmworklogin SSOProvider (id/name/authorize_path[/account_url/reset_password_url]).
+@property(nonatomic,copy) NSArray<WKOidcProviderConfig*> *oidcProviders;
+
 @property(nonatomic,strong) NSArray<WKAppModuleResp*> *modules;
 
 @property(nonatomic,assign) BOOL requestSuccess; // 请求远程配置是否成功
@@ -247,6 +253,19 @@ typedef enum : NSInteger {
 @property(nonatomic,assign) BOOL hidden; // 隐藏
 @property(nonatomic,assign) NSInteger status; // 模块状态 1.可选 0.不可选 2.选中不可编辑
 
+
+@end
+
+// Aegis OIDC SSO provider. One entry corresponds to a single IdP (e.g. 飞书/Aegis).
+// authorizePath is a fully-qualified URL or server-relative path the login
+// webview should open with `?authcode=X&return_to=Y&flag=0` appended.
+@interface WKOidcProviderConfig : WKModel
+
+@property(nonatomic,copy) NSString * _Nonnull providerId;     // backend field: `id`
+@property(nonatomic,copy) NSString * _Nonnull name;           // display name shown on the SSO button
+@property(nonatomic,copy) NSString * _Nonnull authorizePath;  // backend field: `authorize_path`
+@property(nonatomic,copy) NSString * _Nullable accountUrl;        // backend field: `account_url`
+@property(nonatomic,copy) NSString * _Nullable resetPasswordUrl;  // backend field: `reset_password_url`
 
 @end
 

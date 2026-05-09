@@ -41,6 +41,11 @@
 @property(nonatomic,strong) UILabel *registerTipLbl; // 注册提示
 @property(nonatomic,strong) UIButton *registerBtn; // 注册
 
+// Aegis OIDC SSO button. Lazily built and shown once appconfig.oidc_providers 下发.
+@property(nonatomic,strong) UIButton *ssoBtn;
+@property(nonatomic,strong) WKOidcProviderConfig *currentProvider;
+@property(nonatomic,assign) BOOL ssoInFlight; // 防止连续点击重复 push 授权页
+
 
 @end
 
@@ -80,6 +85,10 @@
     [self addSubview:self.loginBtn];
     [self addSubview:self.registerTipLbl];
     [self addSubview:self.registerBtn];
+
+    // Aegis SSO entry — hidden until oidc_providers arrive from appconfig.
+    [self addSubview:self.ssoBtn];
+    [self refreshOidcProviders];
     
     
     
@@ -279,6 +288,126 @@
     return _registerBtn;
 }
 
+// ---------- Aegis SSO ----------
+- (UIButton *)ssoBtn {
+    if(!_ssoBtn) {
+        _ssoBtn = [[UIButton alloc] initWithFrame:CGRectMake(30.0f, self.registerTipLbl.lim_bottom + 20.0f, WKScreenWidth - 60.0f, 40.0f)];
+        _ssoBtn.layer.masksToBounds = YES;
+        _ssoBtn.layer.cornerRadius = 4.0f;
+        _ssoBtn.layer.borderWidth = 1.0f;
+        _ssoBtn.layer.borderColor = [WKApp shared].config.themeColor.CGColor;
+        [_ssoBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
+        [[_ssoBtn titleLabel] setFont:[UIFont systemFontOfSize:15.0f]];
+        [_ssoBtn addTarget:self action:@selector(ssoBtnPressed) forControlEvents:UIControlEventTouchUpInside];
+        _ssoBtn.hidden = YES;
+    }
+    return _ssoBtn;
+}
+
+- (void)refreshOidcProviders {
+    NSArray<WKOidcProviderConfig*> *providers = [WKApp shared].remoteConfig.oidcProviders;
+    // Match web behavior: use the first provider; multi-provider support is
+    // out of scope (web dmworklogin also renders a single primary CTA).
+    WKOidcProviderConfig *provider = providers.count > 0 ? providers.firstObject : nil;
+    self.currentProvider = provider;
+    if(!provider) {
+        self.ssoBtn.hidden = YES;
+        return;
+    }
+    NSString *title = [NSString stringWithFormat:LLang(@"使用 %@ 登录或注册"), provider.name];
+    [self.ssoBtn setTitle:title forState:UIControlStateNormal];
+    self.ssoBtn.hidden = NO;
+}
+
+-(void) ssoBtnPressed {
+    if(self.ssoInFlight) return;
+    WKOidcProviderConfig *provider = self.currentProvider;
+    if(!provider) return;
+    self.ssoInFlight = YES;
+    __weak typeof(self) weakself = self;
+    [WKAPIClient.sharedClient GET:@"user/thirdlogin/authcode" parameters:nil].then(^(NSDictionary *resultDict){
+        weakself.ssoInFlight = NO;
+        NSString *authcode = resultDict[@"authcode"];
+        if(!authcode || authcode.length == 0) {
+            [weakself showHUDWithHide:LLang(@"获取授权失败，请重试")];
+            return;
+        }
+        NSURL *authorizeURL = [weakself buildOidcAuthorizeURL:provider authcode:authcode];
+        if(!authorizeURL) {
+            [weakself showHUDWithHide:LLang(@"授权地址无效")];
+            return;
+        }
+        WKAuthWebViewVC *vc = [[WKAuthWebViewVC alloc] init];
+        vc.authcode = authcode;
+        vc.url = authorizeURL;
+        [WKNavigationManager.shared pushViewController:vc animated:YES];
+    }).catch(^(NSError *error){
+        weakself.ssoInFlight = NO;
+        [weakself showHUDWithHide:error.domain];
+    });
+}
+
+// authorize_path may be either a fully-qualified URL (https://aegis.example.com/...)
+// or a server-relative path (e.g. "user/thirdlogin/aegis" or "/v1/user/thirdlogin/aegis").
+// For fully-qualified URLs, use as-is. Otherwise concatenate against the API baseUrl
+// — the same pattern legacy gitee/github entries use. flag=0 marks this as an app client
+// (web sends 1, pc sends 2) so the IM device-token row is tagged correctly.
+// Resolve provider.authorize_path to a full URL the webview can load.
+//
+// Backend conventions (same shape web consumes):
+//   • "https://..."       → absolute, use as-is
+//   • "/v1/..."           → origin-relative (web resolves against window.location; on
+//                            iOS we resolve against the *host* of apiBaseUrl, so
+//                            baseUrl = https://host/v1/ + "/v1/x" 不会变成 /v1/v1/x)
+//   • "user/thirdlogin/x" → API-relative, append to apiBaseUrl (legacy gitee/github 走这条)
+//
+// flag 必须与 IM CONNECT 包里的 deviceFlag 一致，后端以 (uid, device_flag, token) 查设备 token；
+// iOS SDK CONNECT 发的是 3，WKLoginVM/WKRegisterVM 所有登录注册接口也都发 flag=3。
+//
+// device_* 三元组是 iOS 原生登录/注册接口（user/login、user/emaillogin、user/register、
+// user/emailregister）上报给后端建设备记录用的，backend /user/devices/{device_id} 后续查询
+// 依赖这条记录。Aegis 走 web-shared 的 authorize_path，若后端只按 web 处理不会建 iOS
+// 设备记录 → IM CONNECT 拿 (uid, 3, token) 查不到就关 socket。这里额外带上 device_id /
+// device_name / device_model，后端若支持会照此建记录；不支持则忽略，不会造成额外错误。
+- (NSURL *)buildOidcAuthorizeURL:(WKOidcProviderConfig *)provider authcode:(NSString *)authcode {
+    NSString *path = provider.authorizePath ?: @"";
+    NSString *apiBase = WKAPIClient.sharedClient.config.baseUrl ?: @"";
+    NSString *base = nil;
+    if([path hasPrefix:@"http://"] || [path hasPrefix:@"https://"]) {
+        base = path;
+    } else if([path hasPrefix:@"/"]) {
+        NSURL *baseURL = [NSURL URLWithString:apiBase];
+        NSURL *resolved = [NSURL URLWithString:path relativeToURL:baseURL];
+        base = resolved.absoluteString;
+    } else {
+        base = [apiBase stringByAppendingString:path];
+    }
+    if(base.length == 0) return nil;
+
+    NSCharacterSet *allowed = [NSCharacterSet URLQueryAllowedCharacterSet];
+    NSMutableArray<NSString*> *query = [NSMutableArray array];
+    NSString *encodedCode = [authcode stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: authcode;
+    [query addObject:[NSString stringWithFormat:@"authcode=%@", encodedCode]];
+    [query addObject:@"flag=3"];
+    NSString *deviceId = [UIDevice getUUID] ?: @"";
+    NSString *deviceName = [UIDevice getDeviceName] ?: @"";
+    NSString *deviceModel = [UIDevice getDeviceModel] ?: @"";
+    if(deviceId.length > 0) {
+        [query addObject:[NSString stringWithFormat:@"device_id=%@", [deviceId stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: deviceId]];
+    }
+    if(deviceName.length > 0) {
+        [query addObject:[NSString stringWithFormat:@"device_name=%@", [deviceName stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: deviceName]];
+    }
+    if(deviceModel.length > 0) {
+        [query addObject:[NSString stringWithFormat:@"device_model=%@", [deviceModel stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: deviceModel]];
+    }
+
+    NSString *joiner = [base rangeOfString:@"?"].location == NSNotFound ? @"?" : @"&";
+    NSString *full = [NSString stringWithFormat:@"%@%@%@", base, joiner, [query componentsJoinedByString:@"&"]];
+    WKLogDebug(@"[OIDC] authorize url: %@", full);
+    return [NSURL URLWithString:full];
+}
+
 
 #pragma mark -- 服务器设置
 
@@ -432,6 +561,10 @@
     self.passwordBottomLineView.layer.backgroundColor = [WKApp shared].config.lineColor.CGColor;
     self.countrySpliteLineView.layer.backgroundColor = [WKApp shared].config.lineColor.CGColor;
     self.mobileBottomLineView.layer.backgroundColor = [WKApp shared].config.lineColor.CGColor;
+    if(_ssoBtn) {
+        _ssoBtn.layer.borderColor = [WKApp shared].config.themeColor.CGColor;
+        [_ssoBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
+    }
 }
 
 

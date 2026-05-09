@@ -509,6 +509,41 @@
                 weakSelf.threadOn = [resultDict[@"thread_on"] boolValue];
             }
 
+            // Aegis OIDC providers. Absent/empty means SSO is not enabled and the
+            // login page keeps the existing 手机号/邮箱+密码 entries only.
+            id oidcProvidersRaw = resultDict[@"oidc_providers"];
+            if([oidcProvidersRaw isKindOfClass:[NSArray class]]) {
+                NSMutableArray<WKOidcProviderConfig*> *providers = [NSMutableArray array];
+                for(id item in (NSArray*)oidcProvidersRaw) {
+                    if(![item isKindOfClass:[NSDictionary class]]) continue;
+                    NSDictionary *dict = (NSDictionary*)item;
+                    NSString *pid = dict[@"id"];
+                    NSString *name = dict[@"name"];
+                    NSString *authorizePath = dict[@"authorize_path"];
+                    // A provider missing any required field is unusable — skip so the
+                    // button can't render a broken entry.
+                    if(![pid isKindOfClass:[NSString class]] || pid.length == 0) continue;
+                    if(![name isKindOfClass:[NSString class]] || name.length == 0) continue;
+                    if(![authorizePath isKindOfClass:[NSString class]] || authorizePath.length == 0) continue;
+                    WKOidcProviderConfig *provider = [WKOidcProviderConfig new];
+                    provider.providerId = pid;
+                    provider.name = name;
+                    provider.authorizePath = authorizePath;
+                    id accountUrl = dict[@"account_url"];
+                    if([accountUrl isKindOfClass:[NSString class]] && ((NSString*)accountUrl).length > 0) {
+                        provider.accountUrl = accountUrl;
+                    }
+                    id resetUrl = dict[@"reset_password_url"];
+                    if([resetUrl isKindOfClass:[NSString class]] && ((NSString*)resetUrl).length > 0) {
+                        provider.resetPasswordUrl = resetUrl;
+                    }
+                    [providers addObject:provider];
+                }
+                weakSelf.oidcProviders = [providers copy];
+            } else {
+                weakSelf.oidcProviders = @[];
+            }
+
             // YUJ-219-A4: consume system_bot_uids from backend appconfig.
             // Response shape (A2): {"system_bot_uids": ["botfather", "u_10000", "fileHelper"]}.
             // When the field is missing (A2 not deployed), keep the fallback
@@ -529,6 +564,8 @@
             
             weakSelf.requestSuccess = true;
             weakSelf.startRequest = false;
+            // Notify anyone waiting for remote config (e.g. login page refreshing the Aegis SSO button).
+            [[NSNotificationCenter defaultCenter] postNotificationName:WKNOTIFY_REMOTECONFIG_LOADED object:nil];
             if(callback) {
                 callback(nil);
             }
@@ -720,4 +757,8 @@ static NSMutableArray *mustSupportModules;
     resp.desc = dictory[@"desc"]?:@"";
     return resp;
 }
+@end
+
+@implementation WKOidcProviderConfig
+
 @end
