@@ -82,6 +82,8 @@
 @property (nonatomic, strong) WKConversationWrapModel *model;
 @property (nonatomic, strong) UIButton *threadToggleBtn;
 
+@property (nonatomic, copy) NSString *lastAvatarChannelId; // 上一次 refreshAvatar 对应的 channelId，用于判断 cell 是否被复用到不同会话
+
 @end
 
 @implementation WKConversationGroupThreadCell
@@ -526,7 +528,13 @@
 
 -(void) refreshAvatar:(WKConversationWrapModel*)model {
     UIImage *placeholder = [WKApp.shared loadImage:@"Common/Index/DefaultAvatar" moduleID:@"WuKongBase"];
-    self.avatarView.avatarImgView.image = placeholder;
+    NSString *channelId = model.channel.channelId;
+    // 仅在 cell 被复用到不同会话时清回占位图，避免残留上一个会话的人脸；同会话刷新保留当前头像。
+    BOOL channelChanged = (channelId.length == 0) || ![channelId isEqualToString:self.lastAvatarChannelId];
+    if (channelChanged) {
+        self.avatarView.avatarImgView.image = placeholder;
+    }
+    self.lastAvatarChannelId = channelId;
     if (model.channelInfo) {
         NSString *avatarURL;
         if ([model.channelInfo.logo hasPrefix:@"http"]) {
@@ -536,10 +544,13 @@
         } else {
             avatarURL = [WKAvatarUtil getGroupAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
         }
+        // SDWebImageDelayPlaceholder：加载中不覆盖已有头像，仅在失败时落到占位图，避免返回会话列表刷新时的占位图闪烁
         [self.avatarView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL]
                                           placeholderImage:placeholder
-                                                   options:0
+                                                   options:SDWebImageDelayPlaceholder
                                                    context:@{SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll)}];
+    } else {
+        self.avatarView.avatarImgView.image = placeholder;
     }
 }
 
@@ -666,7 +677,7 @@
 
 - (void)prepareForReuse {
     [super prepareForReuse];
-    self.avatarView.avatarImgView.image = nil;
+    // 不清空 avatar image：让旧头像保留到新头像加载完成后再替换，避免刷新时的空白闪烁。
     self.badgeView.hidden = YES;
     self.muteIcon.hidden = YES;
     self.threadContainer.hidden = YES;
