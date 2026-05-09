@@ -281,7 +281,13 @@
         [parts addObject:[msgLines componentsJoinedByString:@"\n"]];
     }
 
-    return parts.count > 0 ? [parts componentsJoinedByString:@"\n"] : nil;
+    NSString *finalContext = parts.count > 0 ? [parts componentsJoinedByString:@"\n"] : nil;
+    NSLog(@"[VoicePanel] voiceInputChatContext → channelType=%d, memberNames=%lu, textMsgs=%lu, finalLen=%lu",
+          (int)channel.channelType,
+          (unsigned long)memberNames.count,
+          (unsigned long)textMessages.count,
+          (unsigned long)finalContext.length);
+    return finalContext;
 }
 
 - (NSRange)voiceInputSelectedRange {

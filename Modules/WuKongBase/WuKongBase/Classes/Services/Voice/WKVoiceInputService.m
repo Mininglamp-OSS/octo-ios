@@ -212,7 +212,12 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
         formFields[@"member_context"] = memberContext;
     }
 
-    NSLog(@"[VoiceInput] ===== 语音转写请求 =====");
+    NSLog(@"[VoiceInput] ===== 语音转写请求 (m4a) =====");
+    NSLog(@"[VoiceInput] 发送字段: context_text=%@(%lu) chat_context=%@(%lu) personal_context=%@(%lu) member_context=%@(%lu)",
+          formFields[@"context_text"] ? @"Y" : @"N", (unsigned long)contextText.length,
+          formFields[@"chat_context"] ? @"Y" : @"N", (unsigned long)chatContext.length,
+          formFields[@"personal_context"] ? @"Y" : @"N", (unsigned long)personalContext.length,
+          formFields[@"member_context"] ? @"Y" : @"N", (unsigned long)memberContext.length);
     NSLog(@"[VoiceInput] context_text: %@", contextText ?: @"(nil)");
     NSLog(@"[VoiceInput] chat_context: %@", chatContext ?: @"(nil)");
     NSLog(@"[VoiceInput] personal_context: %@", personalContext ?: @"(nil)");
@@ -280,7 +285,16 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
     if (personalContext.length > 0) formFields[@"personal_context"] = personalContext;
     if (memberContext.length > 0) formFields[@"member_context"] = memberContext;
 
-    NSLog(@"[VoiceInput] ===== WAV 语音转写请求 =====");
+    NSLog(@"[VoiceInput] ===== 语音转写请求 (WAV) =====");
+    NSLog(@"[VoiceInput] 发送字段: context_text=%@(%lu) chat_context=%@(%lu) personal_context=%@(%lu) member_context=%@(%lu)",
+          formFields[@"context_text"] ? @"Y" : @"N", (unsigned long)contextText.length,
+          formFields[@"chat_context"] ? @"Y" : @"N", (unsigned long)chatContext.length,
+          formFields[@"personal_context"] ? @"Y" : @"N", (unsigned long)personalContext.length,
+          formFields[@"member_context"] ? @"Y" : @"N", (unsigned long)memberContext.length);
+    NSLog(@"[VoiceInput] context_text: %@", contextText ?: @"(nil)");
+    NSLog(@"[VoiceInput] chat_context: %@", chatContext ?: @"(nil)");
+    NSLog(@"[VoiceInput] personal_context: %@", personalContext ?: @"(nil)");
+    NSLog(@"[VoiceInput] member_context: %@", memberContext ?: @"(nil)");
     NSLog(@"[VoiceInput] audio size: %lu bytes", (unsigned long)audioData.length);
 
     [[WKAPIClient sharedClient] fileUpload:@"voice/transcribe"

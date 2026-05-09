@@ -439,8 +439,9 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
         NSString *personalContext = voiceContext;
         NSString *chatContext = nil;
         NSString *memberContext = nil;
+        NSString *fullContext = nil;
         if ([ws.delegate respondsToSelector:@selector(holdToTalkManagerChatContext:)]) {
-            NSString *fullContext = [ws.delegate holdToTalkManagerChatContext:ws];
+            fullContext = [ws.delegate holdToTalkManagerChatContext:ws];
             if (fullContext) {
                 NSRange memberRange = [fullContext rangeOfString:@"聊天成员："];
                 if (memberRange.location != NSNotFound) {
@@ -456,6 +457,20 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
                 }
             }
         }
+
+        NSLog(@"[HoldToTalk] ===== 上下文采集 =====");
+        NSLog(@"[HoldToTalk] delegate响应holdToTalkManagerChatContext: %@",
+              [ws.delegate respondsToSelector:@selector(holdToTalkManagerChatContext:)] ? @"YES" : @"NO");
+        NSLog(@"[HoldToTalk] fullContext(raw, len=%lu): %@",
+              (unsigned long)fullContext.length, fullContext ?: @"(nil)");
+        NSLog(@"[HoldToTalk] 拆分结果 → memberContext(len=%lu): %@",
+              (unsigned long)memberContext.length, memberContext ?: @"(nil)");
+        NSLog(@"[HoldToTalk] 拆分结果 → chatContext(len=%lu): %@",
+              (unsigned long)chatContext.length, chatContext ?: @"(nil)");
+        NSLog(@"[HoldToTalk] personalContext(预取, len=%lu): %@",
+              (unsigned long)personalContext.length, personalContext ?: @"(nil)");
+        NSLog(@"[HoldToTalk] contextText(已转写, len=%lu): %@",
+              (unsigned long)contextText.length, contextText ?: @"(nil)");
 
         [[WKVoiceInputService shared] transcribeWavAudio:audioData
                                              contextText:contextText

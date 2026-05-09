@@ -640,8 +640,9 @@ static CGFloat const kCircleBaseSize = 80.0; // 基础圆形大小，会随音�
         NSString *personalContext = voiceContext;
         NSString *chatContext = nil;
         NSString *memberContext = nil;
+        NSString *fullContext = nil;
         if ([weakSelf.delegate respondsToSelector:@selector(voiceInputChatContext)]) {
-            NSString *fullContext = [weakSelf.delegate voiceInputChatContext];
+            fullContext = [weakSelf.delegate voiceInputChatContext];
             if (fullContext) {
                 // voiceInputChatContext 返回的格式：聊天成员：xxx\n[发送者]: yyy
                 // 拆分成 memberContext 和 chatContext
@@ -659,6 +660,20 @@ static CGFloat const kCircleBaseSize = 80.0; // 基础圆形大小，会随音�
                 }
             }
         }
+
+        NSLog(@"[VoiceInputView] ===== 上下文采集 =====");
+        NSLog(@"[VoiceInputView] delegate响应voiceInputChatContext: %@",
+              [weakSelf.delegate respondsToSelector:@selector(voiceInputChatContext)] ? @"YES" : @"NO");
+        NSLog(@"[VoiceInputView] fullContext(raw, len=%lu): %@",
+              (unsigned long)fullContext.length, fullContext ?: @"(nil)");
+        NSLog(@"[VoiceInputView] 拆分结果 → memberContext(len=%lu): %@",
+              (unsigned long)memberContext.length, memberContext ?: @"(nil)");
+        NSLog(@"[VoiceInputView] 拆分结果 → chatContext(len=%lu): %@",
+              (unsigned long)chatContext.length, chatContext ?: @"(nil)");
+        NSLog(@"[VoiceInputView] personalContext(预取, len=%lu): %@",
+              (unsigned long)personalContext.length, personalContext ?: @"(nil)");
+        NSLog(@"[VoiceInputView] contextText(输入框, len=%lu): %@",
+              (unsigned long)contextText.length, contextText ?: @"(nil)");
 
         [[WKVoiceInputService shared] transcribeAudio:audioData
                                           contextText:contextText
