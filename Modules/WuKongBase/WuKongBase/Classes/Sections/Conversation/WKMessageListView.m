@@ -2156,25 +2156,32 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
     [[WKMessageEffectManager shared] markTriggeredForMessage:message];
 
-    // 触发前先收起键盘，避免键盘遮挡、也让 tableView 恢复完整显示区域
-    UIWindow *window = self.window ?: [UIApplication sharedApplication].keyWindow;
-    [window endEditing:YES];
-
-    // 等待键盘收起（标准 0.25s） + cell 布局完成
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    // 不再主动收起键盘：键盘保持展开，爆炸点会落在可见区域
+    // （computeExplodePointInView 已利用 adjustedContentInset 避开键盘遮挡区）
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         NSIndexPath *indexPath = [self.dataProvider indexPathAtClientMsgNo:message.clientMsgNo];
         CGRect sourceRect = CGRectZero;
+        UIImage *avatarImage = nil;
         if (indexPath) {
             UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
             if (cell) {
                 sourceRect = [self.tableView convertRect:cell.frame toView:self];
+                // 从 message cell 的头像控件抓当前显示的 UIImage（已加载完成的头像），
+                // 让火箭发射特效可以在舷窗里嵌入发送者头像
+                if ([cell isKindOfClass:WKMessageCell.class]) {
+                    WKMessageCell *msgCell = (WKMessageCell *)cell;
+                    avatarImage = msgCell.avatarImgView.avatarImgView.image;
+                }
             }
         }
         if (CGRectIsEmpty(sourceRect)) {
             // fallback: use bottom center
             sourceRect = CGRectMake(self.bounds.size.width / 2 - 30, self.bounds.size.height - 100, 60, 60);
         }
-        [[WKMessageEffectManager shared] triggerEffect:effectType inHostView:self sourceRect:sourceRect];
+        [[WKMessageEffectManager shared] triggerEffect:effectType
+                                            inHostView:self
+                                            sourceRect:sourceRect
+                                           avatarImage:avatarImage];
     });
 }
 

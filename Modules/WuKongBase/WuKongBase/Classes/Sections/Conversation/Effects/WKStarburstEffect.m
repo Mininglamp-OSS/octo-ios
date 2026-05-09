@@ -1,11 +1,10 @@
 //
-//  WKStarburstEffect.m → 「点赞雨」
+//  WKStarburstEffect.m → 「点赞上升」
 //
 //  触发：消息文本含 👍
-//  视觉：大量不同大小的 👍 从屏幕顶部各个位置陆续降落，像真实雨滴
-//    - 数量多（~18 个）、尺寸小（30~55pt）、持续时间长（~2s 生成 + 2~3s 下落）
-//    - X 位置完全随机（而不是均匀分布），有真实"随风"的感觉
-//    - 定时器检测 👍 经过可见气泡时让气泡脉冲
+//  视觉：参照 ❤️ 的上升逻辑，多个不同尺寸的 👍 从屏幕底部外侧缓缓飘升到顶部外侧，
+//  x 方向做正弦摇摆，生命周期末段淡出。经过可见气泡时让气泡脉冲。
+//
 
 #import "WKStarburstEffect.h"
 #import "WKMessageEffectView.h"
@@ -28,16 +27,15 @@
     NSTimeInterval spawnDuration = 2.0;
 
     for (NSInteger i = 0; i < totalCount; i++) {
-        // 每个 👍 出现的时间随机分布，避免「一波一波」的倒出感
         NSTimeInterval delay = (NSTimeInterval)i * (spawnDuration / totalCount);
-        delay += (NSTimeInterval)arc4random_uniform(80) / 1000.0; // ±80ms 抖动
+        delay += (NSTimeInterval)arc4random_uniform(120) / 1000.0;
 
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             if (effectView.superview == nil) return;
 
-            // 尺寸缩小：30~55pt（之前 54~94 太大）
-            CGFloat fontSize = 30.0 + (CGFloat)(arc4random_uniform(26));
-            CGFloat size = fontSize * 1.3;
+            // 尺寸：22~46pt（和 ❤️ 一致）
+            CGFloat fontSize = 22.0 + (CGFloat)(arc4random_uniform(24));
+            CGFloat size = fontSize * 1.4;
 
             UILabel *thumb = [UILabel new];
             thumb.text = @"👍";
@@ -45,46 +43,55 @@
             thumb.textAlignment = NSTextAlignmentCenter;
             thumb.frame = CGRectMake(0, 0, size, size);
 
-            // X 完全随机（不按下标均分），真正雨滴感
+            // 从底部外侧起飞，往顶部外侧飘走
             CGFloat xStart = (CGFloat)arc4random_uniform((uint32_t)(viewW - size)) + size / 2;
-            CGFloat xDrift = (CGFloat)(arc4random_uniform(60)) - 30; // 下落过程中轻微漂移
-            CGFloat yStart = -size;
-            CGFloat yEnd = viewH + size;
+            CGFloat yStart = viewH + size;
+            CGFloat yEnd = -size;
 
             thumb.center = CGPointMake(xStart, yStart);
+            thumb.alpha = 0.95;
             [effectView addSubview:thumb];
             [thumbs addObject:thumb];
 
-            // 每滴下落时长不同，节奏感更自然
-            NSTimeInterval duration = 1.8 + (NSTimeInterval)(arc4random_uniform(120)) / 100.0; // 1.8~3.0s
+            NSTimeInterval duration = 2.8 + (NSTimeInterval)(arc4random_uniform(150)) / 100.0; // 2.8~4.3s
 
-            // Y：轻度 ease-in，避免开局过慢
+            // Y：匀速上升
             CAKeyframeAnimation *yAnim = [CAKeyframeAnimation animationWithKeyPath:@"position.y"];
             yAnim.values = @[@(yStart), @(yEnd)];
-            yAnim.keyTimes = @[@0, @1];
-            yAnim.timingFunctions = @[[CAMediaTimingFunction functionWithControlPoints:0.4 :0 :0.7 :1]];
             yAnim.duration = duration;
 
-            // X：微漂移（小幅度摇摆，不过度）
+            // X：正弦式摆动
             CAKeyframeAnimation *xAnim = [CAKeyframeAnimation animationWithKeyPath:@"position.x"];
-            CGFloat swayMid1 = xStart + xDrift * 0.4;
-            CGFloat swayMid2 = xStart + xDrift * 0.7;
-            xAnim.values = @[@(xStart), @(swayMid1), @(swayMid2), @(xStart + xDrift)];
+            CGFloat swayAmp = 20.0 + (CGFloat)arc4random_uniform(25);
+            xAnim.values = @[
+                @(xStart),
+                @(xStart + swayAmp),
+                @(xStart),
+                @(xStart - swayAmp * 0.8),
+                @(xStart + swayAmp * 0.5),
+                @(xStart),
+            ];
             xAnim.duration = duration;
 
-            // 旋转：轻微，避免 emoji 翻倒显得奇怪
-            CABasicAnimation *rotAnim = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"];
-            rotAnim.fromValue = @(0);
-            CGFloat targetRot = ((CGFloat)(arc4random_uniform(200)) / 100.0) - 1.0; // -1 ~ +1 弧度
-            rotAnim.toValue = @(targetRot);
-            rotAnim.duration = duration;
+            // 轻微缩放脉冲（有节奏感）
+            CAKeyframeAnimation *scaleAnim = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+            scaleAnim.values = @[@(0.9), @(1.1), @(0.95), @(1.05), @(1.0)];
+            scaleAnim.duration = 1.0;
+            scaleAnim.repeatCount = HUGE_VALF;
+
+            // 末段淡出
+            CAKeyframeAnimation *fadeAnim = [CAKeyframeAnimation animationWithKeyPath:@"opacity"];
+            fadeAnim.values = @[@(0.95), @(0.95), @(0)];
+            fadeAnim.keyTimes = @[@0, @0.7, @1.0];
+            fadeAnim.duration = duration;
 
             CAAnimationGroup *group = [CAAnimationGroup animation];
-            group.animations = @[yAnim, xAnim, rotAnim];
+            group.animations = @[yAnim, xAnim, fadeAnim];
             group.duration = duration;
             group.fillMode = kCAFillModeForwards;
             group.removedOnCompletion = NO;
-            [thumb.layer addAnimation:group forKey:@"thumb-rain"];
+            [thumb.layer addAnimation:group forKey:@"thumb-rise"];
+            [thumb.layer addAnimation:scaleAnim forKey:@"thumb-pulse"];
 
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 [thumb removeFromSuperview];
@@ -99,21 +106,21 @@
         @"effectView": effectView,
         @"tableView": tableView ?: (id)[NSNull null],
     };
-    NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:0.05
+    NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:0.06
                                                       target:self
                                                     selector:@selector(onHitCheckTimer:)
                                                     userInfo:timerUserInfo
                                                      repeats:YES];
 
-    // 最晚 2.0s 生成 + 3.0s 下落 = 5s 后全部结束
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    // 2.0s 生成 + 4.3s 上升 ≈ 6.5s 后全部结束
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(7.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [timer invalidate];
         for (UILabel *t in thumbs) {
             [t removeFromSuperview];
         }
     });
 
-    [effectView scheduleRemovalAfterDelay:5.5];
+    [effectView scheduleRemovalAfterDelay:7.5];
 }
 
 + (void)onHitCheckTimer:(NSTimer *)timer {
@@ -139,13 +146,11 @@
         if (!pres) continue;
         CGPoint center = pres.position;
         CGSize size = pres.bounds.size;
-        // 粒子实际矩形
         CGRect particleFrame = CGRectMake(center.x - size.width / 2,
                                           center.y - size.height / 2,
                                           size.width, size.height);
 
         for (UITableViewCell *cell in cellsCopy) {
-            // 精确到「气泡本身」的矩形，不再用整个 cell 的 row
             UIView *bubble = nil;
             if ([cell isKindOfClass:[WKMessageCell class]]) {
                 bubble = ((WKMessageCell *)cell).bubbleBackgroundView;
@@ -158,10 +163,8 @@
             CGRect bubbleFrame = [effectView convertRect:bubble.bounds fromView:bubble];
             if (CGRectIsEmpty(bubbleFrame)) continue;
 
-            // 真矩形碰撞（粒子 ∩ 气泡）
             if (CGRectIntersectsRect(particleFrame, bubbleFrame)) {
                 [hits addObject:hitKey];
-                // 只脉冲气泡本身，不摇整个 cell
                 [WKBubbleInteractionHelper pulseCell:bubble];
             }
         }
