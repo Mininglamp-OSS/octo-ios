@@ -24,6 +24,12 @@ NS_ASSUME_NONNULL_BEGIN
            inHostView:(UIView *)hostView
            sourceRect:(CGRect)sourceRect;
 
+/// 带发送者头像的触发接口（rocketLaunch 等会用 avatarImage 渲染舷窗内头像）
+- (void)triggerEffect:(NSString *)effectType
+           inHostView:(UIView *)hostView
+           sourceRect:(CGRect)sourceRect
+          avatarImage:(nullable UIImage *)avatarImage;
+
 - (void)cancelCurrentEffect;
 
 /// 气泡物理并发锁。炸弹特效启用气泡物理前检查，若为 YES 就跳过气泡物理（仍播放粒子）。

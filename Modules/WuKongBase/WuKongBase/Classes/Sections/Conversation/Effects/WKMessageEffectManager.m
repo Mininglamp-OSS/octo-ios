@@ -23,10 +23,12 @@ static const NSInteger kMaxTriggeredIds = 1000;
 @property (nonatomic, copy, nullable) NSString *pendingEffectType;
 @property (nonatomic, assign) CGRect pendingSourceRect;
 @property (nonatomic, weak, nullable) UIView *pendingHostView;
+@property (nonatomic, strong, nullable) UIImage *pendingAvatarImage;
 
-// 最近一次特效的弱引用，用于页面退出时兜底清理。
-// 不再用来 cancel 上一个特效 —— 多个特效可以并行独立运行。
-@property (nonatomic, weak, nullable) WKMessageEffectView *currentEffectView;
+// 追踪**所有**活跃的 effectView（可能多个并行特效）。弱引用 → view 被 removeFromSuperview
+// 后自动从 hash table 中消失，不会导致循环引用或"僵尸"记录。
+// 页面退出 cancelCurrentEffect 时需要清理全部，不能只清最后一个。
+@property (nonatomic, strong) NSHashTable<WKMessageEffectView *> *activeEffectViews;
 
 // (bubblePhysicsActive 在 public header 中声明)
 
@@ -64,6 +66,7 @@ static const NSInteger kMaxTriggeredIds = 1000;
         };
 
         _triggeredMessageIds = [NSMutableOrderedSet orderedSet];
+        _activeEffectViews = [NSHashTable weakObjectsHashTable];
         NSArray *persisted = [[NSUserDefaults standardUserDefaults] arrayForKey:kTriggeredIdsDefaultsKey];
         if ([persisted isKindOfClass:[NSArray class]]) {
             for (id item in persisted) {
@@ -131,11 +134,19 @@ static const NSInteger kMaxTriggeredIds = 1000;
 - (void)triggerEffect:(NSString *)effectType
            inHostView:(UIView *)hostView
            sourceRect:(CGRect)sourceRect {
+    [self triggerEffect:effectType inHostView:hostView sourceRect:sourceRect avatarImage:nil];
+}
+
+- (void)triggerEffect:(NSString *)effectType
+           inHostView:(UIView *)hostView
+           sourceRect:(CGRect)sourceRect
+          avatarImage:(nullable UIImage *)avatarImage {
 
     [self.debounceTimer invalidate];
     self.pendingEffectType = effectType;
     self.pendingSourceRect = sourceRect;
     self.pendingHostView = hostView;
+    self.pendingAvatarImage = avatarImage;
 
     self.debounceTimer = [NSTimer scheduledTimerWithTimeInterval:0.3
                                                          target:self
@@ -166,7 +177,8 @@ static const NSInteger kMaxTriggeredIds = 1000;
     }
     [window addSubview:effectView];
 
-    self.currentEffectView = effectView;
+    // 加入活跃集合（弱引用），让 cancelCurrentEffect 能清理所有并行中的特效
+    [self.activeEffectViews addObject:effectView];
 
     // 气泡物理用 tableView 作为承载层（和真实 cell 同层，滚动时一起滚动，视觉一致）
     // 不再单独创建 bubbleLayer
@@ -186,22 +198,27 @@ static const NSInteger kMaxTriggeredIds = 1000;
     } else if ([effectType isEqualToString:@"party"]) {
         [WKPartyEffect playInView:effectView sourceRect:sourceRect];
     } else if ([effectType isEqualToString:@"rocketLaunch"]) {
-        [WKRocketLaunchEffect playInView:effectView sourceRect:sourceRect];
+        [WKRocketLaunchEffect playInView:effectView sourceRect:sourceRect avatarImage:self.pendingAvatarImage];
     } else if ([effectType isEqualToString:@"classy"]) {
         [WKClassyEffect playInView:effectView sourceRect:sourceRect];
     }
 
     self.pendingEffectType = nil;
+    self.pendingAvatarImage = nil;
     self.pendingHostView = nil;
 }
 
 - (void)cancelCurrentEffect {
     [self.debounceTimer invalidate];
     self.debounceTimer = nil;
-    // 兜底把最近一个特效的快照恢复（否则原 cell 会一直隐藏）
-    [self.currentEffectView cleanupSnapshots];
-    [self.currentEffectView removeFromSuperview];
-    self.currentEffectView = nil;
+    // 清理**所有**活跃特效（不只最后一个）——快速连发表情时会有多个 effectView 并行跑在 window 上，
+    // 离开聊天页面必须把它们全部清掉，避免"回到其他页面还在播"的 bug。
+    NSArray<WKMessageEffectView *> *snapshot = [self.activeEffectViews.allObjects copy];
+    for (WKMessageEffectView *view in snapshot) {
+        [view cleanupSnapshots];
+        [view removeFromSuperview];
+    }
+    [self.activeEffectViews removeAllObjects];
     self.bubblePhysicsActive = NO;
 }
 
