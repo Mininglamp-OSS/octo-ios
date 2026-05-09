@@ -18,6 +18,7 @@
 #import "WKMessageListView+Position.h"
 #import "WKConversationListVM.h"
 #import <WuKongBase/WuKongBase-Swift.h>
+#import "WKMessageEffectManager.h"
 @interface WKMessageListView ()<UITableViewDelegate,UITableViewDataSource,WKConversationTableViewDelegate,WKChannelManagerDelegate,WKChatManagerDelegate,WKReactionManagerDelegate,WKConnectionManagerDelegate,WKTypingManagerDelegate,WKReminderManagerDelegate>
 
 @property(nonatomic,strong) UIViewPropertyAnimator *headerViewsAnimator;
@@ -87,8 +88,10 @@
     [self updatePosition];
     // 界面退出停止播放
     [[WKSDK shared].mediaManager stopAudioPlay];
-    
+
     [self markReminderDoneIfNeed];
+
+    [[WKMessageEffectManager shared] cancelCurrentEffect];
 }
 
 - (void)setScrollEnabled:(BOOL)scrollEnabled {
@@ -1431,6 +1434,7 @@
                 [self scrollToBottom:YES];
             }
         }
+
     }
 }
 
@@ -1646,9 +1650,11 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     }
     [baseCell onWillDisplay];
 
-    
+    // 在标记已读之前先检查是否需要触发未读消息的表情特效（否则状态会被改变）
+    [self checkFirstViewEffectForMessage:messageModel];
+
     [self didReadedAndViewed]; // 将消息放入已读和已查看
-    
+
     if(messageModel.orderSeq>self.browseToOrderSeq) {
         [self updateBrowseToOrderSeq];
     }
@@ -2103,6 +2109,73 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     }
     [self updatePostionReminders:self.reminders force:true];
     
+}
+
+#pragma mark - Message Effect
+
+-(void) checkAndTriggerEffectForMessage:(WKMessageModel *)message {
+    NSString *effectType = [[WKMessageEffectManager shared] effectTypeForMessage:message];
+    if (!effectType) return;
+
+    // 已触发过则跳过（同一条消息 cell 重用、重新入视图都不重播）
+    if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
+    [[WKMessageEffectManager shared] markTriggeredForMessage:message];
+
+    // 触发前先收起键盘，避免键盘遮挡、也让 tableView 恢复完整显示区域
+    UIWindow *window = self.window ?: [UIApplication sharedApplication].keyWindow;
+    [window endEditing:YES];
+
+    // 等待键盘收起（标准 0.25s） + cell 布局完成
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSIndexPath *indexPath = [self.dataProvider indexPathAtClientMsgNo:message.clientMsgNo];
+        CGRect sourceRect = CGRectZero;
+        if (indexPath) {
+            UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
+            if (cell) {
+                sourceRect = [self.tableView convertRect:cell.frame toView:self];
+            }
+        }
+        if (CGRectIsEmpty(sourceRect)) {
+            // fallback: use bottom center
+            sourceRect = CGRectMake(self.bounds.size.width / 2 - 30, self.bounds.size.height - 100, 60, 60);
+        }
+        [[WKMessageEffectManager shared] triggerEffect:effectType inHostView:self sourceRect:sourceRect];
+    });
+}
+
+/// 首次看到消息时检查是否触发特效（由 willDisplayCell 调用，是唯一触发入口）
+///
+/// 触发规则（按顺序检查，任一命中就 skip）：
+///   1. triggeredMessageIds 持久化集合包含 → 已触发过，skip
+///   2. 接收消息且已读 (!isSend && readed) → 用户之前看过，skip
+///   3. 消息年龄 > 30s → 历史消息（滚动加载进来的），视觉上已经被"看过"，skip
+///   4. 没命中任何 emoji → skip
+///   5. 否则 → 触发
+-(void) checkFirstViewEffectForMessage:(WKMessageModel *)message {
+    if (!message) return;
+    if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
+    if (!message.isSend && message.readed) return;
+
+    // 年龄检查：历史消息（上下滑动加载的 >30s 老消息）不触发
+    // 自己发的消息没有 readed 语义，这里用年龄兜底
+    NSTimeInterval age = [self ageSecondsForMessage:message];
+    if (age > 30) return;
+
+    NSString *effectType = [[WKMessageEffectManager shared] effectTypeForMessage:message];
+    if (!effectType) return;
+
+    [self checkAndTriggerEffectForMessage:message];
+}
+
+/// 计算消息年龄（秒），自动兼容 timestamp 是秒还是毫秒的情况
+-(NSTimeInterval) ageSecondsForMessage:(WKMessageModel *)message {
+    if (!message) return 0;
+    NSInteger ts = MAX(message.timestamp, message.localTimestamp);
+    if (ts <= 0) return 0;
+    // 当前秒级 timestamp ~1.7e9，毫秒级 ~1.7e12；> 2e10 一定是毫秒
+    if (ts > 20000000000LL) ts = ts / 1000;
+    NSTimeInterval age = [[NSDate date] timeIntervalSince1970] - (NSTimeInterval)ts;
+    return MAX(0, age);
 }
 
 
