@@ -1638,6 +1638,12 @@ static WKApp *_instance;
 #pragma mark - WKNetworkListenerDelegate
 
 - (void)networkListenerStatusChange:(WKNetworkListener *)listener {
+    // Network restored: refresh appconfig so the login page's Aegis SSO button
+    // state recovers when the user was offline on app launch. Runs before the
+    // `isLogined` early-return so the logged-out case is also covered.
+    if(listener.hasNetwork) {
+        [[self remoteConfig] refreshConfig:nil];
+    }
     if(![[WKApp shared] isLogined]) {
         return;
     }

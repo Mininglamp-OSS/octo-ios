@@ -222,6 +222,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 -(void) requestConfig:(void(^__nullable)(NSError  * __nullable error))callback;
 
+// Like requestConfig: but forces a fresh fetch regardless of the cached-success
+// flag. Use this on network restore / explicit refresh. Dedupes concurrent calls
+// (only one in-flight fetch at a time). Posts WKNOTIFY_REMOTECONFIG_LOADED on
+// success, so subscribers (e.g. login page SSO button) update automatically.
+-(void) refreshConfig:(void(^__nullable)(NSError * __nullable error))callback;
+
 // 启用或关闭模块
 -(void) modules:(NSString*)sid on:(BOOL)on;
 

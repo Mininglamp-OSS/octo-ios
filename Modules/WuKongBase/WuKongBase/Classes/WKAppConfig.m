@@ -471,6 +471,65 @@
 
 @implementation WKAppRemoteConfig
 
+// NSUserDefaults key for the cached oidc_providers raw array. Letting the login
+// page render the SSO button on first frame (even offline / before the appconfig
+// API returns) is the whole point of this cache — misses on cold start would
+// otherwise cause the button to blink in N hundred ms later, or not at all when
+// the network is down.
+static NSString * const kOidcProvidersCacheKey = @"WKOidcProvidersCacheV1";
+
+- (instancetype)init {
+    self = [super init];
+    if(self) {
+        // Hydrate oidcProviders from the last-known-good cache so the login
+        // page can show the SSO button immediately. requestConfig: will
+        // overwrite this later with fresh data.
+        NSArray *cachedRaw = [[NSUserDefaults standardUserDefaults] arrayForKey:kOidcProvidersCacheKey];
+        if([cachedRaw isKindOfClass:[NSArray class]]) {
+            _oidcProviders = [self parseOidcProvidersFromRawArray:cachedRaw];
+        }
+    }
+    return self;
+}
+
+// Extract valid providers from the server's raw `oidc_providers` array.
+// A provider missing id/name/authorize_path is unusable → skipped.
+- (NSArray<WKOidcProviderConfig*> *)parseOidcProvidersFromRawArray:(NSArray *)raw {
+    NSMutableArray<WKOidcProviderConfig*> *providers = [NSMutableArray array];
+    for(id item in raw) {
+        if(![item isKindOfClass:[NSDictionary class]]) continue;
+        NSDictionary *dict = (NSDictionary*)item;
+        NSString *pid = dict[@"id"];
+        NSString *name = dict[@"name"];
+        NSString *authorizePath = dict[@"authorize_path"];
+        if(![pid isKindOfClass:[NSString class]] || pid.length == 0) continue;
+        if(![name isKindOfClass:[NSString class]] || name.length == 0) continue;
+        if(![authorizePath isKindOfClass:[NSString class]] || authorizePath.length == 0) continue;
+        WKOidcProviderConfig *provider = [WKOidcProviderConfig new];
+        provider.providerId = pid;
+        provider.name = name;
+        provider.authorizePath = authorizePath;
+        id accountUrl = dict[@"account_url"];
+        if([accountUrl isKindOfClass:[NSString class]] && ((NSString*)accountUrl).length > 0) {
+            provider.accountUrl = accountUrl;
+        }
+        id resetUrl = dict[@"reset_password_url"];
+        if([resetUrl isKindOfClass:[NSString class]] && ((NSString*)resetUrl).length > 0) {
+            provider.resetPasswordUrl = resetUrl;
+        }
+        [providers addObject:provider];
+    }
+    return [providers copy];
+}
+
+-(void) refreshConfig:(void(^)(NSError  * __nullable error))callback {
+    // Bypass the requestSuccess guard so the next request actually hits the network.
+    // startRequest still dedupes concurrent calls — if a fetch is already in flight,
+    // this is a no-op (safe under network flap).
+    self.requestSuccess = NO;
+    [self requestConfig:callback];
+}
+
 -(void) requestConfig:(void(^)(NSError  * __nullable error))callback {
 
     // 配置已加载成功，直接回调
@@ -513,35 +572,14 @@
             // login page keeps the existing 手机号/邮箱+密码 entries only.
             id oidcProvidersRaw = resultDict[@"oidc_providers"];
             if([oidcProvidersRaw isKindOfClass:[NSArray class]]) {
-                NSMutableArray<WKOidcProviderConfig*> *providers = [NSMutableArray array];
-                for(id item in (NSArray*)oidcProvidersRaw) {
-                    if(![item isKindOfClass:[NSDictionary class]]) continue;
-                    NSDictionary *dict = (NSDictionary*)item;
-                    NSString *pid = dict[@"id"];
-                    NSString *name = dict[@"name"];
-                    NSString *authorizePath = dict[@"authorize_path"];
-                    // A provider missing any required field is unusable — skip so the
-                    // button can't render a broken entry.
-                    if(![pid isKindOfClass:[NSString class]] || pid.length == 0) continue;
-                    if(![name isKindOfClass:[NSString class]] || name.length == 0) continue;
-                    if(![authorizePath isKindOfClass:[NSString class]] || authorizePath.length == 0) continue;
-                    WKOidcProviderConfig *provider = [WKOidcProviderConfig new];
-                    provider.providerId = pid;
-                    provider.name = name;
-                    provider.authorizePath = authorizePath;
-                    id accountUrl = dict[@"account_url"];
-                    if([accountUrl isKindOfClass:[NSString class]] && ((NSString*)accountUrl).length > 0) {
-                        provider.accountUrl = accountUrl;
-                    }
-                    id resetUrl = dict[@"reset_password_url"];
-                    if([resetUrl isKindOfClass:[NSString class]] && ((NSString*)resetUrl).length > 0) {
-                        provider.resetPasswordUrl = resetUrl;
-                    }
-                    [providers addObject:provider];
-                }
-                weakSelf.oidcProviders = [providers copy];
+                weakSelf.oidcProviders = [weakSelf parseOidcProvidersFromRawArray:(NSArray*)oidcProvidersRaw];
+                // Cache raw array so the button stays visible on next cold start
+                // even before the appconfig API returns (or if network is down).
+                [[NSUserDefaults standardUserDefaults] setObject:oidcProvidersRaw forKey:kOidcProvidersCacheKey];
             } else {
                 weakSelf.oidcProviders = @[];
+                // Server explicitly dropped the field (admin disabled SSO) — drop cache too.
+                [[NSUserDefaults standardUserDefaults] removeObjectForKey:kOidcProvidersCacheKey];
             }
 
             // YUJ-219-A4: consume system_bot_uids from backend appconfig.
