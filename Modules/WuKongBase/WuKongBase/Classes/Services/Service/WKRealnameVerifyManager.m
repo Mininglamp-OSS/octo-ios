@@ -15,6 +15,12 @@ NSString *const WKRealnameVerifiedURLHost   = @"verified";
 static NSString *const WKRealnameUniversalLinkHost = @"accounts.example.com";
 static NSString *const WKRealnameUniversalLinkPath = @"/verified";
 
+// Aegis 账户页直跳地址（Phase 2c）。点击「去认证」按钮直接把用户带到
+// 这个页面；页面内部的「去认证」CTA 完成后会 302 回 octo://verified。
+// 不再经过 dmworkim `/internal/verify-token` 翻译——老版本兜底由服务端保留接口。
+static NSString *const WKAegisAccountVerificationURL =
+    @"https://accounts.example.com/profile/info?anchor=verification";
+
 @implementation WKRealnameVerifyManager
 
 + (instancetype)shared {
@@ -115,7 +121,7 @@ static NSString *const WKRealnameUniversalLinkPath = @"/verified";
 
     // iOS 11+ 才有 SFSafariViewController 的 dismissButtonStyle 等能力，
     // iOS 14 以下对 3p cookie 的支持有限，但 SFSafariViewController 自 iOS 9 就可用，
-    // 这里与后端 verify-service 的最低要求对齐：iOS 11+。
+    // 这里与 Aegis 账户页的最低要求对齐：iOS 11+。
     if(@available(iOS 11.0, *)) {
         // OK
     } else {
@@ -123,53 +129,27 @@ static NSString *const WKRealnameUniversalLinkPath = @"/verified";
         return;
     }
 
-    NSDictionary *params = @{
-        @"return_to": [NSString stringWithFormat:@"%@://%@",
-                       WKRealnameVerifiedURLScheme, WKRealnameVerifiedURLHost]
-    };
+    // Aegis Phase 2c：直接把用户带到 Aegis 账户页完成实名。
+    // 不再走 dmworkim /internal/verify-token 翻译接口——该接口仍在服务端保留作为
+    // 老版本 App 的兜底，不是新版本的入口。
+    NSURL *verifyURL = [NSURL URLWithString:WKAegisAccountVerificationURL];
+    if(!verifyURL ||
+       ![verifyURL.scheme.lowercaseString isEqualToString:@"https"] ||
+       ![verifyURL.host.lowercaseString isEqualToString:WKRealnameUniversalLinkHost]) {
+        // 理论上不会触发——URL 是编译期常量；写在这里是防御未来有人把常量改坏。
+        WKLogError(@"[Realname] Aegis verification URL unexpectedly invalid: %@",
+                   WKAegisAccountVerificationURL);
+        [fromVC.view showMsg:LLang(@"实名认证地址不合法")];
+        return;
+    }
 
-    __weak typeof(fromVC) weakVC = fromVC;
-    [[WKAPIClient sharedClient] POST:@"internal/verify-token"
-                          parameters:params].then(^(id responseObj){
-        NSDictionary *data = [responseObj isKindOfClass:[NSDictionary class]] ? responseObj : @{};
-        NSString *verifyURLStr = data[@"verify_url"];
-        if(![verifyURLStr isKindOfClass:[NSString class]] || verifyURLStr.length == 0) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [weakVC.view showMsg:LLang(@"获取实名认证地址失败")];
-            });
-            return nil;
-        }
-        NSURL *verifyURL = [NSURL URLWithString:verifyURLStr];
-        // 安全：verify_url 来自服务端响应，防御后端被篡改后返回恶意 URL。
-        // 要求 https 类型 + host 必须在白名单内（当前只允许 accounts.example.com）。
-        if(!verifyURL ||
-           ![verifyURL.scheme.lowercaseString isEqualToString:@"https"] ||
-           ![verifyURL.host.lowercaseString isEqualToString:WKRealnameUniversalLinkHost]) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [weakVC.view showMsg:LLang(@"实名认证地址不合法")];
-            });
-            return nil;
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            SFSafariViewController *safari = [[SFSafariViewController alloc] initWithURL:verifyURL];
-            if(@available(iOS 11.0, *)) {
-                safari.dismissButtonStyle = SFSafariViewControllerDismissButtonStyleClose;
-            }
-            safari.modalPresentationStyle = UIModalPresentationFormSheet;
-            [weakVC presentViewController:safari animated:YES completion:nil];
-        });
-        return nil;
-    }).catch(^(NSError *error){
-        WKLogError(@"[Realname] verify-token failed: %@", error);
-        // error.domain 通常是 NSURLErrorDomain 等系统字符串，不适合展示给用户。
-        NSString *msg = error.localizedDescription.length > 0
-            ? error.localizedDescription
-            : LLang(@"获取实名认证地址失败");
-        // .catch 同样可能在后台线程，showMsg 会触发 UIKit，必须派送主线。
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [weakVC.view showMsg:msg];
-        });
-    });
+    WKLogInfo(@"[Realname] opening Aegis account page: %@", verifyURL);
+    SFSafariViewController *safari = [[SFSafariViewController alloc] initWithURL:verifyURL];
+    if(@available(iOS 11.0, *)) {
+        safari.dismissButtonStyle = SFSafariViewControllerDismissButtonStyleClose;
+    }
+    safari.modalPresentationStyle = UIModalPresentationFormSheet;
+    [fromVC presentViewController:safari animated:YES completion:nil];
 }
 
 @end
