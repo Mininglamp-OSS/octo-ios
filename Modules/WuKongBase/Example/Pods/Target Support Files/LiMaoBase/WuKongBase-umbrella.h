@@ -425,6 +425,7 @@
 #import "WKSyncService.h"
 #import "WKApp.h"
 #import "WKAppConfig.h"
+#import "WKOidcProviderConfig.h"
 #import "WKConstant.h"
 
 FOUNDATION_EXPORT double LiMaoBaseVersionNumber;

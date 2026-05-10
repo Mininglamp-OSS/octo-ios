@@ -467,81 +467,136 @@
 
 @property(nonatomic,assign) BOOL startRequestAppModule;
 
+/// 入队等 config 请求完成的 callback 队列（YUJ-396 R3 / Jerry-Xin #112 warning）。
+/// 老实现 startRequest==YES 时会丢掉后来者的 callback; 现在统一用一个队列,
+/// 请求完成（成功 / 失败）时一次性 drain。线程语义: 调用点基本是 main thread（UI
+/// 入口），但防御性地加 @synchronized(self) 保证跨线程安全。
+@property(nonatomic,strong) NSMutableArray<void(^)(NSError * __nullable)> *pendingConfigCallbacks;
+
 @end
 
 @implementation WKAppRemoteConfig
 
+- (instancetype)init {
+    if(self = [super init]) {
+        // YUJ-396: 冷启动 appconfig 未到时不能是 nil, 否则调用侧需要 nil-check。
+        // 空数组语义即「没有可用 provider」, 实名认证入口走 toast 兜底。
+        _oidcProviders = @[];
+        _pendingConfigCallbacks = [NSMutableArray array];
+    }
+    return self;
+}
+
+/// Drain + fire 所有入队的 config 请求 callback, 传入最终结果 error (nil 成功)。
+/// 在请求的 then/catch 终点调用一次。拷出后清空队列再逐个 fire, 避免回调里再
+/// 调 requestConfig: 进入再入风险。
+- (void)_fireAndClearPendingConfigCallbacks:(NSError * _Nullable)error {
+    NSArray<void(^)(NSError * _Nullable)> *callbacks;
+    @synchronized(self) {
+        callbacks = [self.pendingConfigCallbacks copy];
+        [self.pendingConfigCallbacks removeAllObjects];
+    }
+    for(void(^cb)(NSError * _Nullable) in callbacks) {
+        cb(error);
+    }
+}
+
 -(void) requestConfig:(void(^)(NSError  * __nullable error))callback {
 
-    // 配置已加载成功，直接回调
+    // ========== appconfig 路径（YUJ-396 R3 callback 队列化） ==========
+    // 已加载成功 → 立刻 callback。
     if(self.requestSuccess) {
         if(callback) {
             callback(nil);
         }
-        return;
-    }
+    } else {
+        // 未加载 / in-flight —— 统一把 callback 入队, 请求完成时一次性 drain。
+        // 解决 Jerry-Xin #112 Round 3 warning: 老实现在 startRequest==YES 时
+        // 整个 if 块被跳过, 后来者的 callback 被静默丢弃, 调用侧（如
+        // WKRealnameVerifyManager.startVerificationFromVC:）无法等 loading 完成。
+        if(callback) {
+            @synchronized(self) {
+                [self.pendingConfigCallbacks addObject:[callback copy]];
+            }
+        }
 
-    __weak typeof(self) weakSelf = self;
-    if(!self.startRequest) {
-        self.startRequest = true;
-        [[WKAPIClient sharedClient] GET:@"common/appconfig" parameters:@{}].then(^(NSDictionary *resultDict){
-            weakSelf.webURL =  resultDict[@"web_url"]?:@"";
-            if(resultDict[@"phone_search_off"]) {
-                weakSelf.phoneSearchOff = [resultDict[@"phone_search_off"] boolValue];
-            }
-            if(resultDict[@"shortno_edit_off"]) {
-                weakSelf.shortnoEditOff = [resultDict[@"shortno_edit_off"] boolValue];
-            }
-            if(resultDict[@"revoke_second"]) {
-                weakSelf.revokeSecond = [resultDict[@"revoke_second"] integerValue];
-            }
-            if(resultDict[@"register_invite_on"]) {
-                weakSelf.registerInviteOn = [resultDict[@"register_invite_on"] boolValue];
-            }
-            
-            if(resultDict[@"invite_system_account_join_group_on"]) {
-                weakSelf.inviteSystemAccountJoinGroupOn =  [resultDict[@"invite_system_account_join_group_on"] boolValue];
-            }
-            if(resultDict[@"register_user_must_complete_info_on"]) {
-                weakSelf.registerUserMustCompleteInfoOn = [resultDict[@"register_user_must_complete_info_on"] boolValue];
-            }
-            if(resultDict[@"thread_on"]) {
-                weakSelf.threadOn = [resultDict[@"thread_on"] boolValue];
-            }
+        __weak typeof(self) weakSelf = self;
+        if(!self.startRequest) {
+            self.startRequest = true;
+            [[WKAPIClient sharedClient] GET:@"common/appconfig" parameters:@{}].then(^(NSDictionary *resultDict){
+                weakSelf.webURL =  resultDict[@"web_url"]?:@"";
+                if(resultDict[@"phone_search_off"]) {
+                    weakSelf.phoneSearchOff = [resultDict[@"phone_search_off"] boolValue];
+                }
+                if(resultDict[@"shortno_edit_off"]) {
+                    weakSelf.shortnoEditOff = [resultDict[@"shortno_edit_off"] boolValue];
+                }
+                if(resultDict[@"revoke_second"]) {
+                    weakSelf.revokeSecond = [resultDict[@"revoke_second"] integerValue];
+                }
+                if(resultDict[@"register_invite_on"]) {
+                    weakSelf.registerInviteOn = [resultDict[@"register_invite_on"] boolValue];
+                }
 
-            // YUJ-219-A4: consume system_bot_uids from backend appconfig.
-            // Response shape (A2): {"system_bot_uids": ["botfather", "u_10000", "fileHelper"]}.
-            // When the field is missing (A2 not deployed), keep the fallback
-            // configured in WKAppConfig's -init.
-            id systemBotUIDsRaw = resultDict[@"system_bot_uids"];
-            if([systemBotUIDsRaw isKindOfClass:[NSArray class]]) {
-                NSMutableArray<NSString*> *uids = [NSMutableArray array];
-                for(id item in (NSArray*)systemBotUIDsRaw) {
-                    if([item isKindOfClass:[NSString class]] && ((NSString*)item).length > 0) {
-                        [uids addObject:item];
+                if(resultDict[@"invite_system_account_join_group_on"]) {
+                    weakSelf.inviteSystemAccountJoinGroupOn =  [resultDict[@"invite_system_account_join_group_on"] boolValue];
+                }
+                if(resultDict[@"register_user_must_complete_info_on"]) {
+                    weakSelf.registerUserMustCompleteInfoOn = [resultDict[@"register_user_must_complete_info_on"] boolValue];
+                }
+                if(resultDict[@"thread_on"]) {
+                    weakSelf.threadOn = [resultDict[@"thread_on"] boolValue];
+                }
+
+                // YUJ-219-A4: consume system_bot_uids from backend appconfig.
+                // Response shape (A2): {"system_bot_uids": ["botfather", "u_10000", "fileHelper"]}.
+                // When the field is missing (A2 not deployed), keep the fallback
+                // configured in WKAppConfig's -init.
+                id systemBotUIDsRaw = resultDict[@"system_bot_uids"];
+                if([systemBotUIDsRaw isKindOfClass:[NSArray class]]) {
+                    NSMutableArray<NSString*> *uids = [NSMutableArray array];
+                    for(id item in (NSArray*)systemBotUIDsRaw) {
+                        if([item isKindOfClass:[NSString class]] && ((NSString*)item).length > 0) {
+                            [uids addObject:item];
+                        }
+                    }
+                    if(uids.count > 0) {
+                        [WKApp shared].config.systemBotUIDs = [uids copy];
                     }
                 }
-                if(uids.count > 0) {
-                    [WKApp shared].config.systemBotUIDs = [uids copy];
-                }
-            }
-           
-            
-            weakSelf.requestSuccess = true;
-            weakSelf.startRequest = false;
-            if(callback) {
-                callback(nil);
-            }
-        }).catch(^(NSError *error){
-            WKLogError(@"请求远程配置失败！->%@",error);
-            weakSelf.startRequest = false;
-            if(callback) {
-                callback(error);
-            }
-        });
+
+                // YUJ-396 / GH dmwork-web#1174: consume oidc_providers[].account_url.
+                // 字段缺失 / 非数组 → 置 @[]（调用侧 toast 兜底, 不跳 prod 域）。
+                // 单条 entry 格式不合法（缺 id / authorize_path 非站内相对路径 /
+                // account_url 非 https）→ 由 +parseArray: 跳过, 不影响其它 entry。
+                //
+                // YUJ-396 Round 2: Aegis 回跳改走 dmwork:// custom scheme, 不再有 UL
+                // 降级路径, 因此也不再需要持久化 host 缓存 / 不再调用
+                // WKRealnameVerifyManager cacheHostsFromProviders: —— 见该 class 文件头
+                // 注释关于 Jerry-Xin #112 review blocking 2 的记录。
+                weakSelf.oidcProviders = [WKOidcProviderConfig parseArray:resultDict[@"oidc_providers"]];
+
+                weakSelf.requestSuccess = true;
+                weakSelf.startRequest = false;
+                [weakSelf _fireAndClearPendingConfigCallbacks:nil];
+            }).catch(^(NSError *error){
+                WKLogError(@"请求远程配置失败！->%@",error);
+                weakSelf.startRequest = false;
+                [weakSelf _fireAndClearPendingConfigCallbacks:error];
+            });
+        }
+        // startRequest==YES 的情况: callback 已入队, 等 in-flight 请求的 then/catch
+        // 统一 drain。这里什么都不做。
     }
+
+    // ========== appmodule 路径（legacy, 本 PR 不改语义） ==========
+    // 注意: 这里的 `callback` 是本次 requestConfig: 调用的参数闭包;
+    // 老实现会在 startRequestAppModule==NO 时挂到 appmodule 请求的 then/catch,
+    // 这意味着 appconfig 和 appmodule 都可能各触发一次同一个 callback。
+    // 与 YUJ-396 无关, 保留原行为不引入回归。
     if(!self.requestAppModuleSuccess && !self.startRequestAppModule) {
         self.startRequestAppModule = true;
+        __weak typeof(self) weakSelf = self;
         [WKAPIClient.sharedClient GET:@"common/appmodule" parameters:@{} model:WKAppModuleResp.class].then(^(NSArray<WKAppModuleResp*> *models){
             weakSelf.modules = models;
             weakSelf.requestAppModuleSuccess = true;
