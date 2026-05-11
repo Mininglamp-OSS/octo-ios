@@ -1,4 +1,5 @@
 # Merge conflict artifacts
 *.orig
-.claudexcuserdata/
+.claude
+xcuserdata/
 *.xcuserstate
