@@ -439,42 +439,15 @@ typedef enum : NSUInteger {
 }
 
 - (NSURL *)buildOidcAuthorizeURL:(WKOidcProviderConfig *)provider authcode:(NSString *)authcode {
-    NSString *path = provider.authorizePath ?: @"";
-    NSString *apiBase = WKAPIClient.sharedClient.config.baseUrl ?: @"";
-    NSString *base = nil;
-    if([path hasPrefix:@"http://"] || [path hasPrefix:@"https://"]) {
-        base = path;
-    } else if([path hasPrefix:@"/"]) {
-        NSURL *baseURL = [NSURL URLWithString:apiBase];
-        NSURL *resolved = [NSURL URLWithString:path relativeToURL:baseURL];
-        base = resolved.absoluteString;
-    } else {
-        base = [apiBase stringByAppendingString:path];
-    }
-    if(base.length == 0) return nil;
-
-    NSCharacterSet *allowed = [NSCharacterSet URLQueryAllowedCharacterSet];
-    NSMutableArray<NSString*> *query = [NSMutableArray array];
-    NSString *encodedCode = [authcode stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: authcode;
-    [query addObject:[NSString stringWithFormat:@"authcode=%@", encodedCode]];
-    [query addObject:@"flag=3"];
-    NSString *deviceId = [UIDevice getUUID] ?: @"";
-    NSString *deviceName = [UIDevice getDeviceName] ?: @"";
-    NSString *deviceModel = [UIDevice getDeviceModel] ?: @"";
-    if(deviceId.length > 0) {
-        [query addObject:[NSString stringWithFormat:@"device_id=%@", [deviceId stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: deviceId]];
-    }
-    if(deviceName.length > 0) {
-        [query addObject:[NSString stringWithFormat:@"device_name=%@", [deviceName stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: deviceName]];
-    }
-    if(deviceModel.length > 0) {
-        [query addObject:[NSString stringWithFormat:@"device_model=%@", [deviceModel stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: deviceModel]];
-    }
-
-    NSString *joiner = [base rangeOfString:@"?"].location == NSNotFound ? @"?" : @"&";
-    NSString *full = [NSString stringWithFormat:@"%@%@%@", base, joiner, [query componentsJoinedByString:@"&"]];
-    WKLogDebug(@"[OIDC] authorize url: %@", full);
-    return [NSURL URLWithString:full];
+    // YUJ-420 R1 fix (Jerry-Xin Critical): delegate to WKOidcProviderConfig shared helper,
+    // which uses NSURLComponents + NSURLQueryItem for RFC 3986-safe query encoding and
+    // avoids logging full authorize URL (authcode / device_* redacted).
+    return [WKOidcProviderConfig buildAuthorizeURLForProvider:provider
+                                                     authcode:authcode
+                                                      apiBase:WKAPIClient.sharedClient.config.baseUrl ?: @""
+                                                     deviceId:[UIDevice getUUID]
+                                                   deviceName:[UIDevice getDeviceName]
+                                                  deviceModel:[UIDevice getDeviceModel]];
 }
 
 - (M80AttributedLabel *)privacyLbl {

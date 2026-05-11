@@ -278,17 +278,4 @@ typedef enum : NSInteger {
 
 @end
 
-// Aegis OIDC SSO provider. One entry corresponds to a single IdP (e.g. 飞书/Aegis).
-// authorizePath is a fully-qualified URL or server-relative path the login
-// webview should open with `?authcode=X&return_to=Y&flag=0` appended.
-@interface WKOidcProviderConfig : WKModel
-
-@property(nonatomic,copy) NSString * _Nonnull providerId;     // backend field: `id`
-@property(nonatomic,copy) NSString * _Nonnull name;           // display name shown on the SSO button
-@property(nonatomic,copy) NSString * _Nonnull authorizePath;  // backend field: `authorize_path`
-@property(nonatomic,copy) NSString * _Nullable accountUrl;        // backend field: `account_url`
-@property(nonatomic,copy) NSString * _Nullable resetPasswordUrl;  // backend field: `reset_password_url`
-
-@end
-
 NS_ASSUME_NONNULL_END

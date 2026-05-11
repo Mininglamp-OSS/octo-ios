@@ -805,7 +805,3 @@ static NSMutableArray *mustSupportModules;
     return resp;
 }
 @end
-
-@implementation WKOidcProviderConfig
-
-@end

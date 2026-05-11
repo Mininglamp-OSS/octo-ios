@@ -62,6 +62,30 @@ NS_ASSUME_NONNULL_BEGIN
 /// 整个 appconfig 接口不会因单条 provider 配置坏而整体降级。
 + (NSArray<WKOidcProviderConfig*> *)parseArray:(nullable NSArray *)raw;
 
+/// 拼 OIDC authorize URL (WKLoginView / WKRegisterVC 共用 helper, YUJ-420 R1 fix)。
+///
+/// 引入背景: Jerry-Xin R1 给 PR #114 指出 authorize URL 用
+/// URLQueryAllowedCharacterSet 手拼 query 时, 逻辑符 `&`/`=`/`+` 不会被转义
+/// → authcode / device_name 中出现特殊字符会产生参数截断或注入。
+/// 本方法改用 NSURLComponents + NSURLQueryItem, 由系统第一方做 RFC 3986
+/// 安全转义。
+///
+/// path 解析三种情形对齐旧实现（WKLoginView / WKRegisterVC）:
+///   • https://绝对URL   → 直用
+///   • /v1/..  origin-relative   → relativeToURL:apiBase 拼主机
+///   • user/x  API-relative     → append to apiBase
+/// flag=3, device_* 三元组保留原语义 (iOS SDK CONNECT deviceFlag=3)。
+///
+/// 返 nil 情形: authorize_path 空 / apiBase 空 / 拼出的 base 不是合法 URL。
+///
+/// 无完整 URL 日志泄露 — 仅 host/path 级别 debug 日志, authcode/device_* 脱敏。
++ (nullable NSURL *)buildAuthorizeURLForProvider:(WKOidcProviderConfig *)provider
+                                         authcode:(NSString *)authcode
+                                          apiBase:(NSString *)apiBase
+                                         deviceId:(nullable NSString *)deviceId
+                                       deviceName:(nullable NSString *)deviceName
+                                      deviceModel:(nullable NSString *)deviceModel;
+
 @end
 
 NS_ASSUME_NONNULL_END
