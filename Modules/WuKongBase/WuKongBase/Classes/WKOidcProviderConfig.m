@@ -140,4 +140,43 @@
     return full;
 }
 
+
+// YUJ-420 R3 fix (Jerry-Xin Critical): 递归剥 NSNull, 产出 plist-safe 副本。
+// 详见 .h 注释。
++ (nullable id)plistSanitize:(nullable id)value {
+    if(value == nil) return nil;
+    if([value isKindOfClass:[NSNull class]]) return nil;
+    if([value isKindOfClass:[NSArray class]]) {
+        NSMutableArray *out = [NSMutableArray array];
+        for(id item in (NSArray *)value) {
+            id sanitized = [self plistSanitize:item];
+            if(sanitized != nil) {
+                [out addObject:sanitized];
+            }
+        }
+        return [out copy];
+    }
+    if([value isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary *out = [NSMutableDictionary dictionary];
+        for(id key in ((NSDictionary *)value).allKeys) {
+            // plist key 必须是 NSString
+            if(![key isKindOfClass:[NSString class]]) continue;
+            id sanitized = [self plistSanitize:((NSDictionary *)value)[key]];
+            if(sanitized != nil) {
+                out[key] = sanitized;
+            }
+        }
+        return [out copy];
+    }
+    // plist-native 类型原样放行
+    if([value isKindOfClass:[NSString class]] ||
+       [value isKindOfClass:[NSNumber class]] ||
+       [value isKindOfClass:[NSData class]] ||
+       [value isKindOfClass:[NSDate class]]) {
+        return value;
+    }
+    // 其它非 plist 类型（自定义对象等）静默丢弃，避免写盘 crash
+    return nil;
+}
+
 @end

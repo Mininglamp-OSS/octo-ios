@@ -405,7 +405,8 @@ typedef enum : NSUInteger {
         self.ssoBtn.hidden = YES;
         return;
     }
-    NSString *title = [NSString stringWithFormat:LLang(@"使用 %@ 登录或注册"), provider.name];
+    NSString *displayName = provider.name.length > 0 ? provider.name : provider.providerId;
+    NSString *title = [NSString stringWithFormat:LLang(@"使用 %@ 登录或注册"), displayName];
     [self.ssoBtn setTitle:title forState:UIControlStateNormal];
     self.ssoBtn.hidden = NO;
 }

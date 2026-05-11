@@ -595,7 +595,18 @@ static NSString * const kOidcProvidersCacheKey = @"WKOidcProvidersCacheV1";
                 id oidcProvidersRaw = resultDict[@"oidc_providers"];
                 if([oidcProvidersRaw isKindOfClass:[NSArray class]]) {
                     weakSelf.oidcProviders = [WKOidcProviderConfig parseArray:oidcProvidersRaw];
-                    [[NSUserDefaults standardUserDefaults] setObject:oidcProvidersRaw forKey:kOidcProvidersCacheKey];
+                    // YUJ-420 R3 fix (Jerry-Xin Critical): plist-sanitize raw array 再写 NSUserDefaults。
+                    // 原实现直接 setObject:oidcProvidersRaw, 若后端下发 {"name": null}
+                    // 则 NSArray 中会包含 NSDictionary 内含 NSNull, plist 序列化抛
+                    // NSInvalidArgumentException → NSUserDefaults write crash。
+                    // 解法: 递归剩 NSNull, 允许空 dict 成员但不带非-plist 类型。
+                    NSArray *plistSafeRaw = [WKOidcProviderConfig plistSanitize:oidcProvidersRaw];
+                    if([plistSafeRaw isKindOfClass:[NSArray class]]) {
+                        [[NSUserDefaults standardUserDefaults] setObject:plistSafeRaw forKey:kOidcProvidersCacheKey];
+                    } else {
+                        // sanitize 失败 (理论上不会, 打个 tombstone 注意)
+                        [[NSUserDefaults standardUserDefaults] removeObjectForKey:kOidcProvidersCacheKey];
+                    }
                 } else {
                     weakSelf.oidcProviders = @[];
                     // Server explicitly dropped the field (admin disabled SSO) — drop cache too.
