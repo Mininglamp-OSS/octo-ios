@@ -148,6 +148,40 @@
     [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
     [[NSUserDefaults standardUserDefaults] synchronize];
     [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
+
+    // YUJ-372 Phase 2: 如果是从扫码/邀请命中 need_space 拉起的 Space Gate（
+    // WKGroupScanJoinVC 会把群邀请上下文落盘到 `pendingGroupInvite`），加 Space
+    // 成功后自动重放 WKPOINT_SCAN_HANDLER_JOIN_GROUP 重试入群。dispatch_after
+    // 给 WKPOINT_LOGIN_SUCCESS 的 resetRootViewController + 同步数据一点缓冲，
+    // 确保新首页栈就绪后再 push 群信息卡。
+    [self replayPendingGroupInviteIfAny];
+}
+
+/// YUJ-372 Phase 2：消费一次性的 pendingGroupInvite，用扫码 handler 重放群入场。
+/// 本方法做"读后即清"，无论后续 replay 是否成功都不再重放。
+- (void)replayPendingGroupInviteIfAny {
+    NSDictionary *pending = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"pendingGroupInvite"];
+    if (![pending isKindOfClass:[NSDictionary class]]) { return; }
+    NSString *groupNo = pending[@"group_no"];
+    if (!groupNo || groupNo.length == 0) { return; }
+
+    // 一次性消费：失败也不重放，避免死循环。
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"pendingGroupInvite"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        WKScanResult *result = [WKScanResult new];
+        result.type = @"group";
+        result.data = pending;
+
+        // 拿到 JOIN_GROUP 的扫码 handler，让它走与真实扫码一样的路径：
+        // 构造 WKGroupScanJoinVC 并 push。用户在 Space Gate 已切到目标 Space，
+        // 再次 scanjoin 后端不会再返回 need_space，会正常返回群信息。
+        id handlerObj = [[WKApp shared] invoke:WKPOINT_SCAN_HANDLER_JOIN_GROUP param:nil];
+        if ([handlerObj isKindOfClass:[WKScanHandler class]]) {
+            [(WKScanHandler *)handlerObj handle:result reScan:^{}];
+        }
+    });
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {

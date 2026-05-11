@@ -192,32 +192,61 @@ static NSMutableDictionary *_jsTableHeights;
 ///     UILabel 时代一直依赖这个隐式 padding，换成 UITextView 后如果只用精确的
 ///     sizeThatFits 高度，时间戳会覆盖最后一行。
 + (CGSize)measureTextViewSize:(NSAttributedString *)attrStr maxWidth:(CGFloat)maxWidth {
+    // Bugly #9386: sharedMeasureTV 是进程级静态 UITextView，NSTextStorage/NSLayoutManager 不线程安全。
+    // pulldown/pullup 的后台预计算线程与主线程（channelInfoUpdate/refresh 等）并发进入该方法时，
+    // 一方在 tv.attributedText=... 期间（textStorage beginEditing 未收束）另一方调 setFrame: 触发布局
+    // 会抛 NSInternalInconsistencyException。非主线程统一 dispatch_sync 切回主线程串行化。
+    if (![NSThread isMainThread]) {
+        __block CGSize size = CGSizeZero;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            size = [[self class] measureTextViewSize:attrStr maxWidth:maxWidth];
+        });
+        return size;
+    }
     WKMessageTextView *tv = [[self class] sharedMeasureTV];
-    tv.frame = CGRectMake(0, 0, maxWidth, 10000);
-    tv.attributedText = attrStr;
-    NSAttributedString *normalizedAttr = tv.attributedText;
+    // Bugly #9455: heightForRowAtIndexPath 是 UITableView 直接回调的热路径，一旦 setAttributedText
+    // 在 UIKit 内部抛异常（残留脏 textStorage、非法 attachment、字符串属性冲突等）就会 abort 整个 App。
+    // 兜底：捕获后退到 NSAttributedString boundingRectWithSize:（纯 CoreText，不依赖 UITextView）。
+    @try {
+        tv.frame = CGRectMake(0, 0, maxWidth, 10000);
+        tv.attributedText = attrStr;
+        NSAttributedString *normalizedAttr = tv.attributedText;
 
-    CGFloat tvH = [tv sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)].height;
-    CGFloat brH = [normalizedAttr boundingRectWithSize:CGSizeMake(maxWidth, CGFLOAT_MAX)
+        CGFloat tvH = [tv sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)].height;
+        CGFloat brH = [normalizedAttr boundingRectWithSize:CGSizeMake(maxWidth, CGFLOAT_MAX)
+                                            options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                            context:nil].size.height;
+        CGFloat h = MAX(ceil(tvH), ceil(brH));
+
+        NSLayoutManager *lm = tv.layoutManager;
+        NSTextContainer *tc = tv.textContainer;
+        [lm ensureLayoutForTextContainer:tc];
+        CGRect usedRect = [lm usedRectForTextContainer:tc];
+        CGFloat w = MIN(ceil(usedRect.size.width), maxWidth);
+
+        // YUJ-420 R4 fix (lml2468 Critical privacy): 测量在 cell 渲染热径上,
+        // 不能打消息正文预览(用户数据 + 性能污染). DEBUG-only 保留测量维度 metadata。
+#if DEBUG
+        NSLog(@"[BubbleHeight] measure: textLen=%lu maxW=%.1f | tvH=%.2f brH=%.2f → h=%.0f w=%.0f",
+              (unsigned long)attrStr.string.length, maxWidth, tvH, brH, h, w);
+#endif
+
+        return CGSizeMake(w, h);
+    } @catch (NSException *e) {
+        NSLog(@"[BubbleHeight] measure exception, fallback to boundingRect: name=%@ reason=%@",
+              e.name, e.reason);
+        CGFloat fbH = 0;
+        @try {
+            fbH = [attrStr boundingRectWithSize:CGSizeMake(maxWidth, CGFLOAT_MAX)
                                         options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
                                         context:nil].size.height;
-    CGFloat h = MAX(ceil(tvH), ceil(brH));
-
-    NSLayoutManager *lm = tv.layoutManager;
-    NSTextContainer *tc = tv.textContainer;
-    [lm ensureLayoutForTextContainer:tc];
-    CGRect usedRect = [lm usedRectForTextContainer:tc];
-    CGFloat w = MIN(ceil(usedRect.size.width), maxWidth);
-
-    // --- 诊断日志 ---
-    NSString *textPreview = attrStr.string.length > 30
-        ? [NSString stringWithFormat:@"%@...", [attrStr.string substringToIndex:30]]
-        : attrStr.string;
-    textPreview = [textPreview stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
-    NSLog(@"[BubbleHeight] measure: text=\"%@\" len=%lu maxW=%.1f | tvH=%.2f brH=%.2f → h=%.0f w=%.0f",
-          textPreview, (unsigned long)attrStr.string.length, maxWidth, tvH, brH, h, w);
-
-    return CGSizeMake(w, h);
+        } @catch (NSException *inner) {
+            NSLog(@"[BubbleHeight] fallback boundingRect also failed: %@", inner.reason);
+            CGFloat font = [WKApp shared].config.messageTextFontSize;
+            fbH = font * 1.4 * MAX(1, (NSInteger)ceilf((float)attrStr.string.length / MAX(8, (NSInteger)(maxWidth / MAX(1, font))))); // 粗略估算：字符数/每行可容纳字符数 × 行高
+        }
+        return CGSizeMake(maxWidth, ceil(MAX(fbH, 1)));
+    }
 }
 
 + (CGFloat)measureTextViewHeight:(NSAttributedString *)attrStr maxWidth:(CGFloat)maxWidth {
@@ -1205,16 +1234,31 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
 
 /// 用 sharedMeasureTV 的 layoutManager 测量最后一行宽度（与 textSize: 使用同一排版引擎）
 + (CGFloat)measureLastLineWidth:(NSAttributedString *)attrStr maxWidth:(CGFloat)maxWidth {
+    // 与 measureTextViewSize: 共用 sharedMeasureTV，同样需要串行到主线程，理由见 Bugly #9386 注释。
+    if (![NSThread isMainThread]) {
+        __block CGFloat width = 0;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            width = [[self class] measureLastLineWidth:attrStr maxWidth:maxWidth];
+        });
+        return width;
+    }
     WKMessageTextView *tv = [[self class] sharedMeasureTV];
-    tv.frame = CGRectMake(0, 0, maxWidth, 10000);
-    tv.attributedText = attrStr;
-    NSLayoutManager *lm = tv.layoutManager;
-    NSTextContainer *tc = tv.textContainer;
-    [lm ensureLayoutForTextContainer:tc];
-    if (attrStr.length == 0) return 0;
-    NSUInteger lastGlyphIdx = [lm glyphIndexForCharacterAtIndex:attrStr.length - 1];
-    CGRect lastLineRect = [lm lineFragmentUsedRectForGlyphAtIndex:lastGlyphIdx effectiveRange:nil];
-    return lastLineRect.size.width;
+    // Bugly #9455 同源兜底：UIKit 测量异常时返回 0（时间戳不贴最后一行，不影响正确性，仅视觉上略松）。
+    @try {
+        tv.frame = CGRectMake(0, 0, maxWidth, 10000);
+        tv.attributedText = attrStr;
+        NSLayoutManager *lm = tv.layoutManager;
+        NSTextContainer *tc = tv.textContainer;
+        [lm ensureLayoutForTextContainer:tc];
+        if (attrStr.length == 0) return 0;
+        NSUInteger lastGlyphIdx = [lm glyphIndexForCharacterAtIndex:attrStr.length - 1];
+        CGRect lastLineRect = [lm lineFragmentUsedRectForGlyphAtIndex:lastGlyphIdx effectiveRange:nil];
+        return lastLineRect.size.width;
+    } @catch (NSException *e) {
+        NSLog(@"[BubbleHeight] measureLastLineWidth exception, fallback=0: name=%@ reason=%@",
+              e.name, e.reason);
+        return 0;
+    }
 }
 
 +(CGFloat) textLastlineWidth:(NSMutableAttributedString*)attrStr messageModel:(WKMessageModel*)model{

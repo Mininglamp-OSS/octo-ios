@@ -31,6 +31,30 @@
 			</dict>
 			<dict>
 				<key>file</key>
+				<string>ex_bomb</string>
+				<key>id</key>
+				<string>emoticon_ex_bomb</string>
+				<key>tag</key>
+				<string>💣</string>
+			</dict>
+			<dict>
+				<key>file</key>
+				<string>ex_party</string>
+				<key>id</key>
+				<string>emoticon_ex_party</string>
+				<key>tag</key>
+				<string>🎉</string>
+			</dict>
+			<dict>
+				<key>file</key>
+				<string>ex_heart</string>
+				<key>id</key>
+				<string>emoticon_ex_heart</string>
+				<key>tag</key>
+				<string>❤️</string>
+			</dict>
+			<dict>
+				<key>file</key>
 				<string>0_0</string>
 				<key>id</key>
 				<string>emoticon_0_0</string>

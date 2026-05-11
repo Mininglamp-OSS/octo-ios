@@ -18,6 +18,11 @@ typedef void(^onLogin)(NSString*mobile,NSString*password,NSString *country);
 @property(nonatomic,strong) NSString *mobile;
 
 - (void)viewConfigChange:(WKViewConfigChangeType)type;
+
+// Refresh the Aegis SSO entry based on the current `WKAppRemoteConfig.oidcProviders`.
+// Safe to call before the button has been laid out; it builds the button lazily when
+// providers arrive and hides it when the list is empty.
+- (void)refreshOidcProviders;
 @end
 
 NS_ASSUME_NONNULL_END

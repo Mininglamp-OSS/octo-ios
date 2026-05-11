@@ -640,8 +640,9 @@ static CGFloat const kCircleBaseSize = 80.0; // 基础圆形大小，会随音�
         NSString *personalContext = voiceContext;
         NSString *chatContext = nil;
         NSString *memberContext = nil;
+        NSString *fullContext = nil;
         if ([weakSelf.delegate respondsToSelector:@selector(voiceInputChatContext)]) {
-            NSString *fullContext = [weakSelf.delegate voiceInputChatContext];
+            fullContext = [weakSelf.delegate voiceInputChatContext];
             if (fullContext) {
                 // voiceInputChatContext 返回的格式：聊天成员：xxx\n[发送者]: yyy
                 // 拆分成 memberContext 和 chatContext
@@ -659,6 +660,17 @@ static CGFloat const kCircleBaseSize = 80.0; // 基础圆形大小，会随音�
                 }
             }
         }
+
+        // YUJ-420 R4 fix (lml2468 Critical privacy): 不打用户 context 内容，仅 DEBUG metadata。
+#if DEBUG
+        NSLog(@"[VoiceInputView] context collected: delegate=%@ full.len=%lu member.len=%lu chat.len=%lu personal.len=%lu contextText.len=%lu",
+              [weakSelf.delegate respondsToSelector:@selector(voiceInputChatContext)] ? @"Y" : @"N",
+              (unsigned long)fullContext.length,
+              (unsigned long)memberContext.length,
+              (unsigned long)chatContext.length,
+              (unsigned long)personalContext.length,
+              (unsigned long)contextText.length);
+#endif
 
         [[WKVoiceInputService shared] transcribeAudio:audioData
                                           contextText:contextText

@@ -161,4 +161,34 @@
     return WKGroupTypeCommon;
 }
 
+#pragma mark - 实名认证（YUJ-381 / dmwork-web#1169 Phase A）
+
+// Tri-state：nil=字段缺失 / @YES=显式真 / @NO=显式假（YUJ-384 P1-2）。
+// 调用方用这个区分决定是否 fallback 到 person cache。
++(NSNumber *) isRealnameVerifiedFromExtra:(NSDictionary *)extra {
+    if(!extra || ![extra isKindOfClass:[NSDictionary class]]) {
+        return nil;
+    }
+    id val = extra[@"realname_verified"];
+    if(!val || val == [NSNull null]) {
+        return nil;
+    }
+    if([val isKindOfClass:[NSNumber class]]) {
+        return [(NSNumber *)val boolValue] ? @YES : @NO;
+    }
+    if([val isKindOfClass:[NSString class]]) {
+        NSString *s = (NSString *)val;
+        if([s isEqualToString:@"1"] || [s isEqualToString:@"true"] || [s isEqualToString:@"YES"]) {
+            return @YES;
+        }
+        if([s isEqualToString:@"0"] || [s isEqualToString:@"false"] || [s isEqualToString:@"NO"] || s.length == 0) {
+            return @NO;
+        }
+        // 其他字符串（未预期值）：按「字段存在但无法识别」视作 nil，让 fallback 生效
+        return nil;
+    }
+    // 非 NSNumber / NSString 类型：视作字段缺失
+    return nil;
+}
+
 @end

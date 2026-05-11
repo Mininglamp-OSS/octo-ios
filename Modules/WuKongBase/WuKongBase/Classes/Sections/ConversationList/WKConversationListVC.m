@@ -1752,10 +1752,19 @@
         if (sep.location != NSNotFound) {
             NSString *parentGroupNo = [channelInfo.channel.channelId substringToIndex:sep.location];
             if (parentGroupNo.length > 0) {
-                WKChannel *parentChannel = [WKChannel channelID:parentGroupNo channelType:WK_GROUP];
-                NSInteger parentIndex = [self.conversationListVM indexAtChannel:parentChannel];
-                if (parentIndex != -1) {
-                    [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:parentIndex inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+                // 群聊 tab 下 tableView 真实 row 来自 groupDisplayList(含分类 header),
+                // filteredConversations 下标和 row 不可直接等同。走 rebuild 路径即可。
+                // 私聊 tab 下 indexAtChannel: 返回的就是 row, 但还是做 bounds 校验防御。
+                // (Jerry-Xin R2 blocking fix, YUJ-415)
+                if (_conversationListVM.filterType == WKConversationFilterGroup) {
+                    [self rebuildGroupDisplayAndReload];
+                } else {
+                    WKChannel *parentChannel = [WKChannel channelID:parentGroupNo channelType:WK_GROUP];
+                    NSInteger parentIndex = [self.conversationListVM indexAtChannel:parentChannel];
+                    NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
+                    if (parentIndex >= 0 && parentIndex < rowCount) {
+                        [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:parentIndex inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+                    }
                 }
             }
         }
@@ -1772,7 +1781,16 @@
         if([self hasChange:channelInfo oldChannelInfo:oldChannelInfo]) {
             [self uiAddOrUpdateConversationForOne:conversation];
         }else{
-            [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:index inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+            // Bounds-check: 群聊 tab 下 filteredConversations 下标和真实 row 不一致,
+            // 直接 reload 可能越界。(Jerry-Xin R2 fix, YUJ-415)
+            if (_conversationListVM.filterType == WKConversationFilterGroup) {
+                [self rebuildGroupDisplayAndReload];
+            } else {
+                NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
+                if (index < rowCount) {
+                    [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:index inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+                }
+            }
             
 //            WKConversationListCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]];
 //            if(cell) {

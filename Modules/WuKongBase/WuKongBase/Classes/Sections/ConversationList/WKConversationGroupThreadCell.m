@@ -82,6 +82,8 @@
 @property (nonatomic, strong) WKConversationWrapModel *model;
 @property (nonatomic, strong) UIButton *threadToggleBtn;
 
+@property (nonatomic, copy) NSString *lastAvatarChannelId; // 上一次 refreshAvatar 对应的 channelId，用于判断 cell 是否被复用到不同会话
+
 @end
 
 @implementation WKConversationGroupThreadCell
@@ -446,10 +448,20 @@
             [self.moreLbl addGestureRecognizer:moreTap];
         }
 
-        // 计算子区的未读数和@提醒（从 VM 缓存读取，无 DB 查询）
+        // 计算子区的未读数和@提醒（从 VM 缓存读取，无 DB 查询）。
+        // 排除当前已作为预览行展示的子区 —— 预览行自己的红点已单独渲染，
+        // "+N个子区"badge 只应聚合剩余未显示子区的未读，否则会与预览行重复计数。
+        NSMutableSet<NSString *> *excluded = [NSMutableSet setWithCapacity:count];
+        for (NSInteger i = 0; i < count; i++) {
+            WKThreadModel *p = previews[i];
+            if (p.channelId.length > 0) [excluded addObject:p.channelId];
+        }
         NSInteger moreUnread = 0;
         BOOL moreMention = NO;
-        [[WKConversationListVM shared] getThreadIndicatorForGroup:self.model.channel.channelId threadUnread:&moreUnread threadHasMention:&moreMention];
+        [[WKConversationListVM shared] getThreadIndicatorForGroup:self.model.channel.channelId
+                                              excludingChannelIds:excluded
+                                                     threadUnread:&moreUnread
+                                                 threadHasMention:&moreMention];
 
         // 构建文本：+N个子区 [有人@我]
         NSString *moreText = [NSString stringWithFormat:@"+%ld %@", (long)(self.model.threadCount - count), LLang(@"个子区")];
@@ -526,7 +538,13 @@
 
 -(void) refreshAvatar:(WKConversationWrapModel*)model {
     UIImage *placeholder = [WKApp.shared loadImage:@"Common/Index/DefaultAvatar" moduleID:@"WuKongBase"];
-    self.avatarView.avatarImgView.image = placeholder;
+    NSString *channelId = model.channel.channelId;
+    // 仅在 cell 被复用到不同会话时清回占位图，避免残留上一个会话的人脸；同会话刷新保留当前头像。
+    BOOL channelChanged = (channelId.length == 0) || ![channelId isEqualToString:self.lastAvatarChannelId];
+    if (channelChanged) {
+        self.avatarView.avatarImgView.image = placeholder;
+    }
+    self.lastAvatarChannelId = channelId;
     if (model.channelInfo) {
         NSString *avatarURL;
         if ([model.channelInfo.logo hasPrefix:@"http"]) {
@@ -536,10 +554,13 @@
         } else {
             avatarURL = [WKAvatarUtil getGroupAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
         }
+        // SDWebImageDelayPlaceholder：加载中不覆盖已有头像，仅在失败时落到占位图，避免返回会话列表刷新时的占位图闪烁
         [self.avatarView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL]
                                           placeholderImage:placeholder
-                                                   options:0
+                                                   options:SDWebImageDelayPlaceholder
                                                    context:@{SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll)}];
+    } else {
+        self.avatarView.avatarImgView.image = placeholder;
     }
 }
 
@@ -666,7 +687,7 @@
 
 - (void)prepareForReuse {
     [super prepareForReuse];
-    self.avatarView.avatarImgView.image = nil;
+    // 不清空 avatar image：让旧头像保留到新头像加载完成后再替换，避免刷新时的空白闪烁。
     self.badgeView.hidden = YES;
     self.muteIcon.hidden = YES;
     self.threadContainer.hidden = YES;

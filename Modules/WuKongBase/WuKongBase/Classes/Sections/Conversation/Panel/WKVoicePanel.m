@@ -281,7 +281,16 @@
         [parts addObject:[msgLines componentsJoinedByString:@"\n"]];
     }
 
-    return parts.count > 0 ? [parts componentsJoinedByString:@"\n"] : nil;
+    NSString *finalContext = parts.count > 0 ? [parts componentsJoinedByString:@"\n"] : nil;
+    // YUJ-420 R4: metadata-only 且 DEBUG-gate, 避免生产日志噪音
+#if DEBUG
+    NSLog(@"[VoicePanel] voiceInputChatContext → channelType=%d, memberNames=%lu, textMsgs=%lu, finalLen=%lu",
+          (int)channel.channelType,
+          (unsigned long)memberNames.count,
+          (unsigned long)textMessages.count,
+          (unsigned long)finalContext.length);
+#endif
+    return finalContext;
 }
 
 - (NSRange)voiceInputSelectedRange {

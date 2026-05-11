@@ -15,6 +15,7 @@
 #import "WKReactionBaseView.h"
 #import "UILabel+WK.h"
 #import "NSMutableAttributedString+WK.h"
+#import "WKChannelUtil.h"
 #import "WKExternalViewerResolver.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKTapLongTapOrDoubleTapGestureRecognizerEvent.h"
@@ -208,9 +209,21 @@ static NSMutableDictionary *flameNodeCacheDict;
     // 名字
     self.nameLbl = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, [WKApp shared].config.messageContentMaxWidth, WK_NICKNAME_HEIGHT)];
     [self.nameLbl setFont:WK_NICKNAME_FONT];
-   
+
     [self.nameLbl setTextColor:[UIColor grayColor]];
     [self.bubbleBackgroundView addSubview:self.nameLbl];
+
+    // 实名认证 ✓ 迷你徽章（YUJ-381 / dmwork-web#1169 Phase A）
+    // 12×12 pt 蓝色实心圆 + 白色 ✓。紧贴作者名右侧 padding.left=2pt。
+    // 只加 1 个 ImageView + 最小约束，不触碰原有 nameLbl / botBadge 布局骨架。
+    self.realnameVerifiedImgView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 12.0f, 12.0f)];
+    self.realnameVerifiedImgView.contentMode = UIViewContentModeScaleAspectFit;
+    // 资源路径必须带 Common/ 前缀：Images.xcassets/Common/Contents.json 设了
+    // provides-namespace: true（YUJ-384 P0-1），与同文件 "Conversation/Messages/MsgStatusFail"
+    // 一致的写法。漏前缀会 imageNamed: 返 nil → 徽章 UIImageView 空框。
+    self.realnameVerifiedImgView.image = [self getImageNameForBaseModule:@"Common/ic_realname_verified_mini"];
+    self.realnameVerifiedImgView.hidden = YES;
+    [self.bubbleBackgroundView addSubview:self.realnameVerifiedImgView];
 
     // Bot标识
     self.botBadgeLbl = [[UILabel alloc] init];
@@ -473,6 +486,33 @@ static NSMutableDictionary *flameNodeCacheDict;
         [self.nameLbl sizeToFit];
     }else {
         self.nameLbl.hidden = YES;
+    }
+
+    // 实名认证 ✓ 徽章（YUJ-381 / dmwork-web#1169 Phase A）
+    // 数据源（优先级，tri-state，YUJ-384 P1-2 修复）：
+    //   1. memberOfFrom.extra[@"realname_verified"] — 群聊作者的 member 行记录
+    //   2. 仅当 member 无显式值（nil，字段缺失）时，才回退到对应 person
+    //      WKChannelInfo.extra — 避免 stale person cache 给已取消实名的用户错误打勾。
+    //   显式 @NO 直接视为未实名，不 fallback。
+    // nameLbl 隐藏时（position != First/Single 或单聊）自动隐藏，不做判定避免误测量。
+    BOOL verified = NO;
+    if (!self.nameLbl.hidden) {
+        NSNumber *memberFlag = [WKChannelUtil isRealnameVerifiedFromExtra:model.memberOfFrom.extra];
+        if (memberFlag == nil) {
+            WKChannelInfo *fromChannelInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:model.fromUid channelType:WK_PERSON]];
+            NSNumber *personFlag = [WKChannelUtil isRealnameVerifiedFromExtra:fromChannelInfo.extra];
+            verified = personFlag.boolValue; // nil 或 @NO → NO
+        } else {
+            verified = memberFlag.boolValue;
+        }
+    }
+    // 仅在显隐状态真正改变时触发 layout（channelInfoUpdate → refresh 异步刷新场景）。
+    // 遗漏 setNeedsLayout 会让徽章停在 initUI 时的 (0,0,12,12) 左上角旧 frame。
+    // 等值比较防止无限 layout 循环（同 botBadge 下方模式，YUJ-384 P1-1）。
+    BOOL realnameBadgeWasHidden = self.realnameVerifiedImgView.hidden;
+    self.realnameVerifiedImgView.hidden = !verified;
+    if (realnameBadgeWasHidden != self.realnameVerifiedImgView.hidden) {
+        [self setNeedsLayout];
     }
 
     // Bot标识
@@ -1157,7 +1197,20 @@ static NSMutableDictionary<NSString*, UIImage*> *_bubbleImageCache;
         badgeFrame.size.height += 4.0f;
         self.botBadgeLbl.frame = badgeFrame;
     }
-    self.botBadgeLbl.lim_left = self.nameLbl.lim_left + self.nameLbl.lim_width + 6.0f;
+
+    // 实名认证 ✓ 徽章布局（YUJ-381）
+    // 贴在 nameLbl 右侧，padding.left = 2pt；后续 Bot Badge 继续往右拼。
+    // 仅占 12×12 pt，不影响 nameLbl 自身宽度计算，原有 sizeToFit 逻辑不变。
+    CGFloat afterNameRight = self.nameLbl.lim_left + self.nameLbl.lim_width;
+    if (!self.realnameVerifiedImgView.hidden) {
+        self.realnameVerifiedImgView.lim_width = 12.0f;
+        self.realnameVerifiedImgView.lim_height = 12.0f;
+        self.realnameVerifiedImgView.lim_left = afterNameRight + 2.0f;
+        self.realnameVerifiedImgView.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - 12.0f) / 2.0f;
+        afterNameRight = self.realnameVerifiedImgView.lim_left + self.realnameVerifiedImgView.lim_width;
+    }
+
+    self.botBadgeLbl.lim_left = afterNameRight + 6.0f;
     self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
 }
 

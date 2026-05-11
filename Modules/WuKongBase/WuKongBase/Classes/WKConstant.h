@@ -292,6 +292,8 @@
 #define WKNOTIFY_LANG_CHANGE @"lim.lang.change"
 // 系统模块发生改变
 #define WKNOTIFY_MODULE_CHANGE @"lim.module.change"
+// 远程配置 common/appconfig 拉取完成（成功后发，失败不发）。登录页据此刷新 Aegis SSO 按钮可见性。
+#define WKNOTIFY_REMOTECONFIG_LOADED @"lim.remoteconfig.loaded"
 // 聊天背景改变
 #define WKNOTIFY_CHATBACKGROUND_CHANGE @"lim.chatbackground.change"
 // 频道头像更新
