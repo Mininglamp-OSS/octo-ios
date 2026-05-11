@@ -168,15 +168,24 @@
     // Down 库的 WebKit 渲染会启动嵌套 RunLoop，在布局回调中会导致 UITableView 重入崩溃
     [self precacheHeightForMessage:message];
 
-    // 快照 addMessage 前后的 section/row 数量，按实际变化增量更新
-    NSInteger oldSectionCount = [self.dataProvider dateCount];
-    NSInteger oldLastSectionRowCount = 0;
-    if (oldSectionCount > 0) {
-        oldLastSectionRowCount = [self.dataProvider messagesAtSection:oldSectionCount - 1].count;
-    }
+    // Bugly: pulldown/pullup 把新消息写进 dataProvider 但 tableView 还没 reloadData 的窗口里，
+    // 这里如果仍按 dataProvider 旧值算增量，insertRowsAtIndexPaths 的 count 和 tableView 实际行数
+    // 对不上，endUpdates 会抛 _Bug_Detected_In_Client_Of_UITableView_Invalid_Number_Of_Rows_In_Section。
+    // addMessage 前先记录同步状态，漂移时直接 reloadData 兜底。
+    BOOL inSyncBefore = [self isTableViewRowCountInSyncWithDataProvider];
+    BOOL pulldownActive = self.isPulldownInProgress;
 
     [self.dataProvider addMessage:message];
 
+    if (pulldownActive || !inSyncBefore) {
+        [self.tableView reloadData];
+        [self didAddMessageUI];
+        return;
+    }
+
+    // 无漂移时以 tableView 当前行数为基准做增量（而不是 dataProvider 的旧快照）
+    NSInteger oldSectionCount = [self.tableView numberOfSections];
+    NSInteger oldLastSectionRowCount = (oldSectionCount > 0) ? [self.tableView numberOfRowsInSection:oldSectionCount - 1] : 0;
     NSInteger newSectionCount = [self.dataProvider dateCount];
     BOOL newSectionAdded = (newSectionCount > oldSectionCount);
     NSInteger newLastSectionRowCount = (newSectionCount > 0) ? [self.dataProvider messagesAtSection:newSectionCount - 1].count : 0;
@@ -2187,38 +2196,31 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 
 /// 首次看到消息时检查是否触发特效（由 willDisplayCell 调用，是唯一触发入口）
 ///
-/// 触发规则（按顺序检查，任一命中就 skip）：
-///   1. triggeredMessageIds 持久化集合包含 → 已触发过，skip
-///   2. 接收消息且已读 (!isSend && readed) → 用户之前看过，skip
-///   3. 消息年龄 > 30s → 历史消息（滚动加载进来的），视觉上已经被"看过"，skip
-///   4. 没命中任何 emoji → skip
-///   5. 否则 → 触发
+/// 规则简化为：
+///   1. 已触发过（hasTriggeredForMessage 持久化，含 cell 重用/滚动去重）→ skip
+///   2. 没命中任何 emoji → skip
+///   3. 延迟 300ms 后确认 cell 仍留在可视区 → 触发；否则啥也不做
+///      （一键置底/快速滚动时路过的 cell 不会被误消费，下次真正停在可视区再播）
 -(void) checkFirstViewEffectForMessage:(WKMessageModel *)message {
     if (!message) return;
     if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
-    if (!message.isSend && message.readed) return;
-
-    // 年龄检查：历史消息（上下滑动加载的 >30s 老消息）不触发
-    // 自己发的消息没有 readed 语义，这里用年龄兜底
-    NSTimeInterval age = [self ageSecondsForMessage:message];
-    if (age > 30) return;
 
     NSString *effectType = [[WKMessageEffectManager shared] effectTypeForMessage:message];
     if (!effectType) return;
 
-    [self checkAndTriggerEffectForMessage:message];
+    NSString *clientMsgNo = message.clientMsgNo;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        NSIndexPath *indexPath = [strongSelf.dataProvider indexPathAtClientMsgNo:clientMsgNo];
+        if (!indexPath) return;
+        // cell 已被 UITableView 回收 → 说明 300ms 内已滚出可视区，skip
+        if (![strongSelf.tableView cellForRowAtIndexPath:indexPath]) return;
+        WKMessageModel *current = [strongSelf.dataProvider messageAtIndexPath:indexPath];
+        if (!current) return;
+        [strongSelf checkAndTriggerEffectForMessage:current];
+    });
 }
-
-/// 计算消息年龄（秒），自动兼容 timestamp 是秒还是毫秒的情况
--(NSTimeInterval) ageSecondsForMessage:(WKMessageModel *)message {
-    if (!message) return 0;
-    NSInteger ts = MAX(message.timestamp, message.localTimestamp);
-    if (ts <= 0) return 0;
-    // 当前秒级 timestamp ~1.7e9，毫秒级 ~1.7e12；> 2e10 一定是毫秒
-    if (ts > 20000000000LL) ts = ts / 1000;
-    NSTimeInterval age = [[NSDate date] timeIntervalSince1970] - (NSTimeInterval)ts;
-    return MAX(0, age);
-}
-
 
 @end
