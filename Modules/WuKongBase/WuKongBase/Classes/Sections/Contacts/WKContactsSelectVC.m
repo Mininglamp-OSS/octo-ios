@@ -81,6 +81,7 @@
 -(void) parseData:(NSArray<WKContactsSelect*>*) data {
     self.items = [NSMutableArray array];
     self.sectionTitleArr = @[];
+    [self.tableView reloadData];
     if(data) {
         NSMutableArray *newData = [NSMutableArray array];
         for (WKContactsSelect *contactsSelect in data) {
@@ -386,11 +387,11 @@
 }
 
 -(CGFloat) tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
-    
+    if (section >= (NSInteger)self.sectionTitleArr.count) return 0;
     return 20.0f;
 }
 -(UIView*) tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section{
-    
+    if (section >= (NSInteger)self.sectionTitleArr.count) return nil;
     NSString *title = [self.sectionTitleArr objectAtIndex:section];
     return [self headView:title headHeight:20.0f color:[UIColor grayColor]];
 }

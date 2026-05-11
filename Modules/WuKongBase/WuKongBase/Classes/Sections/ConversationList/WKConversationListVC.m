@@ -101,6 +101,8 @@
 @property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeRight;
 @property(nonatomic,assign) BOOL pendingSpaceSwitchLoad;
 @property(nonatomic,assign) BOOL pendingRebuild;
+@property(nonatomic,assign) CGPoint privateTabScrollOffset;
+@property(nonatomic,assign) CGPoint groupTabScrollOffset;
 
 @end
 
@@ -1690,9 +1692,19 @@
 
     __weak typeof(self) weakSelf = self;
     _conversationTabView.onTabChanged = ^(NSInteger index) {
+        NSInteger oldIndex = weakSelf.conversationListVM.filterType;
+        // 保存当前 tab 滚动位置
+        if (oldIndex == WKConversationFilterGroup) {
+            weakSelf.groupTabScrollOffset = weakSelf.tableView.contentOffset;
+        } else {
+            weakSelf.privateTabScrollOffset = weakSelf.tableView.contentOffset;
+        }
         weakSelf.conversationListVM.filterType = index;
         [weakSelf.conversationListVM rebuildFilteredList];
         [weakSelf rebuildGroupDisplayAndReload];
+        // 恢复目标 tab 的滚动位置
+        CGPoint savedOffset = (index == WKConversationFilterGroup) ? weakSelf.groupTabScrollOffset : weakSelf.privateTabScrollOffset;
+        [weakSelf.tableView setContentOffset:savedOffset animated:NO];
         [weakSelf updateTabUnreadCounts];
         [[NSUserDefaults standardUserDefaults] setInteger:index forKey:@"WKConversationTabIndex"];
     };
@@ -1733,6 +1745,22 @@
 
 -(void) channelInfoUpdate:(WKChannelInfo *)channelInfo oldChannelInfo:(WKChannelInfo *)oldChannelInfo{
    //[self refreshTable];
+    // 子区的 channelInfo 变化(例如子区免打扰切换)在会话列表里没有顶层行,
+    // 需要定位到父群行并刷新,子区预览才会重新读取 threadInfo.mute 渲染静音图标。
+    if (channelInfo.channel.channelType == WK_COMMUNITY_TOPIC) {
+        NSRange sep = [channelInfo.channel.channelId rangeOfString:@"____"];
+        if (sep.location != NSNotFound) {
+            NSString *parentGroupNo = [channelInfo.channel.channelId substringToIndex:sep.location];
+            if (parentGroupNo.length > 0) {
+                WKChannel *parentChannel = [WKChannel channelID:parentGroupNo channelType:WK_GROUP];
+                NSInteger parentIndex = [self.conversationListVM indexAtChannel:parentChannel];
+                if (parentIndex != -1) {
+                    [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:parentIndex inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+                }
+            }
+        }
+        return;
+    }
     NSInteger index = [self.conversationListVM indexAtChannel:channelInfo.channel];
     if(index!= -1) {
         WKConversationWrapModel *oldModel = [self.conversationListVM modelAtIndex:index];
@@ -2137,7 +2165,6 @@
     WKChannel *threadChannel = [WKChannel channelID:threadChannelId channelType:WK_COMMUNITY_TOPIC];
     BOOL isMuted = [[WKChannelSettingManager shared] mute:threadChannel];
 
-    __weak typeof(self) weakSelf = self;
     NSString *muteTitle = isMuted ? LLang(@"打开通知") : LLang(@"关闭通知");
     NSMutableArray<NSDictionary *> *menuItems = [NSMutableArray array];
     [menuItems addObject:@{
@@ -2145,16 +2172,9 @@
         @"icon": [WKConversationListVC iconMute:isMuted],
         @"action": ^{
             BOOL newMute = !isMuted;
+            // 依赖服务端 PUT groups/{groupNo}/threads/{shortID}/setting 成功后,
+            // 通过 SendChannelUpdate 推送 channel update CMD,客户端拉取最新 channelInfo 并刷新 UI。
             [[WKChannelSettingManager shared] channel:threadChannel mute:newMute];
-            WKChannelInfo *threadInfo = [[WKSDK shared].channelManager getChannelInfo:threadChannel];
-            if (!threadInfo) {
-                threadInfo = [[WKChannelInfo alloc] init];
-                threadInfo.channel = threadChannel;
-                threadInfo.name = threadName;
-            }
-            threadInfo.mute = newMute;
-            [[WKSDK shared].channelManager addOrUpdateChannelInfo:threadInfo];
-            [weakSelf rebuildGroupDisplayAndReload];
         }
     }];
     [self showFloatingMenu:menuItems atPoint:point];

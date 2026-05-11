@@ -88,10 +88,61 @@
 
   // 设置频道资料更新函数
 -(void) setChannelInfoUpdate {
-    
-    
+
+
     [[WKSDK shared] setChannelInfoUpdate:^WKTaskOperator * (WKChannel * _Nonnull channel, WKChannelInfoCallback  _Nonnull callback) {
-        
+
+        // 子区(topic)不走通用 channels/{id}/{type} 接口 —— 通用接口不返回 thread_setting 里的用户维度 mute,
+        // 会把刚写入的 thread mute 覆盖回 0。改走 thread 详情接口,和 web 端 channelInfoCallback 保持一致。
+        if (channel.channelType == WK_COMMUNITY_TOPIC) {
+            NSRange sep = [channel.channelId rangeOfString:@"____"];
+            if (sep.location != NSNotFound) {
+                NSString *groupNo = [channel.channelId substringToIndex:sep.location];
+                NSString *shortID = [channel.channelId substringFromIndex:NSMaxRange(sep)];
+                if (groupNo.length > 0 && shortID.length > 0) {
+                    NSURLSessionDataTask *threadTask = [[WKAPIClient sharedClient] taskGET:[NSString stringWithFormat:@"groups/%@/threads/%@", groupNo, shortID] parameters:nil callback:^(NSError * _Nullable tErr, NSDictionary *threadDict) {
+                        if (tErr) {
+                            WKLogError(@"获取子区详情失败！-> %@", tErr);
+                            if (callback) callback(tErr, false);
+                            return;
+                        }
+                        // 保留本地 channelInfo 的 mute 值作为"当前已知状态",避免 null 覆盖为错误值。
+                        WKChannelInfo *existingInfo = [[WKSDK shared].channelManager getChannelInfo:channel];
+                        WKChannelInfo *channelInfo = [[WKChannelInfo alloc] init];
+                        channelInfo.channel = channel;
+                        channelInfo.name = threadDict[@"name"] ?: @"";
+                        // 子区沿用父群头像
+                        channelInfo.logo = [NSString stringWithFormat:@"groups/%@/avatar", groupNo];
+                        // tri-state mute 处理:
+                        //   NSNumber → 服务端显式值,权威,直接采用
+                        //   NSNull/missing → 服务端无显式 thread_setting 记录(或 QuerySetting 失败被吞错)。
+                        //     此时不覆盖本地现有值 —— 因为冷启动父群 channelInfo 不一定已加载,
+                        //     直接 fallback 到 parentInfo.mute 会在 parentInfo==nil 时变成 NO,
+                        //     把用户明确设置过的"静音"误覆盖。仅当本地也没有 channelInfo 时,才用父群做初始化。
+                        id muteVal = threadDict[@"mute"];
+                        if ([muteVal isKindOfClass:[NSNumber class]]) {
+                            channelInfo.mute = [muteVal boolValue];
+                        } else if (existingInfo) {
+                            channelInfo.mute = existingInfo.mute;
+                        } else {
+                            WKChannel *parentChannel = [WKChannel channelID:groupNo channelType:WK_GROUP];
+                            WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parentChannel];
+                            channelInfo.mute = parentInfo ? parentInfo.mute : NO;
+                        }
+                        [[WKSDK shared].channelManager addOrUpdateChannelInfo:channelInfo];
+                        if (callback) callback(nil, false);
+                    }];
+                    return [WKTaskOperator cancel:^{
+                        if (threadTask) [threadTask cancel];
+                    } suspend:^{
+                        if (threadTask) [threadTask suspend];
+                    } resume:^{
+                        if (threadTask) [threadTask resume];
+                    }];
+                }
+            }
+        }
+
         NSURLSessionDataTask *sessionDataTask = [[WKAPIClient sharedClient] taskGET:[NSString stringWithFormat:@"channels/%@/%d",channel.channelId,channel.channelType] parameters:nil callback:^(NSError * _Nullable error, NSDictionary  *resultDict) {
             if(error) {
                 WKLogError(@"获取频道信息失败！-> %@",error);
@@ -99,18 +150,18 @@
                 return;
             }
             WKChannelInfo *channelInfo  = [WKChannelUtil toChannelInfo2:resultDict];
-            
+
             [[WKSDK shared].channelManager addOrUpdateChannelInfo:channelInfo];
             if(callback) {
                 callback(nil,false);
             }
-            
+
         }];
         return [WKTaskOperator cancel:^{
             if(sessionDataTask) {
                 [sessionDataTask cancel];
             }
-            
+
         } suspend:^{
             if(sessionDataTask) {
                 [sessionDataTask suspend];
@@ -121,8 +172,8 @@
             }
         }];
     }];
-    
-    
+
+
     return;
 }
 
