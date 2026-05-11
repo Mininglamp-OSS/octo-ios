@@ -448,10 +448,20 @@
             [self.moreLbl addGestureRecognizer:moreTap];
         }
 
-        // 计算子区的未读数和@提醒（从 VM 缓存读取，无 DB 查询）
+        // 计算子区的未读数和@提醒（从 VM 缓存读取，无 DB 查询）。
+        // 排除当前已作为预览行展示的子区 —— 预览行自己的红点已单独渲染，
+        // "+N个子区"badge 只应聚合剩余未显示子区的未读，否则会与预览行重复计数。
+        NSMutableSet<NSString *> *excluded = [NSMutableSet setWithCapacity:count];
+        for (NSInteger i = 0; i < count; i++) {
+            WKThreadModel *p = previews[i];
+            if (p.channelId.length > 0) [excluded addObject:p.channelId];
+        }
         NSInteger moreUnread = 0;
         BOOL moreMention = NO;
-        [[WKConversationListVM shared] getThreadIndicatorForGroup:self.model.channel.channelId threadUnread:&moreUnread threadHasMention:&moreMention];
+        [[WKConversationListVM shared] getThreadIndicatorForGroup:self.model.channel.channelId
+                                              excludingChannelIds:excluded
+                                                     threadUnread:&moreUnread
+                                                 threadHasMention:&moreMention];
 
         // 构建文本：+N个子区 [有人@我]
         NSString *moreText = [NSString stringWithFormat:@"+%ld %@", (long)(self.model.threadCount - count), LLang(@"个子区")];
