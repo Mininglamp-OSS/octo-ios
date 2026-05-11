@@ -57,8 +57,8 @@ import libcmark_gfm
         guard let parser = cmark_parser_new(CMARK_OPT_DEFAULT) else { return nil }
         defer { cmark_parser_free(parser) }
 
-        // Attach GFM extensions: strikethrough, table, autolink, tagfilter
-        let extNames = ["strikethrough", "table", "autolink", "tagfilter"]
+        // Attach GFM extensions: strikethrough, table, autolink, tagfilter, tasklist
+        let extNames = ["strikethrough", "table", "autolink", "tagfilter", "tasklist"]
         for name in extNames {
             if let ext = cmark_find_syntax_extension(name) {
                 cmark_parser_attach_syntax_extension(parser, ext)
@@ -355,8 +355,16 @@ import libcmark_gfm
 
             case CMARK_NODE_ITEM:
                 ctx.listItemIndex += 1
+                // GFM tasklist extension: list items carrying "- [x]" / "- [ ]" prefix have
+                // their type_string overridden to "tasklist" and the literal `[x]`/`[ ]`
+                // prefix stripped from children. Render ☑ / ☐ instead of "• " so it matches
+                // Android Markwon's tasklist rendering.
+                let isTasklist = typeStr == "tasklist"
                 let marker: String
-                if ctx.listType == CMARK_ORDERED_LIST {
+                if isTasklist {
+                    let checked = cmark_gfm_extensions_get_tasklist_item_checked(node)
+                    marker = checked ? "☑ " : "☐ "
+                } else if ctx.listType == CMARK_ORDERED_LIST {
                     marker = "\(ctx.listItemIndex). "
                 } else {
                     marker = "• "
@@ -382,17 +390,16 @@ import libcmark_gfm
                 return
 
             case CMARK_NODE_IMAGE:
-                if let urlC = cmark_node_get_url(node) {
-                    let url = String(cString: urlC)
-                    let altText = cmark_node_get_literal(cmark_node_first_child(node)).flatMap { String(cString: $0) } ?? "image"
-                    var attrs: [NSAttributedString.Key: Any] = [
-                        .font: ctx.baseFont,
-                        .foregroundColor: ctx.linkColor,
-                        .link: url
-                    ]
-                    if let pStyle = ctx.paragraphStyle { attrs[.paragraphStyle] = pStyle }
-                    result.append(NSAttributedString(string: "[\(altText)]", attributes: attrs))
-                }
+                // 气泡里不下载/展示图片，退化成 alt 文本。之前按链接色 + .link 属性渲染会
+                // 让 `![xxx](...)` 在 UITextView 里变成可点击蓝色下划线条目，和 Android
+                // 的"纯文本 [alt]"不一致（截图里 placeholder 被当成超链接）。
+                let altText = cmark_node_get_literal(cmark_node_first_child(node)).flatMap { String(cString: $0) } ?? "image"
+                var attrs: [NSAttributedString.Key: Any] = [
+                    .font: ctx.baseFont,
+                    .foregroundColor: ctx.textColor
+                ]
+                if let pStyle = ctx.paragraphStyle { attrs[.paragraphStyle] = pStyle }
+                result.append(NSAttributedString(string: "[\(altText)]", attributes: attrs))
                 return
 
             case CMARK_NODE_HTML_BLOCK, CMARK_NODE_HTML_INLINE:
@@ -427,10 +434,13 @@ import libcmark_gfm
 
         renderChildren(doc, ctx: &ctx)
 
-        // Trim trailing newlines
-        while result.length > 0 {
+        // 去掉多余的尾部换行，但保留最后一个 —— 每个块级节点收尾时都会追加一个带
+        // paragraphStyle 的 "\n"，把这唯一的一个也砍掉会让 boundingRect/sizeThatFits
+        // 测不到最后一段的行高，进而让气泡底部把最后一行挤到时间戳下面（用户反馈）。
+        while result.length > 1 {
             let last = result.attributedSubstring(from: NSRange(location: result.length - 1, length: 1)).string
-            if last == "\n" || last == "\r" {
+            let penult = result.attributedSubstring(from: NSRange(location: result.length - 2, length: 1)).string
+            if (last == "\n" || last == "\r") && (penult == "\n" || penult == "\r") {
                 result.deleteCharacters(in: NSRange(location: result.length - 1, length: 1))
             } else {
                 break
