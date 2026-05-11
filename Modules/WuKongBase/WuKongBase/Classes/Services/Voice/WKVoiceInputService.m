@@ -90,19 +90,25 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
     if (self.cachedVoiceContextHasValue &&
         [self.voiceContextSpaceId isEqualToString:spaceId] &&
         ([[NSDate date] timeIntervalSince1970] - self.voiceContextCachedAt) < kVoiceContextCacheTTL) {
-        NSLog(@"[VoiceContext] 使用缓存 context (spaceId=%@)", spaceId);
+#if DEBUG
+        NSLog(@"[VoiceContext] cache hit (spaceId=%@)", spaceId);
+#endif
         return;
     }
 
     // 防重复请求
     if (self.voiceContextInflight && [self.voiceContextSpaceId isEqualToString:spaceId]) {
-        NSLog(@"[VoiceContext] 请求进行中，跳过重复请求");
+#if DEBUG
+        NSLog(@"[VoiceContext] request in-flight, skipping duplicate");
+#endif
         return;
     }
 
     self.voiceContextInflight = YES;
     self.voiceContextSpaceId = spaceId;
-    NSLog(@"[VoiceContext] 开始预取 (spaceId=%@)", spaceId);
+#if DEBUG
+    NSLog(@"[VoiceContext] prefetch start (spaceId=%@)", spaceId);
+#endif
 
     NSString *path = [NSString stringWithFormat:@"voice/context?space_id=%@", spaceId];
 
@@ -110,15 +116,24 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
     __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kVoiceContextTimeout * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (weakSelf.voiceContextInflight && [weakSelf.voiceContextSpaceId isEqualToString:spaceId]) {
-            NSLog(@"[VoiceContext] 请求超时");
+#if DEBUG
+            NSLog(@"[VoiceContext] prefetch timeout");
+#endif
             weakSelf.voiceContextInflight = NO;
             [weakSelf flushVoiceContextCallbacks:nil];
         }
     });
 
     [[WKAPIClient sharedClient] GET:path parameters:nil].then(^(NSDictionary *resp) {
-        NSLog(@"[VoiceContext] 预取完成: has_context=%@, context=%@",
-              resp[@"has_context"], resp[@"context"] ?: @"(nil)");
+        // YUJ-420 R4 fix (lml2468 Critical privacy): 不打 context 字段内容(用户数据)。
+#if DEBUG
+        {
+            NSString *_ctx = resp[@"context"];
+            NSLog(@"[VoiceContext] prefetch done: has_context=%@ context.len=%lu",
+                  resp[@"has_context"] ?: @"(nil)",
+                  (unsigned long)([_ctx isKindOfClass:[NSString class]] ? _ctx.length : 0));
+        }
+#endif
         weakSelf.voiceContextInflight = NO;
         BOOL hasContext = [resp[@"has_context"] boolValue];
         NSString *context = resp[@"context"];
@@ -131,7 +146,7 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
         weakSelf.voiceContextCachedAt = [[NSDate date] timeIntervalSince1970];
         [weakSelf flushVoiceContextCallbacks:weakSelf.cachedVoiceContext];
     }).catch(^(NSError *error) {
-        NSLog(@"[VoiceContext] 预取失败: %@", error.localizedDescription);
+        NSLog(@"[VoiceContext] prefetch failed: %@", error.localizedDescription);
         weakSelf.voiceContextInflight = NO;
         weakSelf.cachedVoiceContext = nil;
         weakSelf.cachedVoiceContextHasValue = NO;
@@ -170,7 +185,9 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
 }
 
 - (void)clearVoiceContextCache {
-    NSLog(@"[VoiceContext] 清除缓存");
+#if DEBUG
+    NSLog(@"[VoiceContext] cache cleared");
+#endif
     self.cachedVoiceContext = nil;
     self.cachedVoiceContextHasValue = NO;
     self.voiceContextCachedAt = 0;
@@ -212,17 +229,15 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
         formFields[@"member_context"] = memberContext;
     }
 
-    NSLog(@"[VoiceInput] ===== 语音转写请求 (m4a) =====");
-    NSLog(@"[VoiceInput] 发送字段: context_text=%@(%lu) chat_context=%@(%lu) personal_context=%@(%lu) member_context=%@(%lu)",
-          formFields[@"context_text"] ? @"Y" : @"N", (unsigned long)contextText.length,
-          formFields[@"chat_context"] ? @"Y" : @"N", (unsigned long)chatContext.length,
-          formFields[@"personal_context"] ? @"Y" : @"N", (unsigned long)personalContext.length,
-          formFields[@"member_context"] ? @"Y" : @"N", (unsigned long)memberContext.length);
-    NSLog(@"[VoiceInput] context_text: %@", contextText ?: @"(nil)");
-    NSLog(@"[VoiceInput] chat_context: %@", chatContext ?: @"(nil)");
-    NSLog(@"[VoiceInput] personal_context: %@", personalContext ?: @"(nil)");
-    NSLog(@"[VoiceInput] member_context: %@", memberContext ?: @"(nil)");
-    NSLog(@"[VoiceInput] audio size: %lu bytes", (unsigned long)audioData.length);
+    // YUJ-420 R4 fix (lml2468 Critical privacy): 不打 context 字段内容。
+#if DEBUG
+    NSLog(@"[VoiceInput] transcribe m4a request: contextText.len=%lu chatContext.len=%lu personalContext.len=%lu memberContext.len=%lu audio=%lu bytes",
+          (unsigned long)contextText.length,
+          (unsigned long)chatContext.length,
+          (unsigned long)personalContext.length,
+          (unsigned long)memberContext.length,
+          (unsigned long)audioData.length);
+#endif
 
     [[WKAPIClient sharedClient] fileUpload:@"voice/transcribe"
                                 formFields:formFields
@@ -234,16 +249,21 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
                           completeCallback:^(id responseObject, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (error) {
-                NSLog(@"[VoiceInput] ===== 转写失败 =====");
-                NSLog(@"[VoiceInput] error: %@", error.localizedDescription);
+                NSLog(@"[VoiceInput] transcribe m4a failed: %@", error.localizedDescription);
                 if (completion) completion(nil, error);
                 return;
             }
 
-            NSLog(@"[VoiceInput] ===== 转写结果 =====");
-            NSLog(@"[VoiceInput] status: %@", responseObject[@"status"]);
-            NSLog(@"[VoiceInput] text: %@", responseObject[@"text"] ?: @"(nil)");
-            NSLog(@"[VoiceInput] model: %@", responseObject[@"model"] ?: @"(nil)");
+            // YUJ-420 R4 fix (lml2468 Critical privacy): 不打转写文本原文(用户语音内容)。
+#if DEBUG
+            {
+                NSString *_t = responseObject[@"text"];
+                NSLog(@"[VoiceInput] transcribe m4a result: status=%@ model=%@ text.len=%lu",
+                      responseObject[@"status"] ?: @"(nil)",
+                      responseObject[@"model"] ?: @"(nil)",
+                      (unsigned long)([_t isKindOfClass:[NSString class]] ? _t.length : 0));
+            }
+#endif
 
             // 检查响应 status 字段
             NSInteger status = [responseObject[@"status"] integerValue];
