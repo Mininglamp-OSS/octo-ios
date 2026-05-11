@@ -199,10 +199,57 @@ static WKEmoticonService *_instance;
 
 -(UIImage*) emojiImageNamed:(NSString*)imageName{
     UIImage *img = [self imageNamed:[NSString stringWithFormat:@"Conversation/Emoji/%@",imageName]];
-    if ([imageName hasPrefix:@"custom_"]) {
-        NSLog(@"[Emoji] emojiImageNamed: %@ -> image=%@", imageName, img ? @"LOADED" : @"NIL");
+    if (img) {
+        if ([imageName hasPrefix:@"custom_"]) {
+            NSLog(@"[Emoji] emojiImageNamed: %@ -> image=LOADED", imageName);
+        }
+        return img;
     }
-    return img;
+
+    // 兜底：对自定义 Unicode emoji（custom_bomb / custom_party / custom_heart 等），
+    // 项目里没放 PNG，在这里用系统字体把 Unicode emoji 渲染成图
+    UIImage *rendered = [self fallbackRenderedEmojiForImageName:imageName];
+    return rendered;
+}
+
+/// 把 imageName 映射到原生 Unicode emoji 并渲染成 32×32 图片（带缓存）
+/// 这些 emoji 在 emoji.plist 里像普通系统 emoji 一样（file=ex_xxx, tag=原生 emoji），
+/// 走普通 emoji 的渲染路径，不会触发"单个自定义表情大图"逻辑。
+- (nullable UIImage *)fallbackRenderedEmojiForImageName:(NSString *)imageName {
+    static NSDictionary<NSString *, NSString *> *mapping;
+    static dispatch_once_t mapOnce;
+    dispatch_once(&mapOnce, ^{
+        mapping = @{
+            @"ex_bomb": @"💣",
+            @"ex_party": @"🎉",
+            @"ex_heart": @"❤️",
+        };
+    });
+    NSString *emoji = mapping[imageName];
+    if (!emoji) return nil;
+
+    static NSMutableDictionary<NSString *, UIImage *> *cache;
+    static dispatch_once_t cacheOnce;
+    dispatch_once(&cacheOnce, ^{
+        cache = [NSMutableDictionary dictionary];
+    });
+    UIImage *cached = cache[imageName];
+    if (cached) return cached;
+
+    CGSize size = CGSizeMake(32, 32);
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
+    NSDictionary *attrs = @{
+        NSFontAttributeName: [UIFont systemFontOfSize:26],
+    };
+    CGSize textSize = [emoji sizeWithAttributes:attrs];
+    CGFloat x = (size.width - textSize.width) / 2.0;
+    CGFloat y = (size.height - textSize.height) / 2.0;
+    [emoji drawAtPoint:CGPointMake(x, y) withAttributes:attrs];
+    UIImage *rendered = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+
+    if (rendered) cache[imageName] = rendered;
+    return rendered;
 }
 
 - (NSArray<WKEmotion*> *)emotions {

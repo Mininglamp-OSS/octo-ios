@@ -62,6 +62,47 @@ NS_ASSUME_NONNULL_BEGIN
 /// 整个 appconfig 接口不会因单条 provider 配置坏而整体降级。
 + (NSArray<WKOidcProviderConfig*> *)parseArray:(nullable NSArray *)raw;
 
+/// 拼 OIDC authorize URL (WKLoginView / WKRegisterVC 共用 helper, YUJ-420 R1 fix)。
+///
+/// 引入背景: Jerry-Xin R1 给 PR #114 指出 authorize URL 用
+/// URLQueryAllowedCharacterSet 手拼 query 时, 逻辑符 `&`/`=`/`+` 不会被转义
+/// → authcode / device_name 中出现特殊字符会产生参数截断或注入。
+/// 本方法改用 NSURLComponents + NSURLQueryItem, 由系统第一方做 RFC 3986
+/// 安全转义。
+///
+/// path 解析三种情形对齐旧实现（WKLoginView / WKRegisterVC）:
+///   • https://绝对URL   → 直用
+///   • /v1/..  origin-relative   → relativeToURL:apiBase 拼主机
+///   • user/x  API-relative     → append to apiBase
+/// flag=3, device_* 三元组保留原语义 (iOS SDK CONNECT deviceFlag=3)。
+///
+/// 返 nil 情形: authorize_path 空 / apiBase 空 / 拼出的 base 不是合法 URL。
+///
+/// 无完整 URL 日志泄露 — 仅 host/path 级别 debug 日志, authcode/device_* 脱敏。
++ (nullable NSURL *)buildAuthorizeURLForProvider:(WKOidcProviderConfig *)provider
+                                         authcode:(NSString *)authcode
+                                          apiBase:(NSString *)apiBase
+                                         deviceId:(nullable NSString *)deviceId
+                                       deviceName:(nullable NSString *)deviceName
+                                      deviceModel:(nullable NSString *)deviceModel;
+
+/// 递归剩定任意 NSArray / NSDictionary 中的 NSNull, 产出 plist-safe 副本用于
+/// 安全写 NSUserDefaults / Info.plist 等 plist-支持的存储。
+///
+/// YUJ-420 R3 fix (Jerry-Xin PR #114 Critical): 后端 /common/appconfig 下发的
+/// oidc_providers[].{name, account_url, reset_password_url} 等 optional 字段若下发
+/// 为 JSON null, NSJSONSerialization 会映射为 NSNull。NSNull 不是 plist 类型,
+/// 直接 setObject: 到 NSUserDefaults 会抛 NSInvalidArgumentException。
+///
+/// 此方法 deep-clean 后返回新对象:
+///   - NSArray/NSDictionary: 递归展开
+///   - NSNull: 从 array 中跳过, 从 dict 中删除 key
+///   - 其它非 plist 类型 (如 NSDate 以外的自定义类): 关错跳过
+///   - plist-原生类型 (NSString/NSNumber/NSData/NSDate): 原样保留
+///
+/// 主要调用点: WKAppConfig.m requestConfig: success 分支缓存 oidc_providers。
++ (nullable id)plistSanitize:(nullable id)value;
+
 @end
 
 NS_ASSUME_NONNULL_END

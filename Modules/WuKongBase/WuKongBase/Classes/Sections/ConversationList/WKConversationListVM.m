@@ -935,11 +935,19 @@ static WKConversationListVM *_instance;
 
 /// 从缓存获取指定群聊下子区的未读数和 @提醒状态（供 cell 渲染用，纯内存查找，无 DB 查询）
 -(void) getThreadIndicatorForGroup:(NSString *)groupNo threadUnread:(NSInteger *)outUnread threadHasMention:(BOOL *)outHasMention {
+    [self getThreadIndicatorForGroup:groupNo excludingChannelIds:nil threadUnread:outUnread threadHasMention:outHasMention];
+}
+
+-(void) getThreadIndicatorForGroup:(NSString *)groupNo
+               excludingChannelIds:(NSSet<NSString *> *)excluded
+                      threadUnread:(NSInteger *)outUnread
+                  threadHasMention:(BOOL *)outHasMention {
     NSInteger unread = 0;
     BOOL hasMention = NO;
     NSArray<WKConversation*> *topics = self.cachedTopicsByGroup[groupNo];
     if (topics) {
         for (WKConversation *conv in topics) {
+            if (excluded.count > 0 && [excluded containsObject:conv.channel.channelId]) continue;
             unread += conv.unreadCount;
             if (!hasMention) {
                 NSArray<WKReminder*> *rems = self.cachedRemindersByChannelId[conv.channel.channelId];

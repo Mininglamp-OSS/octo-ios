@@ -18,6 +18,7 @@
 #import "WKMessageListView+Position.h"
 #import "WKConversationListVM.h"
 #import <WuKongBase/WuKongBase-Swift.h>
+#import "WKMessageEffectManager.h"
 @interface WKMessageListView ()<UITableViewDelegate,UITableViewDataSource,WKConversationTableViewDelegate,WKChannelManagerDelegate,WKChatManagerDelegate,WKReactionManagerDelegate,WKConnectionManagerDelegate,WKTypingManagerDelegate,WKReminderManagerDelegate>
 
 @property(nonatomic,strong) UIViewPropertyAnimator *headerViewsAnimator;
@@ -87,8 +88,10 @@
     [self updatePosition];
     // 界面退出停止播放
     [[WKSDK shared].mediaManager stopAudioPlay];
-    
+
     [self markReminderDoneIfNeed];
+
+    [[WKMessageEffectManager shared] cancelCurrentEffect];
 }
 
 - (void)setScrollEnabled:(BOOL)scrollEnabled {
@@ -267,6 +270,16 @@
 }
 
 -(void) handleLoadMessages:(BOOL)animation firstLoad:(BOOL)firstLoad hasMore:(bool)hasMore complete:(void(^)(void))complete {
+    // Bugly #9375: dataProvider.pullFirst 的 PromiseKit 回调在部分路径（thenOn 指定 bg 队列 / 错误重试等）
+    // 会落到非主线程，随后 reloadData → heightForRowAtIndexPath → sharedMeasureTV 首次懒加载在 bg 线程
+    // [UITextView initWithFrame:] 被 iOS 18 主线程契约直接 abort。此处统一 hop 回主线程。
+    if (![NSThread isMainThread]) {
+        __weak typeof(self) weakSelf = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf handleLoadMessages:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
+        });
+        return;
+    }
     if (!self.tableView) return; // 防止 view 已释放后继续操作
     if(!hasMore) {
         [self pullupFinished];
@@ -1431,6 +1444,7 @@
                 [self scrollToBottom:YES];
             }
         }
+
     }
 }
 
@@ -1646,9 +1660,11 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     }
     [baseCell onWillDisplay];
 
-    
+    // 在标记已读之前先检查是否需要触发未读消息的表情特效（否则状态会被改变）
+    [self checkFirstViewEffectForMessage:messageModel];
+
     [self didReadedAndViewed]; // 将消息放入已读和已查看
-    
+
     if(messageModel.orderSeq>self.browseToOrderSeq) {
         [self updateBrowseToOrderSeq];
     }
@@ -1777,6 +1793,25 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 }
 
 
+// 检查 tableView 当前记住的 section/行数是否与 dataProvider 一致。
+// 不一致说明正处于 pulldown/pullup 改完数据源但尚未 insertRows 的间隙，
+// 此时调用 reloadRows/performBatchUpdates 会触发 UITableView 行数断言崩溃。
+-(BOOL) isTableViewRowCountInSyncWithDataProvider {
+    NSInteger tvSectionCount = [self.tableView numberOfSections];
+    NSInteger dsSectionCount = [self.dataProvider dateCount];
+    if (tvSectionCount != dsSectionCount) {
+        return NO;
+    }
+    for (NSInteger s = 0; s < tvSectionCount; s++) {
+        NSInteger tvRows = [self.tableView numberOfRowsInSection:s];
+        NSInteger dsRows = [self.dataProvider messagesAtSection:s].count;
+        if (tvRows != dsRows) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
 // 消息更新
 -(void) onMessageUpdate:(WKMessage*) message left:(NSInteger)left total:(NSInteger)total{
     WKLogDebug(@"onMessageUpdate-->%u",message.messageSeq);
@@ -1818,13 +1853,19 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         }else if(total == 1) {
             needRelodData = false;
             WKMessageBaseCell *cell = (WKMessageBaseCell *)[self.tableView cellForRowAtIndexPath:indexPath];
-            
+
             [self animateMessageWithBlock:^{
                 [cell refresh:newMessageModel];
                 [cell layoutSubviews];
             }];
-            [self.tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
-           
+            // Bugly #9388: pulldown/pullup 在"dataProvider 已加行但尚未 insertRows"的间隙会让出主线程，
+            // 此时 tableView 记住的行数与 dataProvider 不一致，直接 reloadRows 会抛 NSInternalInconsistencyException。
+            // 漂移时跳过 reloadRows —— cell 内容已在上面 refresh，pulldown/pullup 自身的 insertRows 完成后会恢复一致。
+            if ([self isTableViewRowCountInSyncWithDataProvider]) {
+                [self.tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+            } else {
+                WKLogDebug(@"onMessageUpdate skip reloadRows: tableView/dataProvider row-count drift");
+            }
         }
         
         if(self.lastMessage) {
@@ -2103,6 +2144,80 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     }
     [self updatePostionReminders:self.reminders force:true];
     
+}
+
+#pragma mark - Message Effect
+
+-(void) checkAndTriggerEffectForMessage:(WKMessageModel *)message {
+    NSString *effectType = [[WKMessageEffectManager shared] effectTypeForMessage:message];
+    if (!effectType) return;
+
+    // 已触发过则跳过（同一条消息 cell 重用、重新入视图都不重播）
+    if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
+    [[WKMessageEffectManager shared] markTriggeredForMessage:message];
+
+    // 不再主动收起键盘：键盘保持展开，爆炸点会落在可见区域
+    // （computeExplodePointInView 已利用 adjustedContentInset 避开键盘遮挡区）
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSIndexPath *indexPath = [self.dataProvider indexPathAtClientMsgNo:message.clientMsgNo];
+        CGRect sourceRect = CGRectZero;
+        UIImage *avatarImage = nil;
+        if (indexPath) {
+            UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
+            if (cell) {
+                sourceRect = [self.tableView convertRect:cell.frame toView:self];
+                // 从 message cell 的头像控件抓当前显示的 UIImage（已加载完成的头像），
+                // 让火箭发射特效可以在舷窗里嵌入发送者头像
+                if ([cell isKindOfClass:WKMessageCell.class]) {
+                    WKMessageCell *msgCell = (WKMessageCell *)cell;
+                    avatarImage = msgCell.avatarImgView.avatarImgView.image;
+                }
+            }
+        }
+        if (CGRectIsEmpty(sourceRect)) {
+            // fallback: use bottom center
+            sourceRect = CGRectMake(self.bounds.size.width / 2 - 30, self.bounds.size.height - 100, 60, 60);
+        }
+        [[WKMessageEffectManager shared] triggerEffect:effectType
+                                            inHostView:self
+                                            sourceRect:sourceRect
+                                           avatarImage:avatarImage];
+    });
+}
+
+/// 首次看到消息时检查是否触发特效（由 willDisplayCell 调用，是唯一触发入口）
+///
+/// 触发规则（按顺序检查，任一命中就 skip）：
+///   1. triggeredMessageIds 持久化集合包含 → 已触发过，skip
+///   2. 接收消息且已读 (!isSend && readed) → 用户之前看过，skip
+///   3. 消息年龄 > 30s → 历史消息（滚动加载进来的），视觉上已经被"看过"，skip
+///   4. 没命中任何 emoji → skip
+///   5. 否则 → 触发
+-(void) checkFirstViewEffectForMessage:(WKMessageModel *)message {
+    if (!message) return;
+    if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
+    if (!message.isSend && message.readed) return;
+
+    // 年龄检查：历史消息（上下滑动加载的 >30s 老消息）不触发
+    // 自己发的消息没有 readed 语义，这里用年龄兜底
+    NSTimeInterval age = [self ageSecondsForMessage:message];
+    if (age > 30) return;
+
+    NSString *effectType = [[WKMessageEffectManager shared] effectTypeForMessage:message];
+    if (!effectType) return;
+
+    [self checkAndTriggerEffectForMessage:message];
+}
+
+/// 计算消息年龄（秒），自动兼容 timestamp 是秒还是毫秒的情况
+-(NSTimeInterval) ageSecondsForMessage:(WKMessageModel *)message {
+    if (!message) return 0;
+    NSInteger ts = MAX(message.timestamp, message.localTimestamp);
+    if (ts <= 0) return 0;
+    // 当前秒级 timestamp ~1.7e9，毫秒级 ~1.7e12；> 2e10 一定是毫秒
+    if (ts > 20000000000LL) ts = ts / 1000;
+    NSTimeInterval age = [[NSDate date] timeIntervalSince1970] - (NSTimeInterval)ts;
+    return MAX(0, age);
 }
 
 

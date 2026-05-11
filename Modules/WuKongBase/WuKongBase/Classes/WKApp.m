@@ -5,6 +5,7 @@
 //  Created by tt on 2019/12/1.
 //
 #import <UserNotifications/UserNotifications.h>
+#import <WebKit/WebKit.h>
 
 #import "WKApp.h"
 #import "WKEndpointManager.h"
@@ -678,6 +679,19 @@ static WKApp *_instance;
 -(void) immediatelyLogout {
     // 清楚登录信息
     [[WKLoginInfo shared] clearMainData];
+    // 清掉 WKWebView 共享的 cookie / 本地存储，防止 Aegis 等 OIDC SSO 会话 cookie 遗留
+    // 导致下次点「使用 Aegis 登录」被自动授权进去。data store 是全 app 共享的，
+    // 清的范围只是 cookie + localStorage + sessionStorage，不动缓存/indexedDB。
+    NSSet *dataTypes = [NSSet setWithArray:@[
+        WKWebsiteDataTypeCookies,
+        WKWebsiteDataTypeLocalStorage,
+        WKWebsiteDataTypeSessionStorage,
+    ]];
+    [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:dataTypes
+                                               modifiedSince:[NSDate distantPast]
+                                           completionHandler:^{
+        WKLogDebug(@"[logout] cleared WKWebView cookies/storage");
+    }];
     // 调用登出
     [self invoke:WKPOINT_LOGIN_LOGOUT param:nil];
 }
@@ -1628,6 +1642,12 @@ static WKApp *_instance;
 #pragma mark - WKNetworkListenerDelegate
 
 - (void)networkListenerStatusChange:(WKNetworkListener *)listener {
+    // Network restored: refresh appconfig so the login page's Aegis SSO button
+    // state recovers when the user was offline on app launch. Runs before the
+    // `isLogined` early-return so the logged-out case is also covered.
+    if(listener.hasNetwork) {
+        [[self remoteConfig] refreshConfig:nil];
+    }
     if(![[WKApp shared] isLogined]) {
         return;
     }

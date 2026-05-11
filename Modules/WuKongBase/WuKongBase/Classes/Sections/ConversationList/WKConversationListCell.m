@@ -65,6 +65,8 @@
 
 @property(nonatomic,strong) UILabel *externalGroupTagLbl; // 外部群 Tag（仅 WK_GROUP 的 is_external_group==1 会话）
 
+@property(nonatomic,copy) NSString *lastAvatarChannelId; // 上一次 refreshAvatar 对应的 channelId，用于判断 cell 是否被复用到不同会话
+
 @end
 
 @implementation WKConversationListCell
@@ -219,7 +221,8 @@
 
 - (void)prepareForReuse {
     [super prepareForReuse];
-    self.avatarImgView.avatarImgView.image = nil;
+    // 不再清空 avatar image，让旧头像保留到新头像加载完成后再替换，避免刷新时出现空白/占位图闪烁。
+    // 如果 cell 被复用到不同会话，SDWebImage 会在新 URL 加载完成后覆盖旧头像。
     self.hashTagLbl.hidden = YES;
     self.threadToggleBtn.hidden = YES;
     self.onToggleThreadPreview = nil;
@@ -436,8 +439,15 @@
 
 -(void) refreshAvatar:(WKConversationWrapModel*)model {
     BOOL hasChannelInfo  = model.channelInfo?true:false;
-    // 头像
-    self.avatarImgView.avatarImgView.image =[self imageName:@"Common/Index/DefaultAvatar"];
+    UIImage *placeholder = [self imageName:@"Common/Index/DefaultAvatar"];
+    NSString *channelId = model.channel.channelId;
+    // 只有 cell 被复用到不同会话时才把头像清回占位图，避免复用瞬间残留上一个会话的人脸；
+    // 同会话刷新（常见于从详情页返回列表）保留当前已显示的头像，SDWebImage 会在新头像就绪后原地替换。
+    BOOL channelChanged = (channelId.length == 0) || ![channelId isEqualToString:self.lastAvatarChannelId];
+    if (channelChanged) {
+        self.avatarImgView.avatarImgView.image = placeholder;
+    }
+    self.lastAvatarChannelId = channelId;
     if([model.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
         NSString *avatarURL = hasChannelInfo ? [WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo] : nil;
         NSLog(@"[DEBUG] 系统通知(u_10000) logo: %@, avatarURL: %@, hasChannelInfo: %d", model.channelInfo.logo, avatarURL, hasChannelInfo);
@@ -466,9 +476,12 @@
                 avatarURL = [WKAvatarUtil getAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
             }
         }
-        [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL] placeholderImage:[self imageName:@"Common/Index/DefaultAvatar"] options:0 context:@{
+        // SDWebImageDelayPlaceholder：加载过程中不覆盖当前已显示的头像，只在最终加载失败时才落到占位图，避免返回会话列表刷新时的占位图闪烁
+        [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL] placeholderImage:placeholder options:SDWebImageDelayPlaceholder context:@{
             SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll),
         }];
+    } else {
+        self.avatarImgView.avatarImgView.image = placeholder;
     }
 }
 

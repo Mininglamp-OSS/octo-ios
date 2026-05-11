@@ -79,4 +79,104 @@
     return [out copy];
 }
 
+// YUJ-420 R1 fix (Jerry-Xin 🔴 Critical): WKLoginView / WKRegisterVC 两处 buildOidcAuthorizeURL 共用 helper。
+// 原实现用 URLQueryAllowedCharacterSet + stringByAddingPercentEncodingWithAllowedCharacters 手拼
+// query, 该字符集不转义 `&`/`=`/`+` — authcode 或 device_name 出现这些字符时会被
+// 截断或注入旁的 query param。
+// 用 NSURLComponents + NSURLQueryItem 让系统一方应注 RFC 3986 安全转义；不再打 full URL 日志,
+// 仅 host+path debug 日志, authcode/device_* 脱敏。
++ (nullable NSURL *)buildAuthorizeURLForProvider:(WKOidcProviderConfig *)provider
+                                         authcode:(NSString *)authcode
+                                          apiBase:(NSString *)apiBase
+                                         deviceId:(nullable NSString *)deviceId
+                                       deviceName:(nullable NSString *)deviceName
+                                      deviceModel:(nullable NSString *)deviceModel {
+    NSString *path = provider.authorizePath ?: @"";
+    NSString *effectiveBase = apiBase ?: @"";
+    NSString *baseStr = nil;
+    if([path hasPrefix:@"http://"] || [path hasPrefix:@"https://"]) {
+        baseStr = path;
+    } else if([path hasPrefix:@"/"]) {
+        NSURL *baseURL = [NSURL URLWithString:effectiveBase];
+        NSURL *resolved = [NSURL URLWithString:path relativeToURL:baseURL];
+        baseStr = resolved.absoluteString;
+    } else {
+        baseStr = [effectiveBase stringByAppendingString:path];
+    }
+    if(baseStr.length == 0) return nil;
+
+    NSURLComponents *components = [NSURLComponents componentsWithString:baseStr];
+    if(!components) return nil;
+
+    // 保留 base URL 自带的 query（罕见但向前兼容）, 追加 auth/device 参数。
+    NSMutableArray<NSURLQueryItem *> *items = [NSMutableArray array];
+    if(components.queryItems) {
+        [items addObjectsFromArray:components.queryItems];
+    }
+    if(authcode.length > 0) {
+        [items addObject:[NSURLQueryItem queryItemWithName:@"authcode" value:authcode]];
+    }
+    [items addObject:[NSURLQueryItem queryItemWithName:@"flag" value:@"3"]];
+    if(deviceId.length > 0) {
+        [items addObject:[NSURLQueryItem queryItemWithName:@"device_id" value:deviceId]];
+    }
+    if(deviceName.length > 0) {
+        [items addObject:[NSURLQueryItem queryItemWithName:@"device_name" value:deviceName]];
+    }
+    if(deviceModel.length > 0) {
+        [items addObject:[NSURLQueryItem queryItemWithName:@"device_model" value:deviceModel]];
+    }
+    components.queryItems = items;
+
+    NSURL *full = components.URL;
+    if(!full) return nil;
+    // 脱敏日志: 仅打 host + path, 不包含 query (authcode / device 信息)。
+    NSString *redactedOrigin = [NSString stringWithFormat:@"%@://%@%@",
+                                full.scheme ?: @"",
+                                full.host ?: @"",
+                                full.path ?: @""];
+    NSInteger paramCount = (NSInteger)components.queryItems.count;
+    NSLog(@"[OIDC] authorize url host=%@ params=%ld", redactedOrigin, (long)paramCount);
+    return full;
+}
+
+
+// YUJ-420 R3 fix (Jerry-Xin Critical): 递归剥 NSNull, 产出 plist-safe 副本。
+// 详见 .h 注释。
++ (nullable id)plistSanitize:(nullable id)value {
+    if(value == nil) return nil;
+    if([value isKindOfClass:[NSNull class]]) return nil;
+    if([value isKindOfClass:[NSArray class]]) {
+        NSMutableArray *out = [NSMutableArray array];
+        for(id item in (NSArray *)value) {
+            id sanitized = [self plistSanitize:item];
+            if(sanitized != nil) {
+                [out addObject:sanitized];
+            }
+        }
+        return [out copy];
+    }
+    if([value isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary *out = [NSMutableDictionary dictionary];
+        for(id key in ((NSDictionary *)value).allKeys) {
+            // plist key 必须是 NSString
+            if(![key isKindOfClass:[NSString class]]) continue;
+            id sanitized = [self plistSanitize:((NSDictionary *)value)[key]];
+            if(sanitized != nil) {
+                out[key] = sanitized;
+            }
+        }
+        return [out copy];
+    }
+    // plist-native 类型原样放行
+    if([value isKindOfClass:[NSString class]] ||
+       [value isKindOfClass:[NSNumber class]] ||
+       [value isKindOfClass:[NSData class]] ||
+       [value isKindOfClass:[NSDate class]]) {
+        return value;
+    }
+    // 其它非 plist 类型（自定义对象等）静默丢弃，避免写盘 crash
+    return nil;
+}
+
 @end

@@ -231,6 +231,13 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 从缓存获取指定群聊下子区的未读数和 @提醒状态（供 cell 渲染用，无 DB 查询）
 -(void) getThreadIndicatorForGroup:(NSString *)groupNo threadUnread:(NSInteger *)outUnread threadHasMention:(BOOL *)outHasMention;
 
+/// 同上，但允许排除一组 channelId（例如已经作为预览行单独显示红点的子区）。
+/// 用于"+N个子区"badge 的计算，避免把预览行已经展示的未读数重复计入。
+-(void) getThreadIndicatorForGroup:(NSString *)groupNo
+               excludingChannelIds:(nullable NSSet<NSString *> *)excluded
+                      threadUnread:(NSInteger *)outUnread
+                  threadHasMention:(BOOL *)outHasMention;
+
 /// 保存折叠状态
 -(void) saveCollapsedSections;
 

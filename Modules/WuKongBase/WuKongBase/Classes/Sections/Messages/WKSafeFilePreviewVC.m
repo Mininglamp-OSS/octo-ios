@@ -251,14 +251,66 @@ static UIWindow *_previousKeyWindow = nil;
            @"img{max-width:100%}a{color:#0366d6}";
 }
 
+#pragma mark - 文本编码自适应读取
+
+// 动态探测文本文件编码，避免把 GBK/GB18030/Big5 的中文文件强制按 UTF-8 或 Latin1 解码导致乱码。
+// 顺序：BOM → 严格 UTF-8 → GB18030（兼容 GBK/GB2312）→ Big5 → 系统启发式 → UTF-8 lossy 兜底。
+- (NSString *)decodeTextFromData:(NSData *)data {
+    if (data.length == 0) return @"";
+
+    const unsigned char *bytes = data.bytes;
+    NSUInteger len = data.length;
+
+    // 1) BOM
+    if (len >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+        NSString *s = [[NSString alloc] initWithData:[data subdataWithRange:NSMakeRange(3, len - 3)]
+                                            encoding:NSUTF8StringEncoding];
+        if (s) return s;
+    }
+    if (len >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
+        NSString *s = [[NSString alloc] initWithData:data encoding:NSUTF16LittleEndianStringEncoding];
+        if (s) return s;
+    }
+    if (len >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
+        NSString *s = [[NSString alloc] initWithData:data encoding:NSUTF16BigEndianStringEncoding];
+        if (s) return s;
+    }
+
+    // 2) 严格 UTF-8
+    NSString *s = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (s) return s;
+
+    // 3) GB18030（向下兼容 GBK / GB2312）
+    NSStringEncoding gb18030 = CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingGB_18030_2000);
+    s = [[NSString alloc] initWithData:data encoding:gb18030];
+    if (s) return s;
+
+    // 4) Big5（繁体中文）
+    NSStringEncoding big5 = CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingBig5);
+    s = [[NSString alloc] initWithData:data encoding:big5];
+    if (s) return s;
+
+    // 5) 系统启发式识别
+    NSString *detected = nil;
+    NSStringEncoding guessed = [NSString stringEncodingForData:data
+                                               encodingOptions:nil
+                                               convertedString:&detected
+                                           usedLossyConversion:NULL];
+    if (guessed != 0 && detected.length > 0) return detected;
+
+    // 6) 兜底：UTF-8 lossy，至少保证 ASCII 部分可读（不要再用 Latin1 假装成功）
+    return [[NSString alloc] initWithBytes:data.bytes
+                                    length:data.length
+                                  encoding:NSUTF8StringEncoding] ?: @"";
+}
+
 #pragma mark - Markdown (cmark-gfm 渲染)
 
 - (void)loadMarkdownFile {
     NSData *data = [NSData dataWithContentsOfURL:self.fileURL];
     if (!data) return;
-    NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    if (!text) text = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding];
-    if (!text) return;
+    NSString *text = [self decodeTextFromData:data];
+    if (text.length == 0) return;
 
     cmark_gfm_core_extensions_ensure_registered();
     cmark_parser *parser = cmark_parser_new(CMARK_OPT_DEFAULT);
@@ -288,9 +340,8 @@ static UIWindow *_previousKeyWindow = nil;
 - (void)loadPlainTextFile {
     NSData *data = [NSData dataWithContentsOfURL:self.fileURL];
     if (!data) return;
-    NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    if (!text) text = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding];
-    if (!text) return;
+    NSString *text = [self decodeTextFromData:data];
+    if (text.length == 0) return;
 
     NSString *escaped = [text stringByReplacingOccurrencesOfString:@"&" withString:@"&amp;"];
     escaped = [escaped stringByReplacingOccurrencesOfString:@"<" withString:@"&lt;"];
