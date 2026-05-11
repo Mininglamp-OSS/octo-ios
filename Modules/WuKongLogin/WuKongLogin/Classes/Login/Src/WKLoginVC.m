@@ -23,6 +23,19 @@
     [super viewDidLoad];
     self.navigationBar.hidden= YES;
     [self fillZoneAndPhone];
+
+    // Kick off remote config so the Aegis SSO button can appear on first entry.
+    // WKAppRemoteConfig dedupes concurrent calls; this is cheap if it already ran.
+    [[WKApp shared].remoteConfig requestConfig:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onRemoteConfigLoaded) name:WKNOTIFY_REMOTECONFIG_LOADED object:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)onRemoteConfigLoaded {
+    [self.loginView refreshOidcProviders];
 }
 
 - (NSString *)langTitle {

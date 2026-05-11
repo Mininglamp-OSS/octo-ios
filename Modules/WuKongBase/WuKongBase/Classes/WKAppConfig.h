@@ -10,6 +10,7 @@
 #import "WKRTCIceServer.h"
 #import "WKOidcProviderConfig.h"
 @class WKAppModuleResp;
+@class WKOidcProviderConfig;
 
 @class WKThemeContextMenu;
 typedef enum : NSUInteger {
@@ -210,13 +211,17 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,assign) BOOL threadOn; // 子区功能开关
 
-@property(nonatomic,strong) NSArray<WKAppModuleResp*> *modules;
-
-// YUJ-396 / GH dmwork-web#1174: OIDC provider 列表（appconfig.oidc_providers）.
-// 每个 entry 的 accountUrl 按环境不同（accounts-test.imocto.cn on im-test,
-// accounts.example.com on im-prod）。WKRealnameVerifyManager 从这里读账户页 URL,
-// 不再硬编码 prod 常量。未下发时为 @[], 调用侧需有 toast 兜底。
+// Aegis OIDC SSO providers downloaded from `common/appconfig` -> `oidc_providers`.
+// YUJ-396 / GH dmwork-web#1174 / develop_fix 625cc7c 合并合定义:
+// - 登录页 (王立涛 develop_fix): 显示/隐藏 SSO 按钮, init 从 NSUserDefaults 缓存 hydrate 冷启动即可渲染。
+// - 实名认证 (YUJ-396): WKRealnameVerifyManager 读每 entry 的 accountUrl 拼账户页 URL,
+//   不再硬编码 prod 常量。accountUrl 按环境不同 (accounts-test.imocto.cn im-test /
+//   accounts.example.com im-prod)。未下发 / 非数组 → @[], 调用侧 toast 兜底。
+// Mirrors web dmworkbase OidcProviderConfig / dmworklogin SSOProvider
+// (id/name/authorize_path[/account_url/reset_password_url]).
 @property(nonatomic,copy) NSArray<WKOidcProviderConfig*> *oidcProviders;
+
+@property(nonatomic,strong) NSArray<WKAppModuleResp*> *modules;
 
 @property(nonatomic,assign) BOOL requestSuccess; // 请求远程配置是否成功
 @property(nonatomic,assign) BOOL requestAppModuleSuccess; // 请求app模块是否成功
@@ -232,6 +237,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// 失败场景会把 NSError 传给所有入队的 callback; 下一次调用 requestConfig:
 /// 会重新发起请求（requestSuccess 还是 NO）。
 -(void) requestConfig:(void(^__nullable)(NSError  * __nullable error))callback;
+
+// Like requestConfig: but forces a fresh fetch regardless of the cached-success
+// flag. Use this on network restore / explicit refresh. Dedupes concurrent calls
+// (only one in-flight fetch at a time). Posts WKNOTIFY_REMOTECONFIG_LOADED on
+// success, so subscribers (e.g. login page SSO button) update automatically.
+-(void) refreshConfig:(void(^__nullable)(NSError * __nullable error))callback;
 
 // 启用或关闭模块
 -(void) modules:(NSString*)sid on:(BOOL)on;
@@ -264,6 +275,19 @@ typedef enum : NSInteger {
 @property(nonatomic,assign) BOOL hidden; // 隐藏
 @property(nonatomic,assign) NSInteger status; // 模块状态 1.可选 0.不可选 2.选中不可编辑
 
+
+@end
+
+// Aegis OIDC SSO provider. One entry corresponds to a single IdP (e.g. 飞书/Aegis).
+// authorizePath is a fully-qualified URL or server-relative path the login
+// webview should open with `?authcode=X&return_to=Y&flag=0` appended.
+@interface WKOidcProviderConfig : WKModel
+
+@property(nonatomic,copy) NSString * _Nonnull providerId;     // backend field: `id`
+@property(nonatomic,copy) NSString * _Nonnull name;           // display name shown on the SSO button
+@property(nonatomic,copy) NSString * _Nonnull authorizePath;  // backend field: `authorize_path`
+@property(nonatomic,copy) NSString * _Nullable accountUrl;        // backend field: `account_url`
+@property(nonatomic,copy) NSString * _Nullable resetPasswordUrl;  // backend field: `reset_password_url`
 
 @end
 

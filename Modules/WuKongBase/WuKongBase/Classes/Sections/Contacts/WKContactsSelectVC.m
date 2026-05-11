@@ -14,6 +14,7 @@
 #import  "UIBarButtonItem+WK.h"
 //头部视图高度
 #define HEAD_VIEW_HEIGHT 50
+#define FILTER_TAB_HEIGHT 50
 
 @interface WKContactsSelectVC ()<UITableViewDataSource,UITableViewDelegate,WKContactsManagerDelegate>
 
@@ -33,6 +34,9 @@
 
 @property(nonatomic,assign) BOOL notGetChannel; // 不去获取频道的名字
 
+@property(nonatomic, assign) NSInteger contactsFilter; // 0=全部 1=人类 2=AI
+@property(nonatomic, strong) UIView *filterTabView;
+
 @end
 
 @implementation WKContactsSelectVC
@@ -46,20 +50,23 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    
+
     if(self.showBack) {
         [self.navigationBar setShowBackButton:YES];
     }
-    
+
     self.items = [NSMutableArray array];
-    
+
     [self refreshRightItem];
     //添加搜索bar
     [self.view addSubview:self.searchBar];
-   
+    // 添加过滤tab
+    [self.view addSubview:self.filterTabView];
+
     [self requestData];
-    
-    [self parseData:self.data];
+
+    [self rebuildFilterTabView];
+    [self applyFilterAndSearch];
     if (!self.maxSelectMembers) {
         self.maxSelectMembers = self.data.count;
     }
@@ -141,11 +148,12 @@
 }
 
 -(void) doSearch:(NSString*)text {
+    NSArray *baseData = [self filteredData];
     NSArray *data;
     if(!text || [text isEqualToString:@""]) {
-        data = self.data;
+        data = baseData;
     }else {
-        data = [self.data filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"name CONTAINS[c] %@ OR displayName CONTAINS[c] %@",text,text]];
+        data = [baseData filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"name CONTAINS[c] %@ OR displayName CONTAINS[c] %@",text,text]];
     }
 
     [self parseData:data];
@@ -194,7 +202,7 @@
 #pragma mark - table
 -(UITableView *)tableView{
     if(!_tableView){
-        _tableView = [[UITableView alloc] initWithFrame:CGRectMake(0,HEAD_VIEW_HEIGHT+[self visibleRect].origin.y, self.view.lim_width, [self visibleRect].size.height - HEAD_VIEW_HEIGHT) style:UITableViewStyleGrouped];
+        _tableView = [[UITableView alloc] initWithFrame:CGRectMake(0,HEAD_VIEW_HEIGHT + FILTER_TAB_HEIGHT +[self visibleRect].origin.y, self.view.lim_width, [self visibleRect].size.height - HEAD_VIEW_HEIGHT - FILTER_TAB_HEIGHT) style:UITableViewStyleGrouped];
         _tableView.delegate = self;
         _tableView.dataSource = self;
         UIEdgeInsets separatorInset = _tableView.separatorInset;
@@ -471,6 +479,117 @@
 -(UIImage*) imageName:(NSString*)name {
     return [WKApp.shared loadImage:name moduleID:@"WuKongBase"];
 //    return [[WKResource shared] resourceForImage:name podName:@"WuKongBase_images"];
+}
+
+#pragma mark - Filter Tab
+
+-(UIView*) filterTabView {
+    if (!_filterTabView) {
+        _filterTabView = [[UIView alloc] initWithFrame:CGRectMake(0, self.navigationBar.lim_bottom + HEAD_VIEW_HEIGHT, WKScreenWidth, FILTER_TAB_HEIGHT)];
+        _filterTabView.backgroundColor = [WKApp shared].config.cellBackgroundColor;
+    }
+    return _filterTabView;
+}
+
+-(void) rebuildFilterTabView {
+    for (UIView *sub in self.filterTabView.subviews) {
+        [sub removeFromSuperview];
+    }
+
+    NSInteger totalCount = self.data ? self.data.count : 0;
+    NSInteger aiCount = 0;
+    NSInteger humanCount = 0;
+    for (WKContactsSelect *item in self.data) {
+        if (item.robot) aiCount++; else humanCount++;
+    }
+
+    NSArray *titles = @[
+        [NSString stringWithFormat:@"%@ · %ld", LLang(@"全部"), (long)totalCount],
+        [NSString stringWithFormat:@"%@ · %ld", LLang(@"人类"), (long)humanCount],
+        [NSString stringWithFormat:@"%@ · %ld", LLang(@"已添加AI"), (long)aiCount]
+    ];
+
+    CGFloat hPad = 14.0f;
+    CGFloat pillH = 34.0f;
+    CGFloat pillY = (FILTER_TAB_HEIGHT - pillH) / 2.0f;
+
+    UIView *pillBg = [[UIView alloc] initWithFrame:CGRectMake(hPad, pillY, WKScreenWidth - hPad * 2, pillH)];
+    pillBg.backgroundColor = [self filterBgElevColor];
+    pillBg.layer.cornerRadius = 10.0f;
+    [self.filterTabView addSubview:pillBg];
+
+    CGFloat segPad = 2.0f;
+    CGFloat segW = (pillBg.lim_width - segPad * 2) / 3.0f;
+    CGFloat segH = pillH - segPad * 2;
+
+    for (NSInteger i = 0; i < 3; i++) {
+        UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+        [btn setTitle:titles[i] forState:UIControlStateNormal];
+        btn.tag = i;
+        [btn addTarget:self action:@selector(filterTabTapped:) forControlEvents:UIControlEventTouchUpInside];
+
+        btn.frame = CGRectMake(segPad + segW * i, segPad, segW, segH);
+        btn.layer.cornerRadius = 8.0f;
+
+        if (self.contactsFilter == i) {
+            btn.backgroundColor = [WKApp shared].config.cellBackgroundColor;
+            btn.titleLabel.font = [UIFont systemFontOfSize:13.0f weight:UIFontWeightBold];
+            [btn setTitleColor:[WKApp shared].config.defaultTextColor forState:UIControlStateNormal];
+            btn.layer.shadowColor = [UIColor blackColor].CGColor;
+            btn.layer.shadowOpacity = 0.08f;
+            btn.layer.shadowOffset = CGSizeMake(0, 1);
+            btn.layer.shadowRadius = 3.0f;
+        } else {
+            btn.backgroundColor = [UIColor clearColor];
+            btn.titleLabel.font = [UIFont systemFontOfSize:13.0f weight:UIFontWeightMedium];
+            [btn setTitleColor:[WKApp shared].config.tipColor forState:UIControlStateNormal];
+            btn.layer.shadowOpacity = 0;
+        }
+
+        [pillBg addSubview:btn];
+    }
+}
+
+-(UIColor*) filterBgElevColor {
+    if (@available(iOS 13.0, *)) {
+        return [UIColor colorWithDynamicProvider:^UIColor * _Nonnull(UITraitCollection * _Nonnull traitCollection) {
+            if (traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark || WKApp.shared.config.style == WKSystemStyleDark) {
+                return [UIColor colorWithRed:23/255.0f green:24/255.0f blue:29/255.0f alpha:1.0f];
+            }
+            return [UIColor colorWithRed:245/255.0f green:246/255.0f blue:248/255.0f alpha:1.0f];
+        }];
+    }
+    return [UIColor colorWithRed:245/255.0f green:246/255.0f blue:248/255.0f alpha:1.0f];
+}
+
+-(void) filterTabTapped:(UIButton*)sender {
+    if (self.contactsFilter == sender.tag) return;
+    self.contactsFilter = sender.tag;
+    [self rebuildFilterTabView];
+    [self applyFilterAndSearch];
+}
+
+-(NSArray<WKContactsSelect*>*) filteredData {
+    if (!self.data) return @[];
+    if (self.contactsFilter == 1) { // 人类
+        NSMutableArray *result = [NSMutableArray array];
+        for (WKContactsSelect *item in self.data) {
+            if (!item.robot) [result addObject:item];
+        }
+        return result;
+    } else if (self.contactsFilter == 2) { // AI
+        NSMutableArray *result = [NSMutableArray array];
+        for (WKContactsSelect *item in self.data) {
+            if (item.robot) [result addObject:item];
+        }
+        return result;
+    }
+    return self.data;
+}
+
+-(void) applyFilterAndSearch {
+    NSString *text = self.searchBar.searchFd.text;
+    [self doSearch:text];
 }
 
 - (void)dealloc {

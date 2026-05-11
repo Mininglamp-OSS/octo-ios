@@ -33,12 +33,16 @@
        NSInteger status =  [resultDict[@"status"] integerValue];
         if(status == 1) {
             NSDictionary *dataDict = resultDict[@"result"];
+            // Diagnose Aegis/OIDC login issues: log which fields backend returned.
+            // If `im_token` is missing we fall back to `token` (see WKLoginVM handleLoginData),
+            // which on some backends causes IM CONNECT to be closed silently.
+            WKLogDebug(@"[OIDC] authstatus result fields: %@", [dataDict.allKeys componentsJoinedByString:@","]);
             [weakSelf login:dataDict];
         }else {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 [weakSelf startCheckAuthStatus:authcode];
             });
-           
+
         }
     }).catch(^(NSError *error){
         [weakSelf.view showHUDWithHide:error.domain];
@@ -49,8 +53,14 @@
     WKLoginResp *resp = (WKLoginResp*)[WKLoginResp fromMap:dataDict type:ModelMapTypeAPI];
     [WKLoginVM handleLoginData:resp isSave:YES];
 
+    // 冷启动的自动登录判定 (WKApp.m:443-467) 同时要求 currentSpaceId 非空
+    // **且** WKSpaceGateCompleted=YES。早先只设了 spaceId 没设 gateCompleted，导致 Aegis
+    // 登录后重启 app 会被判"未完成引导"→ 清 loginInfo 踢回登录页。这里两个 key 一起设，
+    // 和 WKLoginVC.m checkSpaceBeforeEnter 保持对齐。
     NSString *cachedSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
     if (cachedSpaceId && ![cachedSpaceId isEqualToString:@""]) {
+        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
         [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
         return;
     }
@@ -61,6 +71,7 @@
             NSString *spaceId = firstSpace[@"space_id"];
             if (spaceId && ![spaceId isEqualToString:@""]) {
                 [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+                [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
                 [[NSUserDefaults standardUserDefaults] synchronize];
             }
             [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];

@@ -12,6 +12,7 @@
 #import "WKRegisterNextVC.h"
 #import "WKSpaceGateVC.h"
 #import "WKServerConfig.h"
+#import "WKAuthWebViewVC.h"
 #import <M80AttributedLabel/M80AttributedLabel.h>
 
 typedef enum : NSUInteger {
@@ -58,6 +59,11 @@ typedef enum : NSUInteger {
 @property(nonatomic,strong) UILabel *loginTipLbl;
 @property(nonatomic,strong) UIButton *toLoginBtn;
 @property(nonatomic,strong) M80AttributedLabel *privacyLbl;
+
+// Aegis SSO 快速入口 — 与 WKLoginView 共享同一套 authcode / WKAuthWebViewVC 机制
+@property(nonatomic,strong) UIButton *ssoBtn;
+@property(nonatomic,strong) WKOidcProviderConfig *currentProvider;
+@property(nonatomic,assign) BOOL ssoInFlight;
 
 @end
 
@@ -112,6 +118,15 @@ typedef enum : NSUInteger {
     [self.view addSubview:self.loginTipLbl];
     [self.view addSubview:self.toLoginBtn];
     [self.view addSubview:self.privacyLbl];
+
+    [self.view addSubview:self.ssoBtn];
+    [self refreshOidcProviders];
+    [[WKApp shared].remoteConfig requestConfig:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onRemoteConfigLoaded) name:WKNOTIFY_REMOTECONFIG_LOADED object:nil];
+}
+
+- (void)onRemoteConfigLoaded {
+    [self refreshOidcProviders];
 }
 
 - (WKBaseVM *)viewModel {
@@ -366,6 +381,102 @@ typedef enum : NSUInteger {
     return _toLoginBtn;
 }
 
+// ---------- Aegis SSO ----------
+- (UIButton *)ssoBtn {
+    if(!_ssoBtn) {
+        _ssoBtn = [[UIButton alloc] initWithFrame:CGRectMake(30.0f, self.loginTipLbl.lim_bottom + 20.0f, WKScreenWidth - 60.0f, 40.0f)];
+        _ssoBtn.layer.masksToBounds = YES;
+        _ssoBtn.layer.cornerRadius = 4.0f;
+        _ssoBtn.layer.borderWidth = 1.0f;
+        _ssoBtn.layer.borderColor = [WKApp shared].config.themeColor.CGColor;
+        [_ssoBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
+        [[_ssoBtn titleLabel] setFont:[UIFont systemFontOfSize:15.0f]];
+        [_ssoBtn addTarget:self action:@selector(ssoBtnPressed) forControlEvents:UIControlEventTouchUpInside];
+        _ssoBtn.hidden = YES;
+    }
+    return _ssoBtn;
+}
+
+- (void)refreshOidcProviders {
+    NSArray<WKOidcProviderConfig*> *providers = [WKApp shared].remoteConfig.oidcProviders;
+    WKOidcProviderConfig *provider = providers.count > 0 ? providers.firstObject : nil;
+    self.currentProvider = provider;
+    if(!provider) {
+        self.ssoBtn.hidden = YES;
+        return;
+    }
+    NSString *title = [NSString stringWithFormat:LLang(@"使用 %@ 登录或注册"), provider.name];
+    [self.ssoBtn setTitle:title forState:UIControlStateNormal];
+    self.ssoBtn.hidden = NO;
+}
+
+- (void)ssoBtnPressed {
+    if(self.ssoInFlight) return;
+    WKOidcProviderConfig *provider = self.currentProvider;
+    if(!provider) return;
+    self.ssoInFlight = YES;
+    __weak typeof(self) weakself = self;
+    [WKAPIClient.sharedClient GET:@"user/thirdlogin/authcode" parameters:nil].then(^(NSDictionary *resultDict){
+        weakself.ssoInFlight = NO;
+        NSString *authcode = resultDict[@"authcode"];
+        if(!authcode || authcode.length == 0) {
+            [weakself.view showHUDWithHide:LLang(@"获取授权失败，请重试")];
+            return;
+        }
+        NSURL *authorizeURL = [weakself buildOidcAuthorizeURL:provider authcode:authcode];
+        if(!authorizeURL) {
+            [weakself.view showHUDWithHide:LLang(@"授权地址无效")];
+            return;
+        }
+        WKAuthWebViewVC *vc = [[WKAuthWebViewVC alloc] init];
+        vc.authcode = authcode;
+        vc.url = authorizeURL;
+        [WKNavigationManager.shared pushViewController:vc animated:YES];
+    }).catch(^(NSError *error){
+        weakself.ssoInFlight = NO;
+        [weakself.view showHUDWithHide:error.domain];
+    });
+}
+
+- (NSURL *)buildOidcAuthorizeURL:(WKOidcProviderConfig *)provider authcode:(NSString *)authcode {
+    NSString *path = provider.authorizePath ?: @"";
+    NSString *apiBase = WKAPIClient.sharedClient.config.baseUrl ?: @"";
+    NSString *base = nil;
+    if([path hasPrefix:@"http://"] || [path hasPrefix:@"https://"]) {
+        base = path;
+    } else if([path hasPrefix:@"/"]) {
+        NSURL *baseURL = [NSURL URLWithString:apiBase];
+        NSURL *resolved = [NSURL URLWithString:path relativeToURL:baseURL];
+        base = resolved.absoluteString;
+    } else {
+        base = [apiBase stringByAppendingString:path];
+    }
+    if(base.length == 0) return nil;
+
+    NSCharacterSet *allowed = [NSCharacterSet URLQueryAllowedCharacterSet];
+    NSMutableArray<NSString*> *query = [NSMutableArray array];
+    NSString *encodedCode = [authcode stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: authcode;
+    [query addObject:[NSString stringWithFormat:@"authcode=%@", encodedCode]];
+    [query addObject:@"flag=3"];
+    NSString *deviceId = [UIDevice getUUID] ?: @"";
+    NSString *deviceName = [UIDevice getDeviceName] ?: @"";
+    NSString *deviceModel = [UIDevice getDeviceModel] ?: @"";
+    if(deviceId.length > 0) {
+        [query addObject:[NSString stringWithFormat:@"device_id=%@", [deviceId stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: deviceId]];
+    }
+    if(deviceName.length > 0) {
+        [query addObject:[NSString stringWithFormat:@"device_name=%@", [deviceName stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: deviceName]];
+    }
+    if(deviceModel.length > 0) {
+        [query addObject:[NSString stringWithFormat:@"device_model=%@", [deviceModel stringByAddingPercentEncodingWithAllowedCharacters:allowed] ?: deviceModel]];
+    }
+
+    NSString *joiner = [base rangeOfString:@"?"].location == NSNotFound ? @"?" : @"&";
+    NSString *full = [NSString stringWithFormat:@"%@%@%@", base, joiner, [query componentsJoinedByString:@"&"]];
+    WKLogDebug(@"[OIDC] authorize url: %@", full);
+    return [NSURL URLWithString:full];
+}
+
 - (M80AttributedLabel *)privacyLbl {
     if(!_privacyLbl) {
         CGFloat bottom = 0.0f;
@@ -531,6 +642,7 @@ typedef enum : NSUInteger {
         [self.codeTimer invalidate];
         self.codeTimer = nil;
     }
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 @end
