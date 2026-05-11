@@ -285,17 +285,17 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
     if (personalContext.length > 0) formFields[@"personal_context"] = personalContext;
     if (memberContext.length > 0) formFields[@"member_context"] = memberContext;
 
-    NSLog(@"[VoiceInput] ===== 语音转写请求 (WAV) =====");
-    NSLog(@"[VoiceInput] 发送字段: context_text=%@(%lu) chat_context=%@(%lu) personal_context=%@(%lu) member_context=%@(%lu)",
-          formFields[@"context_text"] ? @"Y" : @"N", (unsigned long)contextText.length,
-          formFields[@"chat_context"] ? @"Y" : @"N", (unsigned long)chatContext.length,
-          formFields[@"personal_context"] ? @"Y" : @"N", (unsigned long)personalContext.length,
-          formFields[@"member_context"] ? @"Y" : @"N", (unsigned long)memberContext.length);
-    NSLog(@"[VoiceInput] context_text: %@", contextText ?: @"(nil)");
-    NSLog(@"[VoiceInput] chat_context: %@", chatContext ?: @"(nil)");
-    NSLog(@"[VoiceInput] personal_context: %@", personalContext ?: @"(nil)");
-    NSLog(@"[VoiceInput] member_context: %@", memberContext ?: @"(nil)");
-    NSLog(@"[VoiceInput] audio size: %lu bytes", (unsigned long)audioData.length);
+    // YUJ-420 R4 fix (lml2468 Critical privacy): 不打转写请求的 context 字段内容
+    // (context_text / chat_context / personal_context / member_context 均是用户数据);
+    // 仅保留 DEBUG-only 的长度类 metadata 。
+#if DEBUG
+    NSLog(@"[VoiceInput] transcribe WAV request: contextText.len=%lu chatContext.len=%lu personalContext.len=%lu memberContext.len=%lu audio=%lu bytes",
+          (unsigned long)contextText.length,
+          (unsigned long)chatContext.length,
+          (unsigned long)personalContext.length,
+          (unsigned long)memberContext.length,
+          (unsigned long)audioData.length);
+#endif
 
     [[WKAPIClient sharedClient] fileUpload:@"voice/transcribe"
                                 formFields:formFields

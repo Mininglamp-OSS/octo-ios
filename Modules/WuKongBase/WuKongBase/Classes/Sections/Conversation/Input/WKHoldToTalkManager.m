@@ -458,19 +458,19 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
             }
         }
 
-        NSLog(@"[HoldToTalk] ===== 上下文采集 =====");
-        NSLog(@"[HoldToTalk] delegate响应holdToTalkManagerChatContext: %@",
-              [ws.delegate respondsToSelector:@selector(holdToTalkManagerChatContext:)] ? @"YES" : @"NO");
-        NSLog(@"[HoldToTalk] fullContext(raw, len=%lu): %@",
-              (unsigned long)fullContext.length, fullContext ?: @"(nil)");
-        NSLog(@"[HoldToTalk] 拆分结果 → memberContext(len=%lu): %@",
-              (unsigned long)memberContext.length, memberContext ?: @"(nil)");
-        NSLog(@"[HoldToTalk] 拆分结果 → chatContext(len=%lu): %@",
-              (unsigned long)chatContext.length, chatContext ?: @"(nil)");
-        NSLog(@"[HoldToTalk] personalContext(预取, len=%lu): %@",
-              (unsigned long)personalContext.length, personalContext ?: @"(nil)");
-        NSLog(@"[HoldToTalk] contextText(已转写, len=%lu): %@",
-              (unsigned long)contextText.length, contextText ?: @"(nil)");
+        // YUJ-420 R4 fix (lml2468 Critical privacy): 生产日志不能打 context 内容
+        // (fullContext/memberContext/chatContext/personalContext/contextText
+        // 都含用户原始聊天文本/成员名/语音转写);
+        // 仅保留 DEBUG-only 的元数据(长度、nil-ness) 帮助排查。
+#if DEBUG
+        NSLog(@"[HoldToTalk] context collected: delegate=%@ full.len=%lu member.len=%lu chat.len=%lu personal.len=%lu contextText.len=%lu",
+              [ws.delegate respondsToSelector:@selector(holdToTalkManagerChatContext:)] ? @"Y" : @"N",
+              (unsigned long)fullContext.length,
+              (unsigned long)memberContext.length,
+              (unsigned long)chatContext.length,
+              (unsigned long)personalContext.length,
+              (unsigned long)contextText.length);
+#endif
 
         [[WKVoiceInputService shared] transcribeWavAudio:audioData
                                              contextText:contextText

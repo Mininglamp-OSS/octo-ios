@@ -224,13 +224,12 @@ static NSMutableDictionary *_jsTableHeights;
         CGRect usedRect = [lm usedRectForTextContainer:tc];
         CGFloat w = MIN(ceil(usedRect.size.width), maxWidth);
 
-        // --- 诊断日志 ---
-        NSString *textPreview = attrStr.string.length > 30
-            ? [NSString stringWithFormat:@"%@...", [attrStr.string substringToIndex:30]]
-            : attrStr.string;
-        textPreview = [textPreview stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
-        NSLog(@"[BubbleHeight] measure: text=\"%@\" len=%lu maxW=%.1f | tvH=%.2f brH=%.2f → h=%.0f w=%.0f",
-              textPreview, (unsigned long)attrStr.string.length, maxWidth, tvH, brH, h, w);
+        // YUJ-420 R4 fix (lml2468 Critical privacy): 测量在 cell 渲染热径上,
+        // 不能打消息正文预览(用户数据 + 性能污染). DEBUG-only 保留测量维度 metadata。
+#if DEBUG
+        NSLog(@"[BubbleHeight] measure: textLen=%lu maxW=%.1f | tvH=%.2f brH=%.2f → h=%.0f w=%.0f",
+              (unsigned long)attrStr.string.length, maxWidth, tvH, brH, h, w);
+#endif
 
         return CGSizeMake(w, h);
     } @catch (NSException *e) {
