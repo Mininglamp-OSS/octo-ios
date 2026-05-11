@@ -91,6 +91,7 @@ import libcmark_gfm
             var listItemIndex: Int = 0
             var listDepth: Int = 0
             var headingLevel: Int = 0
+            var paragraphStyle: NSParagraphStyle? = nil
         }
 
         var ctx = RenderContext(
@@ -128,6 +129,52 @@ import libcmark_gfm
             return ctx.textColor
         }
 
+        // MARK: - Paragraph style factories
+        // 对齐 Android Markwon 的 LeadingMarginSpan 体系:每个块级节点关联一个 NSParagraphStyle,
+        // 由 TextKit 负责段间距、行距、悬挂缩进。块末尾会追加带此 style 的 "\n",确保
+        // paragraphSpacing 应用到段尾。
+
+        func makeParagraphStyle(_ ctx: RenderContext) -> NSParagraphStyle {
+            let s = NSMutableParagraphStyle()
+            s.lineBreakMode = .byWordWrapping
+            s.paragraphSpacing = ctx.fontSize * 0.35
+            if ctx.isBlockquote {
+                s.firstLineHeadIndent = 12
+                s.headIndent = 12
+            }
+            return s
+        }
+
+        func makeHeadingStyle(_ ctx: RenderContext, level: Int) -> NSParagraphStyle {
+            let s = NSMutableParagraphStyle()
+            s.lineBreakMode = .byWordWrapping
+            s.paragraphSpacing = ctx.fontSize * 0.5
+            s.paragraphSpacingBefore = ctx.fontSize * 0.3
+            return s
+        }
+
+        func makeListItemStyle(_ ctx: RenderContext, depth: Int, markerWidth: CGFloat) -> NSParagraphStyle {
+            let s = NSMutableParagraphStyle()
+            s.lineBreakMode = .byWordWrapping
+            s.paragraphSpacing = ctx.fontSize * 0.2
+            // 每一层嵌套额外缩进 1.2em;markerWidth 决定 wrapped line 的悬挂位置。
+            let perLevel = ctx.fontSize * 1.2
+            let baseIndent = CGFloat(max(0, depth - 1)) * perLevel
+            s.firstLineHeadIndent = baseIndent
+            s.headIndent = baseIndent + markerWidth
+            return s
+        }
+
+        func makeCodeBlockStyle(_ ctx: RenderContext) -> NSParagraphStyle {
+            let s = NSMutableParagraphStyle()
+            s.lineBreakMode = .byWordWrapping
+            s.paragraphSpacing = ctx.fontSize * 0.35
+            s.firstLineHeadIndent = 8
+            s.headIndent = 8
+            s.tailIndent = -8
+            return s
+        }
+
         func renderNode(_ node: UnsafeMutablePointer<cmark_node>, ctx: inout RenderContext) {
             let nodeType = cmark_node_get_type(node)
             let nodeTypeStr = cmark_node_get_type_string(node)
@@ -151,26 +198,34 @@ import libcmark_gfm
                         attrs[.link] = url
                         attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
                     }
+                    if let pStyle = ctx.paragraphStyle {
+                        attrs[.paragraphStyle] = pStyle
+                    }
                     result.append(NSAttributedString(string: text, attributes: attrs))
                 }
                 return
 
             case CMARK_NODE_SOFTBREAK:
-                result.append(NSAttributedString(string: "\n", attributes: [.font: currentFont(ctx), .foregroundColor: currentColor(ctx)]))
+                var attrs: [NSAttributedString.Key: Any] = [.font: currentFont(ctx), .foregroundColor: currentColor(ctx)]
+                if let pStyle = ctx.paragraphStyle { attrs[.paragraphStyle] = pStyle }
+                result.append(NSAttributedString(string: "\n", attributes: attrs))
                 return
 
             case CMARK_NODE_LINEBREAK:
-                result.append(NSAttributedString(string: "\n", attributes: [.font: currentFont(ctx), .foregroundColor: currentColor(ctx)]))
+                var attrs: [NSAttributedString.Key: Any] = [.font: currentFont(ctx), .foregroundColor: currentColor(ctx)]
+                if let pStyle = ctx.paragraphStyle { attrs[.paragraphStyle] = pStyle }
+                result.append(NSAttributedString(string: "\n", attributes: attrs))
                 return
 
             case CMARK_NODE_CODE:
                 if let literal = cmark_node_get_literal(node) {
                     let text = String(cString: literal)
-                    let attrs: [NSAttributedString.Key: Any] = [
+                    var attrs: [NSAttributedString.Key: Any] = [
                         .font: ctx.codeFont,
                         .foregroundColor: currentColor(ctx),
                         .backgroundColor: ctx.codeBg
                     ]
+                    if let pStyle = ctx.paragraphStyle { attrs[.paragraphStyle] = pStyle }
                     result.append(NSAttributedString(string: text, attributes: attrs))
                 }
                 return
@@ -179,28 +234,24 @@ import libcmark_gfm
                 if let literal = cmark_node_get_literal(node) {
                     var text = String(cString: literal)
                     if text.hasSuffix("\n") { text = String(text.dropLast()) }
-                    let style = NSMutableParagraphStyle()
-                    style.firstLineHeadIndent = 8
-                    style.headIndent = 8
-                    style.tailIndent = -8
+                    let style = makeCodeBlockStyle(ctx)
                     let attrs: [NSAttributedString.Key: Any] = [
                         .font: ctx.codeFont,
                         .foregroundColor: currentColor(ctx),
                         .backgroundColor: ctx.codeBg,
                         .paragraphStyle: style
                     ]
-                    if result.length > 0 {
-                        result.append(NSAttributedString(string: "\n", attributes: [.font: ctx.baseFont]))
-                    }
                     result.append(NSAttributedString(string: text, attributes: attrs))
-                    result.append(NSAttributedString(string: "\n", attributes: [.font: ctx.baseFont]))
+                    result.append(NSAttributedString(string: "\n", attributes: [.font: ctx.baseFont, .paragraphStyle: style]))
                 }
                 return
 
             case CMARK_NODE_THEMATIC_BREAK:
-                result.append(NSAttributedString(string: "\n─────────\n", attributes: [
+                let style = makeParagraphStyle(ctx)
+                result.append(NSAttributedString(string: "─────────\n", attributes: [
                     .font: ctx.baseFont,
-                    .foregroundColor: UIColor.gray
+                    .foregroundColor: UIColor.gray,
+                    .paragraphStyle: style
                 ]))
                 return
 
@@ -220,24 +271,40 @@ import libcmark_gfm
             // Handle enter/exit for container nodes
             switch nodeType {
             case CMARK_NODE_PARAGRAPH:
-                if result.length > 0 {
+                // 列表项内部的 PARAGRAPH 不覆盖 ctx.paragraphStyle,保留列表项的悬挂缩进;
+                // 仍然在末尾追加 "\n" 分隔兄弟节点(如 outer paragraph + nested list)。
+                if ctx.listDepth > 0 {
+                    renderChildren(node, ctx: &ctx)
                     let last = result.string.last
-                    if last != nil && last != "\n" {
-                        result.append(NSAttributedString(string: "\n", attributes: [.font: ctx.baseFont]))
+                    if last != "\n" {
+                        result.append(NSAttributedString(string: "\n",
+                            attributes: [.font: ctx.baseFont,
+                                         .paragraphStyle: ctx.paragraphStyle ?? makeParagraphStyle(ctx)]))
                     }
+                    return
                 }
+                let style = makeParagraphStyle(ctx)
+                let old = ctx.paragraphStyle
+                ctx.paragraphStyle = style
                 renderChildren(node, ctx: &ctx)
+                // 段尾 "\n" 携带本段 paragraphStyle,让 paragraphSpacing 生效在段尾。
+                result.append(NSAttributedString(string: "\n",
+                    attributes: [.font: ctx.baseFont, .paragraphStyle: style]))
+                ctx.paragraphStyle = old
                 return
 
             case CMARK_NODE_HEADING:
                 let level = Int(cmark_node_get_heading_level(node))
-                if result.length > 0 {
-                    result.append(NSAttributedString(string: "\n", attributes: [.font: ctx.baseFont]))
-                }
+                let style = makeHeadingStyle(ctx, level: level)
+                let oldStyle = ctx.paragraphStyle
                 let oldLevel = ctx.headingLevel
+                ctx.paragraphStyle = style
                 ctx.headingLevel = level
                 renderChildren(node, ctx: &ctx)
+                result.append(NSAttributedString(string: "\n",
+                    attributes: [.font: ctx.baseFont, .paragraphStyle: style]))
                 ctx.headingLevel = oldLevel
+                ctx.paragraphStyle = oldStyle
                 return
 
             case CMARK_NODE_STRONG:
@@ -267,11 +334,9 @@ import libcmark_gfm
                 return
 
             case CMARK_NODE_BLOCK_QUOTE:
+                // BLOCK_QUOTE 本身不输出文字,内部 PARAGRAPH 根据 isBlockquote 决定缩进和颜色。
                 let was = ctx.isBlockquote
                 ctx.isBlockquote = true
-                if result.length > 0 {
-                    result.append(NSAttributedString(string: "\n", attributes: [.font: ctx.baseFont]))
-                }
                 renderChildren(node, ctx: &ctx)
                 ctx.isBlockquote = was
                 return
@@ -290,35 +355,43 @@ import libcmark_gfm
 
             case CMARK_NODE_ITEM:
                 ctx.listItemIndex += 1
-                if result.length > 0 {
-                    let last = result.string.last
-                    if last != nil && last != "\n" {
-                        result.append(NSAttributedString(string: "\n", attributes: [.font: ctx.baseFont]))
-                    }
-                }
-                let indent = String(repeating: "  ", count: max(0, ctx.listDepth - 1))
-                let bullet: String
+                let marker: String
                 if ctx.listType == CMARK_ORDERED_LIST {
-                    bullet = "\(indent)\(ctx.listItemIndex). "
+                    marker = "\(ctx.listItemIndex). "
                 } else {
-                    bullet = "\(indent)• "
+                    marker = "• "
                 }
-                result.append(NSAttributedString(string: bullet, attributes: [
+                // 实测 marker 宽度以计算悬挂缩进;+2pt 缓冲避免贴边。
+                let markerWidth = (marker as NSString).size(withAttributes: [.font: ctx.baseFont]).width + 2
+                let style = makeListItemStyle(ctx, depth: ctx.listDepth, markerWidth: markerWidth)
+                let oldStyle = ctx.paragraphStyle
+                ctx.paragraphStyle = style
+                result.append(NSAttributedString(string: marker, attributes: [
                     .font: ctx.baseFont,
-                    .foregroundColor: currentColor(ctx)
+                    .foregroundColor: currentColor(ctx),
+                    .paragraphStyle: style
                 ]))
                 renderChildren(node, ctx: &ctx)
+                // 若内部 PARAGRAPH 已经追加过段尾 "\n",就不再重复追加;否则补一个以关闭段落。
+                let last = result.string.last
+                if last != "\n" {
+                    result.append(NSAttributedString(string: "\n",
+                        attributes: [.font: ctx.baseFont, .paragraphStyle: style]))
+                }
+                ctx.paragraphStyle = oldStyle
                 return
 
             case CMARK_NODE_IMAGE:
                 if let urlC = cmark_node_get_url(node) {
                     let url = String(cString: urlC)
                     let altText = cmark_node_get_literal(cmark_node_first_child(node)).flatMap { String(cString: $0) } ?? "image"
-                    result.append(NSAttributedString(string: "[\(altText)]", attributes: [
+                    var attrs: [NSAttributedString.Key: Any] = [
                         .font: ctx.baseFont,
                         .foregroundColor: ctx.linkColor,
                         .link: url
-                    ]))
+                    ]
+                    if let pStyle = ctx.paragraphStyle { attrs[.paragraphStyle] = pStyle }
+                    result.append(NSAttributedString(string: "[\(altText)]", attributes: attrs))
                 }
                 return
 
@@ -328,10 +401,12 @@ import libcmark_gfm
                     // Handle <del>text</del> from GFM
                     let stripped = html.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
                     if !stripped.isEmpty {
-                        result.append(NSAttributedString(string: stripped, attributes: [
+                        var attrs: [NSAttributedString.Key: Any] = [
                             .font: ctx.baseFont,
                             .foregroundColor: currentColor(ctx)
-                        ]))
+                        ]
+                        if let pStyle = ctx.paragraphStyle { attrs[.paragraphStyle] = pStyle }
+                        result.append(NSAttributedString(string: stripped, attributes: attrs))
                     }
                 }
                 return
