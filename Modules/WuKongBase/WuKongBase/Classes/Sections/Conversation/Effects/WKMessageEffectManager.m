@@ -24,6 +24,8 @@ static const NSInteger kMaxTriggeredIds = 1000;
 @property (nonatomic, assign) CGRect pendingSourceRect;
 @property (nonatomic, weak, nullable) UIView *pendingHostView;
 @property (nonatomic, strong, nullable) UIImage *pendingAvatarImage;
+@property (nonatomic, copy, nullable) NSArray<UIImage *> *pendingMemberAvatars;
+@property (nonatomic, assign) BOOL pendingFromSelf;
 
 // 追踪**所有**活跃的 effectView（可能多个并行特效）。弱引用 → view 被 removeFromSuperview
 // 后自动从 hash table 中消失，不会导致循环引用或"僵尸"记录。
@@ -63,6 +65,8 @@ static const NSInteger kMaxTriggeredIds = 1000;
             @"🎉": @"party",
             @"🎊": @"party",
             @"[使命必达]": @"rocketLaunch",
+            // [有品位] classy 特效暂时屏蔽（效果未达标，WKClassyEffect.m 代码保留以便以后迭代）
+            // @"[有品位]": @"classy",
         };
 
         _triggeredMessageIds = [NSMutableOrderedSet orderedSet];
@@ -90,9 +94,20 @@ static const NSInteger kMaxTriggeredIds = 1000;
     NSString *text = textContent.content;
     if (!text || text.length == 0) return nil;
 
-    for (NSString *emoji in self.effectMap) {
-        if ([text containsString:emoji]) {
-            return self.effectMap[emoji];
+    // 匹配规则：
+    //   - 以 "[" 开头的 key（如 [使命必达]、[有品位]）要求**整条消息恰好就是这个 tag**（去前后空白）——
+    //     目的：混在其它文字里的小内联表情不触发特效（用户："和其他文字一起的那种小表情包则不展示动画"）。
+    //   - 其它 key（单字符 emoji 💣👍❤️🎉🎊）保留子串匹配——作为 reaction 写在句中也应触发。
+    NSString *trimmed = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    for (NSString *key in self.effectMap) {
+        if ([key hasPrefix:@"["]) {
+            if ([trimmed isEqualToString:key]) {
+                return self.effectMap[key];
+            }
+        } else {
+            if ([text containsString:key]) {
+                return self.effectMap[key];
+            }
         }
     }
     return nil;
@@ -134,19 +149,46 @@ static const NSInteger kMaxTriggeredIds = 1000;
 - (void)triggerEffect:(NSString *)effectType
            inHostView:(UIView *)hostView
            sourceRect:(CGRect)sourceRect {
-    [self triggerEffect:effectType inHostView:hostView sourceRect:sourceRect avatarImage:nil];
+    [self triggerEffect:effectType inHostView:hostView sourceRect:sourceRect avatarImage:nil memberAvatars:nil fromSelf:NO];
 }
 
 - (void)triggerEffect:(NSString *)effectType
            inHostView:(UIView *)hostView
            sourceRect:(CGRect)sourceRect
           avatarImage:(nullable UIImage *)avatarImage {
+    [self triggerEffect:effectType inHostView:hostView sourceRect:sourceRect avatarImage:avatarImage memberAvatars:nil fromSelf:NO];
+}
+
+- (void)triggerEffect:(NSString *)effectType
+           inHostView:(UIView *)hostView
+           sourceRect:(CGRect)sourceRect
+          avatarImage:(nullable UIImage *)avatarImage
+        memberAvatars:(nullable NSArray<UIImage *> *)memberAvatars {
+    [self triggerEffect:effectType inHostView:hostView sourceRect:sourceRect avatarImage:avatarImage memberAvatars:memberAvatars fromSelf:NO];
+}
+
+- (void)triggerEffect:(NSString *)effectType
+           inHostView:(UIView *)hostView
+           sourceRect:(CGRect)sourceRect
+          avatarImage:(nullable UIImage *)avatarImage
+             fromSelf:(BOOL)fromSelf {
+    [self triggerEffect:effectType inHostView:hostView sourceRect:sourceRect avatarImage:avatarImage memberAvatars:nil fromSelf:fromSelf];
+}
+
+- (void)triggerEffect:(NSString *)effectType
+           inHostView:(UIView *)hostView
+           sourceRect:(CGRect)sourceRect
+          avatarImage:(nullable UIImage *)avatarImage
+        memberAvatars:(nullable NSArray<UIImage *> *)memberAvatars
+             fromSelf:(BOOL)fromSelf {
 
     [self.debounceTimer invalidate];
     self.pendingEffectType = effectType;
     self.pendingSourceRect = sourceRect;
     self.pendingHostView = hostView;
     self.pendingAvatarImage = avatarImage;
+    self.pendingMemberAvatars = memberAvatars;
+    self.pendingFromSelf = fromSelf;
 
     self.debounceTimer = [NSTimer scheduledTimerWithTimeInterval:0.3
                                                          target:self
@@ -198,13 +240,17 @@ static const NSInteger kMaxTriggeredIds = 1000;
     } else if ([effectType isEqualToString:@"party"]) {
         [WKPartyEffect playInView:effectView sourceRect:sourceRect];
     } else if ([effectType isEqualToString:@"rocketLaunch"]) {
-        [WKRocketLaunchEffect playInView:effectView sourceRect:sourceRect avatarImage:self.pendingAvatarImage];
+        [WKRocketLaunchEffect playInView:effectView
+                              sourceRect:sourceRect
+                             avatarImage:self.pendingAvatarImage
+                           memberAvatars:self.pendingMemberAvatars];
     } else if ([effectType isEqualToString:@"classy"]) {
-        [WKClassyEffect playInView:effectView sourceRect:sourceRect];
+        [WKClassyEffect playInView:effectView sourceRect:sourceRect fromSelf:self.pendingFromSelf];
     }
 
     self.pendingEffectType = nil;
     self.pendingAvatarImage = nil;
+    self.pendingMemberAvatars = nil;
     self.pendingHostView = nil;
 }
 

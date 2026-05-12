@@ -19,6 +19,8 @@
 #import "WKConversationListVM.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKMessageEffectManager.h"
+#import "WKMessageCell.h"
+#import <SDWebImage/SDWebImage.h>
 @interface WKMessageListView ()<UITableViewDelegate,UITableViewDataSource,WKConversationTableViewDelegate,WKChannelManagerDelegate,WKChatManagerDelegate,WKReactionManagerDelegate,WKConnectionManagerDelegate,WKTypingManagerDelegate,WKReminderManagerDelegate>
 
 @property(nonatomic,strong) UIViewPropertyAnimator *headerViewsAnimator;
@@ -2024,6 +2026,27 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 -(void) channelInfoUpdate:(WKChannelInfo*)channelInfo {
     if([self.channel isEqual:channelInfo.channel]) { // 更新的当前会话的信息
         self.channelInfo = channelInfo;
+        // 群聊场景:收到 channelInfo 后预加载群头像到 SDImageCache,
+        // 这样用户第一次发 [使命必达] 特效时舷窗能直接显示群头像(否则首次必然 MISS)。
+        if (channelInfo.channel.channelType != WK_PERSON) {
+            NSString *groupAvatarURL = [WKAvatarUtil getGroupAvatar:channelInfo.channel.channelId
+                                                           cacheKey:channelInfo.avatarCacheKey ?: @""];
+            if (groupAvatarURL.length > 0 &&
+                ![[SDImageCache sharedImageCache] imageFromCacheForKey:groupAvatarURL]) {
+                [[SDWebImageManager sharedManager] loadImageWithURL:[NSURL URLWithString:groupAvatarURL]
+                                                            options:SDWebImageRetryFailed
+                                                           progress:nil
+                                                          completed:^(UIImage * _Nullable image,
+                                                                      NSData * _Nullable data,
+                                                                      NSError * _Nullable error,
+                                                                      SDImageCacheType cacheType,
+                                                                      BOOL finished,
+                                                                      NSURL * _Nullable imageURL) {
+                    NSLog(@"[RocketAvatar] prefetch 群头像(channelInfoUpdate) | url=%@ got=%@",
+                          imageURL, image ? @"YES" : @"NO");
+                }];
+            }
+        }
     }else { // 更新的当前聊里页面的发送者的信息
         if(channelInfo.channel.channelType != WK_PERSON) {
             return;
@@ -2170,19 +2193,113 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         NSIndexPath *indexPath = [self.dataProvider indexPathAtClientMsgNo:message.clientMsgNo];
         CGRect sourceRect = CGRectZero;
-        UIImage *avatarImage = nil;
         if (indexPath) {
             UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
             if (cell) {
-                sourceRect = [self.tableView convertRect:cell.frame toView:self];
-                // 从 message cell 的头像控件抓当前显示的 UIImage（已加载完成的头像），
-                // 让火箭发射特效可以在舷窗里嵌入发送者头像
-                if ([cell isKindOfClass:WKMessageCell.class]) {
-                    WKMessageCell *msgCell = (WKMessageCell *)cell;
-                    avatarImage = msgCell.avatarImgView.avatarImgView.image;
+                // classy 特效要精确锚定在气泡上（气泡本身 ≈ 表情图片，
+                // 因为 [有品位] 是 tag-only 消息，文本气泡里只有这一张内联图）。
+                // 先强制 layout 一次，避免首次入视图时 bubble frame 尚未稳定。
+                if ([effectType isEqualToString:@"classy"] && [cell isKindOfClass:WKMessageCell.class]) {
+                    [cell layoutIfNeeded];
+                    UIView *bubble = ((WKMessageCell *)cell).bubbleBackgroundView;
+                    if (bubble && !CGRectIsEmpty(bubble.bounds)) {
+                        sourceRect = [self convertRect:bubble.bounds fromView:bubble];
+                    }
+                }
+                if (CGRectIsEmpty(sourceRect)) {
+                    sourceRect = [self.tableView convertRect:cell.frame toView:self];
                 }
             }
         }
+
+        // 头像源规则:
+        //   - 私聊(channel.channelType == WK_PERSON) → 取对方头像(channel.channelId = 对方 uid)
+        //   - 群聊 → 取**群头像**(getGroupAvatar),作为能量汇聚完成后舷窗最终显示的图像
+        //     群成员头像仅用作能量汇聚动画的视觉素材(流过屏幕后被吸收,最终换成群头像)
+        UIImage *avatarImage = nil;
+        NSString *avatarURL = nil;
+        NSString *cacheKey = self.channelInfo.avatarCacheKey ?: @"";
+        if (self.channel.channelType == WK_PERSON) {
+            avatarURL = [WKAvatarUtil getAvatar:self.channel.channelId cacheKey:cacheKey];
+        } else {
+            avatarURL = [WKAvatarUtil getGroupAvatar:self.channel.channelId cacheKey:cacheKey];
+        }
+        NSLog(@"[RocketAvatar] step1-url | channelType=%d channelId=%@ cacheKey=%@ → avatarURL=%@",
+              self.channel.channelType, self.channel.channelId, cacheKey, avatarURL);
+        if (avatarURL.length > 0) {
+            avatarImage = [[SDImageCache sharedImageCache] imageFromCacheForKey:avatarURL];
+            NSLog(@"[RocketAvatar] step2-cache | key=%@ hit=%@ size=%@",
+                  avatarURL,
+                  avatarImage ? @"YES" : @"NO(MISS)",
+                  avatarImage ? NSStringFromCGSize(avatarImage.size) : @"-");
+            // MISS 时异步触发下载 → 下次使用该群发送表情包时缓存就命中
+            if (!avatarImage) {
+                [[SDWebImageManager sharedManager] loadImageWithURL:[NSURL URLWithString:avatarURL]
+                                                            options:SDWebImageRetryFailed
+                                                           progress:nil
+                                                          completed:^(UIImage * _Nullable image,
+                                                                      NSData * _Nullable data,
+                                                                      NSError * _Nullable error,
+                                                                      SDImageCacheType cacheType,
+                                                                      BOOL finished,
+                                                                      NSURL * _Nullable imageURL) {
+                    NSLog(@"[RocketAvatar] async-preload 群头像 | url=%@ got=%@ err=%@",
+                          imageURL, image ? @"YES" : @"NO", error);
+                }];
+            }
+        } else {
+            NSLog(@"[RocketAvatar] step2-cache | SKIPPED (avatarURL empty)");
+        }
+        // 兜底：若缓存未命中(极少数：从未加载过)，仍尝试用 cell 里的头像
+        //   ⚠️ 群聊下 cell.avatarImgView 是**发送者头像**,fallback 进来会让"群头像"误变成发送者头像
+        //   → 只在私聊下走 fallback;群聊缓存 MISS 时宁可不带头像(传 nil 给特效,舷窗空窗)
+        if (!avatarImage && indexPath && self.channel.channelType == WK_PERSON) {
+            UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
+            if ([cell isKindOfClass:WKMessageCell.class]) {
+                avatarImage = ((WKMessageCell *)cell).avatarImgView.avatarImgView.image;
+                NSLog(@"[RocketAvatar] step3-fallback-cell | channelType=PERSON image=%@ size=%@",
+                      avatarImage ? @"GOT" : @"NIL",
+                      avatarImage ? NSStringFromCGSize(avatarImage.size) : @"-");
+            }
+        } else if (!avatarImage) {
+            NSLog(@"[RocketAvatar] step3-fallback-cell | SKIPPED (group chat → 不用 cell 头像,避免取到发送者)");
+        }
+        NSLog(@"[RocketAvatar] step4-final | avatarImage=%@ → 传给特效",
+              avatarImage ? [NSString stringWithFormat:@"GOT %@", NSStringFromCGSize(avatarImage.size)] : @"NIL");
+
+        // 群聊 + rocketLaunch(使命必达)时,额外取群成员头像列表,触发"能量汇聚"动画
+        //   - 同步从 channelManager 拿已缓存的成员
+        //   - 每个成员用 WKAvatarUtil.getAvatar 拿 URL,从 SDImageCache 同步取图
+        //   - 最多 12 个,取到才进列表;拿不到的跳过
+        //   - 如果最后列表为空 → memberAvatars=nil,走私聊弧形入场(兜底)
+        NSArray<UIImage *> *memberAvatars = nil;
+        if (self.channel.channelType != WK_PERSON && [effectType isEqualToString:@"rocketLaunch"]) {
+            NSArray<WKChannelMember *> *members = [[WKSDK shared].channelManager getMembersWithChannel:self.channel];
+            NSMutableArray<UIImage *> *avatars = [NSMutableArray array];
+            for (WKChannelMember *m in members) {
+                if (avatars.count >= 12) break;
+                NSString *memberURL = (m.memberAvatar.length > 0)
+                    ? [WKAvatarUtil getFullAvatarWIthPath:m.memberAvatar]
+                    : [WKAvatarUtil getAvatar:m.memberUid];
+                if (memberURL.length == 0) continue;
+                UIImage *memberImg = [[SDImageCache sharedImageCache] imageFromCacheForKey:memberURL];
+                if (memberImg) [avatars addObject:memberImg];
+            }
+            // 成员太少时,用群头像补一到两个,让汇聚仍然有视觉动感
+            if (avatars.count > 0 && avatars.count < 3 && avatarImage) {
+                [avatars addObject:avatarImage];
+                [avatars addObject:avatarImage];
+            }
+            if (avatars.count > 0) {
+                memberAvatars = avatars;
+            }
+            NSLog(@"[RocketGroup] channelType=%d members.count=%lu cached avatars=%lu → memberAvatars=%@",
+                  self.channel.channelType,
+                  (unsigned long)members.count,
+                  (unsigned long)avatars.count,
+                  memberAvatars ? @"有,汇聚动画" : @"空,走单 avatar");
+        }
+
         if (CGRectIsEmpty(sourceRect)) {
             // fallback: use bottom center
             sourceRect = CGRectMake(self.bounds.size.width / 2 - 30, self.bounds.size.height - 100, 60, 60);
@@ -2190,7 +2307,9 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         [[WKMessageEffectManager shared] triggerEffect:effectType
                                             inHostView:self
                                             sourceRect:sourceRect
-                                           avatarImage:avatarImage];
+                                           avatarImage:avatarImage
+                                         memberAvatars:memberAvatars
+                                              fromSelf:message.isSend];
     });
 }
 
