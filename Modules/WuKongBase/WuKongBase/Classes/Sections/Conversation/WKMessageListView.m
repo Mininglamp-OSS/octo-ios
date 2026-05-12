@@ -192,18 +192,45 @@
     BOOL newSectionAdded = (newSectionCount > oldSectionCount);
     NSInteger newLastSectionRowCount = (newSectionCount > 0) ? [self.dataProvider messagesAtSection:newSectionCount - 1].count : 0;
 
+    // Bugly #3054 兜底：校验的窗口 + 双保险 @try/@catch。
+    //   insertRowsAtIndexPaths 内部会触发 heightForRow / cellForRow，对未缓存高度的 markdown 消息
+    //   sizeForMessage: 会走 Down 的 WebKit 渲染 → 嵌套 RunLoop。期间主队列 pending 的 pulldown
+    //   完成 / handleRecvMessage 会批量往 dp 追加数据，导致内部校验时 ds.count 和 tv 期望值漂移 →
+    //   NSInternalInconsistencyException。在 insertRows 前再精确校一次，不一致直接 reloadData；
+    //   即便过了二次校验还抛异常（嵌套 RunLoop 在 insert 内部发生），catch 住同样走 reloadData。
+    if (!newSectionAdded && newLastSectionRowCount > oldLastSectionRowCount) {
+        NSInteger intendedDelta = newLastSectionRowCount - oldLastSectionRowCount;
+        NSInteger dsNow = [self.dataProvider messagesAtSection:newSectionCount - 1].count;
+        NSInteger tvNow = [self.tableView numberOfRowsInSection:newSectionCount - 1];
+        if (dsNow - tvNow != intendedDelta) {
+            [self.tableView reloadData];
+            [self didAddMessageUI];
+            return;
+        }
+    }
+
     if (newSectionAdded) {
-        [UIView performWithoutAnimation:^{
-            [self.tableView insertSections:[NSIndexSet indexSetWithIndex:newSectionCount - 1] withRowAnimation:UITableViewRowAnimationNone];
-        }];
+        @try {
+            [UIView performWithoutAnimation:^{
+                [self.tableView insertSections:[NSIndexSet indexSetWithIndex:newSectionCount - 1] withRowAnimation:UITableViewRowAnimationNone];
+            }];
+        } @catch (NSException *ex) {
+            NSLog(@"[WKMessageListView] insertSections drift caught: %@, fallback reloadData", ex);
+            [self.tableView reloadData];
+        }
     } else if (newLastSectionRowCount > oldLastSectionRowCount) {
         NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
         for (NSInteger row = oldLastSectionRowCount; row < newLastSectionRowCount; row++) {
             [indexPaths addObject:[NSIndexPath indexPathForRow:row inSection:newSectionCount - 1]];
         }
-        [UIView performWithoutAnimation:^{
-            [self.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
-        }];
+        @try {
+            [UIView performWithoutAnimation:^{
+                [self.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
+            }];
+        } @catch (NSException *ex) {
+            NSLog(@"[WKMessageListView] insertRows drift caught: %@, fallback reloadData", ex);
+            [self.tableView reloadData];
+        }
     } else {
         // typing 替换等场景：刷新最后一行
         if (newSectionCount > 0 && newLastSectionRowCount > 0) {
@@ -1413,6 +1440,19 @@
         // 预缓存高度（触发 markdown 渲染），避免在 UITableView 布局回调中首次渲染
         [self precacheHeightForMessage:messageModel];
 
+        // Bugly #3054 兜底（另一路径 crash：before=31/after=32/inserted=0/deleted=0）：
+        //   handleRecvMessage 可能在 dp 已经和 tv 漂移的状态下被调用（前一次 insert 抛异常被吞掉、
+        //   或前序 send/recv 因嵌套 RunLoop 留下漂移）。进入增量更新前做一次一致性检查，不一致
+        //   就直接 addMessage + reloadData 收敛，不走后面的增量路径。
+        BOOL inSyncBefore = [self isTableViewRowCountInSyncWithDataProvider];
+        if (!inSyncBefore) {
+            [self.dataProvider addMessage:messageModel];
+            [self.tableView reloadData];
+            if(self.positionAtBottom) { [self scrollToBottom:YES]; }
+            else if ([message isSend]) { [self scrollToBottom:YES]; }
+            return;
+        }
+
         // 快照 addMessage 前后的 section/row 数量，按实际变化增量更新
         NSInteger oldSectionCount = [self.dataProvider dateCount];
         NSInteger oldLastSectionRowCount = 0;
@@ -1426,25 +1466,62 @@
         BOOL newSectionAdded = (newSectionCount > oldSectionCount);
         NSInteger newLastSectionRowCount = (newSectionCount > 0) ? [self.dataProvider messagesAtSection:newSectionCount - 1].count : 0;
 
+        // Bugly #3054 兜底：见 sendMessage: 同处注释。insertRows 内嵌套 RunLoop 会让主队列
+        // pending 的 pulldown/其他 recv 在 insert 期间追加 dp，校验漂移 → NSInternalInconsistencyException。
+        if (!newSectionAdded && newLastSectionRowCount > oldLastSectionRowCount) {
+            NSInteger intendedDelta = newLastSectionRowCount - oldLastSectionRowCount;
+            NSInteger tvSectionsNow = [self.tableView numberOfSections];
+            NSInteger dsNow = [self.dataProvider messagesAtSection:newSectionCount - 1].count;
+            NSInteger tvNow = (tvSectionsNow == newSectionCount) ? [self.tableView numberOfRowsInSection:newSectionCount - 1] : -1;
+            if (tvNow < 0 || dsNow - tvNow != intendedDelta) {
+                [self.tableView reloadData];
+                if(self.positionAtBottom) { [self scrollToBottom:YES]; }
+                else if ([message isSend]) { [self scrollToBottom:YES]; }
+                return;
+            }
+        }
+
         if (newSectionAdded) {
             // 新日期分组：插入整个 section
-            [UIView performWithoutAnimation:^{
-                [self.tableView insertSections:[NSIndexSet indexSetWithIndex:newSectionCount - 1] withRowAnimation:UITableViewRowAnimationNone];
-            }];
+            @try {
+                [UIView performWithoutAnimation:^{
+                    [self.tableView insertSections:[NSIndexSet indexSetWithIndex:newSectionCount - 1] withRowAnimation:UITableViewRowAnimationNone];
+                }];
+            } @catch (NSException *ex) {
+                NSLog(@"[WKMessageListView] recv insertSections drift caught: %@, fallback reloadData", ex);
+                [self.tableView reloadData];
+            }
         } else if (!newSectionAdded && newLastSectionRowCount > oldLastSectionRowCount) {
             // 同日期且行数增加：在末尾插入新行
             NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
             for (NSInteger row = oldLastSectionRowCount; row < newLastSectionRowCount; row++) {
                 [indexPaths addObject:[NSIndexPath indexPathForRow:row inSection:newSectionCount - 1]];
             }
-            [UIView performWithoutAnimation:^{
-                [self.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
-            }];
+            @try {
+                [UIView performWithoutAnimation:^{
+                    [self.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
+                }];
+            } @catch (NSException *ex) {
+                NSLog(@"[WKMessageListView] recv insertRows drift caught: %@, fallback reloadData", ex);
+                [self.tableView reloadData];
+            }
         } else {
             // typing 替换/丢弃等场景：行数不变，刷新最后一行即可
+            //   reloadRow 同样需要 ds.count == tv.count，否则 UITableView 校验仍会抛异常（Bugly 另一路径）。
             if (newSectionCount > 0 && newLastSectionRowCount > 0) {
                 NSIndexPath *lastPath = [NSIndexPath indexPathForRow:newLastSectionRowCount - 1 inSection:newSectionCount - 1];
-                [self.tableView reloadRowsAtIndexPaths:@[lastPath] withRowAnimation:UITableViewRowAnimationNone];
+                NSInteger tvSectionsNow = [self.tableView numberOfSections];
+                NSInteger tvRowsNow = (tvSectionsNow == newSectionCount) ? [self.tableView numberOfRowsInSection:newSectionCount - 1] : -1;
+                if (tvRowsNow != newLastSectionRowCount) {
+                    [self.tableView reloadData];
+                } else {
+                    @try {
+                        [self.tableView reloadRowsAtIndexPaths:@[lastPath] withRowAnimation:UITableViewRowAnimationNone];
+                    } @catch (NSException *ex) {
+                        NSLog(@"[WKMessageListView] recv reloadRows drift caught: %@, fallback reloadData", ex);
+                        [self.tableView reloadData];
+                    }
+                }
             }
         }
 
