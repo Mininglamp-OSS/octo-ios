@@ -253,20 +253,39 @@ static UIWindow *_previousKeyWindow = nil;
 
 #pragma mark - 文本编码自适应读取
 
-// 动态探测文本文件编码，避免把 GBK/GB18030/Big5 的中文文件强制按 UTF-8 或 Latin1 解码导致乱码。
-// 顺序：BOM → 严格 UTF-8 → GB18030（兼容 GBK/GB2312）→ Big5 → 系统启发式 → UTF-8 lossy 兜底。
+// 动态探测文本文件编码，覆盖 UTF-8 / UTF-16(LE|BE) / UTF-32(LE|BE) / GB18030 / Big5 /
+// ISO-2022-CN|JP|KR / Shift-JIS / EUC-KR 等常见情况。
+//
+// 关键顺序：
+//   1. UTF-32 BOM 必须在 UTF-16 BOM 之前判定 —— UTF-32 LE 的 BOM (FF FE 00 00) 前两
+//      字节与 UTF-16 LE BOM (FF FE) 重合，先判 UTF-16 会把 UTF-32 识别错。
+//   2. ISO-2022-* 是 7-bit ASCII-only+转义序列，UTF-8 严格解码不会失败（输出一堆
+//      控制字符），必须在 UTF-8 之前嗅探 ESC ($|(|)) 指示序列并优先尝试 ISO-2022。
+//   3. 系统启发式放在 GB18030 / Big5 直试之前 —— GB18030 极度宽容，对 Big5 字节会
+//      返回非 nil 的错误中文，直试会把 Big5 永久遮蔽。Apple 的启发式在 CJK 多内码
+//      之间区分较可靠。
 - (NSString *)decodeTextFromData:(NSData *)data {
     if (data.length == 0) return @"";
 
     const unsigned char *bytes = data.bytes;
     NSUInteger len = data.length;
 
-    // 1) BOM
+    // 1) BOM：UTF-32 优先
+    if (len >= 4 && bytes[0] == 0xFF && bytes[1] == 0xFE && bytes[2] == 0x00 && bytes[3] == 0x00) {
+        NSString *s = [[NSString alloc] initWithData:data encoding:NSUTF32LittleEndianStringEncoding];
+        if (s) return s;
+    }
+    if (len >= 4 && bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0xFE && bytes[3] == 0xFF) {
+        NSString *s = [[NSString alloc] initWithData:data encoding:NSUTF32BigEndianStringEncoding];
+        if (s) return s;
+    }
+    // UTF-8 BOM
     if (len >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
         NSString *s = [[NSString alloc] initWithData:[data subdataWithRange:NSMakeRange(3, len - 3)]
                                             encoding:NSUTF8StringEncoding];
         if (s) return s;
     }
+    // UTF-16 BOM（判在 UTF-32 之后）
     if (len >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
         NSString *s = [[NSString alloc] initWithData:data encoding:NSUTF16LittleEndianStringEncoding];
         if (s) return s;
@@ -276,29 +295,66 @@ static UIWindow *_previousKeyWindow = nil;
         if (s) return s;
     }
 
-    // 2) 严格 UTF-8
+    // 2) ISO-2022-* 嗅探：扫前 4KB 找 ESC 0x1B 后跟 '$' | '(' | ')'
+    NSUInteger sniffLen = MIN(len, (NSUInteger)4096);
+    BOOL maybeISO2022 = NO;
+    for (NSUInteger i = 0; i + 1 < sniffLen; i++) {
+        if (bytes[i] == 0x1B) {
+            unsigned char next = bytes[i + 1];
+            if (next == '$' || next == '(' || next == ')') { maybeISO2022 = YES; break; }
+        }
+    }
+    if (maybeISO2022) {
+        NSStringEncoding candidates[] = {
+            CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingISO_2022_CN),
+            CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingISO_2022_JP),
+            CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingISO_2022_KR),
+        };
+        for (int i = 0; i < 3; i++) {
+            NSString *s = [[NSString alloc] initWithData:data encoding:candidates[i]];
+            if (s) return s;
+        }
+    }
+
+    // 3) 严格 UTF-8
     NSString *s = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     if (s) return s;
 
-    // 3) GB18030（向下兼容 GBK / GB2312）
-    NSStringEncoding gb18030 = CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingGB_18030_2000);
-    s = [[NSString alloc] initWithData:data encoding:gb18030];
-    if (s) return s;
-
-    // 4) Big5（繁体中文）
-    NSStringEncoding big5 = CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingBig5);
-    s = [[NSString alloc] initWithData:data encoding:big5];
-    if (s) return s;
-
-    // 5) 系统启发式识别
+    // 4) 系统启发式：给出 CJK 候选编码列表让 Apple 区分（比盲试 GB18030 可靠）
+    NSArray<NSNumber *> *suggested = @[
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingGB_18030_2000)),
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingBig5)),
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingISO_2022_CN)),
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingISO_2022_JP)),
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingISO_2022_KR)),
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingShiftJIS)),
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingEUC_JP)),
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingEUC_KR)),
+        @(NSUTF16LittleEndianStringEncoding),
+        @(NSUTF16BigEndianStringEncoding),
+        @(NSUTF32LittleEndianStringEncoding),
+        @(NSUTF32BigEndianStringEncoding),
+    ];
+    NSDictionary *opts = @{
+        NSStringEncodingDetectionSuggestedEncodingsKey: suggested,
+        NSStringEncodingDetectionUseOnlySuggestedEncodingsKey: @YES,
+    };
     NSString *detected = nil;
     NSStringEncoding guessed = [NSString stringEncodingForData:data
-                                               encodingOptions:nil
+                                               encodingOptions:opts
                                                convertedString:&detected
                                            usedLossyConversion:NULL];
     if (guessed != 0 && detected.length > 0) return detected;
 
-    // 6) 兜底：UTF-8 lossy，至少保证 ASCII 部分可读（不要再用 Latin1 假装成功）
+    // 5) 启发式失败后的直试兜底：GB18030（覆盖简中）→ Big5（覆盖繁中）
+    NSStringEncoding gb18030 = CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingGB_18030_2000);
+    s = [[NSString alloc] initWithData:data encoding:gb18030];
+    if (s) return s;
+    NSStringEncoding big5 = CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingBig5);
+    s = [[NSString alloc] initWithData:data encoding:big5];
+    if (s) return s;
+
+    // 6) 最终兜底：UTF-8 lossy（至少 ASCII 可读，不再用 Latin1 假装成功）
     return [[NSString alloc] initWithBytes:data.bytes
                                     length:data.length
                                   encoding:NSUTF8StringEncoding] ?: @"";
