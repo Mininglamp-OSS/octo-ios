@@ -17,6 +17,16 @@ NS_ASSUME_NONNULL_BEGIN
 @interface WKRocketLaunchEffect : NSObject
 
 /// 带头像的完整接口：舷窗内会嵌入 avatarImage（半透明 → 玻璃感）
+///   - avatarImage: 单人头像(私聊)或群头像(群聊最终显示)
+///   - memberAvatars: **仅群聊使用**,传 nil 或空数组 → 走私聊弧形入场;
+///                    非空 → 走群聊"能量汇聚"动画,这些成员头像会从四面八方汇入舷窗,
+///                    然后 avatarImage(群头像)淡入。
++ (void)playInView:(WKMessageEffectView *)effectView
+        sourceRect:(CGRect)sourceRect
+       avatarImage:(nullable UIImage *)avatarImage
+     memberAvatars:(nullable NSArray<UIImage *> *)memberAvatars;
+
+/// 兼容接口:转发到完整接口,memberAvatars=nil
 + (void)playInView:(WKMessageEffectView *)effectView
         sourceRect:(CGRect)sourceRect
        avatarImage:(nullable UIImage *)avatarImage;

@@ -141,6 +141,15 @@
     }else{
         emoji = [self.emojiService.emotions objectAtIndex:indexPath.row];
     }
+    // [有品位]/[崇尚行动]/[使命必达] 是带动画特效的表情——点击即发，不进输入框，
+    // 这样消息就是"纯一个 tag"，特效 manager 才会按精确匹配命中。
+    // 只在有 context 的场景（聊天页主面板）下即点即发；没有 context（例如 reaction 选择
+    // 的 WKSimpleEmojiPanel）时仍走 onEmoji 回调，让上层决定。
+    if (self.context && [self isDirectSendEmoji:emoji]) {
+        [self.emojiService recentEmoji:emoji];
+        [self.context sendTextMessage:emoji.faceName];
+        return;
+    }
     if(self.onEmoji) {
         self.onEmoji(emoji);
         [self.emojiService recentEmoji:emoji];
@@ -148,7 +157,17 @@
         [self.emojiService recentEmoji:emoji];
         [self.context inputInsertText:emoji.faceName];
     }
-    
+
+}
+
+/// 点击即发的自定义表情（含特效）—— 用 faceImageName 精确匹配，避免把所有 custom_*
+/// 都误判成即点即发。新增 emoji 时如果也要"点击即发"才能触发特效，记得同步加到这里。
+- (BOOL)isDirectSendEmoji:(WKEmotion *)emoji {
+    NSString *name = emoji.faceImageName;
+    if (name.length == 0) return NO;
+    return [name isEqualToString:@"custom_taste"]
+        || [name isEqualToString:@"custom_action"]
+        || [name isEqualToString:@"custom_mission"];
 }
 
 - (UIImage *)tabIcon {

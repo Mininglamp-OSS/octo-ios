@@ -30,6 +30,30 @@ NS_ASSUME_NONNULL_BEGIN
            sourceRect:(CGRect)sourceRect
           avatarImage:(nullable UIImage *)avatarImage;
 
+/// 群聊火箭特效的完整接口:avatarImage = 群头像(最终舷窗显示),
+/// memberAvatars = 群成员头像列表(非空 → 触发能量汇聚动画)
+- (void)triggerEffect:(NSString *)effectType
+           inHostView:(UIView *)hostView
+           sourceRect:(CGRect)sourceRect
+          avatarImage:(nullable UIImage *)avatarImage
+        memberAvatars:(nullable NSArray<UIImage *> *)memberAvatars;
+
+/// 群聊 + fromSelf 组合(目前 classy 效果用 fromSelf 决定手臂方向)
+- (void)triggerEffect:(NSString *)effectType
+           inHostView:(UIView *)hostView
+           sourceRect:(CGRect)sourceRect
+          avatarImage:(nullable UIImage *)avatarImage
+        memberAvatars:(nullable NSArray<UIImage *> *)memberAvatars
+             fromSelf:(BOOL)fromSelf;
+
+/// 带方向信息的触发接口：classy 特效需要知道消息是不是自己发的，
+/// 决定手臂从气泡哪一侧伸出（self=左，other=右）。
+- (void)triggerEffect:(NSString *)effectType
+           inHostView:(UIView *)hostView
+           sourceRect:(CGRect)sourceRect
+          avatarImage:(nullable UIImage *)avatarImage
+             fromSelf:(BOOL)fromSelf;
+
 - (void)cancelCurrentEffect;
 
 /// 气泡物理并发锁。炸弹特效启用气泡物理前检查，若为 YES 就跳过气泡物理（仍播放粒子）。

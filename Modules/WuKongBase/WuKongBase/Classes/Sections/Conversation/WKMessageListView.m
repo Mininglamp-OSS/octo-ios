@@ -19,6 +19,8 @@
 #import "WKConversationListVM.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKMessageEffectManager.h"
+#import "WKMessageCell.h"
+#import <SDWebImage/SDWebImage.h>
 @interface WKMessageListView ()<UITableViewDelegate,UITableViewDataSource,WKConversationTableViewDelegate,WKChannelManagerDelegate,WKChatManagerDelegate,WKReactionManagerDelegate,WKConnectionManagerDelegate,WKTypingManagerDelegate,WKReminderManagerDelegate>
 
 @property(nonatomic,strong) UIViewPropertyAnimator *headerViewsAnimator;
@@ -168,36 +170,84 @@
     // Down 库的 WebKit 渲染会启动嵌套 RunLoop，在布局回调中会导致 UITableView 重入崩溃
     [self precacheHeightForMessage:message];
 
-    // 快照 addMessage 前后的 section/row 数量，按实际变化增量更新
-    NSInteger oldSectionCount = [self.dataProvider dateCount];
-    NSInteger oldLastSectionRowCount = 0;
-    if (oldSectionCount > 0) {
-        oldLastSectionRowCount = [self.dataProvider messagesAtSection:oldSectionCount - 1].count;
-    }
+    // Bugly: pulldown/pullup 把新消息写进 dataProvider 但 tableView 还没 reloadData 的窗口里，
+    // 这里如果仍按 dataProvider 旧值算增量，insertRowsAtIndexPaths 的 count 和 tableView 实际行数
+    // 对不上，endUpdates 会抛 _Bug_Detected_In_Client_Of_UITableView_Invalid_Number_Of_Rows_In_Section。
+    // addMessage 前先记录同步状态，漂移时直接 reloadData 兜底。
+    BOOL inSyncBefore = [self isTableViewRowCountInSyncWithDataProvider];
+    BOOL pulldownActive = self.isPulldownInProgress;
 
     [self.dataProvider addMessage:message];
 
+    if (pulldownActive || !inSyncBefore) {
+        [self.tableView reloadData];
+        [self didAddMessageUI];
+        return;
+    }
+
+    // 无漂移时以 tableView 当前行数为基准做增量（而不是 dataProvider 的旧快照）
+    NSInteger oldSectionCount = [self.tableView numberOfSections];
+    NSInteger oldLastSectionRowCount = (oldSectionCount > 0) ? [self.tableView numberOfRowsInSection:oldSectionCount - 1] : 0;
     NSInteger newSectionCount = [self.dataProvider dateCount];
     BOOL newSectionAdded = (newSectionCount > oldSectionCount);
     NSInteger newLastSectionRowCount = (newSectionCount > 0) ? [self.dataProvider messagesAtSection:newSectionCount - 1].count : 0;
 
+    // Bugly #3054 兜底：校验的窗口 + 双保险 @try/@catch。
+    //   insertRowsAtIndexPaths 内部会触发 heightForRow / cellForRow，对未缓存高度的 markdown 消息
+    //   sizeForMessage: 会走 Down 的 WebKit 渲染 → 嵌套 RunLoop。期间主队列 pending 的 pulldown
+    //   完成 / handleRecvMessage 会批量往 dp 追加数据，导致内部校验时 ds.count 和 tv 期望值漂移 →
+    //   NSInternalInconsistencyException。在 insertRows 前再精确校一次，不一致直接 reloadData；
+    //   即便过了二次校验还抛异常（嵌套 RunLoop 在 insert 内部发生），catch 住同样走 reloadData。
+    if (!newSectionAdded && newLastSectionRowCount > oldLastSectionRowCount) {
+        NSInteger intendedDelta = newLastSectionRowCount - oldLastSectionRowCount;
+        NSInteger dsNow = [self.dataProvider messagesAtSection:newSectionCount - 1].count;
+        NSInteger tvNow = [self.tableView numberOfRowsInSection:newSectionCount - 1];
+        if (dsNow - tvNow != intendedDelta) {
+            [self.tableView reloadData];
+            [self didAddMessageUI];
+            return;
+        }
+    }
+
     if (newSectionAdded) {
-        [UIView performWithoutAnimation:^{
-            [self.tableView insertSections:[NSIndexSet indexSetWithIndex:newSectionCount - 1] withRowAnimation:UITableViewRowAnimationNone];
-        }];
+        @try {
+            [UIView performWithoutAnimation:^{
+                [self.tableView insertSections:[NSIndexSet indexSetWithIndex:newSectionCount - 1] withRowAnimation:UITableViewRowAnimationNone];
+            }];
+        } @catch (NSException *ex) {
+            NSLog(@"[WKMessageListView] insertSections drift caught: %@, fallback reloadData", ex);
+            [self.tableView reloadData];
+        }
     } else if (newLastSectionRowCount > oldLastSectionRowCount) {
         NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
         for (NSInteger row = oldLastSectionRowCount; row < newLastSectionRowCount; row++) {
             [indexPaths addObject:[NSIndexPath indexPathForRow:row inSection:newSectionCount - 1]];
         }
-        [UIView performWithoutAnimation:^{
-            [self.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
-        }];
+        @try {
+            [UIView performWithoutAnimation:^{
+                [self.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
+            }];
+        } @catch (NSException *ex) {
+            NSLog(@"[WKMessageListView] insertRows drift caught: %@, fallback reloadData", ex);
+            [self.tableView reloadData];
+        }
     } else {
         // typing 替换等场景：刷新最后一行
+        //   reloadRow 同样需要 ds.count == tv.count，否则 UITableView 校验仍会抛异常（Bugly 另一路径同理）。
         if (newSectionCount > 0 && newLastSectionRowCount > 0) {
             NSIndexPath *lastPath = [NSIndexPath indexPathForRow:newLastSectionRowCount - 1 inSection:newSectionCount - 1];
-            [self.tableView reloadRowsAtIndexPaths:@[lastPath] withRowAnimation:UITableViewRowAnimationNone];
+            NSInteger tvSectionsNow = [self.tableView numberOfSections];
+            NSInteger tvRowsNow = (tvSectionsNow == newSectionCount) ? [self.tableView numberOfRowsInSection:newSectionCount - 1] : -1;
+            if (tvRowsNow != newLastSectionRowCount) {
+                [self.tableView reloadData];
+            } else {
+                @try {
+                    [self.tableView reloadRowsAtIndexPaths:@[lastPath] withRowAnimation:UITableViewRowAnimationNone];
+                } @catch (NSException *ex) {
+                    NSLog(@"[WKMessageListView] send reloadRows drift caught: %@, fallback reloadData", ex);
+                    [self.tableView reloadData];
+                }
+            }
         }
     }
 
@@ -1402,6 +1452,19 @@
         // 预缓存高度（触发 markdown 渲染），避免在 UITableView 布局回调中首次渲染
         [self precacheHeightForMessage:messageModel];
 
+        // Bugly #3054 兜底（另一路径 crash：before=31/after=32/inserted=0/deleted=0）：
+        //   handleRecvMessage 可能在 dp 已经和 tv 漂移的状态下被调用（前一次 insert 抛异常被吞掉、
+        //   或前序 send/recv 因嵌套 RunLoop 留下漂移）。进入增量更新前做一次一致性检查，不一致
+        //   就直接 addMessage + reloadData 收敛，不走后面的增量路径。
+        BOOL inSyncBefore = [self isTableViewRowCountInSyncWithDataProvider];
+        if (!inSyncBefore) {
+            [self.dataProvider addMessage:messageModel];
+            [self.tableView reloadData];
+            if(self.positionAtBottom) { [self scrollToBottom:YES]; }
+            else if ([message isSend]) { [self scrollToBottom:YES]; }
+            return;
+        }
+
         // 快照 addMessage 前后的 section/row 数量，按实际变化增量更新
         NSInteger oldSectionCount = [self.dataProvider dateCount];
         NSInteger oldLastSectionRowCount = 0;
@@ -1415,25 +1478,62 @@
         BOOL newSectionAdded = (newSectionCount > oldSectionCount);
         NSInteger newLastSectionRowCount = (newSectionCount > 0) ? [self.dataProvider messagesAtSection:newSectionCount - 1].count : 0;
 
+        // Bugly #3054 兜底：见 sendMessage: 同处注释。insertRows 内嵌套 RunLoop 会让主队列
+        // pending 的 pulldown/其他 recv 在 insert 期间追加 dp，校验漂移 → NSInternalInconsistencyException。
+        if (!newSectionAdded && newLastSectionRowCount > oldLastSectionRowCount) {
+            NSInteger intendedDelta = newLastSectionRowCount - oldLastSectionRowCount;
+            NSInteger tvSectionsNow = [self.tableView numberOfSections];
+            NSInteger dsNow = [self.dataProvider messagesAtSection:newSectionCount - 1].count;
+            NSInteger tvNow = (tvSectionsNow == newSectionCount) ? [self.tableView numberOfRowsInSection:newSectionCount - 1] : -1;
+            if (tvNow < 0 || dsNow - tvNow != intendedDelta) {
+                [self.tableView reloadData];
+                if(self.positionAtBottom) { [self scrollToBottom:YES]; }
+                else if ([message isSend]) { [self scrollToBottom:YES]; }
+                return;
+            }
+        }
+
         if (newSectionAdded) {
             // 新日期分组：插入整个 section
-            [UIView performWithoutAnimation:^{
-                [self.tableView insertSections:[NSIndexSet indexSetWithIndex:newSectionCount - 1] withRowAnimation:UITableViewRowAnimationNone];
-            }];
+            @try {
+                [UIView performWithoutAnimation:^{
+                    [self.tableView insertSections:[NSIndexSet indexSetWithIndex:newSectionCount - 1] withRowAnimation:UITableViewRowAnimationNone];
+                }];
+            } @catch (NSException *ex) {
+                NSLog(@"[WKMessageListView] recv insertSections drift caught: %@, fallback reloadData", ex);
+                [self.tableView reloadData];
+            }
         } else if (!newSectionAdded && newLastSectionRowCount > oldLastSectionRowCount) {
             // 同日期且行数增加：在末尾插入新行
             NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
             for (NSInteger row = oldLastSectionRowCount; row < newLastSectionRowCount; row++) {
                 [indexPaths addObject:[NSIndexPath indexPathForRow:row inSection:newSectionCount - 1]];
             }
-            [UIView performWithoutAnimation:^{
-                [self.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
-            }];
+            @try {
+                [UIView performWithoutAnimation:^{
+                    [self.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
+                }];
+            } @catch (NSException *ex) {
+                NSLog(@"[WKMessageListView] recv insertRows drift caught: %@, fallback reloadData", ex);
+                [self.tableView reloadData];
+            }
         } else {
             // typing 替换/丢弃等场景：行数不变，刷新最后一行即可
+            //   reloadRow 同样需要 ds.count == tv.count，否则 UITableView 校验仍会抛异常（Bugly 另一路径）。
             if (newSectionCount > 0 && newLastSectionRowCount > 0) {
                 NSIndexPath *lastPath = [NSIndexPath indexPathForRow:newLastSectionRowCount - 1 inSection:newSectionCount - 1];
-                [self.tableView reloadRowsAtIndexPaths:@[lastPath] withRowAnimation:UITableViewRowAnimationNone];
+                NSInteger tvSectionsNow = [self.tableView numberOfSections];
+                NSInteger tvRowsNow = (tvSectionsNow == newSectionCount) ? [self.tableView numberOfRowsInSection:newSectionCount - 1] : -1;
+                if (tvRowsNow != newLastSectionRowCount) {
+                    [self.tableView reloadData];
+                } else {
+                    @try {
+                        [self.tableView reloadRowsAtIndexPaths:@[lastPath] withRowAnimation:UITableViewRowAnimationNone];
+                    } @catch (NSException *ex) {
+                        NSLog(@"[WKMessageListView] recv reloadRows drift caught: %@, fallback reloadData", ex);
+                        [self.tableView reloadData];
+                    }
+                }
             }
         }
 
@@ -2015,6 +2115,29 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 -(void) channelInfoUpdate:(WKChannelInfo*)channelInfo {
     if([self.channel isEqual:channelInfo.channel]) { // 更新的当前会话的信息
         self.channelInfo = channelInfo;
+        // 群聊场景:收到 channelInfo 后预加载群头像到 SDImageCache,
+        // 这样用户第一次发 [使命必达] 特效时舷窗能直接显示群头像(否则首次必然 MISS)。
+        if (channelInfo.channel.channelType != WK_PERSON) {
+            NSString *groupAvatarURL = [WKAvatarUtil getGroupAvatar:channelInfo.channel.channelId
+                                                           cacheKey:channelInfo.avatarCacheKey ?: @""];
+            if (groupAvatarURL.length > 0 &&
+                ![[SDImageCache sharedImageCache] imageFromCacheForKey:groupAvatarURL]) {
+                [[SDWebImageManager sharedManager] loadImageWithURL:[NSURL URLWithString:groupAvatarURL]
+                                                            options:SDWebImageRetryFailed
+                                                           progress:nil
+                                                          completed:^(UIImage * _Nullable image,
+                                                                      NSData * _Nullable data,
+                                                                      NSError * _Nullable error,
+                                                                      SDImageCacheType cacheType,
+                                                                      BOOL finished,
+                                                                      NSURL * _Nullable imageURL) {
+#if DEBUG
+                    NSLog(@"[RocketAvatar] prefetch 群头像(channelInfoUpdate) | url=%@ got=%@",
+                          imageURL, image ? @"YES" : @"NO");
+#endif
+                }];
+            }
+        }
     }else { // 更新的当前聊里页面的发送者的信息
         if(channelInfo.channel.channelType != WK_PERSON) {
             return;
@@ -2154,45 +2277,160 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 
     // 已触发过则跳过（同一条消息 cell 重用、重新入视图都不重播）
     if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
-    [[WKMessageEffectManager shared] markTriggeredForMessage:message];
+    // ⚠️ 不在此处 markTriggered：必须等 dispatch_after 里确认 cell 仍在可视区才 mark+trigger。
+    //   否则快速滚动场景下会消费掉"已触发"状态、却又因 cell 不在而走 bottom-center fallback
+    //   给不可见消息放特效（lml2468 review R1）。cell 不在时不 mark，留待下次滚回可视区重判。
 
-    // 不再主动收起键盘：键盘保持展开，爆炸点会落在可见区域
-    // （computeExplodePointInView 已利用 adjustedContentInset 避开键盘遮挡区）
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         NSIndexPath *indexPath = [self.dataProvider indexPathAtClientMsgNo:message.clientMsgNo];
+        if (!indexPath) return;
+        UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
+        if (!cell) return;  // cell 滚出视口 → 不 mark、不 trigger，允许下次重判
+
+        // cell 确认在视口 —— 才 mark（防并发：再查一次 hasTriggered）
+        if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
+        [[WKMessageEffectManager shared] markTriggeredForMessage:message];
+
         CGRect sourceRect = CGRectZero;
-        UIImage *avatarImage = nil;
-        if (indexPath) {
-            UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
-            if (cell) {
-                sourceRect = [self.tableView convertRect:cell.frame toView:self];
-                // 从 message cell 的头像控件抓当前显示的 UIImage（已加载完成的头像），
-                // 让火箭发射特效可以在舷窗里嵌入发送者头像
-                if ([cell isKindOfClass:WKMessageCell.class]) {
-                    WKMessageCell *msgCell = (WKMessageCell *)cell;
-                    avatarImage = msgCell.avatarImgView.avatarImgView.image;
-                }
+        // classy 特效要精确锚定在气泡上（气泡本身 ≈ 表情图片，
+        // 因为 [有品位] 是 tag-only 消息，文本气泡里只有这一张内联图）。
+        // 先强制 layout 一次，避免首次入视图时 bubble frame 尚未稳定。
+        if ([effectType isEqualToString:@"classy"] && [cell isKindOfClass:WKMessageCell.class]) {
+            [cell layoutIfNeeded];
+            UIView *bubble = ((WKMessageCell *)cell).bubbleBackgroundView;
+            if (bubble && !CGRectIsEmpty(bubble.bounds)) {
+                sourceRect = [self convertRect:bubble.bounds fromView:bubble];
             }
         }
         if (CGRectIsEmpty(sourceRect)) {
-            // fallback: use bottom center
-            sourceRect = CGRectMake(self.bounds.size.width / 2 - 30, self.bounds.size.height - 100, 60, 60);
+            sourceRect = [self.tableView convertRect:cell.frame toView:self];
         }
+
+        // 头像源规则:
+        //   - 私聊(channel.channelType == WK_PERSON) → 取对方头像(channel.channelId = 对方 uid)
+        //   - 群聊 → 取**群头像**(getGroupAvatar),作为能量汇聚完成后舷窗最终显示的图像
+        //     群成员头像仅用作能量汇聚动画的视觉素材(流过屏幕后被吸收,最终换成群头像)
+        UIImage *avatarImage = nil;
+        NSString *avatarURL = nil;
+        NSString *cacheKey = self.channelInfo.avatarCacheKey ?: @"";
+        if (self.channel.channelType == WK_PERSON) {
+            avatarURL = [WKAvatarUtil getAvatar:self.channel.channelId cacheKey:cacheKey];
+        } else {
+            avatarURL = [WKAvatarUtil getGroupAvatar:self.channel.channelId cacheKey:cacheKey];
+        }
+#if DEBUG
+        NSLog(@"[RocketAvatar] step1-url | channelType=%d channelId=%@ cacheKey=%@ → avatarURL=%@",
+              self.channel.channelType, self.channel.channelId, cacheKey, avatarURL);
+#endif
+        if (avatarURL.length > 0) {
+            avatarImage = [[SDImageCache sharedImageCache] imageFromCacheForKey:avatarURL];
+#if DEBUG
+            NSLog(@"[RocketAvatar] step2-cache | key=%@ hit=%@ size=%@",
+                  avatarURL,
+                  avatarImage ? @"YES" : @"NO(MISS)",
+                  avatarImage ? NSStringFromCGSize(avatarImage.size) : @"-");
+#endif
+            // MISS 时异步触发下载 → 下次使用该群发送表情包时缓存就命中
+            if (!avatarImage) {
+                [[SDWebImageManager sharedManager] loadImageWithURL:[NSURL URLWithString:avatarURL]
+                                                            options:SDWebImageRetryFailed
+                                                           progress:nil
+                                                          completed:^(UIImage * _Nullable image,
+                                                                      NSData * _Nullable data,
+                                                                      NSError * _Nullable error,
+                                                                      SDImageCacheType cacheType,
+                                                                      BOOL finished,
+                                                                      NSURL * _Nullable imageURL) {
+#if DEBUG
+                    NSLog(@"[RocketAvatar] async-preload 群头像 | url=%@ got=%@ err=%@",
+                          imageURL, image ? @"YES" : @"NO", error);
+#endif
+                }];
+            }
+        } else {
+#if DEBUG
+            NSLog(@"[RocketAvatar] step2-cache | SKIPPED (avatarURL empty)");
+#endif
+        }
+        // 兜底：若缓存未命中(极少数：从未加载过)，仍尝试用 cell 里的头像
+        //   ⚠️ 群聊下 cell.avatarImgView 是**发送者头像**,fallback 进来会让"群头像"误变成发送者头像
+        //   → 只在私聊下走 fallback;群聊缓存 MISS 时宁可不带头像(传 nil 给特效,舷窗空窗)
+        if (!avatarImage && indexPath && self.channel.channelType == WK_PERSON) {
+            UITableViewCell *avatarCell = [self.tableView cellForRowAtIndexPath:indexPath];
+            if ([avatarCell isKindOfClass:WKMessageCell.class]) {
+                avatarImage = ((WKMessageCell *)avatarCell).avatarImgView.avatarImgView.image;
+#if DEBUG
+                NSLog(@"[RocketAvatar] step3-fallback-cell | channelType=PERSON image=%@ size=%@",
+                      avatarImage ? @"GOT" : @"NIL",
+                      avatarImage ? NSStringFromCGSize(avatarImage.size) : @"-");
+#endif
+            }
+        } else if (!avatarImage) {
+#if DEBUG
+            NSLog(@"[RocketAvatar] step3-fallback-cell | SKIPPED (group chat → 不用 cell 头像,避免取到发送者)");
+#endif
+        }
+#if DEBUG
+        NSLog(@"[RocketAvatar] step4-final | avatarImage=%@ → 传给特效",
+              avatarImage ? [NSString stringWithFormat:@"GOT %@", NSStringFromCGSize(avatarImage.size)] : @"NIL");
+#endif
+
+        // 群聊 + rocketLaunch(使命必达)时,额外取群成员头像列表,触发"能量汇聚"动画
+        //   - 同步从 channelManager 拿已缓存的成员
+        //   - 每个成员用 WKAvatarUtil.getAvatar 拿 URL,从 SDImageCache 同步取图
+        //   - 最多 12 个,取到才进列表;拿不到的跳过
+        //   - 如果最后列表为空 → memberAvatars=nil,走私聊弧形入场(兜底)
+        NSArray<UIImage *> *memberAvatars = nil;
+        if (self.channel.channelType != WK_PERSON && [effectType isEqualToString:@"rocketLaunch"]) {
+            NSArray<WKChannelMember *> *members = [[WKSDK shared].channelManager getMembersWithChannel:self.channel];
+            NSMutableArray<UIImage *> *avatars = [NSMutableArray array];
+            for (WKChannelMember *m in members) {
+                if (avatars.count >= 12) break;
+                NSString *memberURL = (m.memberAvatar.length > 0)
+                    ? [WKAvatarUtil getFullAvatarWIthPath:m.memberAvatar]
+                    : [WKAvatarUtil getAvatar:m.memberUid];
+                if (memberURL.length == 0) continue;
+                UIImage *memberImg = [[SDImageCache sharedImageCache] imageFromCacheForKey:memberURL];
+                if (memberImg) [avatars addObject:memberImg];
+            }
+            // 成员太少时,用群头像补一到两个,让汇聚仍然有视觉动感
+            if (avatars.count > 0 && avatars.count < 3 && avatarImage) {
+                [avatars addObject:avatarImage];
+                [avatars addObject:avatarImage];
+            }
+            if (avatars.count > 0) {
+                memberAvatars = avatars;
+            }
+#if DEBUG
+            NSLog(@"[RocketGroup] channelType=%d members.count=%lu cached avatars=%lu → memberAvatars=%@",
+                  self.channel.channelType,
+                  (unsigned long)members.count,
+                  (unsigned long)avatars.count,
+                  memberAvatars ? @"有,汇聚动画" : @"空,走单 avatar");
+#endif
+        }
+
+        // sourceRect 必定非空：本方法开头已确保 cell 存在并成功计算出 sourceRect。
+        // 历史版本里的 bottom-center fallback 已移除（lml2468 review R1）—— cell 不在视口时
+        // 不 mark、不 trigger，避免给不可见消息放特效。
         [[WKMessageEffectManager shared] triggerEffect:effectType
                                             inHostView:self
                                             sourceRect:sourceRect
-                                           avatarImage:avatarImage];
+                                           avatarImage:avatarImage
+                                         memberAvatars:memberAvatars
+                                              fromSelf:message.isSend];
     });
 }
 
 /// 首次看到消息时检查是否触发特效（由 willDisplayCell 调用，是唯一触发入口）
 ///
-/// 触发规则（按顺序检查，任一命中就 skip）：
-///   1. triggeredMessageIds 持久化集合包含 → 已触发过，skip
-///   2. 接收消息且已读 (!isSend && readed) → 用户之前看过，skip
-///   3. 消息年龄 > 30s → 历史消息（滚动加载进来的），视觉上已经被"看过"，skip
+/// 规则：
+///   1. 已触发过（hasTriggeredForMessage 持久化，含 cell 重用/滚动去重）→ skip
+///   2. 对方发送且已读 → skip（恢复 8ca6e34 之前的 guard，lml2468 review R1）
+///   3. 消息年龄 > 30s → skip（历史消息不触发，含自己发的没 readed 语义的兜底）
 ///   4. 没命中任何 emoji → skip
-///   5. 否则 → 触发
+///   5. 延迟 300ms 后确认 cell 仍留在可视区 → 触发；否则啥也不做
+///      （一键置底/快速滚动时路过的 cell 不会被误消费，下次真正停在可视区再播）
 -(void) checkFirstViewEffectForMessage:(WKMessageModel *)message {
     if (!message) return;
     if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
@@ -2206,7 +2444,19 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     NSString *effectType = [[WKMessageEffectManager shared] effectTypeForMessage:message];
     if (!effectType) return;
 
-    [self checkAndTriggerEffectForMessage:message];
+    NSString *clientMsgNo = message.clientMsgNo;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        NSIndexPath *indexPath = [strongSelf.dataProvider indexPathAtClientMsgNo:clientMsgNo];
+        if (!indexPath) return;
+        // cell 已被 UITableView 回收 → 说明 300ms 内已滚出可视区，skip
+        if (![strongSelf.tableView cellForRowAtIndexPath:indexPath]) return;
+        WKMessageModel *current = [strongSelf.dataProvider messageAtIndexPath:indexPath];
+        if (!current) return;
+        [strongSelf checkAndTriggerEffectForMessage:current];
+    });
 }
 
 /// 计算消息年龄（秒），自动兼容 timestamp 是秒还是毫秒的情况
@@ -2219,6 +2469,5 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     NSTimeInterval age = [[NSDate date] timeIntervalSince1970] - (NSTimeInterval)ts;
     return MAX(0, age);
 }
-
 
 @end

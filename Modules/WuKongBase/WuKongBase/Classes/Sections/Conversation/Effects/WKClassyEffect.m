@@ -2,370 +2,616 @@
 //  WKClassyEffect.m
 //  WuKongBase
 //
-//  [有品位] 特效：从屏幕顶部降下若干个 👍，每个独立选择若干可见气泡，
-//  相邻气泡之间沿二次贝塞尔抛物线跳跃；落地瞬间触发 pulseCell，
-//  完成所有落点后再坠落出屏幕。
+//  [有品位] 特效（v11 · 手臂和点赞一体化）
 //
-//  关键点：
-//    - 每个 👍 的落点序列、arc 高度、落点内偏移、旋转、字号都是独立随机
-//    - 抛物线用物理近似（quadratic Bezier，控制点 y = 中点 y - 2*peakHeight）
-//    - 每段时长用 sqrt(2h/g) 近似，使大跳落地慢、小跳落地快
+//  v10 问题解决：
+//    1. z-order：hole mask 从"整个 sourceRect"缩小成"图片 rect 估算"（sourceRect 小 inset
+//       ~6pt）。手臂在气泡 padding 那圈（bubble 和 image 之间）可见，叠在气泡背景上，被图片
+//       盖住；正好 `bubble_frame < arm < emoji_image` 的 z 序。
+//    2. 手臂和点赞连成一体：点赞形状在底部加了**腕部 stem**（从 palm 底部往下收窄的短柱，
+//       延伸到 handNode 边界）。`armEnd` 落在 stem 中心，arm 最后一小段直接钻进 stem 内部；
+//       因为 arm 和 hand 用同一个金黄色 #FFD500 填充，两者无缝衔接，看起来就是一条连续的
+//       "手臂长成手"。
+//    3. arm 末端 tangent 改成近乎竖直（armControl2 调到 armEnd 正下方附近），hand 直立无
+//       需旋转就能自然对齐。
+//    4. 点赞轮廓按你给的图重绘：高挑拇指（顶端微前倾）+ palm 右侧 4 段 knuckle + 腕部 stem。
 //
 
 #import "WKClassyEffect.h"
 #import "WKMessageEffectView.h"
 #import "WuKongBase.h"
-#import "WKMessageCell.h"
-#import <WuKongBase/WuKongBase-Swift.h>
 
 @implementation WKClassyEffect
 
 #pragma mark - Entry
 
-+ (void)playInView:(WKMessageEffectView *)effectView sourceRect:(CGRect)sourceRect {
-    UITableView *tableView = effectView.tableView;
++ (void)playInView:(WKMessageEffectView *)effectView
+        sourceRect:(CGRect)sourceRect
+          fromSelf:(BOOL)fromSelf {
 
-    // 采集可见气泡顶部中心点（effectView 坐标系），按 y 升序
-    NSArray<NSValue *> *bubbleTops = [self collectBubbleTopCentersInEffectView:effectView tableView:tableView];
-    if (bubbleTops.count == 0) {
-        // 没有可见气泡就退化为纯降落
-        [self rainFallbackInView:effectView];
+    if (effectView.superview == nil || CGRectIsEmpty(sourceRect)) {
+        [effectView scheduleRemovalAfterDelay:0.05];
         return;
     }
 
-    CGFloat viewH = effectView.bounds.size.height;
+    // 单一金色（arm 和 hand 同色才能视觉连成一体）
+    UIColor *yellowBase   = [UIColor colorWithRed:1.00 green:0.835 blue:0.00 alpha:1.0];  // #FFD500
+    UIColor *yellowDark   = [UIColor colorWithRed:0.85 green:0.65 blue:0.00 alpha:1.0];
+    UIColor *yellowShadow = [UIColor colorWithRed:0.55 green:0.38 blue:0.00 alpha:1.0];
+    UIColor *yellowLight  = [UIColor colorWithRed:1.00 green:0.92 blue:0.45 alpha:1.0];
 
-    NSInteger totalCount = 10;          // 👍 的数量
-    NSTimeInterval spawnWindow = 3.2;   // 入场窗口：拉长节奏，避免扎堆
-    NSTimeInterval maxHopEnd = 0;       // 最晚完成时间，决定 effectView 移除
+    CGFloat sign = fromSelf ? -1.0 : 1.0;
 
-    // 首个气泡作为所有 👍 的入场落点，x 以它为中心轻微散开
-    CGPoint firstBubble = [bubbleTops.firstObject CGPointValue];
+    CGFloat w = sourceRect.size.width;
+    CGFloat h = sourceRect.size.height;
+    CGFloat midX = CGRectGetMidX(sourceRect);
+    CGFloat maxY = CGRectGetMaxY(sourceRect);
+    CGFloat avgSize = (w + h) / 2.0;
 
-    // 把入场窗口切成 N 个桶，每个 👍 在自己桶内随机挑一个时刻 —— 保证最小间隔、
-    // 同时每次播放的节奏都不一样，不会像按拍子掉落
-    NSTimeInterval bucketSize = spawnWindow / (NSTimeInterval)totalCount;
+    // 手臂几何：armControl2 放在 armEnd 正下方附近，让末端 tangent 接近竖直，好和 hand 对齐
+    CGPoint armStart   = CGPointMake(midX + sign * w * 0.25, maxY - h * 0.28);
+    CGPoint armControl1= CGPointMake(midX + sign * w * 0.85, maxY + h * 0.52);
+    CGPoint armControl2= CGPointMake(midX + sign * w * 0.92, maxY + h * 0.05);
+    CGPoint armEnd     = CGPointMake(midX + sign * w * 0.90, maxY - h * 0.30);
 
-    for (NSInteger i = 0; i < totalCount; i++) {
-        NSTimeInterval bucketStart = (NSTimeInterval)i * bucketSize;
-        NSTimeInterval jitter = (NSTimeInterval)arc4random_uniform(1000) / 1000.0 * bucketSize;
-        NSTimeInterval delay = bucketStart + jitter;
+    CGFloat armWidth = MIN(avgSize * 0.09, 11.0);
+    CGFloat handSize = MIN(avgSize * 0.62, 140.0);
 
-        // 每个 thumb 独立路径：从首个气泡开始，按步长 1/2/3 依次挑选后续气泡
-        NSArray<NSValue *> *waypoints = [self pickWaypointsFromAll:bubbleTops];
-        if (waypoints.count == 0) continue;
+    UIBezierPath *centerline = [UIBezierPath bezierPath];
+    [centerline moveToPoint:armStart];
+    [centerline addCurveToPoint:armEnd controlPoint1:armControl1 controlPoint2:armControl2];
 
-        CGFloat fontSize = 28.0 + (CGFloat)arc4random_uniform(14);   // 28~42
-        CGFloat size = fontSize * 1.3;
-        // 入场位置：第一个气泡正上方（±14pt 随机偏移），刚好在屏幕外
-        CGFloat xStart = firstBubble.x + ((CGFloat)arc4random_uniform(28) - 14);
-        CGFloat yStart = -size - 8;
+    // ===== armContainer + hole mask：图片 rect 估算 =====
+    //   sourceRect 是整个气泡；图片在气泡中占绝大部分（tag-only 文本的气泡 padding 很小）。
+    //   取 inset ~6pt 的 rect 近似图片区域；这块挖空，arm 在其中被真实图片遮住；气泡边缘那
+    //   一圈薄薄的 padding 区域 arm 可见，叠在气泡背景上——正好是 `bubble_frame < arm < image`。
+    UIView *armContainer = [[UIView alloc] initWithFrame:effectView.bounds];
+    armContainer.userInteractionEnabled = NO;
 
-        NSTimeInterval duration = [self buildAndScheduleHopForThumbAtDelay:delay
-                                                                 xStart:xStart
-                                                                 yStart:yStart
-                                                                   size:size
-                                                               fontSize:fontSize
-                                                              waypoints:waypoints
-                                                                  viewH:viewH
-                                                             effectView:effectView
-                                                              tableView:tableView];
+    CAShapeLayer *holeMask = [CAShapeLayer layer];
+    UIBezierPath *holePath = [UIBezierPath bezierPathWithRect:effectView.bounds];
+    CGFloat inset = MIN(6.0, MIN(w, h) * 0.08);
+    CGRect imageRectEstimate = CGRectInset(sourceRect, inset, inset);
+    [holePath appendPath:[UIBezierPath bezierPathWithRect:imageRectEstimate]];
+    holePath.usesEvenOddFillRule = YES;
+    holeMask.path = holePath.CGPath;
+    holeMask.fillRule = kCAFillRuleEvenOdd;
+    holeMask.fillColor = UIColor.blackColor.CGColor;
+    armContainer.layer.mask = holeMask;
+    [effectView addSubview:armContainer];
 
-        NSTimeInterval end = delay + duration;
-        if (end > maxHopEnd) maxHopEnd = end;
-    }
+    // arm layers
+    CGPathRef armFillPath = CGPathCreateCopyByStrokingPath(centerline.CGPath,
+                                                           NULL,
+                                                           armWidth,
+                                                           kCGLineCapRound,
+                                                           kCGLineJoinRound,
+                                                           1.0);
+    CAShapeLayer *armShape = [CAShapeLayer layer];
+    armShape.path = armFillPath;
+    armShape.fillColor = yellowBase.CGColor;
+    [armContainer.layer addSublayer:armShape];
 
-    [effectView scheduleRemovalAfterDelay:maxHopEnd + 0.5];
-}
+    CAShapeLayer *armEdge = [CAShapeLayer layer];
+    armEdge.path = armFillPath;
+    armEdge.fillColor = UIColor.clearColor.CGColor;
+    armEdge.strokeColor = yellowShadow.CGColor;
+    armEdge.lineWidth = 1.3;
+    armEdge.opacity = 0.95;
+    [armContainer.layer addSublayer:armEdge];
+    CGPathRelease(armFillPath);
 
-#pragma mark - Per-thumb builder
+    CAShapeLayer *armHighlight = [CAShapeLayer layer];
+    armHighlight.path = centerline.CGPath;
+    armHighlight.fillColor = UIColor.clearColor.CGColor;
+    armHighlight.strokeColor = yellowLight.CGColor;
+    armHighlight.lineWidth = armWidth * 0.28;
+    armHighlight.lineCap = kCALineCapRound;
+    armHighlight.opacity = 0.55;
+    [armContainer.layer addSublayer:armHighlight];
 
-+ (NSTimeInterval)buildAndScheduleHopForThumbAtDelay:(NSTimeInterval)delay
-                                              xStart:(CGFloat)xStart
-                                              yStart:(CGFloat)yStart
-                                                size:(CGFloat)size
-                                            fontSize:(CGFloat)fontSize
-                                           waypoints:(NSArray<NSValue *> *)waypoints
-                                               viewH:(CGFloat)viewH
-                                          effectView:(WKMessageEffectView *)effectView
-                                           tableView:(UITableView *)tableView {
+    CAShapeLayer * (^makeReveal)(void) = ^{
+        CAShapeLayer *m = [CAShapeLayer layer];
+        m.path = centerline.CGPath;
+        m.fillColor = UIColor.clearColor.CGColor;
+        m.strokeColor = UIColor.whiteColor.CGColor;
+        m.lineWidth = armWidth * 1.5;
+        m.lineCap = kCALineCapRound;
+        m.strokeEnd = 0;
+        return m;
+    };
+    CAShapeLayer *revealA = makeReveal();
+    CAShapeLayer *revealB = makeReveal();
+    CAShapeLayer *revealC = makeReveal();
+    armShape.mask = revealA;
+    armEdge.mask = revealB;
+    armHighlight.mask = revealC;
 
-    // 预先计算所有段：起点 + 每个气泡落点 + 坠落出屏
-    NSMutableArray<NSValue *> *points = [NSMutableArray array];
-    [points addObject:[NSValue valueWithCGPoint:CGPointMake(xStart, yStart)]];
+    CAEmitterLayer *emitter = [self buildArmEmitter];
+    emitter.frame = effectView.bounds;
+    emitter.emitterPosition = armStart;
+    [armContainer.layer addSublayer:emitter];
 
-    for (NSValue *wp in waypoints) {
-        CGPoint base = [wp CGPointValue];
-        CGFloat dx = (CGFloat)((NSInteger)arc4random_uniform(50) - 25); // 气泡上 ±25pt
-        CGPoint landing = CGPointMake(base.x + dx, base.y - size * 0.35); // 踩在顶沿偏上
-        [points addObject:[NSValue valueWithCGPoint:landing]];
-    }
-    // 最后坠落出屏
-    CGPoint lastBubble = [points.lastObject CGPointValue];
-    CGPoint fallEnd = CGPointMake(lastBubble.x + ((CGFloat)arc4random_uniform(80) - 40), viewH + size);
-    [points addObject:[NSValue valueWithCGPoint:fallEnd]];
+    // ======== 点赞手势（含 wrist stem）========
+    //   stem 在 shape 底部 (0.38-0.62, 0.86-1.00) 这个小矩形区域。
+    //   handRoot 定位：wrist stem 底部中点 (0.50, 1.00) 对齐 armEnd。
+    //   armEnd 附近的 arm 线条（armWidth ~10pt，宽度明显小于 stem 宽度 0.24*handSize）
+    //   被 stem 完全 "吞" 进去，视觉无缝。
+    UIView *thumbView = [self createThumbsUpViewWithSize:handSize
+                                               baseColor:yellowBase
+                                               darkColor:yellowDark
+                                              lightColor:yellowLight
+                                             shadowColor:yellowShadow];
 
-    // 每段时长：依据 peakHeight 用 sqrt(2h/g) 近似
-    const CGFloat g = 1400.0;
-    NSMutableArray<NSNumber *> *segDurations = [NSMutableArray array];
-    NSMutableArray<NSValue *> *controlPoints = [NSMutableArray array];
+    // wrist 底部中点在本地 (0.50*S, 1.00*S)；handRoot 以此为定位基准
+    //   对于无 mirror：handRoot.center.x = armEnd.x（wrist x 本地 0.5 = handRoot 中心 x）
+    //                  handRoot.center.y = armEnd.y - 0.50*S（wrist y 本地 1.0 → 下边界）
+    //   mirror 后：wrist x 本地 0.50 依然是中线，handRoot.center.x 不变
+    CGPoint handCenter = CGPointMake(armEnd.x, armEnd.y - 0.50 * handSize);
 
-    for (NSInteger j = 0; j < (NSInteger)points.count - 1; j++) {
-        CGPoint from = [points[j] CGPointValue];
-        CGPoint to = [points[j + 1] CGPointValue];
-        CGFloat dist = hypot(to.x - from.x, to.y - from.y);
-        BOOL isEntry = (j == 0);
-        BOOL isFall = (j == (NSInteger)points.count - 2);
+    UIView *handRoot = [[UIView alloc] initWithFrame:CGRectMake(0, 0, handSize, handSize)];
+    handRoot.center = handCenter;
+    if (fromSelf) handRoot.transform = CGAffineTransformMakeScale(-1.0, 1.0);
+    [effectView addSubview:handRoot];
 
-        // 弹跳高度：跳得越远，抛物越高（物理感）；入场/坠落是近乎直落
-        CGFloat peakH;
-        if (isEntry) {
-            peakH = 6.0; // 几乎直线落到第一个气泡，避免"飞入"感
-        } else if (isFall) {
-            peakH = 8.0;
-        } else {
-            // 主要由水平距离决定：dx 越大 → 抛物越高
-            CGFloat dx = fabs(to.x - from.x);
-            peakH = 35.0 + dx * 0.35 + (CGFloat)arc4random_uniform(20);
-            peakH = MIN(peakH, 130.0);
+    thumbView.frame = handRoot.bounds;
+    thumbView.alpha = 0;
+    thumbView.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(0.25, 0.25),
+                                                   CGAffineTransformMakeRotation(-15.0 * M_PI / 180.0));
+    [handRoot addSubview:thumbView];
+
+    // ============ Timeline ============
+    NSTimeInterval armBegin = 0.05;
+    NSTimeInterval armDur = 0.60;
+    NSTimeInterval now = CACurrentMediaTime();
+
+    // Phase A: arm 揭示 + 粒子
+    CAKeyframeAnimation *emitterPos = [CAKeyframeAnimation animationWithKeyPath:@"emitterPosition"];
+    emitterPos.path = centerline.CGPath;
+    emitterPos.duration = armDur;
+    emitterPos.beginTime = now + armBegin;
+    emitterPos.calculationMode = kCAAnimationPaced;
+    emitterPos.fillMode = kCAFillModeBoth;
+    emitterPos.removedOnCompletion = NO;
+    [emitter addAnimation:emitterPos forKey:@"classy-emitter-path"];
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(armBegin * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        for (CAEmitterCell *c in emitter.emitterCells) {
+            if ([c.name isEqualToString:@"core"]) c.birthRate = 180;
+            else if ([c.name isEqualToString:@"spark"]) c.birthRate = 70;
         }
-
-        // 贝塞尔控制点
-        CGFloat midX = (from.x + to.x) / 2.0 + (isEntry ? 0 : ((CGFloat)arc4random_uniform(30) - 15));
-        CGFloat topY = MIN(from.y, to.y) - peakH * 2.0;
-        [controlPoints addObject:[NSValue valueWithCGPoint:CGPointMake(midX, topY)]];
-
-        // 段时长
-        NSTimeInterval segDur;
-        if (isEntry) {
-            segDur = 0.22 + dist / 2000.0;   // 快速入场
-        } else if (isFall) {
-            segDur = 0.55;
-        } else {
-            segDur = 2.0 * sqrt(2.0 * peakH / g);   // 真实重力下的飞行时长
-            segDur = MAX(0.22, MIN(0.55, segDur));
-        }
-        [segDurations addObject:@(segDur)];
-    }
-
-    NSTimeInterval totalDur = 0;
-    for (NSNumber *d in segDurations) totalDur += d.doubleValue;
-
-    // 采样每段贝塞尔，拼成 values + keyTimes
-    const NSInteger samplesPerSeg = 8;
-    NSMutableArray *posValues = [NSMutableArray array];
-    NSMutableArray *rotValues = [NSMutableArray array];
-    NSMutableArray *scaleValues = [NSMutableArray array];
-    NSMutableArray<NSNumber *> *keyTimes = [NSMutableArray array];
-
-    [posValues addObject:points.firstObject];
-    [rotValues addObject:@(0)];
-    [scaleValues addObject:@(1.0)];
-    [keyTimes addObject:@(0)];
-
-    NSTimeInterval accT = 0;
-    CGFloat accRot = 0;
-
-    for (NSInteger j = 0; j < (NSInteger)segDurations.count; j++) {
-        CGPoint p0 = [points[j] CGPointValue];
-        CGPoint p2 = [points[j + 1] CGPointValue];
-        CGPoint p1 = [controlPoints[j] CGPointValue];
-        NSTimeInterval segDur = [segDurations[j] doubleValue];
-
-        // 每段加一次随机旋转增量（非首段/末段才旋转明显些）
-        CGFloat rotInc = ((CGFloat)arc4random_uniform(50) - 25) * M_PI / 180.0; // ±25°
-
-        for (NSInteger k = 1; k <= samplesPerSeg; k++) {
-            CGFloat u = (CGFloat)k / (CGFloat)samplesPerSeg;
-            CGFloat mu = 1.0 - u;
-            CGPoint p = CGPointMake(mu * mu * p0.x + 2 * mu * u * p1.x + u * u * p2.x,
-                                    mu * mu * p0.y + 2 * mu * u * p1.y + u * u * p2.y);
-            [posValues addObject:[NSValue valueWithCGPoint:p]];
-            [rotValues addObject:@(accRot + rotInc * u)];
-
-            // 落地前 0.12 的 u 区间做 squash：
-            CGFloat scale = 1.0;
-            if (k == samplesPerSeg) {
-                scale = 0.85; // 触地瞬间挤压
-            } else if (k == samplesPerSeg - 1) {
-                scale = 0.95;
-            } else if (k == 1) {
-                scale = 1.08; // 起跳抬起
-            }
-            [scaleValues addObject:@(scale)];
-
-            NSTimeInterval tAbs = accT + segDur * u;
-            [keyTimes addObject:@(tAbs / totalDur)];
-        }
-
-        accRot += rotInc;
-        accT += segDur;
-    }
-
-    // 保证末位 keyTime 为 1（浮点误差兜底）
-    keyTimes[keyTimes.count - 1] = @(1.0);
-
-    // 调度生成
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (effectView.superview == nil) return;
-
-        UILabel *thumb = [[UILabel alloc] init];
-        thumb.text = @"👍";
-        thumb.font = [UIFont systemFontOfSize:fontSize];
-        thumb.textAlignment = NSTextAlignmentCenter;
-        thumb.frame = CGRectMake(0, 0, size, size);
-        thumb.center = [points.firstObject CGPointValue];
-        [effectView addSubview:thumb];
-
-        CAKeyframeAnimation *posAnim = [CAKeyframeAnimation animationWithKeyPath:@"position"];
-        posAnim.values = posValues;
-        posAnim.keyTimes = keyTimes;
-        posAnim.duration = totalDur;
-        posAnim.calculationMode = kCAAnimationLinear;
-
-        CAKeyframeAnimation *rotAnim = [CAKeyframeAnimation animationWithKeyPath:@"transform.rotation.z"];
-        rotAnim.values = rotValues;
-        rotAnim.keyTimes = keyTimes;
-        rotAnim.duration = totalDur;
-
-        CAKeyframeAnimation *scaleAnim = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
-        scaleAnim.values = scaleValues;
-        scaleAnim.keyTimes = keyTimes;
-        scaleAnim.duration = totalDur;
-
-        CAAnimationGroup *group = [CAAnimationGroup animation];
-        group.animations = @[posAnim, rotAnim, scaleAnim];
-        group.duration = totalDur;
-        group.fillMode = kCAFillModeForwards;
-        group.removedOnCompletion = NO;
-        [thumb.layer addAnimation:group forKey:@"classy-hop"];
-
-        // 每个落点时刻 pulse 对应气泡
-        NSTimeInterval acc = 0;
-        for (NSInteger j = 0; j < (NSInteger)waypoints.count; j++) {
-            acc += [segDurations[j] doubleValue]; // 对应 points[j+1]，即 waypoints[j]
-            CGPoint targetInView = [points[j + 1] CGPointValue];
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(acc * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [self pulseBubbleAt:targetInView effectView:effectView tableView:tableView];
-            });
-        }
-
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((totalDur + 0.1) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [thumb removeFromSuperview];
-        });
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((armBegin + armDur) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        for (CAEmitterCell *c in emitter.emitterCells) c.birthRate = 0;
     });
 
-    return totalDur;
-}
-
-#pragma mark - Helpers
-
-+ (NSArray<NSValue *> *)collectBubbleTopCentersInEffectView:(WKMessageEffectView *)effectView
-                                                 tableView:(UITableView *)tableView {
-    if (!tableView) return @[];
-    // 只收集「在 effectView 可见区域内」的气泡：
-    //   - 上缘被导航/状态栏遮挡的 → 过滤
-    //   - 下缘被输入栏/键盘遮挡的 → 过滤
-    // effectView 的 frame 已对齐 hostView（WKMessageListView）的可视区域，
-    // 以此为裁剪参考即可。
-    CGRect visible = effectView.bounds;
-    CGFloat topMargin = 4.0;      // 顶部留一点余量
-    CGFloat bottomMargin = 12.0;  // 底部为气泡跳起后仍能"踩"留空间
-
-    NSMutableArray<NSValue *> *result = [NSMutableArray array];
-    for (UITableViewCell *cell in tableView.visibleCells) {
-        UIView *bubble = nil;
-        if ([cell isKindOfClass:[WKMessageCell class]]) {
-            bubble = ((WKMessageCell *)cell).bubbleBackgroundView;
-        }
-        if (!bubble || CGRectIsEmpty(bubble.bounds)) continue;
-        CGRect frameInEffect = [effectView convertRect:bubble.bounds fromView:bubble];
-        if (CGRectIsEmpty(frameInEffect)) continue;
-
-        // 气泡整体需落在 effectView 可见区域内（允许略微切边以容错）
-        if (CGRectGetMinY(frameInEffect) < CGRectGetMinY(visible) + topMargin) continue;
-        if (CGRectGetMaxY(frameInEffect) > CGRectGetMaxY(visible) - bottomMargin) continue;
-
-        CGPoint topCenter = CGPointMake(CGRectGetMidX(frameInEffect), CGRectGetMinY(frameInEffect));
-        [result addObject:[NSValue valueWithCGPoint:topCenter]];
+    CAMediaTimingFunction *armCurve = [CAMediaTimingFunction functionWithControlPoints:0.35 :0.0 :0.25 :1.0];
+    for (CAShapeLayer *m in @[revealA, revealB, revealC]) {
+        CABasicAnimation *reveal = [CABasicAnimation animationWithKeyPath:@"strokeEnd"];
+        reveal.fromValue = @(0);
+        reveal.toValue = @(1);
+        reveal.duration = armDur;
+        reveal.beginTime = now + armBegin;
+        reveal.fillMode = kCAFillModeForwards;
+        reveal.removedOnCompletion = NO;
+        reveal.timingFunction = armCurve;
+        [m addAnimation:reveal forKey:@"arm-reveal"];
     }
-    [result sortUsingComparator:^NSComparisonResult(NSValue *a, NSValue *b) {
-        CGFloat ya = [a CGPointValue].y;
-        CGFloat yb = [b CGPointValue].y;
-        if (ya < yb) return NSOrderedAscending;
-        if (ya > yb) return NSOrderedDescending;
-        return NSOrderedSame;
-    }];
-    return result;
-}
 
-+ (NSArray<NSValue *> *)pickWaypointsFromAll:(NSArray<NSValue *> *)all {
-    NSInteger n = (NSInteger)all.count;
-    if (n == 0) return @[];
+    // Phase B: 点赞砸出来
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.55 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (effectView.superview == nil) return;
 
-    // 可视气泡数量 < 4：所有 👍 都挨个踩每一个，避免跳过
-    if (n < 4) return all;
-
-    NSMutableArray<NSValue *> *out = [NSMutableArray array];
-    [out addObject:all[0]]; // 始终从最顶部气泡开始
-    NSInteger cur = 0;
-
-    while (cur < n - 1) {
-        // 步长分布：1 ≈60%, 2 ≈40%（最多跨 1 个气泡，不跳过 2 个）
-        NSInteger step = (arc4random_uniform(100) < 60) ? 1 : 2;
-
-        NSInteger next = MIN(cur + step, n - 1);
-        [out addObject:all[next]];
-        cur = next;
-    }
-    return out;
-}
-
-+ (void)pulseBubbleAt:(CGPoint)pointInEffectView
-           effectView:(WKMessageEffectView *)effectView
-            tableView:(UITableView *)tableView {
-    if (!tableView || effectView.superview == nil) return;
-    CGPoint pInTable = [effectView convertPoint:pointInEffectView toView:tableView];
-    // 向下 1pt 避开顶边误差
-    pInTable.y += 1.0;
-    NSIndexPath *ip = [tableView indexPathForRowAtPoint:pInTable];
-    if (!ip) return;
-    UITableViewCell *cell = [tableView cellForRowAtIndexPath:ip];
-    if ([cell isKindOfClass:[WKMessageCell class]]) {
-        UIView *bubble = ((WKMessageCell *)cell).bubbleBackgroundView;
-        if (bubble) {
-            [WKBubbleInteractionHelper pulseCell:bubble];
-        }
-    }
-}
-
-#pragma mark - Fallback (no visible bubbles)
-
-+ (void)rainFallbackInView:(WKMessageEffectView *)effectView {
-    CGFloat viewW = effectView.bounds.size.width;
-    CGFloat viewH = effectView.bounds.size.height;
-    for (NSInteger i = 0; i < 10; i++) {
-        NSTimeInterval delay = i * 0.1 + (NSTimeInterval)arc4random_uniform(60) / 1000.0;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            if (effectView.superview == nil) return;
-            CGFloat fs = 28.0 + arc4random_uniform(14);
-            CGFloat size = fs * 1.3;
-            UILabel *thumb = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, size, size)];
-            thumb.text = @"👍";
-            thumb.font = [UIFont systemFontOfSize:fs];
-            thumb.textAlignment = NSTextAlignmentCenter;
-            CGFloat x = arc4random_uniform((uint32_t)MAX(1, viewW - size)) + size / 2;
-            thumb.center = CGPointMake(x, -size);
-            [effectView addSubview:thumb];
-            [UIView animateWithDuration:1.8 delay:0
-                                options:UIViewAnimationOptionCurveEaseIn animations:^{
-                thumb.center = CGPointMake(x, viewH + size);
-            } completion:^(BOOL finished) {
-                [thumb removeFromSuperview];
+        [UIView animateWithDuration:0.48
+                              delay:0
+             usingSpringWithDamping:0.52
+              initialSpringVelocity:1.1
+                            options:UIViewAnimationOptionCurveEaseOut
+                         animations:^{
+            thumbView.alpha = 1.0;
+            thumbView.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(1.55, 1.55),
+                                                           CGAffineTransformMakeRotation(0));
+        } completion:^(BOOL finished) {
+            [UIView animateWithDuration:0.22
+                                  delay:0
+                 usingSpringWithDamping:0.75
+                  initialSpringVelocity:0.3
+                                options:UIViewAnimationOptionCurveEaseInOut
+                             animations:^{
+                thumbView.transform = CGAffineTransformMakeScale(1.25, 1.25);
+            } completion:^(BOOL finished2) {
+                // 持续 subtle breathing
+                CAKeyframeAnimation *breath = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+                breath.values = @[@(1.25), @(1.30), @(1.22), @(1.25)];
+                breath.keyTimes = @[@(0), @(0.35), @(0.70), @(1.0)];
+                breath.duration = 0.90;
+                breath.repeatCount = HUGE_VALF;
+                breath.autoreverses = NO;
+                [thumbView.layer addAnimation:breath forKey:@"thumb-breath"];
             }];
+        }];
+
+        // 冲击波金环
+        CGPoint ringCenter = [effectView convertPoint:CGPointMake(handSize * 0.5, handSize * 0.55) fromView:handRoot];
+        [self emitImpactRingInView:effectView atCenter:ringCenter
+                       startRadius:handSize * 0.20
+                         endRadius:handSize * 1.10
+                         ringColor:yellowBase
+                          duration:0.55
+                             delay:0.10];
+
+        // 掌心金光 puff
+        CGPoint puffCenter = [effectView convertPoint:CGPointMake(handSize * 0.5, handSize * 0.55) fromView:handRoot];
+        [self emitGoldPuffInView:effectView atCenter:puffCenter radius:handSize * 0.40 intensity:260 duration:0.10];
+    });
+
+    // Phase C: 小星星
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.20 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (effectView.superview == nil) return;
+        CGPoint thumbTipInHand = CGPointMake(0.40 * handSize, 0.07 * handSize);
+        CGPoint thumbTipInEffect = [effectView convertPoint:thumbTipInHand fromView:handRoot];
+        [self sprinkleStarsAround:thumbTipInEffect inView:effectView radius:handSize * 0.95 count:8
+                         fillColor:yellowBase strokeColor:yellowShadow];
+    });
+
+    [effectView scheduleRemovalAfterDelay:2.10];
+}
+
+#pragma mark - Thumbs-up shape with wrist stem
+
+/// 点赞形状：参照用户给的 PNG 轮廓 —— 高挑大拇指（顶端微前倾）、palm 右侧 4 段 knuckle 明显凸起、
+/// 底部有 **腕部 stem**（从 palm 底部往下收窄的短柱，延伸到 handSize 下边界），方便和手臂
+/// 无缝衔接 —— armEnd 落在 stem 底部中心处，arm 的圆头末端正好被 stem "吞" 进去。
++ (UIView *)createThumbsUpViewWithSize:(CGFloat)S
+                             baseColor:(UIColor *)baseColor
+                             darkColor:(UIColor *)darkColor
+                            lightColor:(UIColor *)lightColor
+                           shadowColor:(UIColor *)shadowColor {
+    UIView *v = [[UIView alloc] initWithFrame:CGRectMake(0, 0, S, S)];
+    v.backgroundColor = UIColor.clearColor;
+
+    UIBezierPath *p = [UIBezierPath bezierPath];
+
+    // ------ 拇指 ------
+    [p moveToPoint:CGPointMake(0.28*S, 0.09*S)];
+    [p addQuadCurveToPoint:CGPointMake(0.52*S, 0.08*S) controlPoint:CGPointMake(0.38*S, 0.00*S)];
+    [p addCurveToPoint:CGPointMake(0.58*S, 0.42*S)
+         controlPoint1:CGPointMake(0.53*S, 0.20*S)
+         controlPoint2:CGPointMake(0.56*S, 0.32*S)];
+
+    // ------ palm 顶部 → 右上角 ------
+    [p addQuadCurveToPoint:CGPointMake(0.72*S, 0.42*S) controlPoint:CGPointMake(0.64*S, 0.48*S)];
+    [p addQuadCurveToPoint:CGPointMake(0.90*S, 0.40*S) controlPoint:CGPointMake(0.82*S, 0.38*S)];
+    [p addQuadCurveToPoint:CGPointMake(0.95*S, 0.48*S) controlPoint:CGPointMake(0.97*S, 0.42*S)];
+
+    // ------ 右侧 4 段 knuckle ------
+    [p addQuadCurveToPoint:CGPointMake(0.94*S, 0.57*S) controlPoint:CGPointMake(1.00*S, 0.52*S)];
+    [p addQuadCurveToPoint:CGPointMake(0.94*S, 0.66*S) controlPoint:CGPointMake(1.00*S, 0.62*S)];
+    [p addQuadCurveToPoint:CGPointMake(0.93*S, 0.75*S) controlPoint:CGPointMake(0.99*S, 0.70*S)];
+    [p addQuadCurveToPoint:CGPointMake(0.83*S, 0.82*S) controlPoint:CGPointMake(0.98*S, 0.80*S)];
+
+    // ------ palm 底部过渡到 wrist stem（右侧收窄）------
+    [p addQuadCurveToPoint:CGPointMake(0.64*S, 0.86*S) controlPoint:CGPointMake(0.74*S, 0.86*S)];
+
+    // ------ wrist stem 右下 → 底部 → 左下 ------
+    //   stem 宽度 = 0.28*S，和 arm 的 ~0.09*S 相比足够宽，完全盖住 arm 的圆头
+    [p addLineToPoint:CGPointMake(0.63*S, 1.00*S)];           // stem 右下
+    [p addQuadCurveToPoint:CGPointMake(0.37*S, 1.00*S)
+              controlPoint:CGPointMake(0.50*S, 1.03*S)];       // 底部圆弧
+    [p addLineToPoint:CGPointMake(0.36*S, 0.86*S)];           // stem 左上
+
+    // ------ wrist stem 过渡回 palm 底部左侧 ------
+    [p addQuadCurveToPoint:CGPointMake(0.17*S, 0.84*S) controlPoint:CGPointMake(0.26*S, 0.88*S)];
+
+    // ------ palm 左侧（拇指下方）→ 拇指底 ------
+    [p addLineToPoint:CGPointMake(0.10*S, 0.65*S)];
+    [p addQuadCurveToPoint:CGPointMake(0.18*S, 0.53*S) controlPoint:CGPointMake(0.10*S, 0.58*S)];
+
+    // ------ 拇指左侧回到起点 ------
+    [p addCurveToPoint:CGPointMake(0.28*S, 0.09*S)
+         controlPoint1:CGPointMake(0.20*S, 0.38*S)
+         controlPoint2:CGPointMake(0.24*S, 0.20*S)];
+    [p closePath];
+
+    // 主 fill 层
+    CAShapeLayer *main = [CAShapeLayer layer];
+    main.path = p.CGPath;
+    main.fillColor = baseColor.CGColor;
+    main.strokeColor = shadowColor.CGColor;
+    main.lineWidth = 2.0;
+    main.lineJoin = kCALineJoinRound;
+    main.shadowColor = shadowColor.CGColor;
+    main.shadowOffset = CGSizeMake(0.8, 2.8);
+    main.shadowOpacity = 0.30;
+    main.shadowRadius = 3.0;
+    [v.layer addSublayer:main];
+
+    // 下半部分深金渐变（体积感）
+    CAGradientLayer *bottomShade = [CAGradientLayer layer];
+    bottomShade.frame = v.bounds;
+    bottomShade.colors = @[
+        (id)[UIColor clearColor].CGColor,
+        (id)[darkColor colorWithAlphaComponent:0.0].CGColor,
+        (id)[darkColor colorWithAlphaComponent:0.22].CGColor,
+    ];
+    bottomShade.locations = @[@0.0, @0.55, @1.0];
+    bottomShade.startPoint = CGPointMake(0.5, 0.0);
+    bottomShade.endPoint = CGPointMake(0.5, 1.0);
+    CAShapeLayer *shadeMask = [CAShapeLayer layer];
+    shadeMask.path = p.CGPath;
+    shadeMask.fillColor = UIColor.blackColor.CGColor;
+    bottomShade.mask = shadeMask;
+    [v.layer addSublayer:bottomShade];
+
+    // 拇指上段柔和亮色
+    CGRect highlightRect = CGRectMake(0.28*S, 0.10*S, 0.22*S, 0.28*S);
+    UIView *highlight = [[UIView alloc] initWithFrame:highlightRect];
+    highlight.backgroundColor = [lightColor colorWithAlphaComponent:0.45];
+    highlight.layer.cornerRadius = 0.11*S;
+    [v addSubview:highlight];
+
+    return v;
+}
+
+#pragma mark - Impact ring
+
++ (void)emitImpactRingInView:(UIView *)host
+                     atCenter:(CGPoint)center
+                  startRadius:(CGFloat)r0
+                    endRadius:(CGFloat)r1
+                    ringColor:(UIColor *)color
+                     duration:(NSTimeInterval)duration
+                        delay:(NSTimeInterval)delay {
+    CAShapeLayer *ring = [CAShapeLayer layer];
+    ring.fillColor = UIColor.clearColor.CGColor;
+    ring.strokeColor = color.CGColor;
+    ring.lineWidth = 4.0;
+    ring.path = [UIBezierPath bezierPathWithArcCenter:center radius:r0
+                                           startAngle:0 endAngle:2*M_PI clockwise:YES].CGPath;
+    ring.opacity = 0;
+    [host.layer addSublayer:ring];
+
+    NSTimeInterval begin = CACurrentMediaTime() + delay;
+
+    CABasicAnimation *grow = [CABasicAnimation animationWithKeyPath:@"path"];
+    grow.fromValue = (id)[UIBezierPath bezierPathWithArcCenter:center radius:r0
+                                                    startAngle:0 endAngle:2*M_PI clockwise:YES].CGPath;
+    grow.toValue = (id)[UIBezierPath bezierPathWithArcCenter:center radius:r1
+                                                  startAngle:0 endAngle:2*M_PI clockwise:YES].CGPath;
+    grow.duration = duration;
+    grow.beginTime = begin;
+    grow.fillMode = kCAFillModeBoth;
+    grow.removedOnCompletion = NO;
+    grow.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+    [ring addAnimation:grow forKey:@"ring-grow"];
+
+    CAKeyframeAnimation *opacity = [CAKeyframeAnimation animationWithKeyPath:@"opacity"];
+    opacity.values = @[@0.0, @0.85, @0.0];
+    opacity.keyTimes = @[@0.0, @0.25, @1.0];
+    opacity.duration = duration;
+    opacity.beginTime = begin;
+    opacity.fillMode = kCAFillModeBoth;
+    opacity.removedOnCompletion = NO;
+    [ring addAnimation:opacity forKey:@"ring-opacity"];
+
+    CABasicAnimation *width = [CABasicAnimation animationWithKeyPath:@"lineWidth"];
+    width.fromValue = @6.0;
+    width.toValue = @1.0;
+    width.duration = duration;
+    width.beginTime = begin;
+    width.fillMode = kCAFillModeBoth;
+    width.removedOnCompletion = NO;
+    [ring addAnimation:width forKey:@"ring-width"];
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((delay + duration + 0.1) * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [ring removeFromSuperlayer];
+    });
+}
+
+#pragma mark - Geometry helper
+
++ (CGPoint)cubicBezierPoint:(CGFloat)t p0:(CGPoint)p0 p1:(CGPoint)p1 p2:(CGPoint)p2 p3:(CGPoint)p3 {
+    CGFloat u = 1.0 - t;
+    return CGPointMake(u*u*u*p0.x + 3*u*u*t*p1.x + 3*u*t*t*p2.x + t*t*t*p3.x,
+                       u*u*u*p0.y + 3*u*u*t*p1.y + 3*u*t*t*p2.y + t*t*t*p3.y);
+}
+
+#pragma mark - Stars
+
++ (void)sprinkleStarsAround:(CGPoint)center
+                     inView:(UIView *)host
+                     radius:(CGFloat)radius
+                      count:(NSInteger)count
+                  fillColor:(UIColor *)fill
+                strokeColor:(UIColor *)stroke {
+    for (NSInteger i = 0; i < count; i++) {
+        CGFloat angle = (2 * M_PI / count) * i + ((CGFloat)arc4random_uniform(200) - 100) / 1000.0;
+        CGFloat r = radius * (0.55 + (CGFloat)arc4random_uniform(80) / 200.0);
+        CGPoint pos = CGPointMake(center.x + cos(angle) * r,
+                                  center.y + sin(angle) * r - radius * 0.10);
+        CGFloat size = 4.0 + (CGFloat)arc4random_uniform(35) / 10.0;
+
+        CAShapeLayer *star = [CAShapeLayer layer];
+        star.path = [self starPathWithOuterRadius:size innerRadius:size * 0.42].CGPath;
+        star.fillColor = fill.CGColor;
+        star.strokeColor = stroke.CGColor;
+        star.lineWidth = 1.0;
+        star.lineJoin = kCALineJoinRound;
+        star.position = pos;
+        star.opacity = 0;
+        star.transform = CATransform3DMakeScale(0.6, 0.6, 1);
+        [host.layer addSublayer:star];
+
+        NSTimeInterval delay = 0.02 + i * 0.03 + (NSTimeInterval)arc4random_uniform(40) / 1000.0;
+
+        CABasicAnimation *fadeIn = [CABasicAnimation animationWithKeyPath:@"opacity"];
+        fadeIn.fromValue = @(0);
+        fadeIn.toValue = @(1.0);
+        fadeIn.duration = 0.14;
+        fadeIn.beginTime = CACurrentMediaTime() + delay;
+        fadeIn.fillMode = kCAFillModeForwards;
+        fadeIn.removedOnCompletion = NO;
+        [star addAnimation:fadeIn forKey:@"star-in"];
+
+        CABasicAnimation *fadeOut = [CABasicAnimation animationWithKeyPath:@"opacity"];
+        fadeOut.fromValue = @(1.0);
+        fadeOut.toValue = @(0);
+        fadeOut.duration = 0.32;
+        fadeOut.beginTime = CACurrentMediaTime() + delay + 0.25;
+        fadeOut.fillMode = kCAFillModeForwards;
+        fadeOut.removedOnCompletion = NO;
+        [star addAnimation:fadeOut forKey:@"star-out"];
+
+        CAKeyframeAnimation *pulse = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+        pulse.values = @[@(0.6), @(1.15), @(0.95), @(1.05), @(0.8)];
+        pulse.keyTimes = @[@(0), @(0.25), @(0.55), @(0.80), @(1.0)];
+        pulse.duration = 0.55;
+        pulse.beginTime = CACurrentMediaTime() + delay;
+        pulse.fillMode = kCAFillModeForwards;
+        pulse.removedOnCompletion = NO;
+        [star addAnimation:pulse forKey:@"star-pulse"];
+
+        CABasicAnimation *spin = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"];
+        spin.fromValue = @(-0.15);
+        spin.toValue = @(0.15);
+        spin.duration = 0.55;
+        spin.beginTime = CACurrentMediaTime() + delay;
+        spin.fillMode = kCAFillModeForwards;
+        spin.removedOnCompletion = NO;
+        [star addAnimation:spin forKey:@"star-spin"];
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((delay + 0.65) * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [star removeFromSuperlayer];
         });
     }
-    [effectView scheduleRemovalAfterDelay:2.5];
+}
+
++ (UIBezierPath *)starPathWithOuterRadius:(CGFloat)outer innerRadius:(CGFloat)inner {
+    UIBezierPath *p = [UIBezierPath bezierPath];
+    for (NSInteger i = 0; i < 10; i++) {
+        CGFloat a = -M_PI_2 + i * (M_PI / 5.0);
+        CGFloat r = (i % 2 == 0) ? outer : inner;
+        CGPoint pt = CGPointMake(cos(a) * r, sin(a) * r);
+        if (i == 0) [p moveToPoint:pt];
+        else [p addLineToPoint:pt];
+    }
+    [p closePath];
+    return p;
+}
+
+#pragma mark - Emitter
+
++ (CAEmitterLayer *)buildArmEmitter {
+    CAEmitterLayer *emitter = [CAEmitterLayer layer];
+    emitter.emitterShape = kCAEmitterLayerPoint;
+    emitter.emitterMode = kCAEmitterLayerPoints;
+    emitter.renderMode = kCAEmitterLayerAdditive;
+    emitter.emitterSize = CGSizeZero;
+
+    UIImage *puff = [self particlePuffImage];
+
+    CAEmitterCell *core = [CAEmitterCell emitterCell];
+    core.name = @"core";
+    core.contents = (id)puff.CGImage;
+    core.birthRate = 0;
+    core.lifetime = 0.38;
+    core.lifetimeRange = 0.10;
+    core.scale = 0.22;
+    core.scaleRange = 0.10;
+    core.scaleSpeed = -0.5;
+    core.alphaRange = 0.2;
+    core.alphaSpeed = -2.4;
+    core.velocity = 14;
+    core.velocityRange = 8;
+    core.emissionRange = 2 * M_PI;
+    core.color = [UIColor colorWithRed:1.0 green:0.835 blue:0.376 alpha:1.0].CGColor;
+
+    CAEmitterCell *spark = [CAEmitterCell emitterCell];
+    spark.name = @"spark";
+    spark.contents = (id)puff.CGImage;
+    spark.birthRate = 0;
+    spark.lifetime = 0.26;
+    spark.lifetimeRange = 0.08;
+    spark.scale = 0.14;
+    spark.scaleRange = 0.06;
+    spark.scaleSpeed = -0.4;
+    spark.alphaSpeed = -3.2;
+    spark.velocity = 22;
+    spark.velocityRange = 14;
+    spark.emissionRange = 2 * M_PI;
+    spark.color = [UIColor colorWithRed:0.259 green:0.780 blue:1.0 alpha:1.0].CGColor;
+    spark.redRange = 0.2;
+    spark.greenRange = 0.2;
+    spark.blueRange = 0.1;
+
+    emitter.emitterCells = @[core, spark];
+    return emitter;
+}
+
++ (UIImage *)particlePuffImage {
+    static UIImage *img;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        CGFloat size = 24.0;
+        UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size)];
+        img = [r imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull ctx) {
+            CGContextRef cg = ctx.CGContext;
+            CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+            NSArray *colors = @[
+                (id)[UIColor colorWithWhite:1.0 alpha:1.0].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.55].CGColor,
+                (id)[UIColor colorWithWhite:1.0 alpha:0.0].CGColor,
+            ];
+            CGFloat locs[] = {0.0, 0.45, 1.0};
+            CGGradientRef g = CGGradientCreateWithColors(cs, (__bridge CFArrayRef)colors, locs);
+            CGContextDrawRadialGradient(cg, g,
+                                        CGPointMake(size/2, size/2), 0,
+                                        CGPointMake(size/2, size/2), size/2, 0);
+            CGGradientRelease(g);
+            CGColorSpaceRelease(cs);
+        }];
+    });
+    return img;
+}
+
+#pragma mark - Gold puff
+
++ (void)emitGoldPuffInView:(UIView *)host
+                  atCenter:(CGPoint)center
+                    radius:(CGFloat)radius
+                 intensity:(CGFloat)birthRate
+                  duration:(NSTimeInterval)burstDur {
+    CAEmitterLayer *puffEmitter = [CAEmitterLayer layer];
+    puffEmitter.emitterShape = kCAEmitterLayerPoint;
+    puffEmitter.emitterMode = kCAEmitterLayerPoints;
+    puffEmitter.renderMode = kCAEmitterLayerAdditive;
+    puffEmitter.emitterPosition = center;
+    puffEmitter.frame = host.bounds;
+
+    CAEmitterCell *c = [CAEmitterCell emitterCell];
+    c.contents = (id)[self particlePuffImage].CGImage;
+    c.birthRate = birthRate;
+    c.lifetime = 0.50;
+    c.lifetimeRange = 0.10;
+    c.scale = 0.26;
+    c.scaleRange = 0.12;
+    c.scaleSpeed = -0.4;
+    c.alphaSpeed = -2.2;
+    c.velocity = radius * 4.2;
+    c.velocityRange = radius * 1.4;
+    c.emissionRange = 2 * M_PI;
+    c.color = [UIColor colorWithRed:1.0 green:0.90 blue:0.45 alpha:1.0].CGColor;
+    puffEmitter.emitterCells = @[c];
+    [host.layer addSublayer:puffEmitter];
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(burstDur * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        for (CAEmitterCell *cell in puffEmitter.emitterCells) cell.birthRate = 0;
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((burstDur + 0.70) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [puffEmitter removeFromSuperlayer];
+    });
 }
 
 @end

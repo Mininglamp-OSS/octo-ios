@@ -169,11 +169,18 @@
 
 
 - (NSInteger)unreadCount {
-    // Person 频道：优先使用后端的 space_unread
+    // Person 频道在多空间模式下会用服务端 space_unread。
+    // 但观察到服务端偶发返回 space_unread=0 却同时 unread=33（大量带 space_id 的消息超过 msg_count
+    // 窗口后聚合失真），会把真实未读数盖成 0 导致红点消失。
+    // 防御：取 max(space_unread, c.unreadCount) —— 正确时 space_unread 仍然主导（≥ c.unreadCount
+    // 或 ≤ 但作为可信低值），异常低估时由 c.unreadCount 兜底。
     if (self.c.channel.channelType == WK_PERSON) {
-        NSNumber *spaceUnread = [[WKSpaceConversationCache shared] spaceUnreadForChannel:self.c.channel];
-        if (spaceUnread != nil) {
-            return [spaceUnread integerValue];
+        NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+        if (currentSpaceId.length > 0) {
+            NSNumber *spaceUnread = [[WKSpaceConversationCache shared] spaceUnreadForChannel:self.c.channel];
+            if (spaceUnread != nil) {
+                return MAX([spaceUnread integerValue], self.c.unreadCount);
+            }
         }
     }
     return self.c.unreadCount;
