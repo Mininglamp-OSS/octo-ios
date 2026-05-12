@@ -233,9 +233,21 @@
         }
     } else {
         // typing 替换等场景：刷新最后一行
+        //   reloadRow 同样需要 ds.count == tv.count，否则 UITableView 校验仍会抛异常（Bugly 另一路径同理）。
         if (newSectionCount > 0 && newLastSectionRowCount > 0) {
             NSIndexPath *lastPath = [NSIndexPath indexPathForRow:newLastSectionRowCount - 1 inSection:newSectionCount - 1];
-            [self.tableView reloadRowsAtIndexPaths:@[lastPath] withRowAnimation:UITableViewRowAnimationNone];
+            NSInteger tvSectionsNow = [self.tableView numberOfSections];
+            NSInteger tvRowsNow = (tvSectionsNow == newSectionCount) ? [self.tableView numberOfRowsInSection:newSectionCount - 1] : -1;
+            if (tvRowsNow != newLastSectionRowCount) {
+                [self.tableView reloadData];
+            } else {
+                @try {
+                    [self.tableView reloadRowsAtIndexPaths:@[lastPath] withRowAnimation:UITableViewRowAnimationNone];
+                } @catch (NSException *ex) {
+                    NSLog(@"[WKMessageListView] send reloadRows drift caught: %@, fallback reloadData", ex);
+                    [self.tableView reloadData];
+                }
+            }
         }
     }
 
@@ -2119,8 +2131,10 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
                                                                       SDImageCacheType cacheType,
                                                                       BOOL finished,
                                                                       NSURL * _Nullable imageURL) {
+#if DEBUG
                     NSLog(@"[RocketAvatar] prefetch 群头像(channelInfoUpdate) | url=%@ got=%@",
                           imageURL, image ? @"YES" : @"NO");
+#endif
                 }];
             }
         }
@@ -2263,30 +2277,33 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 
     // 已触发过则跳过（同一条消息 cell 重用、重新入视图都不重播）
     if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
-    [[WKMessageEffectManager shared] markTriggeredForMessage:message];
+    // ⚠️ 不在此处 markTriggered：必须等 dispatch_after 里确认 cell 仍在可视区才 mark+trigger。
+    //   否则快速滚动场景下会消费掉"已触发"状态、却又因 cell 不在而走 bottom-center fallback
+    //   给不可见消息放特效（lml2468 review R1）。cell 不在时不 mark，留待下次滚回可视区重判。
 
-    // 不再主动收起键盘：键盘保持展开，爆炸点会落在可见区域
-    // （computeExplodePointInView 已利用 adjustedContentInset 避开键盘遮挡区）
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         NSIndexPath *indexPath = [self.dataProvider indexPathAtClientMsgNo:message.clientMsgNo];
+        if (!indexPath) return;
+        UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
+        if (!cell) return;  // cell 滚出视口 → 不 mark、不 trigger，允许下次重判
+
+        // cell 确认在视口 —— 才 mark（防并发：再查一次 hasTriggered）
+        if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
+        [[WKMessageEffectManager shared] markTriggeredForMessage:message];
+
         CGRect sourceRect = CGRectZero;
-        if (indexPath) {
-            UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
-            if (cell) {
-                // classy 特效要精确锚定在气泡上（气泡本身 ≈ 表情图片，
-                // 因为 [有品位] 是 tag-only 消息，文本气泡里只有这一张内联图）。
-                // 先强制 layout 一次，避免首次入视图时 bubble frame 尚未稳定。
-                if ([effectType isEqualToString:@"classy"] && [cell isKindOfClass:WKMessageCell.class]) {
-                    [cell layoutIfNeeded];
-                    UIView *bubble = ((WKMessageCell *)cell).bubbleBackgroundView;
-                    if (bubble && !CGRectIsEmpty(bubble.bounds)) {
-                        sourceRect = [self convertRect:bubble.bounds fromView:bubble];
-                    }
-                }
-                if (CGRectIsEmpty(sourceRect)) {
-                    sourceRect = [self.tableView convertRect:cell.frame toView:self];
-                }
+        // classy 特效要精确锚定在气泡上（气泡本身 ≈ 表情图片，
+        // 因为 [有品位] 是 tag-only 消息，文本气泡里只有这一张内联图）。
+        // 先强制 layout 一次，避免首次入视图时 bubble frame 尚未稳定。
+        if ([effectType isEqualToString:@"classy"] && [cell isKindOfClass:WKMessageCell.class]) {
+            [cell layoutIfNeeded];
+            UIView *bubble = ((WKMessageCell *)cell).bubbleBackgroundView;
+            if (bubble && !CGRectIsEmpty(bubble.bounds)) {
+                sourceRect = [self convertRect:bubble.bounds fromView:bubble];
             }
+        }
+        if (CGRectIsEmpty(sourceRect)) {
+            sourceRect = [self.tableView convertRect:cell.frame toView:self];
         }
 
         // 头像源规则:
@@ -2301,14 +2318,18 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         } else {
             avatarURL = [WKAvatarUtil getGroupAvatar:self.channel.channelId cacheKey:cacheKey];
         }
+#if DEBUG
         NSLog(@"[RocketAvatar] step1-url | channelType=%d channelId=%@ cacheKey=%@ → avatarURL=%@",
               self.channel.channelType, self.channel.channelId, cacheKey, avatarURL);
+#endif
         if (avatarURL.length > 0) {
             avatarImage = [[SDImageCache sharedImageCache] imageFromCacheForKey:avatarURL];
+#if DEBUG
             NSLog(@"[RocketAvatar] step2-cache | key=%@ hit=%@ size=%@",
                   avatarURL,
                   avatarImage ? @"YES" : @"NO(MISS)",
                   avatarImage ? NSStringFromCGSize(avatarImage.size) : @"-");
+#endif
             // MISS 时异步触发下载 → 下次使用该群发送表情包时缓存就命中
             if (!avatarImage) {
                 [[SDWebImageManager sharedManager] loadImageWithURL:[NSURL URLWithString:avatarURL]
@@ -2320,29 +2341,39 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
                                                                       SDImageCacheType cacheType,
                                                                       BOOL finished,
                                                                       NSURL * _Nullable imageURL) {
+#if DEBUG
                     NSLog(@"[RocketAvatar] async-preload 群头像 | url=%@ got=%@ err=%@",
                           imageURL, image ? @"YES" : @"NO", error);
+#endif
                 }];
             }
         } else {
+#if DEBUG
             NSLog(@"[RocketAvatar] step2-cache | SKIPPED (avatarURL empty)");
+#endif
         }
         // 兜底：若缓存未命中(极少数：从未加载过)，仍尝试用 cell 里的头像
         //   ⚠️ 群聊下 cell.avatarImgView 是**发送者头像**,fallback 进来会让"群头像"误变成发送者头像
         //   → 只在私聊下走 fallback;群聊缓存 MISS 时宁可不带头像(传 nil 给特效,舷窗空窗)
         if (!avatarImage && indexPath && self.channel.channelType == WK_PERSON) {
-            UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
-            if ([cell isKindOfClass:WKMessageCell.class]) {
-                avatarImage = ((WKMessageCell *)cell).avatarImgView.avatarImgView.image;
+            UITableViewCell *avatarCell = [self.tableView cellForRowAtIndexPath:indexPath];
+            if ([avatarCell isKindOfClass:WKMessageCell.class]) {
+                avatarImage = ((WKMessageCell *)avatarCell).avatarImgView.avatarImgView.image;
+#if DEBUG
                 NSLog(@"[RocketAvatar] step3-fallback-cell | channelType=PERSON image=%@ size=%@",
                       avatarImage ? @"GOT" : @"NIL",
                       avatarImage ? NSStringFromCGSize(avatarImage.size) : @"-");
+#endif
             }
         } else if (!avatarImage) {
+#if DEBUG
             NSLog(@"[RocketAvatar] step3-fallback-cell | SKIPPED (group chat → 不用 cell 头像,避免取到发送者)");
+#endif
         }
+#if DEBUG
         NSLog(@"[RocketAvatar] step4-final | avatarImage=%@ → 传给特效",
               avatarImage ? [NSString stringWithFormat:@"GOT %@", NSStringFromCGSize(avatarImage.size)] : @"NIL");
+#endif
 
         // 群聊 + rocketLaunch(使命必达)时,额外取群成员头像列表,触发"能量汇聚"动画
         //   - 同步从 channelManager 拿已缓存的成员
@@ -2370,17 +2401,18 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
             if (avatars.count > 0) {
                 memberAvatars = avatars;
             }
+#if DEBUG
             NSLog(@"[RocketGroup] channelType=%d members.count=%lu cached avatars=%lu → memberAvatars=%@",
                   self.channel.channelType,
                   (unsigned long)members.count,
                   (unsigned long)avatars.count,
                   memberAvatars ? @"有,汇聚动画" : @"空,走单 avatar");
+#endif
         }
 
-        if (CGRectIsEmpty(sourceRect)) {
-            // fallback: use bottom center
-            sourceRect = CGRectMake(self.bounds.size.width / 2 - 30, self.bounds.size.height - 100, 60, 60);
-        }
+        // sourceRect 必定非空：本方法开头已确保 cell 存在并成功计算出 sourceRect。
+        // 历史版本里的 bottom-center fallback 已移除（lml2468 review R1）—— cell 不在视口时
+        // 不 mark、不 trigger，避免给不可见消息放特效。
         [[WKMessageEffectManager shared] triggerEffect:effectType
                                             inHostView:self
                                             sourceRect:sourceRect
@@ -2392,14 +2424,22 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 
 /// 首次看到消息时检查是否触发特效（由 willDisplayCell 调用，是唯一触发入口）
 ///
-/// 规则简化为：
+/// 规则：
 ///   1. 已触发过（hasTriggeredForMessage 持久化，含 cell 重用/滚动去重）→ skip
-///   2. 没命中任何 emoji → skip
-///   3. 延迟 300ms 后确认 cell 仍留在可视区 → 触发；否则啥也不做
+///   2. 对方发送且已读 → skip（恢复 8ca6e34 之前的 guard，lml2468 review R1）
+///   3. 消息年龄 > 30s → skip（历史消息不触发，含自己发的没 readed 语义的兜底）
+///   4. 没命中任何 emoji → skip
+///   5. 延迟 300ms 后确认 cell 仍留在可视区 → 触发；否则啥也不做
 ///      （一键置底/快速滚动时路过的 cell 不会被误消费，下次真正停在可视区再播）
 -(void) checkFirstViewEffectForMessage:(WKMessageModel *)message {
     if (!message) return;
     if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
+    if (!message.isSend && message.readed) return;
+
+    // 年龄检查：历史消息（上下滑动加载的 >30s 老消息）不触发
+    // 自己发的消息没有 readed 语义，这里用年龄兜底
+    NSTimeInterval age = [self ageSecondsForMessage:message];
+    if (age > 30) return;
 
     NSString *effectType = [[WKMessageEffectManager shared] effectTypeForMessage:message];
     if (!effectType) return;
@@ -2417,6 +2457,17 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         if (!current) return;
         [strongSelf checkAndTriggerEffectForMessage:current];
     });
+}
+
+/// 计算消息年龄（秒），自动兼容 timestamp 是秒还是毫秒的情况
+-(NSTimeInterval) ageSecondsForMessage:(WKMessageModel *)message {
+    if (!message) return 0;
+    NSInteger ts = MAX(message.timestamp, message.localTimestamp);
+    if (ts <= 0) return 0;
+    // 当前秒级 timestamp ~1.7e9，毫秒级 ~1.7e12；> 2e10 一定是毫秒
+    if (ts > 20000000000LL) ts = ts / 1000;
+    NSTimeInterval age = [[NSDate date] timeIntervalSince1970] - (NSTimeInterval)ts;
+    return MAX(0, age);
 }
 
 @end
