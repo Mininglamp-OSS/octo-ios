@@ -57,6 +57,10 @@ typedef enum :NSUInteger {
 @property(nonatomic,strong) UILabel *nameLbl;
 // Bot标识
 @property(nonatomic,strong) UILabel *botBadgeLbl;
+// 实名认证 ✓ 迷你徽章（12×12pt 蓝勾）
+// YUJ-381 / dmwork-web#1169 Phase A — 聊天气泡作者名旁的实名徽章。
+// 仅在群聊 + 作者已实名 (orgData.realname_verified) 时显示；hidden 由 refreshModel 控制。
+@property(nonatomic,strong) UIImageView *realnameVerifiedImgView;
 // 气泡背景
 
 

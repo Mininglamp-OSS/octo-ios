@@ -1,0 +1,34 @@
+# CODEOWNERS — octo-ios
+# 语法：<path> <@github-user>...
+# GitHub 按文件 path 自动把 PR 指定给此处列出的 owner。
+# 多匹配优先最后一条（更具体的规则放下面）。
+# 参考：https://docs.github.com/en/repositories/managing-your-repositories-settings-and-security/customizing-your-repository/about-code-owners
+
+# 默认：全仓所有文件的 backup reviewer
+*                                       @yujiawei
+
+# 发版 / 治理流程
+/RELEASE.md                             @yujiawei
+/.github/                               @yujiawei
+/CODEOWNERS                             @yujiawei
+
+# 后端协议强类型模型 (YUJ-396 / Aegis)
+**/WKAppConfig.*                        @yujiawei
+**/WKOidcProviderConfig.*               @yujiawei
+**/WKRealnameVerifyManager.*            @yujiawei
+**/realname/*                           @yujiawei
+
+# 登录 / OIDC (Aegis Phase 2)
+**/WKLoginView.*                        @yujiawei
+**/WKRegisterVC.*                       @yujiawei
+**/Login/**                             @yujiawei
+
+# 聊天特效 (zhangqian / 王立涛 feature track, 等邀请后加)
+# **/WKMessageEffectManager.*           @zhangqian
+# **/Effects/**                         @zhangqian
+
+# Pods 工程 (review 风险高, Yu 必须看)
+/Pods/Pods.xcodeproj/                   @yujiawei
+
+# 单元测试
+**/*Tests/**                            @yujiawei

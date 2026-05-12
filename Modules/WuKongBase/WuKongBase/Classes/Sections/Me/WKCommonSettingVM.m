@@ -37,8 +37,7 @@
 }
 
 -(void) registerItems {
-    // 实名认证（OCTO）— 暂时隐藏入口
-    /*
+    // 实名认证（OCTO）
     [[WKApp shared] setMethod:WKPOINT_COMMONSETTING_REALNAME handler:^id _Nullable(id  _Nonnull param) {
         WKLoginInfo *loginInfo = [WKApp shared].loginInfo;
         BOOL verified = loginInfo.realnameVerified;
@@ -90,7 +89,6 @@
             ],
         };
     } category:WKPOINT_CATEGORY_COMMONSETTING sort:99000];
-    */
 
     // 深色模式
     [[WKApp shared] setMethod:@"commonsetting.notify" handler:^id _Nullable(id  _Nonnull param) {

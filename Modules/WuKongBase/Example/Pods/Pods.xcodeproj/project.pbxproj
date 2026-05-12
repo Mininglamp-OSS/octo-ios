@@ -139,6 +139,8 @@
 		1BE357FD579BE68ACC0002BDC7CBC7C9 /* WKEmojiPanel.h in Headers */ = {isa = PBXBuildFile; fileRef = 621BDF33D9E636203C7F3107FB460886 /* WKEmojiPanel.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		1BF6D47FCBC6A6FD9F869E38E28CE7DE /* AAFilter.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 52D28A62219B2FF7A76232472D3D73E0 /* AAFilter.cpp */; };
 		1CB57C6A88D5F4D7A1D421CB64EB3917 /* WKAppConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = D72BF059CFEDE4DF98748F6517125451 /* WKAppConfig.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		3A960396E3960396E3960001 /* WKOidcProviderConfig.h in Headers */ = {isa = PBXBuildFile; fileRef = 3A960396E3960396E3960003 /* WKOidcProviderConfig.h */; settings = {ATTRIBUTES = (Public, ); }; };
+		3A960396E3960396E3960002 /* WKOidcProviderConfig.m in Sources */ = {isa = PBXBuildFile; fileRef = 3A960396E3960396E3960004 /* WKOidcProviderConfig.m */; };
 		1CBE009B7D40631C71EF641F04E94D6B /* WKHistorySplitTipCell.h in Headers */ = {isa = PBXBuildFile; fileRef = 000FF841B163B2111FC711D34D357BA2 /* WKHistorySplitTipCell.h */; settings = {ATTRIBUTES = (Public, ); }; };
 		1CE9F4816554FA0F4655A83BD8B064BA /* WKScreenshotContent.m in Sources */ = {isa = PBXBuildFile; fileRef = 4B141A4BDBB3AAE2C324A55B150BCC72 /* WKScreenshotContent.m */; };
 		1CEF27864764E8B17DEBB71197F3E188 /* GZip.h in Headers */ = {isa = PBXBuildFile; fileRef = 2F4E816AE1F5C80508C3F39940DFAE18 /* GZip.h */; settings = {ATTRIBUTES = (Public, ); }; };
@@ -1456,6 +1458,8 @@
 		2809E1C0792804D737492F99D95C60EC /* WKSimpleInput.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WKSimpleInput.h; sourceTree = "<group>"; };
 		284833D18C244D2B42966B6EE425AA59 /* UIImage+Snapshot.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; name = "UIImage+Snapshot.h"; path = "FBSnapshotTestCase/Categories/UIImage+Snapshot.h"; sourceTree = "<group>"; };
 		284C5EC6301AA694EFB5BD072633E176 /* WKAppConfig.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; name = WKAppConfig.m; path = LiMaoBase/Classes/WKAppConfig.m; sourceTree = "<group>"; };
+		3A960396E3960396E3960003 /* WKOidcProviderConfig.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; name = WKOidcProviderConfig.h; path = LiMaoBase/Classes/WKOidcProviderConfig.h; sourceTree = "<group>"; };
+		3A960396E3960396E3960004 /* WKOidcProviderConfig.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; name = WKOidcProviderConfig.m; path = LiMaoBase/Classes/WKOidcProviderConfig.m; sourceTree = "<group>"; };
 		287429B55DF93A2F41541EB5BF3B6C62 /* WKMessageListView.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WKMessageListView.m; sourceTree = "<group>"; };
 		2894E01624C0E1C409FC2FF4609B2D1B /* WKLottieStickerContent.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WKLottieStickerContent.m; sourceTree = "<group>"; };
 		289AEEB7B05A64961C99544F3DDB4D14 /* WKConversationVM2.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WKConversationVM2.m; sourceTree = "<group>"; };
@@ -2954,6 +2958,8 @@
 				6D8CFA1F2A61CD1434C9DF51B46A2974 /* WKApp.m */,
 				D72BF059CFEDE4DF98748F6517125451 /* WKAppConfig.h */,
 				284C5EC6301AA694EFB5BD072633E176 /* WKAppConfig.m */,
+				3A960396E3960396E3960003 /* WKOidcProviderConfig.h */,
+				3A960396E3960396E3960004 /* WKOidcProviderConfig.m */,
 				85BDD2E34E0F1240B69F2B42E99B358A /* WKConstant.h */,
 				E906E412B000A05CF7A49C1B0B122D29 /* Frameworks */,
 				2A3D4EE141E4546CA0DB5AD090242E18 /* Pod */,
@@ -5266,6 +5272,7 @@
 				F081EB019447500E70484527E0A3344C /* WKAPMManager.h in Headers */,
 				0FBDC62BAD9AA0C9F0BCAD7C952ECE93 /* WKApp.h in Headers */,
 				1CB57C6A88D5F4D7A1D421CB64EB3917 /* WKAppConfig.h in Headers */,
+				3A960396E3960396E3960001 /* WKOidcProviderConfig.h in Headers */,
 				F42BD336FD8CFF01FBA864B60A437241 /* WKAudioWaveformView.h in Headers */,
 				AC4C1D00DB69F286BB80B3929CA0A880 /* WKAvatarTitleCell.h in Headers */,
 				9ACC2A5CCF273DF1AD6A2DC5B53FF6E0 /* WKAvatarUtil.h in Headers */,
@@ -6232,6 +6239,7 @@
 				A2C6F5A93D8FB4FEB8133E1E8C2D4E22 /* WKAPMManager.m in Sources */,
 				005AD933D330A8FCA4E64ADBB30902F9 /* WKApp.m in Sources */,
 				DA8320D2FA0C93FB52FB634CC688A9FE /* WKAppConfig.m in Sources */,
+				3A960396E3960396E3960002 /* WKOidcProviderConfig.m in Sources */,
 				5AC83B7D5F75A7032DB72B920CF18BB5 /* WKAudioWaveformView.m in Sources */,
 				493798EA8DE607480A86C0B7A40648F4 /* WKAvatarTitleCell.m in Sources */,
 				58973DE3FCED4D4C652879EFD5446967 /* WKAvatarUtil.m in Sources */,

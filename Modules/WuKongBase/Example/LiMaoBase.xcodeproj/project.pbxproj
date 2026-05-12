@@ -32,6 +32,10 @@
 		A1410000000000000000F001 /* WKJoinGroupSuccessHelperTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A1410000000000000000F002 /* WKJoinGroupSuccessHelperTests.m */; };
 		A2130000000000000000F001 /* WKGroupScanJoinResponseParsingTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */; };
 		B2180000000000000000F001 /* WKConversationListVMSystemBotsTests.m in Sources */ = {isa = PBXBuildFile; fileRef = B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */; };
+		D5810000000000000000F001 /* WKRealnameVerifiedBadgeTests.m in Sources */ = {isa = PBXBuildFile; fileRef = D5810000000000000000F002 /* WKRealnameVerifiedBadgeTests.m */; };
+		E3960000000000000000F001 /* WKRealnameVerifyURLBuilderTests.m in Sources */ = {isa = PBXBuildFile; fileRef = E3960000000000000000F002 /* WKRealnameVerifyURLBuilderTests.m */; };
+		E3960000000000000001F001 /* WKOidcProviderConfigParseTests.m in Sources */ = {isa = PBXBuildFile; fileRef = E3960000000000000001F002 /* WKOidcProviderConfigParseTests.m */; };
+		E3960000000000000002F001 /* WKRealnameVerifyCallbackTests.m in Sources */ = {isa = PBXBuildFile; fileRef = E3960000000000000002F002 /* WKRealnameVerifyCallbackTests.m */; };
 		71719F9F1E33DC2100824A3D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 71719F9D1E33DC2100824A3D /* LaunchScreen.storyboard */; };
 		7CFCAE9A9883FDF5BD053505 /* Pods_LiMaoBase_Tests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7E3C41DA1F0876AA7579845F /* Pods_LiMaoBase_Tests.framework */; };
 		873B8AEB1B1F5CCA007FD442 /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 873B8AEA1B1F5CCA007FD442 /* Main.storyboard */; };
@@ -84,6 +88,10 @@
 		A1410000000000000000F002 /* WKJoinGroupSuccessHelperTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKJoinGroupSuccessHelperTests.m; sourceTree = "<group>"; };
 		A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKGroupScanJoinResponseParsingTests.m; sourceTree = "<group>"; };
 		B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKConversationListVMSystemBotsTests.m; sourceTree = "<group>"; };
+		D5810000000000000000F002 /* WKRealnameVerifiedBadgeTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKRealnameVerifiedBadgeTests.m; sourceTree = "<group>"; };
+		E3960000000000000000F002 /* WKRealnameVerifyURLBuilderTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKRealnameVerifyURLBuilderTests.m; sourceTree = "<group>"; };
+		E3960000000000000001F002 /* WKOidcProviderConfigParseTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKOidcProviderConfigParseTests.m; sourceTree = "<group>"; };
+		E3960000000000000002F002 /* WKRealnameVerifyCallbackTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKRealnameVerifyCallbackTests.m; sourceTree = "<group>"; };
 		606FC2411953D9B200FFA9A0 /* Tests-Prefix.pch */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Tests-Prefix.pch"; sourceTree = "<group>"; };
 		71719F9E1E33DC2100824A3D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		7E3C41DA1F0876AA7579845F /* Pods_LiMaoBase_Tests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_LiMaoBase_Tests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -196,6 +204,10 @@
 				A1410000000000000000F002 /* WKJoinGroupSuccessHelperTests.m */,
 				A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */,
 				B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */,
+				D5810000000000000000F002 /* WKRealnameVerifiedBadgeTests.m */,
+				E3960000000000000000F002 /* WKRealnameVerifyURLBuilderTests.m */,
+				E3960000000000000001F002 /* WKOidcProviderConfigParseTests.m */,
+				E3960000000000000002F002 /* WKRealnameVerifyCallbackTests.m */,
 				6003F5B6195388D20070C39A /* Supporting Files */,
 			);
 			path = Tests;
@@ -442,6 +454,10 @@
 				A1410000000000000000F001 /* WKJoinGroupSuccessHelperTests.m in Sources */,
 				A2130000000000000000F001 /* WKGroupScanJoinResponseParsingTests.m in Sources */,
 				B2180000000000000000F001 /* WKConversationListVMSystemBotsTests.m in Sources */,
+				D5810000000000000000F001 /* WKRealnameVerifiedBadgeTests.m in Sources */,
+				E3960000000000000000F001 /* WKRealnameVerifyURLBuilderTests.m in Sources */,
+				E3960000000000000001F001 /* WKOidcProviderConfigParseTests.m in Sources */,
+				E3960000000000000002F001 /* WKRealnameVerifyCallbackTests.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

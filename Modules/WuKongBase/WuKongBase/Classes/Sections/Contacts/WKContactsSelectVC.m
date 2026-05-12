@@ -20,6 +20,11 @@
 
 @property(nonatomic,strong) NSArray *sectionTitleArr; //排序后的出现过的拼音首字母数组
 @property(nonatomic,strong) NSMutableArray<NSArray*> *items;
+// Generation token: 每次 parseData 重置时 +1，sortAndGroup 异步回调写入前对比,
+// 只接受最新 generation 的结果。避免快速搜索时旧异步回调把过期数据混进新 items 容器,
+// 造成 sectionTitleArr 与 items 不一致或列表显示错误联系人。
+// (Jerry-Xin R3 review fix, YUJ-418)
+@property(nonatomic,assign) NSInteger parseGeneration;
 /// 默认被选中的用户集合
 @property(nonatomic, strong) NSMutableArray<WKContactsSelect*> *selectedArray;
 
@@ -86,6 +91,9 @@
 
 // 请求有效联系人数据
 -(void) parseData:(NSArray<WKContactsSelect*>*) data {
+    // Bump generation 方初始化,异步回调将根据 gen 识别老结果
+    // (Jerry-Xin R3 fix, YUJ-418)
+    NSInteger gen = ++self.parseGeneration;
     self.items = [NSMutableArray array];
     self.sectionTitleArr = @[];
     [self.tableView reloadData];
@@ -104,7 +112,7 @@
                 }
             }
         }
-        [self sortAndGroup:newData];
+        [self sortAndGroup:newData generation:gen];
     }
 }
 
@@ -152,15 +160,27 @@
 }
 
 // 联系人排序和分组
--(void) sortAndGroup:(NSArray<WKContactsSelect*>*)items{
+// 采用 generation token 解决 Jerry-Xin R3 review 指出的 race:
+// parseData 每次 bump generation 并传入此方法,异步 finish block 返回时对比
+// weakSelf.parseGeneration 是否等于当初的 gen,不等则丢弃旧结果,
+// 避免快速搜索时旧搜索回调污染新 items/sectionTitleArr。
+// (YUJ-418)
+-(void) sortAndGroup:(NSArray<WKContactsSelect*>*)items generation:(NSInteger)gen {
     __weak typeof(self) weakSelf = self;
     [WKChineseSort sortAndGroup:items key:@"displayName" finish:^(bool isSuccess, NSMutableArray *unGroupArr, NSMutableArray *sectionTitleArr, NSMutableArray<NSMutableArray *> *sortedObjArr) {
-        if(isSuccess && weakSelf) {
-            weakSelf.sectionTitleArr = sectionTitleArr;
-            [weakSelf.items addObjectsFromArray:sortedObjArr];
-            [weakSelf.tableView reloadData];
-        }
+        if(!isSuccess || !weakSelf) return;
+        // Generation check: 丢弃旧 generation 的回调
+        if (weakSelf.parseGeneration != gen) return;
+        weakSelf.sectionTitleArr = sectionTitleArr;
+        [weakSelf.items addObjectsFromArray:sortedObjArr];
+        [weakSelf.tableView reloadData];
     }];
+}
+
+// Legacy 入口 - 为兼容旧调用点留一个默认 gen=0 版本
+// (实际当前 parseData 已全走带 gen 版本, 无外部调用, 保留仅为安全网)
+-(void) sortAndGroup:(NSArray<WKContactsSelect*>*)items{
+    [self sortAndGroup:items generation:self.parseGeneration];
 }
 
 

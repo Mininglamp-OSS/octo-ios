@@ -289,7 +289,11 @@ static WKApp *_instance;
 }
 
 -(BOOL) appContinueUserActivity:(NSUserActivity *)userActivity restorationHandler:(void (^)(NSArray<id<UIUserActivityRestoring>> * _Nullable))restorationHandler {
-    // Universal Links：accounts.example.com/…/verified → 同样走实名认证回跳
+    // 实名认证回跳不走 Universal Link (YUJ-396 Round 2 / Jerry-Xin #112 blocking 2):
+    // Aegis return_to 统一走 `octo://verified` 自定义 scheme (由
+    // appDidOpenURL:options: 处理), 本入口不再识别 Aegis host 的 web URL。
+    // 调用 isVerifiedCallbackURL: 仍然保留做防御（万一老版本 Aegis 回跳
+    // 仍下发 https）, 但该方法现在只认 dmwork:// scheme, 对 web URL 永远返 NO。
     if([userActivity.activityType isEqualToString:NSUserActivityTypeBrowsingWeb]) {
         NSURL *url = userActivity.webpageURL;
         if([WKRealnameVerifyManager isVerifiedCallbackURL:url]) {
