@@ -629,7 +629,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
                 [self.textLbl lim_setText:content mentionInfo:textContent.mentionedInfo];
             }
         } @catch (NSException *exception) {
-            // Down 库 WebKit 渲染在嵌套 RunLoop 中可能触发 autorelease pool 断言，fallback 到纯文本
+            // markdown 渲染异常兜底（cmark-gfm 解析失败或表格 WebView 加载异常），fallback 到纯文本
             self.textLbl.hidden = NO;
             self.markdownLbl.hidden = YES;
             [self.textLbl lim_setText:content mentionInfo:textContent.mentionedInfo];

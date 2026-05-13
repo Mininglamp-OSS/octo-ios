@@ -78,9 +78,8 @@
     if(self.uploadTask) {
         [self.uploadTask removeListener:self];
     }
-    if(self.messageModel) {
-        WKImageContent *imageContent = (WKImageContent*)self.messageModel.content;
-        [imageContent releaseData];
+    if([self.messageModel.content isKindOfClass:[WKImageContent class]]) {
+        [(WKImageContent*)self.messageModel.content releaseData];
     }
 }
 

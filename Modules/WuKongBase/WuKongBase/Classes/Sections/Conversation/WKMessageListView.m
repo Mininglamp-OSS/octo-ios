@@ -166,8 +166,9 @@
 -(void) sendMessage:(WKMessageModel*)message {
     [self updateLastMsgIfNeed:message];
 
-    // 预缓存高度（触发 markdown 渲染），避免在 UITableView 布局回调中首次渲染
-    // Down 库的 WebKit 渲染会启动嵌套 RunLoop，在布局回调中会导致 UITableView 重入崩溃
+    // 预缓存高度（触发 markdown AST 解析），避免在 UITableView 布局回调中首次渲染
+    // 当消息含 markdown 表格时，cellForRow 会实例化 WKWebView 加载 HTML 表格，
+    // 在布局回调中会走 WebKit 主线程 spin 嵌套 RunLoop，触发 UITableView 重入校验异常
     [self precacheHeightForMessage:message];
 
     // Bugly: pulldown/pullup 把新消息写进 dataProvider 但 tableView 还没 reloadData 的窗口里，
@@ -193,11 +194,13 @@
     NSInteger newLastSectionRowCount = (newSectionCount > 0) ? [self.dataProvider messagesAtSection:newSectionCount - 1].count : 0;
 
     // Bugly #3054 兜底：校验的窗口 + 双保险 @try/@catch。
-    //   insertRowsAtIndexPaths 内部会触发 heightForRow / cellForRow，对未缓存高度的 markdown 消息
-    //   sizeForMessage: 会走 Down 的 WebKit 渲染 → 嵌套 RunLoop。期间主队列 pending 的 pulldown
-    //   完成 / handleRecvMessage 会批量往 dp 追加数据，导致内部校验时 ds.count 和 tv 期望值漂移 →
-    //   NSInternalInconsistencyException。在 insertRows 前再精确校一次，不一致直接 reloadData；
-    //   即便过了二次校验还抛异常（嵌套 RunLoop 在 insert 内部发生），catch 住同样走 reloadData。
+    //   insertRowsAtIndexPaths 内部会触发 heightForRow / cellForRow，对含 markdown 表格的
+    //   消息，cellForRow 会实例化/加载 WKWebView 渲染 HTML 表格 → WebKit 主线程 spin 嵌套 RunLoop。
+    //   期间主队列 pending 的 pulldown 完成 / handleRecvMessage 会批量往 dp 追加数据，导致内部
+    //   校验时 ds.count 和 tv 期望值漂移 → NSInternalInconsistencyException。在 insertRows
+    //   前再精确校一次，不一致直接 reloadData；即便过了二次校验还抛异常（嵌套 RunLoop 在
+    //   insert 内部发生），catch 住同样走 reloadData。
+    //   注：M3 表格改为原生渲染后此嵌套 RunLoop 路径消失，但 try/catch 仍作为廉价保险保留。
     if (!newSectionAdded && newLastSectionRowCount > oldLastSectionRowCount) {
         NSInteger intendedDelta = newLastSectionRowCount - oldLastSectionRowCount;
         NSInteger dsNow = [self.dataProvider messagesAtSection:newSectionCount - 1].count;
@@ -1690,7 +1693,7 @@
     }
 }
 
-// 高度缓存：避免重复触发 Down 库 markdown 渲染
+// 高度缓存：避免重复触发 markdown AST 解析与高度测量
 // 使用 NSCache 替代 NSMutableDictionary：
 //   1. countLimit=2000 防止跨会话无限积累（原方案无上限，活跃用户可达数万条）
 //   2. 系统内存压力时自动淘汰，无需手动清理

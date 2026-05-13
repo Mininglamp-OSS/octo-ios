@@ -37,7 +37,7 @@ static void *kWKMTVTokens = &kWKMTVTokens;
 /// display-only 配置：外观与 UILabel 一致，默认不可选/不可编辑
 /// UILabel(numberOfLines=0) 会忽略段落样式的 lineBreakMode 强制显示全部行；
 /// UITextView 的 NSLayoutManager 会遵守段落样式的 lineBreakMode，
-/// 导致 Down/markdown 渲染出的 TruncatingTail 段落被截断。
+/// 导致 markdown (cmark-gfm) 渲染出的 TruncatingTail 段落被截断。
 /// 重写 setAttributedText: 将所有段落样式归一化为 WordWrapping。
 - (void)setAttributedText:(NSAttributedString *)attributedText {
     if (!attributedText || attributedText.length == 0) {
