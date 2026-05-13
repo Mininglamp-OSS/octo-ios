@@ -15,6 +15,7 @@
 #import "WKConversationVC.h"
 #import "WKUserInfoExternalGate.h"
 #import "WKExternalViewerResolver.h"
+#import "WKBotAvatarVC.h"
 #define textToAvatarLeftSpace 10.0f // 文本距头像的左边距离
 
 @interface WKUserInfoVC ()<WKUserInfoVMDelegate,WKChannelManagerDelegate>
@@ -408,6 +409,25 @@
 
     // 用新cacheKey构建URL，SDWebImage没有该URL缓存 → 从服务器下载最新头像
     WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:self.uid]];
+
+    // Bot 创建者：进入"个人头像"风格的全屏页（右上 3-dots 修改头像）。
+    // 对齐 Android `UserDetailActivity` 的功能权限（owner-only avatar edit），
+    // 但 UX 与 iOS `WKMeAvatarVC` 一致——不嵌入详情页内联铅笔（Android 做法）。
+    // 非创建者继续走原 `YBImageBrowser` 的查看大图链路，UX 不变。
+    NSString *loginUid = [WKApp shared].loginInfo.uid;
+    NSString *botCreatorUid = self.viewModel.botCreatorUid;
+    BOOL isBotOwner = info.robot
+        && loginUid.length > 0
+        && botCreatorUid.length > 0
+        && [botCreatorUid isEqualToString:loginUid];
+    if(isBotOwner) {
+        WKBotAvatarVC *vc = [[WKBotAvatarVC alloc] init];
+        vc.botUid = self.uid;
+        vc.canEdit = YES;
+        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+        return;
+    }
+
     NSString *avatarUrl = [WKAvatarUtil getAvatar:self.uid cacheKey:info.avatarCacheKey];
 
     WKUserAvatar *imgView = (WKUserAvatar*)gesture.view;

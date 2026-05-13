@@ -47,6 +47,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,copy) NSString *uid;
 @property(nonatomic,strong) WKChannelInfo *channelInfo;
 
+/// 机器人创建者 uid（来自 /users/<uid> 响应顶层 `bot_creator_uid`，仅 robot=YES 时下发）。
+/// VC 据此判定当前登录者是否为该 Bot 的创建者，控制头像页 3-dots 编辑入口可见性。
+/// 对齐 Android `UserInfo.bot_creator_uid` + `isBotOwner` 计算
+/// （wkuikit/.../user/UserDetailActivity.java:522-529）。
+@property(nonatomic,copy,readonly,nullable) NSString *botCreatorUid;
+
 @property(nonatomic,strong,nullable) WKChannel *fromChannel; // 从那个频道进入的用户信息页面
 @property(nonatomic,strong) WKChannelInfo *fromChannelInfo; // 从那个频道过来的
 @property(nonatomic,strong) WKChannelMember *memberOfUser; // 用户在频道内的成员对象（ 如果是从某个频道过来的，则有可能有此值）

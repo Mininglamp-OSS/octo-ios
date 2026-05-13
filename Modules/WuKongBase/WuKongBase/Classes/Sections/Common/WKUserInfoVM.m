@@ -48,6 +48,11 @@
 @property (nonatomic, assign) NSInteger flameSecond;
 @property (nonatomic, copy) NSString *botDescription;
 @property (nonatomic, copy) NSString *botCreatorName;
+/// 机器人创建者 uid（来自后端 /users/<uid> 响应顶层 `bot_creator_uid`）。
+/// 对齐 Android `UserInfo.bot_creator_uid`（wkuikit/.../enity/UserInfo.java:35-38）。
+/// VC 用 `loginUid == botCreatorUid` 判定当前登录者是否为该 Bot 的创建者，
+/// 决定是否在头像页右上角显示"修改头像"入口。
+@property (nonatomic, copy) NSString *botCreatorUid;
 
 // --- YUJ-146 (GH#76) external-user fields ---
 // homeSpaceId: 用户的归属 Space，跨 Space 判定的权威字段（来自后端
@@ -75,6 +80,7 @@
 @property(nonatomic,copy) NSString *introEndpointID;
 @property(nonatomic,copy) NSString *botDescription;
 @property(nonatomic,copy) NSString *botCreatorName;
+@property(nonatomic,copy) NSString *botCreatorUid;
 
 // YUJ-146: 缓存当前 uid 的 home_space_id / is_external，供
 // user.info.addBlack / user.info.freeFriend handler 做同 Space 判定。
@@ -126,6 +132,7 @@
         // 保存 Bot 信息
         weakSelf.botDescription = user.botDescription ?: @"";
         weakSelf.botCreatorName = user.botCreatorName ?: @"";
+        weakSelf.botCreatorUid = user.botCreatorUid ?: @"";
 
         // YUJ-146: 缓存 home_space_id / is_external，供
         // user.info.addBlack / user.info.freeFriend handler 判同 Space。
@@ -753,6 +760,7 @@
     u.flameSecond = [[dictory objectForKey:@"flame_second"] integerValue];
     u.botDescription = [dictory objectForKey:@"bot_description"] ?: @"";
     u.botCreatorName = [dictory objectForKey:@"bot_creator_name"] ?: @"";
+    u.botCreatorUid = [dictory objectForKey:@"bot_creator_uid"] ?: @"";
     // YUJ-146 (GH#76) external-user fields
     u.homeSpaceId = [dictory objectForKey:@"home_space_id"] ?: @"";
     u.isExternal = [[dictory objectForKey:@"is_external"] integerValue];
