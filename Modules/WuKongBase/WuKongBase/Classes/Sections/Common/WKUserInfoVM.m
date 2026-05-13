@@ -62,6 +62,15 @@
 @property (nonatomic, copy) NSString *homeSpaceId;
 @property (nonatomic, assign) NSInteger isExternal;
 
+// --- YUJ-381 / dmwork-web#1169 实名认证字段 ---
+// 对齐 web `orgData.realname_verified`：/users/<uid> 响应顶层下发，需要回写
+// 到 person 缓存的 extra，让 WKMessageCell / WKMemberCell / WKUserInfoVC
+// 的实名徽章 fallback 路径能拿到 @YES。原本 UserModel 漏字段导致
+// channelInfoFromUser 构造的 WKChannelInfo 永远缺 realname_verified，
+// stale member.extra=@NO 直接阻断了 fallback。
+@property (nonatomic, assign) BOOL realnameVerified;
+@property (nonatomic, assign) NSTimeInterval realnameVerifiedAt;
+
 // YUJ-146: viewer-relative 判定「当前用户是否对观察者是外部」。
 // 优先用 homeSpaceId vs 当前 viewer space；没有时 fallback 到 legacy
 // is_external。注意：不做 loginInfo.uid 自我判定，调用方已在各 handler
@@ -656,13 +665,20 @@
     info.logo = [NSString stringWithFormat:@"users/%@/avatar",user.uid];
     
     info.extra[@"sex"] = @(user.sex);
-    
+
     [info setExtraValue:user.shortNo?:@"" forKey:WKChannelExtraKeyShortNo];
     [info setExtraValue:user.sourceDesc?:@"" forKey:WKChannelExtraKeySource];
     [info setExtraValue:user.vercode?:@"" forKey:WKChannelExtraKeyVercode];
     [info setSettingValue:user.screenshot forKey:WKChannelExtraKeyScreenshot];
     [info setSettingValue:user.revokeRemind forKey:WKChannelExtraKeyRevokeRemind];
     [info setSettingValue:user.chatPwdOn forKey:WKChannelExtraKeyChatPwd];
+    // YUJ-381 / dmwork-web#1169：把 /users/<uid> 顶层 realname_verified 回写到
+    // person 缓存的 extra，保证 WKMessageCell / WKMemberCell / WKUserInfoVC 在
+    // member.extra 缺失或 stale 时能 fallback 到 person 拿到正确值。
+    info.extra[@"realname_verified"] = @(user.realnameVerified);
+    if(user.realnameVerifiedAt > 0) {
+        info.extra[@"realname_verified_at"] = @(user.realnameVerifiedAt);
+    }
     return info;
 }
 
@@ -764,6 +780,9 @@
     // YUJ-146 (GH#76) external-user fields
     u.homeSpaceId = [dictory objectForKey:@"home_space_id"] ?: @"";
     u.isExternal = [[dictory objectForKey:@"is_external"] integerValue];
+    // YUJ-381 / dmwork-web#1169：解析顶层实名认证字段（对齐 web orgData.realname_verified）
+    u.realnameVerified = [[dictory objectForKey:@"realname_verified"] boolValue];
+    u.realnameVerifiedAt = [[dictory objectForKey:@"realname_verified_at"] doubleValue];
     return u;
 }
 

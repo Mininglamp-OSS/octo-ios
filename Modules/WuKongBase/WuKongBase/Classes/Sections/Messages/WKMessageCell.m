@@ -16,6 +16,7 @@
 #import "UILabel+WK.h"
 #import "NSMutableAttributedString+WK.h"
 #import "WKChannelUtil.h"
+#import "WKRealnamePrefetcher.h"
 #import "WKExternalViewerResolver.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKTapLongTapOrDoubleTapGestureRecognizerEvent.h"
@@ -463,6 +464,14 @@ static NSMutableDictionary *flameNodeCacheDict;
     }
     if(model.channel.channelType != WK_PERSON && !model.channelInfo) { // 没有频道信息则提取
         [[WKSDK shared].channelManager fetchChannelInfo:model.channel];
+    }
+
+    // YUJ-381 / dmwork-web#1169：群聊气泡发送者实名状态预拉取（不打开名片也能命中）。
+    // SDK 的 fetchChannelInfo 不一定回 realname_verified，这里走 /users/<uid> 让
+    // person.extra 被 UserModel/channelInfoFromUser 写入，tri-state fallback 才能命中。
+    // 自带 uid 节流，列表滚动多次进入也只发一次。
+    if(model.channel.channelType == WK_GROUP && model.fromUid.length > 0) {
+        [WKRealnamePrefetcher ensureFetched:model.fromUid];
     }
     
     if([[self class] isShowName:model]) {
@@ -951,7 +960,7 @@ static NSMutableDictionary *flameNodeCacheDict;
     @try {
         contentSize = [cellClass contentSizeForMessage:self.messageModel];
     } @catch (NSException *exception) {
-        // Down 库嵌套 RunLoop 期间 layoutSubviews 可能被重入，消息类型不匹配时安全兜底
+        // WebView（markdown 表格）嵌套 RunLoop 期间 layoutSubviews 可能被重入，消息类型不匹配时安全兜底
         contentSize = CGSizeMake(200, 44);
     }
     self.messageContentView.lim_size = contentSize;
@@ -1199,14 +1208,14 @@ static NSMutableDictionary<NSString*, UIImage*> *_bubbleImageCache;
     }
 
     // 实名认证 ✓ 徽章布局（YUJ-381）
-    // 贴在 nameLbl 右侧，padding.left = 2pt；后续 Bot Badge 继续往右拼。
-    // 仅占 12×12 pt，不影响 nameLbl 自身宽度计算，原有 sizeToFit 逻辑不变。
+    // 与 botBadge 同 row，紧贴在 nameLbl 右侧，间距 6pt（对齐 AI 文字徽章节奏）。
+    // 用 imgView 自身 lim_height 算垂直居中，避免和 botBadge 公式不一致。
     CGFloat afterNameRight = self.nameLbl.lim_left + self.nameLbl.lim_width;
     if (!self.realnameVerifiedImgView.hidden) {
         self.realnameVerifiedImgView.lim_width = 12.0f;
         self.realnameVerifiedImgView.lim_height = 12.0f;
-        self.realnameVerifiedImgView.lim_left = afterNameRight + 2.0f;
-        self.realnameVerifiedImgView.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - 12.0f) / 2.0f;
+        self.realnameVerifiedImgView.lim_left = afterNameRight + 6.0f;
+        self.realnameVerifiedImgView.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.realnameVerifiedImgView.lim_height) / 2.0f;
         afterNameRight = self.realnameVerifiedImgView.lim_left + self.realnameVerifiedImgView.lim_width;
     }
 

@@ -24,6 +24,8 @@
 #import "WKTextViewVC.h"
 #import "WKOnlineBadgeView.h"
 #import "WKExternalViewerResolver.h"
+#import "WKChannelUtil.h"
+#import "WKRealnamePrefetcher.h"
 #import "TOCropViewController.h"
 #import <SDWebImage/SDImageCache.h>
 
@@ -98,7 +100,26 @@
     
     // 监听群成员更新通知
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(memberUpdate) name:WKNOTIFY_GROUP_MEMBERUPDATE object:nil];
-    
+
+    // YUJ-381 实名状态预拉取回写：宫格里 topNMembers 命中时局部刷一下宫格，避免
+    // 「实名状态拉到了但宫格没更新，必须打开名片才看到徽章」。
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(realnameVerifiedUpdated:) name:WKRealnameVerifiedUpdatedNotification object:nil];
+
+}
+
+
+-(void) realnameVerifiedUpdated:(NSNotification *)noti {
+    NSString *uid = noti.userInfo[@"uid"];
+    if(uid.length == 0) return;
+    BOOL hit = NO;
+    for (WKChannelMember *m in self.topNMembers) {
+        if([m.memberUid isEqualToString:uid]) {
+            hit = YES;
+            break;
+        }
+    }
+    if(!hit) return;
+    [self.settingMemberGridView reloadData];
 }
 
 
@@ -130,6 +151,7 @@
 - (void)dealloc {
     // 销毁监听群成员更新通知
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WKNOTIFY_GROUP_MEMBERUPDATE object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:WKRealnameVerifiedUpdatedNotification object:nil];
 }
 
 
@@ -330,7 +352,69 @@
      [view addSubview:nameLbl];
      nameLbl.lim_top = avatarView.lim_bottom + 5.0f;
      nameLbl.lim_left = view.lim_width/2.0f - nameLbl.lim_width/2.0f;
-    
+
+    // YUJ-381 实名 ✓ 徽章：宫格 cell 昵称后内联 10×10 蓝勾。
+    // 设计原则：实名标识优先 —— 长名时强制 ... 截断保住徽章可见。
+    NSNumber *memberFlag = [WKChannelUtil isRealnameVerifiedFromExtra:member.extra];
+    BOOL realnameVerified = NO;
+    if (memberFlag != nil) {
+        realnameVerified = memberFlag.boolValue;
+    } else {
+        WKChannelInfo *personInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:member.memberUid channelType:WK_PERSON]];
+        NSNumber *personFlag = [WKChannelUtil isRealnameVerifiedFromExtra:personInfo.extra];
+        realnameVerified = personFlag.boolValue;
+    }
+    if (realnameVerified) {
+        const CGFloat kBadgeW = 10.0f;
+        const CGFloat kBadgeGap = 2.0f;
+        const CGFloat kSidePad = 2.0f; // cell 左右安全留白
+
+        nameLbl.lineBreakMode = NSLineBreakByTruncatingTail;
+        nameLbl.numberOfLines = 1;
+        nameLbl.textAlignment = NSTextAlignmentLeft;
+
+        // 文本实际像素宽度
+        CGFloat textW = 0.0f;
+        if (nameLbl.attributedText.length > 0) {
+            textW = [nameLbl.attributedText size].width;
+        } else if (nameLbl.text.length > 0 && nameLbl.font) {
+            textW = [nameLbl.text sizeWithAttributes:@{NSFontAttributeName: nameLbl.font}].width;
+        }
+        // 关键差异：可用宽度按 cell 宽 (view.lim_width) 算，不再卡死在 avatar.lim_width
+        // —— avatar 是 54pt，cell 一般 ~73pt，给名字多留 ~17pt 让正常昵称不被截断。
+        CGFloat usableW = view.lim_width - kSidePad * 2;
+        CGFloat maxNameW = usableW - kBadgeGap - kBadgeW;
+        if (maxNameW < 0) maxNameW = 0;
+        CGFloat usedW = MIN(textW, maxNameW);
+        // 名字 + 徽章 整体居中于 cell
+        CGFloat totalW = usedW + kBadgeGap + kBadgeW;
+        nameLbl.lim_width = usedW;
+        nameLbl.lim_left = view.lim_width/2.0f - totalW/2.0f;
+        if (nameLbl.lim_left < kSidePad) nameLbl.lim_left = kSidePad; // 安全 clamp
+
+        UIImageView *badge = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, kBadgeW, kBadgeW)];
+        badge.contentMode = UIViewContentModeScaleAspectFit;
+        badge.image = [WKApp.shared loadImage:@"Common/ic_realname_verified_mini" moduleID:@"WuKongBase"];
+        [view addSubview:badge];
+        badge.lim_left = nameLbl.lim_left + nameLbl.lim_width + kBadgeGap;
+        badge.lim_top = nameLbl.lim_top + (nameLbl.lim_height - kBadgeW) / 2.0f;
+        // 兜底：如果某种边缘场景下徽章右沿超过了 cell，强制贴右边界（保「徽章必出」）。
+        CGFloat maxBadgeLeft = view.lim_width - kSidePad - kBadgeW;
+        if (badge.lim_left > maxBadgeLeft) {
+            badge.lim_left = maxBadgeLeft;
+            // 同时收缩名字到不和徽章重叠
+            CGFloat nameMaxRight = badge.lim_left - kBadgeGap;
+            if (nameLbl.lim_left + nameLbl.lim_width > nameMaxRight) {
+                nameLbl.lim_width = MAX(0, nameMaxRight - nameLbl.lim_left);
+            }
+        }
+    } else if (member.memberUid.length > 0) {
+        // 没拿到 @YES：可能 person 缓存还没补上，触发预拉取。回写后会发
+        // WKRealnameVerifiedUpdatedNotification，VC 命中本 cell 的 uid 时
+        // 会 reloadData 把宫格重新排一次。
+        [WKRealnamePrefetcher ensureFetched:member.memberUid];
+    }
+
     UIView *roleView = [self getRoleView:member.role];
     if(roleView) {
         [avatarView addSubview:roleView];

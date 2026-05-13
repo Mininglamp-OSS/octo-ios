@@ -1138,6 +1138,18 @@
         }
         hasChange = true;
     }
+    // YUJ-381：实名状态变化也要触发局部刷新。WKRealnamePrefetcher 把 realname_verified
+    // 写进 person 缓存后会回调 channelInfoUpdate；如果只比 name/online/avatar 那几项，
+    // 拉取来的实名 @YES 会被吞掉 → cell 不更新 → 用户看不到徽章（除非打开名片）。
+    {
+        id newFlag = channelInfo.extra[@"realname_verified"];
+        id oldFlag = existCellModel.channelInfo.extra[@"realname_verified"];
+        BOOL same = (newFlag == oldFlag) || (newFlag && oldFlag && [newFlag isEqual:oldFlag]);
+        if (!same) {
+            existCellModel.channelInfo = channelInfo;
+            hasChange = true;
+        }
+    }
     if(hasChange && existIndexPath) {
         // 局部刷新单行，不做全量 reloadData
         [self.tableView reloadRowsAtIndexPaths:@[existIndexPath]

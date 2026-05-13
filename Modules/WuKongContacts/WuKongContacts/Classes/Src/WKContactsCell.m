@@ -10,6 +10,8 @@
 #import <Masonry/Masonry.h>
 #import <WuKongBase/WKOfficialTag.h>
 #import <WuKongBase/WKConstant.h>
+#import <WuKongBase/WKChannelUtil.h>
+#import <WuKongBase/WKRealnamePrefetcher.h>
 
 @implementation WKContactsCellModel
 
@@ -23,6 +25,8 @@
 @property(nonatomic,strong) UIView *onlineDot;
 @property(nonatomic,strong) UILabel *aiBadgeLbl;
 @property(nonatomic,strong) WKOfficialTag *officialTag;
+// YUJ-381 / dmwork-web#1169 Phase A —— 通讯录 cell 实名 ✓ 徽章
+@property(nonatomic,strong) UIImageView *realnameVerifiedImgView;
 
 @end
 
@@ -64,6 +68,13 @@
     _officialTag = [WKOfficialTag new];
     _officialTag.hidden = YES;
     [self.contentView addSubview:_officialTag];
+
+    // YUJ-381：通讯录 cell 实名 ✓ 徽章
+    _realnameVerifiedImgView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 12.0f, 12.0f)];
+    _realnameVerifiedImgView.contentMode = UIViewContentModeScaleAspectFit;
+    _realnameVerifiedImgView.image = [WKApp.shared loadImage:@"Common/ic_realname_verified_mini" moduleID:@"WuKongBase"];
+    _realnameVerifiedImgView.hidden = YES;
+    [self.contentView addSubview:_realnameVerifiedImgView];
 }
 
 +(NSString*) cellId{
@@ -109,6 +120,27 @@
         self.aiBadgeLbl.frame = frame;
     }
 
+    // YUJ-381 实名 ✓ 徽章：仅人 + 非机器人。
+    // 关键：优先读 SDK person 缓存（prefetcher 回写的就是这里、SDK push 也写这里），
+    // cellModel.channelInfo 只作回退。否则当 WKContactsVC.performBatchUpdates 用
+    // /friends API 数据覆盖 cellModel.channelInfo 时，新 info 的 extra 不带
+    // realname_verified，徽章会「闪一下又被覆盖没」。person 缓存里的字段不会丢。
+    BOOL canShowRealname = !_contactModel.robot && _contactModel.uid.length > 0;
+    BOOL realnameVerified = NO;
+    if(canShowRealname) {
+        WKChannelInfo *personInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:_contactModel.uid channelType:WK_PERSON]];
+        NSNumber *flag = [WKChannelUtil isRealnameVerifiedFromExtra:personInfo.extra];
+        if(flag == nil) {
+            // person 缓存还没数据时，看 cellModel 自带的 channelInfo（可能是 friends API 直接给的）
+            flag = [WKChannelUtil isRealnameVerifiedFromExtra:_contactModel.channelInfo.extra];
+        }
+        realnameVerified = flag.boolValue;
+    }
+    self.realnameVerifiedImgView.hidden = !realnameVerified;
+    if(canShowRealname && !realnameVerified) {
+        [WKRealnamePrefetcher ensureFetched:_contactModel.uid];
+    }
+
     // Online dot
     self.onlineDot.hidden = YES;
     UIColor *greenColor = [UIColor colorWithRed:11/255.0f green:135/255.0f blue:125/255.0f alpha:1.0f];
@@ -139,12 +171,19 @@
     self.nameLbl.lim_left = self.avatarImgView.lim_right + avatarToName;
     self.nameLbl.lim_top = self.lim_height / 2.0f - self.nameLbl.lim_height / 2.0f;
 
-    // Official tag + AI badge after name
+    // Official tag + realname + AI badge after name
     CGFloat nextLeft = self.nameLbl.lim_right;
     if (!self.officialTag.hidden) {
         self.officialTag.lim_left = nextLeft + 4.0f;
         self.officialTag.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.officialTag.lim_height) / 2.0f;
         nextLeft = self.officialTag.lim_right;
+    }
+    if (!self.realnameVerifiedImgView.hidden) {
+        self.realnameVerifiedImgView.lim_width = 12.0f;
+        self.realnameVerifiedImgView.lim_height = 12.0f;
+        self.realnameVerifiedImgView.lim_left = nextLeft + 6.0f;
+        self.realnameVerifiedImgView.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.realnameVerifiedImgView.lim_height) / 2.0f;
+        nextLeft = self.realnameVerifiedImgView.lim_right;
     }
     if (!self.aiBadgeLbl.hidden) {
         self.aiBadgeLbl.lim_left = nextLeft + 6.0f;

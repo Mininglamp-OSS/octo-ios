@@ -16,6 +16,8 @@
 #import "WKApp.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 #import "WKGroupMdVC.h"
+#import "WKChannelUtil.h"
+#import "WKRealnamePrefetcher.h"
 
 @interface WKThreadSettingVC () <WKSettingMemberGridViewDelegate, UITableViewDataSource, UITableViewDelegate>
 
@@ -57,6 +59,30 @@
 
     [self loadThreadInfo];
     [self loadMembers];
+
+    // YUJ-381：实名状态预拉取回写后局部刷宫格（uid 命中本子区成员才刷）
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(realnameVerifiedUpdated:)
+                                                 name:WKRealnameVerifiedUpdatedNotification
+                                               object:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:WKRealnameVerifiedUpdatedNotification object:nil];
+}
+
+- (void)realnameVerifiedUpdated:(NSNotification *)noti {
+    NSString *uid = noti.userInfo[@"uid"];
+    if (uid.length == 0) return;
+    BOOL hit = NO;
+    for (NSDictionary *m in self.members) {
+        if ([m[@"uid"] isEqualToString:uid]) {
+            hit = YES;
+            break;
+        }
+    }
+    if (!hit) return;
+    [self.memberGridView reloadData];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -200,6 +226,56 @@
     [view addSubview:nameLbl];
     nameLbl.lim_top = avatarView.lim_bottom + 5.0f;
     nameLbl.lim_left = view.lim_width / 2.0f - nameLbl.lim_width / 2.0f;
+
+    // YUJ-381 实名 ✓ 徽章（子区宫格，与 WKConversationGroupSettingVC 同款节奏）。
+    // 子区 member dict 自身不带 realname_verified，直接读 person 缓存；缺数据
+    // 时由 WKRealnamePrefetcher 补一次，回写后会发 WKRealnameVerifiedUpdatedNotification
+    // —— 本 VC 听这个通知后 reload 一次宫格即可。
+    NSNumber *flag = [WKChannelUtil isRealnameVerifiedFromExtra:memberChannelInfo.extra];
+    BOOL realnameVerified = flag.boolValue;
+    if (realnameVerified) {
+        const CGFloat kBadgeW = 10.0f;
+        const CGFloat kBadgeGap = 2.0f;
+        const CGFloat kSidePad = 2.0f;
+
+        nameLbl.lineBreakMode = NSLineBreakByTruncatingTail;
+        nameLbl.numberOfLines = 1;
+        nameLbl.textAlignment = NSTextAlignmentLeft;
+
+        CGFloat textW = 0.0f;
+        if (nameLbl.attributedText.length > 0) {
+            textW = [nameLbl.attributedText size].width;
+        } else if (nameLbl.text.length > 0 && nameLbl.font) {
+            textW = [nameLbl.text sizeWithAttributes:@{NSFontAttributeName: nameLbl.font}].width;
+        }
+        // 可用宽度按 cell 宽 view.lim_width 算（≈73pt），不卡死在 avatar 54pt。
+        CGFloat usableW = view.lim_width - kSidePad * 2;
+        CGFloat maxNameW = usableW - kBadgeGap - kBadgeW;
+        if (maxNameW < 0) maxNameW = 0;
+        CGFloat usedW = MIN(textW, maxNameW);
+        CGFloat totalW = usedW + kBadgeGap + kBadgeW;
+        nameLbl.lim_width = usedW;
+        nameLbl.lim_left = view.lim_width / 2.0f - totalW / 2.0f;
+        if (nameLbl.lim_left < kSidePad) nameLbl.lim_left = kSidePad;
+
+        UIImageView *badge = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, kBadgeW, kBadgeW)];
+        badge.contentMode = UIViewContentModeScaleAspectFit;
+        badge.image = [WKApp.shared loadImage:@"Common/ic_realname_verified_mini" moduleID:@"WuKongBase"];
+        [view addSubview:badge];
+        badge.lim_left = nameLbl.lim_left + nameLbl.lim_width + kBadgeGap;
+        badge.lim_top = nameLbl.lim_top + (nameLbl.lim_height - kBadgeW) / 2.0f;
+        // 兜底：徽章一定要在 cell 内
+        CGFloat maxBadgeLeft = view.lim_width - kSidePad - kBadgeW;
+        if (badge.lim_left > maxBadgeLeft) {
+            badge.lim_left = maxBadgeLeft;
+            CGFloat nameMaxRight = badge.lim_left - kBadgeGap;
+            if (nameLbl.lim_left + nameLbl.lim_width > nameMaxRight) {
+                nameLbl.lim_width = MAX(0, nameMaxRight - nameLbl.lim_left);
+            }
+        }
+    } else if (uid.length > 0) {
+        [WKRealnamePrefetcher ensureFetched:uid];
+    }
 
     return view;
 }

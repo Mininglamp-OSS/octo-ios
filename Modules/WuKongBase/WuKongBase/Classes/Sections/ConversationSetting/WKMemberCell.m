@@ -10,6 +10,7 @@
 #import "WKOnlineBadgeView.h"
 #import "WKExternalViewerResolver.h"
 #import "WKChannelUtil.h"
+#import "WKRealnamePrefetcher.h"
 @interface WKMemberCell ()<WKCheckBoxDelegate>
 
 @property(nonatomic,strong) WKUserAvatar *avatar;
@@ -123,6 +124,12 @@
     }
     self.realnameVerifiedImgView.hidden = !verified;
 
+    // YUJ-381：未确认已实名时（member 显式 @NO 或两侧都缺数据），后台拉一次
+    // /users/<uid> 把 person 缓存补齐，回写后 channelInfoUpdate 会驱动重刷。
+    if(!verified && member.memberUid.length > 0) {
+        [WKRealnamePrefetcher ensureFetched:member.memberUid];
+    }
+
     self.onlineBadgeView.hidden = YES;
     if(online) {
         if(!online.online) {
@@ -176,9 +183,27 @@
     self.nameLbl.lim_left = self.avatar.lim_right + leftSpace;
     self.nameLbl.lim_height = self.contentView.lim_height;
     self.nameLbl.lim_top = 0.0f;
-    self.nameLbl.lim_width = self.contentView.lim_width - self.nameLbl.lim_left - 40.0f;
 
-    // 名字右侧的 AI badge
+    // YUJ-381：长昵称场景必须保证实名 / AI 徽章不被挤掉。
+    // 先把要显示的 badge 总占用宽度算出来，nameLbl.lim_width 预留好这部分，
+    // UILabel 默认 NSLineBreakByTruncatingTail 会自动 ... 截断。
+    CGFloat rightSafePad = 15.0f;        // cell 末尾基础右边距
+    CGFloat badgesWidth = 0.0f;
+    CGFloat realnameBadgeW = 0.0f;
+    if (!self.realnameVerifiedImgView.hidden) {
+        realnameBadgeW = 12.0f;
+        badgesWidth += realnameBadgeW + 2.0f; // 2pt gap from name
+    }
+    CGFloat botBadgeW = 0.0f;
+    if (!self.botBadgeLbl.hidden) {
+        botBadgeW = self.botBadgeLbl.lim_width;
+        badgesWidth += botBadgeW + 6.0f;      // 6pt gap from前一个
+    }
+    CGFloat maxNameW = self.contentView.lim_width - self.nameLbl.lim_left - badgesWidth - rightSafePad;
+    if (maxNameW < 0) maxNameW = 0;
+    self.nameLbl.lim_width = maxNameW;
+
+    // 名字右侧 badge 起点：用真实文本宽度（小于 lim_width 时贴紧），溢出时取 lim_right。
     CGFloat textWidth = 0.0f;
     if (self.nameLbl.attributedText.length > 0) {
         textWidth = [self.nameLbl.attributedText size].width;
@@ -190,7 +215,7 @@
 
     // 实名认证 ✓ 徽章布局（YUJ-381）：贴在昵称右侧 padding.left = 2pt，12×12pt。
     if (!self.realnameVerifiedImgView.hidden) {
-        self.realnameVerifiedImgView.lim_width = 12.0f;
+        self.realnameVerifiedImgView.lim_width = realnameBadgeW;
         self.realnameVerifiedImgView.lim_height = 12.0f;
         self.realnameVerifiedImgView.lim_left = afterNameRight + 2.0f;
         self.realnameVerifiedImgView.lim_top = badgeCenterY - self.realnameVerifiedImgView.lim_height / 2.0f;
