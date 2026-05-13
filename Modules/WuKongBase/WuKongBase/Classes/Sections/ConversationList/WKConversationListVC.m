@@ -188,6 +188,17 @@
         [weakSelf refreshBadge];
         // 异步加载分组数据，完成后再次刷新
         [weakSelf loadCategories];
+        // YUJ-bot-isolation 冷启动 race 兜底（PR #118 review fix）：
+        // viewDidLoad 同时发起 loadBotsForSpace（网络）和本 loadConversationList（DB）。
+        // 若网络早回 → onSpaceBotRegistryDidLoad 在空 VM 上 prune 等于 no-op；
+        // 此处 VM 已被 DB 回灌完成，再做一次 prune 才能擦掉跨 Space 的 stale Bot 行。
+        // 若 registry 未回（Unknown）→ 本次 prune no-op，registry 后到时
+        // onSpaceBotRegistryDidLoad 会在已 ready 的 VM 上兜底再 prune。两端 callback
+        // 都 prune，谁先到都覆盖。
+        NSString *bootSpaceForPrune = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+        if(bootSpaceForPrune.length > 0) {
+            [weakSelf.conversationListVM pruneNonCurrentSpaceBotsForSpace:bootSpaceForPrune];
+        }
     }];
 
 //    self.refreshTimer = [NSTimer scheduledTimerWithTimeInterval:30 target:self selector:@selector(timerRefreshTable) userInfo:nil repeats:YES];
