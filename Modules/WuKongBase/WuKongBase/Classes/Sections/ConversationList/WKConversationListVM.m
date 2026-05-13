@@ -15,6 +15,8 @@
 #import "WKCategoryService.h"
 #import <WuKongIMSDK/WKReminderDB.h>
 #import "WKSpaceFilter.h"
+#import "WKSpaceBotRegistry.h"
+#import "WKApp.h"
 @interface WKConversationListVM ()
 @property(nonatomic,strong) NSMutableArray<WKConversationWrapModel*> *conversationWrapModels;
 @property(nonatomic,strong) NSMutableDictionary<NSString*, WKConversationWrapModel*> *channelIndex; // channel key → model, O(1) lookup
@@ -145,6 +147,41 @@ static WKConversationListVM *_instance;
     if(removed.count > 0) {
         NSLog(@"🧹 [YUJ-215] 清理当前 Space 不应展示的残留群聊 %lu 个: %@",
               (unsigned long)removed.count, removed);
+    }
+    return removed;
+}
+
+/// YUJ-bot-isolation: 清掉当前 Space 的 conversation list 里"不属于当前 Space 已添加 Bot"
+/// 的 Bot 行。对应 web 没有此问题（web 的服务端 Bot DM 走不同 channel_id 形态）。
+/// 调用时机：WKSpaceBotRegistry 加载完成后，由 VC 监听通知触发。
+/// 数据源：WKSpaceBotRegistry（my_bots ∪ space_bots[status=added]）。
+/// 三态语义：
+///   - Member：保留
+///   - NotMember：移除
+///   - Unknown：保留（理论上加载完成后不应再有 Unknown，安全降级）
+-(NSArray<NSString*>*) pruneNonCurrentSpaceBotsForSpace:(NSString*)spaceId {
+    NSMutableArray<NSString*> *removed = [NSMutableArray array];
+    if(spaceId.length == 0 || self.conversationWrapModels.count == 0) return removed;
+    NSArray<WKConversationWrapModel*> *snapshot = [self.conversationWrapModels copy];
+    NSArray<NSString*> *systemBotUIDs = [WKApp shared].config.systemBotUIDs;
+    for(WKConversationWrapModel *m in snapshot) {
+        WKChannel *ch = m.channel;
+        if(ch.channelType != WK_PERSON) continue;
+        // System bot（botfather/u_10000/fileHelper）全局可见，跳过。
+        if(systemBotUIDs.count > 0 && [systemBotUIDs containsObject:ch.channelId]) continue;
+        WKChannelInfo *info = [[WKChannelInfoDB shared] queryChannelInfo:ch];
+        if(!info || !info.robot) continue; // 非 Bot 不参与本轮 prune
+        WKSpaceBotMembership mem = [[WKSpaceBotRegistry shared] membershipForBotUID:ch.channelId inSpace:spaceId];
+        if(mem == WKSpaceBotMembershipNotMember) {
+            [self removeAtChannnel:ch];
+            [removed addObject:ch.channelId];
+        }
+    }
+    if(removed.count > 0) {
+#if DEBUG
+        NSLog(@"🧹 [BotSpaceTrace] pruneNonCurrentSpaceBots removed %lu bot(s) for space=%@: %@",
+              (unsigned long)removed.count, spaceId, removed);
+#endif
     }
     return removed;
 }
@@ -504,8 +541,19 @@ static WKConversationListVM *_instance;
         return YES; // 白名单未初始化（首次sync前），暂不过滤
     }
 
-    // Person 频道直接放行（不按 lastMessage.space_id 过滤，避免跨 Space 私聊会话消失）
-    // 消息级隔离在聊天页面内独立处理（shouldShowMessageInCurrentSpace）
+    // Person 频道：默认放行（消息级隔离在聊天页面 shouldShowMessageInCurrentSpace 处理）。
+    // 例外：channelId 带 `s{otherSpace}_` 前缀（Bot 与私聊均会被后端前缀化）→ Skip。
+    // 对齐 web `shouldSkipChannelForSpace`（dmwork-web/.../SpaceService.tsx:23-25）。
+    // 无前缀的私聊保持向前兼容。
+    if(conversation.channel.channelType == WK_PERSON) {
+        WKSpaceFilterDecision decision = [[WKSpaceFilter shared]
+                                           decideChannel:conversation.channel.channelId
+                                             channelType:conversation.channel.channelType];
+        if(decision == WKSpaceFilterDecisionSkip) {
+            return NO;
+        }
+        return YES;
+    }
     return YES;
 }
 

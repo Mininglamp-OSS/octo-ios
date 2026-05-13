@@ -61,8 +61,16 @@
         self.nameLbl.lim_width = self.messageContentView.lim_width;
     }
 
-    // Bot标识布局
-    self.botBadgeLbl.lim_left = self.nameLbl.lim_left + self.nameLbl.lim_width + 6.0f;
+    // YUJ-381 实名 ✓ 徽章 + Bot 标识：与 WKTextMessageCell 一致的 realname → bot 串行布局。
+    CGFloat afterNameRight = self.nameLbl.lim_left + self.nameLbl.lim_width;
+    if (!self.realnameVerifiedImgView.hidden) {
+        self.realnameVerifiedImgView.lim_width = 12.0f;
+        self.realnameVerifiedImgView.lim_height = 12.0f;
+        self.realnameVerifiedImgView.lim_left = afterNameRight + 6.0f;
+        self.realnameVerifiedImgView.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.realnameVerifiedImgView.lim_height) / 2.0f;
+        afterNameRight = self.realnameVerifiedImgView.lim_left + self.realnameVerifiedImgView.lim_width;
+    }
+    self.botBadgeLbl.lim_left = afterNameRight + 6.0f;
     self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
 }
 

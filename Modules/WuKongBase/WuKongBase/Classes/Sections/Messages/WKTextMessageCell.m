@@ -667,7 +667,7 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                 NSMutableAttributedString *mdMutable = [[NSMutableAttributedString alloc] initWithAttributedString:mdAttr];
                 mdMutable.font = attrStr.font;
 
-                // 从 Down 渲染结果中提取可点击的 tokens
+                // 从 cmark-gfm 渲染结果中提取可点击的 tokens
                 NSMutableArray<id<WKMatchToken>> *clickableTokens = [NSMutableArray array];
 
                 // 1. 提取链接 tokens，并记录需要移除NSLinkAttributeName的range
@@ -1078,7 +1078,7 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
             }
         }
     }
-    // 超长文本截断为预览长度，避免 Down 库渲染超长 Markdown 崩溃/卡顿
+    // 超长文本截断为预览长度，避免 cmark-gfm 渲染超长 Markdown 卡顿
     if (content.length > kTextTruncateThreshold) {
         // 流式消息不截断
         if (!(message.streamOn && message.streamFlag != WKStreamFlagEnd)) {
@@ -1869,8 +1869,19 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         self.nameLbl.lim_width = self.messageContentView.lim_width;
     }
 
-    // Bot标识布局：紧跟nameLbl右侧，垂直居中对齐
-    self.botBadgeLbl.lim_left = self.nameLbl.lim_left + self.nameLbl.lim_width + 6.0f;
+    // YUJ-381 实名 ✓ 徽章 + Bot 标识：紧跟 nameLbl 右侧，realname → bot 串行。
+    // 父类 layoutName 在 WKTextMessageCell 这里被完全覆写，必须在子类显式排
+    // realnameVerifiedImgView，否则它会停留在 initUI 时的 (0,0,12,12) 旧 frame
+    // —— 表现为「徽章卡在气泡左上角」（YUJ-384 P1-1 同型坑）。
+    CGFloat afterNameRight = self.nameLbl.lim_left + self.nameLbl.lim_width;
+    if (!self.realnameVerifiedImgView.hidden) {
+        self.realnameVerifiedImgView.lim_width = 12.0f;
+        self.realnameVerifiedImgView.lim_height = 12.0f;
+        self.realnameVerifiedImgView.lim_left = afterNameRight + 6.0f;
+        self.realnameVerifiedImgView.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.realnameVerifiedImgView.lim_height) / 2.0f;
+        afterNameRight = self.realnameVerifiedImgView.lim_left + self.realnameVerifiedImgView.lim_width;
+    }
+    self.botBadgeLbl.lim_left = afterNameRight + 6.0f;
     self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
 }
 

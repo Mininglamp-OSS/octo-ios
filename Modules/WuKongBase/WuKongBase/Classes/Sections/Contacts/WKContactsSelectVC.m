@@ -11,6 +11,7 @@
 #import "WKContactsManager.h"
 #import "WKBarUserSearchView.h"
 #import "WKContacts.h"
+#import "WKRealnamePrefetcher.h"
 #import  "UIBarButtonItem+WK.h"
 //头部视图高度
 #define HEAD_VIEW_HEIGHT 50
@@ -69,6 +70,36 @@
     [self applyFilterAndSearch];
     if (!self.maxSelectMembers) {
         self.maxSelectMembers = self.data.count;
+    }
+
+    // YUJ-381 (#118 review fix): 选人列表也要听 prefetcher 回写通知。
+    // WKContactsSelectCell 在 person 缓存无 realname 时触发 prefetch，
+    // /users/<uid> 返回前 cell 已经渲染完，没这个监听就要等 cell 被回收
+    // 重建才能看见徽章 —— 复现「选人列表覆盖不可靠」review 评论。
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(realnameVerifiedUpdated:)
+                                                 name:WKRealnameVerifiedUpdatedNotification
+                                               object:nil];
+}
+
+-(void) realnameVerifiedUpdated:(NSNotification *)noti {
+    NSString *uid = noti.userInfo[@"uid"];
+    if (uid.length == 0) return;
+    NSMutableArray<NSIndexPath *> *paths = [NSMutableArray array];
+    for (NSInteger s = 0; s < (NSInteger)self.items.count; s++) {
+        NSArray *section = self.items[s];
+        for (NSInteger r = 0; r < (NSInteger)section.count; r++) {
+            id obj = section[r];
+            if ([obj isKindOfClass:[WKContactsSelect class]]) {
+                WKContactsSelect *m = (WKContactsSelect *)obj;
+                if ([m.uid isEqualToString:uid]) {
+                    [paths addObject:[NSIndexPath indexPathForRow:r inSection:s]];
+                }
+            }
+        }
+    }
+    if (paths.count > 0) {
+        [self.tableView reloadRowsAtIndexPaths:paths withRowAnimation:UITableViewRowAnimationNone];
     }
 }
 
@@ -594,6 +625,7 @@
 
 - (void)dealloc {
     NSLog(@"WKContactsSelectVC dealloc");
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:WKRealnameVerifiedUpdatedNotification object:nil];
     if(self.onDealloc) {
         self.onDealloc();
     }

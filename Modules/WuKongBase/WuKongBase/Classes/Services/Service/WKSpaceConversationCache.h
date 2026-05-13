@@ -8,15 +8,14 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+/// 缓存 server 下发的 `space_last_message`，仅用于会话列表按当前空间展示"最后一条消息"。
+/// 不再维护客户端 `space_unread`：unread 由 SDK DB 持久化，UI 按 lastMessage.space_id 过滤跨空间污染。
 @interface WKSpaceConversationCache : NSObject
 
 + (instancetype)shared;
 
-- (void)setSpaceUnread:(NSNumber * _Nullable)unread spaceLastMessage:(WKMessage * _Nullable)lastMessage forChannel:(WKChannel *)channel;
-- (NSNumber * _Nullable)spaceUnreadForChannel:(WKChannel *)channel;
+- (void)setSpaceLastMessage:(WKMessage *)lastMessage forChannel:(WKChannel *)channel;
 - (WKMessage * _Nullable)spaceLastMessageForChannel:(WKChannel *)channel;
-/// 递增当前空间的未读数（实时消息到达时调用）
-- (void)incrementSpaceUnread:(NSInteger)delta forChannel:(WKChannel *)channel;
 - (void)clearAll;
 
 @end

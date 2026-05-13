@@ -48,6 +48,11 @@
 @property (nonatomic, assign) NSInteger flameSecond;
 @property (nonatomic, copy) NSString *botDescription;
 @property (nonatomic, copy) NSString *botCreatorName;
+/// 机器人创建者 uid（来自后端 /users/<uid> 响应顶层 `bot_creator_uid`）。
+/// 对齐 Android `UserInfo.bot_creator_uid`（wkuikit/.../enity/UserInfo.java:35-38）。
+/// VC 用 `loginUid == botCreatorUid` 判定当前登录者是否为该 Bot 的创建者，
+/// 决定是否在头像页右上角显示"修改头像"入口。
+@property (nonatomic, copy) NSString *botCreatorUid;
 
 // --- YUJ-146 (GH#76) external-user fields ---
 // homeSpaceId: 用户的归属 Space，跨 Space 判定的权威字段（来自后端
@@ -56,6 +61,15 @@
 // 时才参与判定（isExternalUser helper）。
 @property (nonatomic, copy) NSString *homeSpaceId;
 @property (nonatomic, assign) NSInteger isExternal;
+
+// --- YUJ-381 / dmwork-web#1169 实名认证字段 ---
+// 对齐 web `orgData.realname_verified`：/users/<uid> 响应顶层下发，需要回写
+// 到 person 缓存的 extra，让 WKMessageCell / WKMemberCell / WKUserInfoVC
+// 的实名徽章 fallback 路径能拿到 @YES。原本 UserModel 漏字段导致
+// channelInfoFromUser 构造的 WKChannelInfo 永远缺 realname_verified，
+// stale member.extra=@NO 直接阻断了 fallback。
+@property (nonatomic, assign) BOOL realnameVerified;
+@property (nonatomic, assign) NSTimeInterval realnameVerifiedAt;
 
 // YUJ-146: viewer-relative 判定「当前用户是否对观察者是外部」。
 // 优先用 homeSpaceId vs 当前 viewer space；没有时 fallback 到 legacy
@@ -75,6 +89,7 @@
 @property(nonatomic,copy) NSString *introEndpointID;
 @property(nonatomic,copy) NSString *botDescription;
 @property(nonatomic,copy) NSString *botCreatorName;
+@property(nonatomic,copy) NSString *botCreatorUid;
 
 // YUJ-146: 缓存当前 uid 的 home_space_id / is_external，供
 // user.info.addBlack / user.info.freeFriend handler 做同 Space 判定。
@@ -126,6 +141,7 @@
         // 保存 Bot 信息
         weakSelf.botDescription = user.botDescription ?: @"";
         weakSelf.botCreatorName = user.botCreatorName ?: @"";
+        weakSelf.botCreatorUid = user.botCreatorUid ?: @"";
 
         // YUJ-146: 缓存 home_space_id / is_external，供
         // user.info.addBlack / user.info.freeFriend handler 判同 Space。
@@ -649,13 +665,20 @@
     info.logo = [NSString stringWithFormat:@"users/%@/avatar",user.uid];
     
     info.extra[@"sex"] = @(user.sex);
-    
+
     [info setExtraValue:user.shortNo?:@"" forKey:WKChannelExtraKeyShortNo];
     [info setExtraValue:user.sourceDesc?:@"" forKey:WKChannelExtraKeySource];
     [info setExtraValue:user.vercode?:@"" forKey:WKChannelExtraKeyVercode];
     [info setSettingValue:user.screenshot forKey:WKChannelExtraKeyScreenshot];
     [info setSettingValue:user.revokeRemind forKey:WKChannelExtraKeyRevokeRemind];
     [info setSettingValue:user.chatPwdOn forKey:WKChannelExtraKeyChatPwd];
+    // YUJ-381 / dmwork-web#1169：把 /users/<uid> 顶层 realname_verified 回写到
+    // person 缓存的 extra，保证 WKMessageCell / WKMemberCell / WKUserInfoVC 在
+    // member.extra 缺失或 stale 时能 fallback 到 person 拿到正确值。
+    info.extra[@"realname_verified"] = @(user.realnameVerified);
+    if(user.realnameVerifiedAt > 0) {
+        info.extra[@"realname_verified_at"] = @(user.realnameVerifiedAt);
+    }
     return info;
 }
 
@@ -753,9 +776,13 @@
     u.flameSecond = [[dictory objectForKey:@"flame_second"] integerValue];
     u.botDescription = [dictory objectForKey:@"bot_description"] ?: @"";
     u.botCreatorName = [dictory objectForKey:@"bot_creator_name"] ?: @"";
+    u.botCreatorUid = [dictory objectForKey:@"bot_creator_uid"] ?: @"";
     // YUJ-146 (GH#76) external-user fields
     u.homeSpaceId = [dictory objectForKey:@"home_space_id"] ?: @"";
     u.isExternal = [[dictory objectForKey:@"is_external"] integerValue];
+    // YUJ-381 / dmwork-web#1169：解析顶层实名认证字段（对齐 web orgData.realname_verified）
+    u.realnameVerified = [[dictory objectForKey:@"realname_verified"] boolValue];
+    u.realnameVerifiedAt = [[dictory objectForKey:@"realname_verified_at"] doubleValue];
     return u;
 }
 

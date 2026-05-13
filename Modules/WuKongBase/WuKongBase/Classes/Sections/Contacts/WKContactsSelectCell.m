@@ -8,6 +8,8 @@
 #import "WKContactsSelectCell.h"
 #import "WKContacts.h"
 #import "WuKongBase.h"
+#import "WKChannelUtil.h"
+#import "WKRealnamePrefetcher.h"
 @implementation WKContactsSelect
 
 
@@ -17,6 +19,8 @@
 @interface WKContactsSelectCell()<WKCheckBoxDelegate>
 
 @property(nonatomic,strong) UILabel *botBadgeLbl;
+// YUJ-381 / dmwork-web#1169 Phase A —— 选人列表实名 ✓ 徽章（拉人 / 新建群）
+@property(nonatomic,strong) UIImageView *realnameVerifiedImgView;
 
 @end
 @implementation WKContactsSelectCell
@@ -55,6 +59,13 @@
     _botBadgeLbl.layer.masksToBounds = YES;
     _botBadgeLbl.hidden = YES;
     [self.contentView addSubview:_botBadgeLbl];
+
+    // YUJ-381 实名 ✓ 徽章
+    _realnameVerifiedImgView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 12.0f, 12.0f)];
+    _realnameVerifiedImgView.contentMode = UIViewContentModeScaleAspectFit;
+    _realnameVerifiedImgView.image = [WKApp.shared loadImage:@"Common/ic_realname_verified_mini" moduleID:@"WuKongBase"];
+    _realnameVerifiedImgView.hidden = YES;
+    [self.contentView addSubview:_realnameVerifiedImgView];
 }
 
 +(NSString*) cellId{
@@ -78,6 +89,24 @@
         frame.size.width += 8.0f;
         frame.size.height += 4.0f;
         self.botBadgeLbl.frame = frame;
+    }
+
+    // YUJ-381 实名 ✓ 徽章：只对人 + 非机器人显示。数据走 person 缓存（预拉取器
+    // 在没数据时主动补一次 /users/<uid>，channelInfoUpdate 会驱动 reload）。
+    BOOL canShowRealname = !_contactSelectModel.robot && _contactSelectModel.uid.length > 0;
+    BOOL realnameVerified = NO;
+    if(canShowRealname) {
+        WKChannelInfo *personInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:_contactSelectModel.uid channelType:WK_PERSON]];
+        NSNumber *flag = [WKChannelUtil isRealnameVerifiedFromExtra:personInfo.extra];
+        // 兼容选人模型自带 extra 的场景（WKContacts.extra 也可能携带 realname_verified）
+        if(flag == nil) {
+            flag = [WKChannelUtil isRealnameVerifiedFromExtra:_contactSelectModel.extra];
+        }
+        realnameVerified = flag.boolValue;
+    }
+    self.realnameVerifiedImgView.hidden = !realnameVerified;
+    if(canShowRealname && !realnameVerified) {
+        [WKRealnamePrefetcher ensureFetched:_contactSelectModel.uid];
     }
 
     if(_contactSelectModel.mode == WKContactsModeSingle) {
@@ -119,8 +148,17 @@
     self.nameLbl.lim_left = self.avatarImgView.lim_right + nameLeft;
     self.nameLbl.lim_top = self.lim_height/2.0f - self.nameLbl.lim_height/2.0f;
 
+    // YUJ-381：实名 → AI 串行排，徽章必出（长名内容由 sizeToFit 决定，列表多数场景够用）。
+    CGFloat afterNameRight = self.nameLbl.lim_right;
+    if (!self.realnameVerifiedImgView.hidden) {
+        self.realnameVerifiedImgView.lim_width = 12.0f;
+        self.realnameVerifiedImgView.lim_height = 12.0f;
+        self.realnameVerifiedImgView.lim_left = afterNameRight + 6.0f;
+        self.realnameVerifiedImgView.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.realnameVerifiedImgView.lim_height) / 2.0f;
+        afterNameRight = self.realnameVerifiedImgView.lim_right;
+    }
     if(!self.botBadgeLbl.hidden) {
-        self.botBadgeLbl.lim_left = self.nameLbl.lim_right + 6.0f;
+        self.botBadgeLbl.lim_left = afterNameRight + 6.0f;
         self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
     }
     

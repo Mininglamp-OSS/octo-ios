@@ -15,6 +15,8 @@
 #import "WKConversationVC.h"
 #import "WKUserInfoExternalGate.h"
 #import "WKExternalViewerResolver.h"
+#import "WKChannelUtil.h"
+#import "WKBotAvatarVC.h"
 #define textToAvatarLeftSpace 10.0f // 文本距头像的左边距离
 
 @interface WKUserInfoVC ()<WKUserInfoVMDelegate,WKChannelManagerDelegate>
@@ -23,6 +25,11 @@
 @property(nonatomic,strong) UIView *userHeader;
 @property(nonatomic,strong) WKUserAvatar *userAvatarView; // 用户头像
 @property(nonatomic,strong) UIImageView *sexImgView; // 性别
+// YUJ-381 / dmwork-web#1169 Phase A — 用户名片实名 ✓ 徽章
+// 12×12pt 蓝勾，贴在 nameLbl 右侧 padding.left = 2pt；性别图标顺延到徽章右侧。
+// 数据源：viewModel.channelInfo.extra[@"realname_verified"]（loadPersonChannelInfo
+// 后由 WKUserInfoVM.channelInfoFromUser 写入，对齐 web orgData.realname_verified）。
+@property(nonatomic,strong) UIImageView *realnameVerifiedImgView;
 @property(nonatomic,strong) WKCopyLabel *nameLbl; // 用户名称（如果有备注就是备注没有就是昵称,最大的名字）
 @property(nonatomic,strong) WKUserFieldView *nicknameField; // 用户昵称(如果有备注则隐藏昵称)
 @property(nonatomic,strong) WKUserFieldView *shortNoField; // 用户短编号
@@ -70,7 +77,8 @@
     self.tableView.tableHeaderView = self.userHeader;
     [self.userHeader addSubview:self.userAvatarView];
     [self.userHeader addSubview:self.sexImgView];
-    
+    [self.userHeader addSubview:self.realnameVerifiedImgView];
+
     [self.userHeader addSubview:self.userInfoBoxView];
     
     // footer
@@ -196,6 +204,11 @@
     }else {
         [self.sexImgView setImage:[self imageName:@"Common/Index/SexMan"]];
     }
+
+    // YUJ-381：实名 ✓ 徽章显隐。直接读 person 缓存的 extra；UserModel/channelInfoFromUser
+    // 已把后端顶层 realname_verified 写进来，与 web `orgData.realname_verified` 对齐。
+    NSNumber *verifiedFlag = [WKChannelUtil isRealnameVerifiedFromExtra:self.viewModel.channelInfo.extra];
+    self.realnameVerifiedImgView.hidden = !verifiedFlag.boolValue;
     self.sendBtn.hidden = NO;
     self.addFriendBtn.hidden = YES;
     self.externalHintLbl.hidden = YES;
@@ -370,8 +383,24 @@
         }
         preView = view;
     }
-    self.sexImgView.lim_left = self.nameLbl.lim_right + 5.0f + self.userAvatarView.lim_right + textToAvatarLeftSpace;
-    self.sexImgView.lim_top = self.nameLbl.lim_top + 4.0f;
+    // YUJ-381 实名 ✓ 徽章定位：贴在 nameLbl 右侧 padding.left = 6pt。
+    // 资源 Common/ic_realname_verified_card 是 200×143 横向 tag，按高度 16pt
+    // 算 aspect-fit 宽度，避免压扁。徽章 superview 是 userHeader，nameLbl
+    // 在 userInfoBoxView 内，需要把 box 偏移加上。
+    CGFloat boxLeft = self.userInfoBoxView.lim_left;
+    CGFloat boxTop  = self.userInfoBoxView.lim_top;
+    CGFloat afterNameRight = boxLeft + self.nameLbl.lim_right;
+    if (!self.realnameVerifiedImgView.hidden) {
+        CGFloat badgeH = 16.0f;
+        CGFloat badgeW = badgeH * 200.0f / 143.0f; // 保持原图比例
+        self.realnameVerifiedImgView.lim_width = badgeW;
+        self.realnameVerifiedImgView.lim_height = badgeH;
+        self.realnameVerifiedImgView.lim_left = afterNameRight + 6.0f;
+        self.realnameVerifiedImgView.lim_top = boxTop + self.nameLbl.lim_top + (self.nameLbl.lim_height - badgeH) / 2.0f;
+        afterNameRight = self.realnameVerifiedImgView.lim_right;
+    }
+    self.sexImgView.lim_left = afterNameRight + 5.0f;
+    self.sexImgView.lim_top = boxTop + self.nameLbl.lim_top + 4.0f;
     if(preView) {
         self.userInfoBoxView.lim_height = preView.lim_bottom;
     }
@@ -408,6 +437,25 @@
 
     // 用新cacheKey构建URL，SDWebImage没有该URL缓存 → 从服务器下载最新头像
     WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:self.uid]];
+
+    // Bot 创建者：进入"个人头像"风格的全屏页（右上 3-dots 修改头像）。
+    // 对齐 Android `UserDetailActivity` 的功能权限（owner-only avatar edit），
+    // 但 UX 与 iOS `WKMeAvatarVC` 一致——不嵌入详情页内联铅笔（Android 做法）。
+    // 非创建者继续走原 `YBImageBrowser` 的查看大图链路，UX 不变。
+    NSString *loginUid = [WKApp shared].loginInfo.uid;
+    NSString *botCreatorUid = self.viewModel.botCreatorUid;
+    BOOL isBotOwner = info.robot
+        && loginUid.length > 0
+        && botCreatorUid.length > 0
+        && [botCreatorUid isEqualToString:loginUid];
+    if(isBotOwner) {
+        WKBotAvatarVC *vc = [[WKBotAvatarVC alloc] init];
+        vc.botUid = self.uid;
+        vc.canEdit = YES;
+        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+        return;
+    }
+
     NSString *avatarUrl = [WKAvatarUtil getAvatar:self.uid cacheKey:info.avatarCacheKey];
 
     WKUserAvatar *imgView = (WKUserAvatar*)gesture.view;
@@ -429,6 +477,18 @@
         _sexImgView = [[UIImageView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, 16.0f, 16.0f)];
     }
     return _sexImgView;
+}
+
+// YUJ-381 / dmwork-web#1169 Phase A —— 用户名片实名 ✓ 徽章
+// 资源：Common/ic_realname_verified_card（200×143 横向 tag 图，aspectFit 缩放保持比例）。
+- (UIImageView *)realnameVerifiedImgView {
+    if(!_realnameVerifiedImgView) {
+        _realnameVerifiedImgView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 22.0f, 16.0f)];
+        _realnameVerifiedImgView.contentMode = UIViewContentModeScaleAspectFit;
+        _realnameVerifiedImgView.image = [[WKApp shared] loadImage:@"Common/ic_realname_verified_card" moduleID:@"WuKongBase"];
+        _realnameVerifiedImgView.hidden = YES;
+    }
+    return _realnameVerifiedImgView;
 }
 
 - (WKCopyLabel *)nameLbl {

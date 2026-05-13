@@ -65,6 +65,13 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 返回被移除的 channelId 列表（便于 caller 触发 UI 刷新 / 记日志）。
 -(NSArray<NSString*>*) pruneNonCurrentSpaceGroups;
 
+/// YUJ-bot-isolation: 清掉 VM 中"已 robot=YES 但不属于指定 Space my_bots∪space_bots 集合"的 Bot 行。
+/// 与 web 不同：iOS 上 Bot DM 的 channel_id 不带 `s{spaceId}_` 前缀、消息 payload 也不带
+/// space_id（实测线上服务端如此），因此前缀 / 消息字段三层信号都失效，必须靠
+/// WKSpaceBotRegistry 的服务端权威列表兜底。在 WKSpaceBotRegistryDidLoadNotification
+/// 触发时调用。返回被移除的 channelId 列表。
+-(NSArray<NSString*>*) pruneNonCurrentSpaceBotsForSpace:(NSString*)spaceId;
+
 /// YUJ-218: 后端 sync 在当前 Space 不返回 botfather 时本地兜底合成占位 conversation，
 /// 保证用户能看到系统 bot 入口（对齐 Android Round-3 Fix C）。
 /// 调用时机：sync 完成 / Space 切换后的 loadConversationList 之后，

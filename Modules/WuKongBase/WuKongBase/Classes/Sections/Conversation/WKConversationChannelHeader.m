@@ -10,6 +10,8 @@
 #import "WKAutoDeleteView.h"
 #import "WKOfficialTag.h"
 #import "WKConstant.h"
+#import "WKChannelUtil.h"
+#import "WKRealnamePrefetcher.h"
 @interface WKConversationChannelHeader ()
 
 @property(nonatomic,strong) UIButton *infoBoxBtn;
@@ -24,6 +26,10 @@
 @property(nonatomic,strong) UILabel *botBadgeLbl; // Bot标识
 
 @property(nonatomic,strong) WKOfficialTag *officialTag; // 官方图标
+
+// YUJ-381 / dmwork-web#1169 Phase A —— 私聊顶部实名 ✓ 徽章
+// 12×12pt 蓝勾，紧贴 titleLbl 右侧，节奏与 botBadgeLbl 对齐。
+@property(nonatomic,strong) UIImageView *realnameVerifiedImgView;
 
 @end
 
@@ -47,6 +53,7 @@
     [self.infoBoxBtn addSubview:self.subtitleLbl];
     [self.infoBoxBtn addSubview:self.botBadgeLbl];
     [self.infoBoxBtn addSubview:self.officialTag];
+    [self.infoBoxBtn addSubview:self.realnameVerifiedImgView];
     [self addSubview:self.voiceCallBtn];
     [self addSubview:self.videoCallBtn];
     [self addSubview:self.moreDotsBtn];
@@ -147,9 +154,12 @@
     self.autoDeleteView.lim_left = self.avatarImgView.lim_width - self.autoDeleteView.lim_width + 4.0f;
     self.autoDeleteView.lim_top = self.avatarImgView.lim_height - self.autoDeleteView.lim_height + 2.0f;
 
-    // 标题右侧标识（官方 + Bot）
+    // 标题右侧标识（实名 + 官方 + Bot）
     [self.titleLbl sizeToFit];
     CGFloat badgesWidth = 0;
+    if(!self.realnameVerifiedImgView.hidden) {
+        badgesWidth += 12.0f + 6.0f;
+    }
     if(!self.officialTag.hidden) {
         badgesWidth += self.officialTag.lim_width + 4.0f;
     }
@@ -162,6 +172,13 @@
     }
 
     CGFloat nextLeft = self.titleLbl.lim_left + self.titleLbl.lim_width;
+    if(!self.realnameVerifiedImgView.hidden) {
+        self.realnameVerifiedImgView.lim_width = 12.0f;
+        self.realnameVerifiedImgView.lim_height = 12.0f;
+        self.realnameVerifiedImgView.lim_left = nextLeft + 6.0f;
+        self.realnameVerifiedImgView.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.realnameVerifiedImgView.lim_height) / 2.0f;
+        nextLeft = self.realnameVerifiedImgView.lim_right;
+    }
     if(!self.officialTag.hidden) {
         self.officialTag.lim_left = nextLeft + 4.0f;
         self.officialTag.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.officialTag.lim_height) / 2.0f;
@@ -187,6 +204,7 @@
         self.autoDeleteView.hidden = YES;
         self.officialTag.hidden = YES;
         self.botBadgeLbl.hidden = YES;
+        self.realnameVerifiedImgView.hidden = YES;
         return;
     }
     self.titleLbl.text = channelInfo.displayName;
@@ -277,6 +295,24 @@
         frame.size.height += 4.0f;
         self.botBadgeLbl.frame = frame;
     }
+
+    // YUJ-381 实名 ✓ 徽章：仅私聊（且非系统/文件助手/机器人）展示。
+    BOOL canShowRealname = channel.channelType == WK_PERSON
+        && ![channel.channelId isEqualToString:[WKApp shared].config.systemUID]
+        && ![channel.channelId isEqualToString:[WKApp shared].config.fileHelperUID]
+        && !isBot;
+    BOOL realnameVerified = NO;
+    if(canShowRealname) {
+        NSNumber *flag = [WKChannelUtil isRealnameVerifiedFromExtra:channelInfo.extra];
+        realnameVerified = flag.boolValue;
+    }
+    self.realnameVerifiedImgView.hidden = !realnameVerified;
+    // 不打开名片也能补：未确认已实名时，后台拉一次 /users/<uid>，
+    // 拉到后 channelInfoUpdate 触发 conversationVC.refreshTitle 重新进 setChannelInfo。
+    if(canShowRealname && !realnameVerified) {
+        [WKRealnamePrefetcher ensureFetched:channel.channelId];
+    }
+    [self setNeedsLayout];
 }
 
 
@@ -376,6 +412,17 @@
         _botBadgeLbl.hidden = YES;
     }
     return _botBadgeLbl;
+}
+
+// YUJ-381：私聊顶部实名 ✓ 徽章
+- (UIImageView *)realnameVerifiedImgView {
+    if(!_realnameVerifiedImgView) {
+        _realnameVerifiedImgView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 12.0f, 12.0f)];
+        _realnameVerifiedImgView.contentMode = UIViewContentModeScaleAspectFit;
+        _realnameVerifiedImgView.image = [self imageName:@"Common/ic_realname_verified_mini"];
+        _realnameVerifiedImgView.hidden = YES;
+    }
+    return _realnameVerifiedImgView;
 }
 
 - (UIButton *)moreDotsBtn {

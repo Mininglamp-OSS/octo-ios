@@ -121,7 +121,29 @@ static NSString *const kMemberSourceSpaceIdExtraKey = @"source_space_id";
     }
 
     // 3. person-pass：私聊不按 channelId 过滤（另有消息级过滤）
-    if (channelType == WK_PERSON) return WKSpaceFilterDecisionKeep;
+    //    例外 1：私聊频道带 `s{otherSpace}_` 前缀（Bot/私聊 ID 由后端前缀化）
+    //    时，必须 Skip——对齐 web `shouldSkipChannelForSpace`
+    //    （dmwork-web/.../SpaceService.tsx:23-25）。"外部成员" 仅适用于群聊，
+    //    私聊没有该语义，prefix-mismatch 直接表示该频道不属于当前 Space。
+    //
+    //    例外 2：channelId 无前缀（裸 UID 的 Bot/私聊），但 channelInfo 已缓存且
+    //    `extra[@"space_id"]` 与当前 Space 不一致 → Skip。
+    //    场景：在 Space A 添加的 Bot，channelInfo 标注 space_id=A；用户切到 B 后
+    //    收到该 Bot 的延迟推送，前缀检查会落空（裸 UID），靠这条二级判定兜底。
+    //    依赖 `WKChannelUtil.toChannelInfo2:` 持久化的 `extra[@"space_id"]`。
+    //    info 未缓存（race）→ channelSpaceId 为 nil，Keep（向前兼容，避免误杀
+    //    首次收到的合法私聊）。
+    //
+    //    无前缀且 channelInfo 不带 space_id 的情况（旧数据 / 单 Space 部署）→ Keep。
+    if (channelType == WK_PERSON) {
+        if (prefixSpace.length > 0) {
+            return WKSpaceFilterDecisionSkip;
+        }
+        if (channelSpaceId.length > 0 && ![channelSpaceId isEqualToString:currentSpaceId]) {
+            return WKSpaceFilterDecisionSkip;
+        }
+        return WKSpaceFilterDecisionKeep;
+    }
 
     BOOL hasChannelSpace = (channelSpaceId.length > 0);
     BOOL hasMySource = (mySourceSpaceId.length > 0);
@@ -163,11 +185,24 @@ static NSString *const kMemberSourceSpaceIdExtraKey = @"source_space_id";
                                                     channelType:channelType];
     NSString *mySource = [self.provider mySourceSpaceIdForChannelId:channelId
                                                         channelType:channelType];
-    return [WKSpaceFilter decideWithChannelId:channelId
-                                  channelType:channelType
-                               currentSpaceId:current
-                               channelSpaceId:channelSpace
-                              mySourceSpaceId:mySource];
+    WKSpaceFilterDecision decision = [WKSpaceFilter decideWithChannelId:channelId
+                                                            channelType:channelType
+                                                         currentSpaceId:current
+                                                         channelSpaceId:channelSpace
+                                                        mySourceSpaceId:mySource];
+    // [BotSpaceTrace] 仅 DEBUG 构建打日志，定位跨 Space Bot 是否被正确 Skip。
+    // Release 不打：channelId / spaceId 是用户标识不应出现在生产日志（PR #118 review）。
+#if DEBUG
+    if(channelType == WK_PERSON) {
+        const char *decStr = "Keep";
+        if(decision == WKSpaceFilterDecisionSkip) decStr = "Skip";
+        else if(decision == WKSpaceFilterDecisionFailOpen) decStr = "FailOpen";
+        NSLog(@"[BotSpaceTrace] WKSpaceFilter.decideChannel channelId=%@ current=%@ channelSpaceId=%@ mySource=%@ → %s",
+              channelId, current ?: @"<nil>",
+              channelSpace ?: @"<nil>", mySource ?: @"<nil>", decStr);
+    }
+#endif
+    return decision;
 }
 
 - (BOOL)shouldSkipChannelForSpace:(NSString *)channelId

@@ -479,15 +479,15 @@
         }
         model.recents = messages.reverseObjectEnumerator.allObjects;
     }
-    // 提取后端 space_unread 和 space_last_message（不碰 SDK，应用层缓存）
-    NSNumber *spaceUnread = dataDict[@"space_unread"];
+    // 仅缓存 server 的 space_last_message（用于会话列表按 space 过滤的"最后一条消息"展示）。
+    // server 的 space_unread 字段不再被读取——它在消息数超过 msg_count 窗口后会聚合失真返 0，
+    // 引入 cache 后又会被重启清空 / 再 sync 重新 seed 为 0，导致红点丢失。
+    // 改用 Android 风格：UI 层只按 lastMessage.space_id 跨空间过滤，unread 直接信任 SDK DB。
     NSDictionary *spaceLastMsgDict = dataDict[@"space_last_message"];
-    if (model.channel.channelType == WK_PERSON && (spaceUnread || spaceLastMsgDict)) {
-        WKMessage *spaceLastMsg = nil;
-        if (spaceLastMsgDict && [spaceLastMsgDict isKindOfClass:[NSDictionary class]]) {
-            spaceLastMsg = [WKMessageUtil toMessage:spaceLastMsgDict];
-        }
-        [[WKSpaceConversationCache shared] setSpaceUnread:spaceUnread spaceLastMessage:spaceLastMsg forChannel:model.channel];
+    if (model.channel.channelType == WK_PERSON
+        && spaceLastMsgDict && [spaceLastMsgDict isKindOfClass:[NSDictionary class]]) {
+        WKMessage *spaceLastMsg = [WKMessageUtil toMessage:spaceLastMsgDict];
+        [[WKSpaceConversationCache shared] setSpaceLastMessage:spaceLastMsg forChannel:model.channel];
     }
     return model;
 }

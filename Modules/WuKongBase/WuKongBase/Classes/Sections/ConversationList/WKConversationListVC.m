@@ -28,6 +28,15 @@
 #import <WuKongIMSDK/WuKongIMSDK.h>
 #import "WKTypingManager.h"
 #import "WKTypingContent.h"
+
+// [BotSpaceTrace] 跨 Space Bot 隔离调试日志（PR #118 review）：
+// 仅 DEBUG 构建打印，Release 编译为空 —— 防止 channelId / spaceId 等用户标识
+// 进入生产环境日志。
+#if DEBUG
+#define WK_BOT_TRACE(...) NSLog(__VA_ARGS__)
+#else
+#define WK_BOT_TRACE(...) do {} while(0)
+#endif
 #import "WKConversationAddItem.h"
 #import "WKConversationPasswordVC.h"
 #import "WKConversationListTableView.h"
@@ -43,6 +52,7 @@
 #import "WKJoinGroupSuccessDialog.h"
 #import "WKConversationVC.h"
 #import "WKSpaceConversationCache.h"
+#import "WKSpaceBotRegistry.h"
 #import "WKPCOnlineVC.h"
 #import "WKPixelParticleHint.h"
 #import "WKThreadModel.h"
@@ -130,6 +140,14 @@
 }
 - (void)viewDidLoad {
     [super viewDidLoad];
+
+    // YUJ-bot-isolation: 启动时立即拉取当前 Space 的 Bot 成员名单，给后续
+    // isConversationInCurrentSpace 的 Bot gate 提供权威数据；加载完成后会
+    // 通过 WKSpaceBotRegistryDidLoadNotification 触发 prune。
+    NSString *bootSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(bootSpaceId.length > 0) {
+        [[WKSpaceBotRegistry shared] loadBotsForSpace:bootSpaceId completion:nil];
+    }
 
     // 先创建固定头部（搜索栏+tab），再创建 tableView（tableView frame 需要依赖固定头部高度）
     [self setupFixedHeader];
@@ -442,12 +460,15 @@
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onThreadCountBatchUpdated:) name:@"WKThreadCountBatchUpdated" object:nil];
     // 监听"创建分组"弹窗请求
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(showCreateCategoryDialog) name:@"WKShowCreateCategoryDialog" object:nil];
+    // YUJ-bot-isolation: 当前 Space 的 Bot 列表加载完成 → prune 切换瞬间 race 浮上来的旧 Space Bot
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onSpaceBotRegistryDidLoad:) name:WKSpaceBotRegistryDidLoadNotification object:nil];
 }
 
 -(void) removeDelegates {
     [[WKReminderManager shared] removeDelegate:self];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKShowCreateCategoryDialog" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKThreadCountBatchUpdated" object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:WKSpaceBotRegistryDidLoadNotification object:nil];
     // 移除连接监听
     [[[WKSDK shared] connectionManager] removeDelegate:self];
     // 移除频道监听
@@ -733,6 +754,12 @@
 
     // 清空 space_unread / space_last_message 缓存（新空间会重新同步）
     [[WKSpaceConversationCache shared] clearAll];
+
+    // YUJ-bot-isolation: 切 Space → 重新拉取该 Space 的 Bot 列表。
+    // 加载完成会广播 WKSpaceBotRegistryDidLoadNotification，由 viewDidLoad 注册的
+    // 监听者触发 pruneNonCurrentSpaceBots，清掉切换瞬间从 SDK 浮上来的旧 Space Bot。
+    [[WKSpaceBotRegistry shared] resetAllCaches];
+    [[WKSpaceBotRegistry shared] loadBotsForSpace:spaceId completion:nil];
 
     // 更新标题
     [self refreshTitle];
@@ -1041,6 +1068,13 @@
                     [weakSelf.conversationListVM snapshotSyncedGroupIds];
                     // YUJ-215: snapshot 后再 prune 一遍，对齐 performSwitchToSpaceId 流程
                     [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
+                    // YUJ-bot-isolation: 同步路径 race 兜底——若 registry 加载早于 sync
+                    // 写库，onSpaceBotRegistryDidLoad 那次 prune 跑在空 VM 上没用；这里
+                    // VM 已被 handleSyncConversation 回灌，必须重跑一次 bot prune。
+                    NSString *curSpaceForPrune = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+                    if(curSpaceForPrune.length > 0) {
+                        [weakSelf.conversationListVM pruneNonCurrentSpaceBotsForSpace:curSpaceForPrune];
+                    }
                     // YUJ-218: backend sync 可能不返回 botfather（按 X-Space-Id 过滤时）—
                     // 本地兜底合成占位 entry，保证系统 bot 可见；已存在则无操作。
                     [weakSelf.conversationListVM ensureSystemBotsVisible];
@@ -1056,6 +1090,12 @@
                 [weakSelf.conversationListVM snapshotSyncedGroupIds];
                 // YUJ-215: prune 残留（见 performSwitchToSpaceId 注释）
                 [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
+                // YUJ-bot-isolation: 同 sync 完成路径，DB 冷启动也必须 bot prune
+                // 一次，避免上次 session 残留的跨 Space Bot 行被 sortConversationList 浮回。
+                NSString *curSpaceForPrune2 = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+                if(curSpaceForPrune2.length > 0) {
+                    [weakSelf.conversationListVM pruneNonCurrentSpaceBotsForSpace:curSpaceForPrune2];
+                }
                 // YUJ-218: DB 冷启动也兜底（上次 sync 若未写入 botfather，DB 同样缺失）。
                 [weakSelf.conversationListVM ensureSystemBotsVisible];
                 [weakSelf rebuildGroupDisplayAndReload];
@@ -1123,21 +1163,6 @@
         return;
     }
 
-    // 同步 WK_PERSON 的 space 未读缓存：通过 space 过滤的消息属于当前空间，需递增 space_unread
-    for (WKConversation *conversation in filtered) {
-        if (conversation.channel.channelType == WK_PERSON) {
-            WKConversationWrapModel *existingModel = [self.conversationListVM modelAtChannel:conversation.channel];
-            if (existingModel) {
-                NSInteger oldSDKUnread = [existingModel getConversation].unreadCount;
-                NSInteger newSDKUnread = conversation.unreadCount;
-                NSInteger delta = newSDKUnread - oldSDKUnread;
-                if (delta > 0) {
-                    [[WKSpaceConversationCache shared] incrementSpaceUnread:delta forChannel:conversation.channel];
-                }
-            }
-        }
-    }
-
     if(filtered.count>1) {
         for (WKConversation *conversation in filtered) {
             if (conversation.channel.channelType == WK_GROUP && conversation.lastMessage) {
@@ -1163,6 +1188,16 @@
                 // 可能把不该属于当前 Space 的群带回来——最后一次 prune 保证 snapshot
                 // 之后的单例内存是干净的。
                 [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
+                // YUJ-bot-isolation: race 关键点——performSwitchToSpaceId 里启动了
+                // 异步 loadBotsForSpace；若 registry 回包早于本次 reload，
+                // onSpaceBotRegistryDidLoad 那次 prune 跑在还没被 sync 回灌的 VM 上
+                // 等于空跑。此处 VM 已被 handleSyncConversation 重新填好，必须再
+                // prune 一次。即便 registry 还没回来（Unknown），下次回来时仍会
+                // 走 onSpaceBotRegistryDidLoad 兜底，两者覆盖所有时序。
+                NSString *curSpaceForPrune3 = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+                if(curSpaceForPrune3.length > 0) {
+                    [weakSelf.conversationListVM pruneNonCurrentSpaceBotsForSpace:curSpaceForPrune3];
+                }
                 // YUJ-218: 切 Space 后若 backend sync 在新 Space 未返回 botfather，
                 // 本地兜底合成占位 entry，保证用户立即看到系统 bot 入口。
                 [weakSelf.conversationListVM ensureSystemBotsVisible];
@@ -1310,6 +1345,15 @@
                     }
                     continue;
                 }
+                // YUJ-bot-isolation: 上面只能判出"消息明确带跨 Space space_id"的情况。
+                // 裸 Bot DM（无 space_id）会从这里漏过去 → 下游 onlyAddOrUpdateConversation
+                // 的 setConversation 把 stale bot 行刷新成跨 Space 内容。这里补一道：
+                // 走 isConversationInCurrentSpace（含 prefix / channelInfo space_id /
+                // WKSpaceBotRegistry 三层判定）。Skip → 跳过（gate 内部已 removeAtChannnel
+                // 兜底清残留）；Keep → 继续 addObject，让消息正常更新当前 Space 列表。
+                if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
+                    continue;
+                }
             }
             [filtered addObject:conversation];
         } else {
@@ -1429,6 +1473,25 @@
     [self rebuildGroupDisplayAndReload];
 }
 
+/// YUJ-bot-isolation: 当前 Space 的 Bot 列表加载完成 → 触发 prune + UI 刷新。
+/// 服务端没把 Bot DM 的 channel_id 前缀化、payload 也无 space_id（实测线上行为），
+/// 切 Space 瞬间 SDK 仍可能把旧 Space Bot 的 conversation 浮上来；这里在
+/// /robot/my_bots + /robot/space_bots 返回后做一次兜底清理，确保 UI 与服务端权威
+/// Bot 成员名单一致。
+-(void) onSpaceBotRegistryDidLoad:(NSNotification*)notification {
+    NSString *loadedSpaceId = notification.userInfo[@"space_id"];
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(loadedSpaceId.length == 0 || ![loadedSpaceId isEqualToString:currentSpaceId]) {
+        // 加载完成后用户已经又切走了，本次加载的结果对当前 Space 无意义。
+        return;
+    }
+    NSArray<NSString*> *removed = [self.conversationListVM pruneNonCurrentSpaceBotsForSpace:loadedSpaceId];
+    if(removed.count > 0) {
+        [self rebuildGroupDisplayAndReload];
+        [self refreshBadge];
+    }
+}
+
 /// YUJ-219-C: 判断 channel 是否为系统 Bot（botfather / u_10000 / fileHelper 等）。
 /// SYSTEM_BOTS 集合在本单先取 WKAppConfig 已有的三个 UID，口径与
 /// `isConversationInCurrentSpace` 放行"全局可见"的那三项保持一致。
@@ -1467,6 +1530,14 @@
 
 // 单个会话添加或更新
 -(void) uiAddOrUpdateConversationForOne:(WKConversation*)conversation {
+    if(conversation.channel.channelType == WK_PERSON) {
+#if DEBUG
+        NSString *cur = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+        BOOL existsInList = [self.conversationListVM indexAtChannel:conversation.channel] != -1;
+        WK_BOT_TRACE(@"[BotSpaceTrace] uiAddOrUpdateConversationForOne enter channelId=%@ current=%@ existsInList=%d",
+              conversation.channel.channelId, cur ?: @"<nil>", existsInList);
+#endif
+    }
     // YUJ-219-C: push 路径对称 gate —— 必须在 getRealShowConversationWrap 之前做判定。
     // validation-report.md §3 / §5 判定 iOS 是"半保险"：spaceFilteredLastMessage 能擦
     // preview 文字，但 replaceAtChannel 裸替换会照常 bump lastMessage.timestamp 和
@@ -1528,15 +1599,18 @@
 /// 判断会话是否属于当前空间（用于过滤其他空间的实时消息）
 -(BOOL) isConversationInCurrentSpace:(WKConversation*)conversation spaceId:(NSString*)spaceId {
     NSString *channelId = conversation.channel.channelId;
+    BOOL isPerson = (conversation.channel.channelType == WK_PERSON);
 
     // 系统通知和文件助手是全局的，始终显示
     if([channelId isEqualToString:[WKApp shared].config.systemUID] ||
        [channelId isEqualToString:[WKApp shared].config.fileHelperUID]) {
+        if(isPerson) WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → YES (system/fileHelper)", channelId);
         return YES;
     }
 
     // BotFather是全局的（已有space_id消息过滤）
     if([channelId isEqualToString:[WKApp shared].config.botfatherUID]) {
+        if(isPerson) WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → YES (botfather)", channelId);
         return YES;
     }
 
@@ -1568,25 +1642,69 @@
         return [self.conversationListVM isGroupInWhitelist:conversation.channel.channelId];
     }
 
+    // 个人聊天：先按 channelId 前缀做空间过滤（Bot 与私聊频道均会被后端前缀化为
+    // `s{spaceId}_{uid}`），对齐 web `shouldSkipChannelForSpace`
+    // （dmwork-web/.../SpaceService.tsx:23-25）。无前缀的旧数据走 lastMessage.space_id 兜底。
+    if(conversation.channel.channelType == WK_PERSON) {
+        WKSpaceFilterDecision decision = [[WKSpaceFilter shared]
+                                           decideChannel:channelId
+                                             channelType:conversation.channel.channelType];
+        if(decision == WKSpaceFilterDecisionSkip) {
+            // 与群聊 Skip 分支对称：清除 VM 中残留，避免下次 sort/rebuild 再浮回。
+            WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → NO (WKSpaceFilter Skip)", channelId);
+            if([self.conversationListVM indexAtChannel:conversation.channel] != -1) {
+                [self.conversationListVM removeAtChannnel:conversation.channel];
+            }
+            return NO;
+        }
+
+        // YUJ-bot-isolation: 服务端对 Bot DM 的 channel_id 不带前缀，且 message
+        // payload / channelInfo 都不带 space_id（线上日志证实），上面三层信号全失效。
+        // 兜底：用本地"当前 Space 已添加 Bot 列表"判定（数据来自 /robot/my_bots +
+        // /robot/space_bots，与 WKBotListVM 同源）。
+        // - NotMember：明确不属于当前 Space → Skip + 清残留。
+        // - Unknown：列表尚未加载（冷启动/切 Space race）→ fail-open，等加载完成后
+        //   pruneNonCurrentSpaceBots 兜底清理。
+        // - Member：放行，进入下方 lastMessage.space_id 检查（保留更细粒度判定）。
+        WKChannelInfo *info = [[WKChannelInfoDB shared] queryChannelInfo:conversation.channel];
+        if(info && info.robot) {
+            WKSpaceBotMembership mem = [[WKSpaceBotRegistry shared] membershipForBotUID:channelId inSpace:spaceId];
+            if(mem == WKSpaceBotMembershipNotMember) {
+                WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → NO (bot not in current space's my_bots∪space_bots)", channelId);
+                if([self.conversationListVM indexAtChannel:conversation.channel] != -1) {
+                    [self.conversationListVM removeAtChannnel:conversation.channel];
+                }
+                return NO;
+            }
+        }
+    }
+
     // 个人聊天：检查最后一条消息的 space_id 是否匹配当前空间
     if(conversation.lastMessage) {
         NSString *msgSpaceId = conversation.lastMessage.content.contentDict[@"space_id"];
         if([msgSpaceId isKindOfClass:[NSString class]] && [msgSpaceId isEqualToString:spaceId]) {
+            if(isPerson) WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → YES (msg.space_id=%@ match)", channelId, msgSpaceId);
             return YES; // 消息明确属于当前空间
         }
         // 消息没有 space_id 标记
         if(!msgSpaceId || [msgSpaceId isEqual:[NSNull null]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0)) {
+            if(isPerson) WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → YES (msg无 space_id，向前兼容)", channelId);
             return YES; // 消息无 space_id（含 Bot），视为当前空间
         }
         // 消息有 space_id 但不匹配当前空间
+        if(isPerson) WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → NO (msg.space_id=%@ != current=%@)", channelId, msgSpaceId, spaceId);
         return NO;
     }
 
     // 无最后一条消息，允许显示（如空会话）
+    if(isPerson) WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → YES (无 lastMessage)", channelId);
     return YES;
 }
 
 -(void) uiAddConversation:(WKConversation*)conversation {
+    if(conversation.channel.channelType == WK_PERSON) {
+        WK_BOT_TRACE(@"[BotSpaceTrace] uiAddConversation enter channelId=%@", conversation.channel.channelId);
+    }
     // 会话已存在则更新，不重复插入
     if ([self.conversationListVM indexAtChannel:conversation.channel] != -1) {
         [self uiAddOrUpdateConversationForOne:conversation];
@@ -1620,8 +1738,35 @@
 }
 
 -(void) onlyAddOrUpdateConversation:(WKConversation*)conversation {
+    if(conversation.channel.channelType == WK_PERSON) {
+        WK_BOT_TRACE(@"[BotSpaceTrace] onlyAddOrUpdateConversation enter channelId=%@", conversation.channel.channelId);
+    }
     // 子区不独立显示在会话列表
     if(conversation.channel.channelType == WK_COMMUNITY_TOPIC) {
+        return;
+    }
+    // 系统 Bot（botfather/u_10000/fileHelper）跨 Space 串台 gate：与
+    // uiAddOrUpdateConversationForOne 的 gate 对称（参见本文件 m:1500 附近）。
+    // 对齐 web `shouldSkipSystemBotConversation`（dmwork-web/.../SpaceService.tsx）。
+    // 该路径承载切 Space 后的 sync rebuild 与离线消息刷库回调，缺它会让另一个
+    // Space 的 Bot 最近一条消息把当前 Space 的 bot 行 lastMessage 替换掉，再走
+    // refreshTable / sortConversationList 时排序与预览一并污染。
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(currentSpaceId.length > 0
+       && [self isSystemBotChannel:conversation.channel]
+       && ![self isMessageFromCurrentSpace:conversation.lastMessage spaceId:currentSpaceId]) {
+        return;
+    }
+    // YUJ-bot-isolation: 普通 Person/Bot 频道在"已存在 model → setConversation"
+    // 分支也必须过 isConversationInCurrentSpace gate（含 prefix / channelInfo
+    // space_id / WKSpaceBotRegistry 三层判定）。否则 filterConversationsBySpace
+    // 的 existsInList 分支会让"无 space_id 的裸 Bot DM"通过，再 setConversation
+    // 把 stale bot 行用跨 Space 消息刷新预览/排序——即使 registry 已判定 NotMember。
+    // gate 内部命中 Skip 时会 removeAtChannnel: 兜底清残留。
+    if(currentSpaceId.length > 0
+       && conversation.channel.channelType == WK_PERSON
+       && ![self isSystemBotChannel:conversation.channel]
+       && ![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
         return;
     }
     WKConversationWrapModel *model =  [self.conversationListVM modelAtChannel:conversation.channel];
@@ -1629,7 +1774,6 @@
         [model setConversation:conversation];
     }else {
         // 有活跃空间时，不自动添加不属于当前空间的新会话
-        NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
         if(currentSpaceId && currentSpaceId.length > 0) {
             if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
                 return;
@@ -1661,10 +1805,6 @@
 
     WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
     model.unreadCount = unreadCount;
-    // 同步更新 space 未读缓存（清零或设置具体值）
-    if (channel.channelType == WK_PERSON) {
-        [[WKSpaceConversationCache shared] setSpaceUnread:@(unreadCount) spaceLastMessage:nil forChannel:channel];
-    }
     // 群聊 tab 使用分组展示，index 不匹配 tableView 行号，直接全量刷新
     if (_conversationListVM.filterType == WKConversationFilterGroup) {
         [self rebuildGroupDisplayAndReload];
