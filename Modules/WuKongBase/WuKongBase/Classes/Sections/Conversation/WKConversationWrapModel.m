@@ -137,7 +137,39 @@
     if(self.lastChildConversation) {
         return self.lastChildConversation.lastMsgTimestamp;
     }
+    // System bot（botfather / systemUID / fileHelperUID）在多空间模式下，
+    // SDK 的 c.lastMsgTimestamp 是按 channel 单实例维护的全空间最近一条时间戳，
+    // 跨空间消息会让当前空间的 bot 行被错误地顶到列表顶部。
+    // 这里改用 spaceFilteredLastMessage 的时间戳，保证排序键、cell 时间标签与
+    // preview 对齐——只在 system bot 频道生效，普通私聊/群聊维持原行为。
+    if(self.c.channel.channelType == WK_PERSON && [self isCurrentSystemBotInMultiSpace]) {
+        WKMessage *displayMsg = [self spaceFilteredLastMessage];
+        return displayMsg ? [displayMsg timestamp] : 0;
+    }
     return self.c.lastMsgTimestamp;
+}
+
+/// 判断当前 wrap 是否对应"多空间模式 + system bot 频道"。
+/// 注意：本文件已有的 `isSystemBotChannel`（约 m:194-200）是误名，它实际只判定
+/// "多空间模式 + WK_PERSON"，并不真的判定 system bot；此处不复用以免被误读。
+-(BOOL) isCurrentSystemBotInMultiSpace {
+    if(self.c.channel.channelType != WK_PERSON) {
+        return NO;
+    }
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(currentSpaceId.length == 0) {
+        return NO;
+    }
+    NSString *channelId = self.c.channel.channelId;
+    if(channelId.length == 0) {
+        return NO;
+    }
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    NSString *systemUID = [WKApp shared].config.systemUID;
+    NSString *fileHelperUID = [WKApp shared].config.fileHelperUID;
+    return (botfatherUID.length > 0 && [channelId isEqualToString:botfatherUID])
+        || (systemUID.length > 0 && [channelId isEqualToString:systemUID])
+        || (fileHelperUID.length > 0 && [channelId isEqualToString:fileHelperUID]);
 }
 
 - (NSString *)content {
@@ -169,17 +201,19 @@
 
 
 - (NSInteger)unreadCount {
-    // Person 频道在多空间模式下会用服务端 space_unread。
-    // 但观察到服务端偶发返回 space_unread=0 却同时 unread=33（大量带 space_id 的消息超过 msg_count
-    // 窗口后聚合失真），会把真实未读数盖成 0 导致红点消失。
-    // 防御：取 max(space_unread, c.unreadCount) —— 正确时 space_unread 仍然主导（≥ c.unreadCount
-    // 或 ≤ 但作为可信低值），异常低估时由 c.unreadCount 兜底。
+    // Person 多空间：对齐 Android `ChatFragment.adjustPersonalForSpace` 的极简策略——
+    // 只信任 SDK DB 的全会话 unreadCount（DB 持久化、重启可恢复），
+    // 仅在最后一条消息明确归属其它空间时把红点显示为 0，避免跨 space 污染。
+    // 不再维护客户端 spaceUnread cache：它依赖内存、重启后会被 server 聚合失真值（space_unread=0）
+    // 重新 seed 成 0，导致红点丢失（YUJ-XXX 复现：>30 条消息后重启红点消失）。
     if (self.c.channel.channelType == WK_PERSON) {
         NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
         if (currentSpaceId.length > 0) {
-            NSNumber *spaceUnread = [[WKSpaceConversationCache shared] spaceUnreadForChannel:self.c.channel];
-            if (spaceUnread != nil) {
-                return MAX([spaceUnread integerValue], self.c.unreadCount);
+            WKMessage *lastMsg = self.c.lastMessage;
+            NSString *msgSpaceId = lastMsg.content.contentDict[@"space_id"];
+            if ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0
+                && ![msgSpaceId isEqualToString:currentSpaceId]) {
+                return 0;
             }
         }
     }

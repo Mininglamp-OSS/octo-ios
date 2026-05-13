@@ -1123,21 +1123,6 @@
         return;
     }
 
-    // 同步 WK_PERSON 的 space 未读缓存：通过 space 过滤的消息属于当前空间，需递增 space_unread
-    for (WKConversation *conversation in filtered) {
-        if (conversation.channel.channelType == WK_PERSON) {
-            WKConversationWrapModel *existingModel = [self.conversationListVM modelAtChannel:conversation.channel];
-            if (existingModel) {
-                NSInteger oldSDKUnread = [existingModel getConversation].unreadCount;
-                NSInteger newSDKUnread = conversation.unreadCount;
-                NSInteger delta = newSDKUnread - oldSDKUnread;
-                if (delta > 0) {
-                    [[WKSpaceConversationCache shared] incrementSpaceUnread:delta forChannel:conversation.channel];
-                }
-            }
-        }
-    }
-
     if(filtered.count>1) {
         for (WKConversation *conversation in filtered) {
             if (conversation.channel.channelType == WK_GROUP && conversation.lastMessage) {
@@ -1624,12 +1609,23 @@
     if(conversation.channel.channelType == WK_COMMUNITY_TOPIC) {
         return;
     }
+    // 系统 Bot（botfather/u_10000/fileHelper）跨 Space 串台 gate：与
+    // uiAddOrUpdateConversationForOne 的 gate 对称（参见本文件 m:1500 附近）。
+    // 对齐 web `shouldSkipSystemBotConversation`（dmwork-web/.../SpaceService.tsx）。
+    // 该路径承载切 Space 后的 sync rebuild 与离线消息刷库回调，缺它会让另一个
+    // Space 的 Bot 最近一条消息把当前 Space 的 bot 行 lastMessage 替换掉，再走
+    // refreshTable / sortConversationList 时排序与预览一并污染。
+    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(currentSpaceId.length > 0
+       && [self isSystemBotChannel:conversation.channel]
+       && ![self isMessageFromCurrentSpace:conversation.lastMessage spaceId:currentSpaceId]) {
+        return;
+    }
     WKConversationWrapModel *model =  [self.conversationListVM modelAtChannel:conversation.channel];
     if(model) {
         [model setConversation:conversation];
     }else {
         // 有活跃空间时，不自动添加不属于当前空间的新会话
-        NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
         if(currentSpaceId && currentSpaceId.length > 0) {
             if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
                 return;
@@ -1661,10 +1657,6 @@
 
     WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
     model.unreadCount = unreadCount;
-    // 同步更新 space 未读缓存（清零或设置具体值）
-    if (channel.channelType == WK_PERSON) {
-        [[WKSpaceConversationCache shared] setSpaceUnread:@(unreadCount) spaceLastMessage:nil forChannel:channel];
-    }
     // 群聊 tab 使用分组展示，index 不匹配 tableView 行号，直接全量刷新
     if (_conversationListVM.filterType == WKConversationFilterGroup) {
         [self rebuildGroupDisplayAndReload];
