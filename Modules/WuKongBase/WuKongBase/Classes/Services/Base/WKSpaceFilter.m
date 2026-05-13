@@ -190,7 +190,9 @@ static NSString *const kMemberSourceSpaceIdExtraKey = @"source_space_id";
                                                          currentSpaceId:current
                                                          channelSpaceId:channelSpace
                                                         mySourceSpaceId:mySource];
-    // [BotSpaceTrace] 仅 Person 打日志，定位跨 Space Bot 是否被正确 Skip。
+    // [BotSpaceTrace] 仅 DEBUG 构建打日志，定位跨 Space Bot 是否被正确 Skip。
+    // Release 不打：channelId / spaceId 是用户标识不应出现在生产日志（PR #118 review）。
+#if DEBUG
     if(channelType == WK_PERSON) {
         const char *decStr = "Keep";
         if(decision == WKSpaceFilterDecisionSkip) decStr = "Skip";
@@ -199,6 +201,7 @@ static NSString *const kMemberSourceSpaceIdExtraKey = @"source_space_id";
               channelId, current ?: @"<nil>",
               channelSpace ?: @"<nil>", mySource ?: @"<nil>", decStr);
     }
+#endif
     return decision;
 }
 

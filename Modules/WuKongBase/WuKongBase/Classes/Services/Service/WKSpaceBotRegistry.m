@@ -121,8 +121,10 @@ NSString * const WKSpaceBotRegistryDidLoadNotification = @"WKSpaceBotRegistryDid
             [self_.pendingCompletions removeObjectForKey:spaceId];
         }
 
+#if DEBUG
         NSLog(@"[BotSpaceTrace] WKSpaceBotRegistry loaded spaceId=%@ bots=%lu hasError=%d",
               spaceId, (unsigned long)uidSet.count, hasError);
+#endif
 
         for (void (^cb)(BOOL) in callbacks) {
             cb(!hasError);

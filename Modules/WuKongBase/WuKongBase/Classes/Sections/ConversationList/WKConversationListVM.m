@@ -178,8 +178,10 @@ static WKConversationListVM *_instance;
         }
     }
     if(removed.count > 0) {
+#if DEBUG
         NSLog(@"🧹 [BotSpaceTrace] pruneNonCurrentSpaceBots removed %lu bot(s) for space=%@: %@",
               (unsigned long)removed.count, spaceId, removed);
+#endif
     }
     return removed;
 }
