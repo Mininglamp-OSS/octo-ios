@@ -300,8 +300,13 @@
         self.lastContentLbl.hidden = NO;
         self.lastMsgTimeLbl.hidden = NO;
         [self refreshAvatar:model];
-        // 最后一次消息时间
-        self.lastMsgTimeLbl.text = [WKTimeTool getTimeStringAutoShort2:[NSDate dateWithTimeIntervalSince1970:model.lastMsgTimestamp] mustIncludeTime:true];
+        // 最后一次消息时间。timestamp == 0 表示当前空间无可显示的最近消息（system bot 跨空间过滤后），
+        // 直接清空时间标签，避免 WKTimeTool 把 0 渲染成 "1970..."。
+        if(model.lastMsgTimestamp <= 0) {
+            self.lastMsgTimeLbl.text = @"";
+        } else {
+            self.lastMsgTimeLbl.text = [WKTimeTool getTimeStringAutoShort2:[NSDate dateWithTimeIntervalSince1970:model.lastMsgTimestamp] mustIncludeTime:true];
+        }
         // 刷新在线状态
         [self refreshOnlineStatus:model];
         // 刷新最后一条消息

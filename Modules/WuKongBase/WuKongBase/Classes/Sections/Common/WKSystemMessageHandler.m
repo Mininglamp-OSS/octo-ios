@@ -91,6 +91,22 @@ static WKSystemMessageHandler *_instance = nil;
 #pragma mark - WKChatManagerDelegate
 bool needRemind = false; // 是否需要提醒
 - (void)onRecvMessages:(WKMessage*)message left:(NSInteger)left {
+    // [BotSpaceTrace] 收消息总入口：定位跨 Space Bot 消息为何会进入当前 Space 列表。
+    // 仅对 WK_PERSON 打日志，群聊不污染日志。日志可上线后通过宏统一关。
+    if(message.channel.channelType == WK_PERSON) {
+        NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+        id rawMsgSpaceId = message.content.contentDict[@"space_id"];
+        WKChannelInfo *info = [[WKChannelInfoDB shared] queryChannelInfo:message.channel];
+        id channelInfoSpaceId = info.extra[@"space_id"];
+        NSLog(@"[BotSpaceTrace] onRecvMessages channelId=%@ type=%d currentSpace=%@ msgSpaceId=%@ channelInfoSpaceId=%@ robot=%d fromUid=%@ contentType=%d",
+              message.channel.channelId, message.channel.channelType,
+              currentSpaceId ?: @"<nil>",
+              [rawMsgSpaceId isKindOfClass:[NSString class]] ? rawMsgSpaceId : @"<missing>",
+              [channelInfoSpaceId isKindOfClass:[NSString class]] ? channelInfoSpaceId : @"<missing>",
+              info ? info.robot : -1,
+              message.fromUid ?: @"<nil>",
+              (int)message.contentType);
+    }
     // BotFather空间隔离：为缺少space_id的Bot回复推断当前空间
     [self inferSpaceIdForBotMessage:message];
 
@@ -392,32 +408,21 @@ bool needRemind = false; // 是否需要提醒
     }
 }
 
-/// 为BotFather的回复消息推断space_id（Bot回复可能没有space_id）
+/// 已废弃：参考 web 实现（packages/dmworkbase/src/Service/SpaceService.tsx
+/// `shouldSkipSystemBotConversation`），跨 Space Bot 消息隔离应当在 UI 层做"过滤"，
+/// 而不是在收消息时给 message 盖戳改写 space_id。
+///
+/// 旧实现把 `currentSpaceId` 强行写进 contentDict，会让另一个 Space 的 Bot 推送
+/// 在到达时被错误标记为当前 Space，从而绕过 `WKConversationListVC` 的
+/// `isMessageFromCurrentSpace` gate（m:1500-1503）造成串台。
+///
+/// 现在策略：完全不改 message —— 信任服务端下发的 space_id；缺失也不补。
+/// 由 `WKConversationListVC` 的现有 gate（系统 Bot + 跨 Space lastMessage）在
+/// uiAddOrUpdateConversationForOne / onlyAddOrUpdateConversation 处统一拦截。
+/// 保留方法以避免 callsite 改动，body 留空仅做兼容回退。
 -(void) inferSpaceIdForBotMessage:(WKMessage*)message {
-    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
-    if(!botfatherUID || botfatherUID.length == 0) {
-        return;
-    }
-    // 只处理BotFather频道的消息
-    if(message.channel.channelType != WK_PERSON || ![message.channel.channelId isEqualToString:botfatherUID]) {
-        return;
-    }
-    // 只处理非自己发送的消息（Bot的回复）
-    if([message.fromUid isEqualToString:[WKApp shared].loginInfo.uid]) {
-        return;
-    }
-    // 已有space_id则不覆盖
-    NSString *msgSpaceId = message.content.contentDict[@"space_id"];
-    if([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0) {
-        return;
-    }
-    // 用当前活跃的space_id填充
-    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
-    if(currentSpaceId.length > 0 && message.content.contentDict) {
-        NSMutableDictionary *mutableDict = [message.content.contentDict mutableCopy];
-        mutableDict[@"space_id"] = currentSpaceId;
-        message.content.contentDict = [mutableDict copy];
-    }
+    // 不再做任何 space_id 推断/盖戳。详见函数注释。
+    (void)message;
 }
 
 -(void) remindUserIfNeed {

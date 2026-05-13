@@ -370,12 +370,58 @@ static NSString * const SP_B = @"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; // 32 × 'b'
     XCTAssertEqual(d, WKSpaceFilterDecisionKeep, @"非法前缀应走 cache 判定");
 }
 
-/// branch 3: person-pass — 私聊永不按 channelId 过滤
-- (void)testDecide_Person_ReturnsKeep {
+/// branch 3: person-pass — 无前缀 + 无 channelSpaceId → Keep（旧数据/单 Space 部署兼容）
+- (void)testDecide_Person_NoPrefixNoChannelSpace_ReturnsKeep {
     WKSpaceFilterDecision d = [WKSpaceFilter decideWithChannelId:@"user1"
                                                       channelType:WK_PERSON
                                                    currentSpaceId:SP_A
+                                                   channelSpaceId:nil
+                                                  mySourceSpaceId:nil];
+    XCTAssertEqual(d, WKSpaceFilterDecisionKeep);
+}
+
+/// branch 3a: person + channelInfo 标注的 space_id 与当前不同 → Skip
+/// 场景：在 Space A 添加的 Bot（裸 UID，无 channel-id 前缀），channelInfo.extra
+/// `space_id`=A；用户切到 B 后收到延迟推送，靠 channelSpaceId 二级判定兜底。
+- (void)testDecide_Person_NoPrefixChannelSpaceMismatch_ReturnsSkip {
+    WKSpaceFilterDecision d = [WKSpaceFilter decideWithChannelId:@"botUidBare"
+                                                      channelType:WK_PERSON
+                                                   currentSpaceId:SP_A
                                                    channelSpaceId:SP_B
+                                                  mySourceSpaceId:nil];
+    XCTAssertEqual(d, WKSpaceFilterDecisionSkip);
+}
+
+/// branch 3b: person + 跨 Space 前缀 → Skip
+/// 对齐 web `shouldSkipChannelForSpace`（dmwork-web/.../SpaceService.tsx:23-25）。
+/// 使用场景：Bot/私聊 ID 后端前缀化为 `s{spaceId}_{uid}`，跨 Space 时不应进入当前 Space 列表。
+- (void)testDecide_Person_PrefixMismatch_ReturnsSkip {
+    NSString *cid = [NSString stringWithFormat:@"s%@_bot1", SP_B];
+    WKSpaceFilterDecision d = [WKSpaceFilter decideWithChannelId:cid
+                                                      channelType:WK_PERSON
+                                                   currentSpaceId:SP_A
+                                                   channelSpaceId:nil
+                                                  mySourceSpaceId:nil];
+    XCTAssertEqual(d, WKSpaceFilterDecisionSkip);
+}
+
+/// branch 3c: person + 当前 Space 前缀 → Keep（被 prefix-fast-path 命中）
+- (void)testDecide_Person_PrefixMatch_ReturnsKeep {
+    NSString *cid = [NSString stringWithFormat:@"s%@_bot1", SP_A];
+    WKSpaceFilterDecision d = [WKSpaceFilter decideWithChannelId:cid
+                                                      channelType:WK_PERSON
+                                                   currentSpaceId:SP_A
+                                                   channelSpaceId:nil
+                                                  mySourceSpaceId:nil];
+    XCTAssertEqual(d, WKSpaceFilterDecisionKeep);
+}
+
+/// branch 3d: person + channelSpaceId 与当前一致 → Keep（同 Space Bot 正常显示）
+- (void)testDecide_Person_NoPrefixChannelSpaceMatch_ReturnsKeep {
+    WKSpaceFilterDecision d = [WKSpaceFilter decideWithChannelId:@"botUidBare"
+                                                      channelType:WK_PERSON
+                                                   currentSpaceId:SP_A
+                                                   channelSpaceId:SP_A
                                                   mySourceSpaceId:nil];
     XCTAssertEqual(d, WKSpaceFilterDecisionKeep);
 }
