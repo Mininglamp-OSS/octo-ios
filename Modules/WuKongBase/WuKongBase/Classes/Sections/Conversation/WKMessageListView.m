@@ -2277,17 +2277,25 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 
     // 已触发过则跳过（同一条消息 cell 重用、重新入视图都不重播）
     if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
-    // ⚠️ 不在此处 markTriggered：必须等 dispatch_after 里确认 cell 仍在可视区才 mark+trigger。
-    //   否则快速滚动场景下会消费掉"已触发"状态、却又因 cell 不在而走 bottom-center fallback
-    //   给不可见消息放特效（lml2468 review R1）。cell 不在时不 mark，留待下次滚回可视区重判。
+    // cell 不在视口时也要 mark：从上层 +300ms gate 走到这里只差 100ms，cell 仍消失
+    // 说明用户在做快速滚动，机会已用掉；mark 掉避免回滑重播。
+    // 注意：mark 之前 sourceRect 还没计算，不会误把 bottom-center fallback 给不可见消息
+    // 放特效（lml2468 review R1）—— 我们 mark 后直接 return，不进 trigger 路径。
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         NSIndexPath *indexPath = [self.dataProvider indexPathAtClientMsgNo:message.clientMsgNo];
-        if (!indexPath) return;
+        if (!indexPath) {
+            [[WKMessageEffectManager shared] markTriggeredForMessage:message];
+            return;
+        }
         UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
-        if (!cell) return;  // cell 滚出视口 → 不 mark、不 trigger，允许下次重判
+        if (!cell) {
+            // cell 滚出视口 → mark 掉消费，不 trigger（避免下次回滑重播）
+            [[WKMessageEffectManager shared] markTriggeredForMessage:message];
+            return;
+        }
 
-        // cell 确认在视口 —— 才 mark（防并发：再查一次 hasTriggered）
+        // cell 确认在视口 —— mark + trigger（防并发：再查一次 hasTriggered）
         if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
         [[WKMessageEffectManager shared] markTriggeredForMessage:message];
 
@@ -2412,7 +2420,7 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 
         // sourceRect 必定非空：本方法开头已确保 cell 存在并成功计算出 sourceRect。
         // 历史版本里的 bottom-center fallback 已移除（lml2468 review R1）—— cell 不在视口时
-        // 不 mark、不 trigger，避免给不可见消息放特效。
+        // mark 后直接 return，绝不进入下面的 trigger 路径，避免给不可见消息放特效。
         [[WKMessageEffectManager shared] triggerEffect:effectType
                                             inHostView:self
                                             sourceRect:sourceRect
@@ -2424,25 +2432,43 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 
 /// 首次看到消息时检查是否触发特效（由 willDisplayCell 调用，是唯一触发入口）
 ///
+/// 设计原则：
+///   把 markTriggered 从"动画播放成功"解耦为"用户已有机会看到此消息"。
+///   只要 cell 进入过 willDisplayCell，无论后续是否真正播放，都把它从未来重播
+///   的候选里消费掉。这样快速滑过 / 一键已读后回滑都不会再触发重播。
+///
 /// 规则：
-///   1. 已触发过（hasTriggeredForMessage 持久化，含 cell 重用/滚动去重）→ skip
-///   2. 对方发送且已读 → skip（恢复 8ca6e34 之前的 guard，lml2468 review R1）
-///   3. 消息年龄 > 30s → skip（历史消息不触发，含自己发的没 readed 语义的兜底）
-///   4. 没命中任何 emoji → skip
-///   5. 延迟 300ms 后确认 cell 仍留在可视区 → 触发；否则啥也不做
-///      （一键置底/快速滚动时路过的 cell 不会被误消费，下次真正停在可视区再播）
+///   1. 没命中 emoji → skip（不污染 triggered 集合）
+///   2. 已触发过 → skip
+///   3. 对方发送且已读 → mark + skip（已看过的，消费掉）
+///   4. 自己发送且 age > 30s → mark + skip（自己发的没 readed 语义，
+///      用年龄给"下拉历史看到自己几个月前发的"兜底；triggeredMessageIds 是主防线）
+///      ⚠️ 不对"对方消息"做年龄兜底：未读消息无论多老，第一次进入会话都应播。
+///   5. 延迟 300ms 后 cell 仍在可视区 → 进入下一阶段（最终会 mark + play）
+///      cell 已滚出可视区（一键置底 / 快速滑过）→ mark + skip（机会用掉了）
 -(void) checkFirstViewEffectForMessage:(WKMessageModel *)message {
     if (!message) return;
     if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
-    if (!message.isSend && message.readed) return;
-
-    // 年龄检查：历史消息（上下滑动加载的 >30s 老消息）不触发
-    // 自己发的消息没有 readed 语义，这里用年龄兜底
-    NSTimeInterval age = [self ageSecondsForMessage:message];
-    if (age > 30) return;
 
     NSString *effectType = [[WKMessageEffectManager shared] effectTypeForMessage:message];
     if (!effectType) return;
+
+    // 对方已读：用户之前已经看过这条消息，不再播
+    if (!message.isSend && message.readed) {
+        [[WKMessageEffectManager shared] markTriggeredForMessage:message];
+        return;
+    }
+
+    // 自己发的没 readed 语义，用年龄兜底（仅自己消息）：避免下拉历史时把
+    // 几个月前发的 [使命必达] 又播一遍。triggeredMessageIds 持久化是主防线，
+    // 这里是 set 被修剪（>1000）后的二级保险。
+    if (message.isSend) {
+        NSTimeInterval age = [self ageSecondsForMessage:message];
+        if (age > 30) {
+            [[WKMessageEffectManager shared] markTriggeredForMessage:message];
+            return;
+        }
+    }
 
     NSString *clientMsgNo = message.clientMsgNo;
     __weak typeof(self) weakSelf = self;
@@ -2450,9 +2476,11 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         NSIndexPath *indexPath = [strongSelf.dataProvider indexPathAtClientMsgNo:clientMsgNo];
-        if (!indexPath) return;
-        // cell 已被 UITableView 回收 → 说明 300ms 内已滚出可视区，skip
-        if (![strongSelf.tableView cellForRowAtIndexPath:indexPath]) return;
+        // cell 已被 UITableView 回收 → 300ms 内滚出可视区，视为"快速划过"，消费掉
+        if (!indexPath || ![strongSelf.tableView cellForRowAtIndexPath:indexPath]) {
+            [[WKMessageEffectManager shared] markTriggeredForMessage:message];
+            return;
+        }
         WKMessageModel *current = [strongSelf.dataProvider messageAtIndexPath:indexPath];
         if (!current) return;
         [strongSelf checkAndTriggerEffectForMessage:current];
