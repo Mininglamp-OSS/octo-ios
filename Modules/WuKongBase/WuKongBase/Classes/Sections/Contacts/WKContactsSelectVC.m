@@ -82,10 +82,6 @@
                                                object:nil];
 }
 
--(void) dealloc {
-    [[NSNotificationCenter defaultCenter] removeObserver:self name:WKRealnameVerifiedUpdatedNotification object:nil];
-}
-
 -(void) realnameVerifiedUpdated:(NSNotification *)noti {
     NSString *uid = noti.userInfo[@"uid"];
     if (uid.length == 0) return;
@@ -629,6 +625,7 @@
 
 - (void)dealloc {
     NSLog(@"WKContactsSelectVC dealloc");
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:WKRealnameVerifiedUpdatedNotification object:nil];
     if(self.onDealloc) {
         self.onDealloc();
     }
