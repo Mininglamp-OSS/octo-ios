@@ -183,11 +183,6 @@
     // 加载最近会话列表数据
     __weak __typeof(self) weakSelf  = self;
     [_conversationListVM loadConversationList:^{
-        // 先用当前 categoryList（可能为空）构建一次展示列表，确保群聊 tab 能立即显示内容
-        [weakSelf rebuildGroupDisplayAndReload];
-        [weakSelf refreshBadge];
-        // 异步加载分组数据，完成后再次刷新
-        [weakSelf loadCategories];
         // YUJ-bot-isolation 冷启动 race 兜底（PR #118 review fix）：
         // viewDidLoad 同时发起 loadBotsForSpace（网络）和本 loadConversationList（DB）。
         // 若网络早回 → onSpaceBotRegistryDidLoad 在空 VM 上 prune 等于 no-op；
@@ -195,10 +190,18 @@
         // 若 registry 未回（Unknown）→ 本次 prune no-op，registry 后到时
         // onSpaceBotRegistryDidLoad 会在已 ready 的 VM 上兜底再 prune。两端 callback
         // 都 prune，谁先到都覆盖。
+        // 注意：prune 必须在 rebuildGroupDisplayAndReload 之前；removeAtChannnel
+        // 只改内存不刷 tableView，先 rebuild 再 prune 会让 stale Bot 行留到下次刷新。
+        // 与切 Space 路径（L1210）/ 冷启动无 sync 路径（L1108）三处保持同一节奏。
         NSString *bootSpaceForPrune = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
         if(bootSpaceForPrune.length > 0) {
             [weakSelf.conversationListVM pruneNonCurrentSpaceBotsForSpace:bootSpaceForPrune];
         }
+        // 用当前 categoryList（可能为空）构建一次展示列表，确保群聊 tab 能立即显示内容
+        [weakSelf rebuildGroupDisplayAndReload];
+        [weakSelf refreshBadge];
+        // 异步加载分组数据，完成后再次刷新
+        [weakSelf loadCategories];
     }];
 
 //    self.refreshTimer = [NSTimer scheduledTimerWithTimeInterval:30 target:self selector:@selector(timerRefreshTable) userInfo:nil repeats:YES];
