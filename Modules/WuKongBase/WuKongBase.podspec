@@ -28,12 +28,13 @@ TODO: Add long description of the pod here.
   s.source           = { :git => 'https://github.com/tangtaoit/WuKongBase.git', :tag => s.version.to_s }
   # s.social_media_url = 'https://twitter.com/<TWITTER_USERNAME>'
 
-  s.ios.deployment_target = '12.0'
-  s.platform     = :ios, '12.0'
+  s.ios.deployment_target = '14.0'
+  s.platform     = :ios, '14.0'
   
   s.resource_bundles = {
     'WuKongBase_images' => ['WuKongBase/Assets/Images.xcassets'],
-    'WuKongBase_resources' => ['WuKongBase/Assets/DB','WuKongBase/Assets/emoji','WuKongBase/Assets/Other']
+    'WuKongBase_resources' => ['WuKongBase/Assets/DB','WuKongBase/Assets/emoji','WuKongBase/Assets/Other'],
+    'WuKongBase_aisummary' => ['WuKongBase/Assets/AISummary/*.riv']
   }
  
  s.resources = ['WuKongBase/Assets/Lang']
@@ -98,6 +99,7 @@ TODO: Add long description of the pod here.
   s.dependency 'FPSCounter', '~> 4.1'
   s.dependency 'librlottie', '~> 0.1'
   s.dependency 'libcmark_gfm'
+  s.dependency 'RiveRuntime', '~> 6.11'
   s.pod_target_xcconfig = {
     'SWIFT_INCLUDE_PATHS' => '$(inherited)'
   }

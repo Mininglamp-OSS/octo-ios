@@ -1,5 +1,5 @@
 # Uncomment the next line to define a global platform for your project
- platform :ios, '12.0'
+ platform :ios, '14.0'
 workspace 'TangSengDaoDaoiOS.xcworkspace'
 
 post_install do |installer|
@@ -20,7 +20,7 @@ post_install do |installer|
             if target.respond_to?(:product_type) and target.product_type == "com.apple.product-type.bundle"
               config.build_settings['DEVELOPMENT_TEAM'] = dev_team
             end
-            config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '11.0'
+            config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
             config.build_settings['ENABLE_BITCODE'] = 'NO'
             config.build_settings["EXCLUDED_ARCHS[sdk=iphonesimulator*]"] = "arm64"
             # librlottie: config.h 在根目录，源文件在子目录用 #include "config.h"

@@ -85,7 +85,8 @@
 
 - (void)viewDidAppear {
     [self.input addKeyboardListen];
-    
+    // 与 viewWillDisappear 对称：暴露 reappear 钩子给关心的子模块（如 AI 总结按钮的入口控制器）
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"WKConversationViewDidAppear" object:nil];
 }
 
 
