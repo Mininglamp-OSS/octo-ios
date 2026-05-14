@@ -105,6 +105,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 -(void) cancelSelectedMessages; // 取消被选中的消息
 
+// 多选模式下的区间批量勾选（并集语义）
+-(NSInteger) selectMessagesFromOrderSeq:(uint32_t)orderSeqA toOrderSeq:(uint32_t)orderSeqB;
+
 -(NSArray<WKMessageModel*>*) getMessagesWithContentType:(NSInteger)contentType;
 
 

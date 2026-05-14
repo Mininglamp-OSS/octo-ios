@@ -297,6 +297,10 @@
     [self.messageList cancelSelectedMessages];
 }
 
+-(NSInteger) selectMessagesFromOrderSeq:(uint32_t)orderSeqA toOrderSeq:(uint32_t)orderSeqB {
+    return [self.messageList selectMessagesFromOrderSeq:orderSeqA toOrderSeq:orderSeqB];
+}
+
 -(void) addMessage:(WKMessageModel*)message {
     [self.messageList addMessage:message];
 }

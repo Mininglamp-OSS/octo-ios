@@ -59,6 +59,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 -(void) cancelSelectedMessages; // 取消被选中的消息
 
+// 把 orderSeq 闭区间内所有可选消息的 checked 置为 YES（并集，已选保留），返回新选中的消息条数
+-(NSInteger) selectMessagesFromOrderSeq:(uint32_t)orderSeqA toOrderSeq:(uint32_t)orderSeqB;
+
 -(NSArray<WKMessageModel*>*) getMessagesWithContentType:(NSInteger)contentType;
 
 -(NSIndexPath*) replaceMessage:(WKMessageModel*)newMessage atClientMsgNo:(NSString*)clientMsgNo;

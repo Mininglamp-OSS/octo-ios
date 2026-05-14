@@ -390,6 +390,12 @@ static NSMutableDictionary *flameNodeCacheDict;
     }
     self.messageModel.checked = !self.messageModel.checked;
     [self.checkBox setOn:self.messageModel.checked];
+    // 仅"勾选"时刷新区间选择 anchor，取消勾选时保持原 anchor 让用户继续区间选择
+    if(self.messageModel.checked && self.messageModel.clientMsgNo.length > 0) {
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"WKMessageMultipleAnchorDidChange"
+                                                            object:nil
+                                                          userInfo:@{@"clientMsgNo": self.messageModel.clientMsgNo}];
+    }
 }
 
 -(void) onLongTap:(UIGestureRecognizer *)gestureRecognizer {
