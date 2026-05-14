@@ -305,7 +305,8 @@
     self.sortGeneration++;
     NSInteger currentGeneration = self.sortGeneration;
 
-    // 去重检测：检查 allContactInfos 是否有重复 uid
+#if DEBUG
+    // 去重检测：检查 allContactInfos 是否有重复 uid（仅 DEBUG，避免主线程上抓 callStackSymbols）
     {
         NSMutableDictionary<NSString*, NSNumber*> *uidCounts = [NSMutableDictionary dictionary];
         for (WKChannelInfo *info in self.allContactInfos) {
@@ -321,6 +322,7 @@
             }
         }
     }
+#endif
 
     NSArray<WKChannelInfo*> *filtered = [self filteredContactInfos];
     NSString *suffix = (self.contactsFilter == 1) ? @" AI" : LLang(@"联系人");
@@ -473,7 +475,11 @@
             }
 
             NSString *myUid = [WKApp shared].loginInfo.uid;
-            NSMutableArray<WKChannelInfo*> *channelInfos = [NSMutableArray array];
+            // UI 渲染数据：含全部 space_bots（含 not_added/pending），保证「AI」tab 显示空间内全部 AI。
+            // DB 写入数据：仅含「已添加」的（members、my_bots、space_bots(added)），
+            // 避免选人页通过 follow=Friend 查 DB 时拿到「全部 AI」。
+            NSMutableArray<WKChannelInfo*> *uiInfos = [NSMutableArray array];
+            NSMutableArray<WKChannelInfo*> *dbInfos = [NSMutableArray array];
             NSMutableSet *addedUids = [NSMutableSet set];
             NSInteger myBotCount = 0;
 
@@ -518,14 +524,19 @@
                     if (m[@"category"] && ![m[@"category"] isEqual:[NSNull null]]) {
                         channelInfo.category = m[@"category"];
                     }
-                    [channelInfos addObject:channelInfo];
+                    [uiInfos addObject:channelInfo];
+                    [dbInfos addObject:channelInfo];
                 }
             }
 
             // 处理 space_bots（成功时才处理）
+            // - 全部 status 都进 uiInfos —— 通讯录「AI」tab 需要显示空间内所有 AI（含 not_added/pending）。
+            // - 仅 status=added 进 dbInfos —— 避免选人页通过 follow=Friend 查 DB 时拿到「全部 AI」。
+            // - myBotCount 同样只算 added，与 header「已添加 AI」语义一致。
             if (spaceBotsOK) {
                 for (NSDictionary *bot in (NSArray*)rawSpaceBots) {
                     NSString *uid = bot[@"uid"];
+                    NSString *status = bot[@"status"];
                     if (!uid || [addedUids containsObject:uid]) continue;
                     [addedUids addObject:uid];
 
@@ -536,11 +547,11 @@
                     channelInfo.follow = WKChannelInfoFollowFriend;
                     channelInfo.status = 1;
                     channelInfo.robot = YES;
-                    NSString *status = bot[@"status"];
+                    [uiInfos addObject:channelInfo];
                     if ([status isEqualToString:@"added"]) {
                         myBotCount++;
+                        [dbInfos addObject:channelInfo];
                     }
-                    [channelInfos addObject:channelInfo];
                 }
             }
 
@@ -564,7 +575,8 @@
                     channelInfo.status = 1;
                     channelInfo.robot = YES;
                     myBotCount++;
-                    [channelInfos addObject:channelInfo];
+                    [uiInfos addObject:channelInfo];
+                    [dbInfos addObject:channelInfo];
                 }
             }
 
@@ -575,8 +587,10 @@
             }
 
             // DB 写入在后台线程完成，避免阻塞主线程
+            // 仅写 dbInfos —— 不把 not_added/pending 的 space_bots 写入 follow=Friend，
+            // 否则会污染选人页（拉群成员）的好友查询。
             weakSelf.isBatchUpdating = YES;
-            [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
+            [[WKSDK shared].channelManager addOrUpdateChannelInfos:dbInfos];
             weakSelf.isBatchUpdating = NO;
 
             // 回主线程更新 UI
@@ -588,7 +602,8 @@
                 if (groupsOK) {
                     weakSelf.groupCount = groupCount;
                 }
-                [weakSelf applyIncrementalUpdate:channelInfos];
+                // UI 用 uiInfos —— 「AI」tab 渲染包含 not_added/pending 的全部 AI。
+                [weakSelf applyIncrementalUpdate:uiInfos];
                 weakSelf.dataLoaded = YES;
                 weakSelf.lastLoadTime = [[NSDate date] timeIntervalSince1970];
                 weakSelf.isUpdating = NO;
@@ -608,30 +623,36 @@
         syncParams[@"space_id"] = currentSpaceId;
     }
     [[WKAPIClient sharedClient] GET:@"friend/sync" parameters:syncParams].then(^(NSArray<NSDictionary*>* contacts){
-        if(contacts && contacts.count > 0) {
-            NSMutableArray *channelInfos = [NSMutableArray array];
-            for (NSDictionary *dict in contacts) {
-                BOOL isDeleted = dict[@"is_deleted"] ? [dict[@"is_deleted"] boolValue] : NO;
-                if(isDeleted) {
-                    WKChannel *channel = [[WKChannel alloc] initWith:dict[@"uid"] channelType:WK_PERSON];
-                    [[WKSDK shared].channelManager deleteChannelInfo:channel];
-                } else {
-                    [channelInfos addObject:[WKChannelUtil toChannelInfo:dict]];
+        // 数据处理放到后台线程，避免阻塞 UI（与 fetchAllDataWithSpaceId 对齐）
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            if (contacts && contacts.count > 0) {
+                NSMutableArray *channelInfos = [NSMutableArray array];
+                for (NSDictionary *dict in contacts) {
+                    BOOL isDeleted = dict[@"is_deleted"] ? [dict[@"is_deleted"] boolValue] : NO;
+                    if(isDeleted) {
+                        WKChannel *channel = [[WKChannel alloc] initWith:dict[@"uid"] channelType:WK_PERSON];
+                        [[WKSDK shared].channelManager deleteChannelInfo:channel];
+                    } else {
+                        [channelInfos addObject:[WKChannelUtil toChannelInfo:dict]];
+                    }
                 }
+                long long version = [contacts.lastObject[@"version"] longLongValue];
+                // iOS 12+ 系统会自动调度落盘，去掉主动 synchronize 以减少阻塞
+                [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%lld",version] forKey:cacheKey];
+                weakSelf.isBatchUpdating = YES;
+                [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
+                weakSelf.isBatchUpdating = NO;
             }
-            long long version = [contacts.lastObject[@"version"] longLongValue];
-            [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%lld",version] forKey:cacheKey];
-            [[NSUserDefaults standardUserDefaults] synchronize];
-            weakSelf.isBatchUpdating = YES;
-            [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
-            weakSelf.isBatchUpdating = NO;
-        }
-        // 从数据库重新加载（API 可能只返回增量数据）
-        NSArray<WKChannelInfo*> *allInfos = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
-        [weakSelf applyIncrementalUpdate:allInfos ?: @[]];
-        weakSelf.dataLoaded = YES;
-        weakSelf.lastLoadTime = [[NSDate date] timeIntervalSince1970];
-        weakSelf.isUpdating = NO;
+            // 从数据库重新加载（API 可能只返回增量数据）
+            NSArray<WKChannelInfo*> *allInfos = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf applyIncrementalUpdate:allInfos ?: @[]];
+                weakSelf.dataLoaded = YES;
+                weakSelf.lastLoadTime = [[NSDate date] timeIntervalSince1970];
+                weakSelf.isUpdating = NO;
+            });
+        });
     }).catch(^(NSError *error){
         WKLogError(@"拉取好友联系人失败:%@", error);
         weakSelf.dataLoaded = YES;
