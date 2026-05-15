@@ -33,8 +33,7 @@ TODO: Add long description of the pod here.
   
   s.resource_bundles = {
     'WuKongBase_images' => ['WuKongBase/Assets/Images.xcassets'],
-    'WuKongBase_resources' => ['WuKongBase/Assets/DB','WuKongBase/Assets/emoji','WuKongBase/Assets/Other'],
-    'WuKongBase_aisummary' => ['WuKongBase/Assets/AISummary/*.riv']
+    'WuKongBase_resources' => ['WuKongBase/Assets/DB','WuKongBase/Assets/emoji','WuKongBase/Assets/Other']
   }
  
  s.resources = ['WuKongBase/Assets/Lang']
