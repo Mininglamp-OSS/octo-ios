@@ -561,6 +561,12 @@ static const NSInteger kRangeAll    = NSIntegerMax;
                    dispatch_get_main_queue(), ^{
         WKTextContent *txt = [[WKTextContent alloc] init];
         txt.content = prompt;
+        // 与 WKConversationContextImpl.sendMessage: 一致：DM 消息注入 space_id，
+        // 避免 Bot DM 跨 Space 错位/泄露。
+        NSString *currentSpaceId = [[WKSpaceFilter shared] currentSpaceId];
+        if (currentSpaceId.length > 0 && botChannel.channelType == WK_PERSON) {
+            txt.spaceId = currentSpaceId;
+        }
         WKMessage *sentMsg = [[WKSDK shared].chatManager sendMessage:txt channel:botChannel];
 
         UIView *src = [self findHostViewController].view ?: self.host.window;
