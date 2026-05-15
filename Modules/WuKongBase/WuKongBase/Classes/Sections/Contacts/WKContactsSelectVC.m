@@ -251,6 +251,16 @@
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
+        // [Space race] 三个 API 飞行期间用户可能切了 Space —— 此时 NSUserDefaults
+        // 里的 currentSpaceId 已变，但本次回调里 addedUids 还是旧 Space 的 Bot 集合。
+        // 直接 apply 会让旧 Space 的 AI 列表写入新 Space 的视图。
+        // 检测到不一致就丢弃本次结果；新 Space 的视图重建会重新触发本方法。
+        NSString *nowSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+        if (![nowSpaceId isEqualToString:spaceId]) {
+            NSLog(@"[ContactsSelect] Space switched mid-flight (%@ -> %@), drop stale robot list",
+                  spaceId, nowSpaceId);
+            return;
+        }
         if (addedUids.count == 0) {
             // 全部接口失败或返回空 —— 保持 0 AI 状态，用户重进页面会重试
             return;
