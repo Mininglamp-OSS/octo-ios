@@ -166,9 +166,28 @@
 
     void (^showPicker)(void) = ^{
         WKMediaPickerController *vc = [[WKMediaPickerController alloc] initWithMaxImagesCount:weakSelf.limit delegate:weakSelf];
-        vc.naviBgColor = [UIColor blackColor];
-        vc.naviTitleColor = [UIColor whiteColor];
-        vc.barItemTextColor = [UIColor whiteColor];
+
+        // 配色策略（同步深浅模式）：
+        //   bg     = systemBackground（浅色白 / 深色黑）
+        //   title  = label（浅色黑 / 深色白）
+        //   item   = app 主题紫，紫色对黑/白底都有足够对比，深浅模式下都看得清
+        // 之前只设了 barItemTextColor 没设 navigationBar.tintColor，
+        // 导致左上角系统 cancel 按钮颜色跟随系统默认 tint，跟背景容易"几乎一样"。
+        UIColor *navBg;
+        UIColor *navTitle;
+        if (@available(iOS 13.0, *)) {
+            navBg = [UIColor systemBackgroundColor];
+            navTitle = [UIColor labelColor];
+        } else {
+            navBg = [UIColor whiteColor];
+            navTitle = [UIColor blackColor];
+        }
+        UIColor *itemColor = [WKApp shared].config.themeColor ?: [UIColor systemBlueColor];
+
+        vc.naviBgColor = navBg;
+        vc.naviTitleColor = navTitle;
+        vc.barItemTextColor = itemColor;
+        vc.navigationBar.tintColor = itemColor; // system bar items（cancel/back）走 tintColor
         vc.navigationBar.barStyle = UIBarStyleDefault;
         vc.allowTakePicture = weakSelf.allowTakePicture;
         vc.allowPickingVideo = [weakSelf.mediaTypes containsObject:(NSString *)kUTTypeMovie];
