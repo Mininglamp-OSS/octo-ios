@@ -557,18 +557,39 @@ static const NSInteger kRangeAll    = NSIntegerMax;
     NSString *botUID = self.selectedBotUID;
     WKChannel *botChannel = [WKChannel personWithChannelID:botUID];
 
+    // ⚠️ 立刻发送，不要等动画完成。
+    //
+    // 旧实现把 sendMessage: 放在 dispatch_after(0.95s) 里，留下了一个长 race 窗口：
+    // 用户在动画期间切到空间 B → 0.95s 时再读 currentSpaceId 已经是 B；同时 SDK
+    // 上传时附带的 X-Space-Id HTTP 头也是 B。结果空间 A 的总结请求被服务器路由
+    // 到了空间 B，Bot 回复也跟着进 B，进一步拖坏空间切换。
+    //
+    // 现在与手动发送（WKConversationContextImpl.sendMessage:）行为完全一致：
+    //   1. 立刻在点击瞬间发出（spaceId 一定是当前 = A）
+    //   2. 用同款的 sendMessage:channel:setting:topic: 全套重载
+    //   3. 之后的充能动画与切场只是视觉装饰，不影响网络
+    WKTextContent *txt = [[WKTextContent alloc] init];
+    txt.content = prompt;
+    NSString *currentSpaceId = [[WKSpaceFilter shared] currentSpaceId];
+    if (currentSpaceId.length > 0 && botChannel.channelType == WK_PERSON) {
+        txt.spaceId = currentSpaceId;
+    }
+    WKSetting *setting = [WKSetting new];
+    WKChannelInfo *botInfo = [[WKSDK shared].channelManager getChannelInfo:botChannel];
+    if (botInfo) {
+        setting.receiptEnabled = botInfo.receipt;
+        if (botInfo.extra[@"msg_auto_delete"]) {
+            setting.expire = [botInfo.extra[@"msg_auto_delete"] integerValue];
+        }
+    }
+    WKMessage *sentMsg = [[WKSDK shared].chatManager sendMessage:txt
+                                                          channel:botChannel
+                                                          setting:setting
+                                                            topic:@""];
+
+    // 充能动画演完之后再切场到 Bot DM —— 与发送解耦，纯视觉
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.95 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        WKTextContent *txt = [[WKTextContent alloc] init];
-        txt.content = prompt;
-        // 与 WKConversationContextImpl.sendMessage: 一致：DM 消息注入 space_id，
-        // 避免 Bot DM 跨 Space 错位/泄露。
-        NSString *currentSpaceId = [[WKSpaceFilter shared] currentSpaceId];
-        if (currentSpaceId.length > 0 && botChannel.channelType == WK_PERSON) {
-            txt.spaceId = currentSpaceId;
-        }
-        WKMessage *sentMsg = [[WKSDK shared].chatManager sendMessage:txt channel:botChannel];
-
         UIView *src = [self findHostViewController].view ?: self.host.window;
         [WKAISummaryCyberpunkTransition performFromView:src pushBlock:^{
             WKConversationVC *botVC = [WKConversationVC new];
@@ -587,7 +608,7 @@ static const NSInteger kRangeAll    = NSIntegerMax;
         self.pendingReopenChannel = botChannel;
     });
 
-    NSLog(@"[AISummary] trigger: bot=%@ prompt=%@", botUID, prompt);
+    NSLog(@"[AISummary] trigger: bot=%@ space=%@ prompt=%@", botUID, currentSpaceId, prompt);
 }
 
 #pragma mark - Prompt 构造
