@@ -582,6 +582,29 @@ static const NSInteger kRangeAll    = NSIntegerMax;
             setting.expire = [botInfo.extra[@"msg_auto_delete"] integerValue];
         }
     }
+
+    // 关键：把当前 spaceId 写到 botInfo.extra["space_id"]。
+    //
+    // WKSpaceFilter.decideChannel 在 WKConversationListVM 里筛 conv 列表时，会读
+    // channelInfo.extra["space_id"]：
+    //   - == 当前 Space → Keep
+    //   - != 当前 Space → Skip（跨 Space 漏发的关键拦截点）
+    //   - 缺失       → fail-open（视作未知，放过）
+    //
+    // 手动从 Bot DM 内发送时，进 DM 触发的 fetchChannelInfo: 已经把
+    // extra["space_id"] 写好了，所以漏不到别的 Space。
+    // 我们这里没进过 DM 直接发，本地缓存的 botInfo 可能 extra 为空 → filter 失效。
+    // 这里显式把当前 spaceId 写一份回 SDK，让 Bot 回复经过 filter 时被正确过滤掉。
+    if (botInfo && currentSpaceId.length > 0) {
+        NSMutableDictionary *newExtra = botInfo.extra ? [botInfo.extra mutableCopy]
+                                                       : [NSMutableDictionary dictionary];
+        if (![newExtra[@"space_id"] isEqualToString:currentSpaceId]) {
+            newExtra[@"space_id"] = currentSpaceId;
+            botInfo.extra = newExtra;
+            [[WKSDK shared].channelManager addOrUpdateChannelInfos:@[botInfo]];
+        }
+    }
+
     WKMessage *sentMsg = [[WKSDK shared].chatManager sendMessage:txt
                                                           channel:botChannel
                                                           setting:setting
