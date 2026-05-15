@@ -630,8 +630,6 @@ static const NSInteger kRangeAll    = NSIntegerMax;
         self.chargingUp = NO;
         self.pendingReopenChannel = botChannel;
     });
-
-    NSLog(@"[AISummary] trigger: bot=%@ space=%@ prompt=%@", botUID, currentSpaceId, prompt);
 }
 
 #pragma mark - Prompt 构造
