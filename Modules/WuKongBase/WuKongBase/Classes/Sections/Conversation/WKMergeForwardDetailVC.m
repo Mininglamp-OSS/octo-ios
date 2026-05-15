@@ -25,9 +25,13 @@
 - (void)viewDidLoad {
     self.viewModel.mergeForwardContent = self.mergeForwardContent;
     [super viewDidLoad];
-    
-    self.title = self.mergeForwardContent.title;
-    
+
+    NSString *baseTitle = self.mergeForwardContent.title ?: @"";
+    NSInteger count = self.mergeForwardContent.msgs.count;
+    self.title = count > 0
+        ? [NSString stringWithFormat:LLang(@"%@ (%ld 条)"), baseTitle, (long)count]
+        : baseTitle;
+
     [[WKSDK shared].channelManager addDelegate:self];
 
 }

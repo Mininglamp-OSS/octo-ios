@@ -55,9 +55,16 @@
     self = [super initWithFrame:frame];
     if (self) {
         self.channel = channel;
-        
+        // 多选 selection 变化时刷新底部 panel 的"已选 N 条"
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onMultipleSelectionDidChange:) name:@"WKMessageMultipleSelectionDidChange" object:nil];
     }
     return self;
+}
+
+-(void) onMultipleSelectionDidChange:(NSNotification *)note {
+    if(!self.multipleOn) return;
+    NSInteger count = [self.messageListView getSelectedMessages].count;
+    [self.multiplePanel setSelectedCount:count];
 }
 
 - (WKConversationVM *)conversationVM {
@@ -185,6 +192,7 @@
 
 - (void)dealloc {
     WKLogDebug(@"%s",__func__);
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKMessageMultipleSelectionDidChange" object:nil];
     [self destoryForbiddenTimer];
     [self removeDelegates];
 }
@@ -527,11 +535,14 @@
 -(void) setMultipleOn:(BOOL)multiple selectedMessage:(WKMessageModel * _Nullable)messageModel {
     // 先取消所有选中的
     [self.messageListView setMultipleOn:multiple selectedMessage:messageModel];
-    
+
     __weak typeof(self) weakSelf = self;
     _multipleOn = multiple;
     if(multiple) {
         [self.input endEditing];
+        // 进入多选时初始化"已选 N 条"显示（起点消息默认勾上 1 条）
+        NSInteger initialCount = [self.messageListView getSelectedMessages].count;
+        [self.multiplePanel setSelectedCount:initialCount];
     }
     // 隐藏输入面板
     [self.input setHidden:multiple animation:YES animationBlock:^{
@@ -564,7 +575,8 @@
         CGFloat safeBottom;
         if (@available(iOS 11.0, *)) {
             safeBottom = [[UIApplication sharedApplication].keyWindow safeAreaInsets].bottom;
-            _multiplePanel = [[WKMultiplePanel alloc] initWithFrame:CGRectMake(0.0f, WKScreenHeight, WKScreenWidth, self.input.contentViewMinHeight+safeBottom)];
+            // 比 input 高 28pt：留给"已选 N 条"标签
+            _multiplePanel = [[WKMultiplePanel alloc] initWithFrame:CGRectMake(0.0f, WKScreenHeight, WKScreenWidth, self.input.contentViewMinHeight+safeBottom+28.0f)];
             _multiplePanel.delegate = self;
             _multiplePanel.backgroundColor = [WKApp shared].config.cellBackgroundColor;
         }
@@ -847,10 +859,21 @@
     [vc setOnSingleConfirm:^(WKChannel *channel, NSString *extraText) {
         // ForwardSelectVC 确认后会自动 pop，这里不再重复 pop
 
-        NSMutableArray *msgs = [NSMutableArray array];
+        NSMutableArray<WKMessage *> *msgs = [NSMutableArray array];
         NSMutableArray<NSDictionary*> *userDicts = [NSMutableArray array];
+        NSInteger skippedCount = 0; // 流式/发送中状态被跳过的条目数
         for (WKMessageModel *messageModel in selectedMessages) {
-            [msgs addObject:messageModel.message];
+            WKMessage *m = messageModel.message;
+            if(!m) {
+                skippedCount++;
+                continue;
+            }
+            // 流式机器人消息 content 还在拼接、本地发送中消息 contentDict 没回填，直接合并会丢字段 → 跳过并提示
+            if(m.streamOn || m.status != WK_MESSAGE_SUCCESS) {
+                skippedCount++;
+                continue;
+            }
+            [msgs addObject:m];
             bool hasUser = false;
             for (NSDictionary *userDict in userDicts) {
                 if([messageModel.fromUid isEqualToString:userDict[@"uid"]]) {
@@ -863,11 +886,17 @@
                 [userDicts addObject:@{@"uid":messageModel.fromUid?:@"",@"name":name}];
             }
         }
-        [msgs sortUsingComparator:^NSComparisonResult(WKMessageModel *obj1, WKMessageModel *obj2) {
-            if(obj1.timestamp<obj2.timestamp) return NSOrderedAscending;
-            if(obj1.timestamp == obj2.timestamp) return NSOrderedSame;
+        [msgs sortUsingComparator:^NSComparisonResult(WKMessage *m1, WKMessage *m2) {
+            if(m1.timestamp<m2.timestamp) return NSOrderedAscending;
+            if(m1.timestamp == m2.timestamp) return NSOrderedSame;
             return NSOrderedDescending;
         }];
+
+        if(msgs.count == 0) {
+            [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"无可合并的消息（流式或发送中状态不支持合并）")];
+            [weakSelf setMultipleOn:NO];
+            return;
+        }
 
         WKMergeForwardContent *content = [WKMergeForwardContent msgs:msgs users:userDicts channelType:weakSelf.channel.channelType];
         if([weakSelf.channel isEqual:channel]) {
@@ -884,7 +913,10 @@
                 [[WKSDK shared].chatManager forwardMessage:tc channel:channel];
             }
         }
-        [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送成功")];
+        NSString *hint = (skippedCount > 0)
+            ? [NSString stringWithFormat:LLang(@"发送成功（%ld 条流式/发送中消息未合并）"), (long)skippedCount]
+            : LLang(@"发送成功");
+        [[WKNavigationManager shared].topViewController.view showHUDWithHide:hint];
         [weakSelf setMultipleOn:NO];
     }];
     [[WKNavigationManager shared] pushViewController:vc animated:YES];

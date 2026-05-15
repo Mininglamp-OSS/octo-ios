@@ -1438,6 +1438,8 @@
     }
 
     [self updateSelectToHereButtonsVisibility];
+    // 批量勾选了一段区间，通知外层刷新"已选 N 条"
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"WKMessageMultipleSelectionDidChange" object:nil];
 }
 
 -(NSArray<WKMessageModel*>*) getMessagesWithContentType:(NSInteger)contentType {

@@ -396,6 +396,8 @@ static NSMutableDictionary *flameNodeCacheDict;
                                                             object:nil
                                                           userInfo:@{@"clientMsgNo": self.messageModel.clientMsgNo}];
     }
+    // 选中数量变了（勾或取消都算），让 conversationView 刷新底部"已选 N 条"
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"WKMessageMultipleSelectionDidChange" object:nil];
 }
 
 -(void) onLongTap:(UIGestureRecognizer *)gestureRecognizer {
