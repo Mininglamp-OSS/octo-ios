@@ -27,10 +27,10 @@ Pod::Spec.new do |s|
   s.author           = { 'tangtaoit' => 'tt@tgo.ai' }
   s.source           = { :git => "https://github.com/WuKongIM/WuKongIMiOSSDK.git" }
   # s.social_media_url = 'https://twitter.com/<TWITTER_USERNAME>'
-  s.platform     = :ios, '11.0'
+  s.platform     = :ios, '14.0'
   s.requires_arc = true
-  
-  s.ios.deployment_target = '11.0'
+
+  s.ios.deployment_target = '14.0'
   
   s.vendored_libraries = 'WuKongIMSDK/Classes/private/arm/lib/*.a'
   

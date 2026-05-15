@@ -142,7 +142,7 @@
             if(spaceId && ![spaceId isEqualToString:@""]) {
                 [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
                 [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
-                [[NSUserDefaults standardUserDefaults] synchronize];
+                // iOS 12+ 系统会自动调度落盘，去掉主动 synchronize 以避免登录链路上同步阻塞
             }
             [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
         } else {

@@ -23,6 +23,9 @@
 @property(nonatomic,strong) UILabel *titleLbl;
 @property(nonatomic,strong) WKSearchbarView *searchbarView;
 @property(nonatomic,strong) UIView *tableHeader;
+// 顶部固定栏（搜索 + 全部/AI/人类 tab），不随 tableView 滚动
+@property(nonatomic,strong) UIView *topStickyView;
+@property(nonatomic,strong) UIView *filterTabContainer; // tab 区子容器，filter 切换时只重建它的 subview
 
 @property(nonatomic,strong) UILabel *contactsCountLbl; // 联系人数量
 
@@ -305,7 +308,11 @@
     self.sortGeneration++;
     NSInteger currentGeneration = self.sortGeneration;
 
-    // 去重检测：检查 allContactInfos 是否有重复 uid
+    // 顶部 filter pill 计数/选中态跟随数据变化刷新（pill 已迁到固定栏，不会被 reloadData 触达）
+    [self refreshFilterTabContainer];
+
+#if DEBUG
+    // 去重检测：检查 allContactInfos 是否有重复 uid（仅 DEBUG，避免主线程上抓 callStackSymbols）
     {
         NSMutableDictionary<NSString*, NSNumber*> *uidCounts = [NSMutableDictionary dictionary];
         for (WKChannelInfo *info in self.allContactInfos) {
@@ -321,6 +328,7 @@
             }
         }
     }
+#endif
 
     NSArray<WKChannelInfo*> *filtered = [self filteredContactInfos];
     NSString *suffix = (self.contactsFilter == 1) ? @" AI" : LLang(@"联系人");
@@ -473,7 +481,11 @@
             }
 
             NSString *myUid = [WKApp shared].loginInfo.uid;
-            NSMutableArray<WKChannelInfo*> *channelInfos = [NSMutableArray array];
+            // UI 渲染数据：含全部 space_bots（含 not_added/pending），保证「AI」tab 显示空间内全部 AI。
+            // DB 写入数据：仅含「已添加」的（members、my_bots、space_bots(added)），
+            // 避免选人页通过 follow=Friend 查 DB 时拿到「全部 AI」。
+            NSMutableArray<WKChannelInfo*> *uiInfos = [NSMutableArray array];
+            NSMutableArray<WKChannelInfo*> *dbInfos = [NSMutableArray array];
             NSMutableSet *addedUids = [NSMutableSet set];
             NSInteger myBotCount = 0;
 
@@ -518,14 +530,19 @@
                     if (m[@"category"] && ![m[@"category"] isEqual:[NSNull null]]) {
                         channelInfo.category = m[@"category"];
                     }
-                    [channelInfos addObject:channelInfo];
+                    [uiInfos addObject:channelInfo];
+                    [dbInfos addObject:channelInfo];
                 }
             }
 
             // 处理 space_bots（成功时才处理）
+            // - 全部 status 都进 uiInfos —— 通讯录「AI」tab 需要显示空间内所有 AI（含 not_added/pending）。
+            // - 仅 status=added 进 dbInfos —— 避免选人页通过 follow=Friend 查 DB 时拿到「全部 AI」。
+            // - myBotCount 同样只算 added，与 header「已添加 AI」语义一致。
             if (spaceBotsOK) {
                 for (NSDictionary *bot in (NSArray*)rawSpaceBots) {
                     NSString *uid = bot[@"uid"];
+                    NSString *status = bot[@"status"];
                     if (!uid || [addedUids containsObject:uid]) continue;
                     [addedUids addObject:uid];
 
@@ -536,11 +553,11 @@
                     channelInfo.follow = WKChannelInfoFollowFriend;
                     channelInfo.status = 1;
                     channelInfo.robot = YES;
-                    NSString *status = bot[@"status"];
+                    [uiInfos addObject:channelInfo];
                     if ([status isEqualToString:@"added"]) {
                         myBotCount++;
+                        [dbInfos addObject:channelInfo];
                     }
-                    [channelInfos addObject:channelInfo];
                 }
             }
 
@@ -564,7 +581,8 @@
                     channelInfo.status = 1;
                     channelInfo.robot = YES;
                     myBotCount++;
-                    [channelInfos addObject:channelInfo];
+                    [uiInfos addObject:channelInfo];
+                    [dbInfos addObject:channelInfo];
                 }
             }
 
@@ -575,8 +593,22 @@
             }
 
             // DB 写入在后台线程完成，避免阻塞主线程
+            // 仅写 dbInfos —— 不把 not_added/pending 的 space_bots 写入 follow=Friend，
+            // 否则会污染选人页（拉群成员）的好友查询。
+            //
+            // [Online 保留] 通讯录 API 返回里**没有** online/lastOffline/deviceFlag 字段，
+            // 直接 addOrUpdate 会把这些字段覆盖为默认值（online=NO），污染所有依赖
+            // channelInfo.online 的判定（如 AI 总结按钮、在线小绿点）。这里在批写前从
+            // 已有 channelInfo merge 这几个字段，让 OnlineStatusManager 维护的状态保留。
+            for (WKChannelInfo *info in dbInfos) {
+                WKChannelInfo *old = [[WKSDK shared].channelManager getChannelInfo:info.channel];
+                if (!old) continue;
+                info.online = old.online;
+                info.lastOffline = old.lastOffline;
+                info.deviceFlag = old.deviceFlag;
+            }
             weakSelf.isBatchUpdating = YES;
-            [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
+            [[WKSDK shared].channelManager addOrUpdateChannelInfos:dbInfos];
             weakSelf.isBatchUpdating = NO;
 
             // 回主线程更新 UI
@@ -588,7 +620,8 @@
                 if (groupsOK) {
                     weakSelf.groupCount = groupCount;
                 }
-                [weakSelf applyIncrementalUpdate:channelInfos];
+                // UI 用 uiInfos —— 「AI」tab 渲染包含 not_added/pending 的全部 AI。
+                [weakSelf applyIncrementalUpdate:uiInfos];
                 weakSelf.dataLoaded = YES;
                 weakSelf.lastLoadTime = [[NSDate date] timeIntervalSince1970];
                 weakSelf.isUpdating = NO;
@@ -608,30 +641,44 @@
         syncParams[@"space_id"] = currentSpaceId;
     }
     [[WKAPIClient sharedClient] GET:@"friend/sync" parameters:syncParams].then(^(NSArray<NSDictionary*>* contacts){
-        if(contacts && contacts.count > 0) {
-            NSMutableArray *channelInfos = [NSMutableArray array];
-            for (NSDictionary *dict in contacts) {
-                BOOL isDeleted = dict[@"is_deleted"] ? [dict[@"is_deleted"] boolValue] : NO;
-                if(isDeleted) {
-                    WKChannel *channel = [[WKChannel alloc] initWith:dict[@"uid"] channelType:WK_PERSON];
-                    [[WKSDK shared].channelManager deleteChannelInfo:channel];
-                } else {
-                    [channelInfos addObject:[WKChannelUtil toChannelInfo:dict]];
+        // 数据处理放到后台线程，避免阻塞 UI（与 fetchAllDataWithSpaceId 对齐）
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            if (contacts && contacts.count > 0) {
+                NSMutableArray *channelInfos = [NSMutableArray array];
+                for (NSDictionary *dict in contacts) {
+                    BOOL isDeleted = dict[@"is_deleted"] ? [dict[@"is_deleted"] boolValue] : NO;
+                    if(isDeleted) {
+                        WKChannel *channel = [[WKChannel alloc] initWith:dict[@"uid"] channelType:WK_PERSON];
+                        [[WKSDK shared].channelManager deleteChannelInfo:channel];
+                    } else {
+                        [channelInfos addObject:[WKChannelUtil toChannelInfo:dict]];
+                    }
                 }
+                long long version = [contacts.lastObject[@"version"] longLongValue];
+                // iOS 12+ 系统会自动调度落盘，去掉主动 synchronize 以减少阻塞
+                [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%lld",version] forKey:cacheKey];
+                // [Online 保留] friend/sync 同样不返 online 字段，merge 旧值避免覆盖
+                for (WKChannelInfo *info in channelInfos) {
+                    WKChannelInfo *old = [[WKSDK shared].channelManager getChannelInfo:info.channel];
+                    if (!old) continue;
+                    info.online = old.online;
+                    info.lastOffline = old.lastOffline;
+                    info.deviceFlag = old.deviceFlag;
+                }
+                weakSelf.isBatchUpdating = YES;
+                [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
+                weakSelf.isBatchUpdating = NO;
             }
-            long long version = [contacts.lastObject[@"version"] longLongValue];
-            [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%lld",version] forKey:cacheKey];
-            [[NSUserDefaults standardUserDefaults] synchronize];
-            weakSelf.isBatchUpdating = YES;
-            [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
-            weakSelf.isBatchUpdating = NO;
-        }
-        // 从数据库重新加载（API 可能只返回增量数据）
-        NSArray<WKChannelInfo*> *allInfos = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
-        [weakSelf applyIncrementalUpdate:allInfos ?: @[]];
-        weakSelf.dataLoaded = YES;
-        weakSelf.lastLoadTime = [[NSDate date] timeIntervalSince1970];
-        weakSelf.isUpdating = NO;
+            // 从数据库重新加载（API 可能只返回增量数据）
+            NSArray<WKChannelInfo*> *allInfos = [[WKChannelInfoDB shared] queryChannelInfosWithStatusAndFollow:WKChannelStatusNormal follow:WKChannelInfoFollowFriend];
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf applyIncrementalUpdate:allInfos ?: @[]];
+                weakSelf.dataLoaded = YES;
+                weakSelf.lastLoadTime = [[NSDate date] timeIntervalSince1970];
+                weakSelf.isUpdating = NO;
+            });
+        });
     }).catch(^(NSError *error){
         WKLogError(@"拉取好友联系人失败:%@", error);
         weakSelf.dataLoaded = YES;
@@ -681,16 +728,56 @@
     return _tableHeader;
 }
 
+#pragma mark - 顶部固定栏（搜索 + 全部/AI/人类 tab，不随 tableView 滚动）
+
+-(UIView*) topStickyView {
+    if(!_topStickyView) {
+        CGFloat searchTop = 8.0f;
+        CGFloat searchH   = 36.0f;
+        CGFloat searchBottom = 10.0f;
+        CGFloat filterH   = 50.0f;
+        CGFloat totalH    = searchTop + searchH + searchBottom + filterH;
+        CGFloat top       = self.navigationBar.lim_bottom;
+        _topStickyView = [[UIView alloc] initWithFrame:CGRectMake(0, top, WKScreenWidth, totalH)];
+        _topStickyView.backgroundColor = WKApp.shared.config.cellBackgroundColor;
+
+        // 搜索栏
+        self.searchbarView.frame = CGRectMake(14.0f, searchTop, WKScreenWidth - 28.0f, searchH);
+        [_topStickyView addSubview:self.searchbarView];
+
+        // filter tab 容器（pill 内容由 refreshFilterTabContainer 重建）
+        _filterTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, searchTop + searchH + searchBottom, WKScreenWidth, filterH)];
+        _filterTabContainer.backgroundColor = WKApp.shared.config.cellBackgroundColor;
+        [_topStickyView addSubview:_filterTabContainer];
+
+        [self refreshFilterTabContainer];
+    }
+    return _topStickyView;
+}
+
+-(void) refreshFilterTabContainer {
+    if(!_filterTabContainer) return;
+    for(UIView *v in _filterTabContainer.subviews) [v removeFromSuperview];
+    UIView *pill = [self contactsFilterHeaderView];
+    pill.frame = CGRectMake(0, 0, _filterTabContainer.lim_width, _filterTabContainer.lim_height);
+    [_filterTabContainer addSubview:pill];
+}
+
 -(UITableView *)tableView{
     if(!_tableView){
-        _tableView = [[UITableView alloc] initWithFrame:[self visibleRect] style:UITableViewStyleGrouped];
+        // tableView 起点 = 顶部固定栏底部，避开 searchbar + filter tab 区域
+        CGRect r = [self visibleRect];
+        CGFloat stickyH = self.topStickyView.frame.size.height;
+        r.origin.y    += stickyH;
+        r.size.height -= stickyH;
+        _tableView = [[UITableView alloc] initWithFrame:r style:UITableViewStyleGrouped];
         _tableView.delegate = self;
         _tableView.dataSource = self;
         UIEdgeInsets separatorInset   = _tableView.separatorInset;
         separatorInset.right          = 0;
         _tableView.separatorInset = separatorInset;
         _tableView.backgroundColor=[UIColor clearColor];
-        
+
         _tableView.sectionIndexBackgroundColor = [UIColor clearColor];
 //        _tableView.tableFooterView = [[UIView alloc] init];
         _tableView.estimatedRowHeight = 0;
@@ -705,17 +792,18 @@
         _tableView.contentInset = UIEdgeInsetsMake(0, 0, tabBarHeight + 10, 0);
         [_tableView registerClass:WKContactsCell.class forCellReuseIdentifier:[WKContactsCell cellId]];
         [_tableView registerClass:WKContactsHeaderItemCell.class forCellReuseIdentifier:[WKContactsHeaderItemCell cellId]];
-        
-         _tableView.tableHeaderView = self.tableHeader;
-        
+
+        // 1pt 占位 tableHeaderView：消掉 grouped style 顶部 ~35pt 系统默认 padding
+        _tableView.tableHeaderView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, WKScreenWidth, 0.01f)];
         _tableView.tableFooterView = [self tableFooterView];
-        
+
     }
     return _tableView;
 }
 
 -(void) loadView{
     [super loadView];
+    [self.view addSubview:self.topStickyView]; // 顺序：sticky 在底层、tableView 在上层（tableView 高度从 sticky 之下开始，不会重叠）
     [self.view addSubview:self.tableView];
 }
 
@@ -806,13 +894,14 @@
 
 -(CGFloat) tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
     if(section == 0) {
-        return 50.0f;
+        // section 0 的 filter tab 已迁到 topStickyView 固定栏，不再走 tableView header
+        return 0.0f;
     }
     return 24.0f;
 }
 -(UIView*) tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section{
     if(section == 0) {
-        return [self contactsFilterHeaderView];
+        return nil;
     }
     if (!self.sectionTitleArr || self.sectionTitleArr.count == 0) {
         return nil;
@@ -898,6 +987,7 @@
 
 -(void) filterTabTapped:(UIButton*)sender {
     self.contactsFilter = sender.tag;
+    [self refreshFilterTabContainer]; // 立即反馈选中态，不等异步排序完
     self.currentContactsFingerprint = nil; // 强制刷新
     [self applyFilter];
 }
@@ -1597,6 +1687,9 @@
         [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1]
                       withRowAnimation:UITableViewRowAnimationNone];
     }
+
+    // filter pill 已迁到顶部固定栏，count 变化要单独刷新
+    [self refreshFilterTabContainer];
 
     // 更新 footer 联系人数量文字
     NSArray<WKChannelInfo*> *filtered = [self filteredContactInfos];

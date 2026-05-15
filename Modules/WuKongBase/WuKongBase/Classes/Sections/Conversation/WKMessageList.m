@@ -557,6 +557,31 @@
     return;
 }
 
+// 把 orderSeq 闭区间 [min, max] 内所有可选消息的 checked 置为 YES，并集语义。
+// 跨日期 section 安全：基于 orderSeq 而不是 indexPath。
+-(NSInteger) selectMessagesFromOrderSeq:(uint32_t)orderSeqA toOrderSeq:(uint32_t)orderSeqB {
+    if(orderSeqA == 0 || orderSeqB == 0) {
+        return 0;
+    }
+    uint32_t minSeq = MIN(orderSeqA, orderSeqB);
+    uint32_t maxSeq = MAX(orderSeqA, orderSeqB);
+    __block NSInteger added = 0;
+    [self.messagesLock lock];
+    [self.dateMessageGroups enumerateKeysAndObjectsUsingBlock:^(NSString * _Nonnull key, NSMutableArray<WKMessageModel *> * _Nonnull messages, BOOL * _Nonnull stop) {
+        for (WKMessageModel *messageModel in messages) {
+            if(messageModel.contentType == WK_TYPING) continue;
+            if(messageModel.orderSeq == 0) continue;
+            if(messageModel.orderSeq < minSeq || messageModel.orderSeq > maxSeq) continue;
+            if(!messageModel.checked) {
+                messageModel.checked = YES;
+                added++;
+            }
+        }
+    }];
+    [self.messagesLock unlock];
+    return added;
+}
+
 -(NSString*) formatMessageDate:(WKMessageModel*)model {
     return [self formatDate:[NSDate dateWithTimeIntervalSince1970:model.timestamp] ];
 }

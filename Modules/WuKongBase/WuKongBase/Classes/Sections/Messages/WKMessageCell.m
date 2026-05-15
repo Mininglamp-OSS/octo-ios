@@ -390,6 +390,14 @@ static NSMutableDictionary *flameNodeCacheDict;
     }
     self.messageModel.checked = !self.messageModel.checked;
     [self.checkBox setOn:self.messageModel.checked];
+    // 仅"勾选"时刷新区间选择 anchor，取消勾选时保持原 anchor 让用户继续区间选择
+    if(self.messageModel.checked && self.messageModel.clientMsgNo.length > 0) {
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"WKMessageMultipleAnchorDidChange"
+                                                            object:nil
+                                                          userInfo:@{@"clientMsgNo": self.messageModel.clientMsgNo}];
+    }
+    // 选中数量变了（勾或取消都算），让 conversationView 刷新底部"已选 N 条"
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"WKMessageMultipleSelectionDidChange" object:nil];
 }
 
 -(void) onLongTap:(UIGestureRecognizer *)gestureRecognizer {
@@ -782,20 +790,34 @@ static NSMutableDictionary *flameNodeCacheDict;
     return nicknameSize;
 }
 
-/// 获取昵称行的总宽度（包括AI标识徽章），用于气泡宽度计算
+/// 获取昵称行的总宽度（包括实名认证徽章 / AI标识徽章），用于气泡宽度计算
 +(CGFloat) getNicknameRowWidth:(WKMessageModel*)messageModel {
     CGSize nicknameSize = [self getNicknameSize:messageModel];
     CGFloat totalWidth = nicknameSize.width;
+
+    WKChannelInfo *fromChannelInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:messageModel.fromUid channelType:WK_PERSON]];
+
+    // 实名认证 ✓ 徽章宽度（YUJ-381）：tri-state fallback 与 refresh:/layoutName 一致
+    // member.extra 显式 @NO 直接视为未实名，nil 才回退到 person.extra。
+    // 几何同步 layoutName：6pt 间距 + 12pt 图标宽。
+    NSNumber *memberFlag = [WKChannelUtil isRealnameVerifiedFromExtra:messageModel.memberOfFrom.extra];
+    BOOL verified = NO;
+    if(memberFlag == nil) {
+        NSNumber *personFlag = [WKChannelUtil isRealnameVerifiedFromExtra:fromChannelInfo.extra];
+        verified = personFlag.boolValue;
+    } else {
+        verified = memberFlag.boolValue;
+    }
+    if(verified) {
+        totalWidth += 6.0f + 12.0f; // 6pt gap + 12pt icon
+    }
 
     // 判断是否为机器人，需要加上AI标识的宽度
     BOOL isBot = NO;
     if(messageModel.memberOfFrom.robot) {
         isBot = YES;
-    } else {
-        WKChannelInfo *fromChannelInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:messageModel.fromUid channelType:WK_PERSON]];
-        if(fromChannelInfo && fromChannelInfo.robot) {
-            isBot = YES;
-        }
+    } else if(fromChannelInfo && fromChannelInfo.robot) {
+        isBot = YES;
     }
     if(isBot) {
         // AI标识: "AI"文本(10pt字体) + 8pt内边距 + 6pt间距

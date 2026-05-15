@@ -23,6 +23,7 @@
 #import "WKThreadService.h"
 #import "WKThreadModel.h"
 #import "WKThreadCreatedContent.h"
+#import "WKAISummaryEntryController.h"
 @interface WKConversationVC ()<WKChannelManagerDelegate>
 
 @property(nonatomic,strong) WKConversationView *conversationView;
@@ -96,6 +97,9 @@
         self.conversationView.topView.lim_height = topPanel.lim_height;
         [self.conversationView.topView addSubview:topPanel];
     }
+
+    // [AI Summary v1] 入口控制器：候选 Bot 集合 ∩ 在线 → 显隐按钮 + 长按菜单 + 推 Bot DM
+    [WKAISummaryEntryController attachToMessageListView:self.conversationView.messageListView channel:self.channel];
 }
 
 

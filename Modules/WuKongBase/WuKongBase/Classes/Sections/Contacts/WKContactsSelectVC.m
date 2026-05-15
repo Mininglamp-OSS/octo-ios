@@ -13,6 +13,8 @@
 #import "WKContacts.h"
 #import "WKRealnamePrefetcher.h"
 #import  "UIBarButtonItem+WK.h"
+#import "WKAPIClient.h"
+#import "WKAvatarUtil.h"
 //头部视图高度
 #define HEAD_VIEW_HEIGHT 50
 #define FILTER_TAB_HEIGHT 50
@@ -118,6 +120,198 @@
             contactsSelect.mode = self.mode;
         }
     }
+    // Space 模式下，异步过滤 robot 联系人，只保留当前空间已添加的 AI
+    // 与通讯录 WKBotListVM.requestBots 逻辑保持一致
+    [self filterRobotContactsForCurrentSpace];
+}
+
+/// 选人页 robot 过滤口径（YUJ-xxx 修复）：
+/// 1. 系统账号（fileHelperUID / systemUID）永久排除 —— 即便 DB 里 robot=YES。
+/// 2. Space 模式下，初始就把所有 robot 从 self.data 剔除（兜底防御），
+///    避免 API 未返回/失败时短暂或长期看到「全部 AI」。
+/// 3. 三个接口求并集 = my_bots ∪ space_bots(status=added) ∪ space.members(robot=YES)，
+///    与通讯录页 myBotCount 计数口径对齐，覆盖「我添加的别人的 AI（作为 space 成员）」。
+/// 4. 任一接口失败时不退化到「保留全部」，只把已成功接口拿到的 added 加回；
+///    全部失败则 AI 列表为空 —— 用户重进页面会重试。
+/// 5. 用户没进过通讯录页时 DB 里没有 my_bots 的 channelInfo —— 此时
+///    根据 API 返回的 name/avatar 现场构造 WKContactsSelect 补入，避免缺项。
+- (void)filterRobotContactsForCurrentSpace {
+    // 永久排除系统账号（与 Space 模式无关）
+    if (self.data && self.data.count > 0) {
+        NSMutableArray *withoutSystem = [NSMutableArray array];
+        for (WKContactsSelect *item in self.data) {
+            if ([[WKApp shared] isSystemAccount:item.uid]) continue;
+            [withoutSystem addObject:item];
+        }
+        if (withoutSystem.count != self.data.count) {
+            self.data = withoutSystem;
+        }
+    }
+
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+    if (!spaceId || spaceId.length == 0) {
+        // 非 Space 模式，不再过滤 robot
+        return;
+    }
+
+    // Space 模式：先抽出所有 robot 暂存，self.data 立刻只剩 human + 0 AI。
+    // 这样在 API 回来之前，「已添加 AI」分组不会出现任何错乱数据。
+    NSMutableArray<WKContactsSelect*> *originalRobots = [NSMutableArray array];
+    NSMutableArray<WKContactsSelect*> *humansOnly = [NSMutableArray array];
+    for (WKContactsSelect *item in self.data) {
+        if (item.robot) {
+            [originalRobots addObject:item];
+        } else {
+            [humansOnly addObject:item];
+        }
+    }
+    self.data = humansOnly;
+    [self rebuildFilterTabView];
+    [self applyFilterAndSearch];
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_group_t group = dispatch_group_create();
+    // 串行队列保证对 addedUids / uidInfo 的写操作无竞争
+    dispatch_queue_t safeQ = dispatch_queue_create("com.wk.filterRobots", DISPATCH_QUEUE_SERIAL);
+    __block NSMutableSet *addedUids = [NSMutableSet set];
+    // uid -> {name, avatar?} 用于 DB 缺项时现场构造 WKContactsSelect。
+    // 不同接口先后到达时直接覆盖，最后一个赢即可（字段都是 bot 自身属性，与 space 无关）。
+    __block NSMutableDictionary<NSString*, NSDictionary*> *uidInfo = [NSMutableDictionary dictionary];
+
+    // 1) my_bots：当前用户在该 space 下添加的 AI（含「我添加的别人的 AI」）
+    dispatch_group_enter(group);
+    [[WKAPIClient sharedClient] taskGET:@"robot/my_bots"
+                             parameters:@{@"space_id": spaceId}
+                               callback:^(NSError *error, id result) {
+        dispatch_async(safeQ, ^{
+            if (!error && [result isKindOfClass:[NSArray class]]) {
+                for (id item in (NSArray *)result) {
+                    NSDictionary *m = [item isKindOfClass:[NSDictionary class]] ? item : nil;
+                    NSString *uid = m[@"uid"];
+                    if (uid.length == 0) continue;
+                    [addedUids addObject:uid];
+                    uidInfo[uid] = @{ @"name": m[@"name"] ?: @"" };
+                }
+            }
+            dispatch_group_leave(group);
+        });
+    }];
+
+    // 2) space_bots：只取 status=added
+    dispatch_group_enter(group);
+    [[WKAPIClient sharedClient] taskGET:@"robot/space_bots"
+                             parameters:@{@"space_id": spaceId}
+                               callback:^(NSError *error, id result) {
+        dispatch_async(safeQ, ^{
+            if (!error && [result isKindOfClass:[NSArray class]]) {
+                for (id item in (NSArray *)result) {
+                    NSDictionary *bot = [item isKindOfClass:[NSDictionary class]] ? item : nil;
+                    NSString *uid = bot[@"uid"];
+                    NSString *status = bot[@"status"];
+                    if (uid.length == 0 || ![status isEqualToString:@"added"]) continue;
+                    [addedUids addObject:uid];
+                    if (!uidInfo[uid]) uidInfo[uid] = @{ @"name": bot[@"name"] ?: @"" };
+                }
+            }
+            dispatch_group_leave(group);
+        });
+    }];
+
+    // 3) space members：覆盖「别人的 AI」作为 space 共享成员的情况
+    dispatch_group_enter(group);
+    NSString *membersPath = [NSString stringWithFormat:@"space/%@/members", spaceId];
+    [[WKAPIClient sharedClient] taskGET:membersPath
+                             parameters:@{@"page": @"1", @"limit": @"10000"}
+                               callback:^(NSError *error, id result) {
+        dispatch_async(safeQ, ^{
+            if (!error && [result isKindOfClass:[NSArray class]]) {
+                for (id item in (NSArray *)result) {
+                    NSDictionary *m = [item isKindOfClass:[NSDictionary class]] ? item : nil;
+                    NSString *uid = m[@"uid"];
+                    BOOL isRobot = m[@"robot"] ? [m[@"robot"] boolValue] : NO;
+                    if (uid.length == 0 || !isRobot) continue;
+                    [addedUids addObject:uid];
+                    if (!uidInfo[uid]) {
+                        NSMutableDictionary *info = [NSMutableDictionary dictionary];
+                        info[@"name"] = m[@"name"] ?: @"";
+                        if ([m[@"avatar"] isKindOfClass:[NSString class]] && [m[@"avatar"] length] > 0) {
+                            info[@"avatar"] = m[@"avatar"];
+                        }
+                        uidInfo[uid] = info;
+                    }
+                }
+            }
+            dispatch_group_leave(group);
+        });
+    }];
+
+    // 三个请求都完成后，在主线程把命中 addedUids 的 robot 加回 self.data。
+    // 优先用 originalRobots（有 displayName/avatar 等已初始化字段），
+    // 对 DB 缺失的 uid 用 API 返回字段现场构造。
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        // [Space race] 三个 API 飞行期间用户可能切了 Space —— 此时 NSUserDefaults
+        // 里的 currentSpaceId 已变，但本次回调里 addedUids 还是旧 Space 的 Bot 集合。
+        // 直接 apply 会让旧 Space 的 AI 列表写入新 Space 的视图。
+        // 检测到不一致就丢弃本次结果；新 Space 的视图重建会重新触发本方法。
+        NSString *nowSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+        if (![nowSpaceId isEqualToString:spaceId]) {
+            NSLog(@"[ContactsSelect] Space switched mid-flight (%@ -> %@), drop stale robot list",
+                  spaceId, nowSpaceId);
+            return;
+        }
+        if (addedUids.count == 0) {
+            // 全部接口失败或返回空 —— 保持 0 AI 状态，用户重进页面会重试
+            return;
+        }
+
+        NSMutableArray<WKContactsSelect*> *robotsToAdd = [NSMutableArray array];
+        NSMutableSet<NSString*> *includedUids = [NSMutableSet set];
+
+        for (WKContactsSelect *item in originalRobots) {
+            if ([addedUids containsObject:item.uid] && ![includedUids containsObject:item.uid]) {
+                [robotsToAdd addObject:item];
+                [includedUids addObject:item.uid];
+            }
+        }
+
+        // 用 API 数据补 DB 缺项（典型场景：用户没进过通讯录页，DB 里没有「我添加的别人的 AI」）
+        for (NSString *uid in addedUids) {
+            if ([includedUids containsObject:uid]) continue;
+            if ([[WKApp shared] isSystemAccount:uid]) continue;
+            NSDictionary *info = uidInfo[uid];
+            if (!info) continue;
+
+            WKContactsSelect *contacts = [[WKContactsSelect alloc] init];
+            contacts.uid = uid;
+            contacts.name = info[@"name"] ?: @"";
+            contacts.displayName = info[@"name"] ?: @"";
+            NSString *apiAvatar = info[@"avatar"];
+            if (apiAvatar.length > 0) {
+                contacts.avatar = apiAvatar;
+            } else {
+                contacts.avatar = [WKAvatarUtil getAvatar:uid];
+            }
+            contacts.robot = YES;
+            contacts.selected = strongSelf.selecteds ? [strongSelf.selecteds containsObject:uid] : NO;
+            contacts.disable = strongSelf.disables ? [strongSelf.disables containsObject:uid] : NO;
+            contacts.mode = strongSelf.mode;
+            [robotsToAdd addObject:contacts];
+            [includedUids addObject:uid];
+        }
+
+        if (robotsToAdd.count == 0) return;
+
+        NSMutableArray *newData = [NSMutableArray arrayWithArray:strongSelf.data];
+        [newData addObjectsFromArray:robotsToAdd];
+        strongSelf.data = newData;
+        [strongSelf rebuildFilterTabView];
+        [strongSelf applyFilterAndSearch];
+        if (!strongSelf.maxSelectMembers || strongSelf.maxSelectMembers < (NSInteger)strongSelf.data.count) {
+            strongSelf.maxSelectMembers = strongSelf.data.count;
+        }
+    });
 }
 
 // 请求有效联系人数据

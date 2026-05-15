@@ -33,6 +33,9 @@ typedef enum : NSUInteger {
 
 @property(nonatomic,weak) id<WKMultiplePanelDelegate> delegate;
 
+// 顶部"已选 N 条"计数显示。每次 selection 变化由 WKConversationView 调一次。
+-(void) setSelectedCount:(NSInteger)count;
+
 @end
 
 NS_ASSUME_NONNULL_END

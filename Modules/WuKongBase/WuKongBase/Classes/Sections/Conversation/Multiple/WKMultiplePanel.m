@@ -12,6 +12,7 @@
 #import "WuKongBase.h"
 @interface WKMultiplePanel ()
 
+@property(nonatomic,strong) UILabel *selectedCountLabel; // 顶部"已选 N 条"
 @property(nonatomic,strong) UIButton *forwardBtn;
 
 @property(nonatomic,strong) UIButton *deleteBtn; // 删除
@@ -20,6 +21,8 @@
 @end
 
 #define iconWidth 40.0f
+#define countLabelHeight 22.0f
+#define countLabelTopPadding 6.0f
 
 @implementation WKMultiplePanel
 
@@ -28,10 +31,26 @@
     self = [super initWithFrame:frame];
     if (self) {
         [self setBackgroundColor:[UIColor whiteColor]];
+        [self addSubview:self.selectedCountLabel];
         [self addSubview:self.forwardBtn];
         [self addSubview:self.deleteBtn];
     }
     return self;
+}
+
+- (UILabel *)selectedCountLabel {
+    if(!_selectedCountLabel) {
+        _selectedCountLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+        _selectedCountLabel.font = [UIFont systemFontOfSize:13.0f];
+        _selectedCountLabel.textColor = [UIColor colorWithWhite:0.5 alpha:1.0];
+        _selectedCountLabel.textAlignment = NSTextAlignmentCenter;
+        _selectedCountLabel.text = [NSString stringWithFormat:LLang(@"已选 %ld 条"), (long)0];
+    }
+    return _selectedCountLabel;
+}
+
+-(void) setSelectedCount:(NSInteger)count {
+    self.selectedCountLabel.text = [NSString stringWithFormat:LLang(@"已选 %ld 条"), (long)count];
 }
 
 - (UIButton *)forwardBtn {
@@ -81,13 +100,18 @@
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    
+
+    // 顶部"已选 N 条"
+    self.selectedCountLabel.frame = CGRectMake(0, countLabelTopPadding, self.lim_width, countLabelHeight);
+
+    // 把按钮的纵向位置压在 label 之下，水平依旧三等分
+    CGFloat buttonsTop = countLabelTopPadding + countLabelHeight + 4.0f;
+    self.forwardBtn.lim_top = buttonsTop;
+    self.deleteBtn.lim_top = buttonsTop;
+
     CGFloat space = (self.lim_width - iconWidth*2)/3.0f;
-    
     self.forwardBtn.lim_left = space;
-    
     self.deleteBtn.lim_left = self.forwardBtn.lim_right + space;
-    
 }
 
 

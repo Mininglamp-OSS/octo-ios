@@ -19,16 +19,60 @@
 #import "UIImage+Compression.h"
 //#import <ZLPhotoBrowser/ZLPhotoBrowser.h>
 
-@interface WKMediaPickerController : TZImagePickerController
+@interface WKMediaPickerController : TZImagePickerController <UINavigationControllerDelegate>
 
 @end
 
 @implementation WKMediaPickerController
 
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.delegate = self; // 监听 push/show，兜底覆盖 leftBarButtonItem
+}
+
 - (void)viewWillAppear:(BOOL)animated
 {
     [super viewWillAppear:animated];
     [UIApplication sharedApplication].statusBarStyle =  UIStatusBarStyleDefault;
+}
+
+#pragma mark - UINavigationControllerDelegate
+
+// 兜底覆盖：每次 push/show 完成后，强制给非 root 的 child VC 设 leftBarButtonItem
+// 这一步独立于 navLeftBarButtonSettingBlock，无论 TZ 内部走哪条 backBarButton 分支都能稳定显示。
+- (void)navigationController:(UINavigationController *)navigationController
+       didShowViewController:(UIViewController *)viewController
+                    animated:(BOOL)animated {
+    if (self.viewControllers.firstObject == viewController) {
+        return; // root vc 不显示返回按钮
+    }
+    UIButton *leftBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    leftBtn.frame = CGRectMake(0, 0, 44, 44);
+    UIImage *icon = nil;
+    if (@available(iOS 13.0, *)) {
+        icon = [UIImage systemImageNamed:@"chevron.backward"];
+    }
+    UIColor *tint = self.navigationBar.tintColor ?: ([WKApp shared].config.themeColor ?: [UIColor systemBlueColor]);
+    if (icon) {
+        [leftBtn setImage:[icon imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal];
+        leftBtn.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        leftBtn.contentEdgeInsets = UIEdgeInsetsMake(8, 0, 8, 12);
+    } else {
+        [leftBtn setTitle:LLang(@"返回") forState:UIControlStateNormal];
+        [leftBtn setTitleColor:tint forState:UIControlStateNormal];
+        leftBtn.titleLabel.font = [UIFont systemFontOfSize:16.0f];
+    }
+    leftBtn.tintColor = tint;
+    [leftBtn addTarget:self action:@selector(_wkPickerBackTapped) forControlEvents:UIControlEventTouchUpInside];
+    viewController.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:leftBtn];
+}
+
+- (void)_wkPickerBackTapped {
+    if (self.viewControllers.count > 1) {
+        [self popViewControllerAnimated:YES];
+    } else {
+        [self dismissViewControllerAnimated:YES completion:nil];
+    }
 }
 
 - (void)dealloc
@@ -166,10 +210,60 @@
 
     void (^showPicker)(void) = ^{
         WKMediaPickerController *vc = [[WKMediaPickerController alloc] initWithMaxImagesCount:weakSelf.limit delegate:weakSelf];
-        vc.naviBgColor = [UIColor blackColor];
-        vc.naviTitleColor = [UIColor whiteColor];
-        vc.barItemTextColor = [UIColor whiteColor];
+
+        // 配色策略（同步深浅模式）：
+        //   bg     = systemBackground（浅色白 / 深色黑）
+        //   title  = label（浅色黑 / 深色白）
+        //   item   = app 主题紫，紫色对黑/白底都有足够对比，深浅模式下都看得清
+        // 之前只设了 barItemTextColor 没设 navigationBar.tintColor，
+        // 导致左上角系统 cancel 按钮颜色跟随系统默认 tint，跟背景容易"几乎一样"。
+        UIColor *navBg;
+        UIColor *navTitle;
+        if (@available(iOS 13.0, *)) {
+            navBg = [UIColor systemBackgroundColor];
+            navTitle = [UIColor labelColor];
+        } else {
+            navBg = [UIColor whiteColor];
+            navTitle = [UIColor blackColor];
+        }
+        UIColor *itemColor = [WKApp shared].config.themeColor ?: [UIColor systemBlueColor];
+
+        // TZImagePickerController.bundle 在当前集成方式下没被复制到 app（resources.sh 里没它），
+        // 所以 [NSBundle tz_imagePickerBundle] 返回 nil，内部所有 tz_localizedStringForKey: 都返回空串
+        // → 左上角 backBarButton 的 title 是 ""，系统只画 chevron 图标但 normal 状态下经常看不清，
+        //    必须长按高亮才能看到 → 这里显式覆盖按钮文案 + 用 navLeftBarButtonSettingBlock 自绘左按钮。
+        vc.cancelBtnTitleStr     = LLangW(@"取消", weakSelf);
+        vc.doneBtnTitleStr       = LLangW(@"完成", weakSelf);
+        vc.previewBtnTitleStr    = LLangW(@"预览", weakSelf);
+        vc.fullImageBtnTitleStr  = LLangW(@"原图", weakSelf);
+
+        // 自绘左上角按钮：图片网格页是 child[1]，TZ 会在 navLeftBarButtonSettingBlock 存在时
+        // 用 customView 替换系统 backBarButton；click 默认走 navLeftBarButtonClick → pop 回相册分类列表
+        UIColor *leftBtnColor = itemColor;
+        vc.navLeftBarButtonSettingBlock = ^(UIButton *leftButton) {
+            UIImage *icon = nil;
+            if (@available(iOS 13.0, *)) {
+                icon = [UIImage systemImageNamed:@"chevron.backward"];
+            }
+            if (icon) {
+                [leftButton setImage:[icon imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal];
+                leftButton.tintColor = leftBtnColor;
+                leftButton.imageView.contentMode = UIViewContentModeScaleAspectFit;
+                leftButton.contentEdgeInsets = UIEdgeInsetsMake(8, 0, 8, 12); // 左对齐 + 增加点击区
+            } else {
+                // iOS 12 fallback：用文字
+                [leftButton setTitle:LLangW(@"返回", weakSelf) forState:UIControlStateNormal];
+                [leftButton setTitleColor:leftBtnColor forState:UIControlStateNormal];
+                leftButton.titleLabel.font = [UIFont systemFontOfSize:16.0f];
+            }
+        };
+
+        vc.naviBgColor = navBg;
+        vc.naviTitleColor = navTitle;
+        vc.barItemTextColor = itemColor;
+        vc.navigationBar.tintColor = itemColor; // system bar items（cancel/back）走 tintColor
         vc.navigationBar.barStyle = UIBarStyleDefault;
+
         vc.allowTakePicture = weakSelf.allowTakePicture;
         vc.allowPickingVideo = [weakSelf.mediaTypes containsObject:(NSString *)kUTTypeMovie];
         if(handler) handler(vc);

@@ -20,6 +20,7 @@
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKMessageEffectManager.h"
 #import "WKMessageCell.h"
+#import "WKMultipleSelectToHereButton.h"
 #import <SDWebImage/SDWebImage.h>
 @interface WKMessageListView ()<UITableViewDelegate,UITableViewDataSource,WKConversationTableViewDelegate,WKChannelManagerDelegate,WKChatManagerDelegate,WKReactionManagerDelegate,WKConnectionManagerDelegate,WKTypingManagerDelegate,WKReminderManagerDelegate>
 
@@ -32,6 +33,15 @@
 
 @property(nonatomic,assign) BOOL multipleOn;
 @property(nonatomic,strong,nullable) WKMessageModel *lastMessageInner;
+
+// -------------------- 多选区间选择 --------------------
+// 多选模式下 "选到这里" 的起始 anchor，记 clientMsgNo 而非 indexPath（消息插入/删除后仍稳定）
+@property(nonatomic,copy,nullable) NSString *multipleAnchorClientMsgNo;
+@property(nonatomic,strong) WKMultipleSelectToHereButton *selectToHereTopButton;
+@property(nonatomic,strong) WKMultipleSelectToHereButton *selectToHereBottomButton;
+@property(nonatomic,assign) NSTimeInterval lastSelectToHereUpdateAt; // 节流
+// "选到这里"批量后进入连续模式：anchor 位于 visible 边缘，下次只要 anchor 一离开 visible 就显示按钮（不等满 1 屏）
+@property(nonatomic,assign) BOOL multipleAnchorContinuous;
 
 // pulldown 期间串行化新消息，防止并发修改导致布局错乱
 @property(nonatomic,assign) BOOL isPulldownInProgress;
@@ -55,6 +65,8 @@
     self.clipsToBounds = YES;
     [self addSubview:self.tableView];
     [self initPosition];
+
+    [self setupSelectToHereButtons];
 
     [self addDelegates];
 
@@ -110,6 +122,8 @@
     [[WKReminderManager shared] addDelegate:self]; // 提醒项监听
     // 外部分享消息发送通知
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onShareExtensionMessageSent:) name:@"WKShareExtensionMessageSent" object:nil];
+    // 多选模式下 cell 圆圈被勾选时刷新 anchor
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onMultipleAnchorDidChange:) name:@"WKMessageMultipleAnchorDidChange" object:nil];
 }
 
 -(void) removeDelegates {
@@ -120,6 +134,7 @@
     [[WKTypingManager shared] removeDelegate:self];
     [[WKReminderManager shared] removeDelegate:self];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKShareExtensionMessageSent" object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKMessageMultipleAnchorDidChange" object:nil];
 }
 
 /// 外部分享的消息发送后，插入消息到当前聊天页面
@@ -1213,14 +1228,22 @@
     self.multipleOn = multiple;
     // 先取消所有选中的
     [self cancelAllSelected];
-    
+
     __weak typeof(self) weakSelf = self;
     if(multiple) {
         if(messageModel && messageModel.contentType != WK_TYPING) {
             messageModel.checked = YES;
         }
+        // 区间选择 anchor 起点
+        self.multipleAnchorClientMsgNo = (messageModel && messageModel.clientMsgNo.length > 0) ? [messageModel.clientMsgNo copy] : nil;
+        self.multipleAnchorContinuous = NO;
+    } else {
+        self.multipleAnchorClientMsgNo = nil;
+        self.multipleAnchorContinuous = NO;
+        [self.selectToHereTopButton hideAnimated:NO];
+        [self.selectToHereBottomButton hideAnimated:NO];
     }
-    
+
     // checkBox动画
     [self visiableCellAnimatioCheckBoxShow:multiple];
     // checBox动画后才reloadData 如果不这样动画会被盖掉
@@ -1254,6 +1277,169 @@
             }
         }
     }
+}
+
+#pragma mark - 多选区间选择 ("选到这里" 浮层按钮)
+
+-(void) setupSelectToHereButtons {
+    self.selectToHereTopButton = [[WKMultipleSelectToHereButton alloc] initWithPosition:WKMultipleSelectToHerePositionTop];
+    [self.selectToHereTopButton addTarget:self action:@selector(selectToHereTopTapped) forControlEvents:UIControlEventTouchUpInside];
+    [self addSubview:self.selectToHereTopButton];
+
+    self.selectToHereBottomButton = [[WKMultipleSelectToHereButton alloc] initWithPosition:WKMultipleSelectToHerePositionBottom];
+    [self.selectToHereBottomButton addTarget:self action:@selector(selectToHereBottomTapped) forControlEvents:UIControlEventTouchUpInside];
+    [self addSubview:self.selectToHereBottomButton];
+}
+
+// cell 圆圈被勾选时（来自通知）刷新 anchor
+-(void) onMultipleAnchorDidChange:(NSNotification *)notification {
+    if (!self.multipleOn) return;
+    NSString *clientMsgNo = notification.userInfo[@"clientMsgNo"];
+    if (clientMsgNo.length > 0) {
+        self.multipleAnchorClientMsgNo = [clientMsgNo copy];
+        // 用户手动选了某条 cell（不是通过"选到这里"批量），脱离连续模式，恢复 1 屏阈值
+        self.multipleAnchorContinuous = NO;
+        [self updateSelectToHereButtonsVisibility];
+    }
+}
+
+-(void) updateSelectToHereButtonsThrottled {
+    NSTimeInterval now = CACurrentMediaTime();
+    if (now - self.lastSelectToHereUpdateAt < 0.08) return;
+    self.lastSelectToHereUpdateAt = now;
+    [self updateSelectToHereButtonsVisibility];
+}
+
+-(void) updateSelectToHereButtonsVisibility {
+    if (!self.multipleOn || self.multipleAnchorClientMsgNo.length == 0) {
+        if (self.selectToHereTopButton.isShowing)    [self.selectToHereTopButton hideAnimated:YES];
+        if (self.selectToHereBottomButton.isShowing) [self.selectToHereBottomButton hideAnimated:YES];
+        return;
+    }
+
+    NSIndexPath *anchorPath = [self.dataProvider indexPathAtClientMsgNo:self.multipleAnchorClientMsgNo];
+    if (!anchorPath) {
+        return;
+    }
+
+    NSArray<NSIndexPath *> *visibleRows = [self.tableView indexPathsForVisibleRows];
+    if (visibleRows.count == 0) {
+        if (self.selectToHereTopButton.isShowing)    [self.selectToHereTopButton hideAnimated:YES];
+        if (self.selectToHereBottomButton.isShowing) [self.selectToHereBottomButton hideAnimated:YES];
+        return;
+    }
+
+    // visibleRows 不一定升序，显式取 min/max
+    NSIndexPath *firstVisible = visibleRows.firstObject;
+    NSIndexPath *lastVisible  = visibleRows.firstObject;
+    BOOL anchorVisible = NO;
+    for (NSIndexPath *p in visibleRows) {
+        if ([p compare:firstVisible] == NSOrderedAscending) firstVisible = p;
+        if ([p compare:lastVisible]  == NSOrderedDescending) lastVisible  = p;
+        if (p.section == anchorPath.section && p.row == anchorPath.row) {
+            anchorVisible = YES;
+        }
+    }
+
+    if (anchorVisible) {
+        if (self.selectToHereTopButton.isShowing)    [self.selectToHereTopButton hideAnimated:YES];
+        if (self.selectToHereBottomButton.isShowing) [self.selectToHereBottomButton hideAnimated:YES];
+        return;
+    }
+
+    BOOL anchorAbove = ([anchorPath compare:firstVisible] == NSOrderedAscending);
+    BOOL anchorBelow = ([anchorPath compare:lastVisible]  == NSOrderedDescending);
+
+    BOOL shouldShowTop = NO;
+    BOOL shouldShowBottom = NO;
+    if (anchorAbove) {
+        // anchor 在 visible 上方（更老）→ 朝下选 → 底部按钮
+        shouldShowBottom = YES;
+    } else if (anchorBelow) {
+        // anchor 在 visible 下方（更新）→ 朝上选 → 顶部按钮
+        shouldShowTop = YES;
+    }
+
+    if (shouldShowTop) {
+        [self layoutSelectToHereButton:self.selectToHereTopButton];
+        if (!self.selectToHereTopButton.isShowing) [self.selectToHereTopButton showAnimated:YES];
+    } else {
+        if (self.selectToHereTopButton.isShowing) [self.selectToHereTopButton hideAnimated:YES];
+    }
+    if (shouldShowBottom) {
+        [self layoutSelectToHereButton:self.selectToHereBottomButton];
+        if (!self.selectToHereBottomButton.isShowing) [self.selectToHereBottomButton showAnimated:YES];
+    } else {
+        if (self.selectToHereBottomButton.isShowing) [self.selectToHereBottomButton hideAnimated:YES];
+    }
+}
+
+-(void) layoutSelectToHereButton:(WKMultipleSelectToHereButton *)button {
+    if (!button) return;
+    CGFloat left = 16.0f; // 贴齐 cell 左侧圆圈
+
+    // 聊天页 tableView 通过 adjustTableWithOffset 设置 lim_top = -offset 给 multiplePanel/input 让位，
+    // 所以 tableView.frame 在 listView 坐标系里是 (0, -offset, w, h)，
+    // 它的"视觉可见区域"是 [max(frame.y, 0), min(maxY(frame), self.bounds.height)]。
+    // 顶部按钮贴视觉顶 + 8pt，底部按钮贴视觉底（tableView 真正能看见的最底，即 multiplePanel 顶）- 8pt。
+    CGFloat visualTop    = MAX(self.tableView.frame.origin.y, 0.0f);
+    CGFloat visualBottom = MIN(CGRectGetMaxY(self.tableView.frame), self.bounds.size.height);
+
+    CGFloat top;
+    if (button.position == WKMultipleSelectToHerePositionTop) {
+        top = visualTop + 8.0f;
+    } else {
+        top = visualBottom - button.bounds.size.height - 8.0f;
+    }
+    CGRect frame = button.frame;
+    frame.origin.x = left;
+    frame.origin.y = top;
+    button.frame = frame;
+}
+
+-(void) selectToHereTopTapped {
+    [self performSelectToHereForPosition:WKMultipleSelectToHerePositionTop];
+}
+
+-(void) selectToHereBottomTapped {
+    [self performSelectToHereForPosition:WKMultipleSelectToHerePositionBottom];
+}
+
+-(void) performSelectToHereForPosition:(WKMultipleSelectToHerePosition)position {
+    if (!self.multipleOn || self.multipleAnchorClientMsgNo.length == 0) return;
+    NSIndexPath *anchorPath = [self.dataProvider indexPathAtClientMsgNo:self.multipleAnchorClientMsgNo];
+    if (!anchorPath) return;
+    WKMessageModel *anchorModel = [self.dataProvider messageAtIndexPath:anchorPath];
+    if (!anchorModel || anchorModel.orderSeq == 0) return;
+
+    NSArray<NSIndexPath *> *visibleRows = [self.tableView indexPathsForVisibleRows];
+    if (visibleRows.count == 0) return;
+    NSIndexPath *targetPath = (position == WKMultipleSelectToHerePositionTop) ? visibleRows.firstObject : visibleRows.lastObject;
+    WKMessageModel *targetModel = [self.dataProvider messageAtIndexPath:targetPath];
+    if (!targetModel || targetModel.orderSeq == 0) return;
+
+    [self.dataProvider selectMessagesFromOrderSeq:anchorModel.orderSeq toOrderSeq:targetModel.orderSeq];
+
+    if (targetModel.clientMsgNo.length > 0) {
+        self.multipleAnchorClientMsgNo = [targetModel.clientMsgNo copy];
+    }
+    // 进入连续模式：新 anchor 紧贴 visible 边缘，下次离开 visible 立刻显示按钮
+    self.multipleAnchorContinuous = YES;
+
+    // 刷新可见 cell 的圆圈勾选 UI
+    NSArray *visibleCells = [self visibleCells];
+    for (UITableViewCell *cell in visibleCells) {
+        if ([cell isKindOfClass:[WKMessageCell class]]) {
+            WKMessageCell *messageCell = (WKMessageCell *)cell;
+            if (messageCell.messageModel) {
+                [messageCell.checkBox setOn:messageCell.messageModel.checked];
+            }
+        }
+    }
+
+    [self updateSelectToHereButtonsVisibility];
+    // 批量勾选了一段区间，通知外层刷新"已选 N 条"
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"WKMessageMultipleSelectionDidChange" object:nil];
 }
 
 -(NSArray<WKMessageModel*>*) getMessagesWithContentType:(NSInteger)contentType {
@@ -1828,6 +2014,7 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     self.scrolling = true;
     [self updateBrowseToOrderSeq];
     [self scrollViewDidScrollOfPosition:scrollView];
+    [self updateSelectToHereButtonsThrottled];
 
     // 滚到顶部自动触发 MJRefresh 加载历史消息（显示菊花）
     CGFloat offsetY = scrollView.contentOffset.y + scrollView.contentInset.top;

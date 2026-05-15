@@ -183,7 +183,21 @@
     // 加载最近会话列表数据
     __weak __typeof(self) weakSelf  = self;
     [_conversationListVM loadConversationList:^{
-        // 先用当前 categoryList（可能为空）构建一次展示列表，确保群聊 tab 能立即显示内容
+        // YUJ-bot-isolation 冷启动 race 兜底（PR #118 review fix）：
+        // viewDidLoad 同时发起 loadBotsForSpace（网络）和本 loadConversationList（DB）。
+        // 若网络早回 → onSpaceBotRegistryDidLoad 在空 VM 上 prune 等于 no-op；
+        // 此处 VM 已被 DB 回灌完成，再做一次 prune 才能擦掉跨 Space 的 stale Bot 行。
+        // 若 registry 未回（Unknown）→ 本次 prune no-op，registry 后到时
+        // onSpaceBotRegistryDidLoad 会在已 ready 的 VM 上兜底再 prune。两端 callback
+        // 都 prune，谁先到都覆盖。
+        // 注意：prune 必须在 rebuildGroupDisplayAndReload 之前；removeAtChannnel
+        // 只改内存不刷 tableView，先 rebuild 再 prune 会让 stale Bot 行留到下次刷新。
+        // 与切 Space 路径（L1210）/ 冷启动无 sync 路径（L1108）三处保持同一节奏。
+        NSString *bootSpaceForPrune = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+        if(bootSpaceForPrune.length > 0) {
+            [weakSelf.conversationListVM pruneNonCurrentSpaceBotsForSpace:bootSpaceForPrune];
+        }
+        // 用当前 categoryList（可能为空）构建一次展示列表，确保群聊 tab 能立即显示内容
         [weakSelf rebuildGroupDisplayAndReload];
         [weakSelf refreshBadge];
         // 异步加载分组数据，完成后再次刷新
@@ -1165,7 +1179,10 @@
 
     if(filtered.count>1) {
         for (WKConversation *conversation in filtered) {
-            if (conversation.channel.channelType == WK_GROUP && conversation.lastMessage) {
+            // 私聊 + 群聊都允许触发提醒（子区已在 line 1156 分支处理过，nonThreadFiltered 不含子区）
+            if (conversation.lastMessage) {
+                NSLog(@"[HintDebug] conv-multi → tryShowPixelHint channelType=%d ch=%@",
+                      conversation.channel.channelType, conversation.channel.channelId);
                 [self tryShowPixelHintForMessage:conversation.lastMessage];
             }
             [self onlyAddOrUpdateConversation:conversation];
@@ -1211,7 +1228,10 @@
     }
 
    WKConversation *conversation = filtered[0];
-    if (conversation.channel.channelType == WK_GROUP && conversation.lastMessage) {
+    // 私聊 + 群聊都允许触发提醒（子区已在前面单独处理）
+    if (conversation.lastMessage) {
+        NSLog(@"[HintDebug] conv-single → tryShowPixelHint channelType=%d ch=%@",
+              conversation.channel.channelType, conversation.channel.channelId);
         [self tryShowPixelHintForMessage:conversation.lastMessage];
     }
     [self uiAddOrUpdateConversationForOne:conversation];
@@ -3360,7 +3380,8 @@
     if (!message) return;
 
     WKChannel *channel = message.channel;
-    if (channel.channelType != WK_GROUP && channel.channelType != WK_COMMUNITY_TOPIC) return;
+    // 私聊 / 群聊 / 子区都允许触发，不再限制 channelType
+    if (channel.channelType != WK_GROUP && channel.channelType != WK_COMMUNITY_TOPIC && channel.channelType != WK_PERSON) return;
 
     NSString *loginUid = [WKApp shared].loginInfo.uid;
     if (loginUid.length > 0 && [message.fromUid isEqualToString:loginUid]) return;
@@ -3376,7 +3397,7 @@
     }
 
     // 以下条件不满足时静默跳过（messageId已记录，不会重复弹）
-    if (_conversationListVM.filterType != WKConversationFilterGroup) return;
+    // 不再限制 filterType — 任意 tab（全部 / 群聊 / 私聊 等）都允许触发
     if (!self.view.window) return;
 
     // 空间隔离：不属于当前空间的消息不显示
@@ -3397,6 +3418,9 @@
     } else if (channel.channelType == WK_COMMUNITY_TOPIC) {
         // 子区：只检查子区自身的 mute，不继承父群
         if (info && info.mute) return;
+    } else if (channel.channelType == WK_PERSON) {
+        // 私聊：对方设了免打扰也不弹
+        if (info && info.mute) return;
     }
 
     NSLog(@"[HintDebug] PASS all filters → showing hint for %@ name=%@",
@@ -3409,6 +3433,13 @@
             avatarURL = info.logo;
         } else {
             avatarURL = [WKAvatarUtil getGroupAvatar:channel.channelId cacheKey:info.avatarCacheKey];
+        }
+    } else if (channel.channelType == WK_PERSON) {
+        // 私聊：channel.channelId 就是对方 uid
+        if ([info.logo hasPrefix:@"http"]) {
+            avatarURL = info.logo;
+        } else {
+            avatarURL = [WKAvatarUtil getAvatar:channel.channelId cacheKey:info.avatarCacheKey];
         }
     } else if (channel.channelType == WK_COMMUNITY_TOPIC) {
         // 子区名称：从 channelInfo 获取，如果为空则从父群的 threadPreviews 中查找
