@@ -410,7 +410,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 @interface WKMergeForwardDetailTextCell () <WKNavigationDelegate, UIScrollViewDelegate, M80AttributedLabelDelegate>
 
 @property(nonatomic,strong) M80AttributedLabel *textLbl;
-@property(nonatomic,strong) UILabel *markdownLbl;
+@property(nonatomic,strong) M80AttributedLabel *markdownLbl;
 @property(nonatomic,strong) NSMutableArray<UIView *> *segmentViews;
 @property(nonatomic,strong) NSMutableArray<WKWebView *> *tableWebViews;
 @property(nonatomic,strong) NSMutableArray<UIScrollView *> *tableOverlays;
@@ -568,18 +568,35 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
                 NSString *type = seg[@"type"];
                 NSString *segContent = seg[@"content"];
                 if ([type isEqualToString:@"text"]) {
-                    UILabel *lbl = [[UILabel alloc] init];
+                    // 用 M80AttributedLabel 而非 UILabel：UILabel 不响应 NSLink 点击，
+                    // 而合并消息含表格时这一段也可能含 markdown 链接，要可点。
+                    M80AttributedLabel *lbl = [[M80AttributedLabel alloc] init];
                     lbl.font = [UIFont systemFontOfSize:[WKApp shared].config.messageTextFontSize];
                     lbl.textColor = textColor;
                     lbl.numberOfLines = 0;
-                    lbl.lineBreakMode = NSLineBreakByWordWrapping;
+                    lbl.lineBreakMode = kCTLineBreakByWordWrapping;
                     lbl.backgroundColor = [UIColor clearColor];
+                    lbl.autoDetectLinks = NO;
+                    lbl.underLineForLink = NO;
+                    lbl.delegate = self;
+                    if (@available(iOS 13.0, *)) {
+                        lbl.linkColor = [UIColor colorWithDynamicProvider:^UIColor * _Nonnull(UITraitCollection * _Nonnull tc) {
+                            if (tc.userInterfaceStyle == UIUserInterfaceStyleDark) {
+                                return [UIColor colorWithRed:100/255.0 green:181/255.0 blue:246/255.0 alpha:1.0];
+                            }
+                            return [UIColor colorWithRed:89/255.0 green:121/255.0 blue:240/255.0 alpha:1.0];
+                        }];
+                    } else {
+                        lbl.linkColor = [UIColor colorWithRed:89/255.0 green:121/255.0 blue:240/255.0 alpha:1.0];
+                    }
                     if ([WKMarkdownRenderer containsMarkdown:segContent]) {
                         NSAttributedString *mdAttr = [WKMarkdownRenderer render:segContent fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
-                        if (mdAttr) { lbl.attributedText = mdAttr; }
-                        else { lbl.text = segContent; }
+                        if (mdAttr) {
+                            lbl.attributedText = mdAttr;
+                            [self wk_registerNSLinksOnLabel:lbl fromAttributedText:mdAttr];
+                        } else { [lbl setText:segContent]; }
                     } else {
-                        lbl.text = segContent;
+                        [lbl setText:segContent];
                     }
                     [self.messageContentView addSubview:lbl];
                     [self.segmentViews addObject:lbl];
@@ -623,6 +640,8 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
             NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
             if (mdAttr && mdAttr.length > 0) {
                 self.markdownLbl.attributedText = mdAttr;
+                // M80.setAttributedText 会 cleanAll，customLink 必须在之后注册才不会被清掉
+                [self wk_registerNSLinksOnLabel:self.markdownLbl fromAttributedText:mdAttr];
             } else {
                 self.textLbl.hidden = NO;
                 self.markdownLbl.hidden = YES;
@@ -759,9 +778,23 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         [_textLbl setFont:[UIFont systemFontOfSize:[WKApp shared].config.messageTextFontSize]];
         [_textLbl setBackgroundColor:[UIColor clearColor]];
         [_textLbl setTextColor:[WKApp shared].config.defaultTextColor];
+        // 跟 markdownLbl（WKMarkdownRenderer）保持一致的链接色：
+        // 深色 #64B5F6（Material Blue 300 浅蓝）/ 浅色 #5979F0。
+        // 不设的话 M80 会用默认 [UIColor blueColor]（#0000FF 深蓝），
+        // 导致同一个详情页里 markdown 链接与自动识别 URL 颜色不一致。
+        if (@available(iOS 13.0, *)) {
+            _textLbl.linkColor = [UIColor colorWithDynamicProvider:^UIColor * _Nonnull(UITraitCollection * _Nonnull tc) {
+                if (tc.userInterfaceStyle == UIUserInterfaceStyleDark) {
+                    return [UIColor colorWithRed:100/255.0 green:181/255.0 blue:246/255.0 alpha:1.0]; // #64B5F6
+                }
+                return [UIColor colorWithRed:89/255.0 green:121/255.0 blue:240/255.0 alpha:1.0]; // #5979F0
+            }];
+        } else {
+            _textLbl.linkColor = [UIColor colorWithRed:89/255.0 green:121/255.0 blue:240/255.0 alpha:1.0];
+        }
         _textLbl.numberOfLines = 0;
         _textLbl.lineBreakMode = kCTLineBreakByWordWrapping;
-        
+
     }
     return _textLbl;
 }
@@ -783,17 +816,52 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
     return _tableRawContents;
 }
 
-- (UILabel *)markdownLbl {
+- (M80AttributedLabel *)markdownLbl {
     if (!_markdownLbl) {
-        _markdownLbl = [[UILabel alloc] init];
+        _markdownLbl = [[M80AttributedLabel alloc] init];
         _markdownLbl.font = [UIFont systemFontOfSize:[WKApp shared].config.messageTextFontSize];
         _markdownLbl.textColor = [WKApp shared].config.defaultTextColor;
         _markdownLbl.numberOfLines = 0;
-        _markdownLbl.lineBreakMode = NSLineBreakByWordWrapping;
+        _markdownLbl.lineBreakMode = kCTLineBreakByWordWrapping;
         _markdownLbl.backgroundColor = [UIColor clearColor];
         _markdownLbl.hidden = YES;
+        // markdown 已经把 [text](url) 解析成 NSLinkAttribute，autoDetect 会再走一次 NSDataDetector
+        // 反而对纯文本里的 URL 会和 markdown link 冲突，关掉
+        _markdownLbl.autoDetectLinks = NO;
+        _markdownLbl.underLineForLink = NO;
+        _markdownLbl.delegate = self;
+        // 跟 textLbl 完全相同的 dynamic linkColor：深色 #64B5F6 浅蓝 / 浅色 #5979F0
+        if (@available(iOS 13.0, *)) {
+            _markdownLbl.linkColor = [UIColor colorWithDynamicProvider:^UIColor * _Nonnull(UITraitCollection * _Nonnull tc) {
+                if (tc.userInterfaceStyle == UIUserInterfaceStyleDark) {
+                    return [UIColor colorWithRed:100/255.0 green:181/255.0 blue:246/255.0 alpha:1.0];
+                }
+                return [UIColor colorWithRed:89/255.0 green:121/255.0 blue:240/255.0 alpha:1.0];
+            }];
+        } else {
+            _markdownLbl.linkColor = [UIColor colorWithRed:89/255.0 green:121/255.0 blue:240/255.0 alpha:1.0];
+        }
     }
     return _markdownLbl;
+}
+
+// 把 attributedText 内 NSLinkAttributeName 标记的 range 注册成 M80 的 customLink，
+// UILabel 本身不响应 NSLink 点击；M80 的 customLink 才会进 m80AttributedLabel:clickedOnLink: 回调。
+// 必须在 setAttributedText 之后调（M80.setAttributedText 会 cleanAll 已注册的 customLink）。
+- (void)wk_registerNSLinksOnLabel:(M80AttributedLabel *)label fromAttributedText:(NSAttributedString *)attr {
+    if (!label || !attr || attr.length == 0) return;
+    [attr enumerateAttribute:NSLinkAttributeName
+                     inRange:NSMakeRange(0, attr.length)
+                     options:0
+                  usingBlock:^(id value, NSRange range, BOOL *stop) {
+        id linkData = nil;
+        if ([value isKindOfClass:[NSURL class]] || [value isKindOfClass:[NSString class]]) {
+            linkData = value;
+        }
+        if (linkData) {
+            [label addCustomLink:linkData forRange:range];
+        }
+    }];
 }
 
 -(void) handleLongPressGesture:(UILongPressGestureRecognizer *)longPressGR {
