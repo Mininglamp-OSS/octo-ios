@@ -587,17 +587,31 @@ static const NSInteger kRangeAll    = NSIntegerMax;
 #pragma mark - Prompt 构造
 
 /// 群/子区前缀，如 「迟到挨打的小学生」群「番外」子区。固定部分。
+///
+/// 子区判定依据 channelType（WK_COMMUNITY_TOPIC），与 effectiveGroupChannel 同款规则：
+/// channelInfo.parentChannel 没加载完时，从 channelId 的 "____" 分隔符抽 groupNo 兜底，
+/// 避免子区刚进入时把"子区名"误当成"群名"导出 prefix（旧 bug）。
 - (NSString *)customPromptPrefix {
-    NSString *groupName = [self groupDisplayName] ?: @"当前群";
-    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:self.channel];
-    if (info.parentChannel) {
-        WKChannelInfo *parent = [[WKSDK shared].channelManager getChannelInfo:info.parentChannel];
-        NSString *parentName = parent.displayName.length > 0 ? parent.displayName : @"";
-        if (parentName.length > 0) {
-            return [NSString stringWithFormat:@"在「%@」群「%@」子区", parentName, groupName];
+    if (self.channel.channelType == WK_COMMUNITY_TOPIC) {
+        WKChannel *parentGroup = [self effectiveGroupChannel];
+        NSString *groupName = @"当前群";
+        if (parentGroup) {
+            NSString *n = [self channelDisplayName:parentGroup];
+            if (n.length > 0) groupName = n;
         }
+        NSString *topicName = [self channelDisplayName:self.channel] ?: @"当前子区";
+        return [NSString stringWithFormat:@"在「%@」群「%@」子区", groupName, topicName];
     }
+    NSString *groupName = [self groupDisplayName] ?: @"当前群";
     return [NSString stringWithFormat:@"在「%@」群", groupName];
+}
+
+- (NSString *)channelDisplayName:(WKChannel *)channel {
+    if (!channel) return nil;
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:channel];
+    if (info.displayName.length > 0) return info.displayName;
+    if (info.name.length > 0) return info.name;
+    return nil;
 }
 
 - (NSString *)buildPromptForCustom {
