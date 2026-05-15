@@ -23,6 +23,9 @@
 @property(nonatomic,strong) UILabel *titleLbl;
 @property(nonatomic,strong) WKSearchbarView *searchbarView;
 @property(nonatomic,strong) UIView *tableHeader;
+// 顶部固定栏（搜索 + 全部/AI/人类 tab），不随 tableView 滚动
+@property(nonatomic,strong) UIView *topStickyView;
+@property(nonatomic,strong) UIView *filterTabContainer; // tab 区子容器，filter 切换时只重建它的 subview
 
 @property(nonatomic,strong) UILabel *contactsCountLbl; // 联系人数量
 
@@ -304,6 +307,9 @@
     CFAbsoluteTime _rtStart = CFAbsoluteTimeGetCurrent();
     self.sortGeneration++;
     NSInteger currentGeneration = self.sortGeneration;
+
+    // 顶部 filter pill 计数/选中态跟随数据变化刷新（pill 已迁到固定栏，不会被 reloadData 触达）
+    [self refreshFilterTabContainer];
 
 #if DEBUG
     // 去重检测：检查 allContactInfos 是否有重复 uid（仅 DEBUG，避免主线程上抓 callStackSymbols）
@@ -722,16 +728,56 @@
     return _tableHeader;
 }
 
+#pragma mark - 顶部固定栏（搜索 + 全部/AI/人类 tab，不随 tableView 滚动）
+
+-(UIView*) topStickyView {
+    if(!_topStickyView) {
+        CGFloat searchTop = 8.0f;
+        CGFloat searchH   = 36.0f;
+        CGFloat searchBottom = 10.0f;
+        CGFloat filterH   = 50.0f;
+        CGFloat totalH    = searchTop + searchH + searchBottom + filterH;
+        CGFloat top       = self.navigationBar.lim_bottom;
+        _topStickyView = [[UIView alloc] initWithFrame:CGRectMake(0, top, WKScreenWidth, totalH)];
+        _topStickyView.backgroundColor = WKApp.shared.config.cellBackgroundColor;
+
+        // 搜索栏
+        self.searchbarView.frame = CGRectMake(14.0f, searchTop, WKScreenWidth - 28.0f, searchH);
+        [_topStickyView addSubview:self.searchbarView];
+
+        // filter tab 容器（pill 内容由 refreshFilterTabContainer 重建）
+        _filterTabContainer = [[UIView alloc] initWithFrame:CGRectMake(0, searchTop + searchH + searchBottom, WKScreenWidth, filterH)];
+        _filterTabContainer.backgroundColor = WKApp.shared.config.cellBackgroundColor;
+        [_topStickyView addSubview:_filterTabContainer];
+
+        [self refreshFilterTabContainer];
+    }
+    return _topStickyView;
+}
+
+-(void) refreshFilterTabContainer {
+    if(!_filterTabContainer) return;
+    for(UIView *v in _filterTabContainer.subviews) [v removeFromSuperview];
+    UIView *pill = [self contactsFilterHeaderView];
+    pill.frame = CGRectMake(0, 0, _filterTabContainer.lim_width, _filterTabContainer.lim_height);
+    [_filterTabContainer addSubview:pill];
+}
+
 -(UITableView *)tableView{
     if(!_tableView){
-        _tableView = [[UITableView alloc] initWithFrame:[self visibleRect] style:UITableViewStyleGrouped];
+        // tableView 起点 = 顶部固定栏底部，避开 searchbar + filter tab 区域
+        CGRect r = [self visibleRect];
+        CGFloat stickyH = self.topStickyView.frame.size.height;
+        r.origin.y    += stickyH;
+        r.size.height -= stickyH;
+        _tableView = [[UITableView alloc] initWithFrame:r style:UITableViewStyleGrouped];
         _tableView.delegate = self;
         _tableView.dataSource = self;
         UIEdgeInsets separatorInset   = _tableView.separatorInset;
         separatorInset.right          = 0;
         _tableView.separatorInset = separatorInset;
         _tableView.backgroundColor=[UIColor clearColor];
-        
+
         _tableView.sectionIndexBackgroundColor = [UIColor clearColor];
 //        _tableView.tableFooterView = [[UIView alloc] init];
         _tableView.estimatedRowHeight = 0;
@@ -746,17 +792,18 @@
         _tableView.contentInset = UIEdgeInsetsMake(0, 0, tabBarHeight + 10, 0);
         [_tableView registerClass:WKContactsCell.class forCellReuseIdentifier:[WKContactsCell cellId]];
         [_tableView registerClass:WKContactsHeaderItemCell.class forCellReuseIdentifier:[WKContactsHeaderItemCell cellId]];
-        
-         _tableView.tableHeaderView = self.tableHeader;
-        
+
+        // 1pt 占位 tableHeaderView：消掉 grouped style 顶部 ~35pt 系统默认 padding
+        _tableView.tableHeaderView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, WKScreenWidth, 0.01f)];
         _tableView.tableFooterView = [self tableFooterView];
-        
+
     }
     return _tableView;
 }
 
 -(void) loadView{
     [super loadView];
+    [self.view addSubview:self.topStickyView]; // 顺序：sticky 在底层、tableView 在上层（tableView 高度从 sticky 之下开始，不会重叠）
     [self.view addSubview:self.tableView];
 }
 
@@ -847,13 +894,14 @@
 
 -(CGFloat) tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
     if(section == 0) {
-        return 50.0f;
+        // section 0 的 filter tab 已迁到 topStickyView 固定栏，不再走 tableView header
+        return 0.0f;
     }
     return 24.0f;
 }
 -(UIView*) tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section{
     if(section == 0) {
-        return [self contactsFilterHeaderView];
+        return nil;
     }
     if (!self.sectionTitleArr || self.sectionTitleArr.count == 0) {
         return nil;
@@ -939,6 +987,7 @@
 
 -(void) filterTabTapped:(UIButton*)sender {
     self.contactsFilter = sender.tag;
+    [self refreshFilterTabContainer]; // 立即反馈选中态，不等异步排序完
     self.currentContactsFingerprint = nil; // 强制刷新
     [self applyFilter];
 }
@@ -1638,6 +1687,9 @@
         [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1]
                       withRowAnimation:UITableViewRowAnimationNone];
     }
+
+    // filter pill 已迁到顶部固定栏，count 变化要单独刷新
+    [self refreshFilterTabContainer];
 
     // 更新 footer 联系人数量文字
     NSArray<WKChannelInfo*> *filtered = [self filteredContactInfos];

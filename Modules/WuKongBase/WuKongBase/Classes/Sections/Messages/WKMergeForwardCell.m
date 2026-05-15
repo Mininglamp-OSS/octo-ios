@@ -49,14 +49,25 @@
 - (void)refresh:(WKMessageModel *)model {
     [super refresh:model];
     WKMergeForwardContent *content = (WKMergeForwardContent*)model.content;
-    
+
     self.titleLbl.text = content.title;
-    
+
     [[self.messageBox subviews] makeObjectsPerformSelector:@selector(removeFromSuperview)];
-    if(content.msgs && content.msgs.count>0) {
-        for (NSInteger i=0; i<content.msgs.count; i++) {
+    NSInteger displayCount = MIN((NSInteger)(content.msgs.count), 4);
+    if(displayCount > 0) {
+        // textLbl 的位置/宽度直接在这里同步设好，不依赖 layoutSubviews：
+        // 父类 layoutSubviews 在 messageModel 未 set 时会提前 return（WKMessageCell.m:974），
+        // 而 UITableView 在 cellForRow 之前可能已经触发过一次 layoutSubviews，
+        // 那次跑完后 messageContentView.lim_size / messageBox 子 view frame 都没被撑开；
+        // refresh 之后系统不一定再触发 layoutSubviews（行高没变时）。
+        // 直接同步设 frame 可以彻底避开这个时机问题。
+        CGFloat leftSpace = 10.0f;
+        CGFloat lblW = [WKApp shared].config.messageContentMaxWidth - leftSpace * 2;
+        for (NSInteger i=0; i<displayCount; i++) {
             WKMessage *message = content.msgs[i];
             UILabel *textLbl = [self messageTextLbl];
+            textLbl.frame = CGRectMake(leftSpace, i * messageHeight, lblW, messageHeight);
+
             NSString *fromName = @"";
             if(message.from) {
                 fromName = message.from.displayName;
@@ -65,19 +76,20 @@
             }
             textLbl.text = [NSString stringWithFormat:@"%@：%@",fromName,[message.content conversationDigest]];
             [self.messageBox addSubview:textLbl];
-            
-            if(i+1==4) {
-                break;
-            }
         }
+        // messageBox 自身高度也同步设好，避免 layoutSubviews 没跑时 height=0
+        self.messageBox.lim_height = messageHeight * displayCount;
     }
-    
+
     [self.messageContentView setBackgroundColor:[WKApp shared].config.cellBackgroundColor];
     self.titleLbl.textColor = [WKApp shared].config.defaultTextColor;
     self.lineView.backgroundColor = [WKApp shared].config.lineColor;
-    
+
     self.trailingView.timeLbl.textColor = [WKApp shared].config.tipColor;
     self.trailingView.statusImgView.tintColor = [WKApp shared].config.tipColor;
+
+    // schedule 一次完整 layoutSubviews，让 messageBox.lim_top / messageContentView 等也跟上
+    [self setNeedsLayout];
 }
 
 - (void)onTap {

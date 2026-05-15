@@ -93,6 +93,21 @@ static WKPhotoBrowser *_instance;
     uiConfig.navBarColorOfPreviewVC = [UIColor whiteColor];
     uiConfig.navTitleColor = [UIColor blackColor];
     uiConfig.navTitleColorOfPreviewVC = [UIColor blackColor];
+    // ZL 默认 cancel 按钮 = .image（zl_navClose 浅色叉号 png，给深色 navBar 设计的），
+    // 在我们的白色 navBar 下白底浅色叉号几乎看不见（必须长按高亮才显形）。
+    // 切到 .text 模式 → 显示文字"取消"，文字色走 navTitleColor（已是黑色），白底黑字清晰可见。
+    uiConfig.navCancelButtonStyle = CancelButtonStyleText;
+    // 大图预览页（ZLPhotoPreviewController）的左上角"返回"按钮用的是 zl_navBack 图标（也是浅色），
+    // 白色 navBar 下同样看不清。通过 customImageForKey_objc 替换为黑色 chevron.backward。
+    if (@available(iOS 13.0, *)) {
+        UIImage *backIcon = [UIImage systemImageNamed:@"chevron.backward"];
+        if (backIcon) {
+            UIImage *tintedBack = [backIcon imageWithTintColor:[UIColor blackColor] renderingMode:UIImageRenderingModeAlwaysOriginal];
+            if (tintedBack) {
+                uiConfig.customImageForKey_objc = @{@"zl_navBack": tintedBack};
+            }
+        }
+    }
     uiConfig.navEmbedTitleViewBgColor = [UIColor colorWithRed:0.95 green:0.95 blue:0.95 alpha:1.0];
     uiConfig.navViewBlurEffectOfAlbumList = nil;
     uiConfig.navViewBlurEffectOfPreview = nil;
