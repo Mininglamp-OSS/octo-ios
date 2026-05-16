@@ -48,12 +48,16 @@ The following components ship inside this repository and require explicit
 attribution. The exact list and license obligations are pending final review;
 all entries below are placeholders that will be confirmed or removed.
 
-  [ ] SoundTouch                      LGPL v2.1   (license review pending)
-  [ ] Telegram Display utilities      GPL v2      (license review pending)
-  [ ] librlottie                      LGPL        (license review pending)
-  [ ] Facebook POP                    BSD+Patents
-  [ ] nanosvg                         zlib
-  [ ] opencore-amr                    Apache 2.0
+  [ ] SoundTouch                      LGPL v2.1   REMOVED from build (P5): podspec exclude_files.
+                                                  CWVoiceChangePlayCell voice-change disabled;
+                                                  pending replacement with AVAudioUnitTimePitch.
+  [!] TelegramUtils (Telegram iOS)    GPL v2      ACTIVE dependency — license incompatibility.
+                                                  Replacement in progress (P5 long-term).
+                                                  See TelegramUtils/README.md for component list.
+  [ ] Facebook POP                    BSD+Patents Used only inside TelegramUtils; removed when
+                                                  TelegramUtils replacement is complete.
+  [ ] nanosvg                         zlib        Used only inside TelegramUtils/Svg/.
+  [x] opencore-amr                    Apache 2.0  Compliant. Bundled as static .a in WuKongIMSDK.
 
 
 ================================================================================

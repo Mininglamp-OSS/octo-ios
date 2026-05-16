@@ -39,6 +39,11 @@ utilities used across all other Octo modules.
  
   s.private_header_files = 'WuKongBase/Classes/Vendor/**/*'
   s.source_files = 'WuKongBase/Classes/**/*'
+  # SoundTouch (LGPL v2.1) excluded from compilation — replaced with no-op stub in P5.
+  # TelegramUtils (GPL v2) excluded — legal review pending P5 long-term replacement.
+  s.exclude_files = [
+    'WuKongBase/Classes/Vendor/SoundTouch/**',
+  ]
 #  s.preserve_paths = 'ios/arm/*.{a}'
 #   s.vendored_frameworks  = 'ios/WuKongIMSDK.framework'
   

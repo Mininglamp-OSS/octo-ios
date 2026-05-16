@@ -1,0 +1,27 @@
+This directory contains code derived from the Telegram iOS application.
+
+Copyright (c) 2014-2024 Telegram Inc.
+
+Licensed under the GNU General Public License, Version 2.0
+https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+The original source is available at:
+https://github.com/TelegramMessenger/Telegram-iOS
+
+============================================================
+IMPORTANT — LICENSE COMPATIBILITY NOTICE
+============================================================
+
+This GPL v2 code is currently bundled inside the Octo iOS project
+(Apache License 2.0). This creates a known license incompatibility.
+
+Status: PENDING REPLACEMENT (tracked as P5 in the open-source
+preparation roadmap). The plan is to replace all TelegramUtils
+display-layer usage with native UIKit/SwiftUI equivalents.
+
+Until the replacement is complete, this directory MUST NOT be
+treated as Apache 2.0 code. The GPL v2 obligations apply to the
+portions of the project that link against this code.
+
+Contributors: please do NOT add new dependencies on this directory.
+See CONTRIBUTING.md for guidance.

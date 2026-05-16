@@ -14,8 +14,15 @@
 
 已知历史包袱（不要再往里加东西，优先逐步迁出）:
 
-- `Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/` —— Telegram
-  桌面客户端移植代码，大部分显示层 (`Display/`) 未被实例化。新代码请勿依赖此目录。
+- `Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/` ——
+  **GPL v2 代码（许可证不兼容，P5 长期替换中）**。
+  现有消费方（`WKMessageCell` / `WKImageBrowser` / `WKSpaceGateVC` / `WKStickerImageView`）
+  在替换完成前继续使用，但**任何新代码禁止 import 此目录下的符号**。
+  替换计划见 `TelegramUtils/README.md`。
+
+- `Modules/WuKongBase/WuKongBase/Classes/Vendor/SoundTouch/` ——
+  **LGPL v2.1，已在 P5 从编译链中排除**（podspec `exclude_files`）。
+  `CWVoiceChangePlayCell` 变声功能已降级为无变调直播，待用 `AVAudioUnitTimePitch` 替换。
 
 ## 调试工具的生命周期
 

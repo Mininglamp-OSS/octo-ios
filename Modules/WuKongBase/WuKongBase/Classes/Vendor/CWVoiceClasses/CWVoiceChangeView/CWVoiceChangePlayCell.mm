@@ -10,7 +10,8 @@
 #import "UIView+CWChat.h"
 #import "CWRecordModel.h"
 #import "CWAudioPlayer.h"
-#import "SoundTouchOperation.h"
+// SoundTouchOperation removed (P5): SoundTouch is LGPL v2.1, incompatible with Apache 2.0.
+// Voice-change playback is disabled. Replace with AVAudioUnitTimePitch to restore.
 #import "WKApp.h"
 static CGFloat const levelWidth = 3.0;
 static CGFloat const levelMargin = 2.0;
@@ -73,7 +74,6 @@ static CGFloat const levelMargin = 2.0;
 {
     self = [super initWithFrame:frame];
     if (self) {
-        [self initSoundTouchQueue];
         [self setupSubviews];
         _voicePath = [CWRecordModel shareInstance].path;
     }
@@ -81,8 +81,7 @@ static CGFloat const levelMargin = 2.0;
 }
 
 - (void)initSoundTouchQueue {
-    _soundTouchQueue = [[NSOperationQueue alloc] init];
-    _soundTouchQueue.maxConcurrentOperationCount = 1;
+    // SoundTouch removed — no-op stub kept for ABI compatibility.
 }
 
 - (void)setupSubviews {
@@ -201,20 +200,12 @@ static CGFloat const levelMargin = 2.0;
     
 }
 
-#pragma mark - 变声功能
+#pragma mark - 变声功能（已禁用 SoundTouch）
 - (void)playAudioWithPath:(NSString *)path {
-    NSData *data = [NSData dataWithContentsOfFile:path];
-    MySountTouchConfig config;
-    config.sampleRate = 11025;
-    config.tempoChange = 0;        // -50 - 100
-    config.pitch = [self.pitchDict[self.title] intValue]; // -12 - 12
-    config.rate = 0;    // -50 - 100
-    
-    SoundTouchOperation *sdop = [[SoundTouchOperation alloc] initWithTarget:self
-                                                                     action:@selector(playVoiceChange:)
-                                                           SoundTouchConfig:config soundFile:data];
-    [_soundTouchQueue cancelAllOperations];
-    [_soundTouchQueue addOperation:sdop];
+    // SoundTouch (LGPL) removed. Voice-change pitch shift is disabled.
+    // Audio plays back at original pitch via CWAudioPlayer.
+    // TODO: replace with AVAudioEngine + AVAudioUnitTimePitch to restore.
+    [[CWAudioPlayer sharedInstance] playWithPath:path];
 }
 
 - (void)playVoiceChange:(NSString *)path {

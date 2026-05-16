@@ -87,15 +87,6 @@ post_install do |installer|
             config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
             config.build_settings['ENABLE_BITCODE'] = 'NO'
             config.build_settings["EXCLUDED_ARCHS[sdk=iphonesimulator*]"] = "arm64"
-            # librlottie: config.h 在根目录，源文件在子目录用 #include "config.h"
-            # 需要同时设置 HEADER_SEARCH_PATHS 和 USER_HEADER_SEARCH_PATHS
-            if target.name == 'librlottie'
-              src = '"${PODS_ROOT}/librlottie"'
-              config.build_settings['HEADER_SEARCH_PATHS'] ||= ['$(inherited)']
-              config.build_settings['HEADER_SEARCH_PATHS'] << src
-              config.build_settings['USER_HEADER_SEARCH_PATHS'] ||= ['$(inherited)']
-              config.build_settings['USER_HEADER_SEARCH_PATHS'] << src
-            end
         end
 
     end
@@ -196,7 +187,7 @@ abstract_target 'TangSengDaoDaoiOSBase' do
   pod 'YBImageBrowser/NOSD', :git=>'https://github.com/tangtaoit/YBImageBrowser.git'
   pod 'YYImage/WebP', :git => 'https://github.com/tangtaoit/YYImage.git'
   pod 'AsyncDisplayKit', :git => 'https://github.com/tangtaoit/AsyncDisplayKit.git'
-  pod 'librlottie', :git => 'https://github.com/tangtaoit/librlottie.git'
+  # librlottie (LGPL) 已移除 — 依赖它的 WKAnimatedStickerNode / WKMessageStickerCell 均为死代码，已在 P5 删除
   
   pod 'WuKongIMSDK',  :path => './Modules/WuKongIMiOSSDK'   ## WuKongBase 基础工具包  源码地址 https://github.com/WuKongIM/WuKongIMiOSSDK
 #  pod 'WuKongIMSDK',  :path => '../../../wukongIM/iOS/WuKongIMiOSSDK'
