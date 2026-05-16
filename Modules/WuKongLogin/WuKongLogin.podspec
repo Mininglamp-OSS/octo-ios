@@ -9,16 +9,12 @@
 Pod::Spec.new do |s|
   s.name             = 'WuKongLogin'
   s.version          = '0.1.0'
-  s.summary          = 'A short description of WuKongLogin.'
-
-# This description is used to generate tags and improve search results.
-#   * Think: What does it do? Why did you write it? What is the focus?
-#   * Try to keep it short, snappy and to the point.
-#   * Write the description between the DESC delimiters below.
-#   * Finally, don't worry about the indent, CocoaPods strips it!
+  s.summary          = 'Octo iOS login module — account registration, sign-in, and third-party auth.'
 
   s.description      = <<-DESC
-TODO: Add long description of the pod here.
+WuKongLogin handles all authentication flows for the Octo iOS client:
+phone/email registration and sign-in, Apple Sign-In, and OIDC-based
+single sign-on. Designed to be drop-in replaceable for custom auth backends.
                        DESC
 
   s.homepage         = 'https://github.com/Mininglamp-OSS/octo-ios'

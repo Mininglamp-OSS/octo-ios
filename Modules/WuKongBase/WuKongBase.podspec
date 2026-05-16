@@ -9,16 +9,13 @@
 Pod::Spec.new do |s|
   s.name             = 'WuKongBase'
   s.version          = '0.1.0'
-  s.summary          = 'A short description of WuKongBase.'
-
-# This description is used to generate tags and improve search results.
-#   * Think: What does it do? Why did you write it? What is the focus?
-#   * Try to keep it short, snappy and to the point.
-#   * Write the description between the DESC delimiters below.
-#   * Finally, don't worry about the indent, CocoaPods strips it!
+  s.summary          = 'Octo iOS core module — chat UI, conversation list, notifications and common utilities.'
 
   s.description      = <<-DESC
-TODO: Add long description of the pod here.
+WuKongBase is the foundational module of the Octo iOS client.
+It provides the full chat experience: conversation list, message cells,
+input bar, voice/video, notifications, web view bridge, and shared
+utilities used across all other Octo modules.
                        DESC
 
   s.homepage         = 'https://github.com/Mininglamp-OSS/octo-ios'
