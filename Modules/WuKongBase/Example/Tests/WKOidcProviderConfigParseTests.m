@@ -113,14 +113,14 @@
     NSArray *raw = @[@{
         @"id": @"xming",
         @"authorize_path": @"/auth/oidc/xming/authorize",
-        @"account_url": @"https://accounts-test.imocto.cn",
+        @"account_url": @"https://accounts-test.example.com",
     }];
     NSArray<WKOidcProviderConfig *> *out = [WKOidcProviderConfig parseArray:raw];
     XCTAssertEqual(out.count, 1u);
     WKOidcProviderConfig *p = out.firstObject;
     XCTAssertEqualObjects(p.providerId, @"xming");
     XCTAssertNil(p.name);
-    XCTAssertEqualObjects(p.accountUrl, @"https://accounts-test.imocto.cn");
+    XCTAssertEqualObjects(p.accountUrl, @"https://accounts-test.example.com");
 }
 
 - (void)test_emptyName_entryKept_nameNil {
@@ -152,7 +152,7 @@
         @"id": @"xming",
         @"name": @"xming",
         @"authorize_path": @"/auth/oidc/xming/authorize",
-        @"account_url": @"http://accounts-test.imocto.cn",
+        @"account_url": @"http://accounts-test.example.com",
     }];
     NSArray<WKOidcProviderConfig *> *out = [WKOidcProviderConfig parseArray:raw];
     XCTAssertEqual(out.count, 1u);
@@ -185,7 +185,7 @@
         @"id": @"xming",
         @"name": @"xming",
         @"authorize_path": @"/auth/oidc/xming/authorize",
-        @"account_url": @"https://accounts-test.imocto.cn?x=1",
+        @"account_url": @"https://accounts-test.example.com?x=1",
     }];
     NSArray<WKOidcProviderConfig *> *out = [WKOidcProviderConfig parseArray:raw];
     XCTAssertEqual(out.count, 1u);
@@ -198,7 +198,7 @@
         @"id": @"xming",
         @"name": @"xming",
         @"authorize_path": @"/auth/oidc/xming/authorize",
-        @"account_url": @"https://accounts-test.imocto.cn#anchor",
+        @"account_url": @"https://accounts-test.example.com#anchor",
     }];
     NSArray<WKOidcProviderConfig *> *out = [WKOidcProviderConfig parseArray:raw];
     XCTAssertEqual(out.count, 1u);
@@ -211,7 +211,7 @@
         @"id": @"xming",
         @"name": @"xming",
         @"authorize_path": @"/auth/oidc/xming/authorize",
-        @"account_url": @"https://accounts-test.imocto.cn/base?x=1#f",
+        @"account_url": @"https://accounts-test.example.com/base?x=1#f",
     }];
     NSArray<WKOidcProviderConfig *> *out = [WKOidcProviderConfig parseArray:raw];
     XCTAssertEqual(out.count, 1u);
@@ -239,8 +239,8 @@
         @"id": @"xming",
         @"name": @"xming",
         @"authorize_path": @"/auth/oidc/xming/authorize",
-        @"account_url": @"https://accounts-test.imocto.cn",
-        @"reset_password_url": @"https://accounts-test.imocto.cn/reset",
+        @"account_url": @"https://accounts-test.example.com",
+        @"reset_password_url": @"https://accounts-test.example.com/reset",
     }];
     NSArray<WKOidcProviderConfig *> *out = [WKOidcProviderConfig parseArray:raw];
     XCTAssertEqual(out.count, 1u);
@@ -248,8 +248,8 @@
     XCTAssertEqualObjects(p.providerId, @"xming");
     XCTAssertEqualObjects(p.name, @"xming");
     XCTAssertEqualObjects(p.authorizePath, @"/auth/oidc/xming/authorize");
-    XCTAssertEqualObjects(p.accountUrl, @"https://accounts-test.imocto.cn");
-    XCTAssertEqualObjects(p.resetPasswordUrl, @"https://accounts-test.imocto.cn/reset");
+    XCTAssertEqualObjects(p.accountUrl, @"https://accounts-test.example.com");
+    XCTAssertEqualObjects(p.resetPasswordUrl, @"https://accounts-test.example.com/reset");
 }
 
 - (void)test_mixedValidAndInvalidEntries_onlyValidKept {

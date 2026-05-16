@@ -62,7 +62,7 @@
 }
 
 - (void)test_httpsTestAegisVerified_rejected_ULDisabled {
-    NSURL *url = [NSURL URLWithString:@"https://accounts-test.imocto.cn/verified?token=abc"];
+    NSURL *url = [NSURL URLWithString:@"https://accounts-test.example.com/verified?token=abc"];
     XCTAssertFalse([WKRealnameVerifyManager isVerifiedCallbackURL:url]);
 }
 
@@ -79,7 +79,7 @@
 
 - (void)test_httpVerified_rejected {
     // http 同 https 一样, 回跳通道只认 dmwork://。
-    NSURL *url = [NSURL URLWithString:@"http://accounts-test.imocto.cn/verified"];
+    NSURL *url = [NSURL URLWithString:@"http://accounts-test.example.com/verified"];
     XCTAssertFalse([WKRealnameVerifyManager isVerifiedCallbackURL:url]);
 }
 

@@ -50,8 +50,15 @@ Upstream Origin (本项目 fork 自以下上游项目，保留其原始许可证
 Bundled Third-Party Components
 ================================================================================
 
-  [x] opencore-amr                Apache 2.0      Compliant.
-                                                  Bundled as static .a in WuKongIMSDK.
+  [x] opencore-amr / vo-amrwbenc       opencore-amr: Apache 2.0
+                                       vo-amrwbenc: Apache 2.0 (Frauhofer 双许可)
+                                       上游: https://sourceforge.net/projects/opencore-amr/
+                                       Bundled as static .a in:
+                                         Modules/WuKongIMiOSSDK/WuKongIMSDK/Classes/private/arm/lib/
+                                       (libopencore-amrnb.a, libopencore-amrwb.a, libvo-amrwbenc.a)
+                                       用途：语音消息 AMR 编解码（IM 标准音频格式）
+                                       源代码副本保留在同目录 arm/opencore-amrnb/, arm/opencore-amrwb/,
+                                       arm/vo-amrwbenc/ 子目录中，以满足许可证下游分发义务。
 
   [REMOVED in P5] librlottie       LGPL            从 Podfile 与本仓库构建链中移除。
                                                   消费方 WKAnimatedStickerNode /

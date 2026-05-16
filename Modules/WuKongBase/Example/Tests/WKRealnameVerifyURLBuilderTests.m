@@ -11,7 +11,7 @@
 //
 //  covers: WKRealnameVerifyManager.buildVerifyURLFromAccountUrl:
 //    1. prod accountUrl → 拼 prod verify URL
-//    2. test accountUrl (accounts-test.imocto.cn) → 拼 test verify URL
+//    2. test accountUrl (accounts-test.example.com) → 拼 test verify URL
 //    3. 末尾斜杠剥离
 //    4. nil / 空串 → nil
 //    5. 非 https (http/javascript) → nil（安全守卫）
@@ -37,19 +37,19 @@
 
 - (void)test_testAccountUrl_buildsTestVerifyURL_imTestScenario {
     // 本测试就是 修复的核心目标: im-test 环境不能再跳 prod Aegis。
-    NSURL *url = [WKRealnameVerifyManager buildVerifyURLFromAccountUrl:@"https://accounts-test.imocto.cn"];
+    NSURL *url = [WKRealnameVerifyManager buildVerifyURLFromAccountUrl:@"https://accounts-test.example.com"];
     XCTAssertNotNil(url);
     XCTAssertEqualObjects(url.absoluteString,
-                          @"https://accounts-test.imocto.cn/profile/info?anchor=verification");
-    XCTAssertEqualObjects(url.host, @"accounts-test.imocto.cn");
+                          @"https://accounts-test.example.com/profile/info?anchor=verification");
+    XCTAssertEqualObjects(url.host, @"accounts-test.example.com");
 }
 
 - (void)test_trailingSlashOnAccountUrl_isStripped {
     // 防 `//profile/info?...` 协议相对 URL 泄漏。
-    NSURL *url = [WKRealnameVerifyManager buildVerifyURLFromAccountUrl:@"https://accounts-test.imocto.cn/"];
+    NSURL *url = [WKRealnameVerifyManager buildVerifyURLFromAccountUrl:@"https://accounts-test.example.com/"];
     XCTAssertNotNil(url);
     XCTAssertEqualObjects(url.absoluteString,
-                          @"https://accounts-test.imocto.cn/profile/info?anchor=verification");
+                          @"https://accounts-test.example.com/profile/info?anchor=verification");
 }
 
 - (void)test_multipleTrailingSlashes_allStripped {
@@ -71,7 +71,7 @@
 
 - (void)test_httpAccountUrl_returnsNil_httpsOnly {
     // 客户端比 Web 端更严：Aegis 账户页涉及密码 / OIDC token, 必须 TLS。
-    XCTAssertNil([WKRealnameVerifyManager buildVerifyURLFromAccountUrl:@"http://accounts-test.imocto.cn"]);
+    XCTAssertNil([WKRealnameVerifyManager buildVerifyURLFromAccountUrl:@"http://accounts-test.example.com"]);
 }
 
 - (void)test_javascriptProtocolAccountUrl_returnsNil_noScriptInjection {
@@ -92,7 +92,7 @@
 
 - (void)test_accountUrlWithQuery_returnsNil_defenseInDepth {
     XCTAssertNil([WKRealnameVerifyManager buildVerifyURLFromAccountUrl:
-                    @"https://accounts-test.imocto.cn?x=1"]);
+                    @"https://accounts-test.example.com?x=1"]);
 }
 
 - (void)test_accountUrlWithFragment_returnsNil_defenseInDepth {
