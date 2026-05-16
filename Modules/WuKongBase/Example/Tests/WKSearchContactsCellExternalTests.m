@@ -1,8 +1,10 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 //
 //  WKSearchContactsCellExternalTests.m
 //  LiMaoBase_Tests
 //
-//  YUJ-156 — 搜索结果外部成员/群 @SpaceName 后缀单元测试。
+//  — 搜索结果外部成员/群 @SpaceName 后缀单元测试。
 //
 //  覆盖：
 //    1. 外部成员（home_space_id ≠ viewer）→ nameLbl.attributedText 尾部含 " @SpaceName"
@@ -106,7 +108,7 @@
     XCTAssertEqualObjects(lbl.attributedText.string, @"Dan");
 }
 
-// YUJ-98 坑点：cell 复用时外部后缀必须随 refresh 重置，否则残留上一次 @Space
+// 坑点：cell 复用时外部后缀必须随 refresh 重置，否则残留上一次 @Space
 - (void)testCellReuse_ExternalThenInternal_ClearsSuffix {
     WKSearchContactsModel *ext = [self modelWithName:@"Alice"
                                           homeSpaceId:@"spaceA"

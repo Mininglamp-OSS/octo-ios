@@ -25,7 +25,7 @@
 @property(nonatomic,strong) UIView *onlineDot;
 @property(nonatomic,strong) UILabel *aiBadgeLbl;
 @property(nonatomic,strong) WKOfficialTag *officialTag;
-// YUJ-381 / dmwork-web#1169 Phase A —— 通讯录 cell 实名 ✓ 徽章
+// / Phase A —— 通讯录 cell 实名 ✓ 徽章
 @property(nonatomic,strong) UIImageView *realnameVerifiedImgView;
 
 @end
@@ -69,7 +69,7 @@
     _officialTag.hidden = YES;
     [self.contentView addSubview:_officialTag];
 
-    // YUJ-381：通讯录 cell 实名 ✓ 徽章
+    // ：通讯录 cell 实名 ✓ 徽章
     _realnameVerifiedImgView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 12.0f, 12.0f)];
     _realnameVerifiedImgView.contentMode = UIViewContentModeScaleAspectFit;
     _realnameVerifiedImgView.image = [WKApp.shared loadImage:@"Common/ic_realname_verified_mini" moduleID:@"WuKongBase"];
@@ -120,7 +120,7 @@
         self.aiBadgeLbl.frame = frame;
     }
 
-    // YUJ-381 实名 ✓ 徽章：仅人 + 非机器人。
+    // 实名 ✓ 徽章：仅人 + 非机器人。
     // 关键：优先读 SDK person 缓存（prefetcher 回写的就是这里、SDK push 也写这里），
     // cellModel.channelInfo 只作回退。否则当 WKContactsVC.performBatchUpdates 用
     // /friends API 数据覆盖 cellModel.channelInfo 时，新 info 的 extra 不带

@@ -61,7 +61,7 @@
         self.nameLbl.lim_width = self.messageContentView.lim_width;
     }
 
-    // YUJ-381 实名 ✓ 徽章 + Bot 标识：与 WKTextMessageCell 一致的 realname → bot 串行布局。
+    // 实名 ✓ 徽章 + Bot 标识：与 WKTextMessageCell 一致的 realname → bot 串行布局。
     CGFloat afterNameRight = self.nameLbl.lim_left + self.nameLbl.lim_width;
     if (!self.realnameVerifiedImgView.hidden) {
         self.realnameVerifiedImgView.lim_width = 12.0f;

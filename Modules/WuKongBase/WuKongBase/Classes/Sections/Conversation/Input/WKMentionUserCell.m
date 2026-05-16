@@ -69,11 +69,11 @@
 - (void)refresh:(WKMentionUserCellModel *)model {
     [super refresh:model];
 
-    // YUJ-135 @Mention 候选菜单外部成员 @SpaceName 标识。
-    // 规则与 WKMemberCell (YUJ-93) / Android RemindMemberAdapter 对齐：
+    // @Mention 候选菜单外部成员 @SpaceName 标识。
+    // 规则与 WKMemberCell () / Android RemindMemberAdapter 对齐：
     //   isExternal && sourceSpaceName.length > 0 → nameLbl.attributedText = baseName + 灰色 " @SpaceName"
     //   否则走 plain text，并把 attributedText 重置为 nil（attributedText 和
-    //   text 在 UILabel 上互斥，不清理会残留上一次 render 的富文本 — YUJ-98 反复翻车的坑点）。
+    //   text 在 UILabel 上互斥，不清理会残留上一次 render 的富文本 — 反复翻车的坑点）。
     NSString *baseName = model.name ?: @"";
     WKExternalResolveResult *res = [WKExternalViewerResolver resolveFromExtras:model.extras
                                                                  viewerSpaceId:[WKExternalViewerResolver currentViewerSpaceId]];

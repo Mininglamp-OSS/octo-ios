@@ -33,7 +33,7 @@
     }];
     
     // 显示空间引导页
-    // YUJ-372 Phase 2: 接受 param @{@"mode": @"push"} — 从扫码/邀请命中
+    // Phase 2: 接受 param @{@"mode": @"push"} — 从扫码/邀请命中
     // need_space 的运行时路径拉起 Space Gate，需要保留当前栈（加 Space 后 pop
     // 回主列表重放扫码 handler 重试入群）。默认行为仍是 resetRootViewController
     // （登录后首次引导的场景）。

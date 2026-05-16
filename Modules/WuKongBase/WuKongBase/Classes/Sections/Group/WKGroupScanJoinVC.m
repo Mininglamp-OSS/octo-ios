@@ -70,21 +70,21 @@
 
     NSString *path = [NSString stringWithFormat:@"groups/%@/scanjoin?auth_code=%@", self.groupNo, self.authCode];
     __weak typeof(self) weakSelf = self;
-    // YUJ-213 / YUJ-372: scanjoin 成功响应现在由后端直接返回一个 JSON object
-    //   YUJ-213 (dmworkim PR#1250): { status, group_no, group_name, space_id, space_name, is_external }
-    //   YUJ-372 Phase 2 (dmworkim PR#1320): 当调用者无 Space 时返回
+    // / : scanjoin 成功响应现在由后端直接返回一个 JSON object
+    //   (dmworkim PR#1250): { status, group_no, group_name, space_id, space_name, is_external }
+    //   Phase 2 (dmworkim PR#1320): 当调用者无 Space 时返回
     //     { status: "need_space", msg: "请先加入一个 Space 后再入群" }
     // 以前 `.then(^{ })` 忽略 body — 现在按 NSDictionary 接住，便于就地判断
     // status/跨 Space/is_external。若未来服务端版本不带这些字段，回退到 VC
     // 构造时由扫码/邀请链接解析器注入的 `self.targetSpaceId / Name` 字段
-    // （YUJ-141 的 legacy 通道），保持旧客户端 + 新服务端 / 新客户端 + 旧服务端
+    // （的 legacy 通道），保持旧客户端 + 新服务端 / 新客户端 + 旧服务端
     // 两个方向都不 crash。
     [[WKAPIClient sharedClient] GET:path parameters:nil].then(^(id _Nullable resp) {
         [weakSelf.view hideHud];
 
         NSDictionary *respDict = [resp isKindOfClass:[NSDictionary class]] ? (NSDictionary *)resp : nil;
 
-        // YUJ-372 Phase 2: 后端契约（dmworkim PR#1320）— 调用者无 Space 时
+        // Phase 2: 后端契约（dmworkim PR#1320）— 调用者无 Space 时
         //   scanjoin 返回 { status: "need_space", msg: "请先加入一个 Space 后再入群" }。
         // 命中 need_space 时：
         //   1) 不入群，不走跨 Space Toast / success dialog
@@ -143,7 +143,7 @@
             isExternal = ([externalRaw integerValue] == 1);
         }
 
-        // YUJ-141 / YUJ-213: 跨 Space 加群（非 external）— 不能直接把用户推进群，
+        // / : 跨 Space 加群（非 external）— 不能直接把用户推进群，
         // 否则 iOS 会把 viewer 当前 Space 的上下文错位带进去（Web 对齐 PR#1068）。
         // 先记"跨 Space 加群成功"通知，pop 回主列表，由 WKConversationListVC
         // viewDidAppear 弹双行 Toast + 紫色「切换过去」按钮。用户显式点击才切

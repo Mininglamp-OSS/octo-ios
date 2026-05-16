@@ -17,7 +17,7 @@
     NSMutableArray *items = [NSMutableArray array];
     NSString *title = @"";
 
-    // YUJ-130 / Web PR#981-982 对齐：把 WKMergeForwardContent.users 里每个
+    // / Web PR#981-982 对齐：把 WKMergeForwardContent.users 里每个
     // 成员的外部群字段（is_external / source_space_name / home_space_*）按
     // uid 建立 map，后续传给 Cell 做 viewer-relative「 @SpaceName」渲染。
     NSMutableDictionary<NSString*, NSDictionary*> *uidToUserExtras = [NSMutableDictionary dictionary];

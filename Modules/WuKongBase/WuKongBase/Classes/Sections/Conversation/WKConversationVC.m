@@ -18,7 +18,6 @@
 #import "WKConversationView+Robot.h"
 #import "WKMessageListView+Position.h"
 #import <WuKongBase/WuKongBase-Swift.h>
-#import "Svg.h"
 #import "WKThemeUtil.h"
 #import "WKThreadService.h"
 #import "WKThreadModel.h"
@@ -99,7 +98,8 @@
     }
 
     // [AI Summary v1] 入口控制器：候选 Bot 集合 ∩ 在线 → 显隐按钮 + 长按菜单 + 推 Bot DM
-    [WKAISummaryEntryController attachToMessageListView:self.conversationView.messageListView channel:self.channel];
+    // 暂时屏蔽 AI 一键总结按钮入口（保留实现代码，恢复时取消注释即可）
+    // [WKAISummaryEntryController attachToMessageListView:self.conversationView.messageListView channel:self.channel];
 }
 
 

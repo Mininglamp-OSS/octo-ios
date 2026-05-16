@@ -1,8 +1,10 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 //
 //  Tests.m
 //  WuKongBase Tests
 //
-//  Unit tests for WuKongBase (EP1 YUJ-92 + EP3 YUJ-94 / WKSpaceFilter).
+//  Unit tests for WuKongBase (EP1 + EP3 / WKSpaceFilter).
 //
 
 @import XCTest;
@@ -45,7 +47,7 @@
 }
 @end
 
-#pragma mark - WuKongBase EP1 Tests (YUJ-92)
+#pragma mark - WuKongBase EP1 Tests ()
 
 @interface Tests : XCTestCase
 
@@ -61,7 +63,7 @@
     [super tearDown];
 }
 
-#pragma mark - WKChannelUtil.toChannelInfo2 — External Group Phase 1 群级字段透传 (YUJ-92 EP1)
+#pragma mark - WKChannelUtil.toChannelInfo2 — External Group Phase 1 群级字段透传 (EP1)
 
 - (void)test_channelUtil_toChannelInfo2_allExternalFieldsWritten {
     NSDictionary *dict = @{
@@ -112,7 +114,7 @@
     XCTAssertNil(ci.extra[@"space_id"]);
 }
 
-#pragma mark - WKMessageUtil.toMessage — External Group Phase 1 消息级字段透传 (YUJ-92 EP1)
+#pragma mark - WKMessageUtil.toMessage — External Group Phase 1 消息级字段透传 (EP1)
 
 - (void)test_messageUtil_toMessage_allFromFieldsWritten {
     NSDictionary *dict = @{
@@ -181,7 +183,7 @@
     XCTAssertNil(msg.extra[@"from_home_space_name"]);
 }
 
-#pragma mark - WKMessageModel — External Group Phase 1 getter (YUJ-92 EP1)
+#pragma mark - WKMessageModel — External Group Phase 1 getter (EP1)
 
 - (void)test_messageModel_externalGetters_readFromMessageExtra {
     WKMessage *m = [WKMessage new];
@@ -218,7 +220,7 @@
     XCTAssertNoThrow([model fromHomeSpaceName]);
 }
 
-#pragma mark - WKMergeForwardContent — users 数组外部字段透传 (PR #981 对齐, YUJ-92 EP1)
+#pragma mark - WKMergeForwardContent — users 数组外部字段透传 (PR #981 对齐, EP1)
 
 - (void)test_mergeforward_usersArray_passesExternalFields {
     WKMergeForwardContent *c = [WKMergeForwardContent new];
@@ -272,7 +274,7 @@
 
 @end
 
-#pragma mark - WKSpaceFilter Tests (YUJ-94 / EP3)
+#pragma mark - WKSpaceFilter Tests (/ EP3)
 
 @interface WKSpaceFilterTests : XCTestCase
 @end
@@ -594,11 +596,11 @@ static NSString * const SP_B = @"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; // 32 × 'b'
     }
 }
 
-#pragma mark YUJ-209 — 新消息 + 外部群 + 非当前 Space 串台分支
+#pragma mark — 新消息 + 外部群 + 非当前 Space 串台分支
 
 /// viewer 停留 Space A，Space B 的外部群有新消息到达：
 /// channelInfo.space_id=B 且 member.source_space_id=B（我不是 A 的外部成员）
-/// → cached-mismatch，必须 Skip，防止该群污染 A 的会话列表（YUJ-209 串台 bug）。
+/// → cached-mismatch，必须 Skip，防止该群污染 A 的会话列表（串台 bug）。
 - (void)testYUJ209_NewMessageForOtherSpaceExternalGroup_ReturnsSkip {
     WKStubSpaceFilterProvider *stub = [WKStubSpaceFilterProvider new];
     [stub setChannelSpace:SP_B forChannelId:@"ext_group_b" type:WK_GROUP];
@@ -612,7 +614,7 @@ static NSString * const SP_B = @"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; // 32 × 'b'
                                     decideChannel:@"ext_group_b"
                                       channelType:WK_GROUP];
         XCTAssertEqual(d, WKSpaceFilterDecisionSkip,
-                       @"YUJ-209: 外部群归属 B + 我在 B 的身份 → 在 A 视角必须 Skip");
+                       @": 外部群归属 B + 我在 B 的身份 → 在 A 视角必须 Skip");
         XCTAssertTrue([[WKSpaceFilter shared] shouldSkipChannelForSpace:@"ext_group_b"
                                                             channelType:WK_GROUP]);
     } @finally {
@@ -636,7 +638,7 @@ static NSString * const SP_B = @"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; // 32 × 'b'
                                     decideChannel:@"ext_group_b"
                                       channelType:WK_GROUP];
         XCTAssertEqual(d, WKSpaceFilterDecisionKeep,
-                       @"YUJ-209: A 身份的外部群新消息必须出现在 A 列表");
+                       @": A 身份的外部群新消息必须出现在 A 列表");
         XCTAssertFalse([[WKSpaceFilter shared] shouldSkipChannelForSpace:@"ext_group_b"
                                                              channelType:WK_GROUP]);
     } @finally {
@@ -659,7 +661,7 @@ static NSString * const SP_B = @"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; // 32 × 'b'
                                     decideChannel:@"unknown_group"
                                       channelType:WK_GROUP];
         XCTAssertEqual(d, WKSpaceFilterDecisionFailOpen,
-                       @"YUJ-209: EP1 未就绪 → FailOpen，让调用方走 whitelist 兜底");
+                       @": EP1 未就绪 → FailOpen，让调用方走 whitelist 兜底");
         XCTAssertFalse([[WKSpaceFilter shared] shouldSkipChannelForSpace:@"unknown_group"
                                                              channelType:WK_GROUP],
                        @"FailOpen 状态不应被 shouldSkip 误判为 Skip");
@@ -669,7 +671,7 @@ static NSString * const SP_B = @"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; // 32 × 'b'
     }
 }
 
-#pragma mark YUJ-215 — 访问过群后切 Space 仍串台（缓存污染 regression）
+#pragma mark — 访问过群后切 Space 仍串台（缓存污染 regression）
 
 /// 复现 Yu 真机场景：user 在 Space A 打开外部群 EDF（populates channelInfo.extra[space_id]=A
 /// 以及 member.extra[source_space_id]=A），切到 Space B，EDF 新消息到达。
@@ -692,7 +694,7 @@ static NSString * const SP_B = @"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; // 32 × 'b'
                                     decideChannel:EDF_CID
                                       channelType:WK_GROUP];
         XCTAssertEqual(d, WKSpaceFilterDecisionSkip,
-                       @"YUJ-215: 访问过的外部群归属华山派、我也是华山派身份 → 在占位符视角必须 Skip");
+                       @": 访问过的外部群归属华山派、我也是华山派身份 → 在占位符视角必须 Skip");
         XCTAssertTrue([[WKSpaceFilter shared] shouldSkipChannelForSpace:EDF_CID
                                                             channelType:WK_GROUP]);
     } @finally {
@@ -702,7 +704,7 @@ static NSString * const SP_B = @"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; // 32 × 'b'
 }
 
 /// 反例锁定：未访问过华山派（channelInfo/member 均未缓存），新消息到达时必须 FailOpen——
-/// 这是 YUJ-209 原场景仍然依赖的行为。由调用方走 whitelist / verifyAndAddGroupsToList 回兜。
+/// 这是 原场景仍然依赖的行为。由调用方走 whitelist / verifyAndAddGroupsToList 回兜。
 - (void)testYUJ215_NeverVisited_NewMessageFailsOpenForWhitelistFallback {
     NSString *const EDF_CID = @"edf_never_visited";
     NSString *const SP_PLACEHOLDER = @"spB_placeholder_xyz";
@@ -718,7 +720,7 @@ static NSString * const SP_B = @"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; // 32 × 'b'
                                     decideChannel:EDF_CID
                                       channelType:WK_GROUP];
         XCTAssertEqual(d, WKSpaceFilterDecisionFailOpen,
-                       @"YUJ-215 反例：未访问过 → EP1 两端 nil → FailOpen，由 whitelist/verify 兜底");
+                       @"反例：未访问过 → EP1 两端 nil → FailOpen，由 whitelist/verify 兜底");
     } @finally {
         [WKSpaceFilter shared].provider = original;
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"currentSpaceId"];
@@ -745,7 +747,7 @@ static NSString * const SP_B = @"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; // 32 × 'b'
                                     decideChannel:EDF_CID
                                       channelType:WK_GROUP];
         XCTAssertEqual(d, WKSpaceFilterDecisionSkip,
-                       @"YUJ-215: 群归 C，我以 A 身份加入，但当前 Space 是占位符 → Skip（不污染占位符）");
+                       @": 群归 C，我以 A 身份加入，但当前 Space 是占位符 → Skip（不污染占位符）");
     } @finally {
         [WKSpaceFilter shared].provider = original;
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"currentSpaceId"];

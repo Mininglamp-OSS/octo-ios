@@ -1,15 +1,17 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 //
 //  WKExternalViewerResolverTests.m
 //  LiMaoBase_Tests
 //
-//  YUJ-93 (iOS EP2) — viewer-relative external-member resolver unit tests.
+//  (iOS EP2) — viewer-relative external-member resolver unit tests.
 //
-//  Mirror of Android YUJ-87 `ExternalViewerResolverTest` (14 cases) and
+//  Mirror of Android `ExternalViewerResolverTest` (14 cases) and
 //  dmwork-web `externalViewer.test.ts` (9 cases). The resolver is pure —
 //  no NSUserDefaults / UIKit deps — so these run entirely in-process.
 //
 //  The extras-key-contract cases are the direct defense against the
-//  YUJ-53 silent-fail pattern (backend renames a field, client still
+//  silent-fail pattern (backend renames a field, client still
 //  reads the old key, UI silently shows nothing).
 //
 
@@ -151,7 +153,7 @@
     // This test locks the contract between data-layer writers and
     // resolver readers. If these literals diverge from WKDataSourceModel
     // / WKChannelUtil / resolver, the UI will silently show nothing —
-    // the YUJ-53 failure mode we MUST prevent. Keep in sync with
+    // the failure mode we MUST prevent. Keep in sync with
     // Android ExternalViewerResolverTest.extrasKeyContract().
     XCTAssertEqualObjects(WKExternalExtrasKeyHomeSpaceId, @"home_space_id");
     XCTAssertEqualObjects(WKExternalExtrasKeyHomeSpaceName, @"home_space_name");

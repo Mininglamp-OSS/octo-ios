@@ -1,14 +1,13 @@
-# DMWork iOS 发版指南
+# Octo iOS 发版指南
 
-> 最后更新：2026-05-01 · 分支策略：GitFlow（`base=develop`）
-> 详细在线文档：https://api-test.example.com/dmwork/apk/release-guide.html
+> 分支策略：GitFlow（`base=develop`） · 默认分支：`develop`
 
 ## TL;DR
 
 **日常**：feature PR 合到 `develop`。
 **发版**：`develop → main` release PR → merge commit → tag → Xcode Archive + Distribute。
 
-> ⚠️ iOS 目前无 CI workflow，正式包必须本地 Xcode 手动打包。
+> ⚠️ 本仓库目前无 CI workflow，正式包必须本地 Xcode 手动打包。
 
 ---
 
@@ -39,19 +38,16 @@
 ### 1. 开 release PR（`develop → main`）
 
 ```bash
-gh pr create --repo Mininglamp-OSS/octo-ios \
+gh pr create \
   --base main --head develop \
   --title "release: v1.x.y" \
   --body "本次发版内容：
-- YUJ-209 / YUJ-215 外部群 SpaceFilter + 缓存污染修复
-- YUJ-210 气泡 @SpaceName 不截断
-- YUJ-213 扫码入群 Toast
-- ...（列 merged PR / YUJ 编号）"
+- ...（列 merged PR / 重要修复）"
 ```
 
 ### 2. Review & merge commit
 
-- 至少 1 位 reviewer 过一遍（Jerry-Xin / lml2468 / 王立涛）
+- 至少 1 位 reviewer 过一遍
 - **用 merge commit，不要 squash**
 
 ### 3. 打 tag
@@ -66,11 +62,11 @@ git push origin v1.x.y
 ### 4. 构建正式 IPA（Xcode）
 
 1. Xcode 打开项目，切到 `main` 分支（对齐 `v1.x.y` tag）
-2. Scheme 选 **Release**，Target 选 **Any iOS Device / Generic iOS Device**
+2. Scheme 选 **OctoiOS**，Build Configuration 选 **Release**，Target 选 **Any iOS Device**
 3. **Product → Archive**
 4. Archive 完成后在 Organizer 选 **Distribute App**
 5. 选择分发方式：**App Store Connect**（上架 / TestFlight）或 **Ad Hoc**（内测）
-6. 证书选 **Distribution**（不是 Development！）
+6. 证书选 **Distribution**（不是 Development）
 7. Provisioning Profile 对应 Distribution
 
 ### 5. 发布
@@ -95,7 +91,7 @@ git push origin develop
 
 1. 从 `main` 切 `hotfix/xxx`
 2. 修复
-3. 提 PR hotfix → main + hotfix → develop
+3. 提 PR `hotfix → main` + `hotfix → develop`
 4. merge 后打 patch tag（如 `v1.0.1`）
 5. Xcode Archive + Distribute
 
@@ -103,10 +99,10 @@ git push origin develop
 
 ## CI 现状
 
-iOS 仓库**目前无 CI workflow**（计划中）。日常验证依赖：
+本仓库目前无 CI workflow（欢迎贡献）。日常验证依赖：
 
 - Xcode 本地 build + 真机测试
-- code review（Jerry-Xin / lml2468 人工把关）
+- code review 人工把关
 
 正式发版必须本地 Xcode 手动 Archive → Distribute。
 
@@ -122,11 +118,3 @@ iOS 仓库**目前无 CI workflow**（计划中）。日常验证依赖：
 | 发版后忘记回流 | 下次 release 冲突 | 立即 merge main → develop |
 | 用 Development 证书 Archive | 不能上 TestFlight / App Store | 必须用 Distribution 证书 |
 | scheme 用 Debug | 调试符号泄露，性能差 | Archive 用 Release scheme |
-
----
-
-## 相关链接
-
-- 仓库：https://github.com/Mininglamp-OSS/octo-ios
-- 在线完整指南：https://api-test.example.com/dmwork/apk/release-guide.html
-- 分支策略：全 org GitFlow（`base=develop`），2026-05-01 起生效

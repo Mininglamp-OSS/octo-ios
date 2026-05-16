@@ -2,7 +2,7 @@
 //  WKJoinGroupSuccessDialog.h
 //  WuKongBase
 //
-//  YUJ-141 — 跨 Space 加群成功后的双行 Toast/Dialog。
+//  — 跨 Space 加群成功后的双行 Toast/Dialog。
 //
 //  对齐 Web PR#1068 `showJoinSuccessToast(crossSpace = true)`：
 //    ┌─────────────────────────────────────┐

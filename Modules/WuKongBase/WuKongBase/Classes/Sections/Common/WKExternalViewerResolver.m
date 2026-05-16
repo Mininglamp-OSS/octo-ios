@@ -90,7 +90,7 @@ NSString *const WKExternalExtrasKeySourceSpaceName  = @"source_space_name";
                                                    sourceSpaceName:sourceSpaceName];
     }
 
-    // Legacy fallback — preserves YUJ-28 behavior for clients on older
+    // Legacy fallback — preserves behavior for clients on older
     // backends that don't yet return home_space_id.
     BOOL isExternal = [self coerceIntFlag:isExternalLegacyRaw] == 1;
     NSString *sourceSpaceName = @"";
@@ -116,7 +116,7 @@ NSString *const WKExternalExtrasKeySourceSpaceName  = @"source_space_name";
 
 + (NSString *)currentViewerSpaceId {
     // Read fresh each call — Space switches update NSUserDefaults
-    // synchronously and callers rely on this for re-render (YUJ-93).
+    // synchronously and callers rely on this for re-render ().
     NSString *spaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
     if (spaceId && spaceId.length > 0) {
         return spaceId;

@@ -1,8 +1,10 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 //
 //  WKMessageCellAttributedNameTests.m
 //  WuKongBase Tests
 //
-//  YUJ-129 (iOS) — WKMessageCell `+getFromNameAttributed:viewerSpaceId:`
+//  (iOS) — WKMessageCell `+getFromNameAttributed:viewerSpaceId:`
 //  unit tests. 对齐 Web PR #1084 `wk-msg-row-header` 的 5 个 fiber 诊断
 //  scenario + Android `WKChatBaseProvider.resolveExternalSpaceSuffix`。
 //

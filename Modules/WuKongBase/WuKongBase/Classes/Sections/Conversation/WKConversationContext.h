@@ -13,7 +13,6 @@
 @protocol WKConversationContext;
 NS_ASSUME_NONNULL_BEGIN
 @class WKConversationInputPanel;
-@class WKMessageContextController;
 
 @protocol WKConversationInputDelegate <NSObject>
 

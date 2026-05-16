@@ -1,8 +1,10 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 //
 //  WKOidcProviderConfigParseTests.m
 //  WuKongBase Tests
 //
-//  YUJ-396 P-S2 / Jerry-Xin #112 review suggestion 2 —
+//  P-S2 / Jerry-Xin #112 review suggestion 2 —
 //    锁 WKOidcProviderConfig.parseArray 的 entry 筛选合约。
 //
 //  cover:
@@ -11,7 +13,7 @@
 //    3. entry 不是 dict → 跳过
 //    4. id 缺失 / 非 string / 空串 → 跳过 entry
 //    5. authorize_path 非合规（缺 / '//' 开头 / 不 '/' 开头 / 非 string）→ 跳过 entry
-//    6. name 缺失 / 空串 → 保留 entry（YUJ-396 P-S1 改动）, name=nil
+//    6. name 缺失 / 空串 → 保留 entry（P-S1 改动）, name=nil
 //    7. account_url 非 https（http / javascript: / 无 host）→ entry 保留, accountUrl=nil
 //    8. 正常 entry → 字段齐全拼回
 //    9. 混合合法 / 非法 entries → 只保留合法部分
@@ -104,21 +106,21 @@
     XCTAssertEqualObjects([WKOidcProviderConfig parseArray:raw], @[]);
 }
 
-#pragma mark - name optional (YUJ-396 P-S1)
+#pragma mark - name optional (P-S1)
 
 - (void)test_missingName_entryKept_nameNil {
     // name 缺失 → entry 保留, name=nil（UI 侧 fallback 到 providerId）
     NSArray *raw = @[@{
         @"id": @"xming",
         @"authorize_path": @"/auth/oidc/xming/authorize",
-        @"account_url": @"https://accounts-test.imocto.cn",
+        @"account_url": @"https://accounts-test.example.com",
     }];
     NSArray<WKOidcProviderConfig *> *out = [WKOidcProviderConfig parseArray:raw];
     XCTAssertEqual(out.count, 1u);
     WKOidcProviderConfig *p = out.firstObject;
     XCTAssertEqualObjects(p.providerId, @"xming");
     XCTAssertNil(p.name);
-    XCTAssertEqualObjects(p.accountUrl, @"https://accounts-test.imocto.cn");
+    XCTAssertEqualObjects(p.accountUrl, @"https://accounts-test.example.com");
 }
 
 - (void)test_emptyName_entryKept_nameNil {
@@ -150,7 +152,7 @@
         @"id": @"xming",
         @"name": @"xming",
         @"authorize_path": @"/auth/oidc/xming/authorize",
-        @"account_url": @"http://accounts-test.imocto.cn",
+        @"account_url": @"http://accounts-test.example.com",
     }];
     NSArray<WKOidcProviderConfig *> *out = [WKOidcProviderConfig parseArray:raw];
     XCTAssertEqual(out.count, 1u);
@@ -169,7 +171,7 @@
     XCTAssertNil(out.firstObject.accountUrl);
 }
 
-#pragma mark - account_url rejects query / fragment (YUJ-396 Round 2 suggestion)
+#pragma mark - account_url rejects query / fragment (Round 2 suggestion)
 
 // buildVerifyURLFromAccountUrl: 在 accountUrl 末尾拼固定 path `/profile/info?anchor=verification`。
 // 若 accountUrl 本身已经带 query 或 fragment, 拼出来的 URL 语义歧义:
@@ -183,7 +185,7 @@
         @"id": @"xming",
         @"name": @"xming",
         @"authorize_path": @"/auth/oidc/xming/authorize",
-        @"account_url": @"https://accounts-test.imocto.cn?x=1",
+        @"account_url": @"https://accounts-test.example.com?x=1",
     }];
     NSArray<WKOidcProviderConfig *> *out = [WKOidcProviderConfig parseArray:raw];
     XCTAssertEqual(out.count, 1u);
@@ -196,7 +198,7 @@
         @"id": @"xming",
         @"name": @"xming",
         @"authorize_path": @"/auth/oidc/xming/authorize",
-        @"account_url": @"https://accounts-test.imocto.cn#anchor",
+        @"account_url": @"https://accounts-test.example.com#anchor",
     }];
     NSArray<WKOidcProviderConfig *> *out = [WKOidcProviderConfig parseArray:raw];
     XCTAssertEqual(out.count, 1u);
@@ -209,7 +211,7 @@
         @"id": @"xming",
         @"name": @"xming",
         @"authorize_path": @"/auth/oidc/xming/authorize",
-        @"account_url": @"https://accounts-test.imocto.cn/base?x=1#f",
+        @"account_url": @"https://accounts-test.example.com/base?x=1#f",
     }];
     NSArray<WKOidcProviderConfig *> *out = [WKOidcProviderConfig parseArray:raw];
     XCTAssertEqual(out.count, 1u);
@@ -237,8 +239,8 @@
         @"id": @"xming",
         @"name": @"xming",
         @"authorize_path": @"/auth/oidc/xming/authorize",
-        @"account_url": @"https://accounts-test.imocto.cn",
-        @"reset_password_url": @"https://accounts-test.imocto.cn/reset",
+        @"account_url": @"https://accounts-test.example.com",
+        @"reset_password_url": @"https://accounts-test.example.com/reset",
     }];
     NSArray<WKOidcProviderConfig *> *out = [WKOidcProviderConfig parseArray:raw];
     XCTAssertEqual(out.count, 1u);
@@ -246,8 +248,8 @@
     XCTAssertEqualObjects(p.providerId, @"xming");
     XCTAssertEqualObjects(p.name, @"xming");
     XCTAssertEqualObjects(p.authorizePath, @"/auth/oidc/xming/authorize");
-    XCTAssertEqualObjects(p.accountUrl, @"https://accounts-test.imocto.cn");
-    XCTAssertEqualObjects(p.resetPasswordUrl, @"https://accounts-test.imocto.cn/reset");
+    XCTAssertEqualObjects(p.accountUrl, @"https://accounts-test.example.com");
+    XCTAssertEqualObjects(p.resetPasswordUrl, @"https://accounts-test.example.com/reset");
 }
 
 - (void)test_mixedValidAndInvalidEntries_onlyValidKept {

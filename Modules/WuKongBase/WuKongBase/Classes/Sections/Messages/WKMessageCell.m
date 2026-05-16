@@ -20,6 +20,11 @@
 #import "WKExternalViewerResolver.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKTapLongTapOrDoubleTapGestureRecognizerEvent.h"
+// 用 Telegram 原版 ContextControllerSourceNode + ContextExtractedContentContainingNode
+// (在 TelegramUtils/Display/Source/ 中) 替代 P5 写的 WKGestureContainerNode /
+// WKContentContainerNode —— 因 P5 自写版用普通 UILongPressGestureRecognizer
+// 在聊天 tableview 上吃掉 navigation pop / scroll 手势。原版自带定制的
+// ContextGesture（beginDelay = 0.12 + 内部状态机），与 scrollview 协作良好。
 
 
 // 整个消息距离顶部的距离
@@ -214,13 +219,13 @@ static NSMutableDictionary *flameNodeCacheDict;
     [self.nameLbl setTextColor:[UIColor grayColor]];
     [self.bubbleBackgroundView addSubview:self.nameLbl];
 
-    // 实名认证 ✓ 迷你徽章（YUJ-381 / dmwork-web#1169 Phase A）
+    // 实名认证 ✓ 迷你徽章（/ Phase A）
     // 12×12 pt 蓝色实心圆 + 白色 ✓。紧贴作者名右侧 padding.left=2pt。
     // 只加 1 个 ImageView + 最小约束，不触碰原有 nameLbl / botBadge 布局骨架。
     self.realnameVerifiedImgView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 12.0f, 12.0f)];
     self.realnameVerifiedImgView.contentMode = UIViewContentModeScaleAspectFit;
     // 资源路径必须带 Common/ 前缀：Images.xcassets/Common/Contents.json 设了
-    // provides-namespace: true（YUJ-384 P0-1），与同文件 "Conversation/Messages/MsgStatusFail"
+    // provides-namespace: true（P0-1），与同文件 "Conversation/Messages/MsgStatusFail"
     // 一致的写法。漏前缀会 imageNamed: 返 nil → 徽章 UIImageView 空框。
     self.realnameVerifiedImgView.image = [self getImageNameForBaseModule:@"Common/ic_realname_verified_mini"];
     self.realnameVerifiedImgView.hidden = YES;
@@ -474,7 +479,7 @@ static NSMutableDictionary *flameNodeCacheDict;
         [[WKSDK shared].channelManager fetchChannelInfo:model.channel];
     }
 
-    // YUJ-381 / dmwork-web#1169：群聊气泡发送者实名状态预拉取（不打开名片也能命中）。
+    // / ：群聊气泡发送者实名状态预拉取（不打开名片也能命中）。
     // SDK 的 fetchChannelInfo 不一定回 realname_verified，这里走 /users/<uid> 让
     // person.extra 被 UserModel/channelInfoFromUser 写入，tri-state fallback 才能命中。
     // 自带 uid 节流，列表滚动多次进入也只发一次。
@@ -489,11 +494,11 @@ static NSMutableDictionary *flameNodeCacheDict;
         }else {
             self.nameLbl.textColor =  [WKUserColorUtil userColor:model.from.channel.channelId];
         }
-        // YUJ-129 / web PR #1084 对齐：昵称后追加灰紫色「@SpaceName」跨 Space 后缀。
+        // / web PR #1084 对齐：昵称后追加灰紫色「@SpaceName」跨 Space 后缀。
         // attributedText 与 text 互斥，先清 text 再赋 attributedText，避免 UILabel
         // 双写坑（iOS 底层在同一帧 set 两次会以后者为准，但脏数据残留会导致 sizeToFit 异常）。
         self.nameLbl.text = nil;
-        // YUJ-210: 外部消息（含 @SpaceName 后缀）使用 byTruncatingHead 保留尾部
+        // : 外部消息（含 @SpaceName 后缀）使用 byTruncatingHead 保留尾部
         // @SpaceName；普通群气泡维持 byTruncatingTail 不受影响。
         BOOL hasExternalSuffix = [[self class] hasExternalSpaceSuffix:model];
         self.nameLbl.numberOfLines = 1;
@@ -505,8 +510,8 @@ static NSMutableDictionary *flameNodeCacheDict;
         self.nameLbl.hidden = YES;
     }
 
-    // 实名认证 ✓ 徽章（YUJ-381 / dmwork-web#1169 Phase A）
-    // 数据源（优先级，tri-state，YUJ-384 P1-2 修复）：
+    // 实名认证 ✓ 徽章（/ Phase A）
+    // 数据源（优先级，tri-state，P1-2 修复）：
     //   1. memberOfFrom.extra[@"realname_verified"] — 群聊作者的 member 行记录
     //   2. 仅当 member 无显式值（nil，字段缺失）时，才回退到对应 person
     //      WKChannelInfo.extra — 避免 stale person cache 给已取消实名的用户错误打勾。
@@ -525,7 +530,7 @@ static NSMutableDictionary *flameNodeCacheDict;
     }
     // 仅在显隐状态真正改变时触发 layout（channelInfoUpdate → refresh 异步刷新场景）。
     // 遗漏 setNeedsLayout 会让徽章停在 initUI 时的 (0,0,12,12) 左上角旧 frame。
-    // 等值比较防止无限 layout 循环（同 botBadge 下方模式，YUJ-384 P1-1）。
+    // 等值比较防止无限 layout 循环（同 botBadge 下方模式，P1-1）。
     BOOL realnameBadgeWasHidden = self.realnameVerifiedImgView.hidden;
     self.realnameVerifiedImgView.hidden = !verified;
     if (realnameBadgeWasHidden != self.realnameVerifiedImgView.hidden) {
@@ -625,7 +630,7 @@ static NSMutableDictionary *flameNodeCacheDict;
     [self.flameBox.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
     
     if(self.messageModel.content.flame && ![self hiddenFlameProgress] && !self.messageModel.flameFinished) {
-        RadialStatusNode *flameNode = [self.messageModel flameNode];
+        WKRadialProgressView *flameNode = [self.messageModel flameNode];
         [self.flameBox addSubview:flameNode.view];
         __weak typeof(self.messageModel) weakMessageModel = self.messageModel;
         [self.messageModel startFlameIfNeed:^{
@@ -686,7 +691,7 @@ static NSMutableDictionary *flameNodeCacheDict;
     return name;
 }
 
-// 获取发送者名字（富文本版）— YUJ-129 iOS 对齐 Web PR #1084 / Android WKChatBaseProvider
+// 获取发送者名字（富文本版）— iOS 对齐 Web PR #1084 / Android WKChatBaseProvider
 // `resolveExternalSpaceSuffix`。当 sender 相对 viewer 属于外部（跨 Space）时，在基础
 // 名字后追加灰紫色 ` @{sourceSpaceName}` 后缀，与 Android 0xFF8B5CF6 保持像素级一致。
 //
@@ -696,7 +701,7 @@ static NSMutableDictionary *flameNodeCacheDict;
                                viewerSpaceId:(NSString*)viewerSpaceId {
     NSString *baseName = [self getFromName:messageModel] ?: @"";
 
-    // YUJ-210: 显式写入 NSFontAttributeName，让 `boundingRectWithSize:` / `sizeThatFits:`
+    // : 显式写入 NSFontAttributeName，让 `boundingRectWithSize:` / `sizeThatFits:`
     // 在测量气泡宽度与 nameLbl 布局时能算到真实 width，避免 UILabel 截断。
     UIFont *nameFont = WK_NICKNAME_FONT;
     NSDictionary *baseAttrs = nameFont ? @{NSFontAttributeName: nameFont} : @{};
@@ -729,7 +734,7 @@ static NSMutableDictionary *flameNodeCacheDict;
     return attr;
 }
 
-// YUJ-210: 判定 messageModel 相对当前 viewer 是否应渲染 @SpaceName 后缀。
+// : 判定 messageModel 相对当前 viewer 是否应渲染 @SpaceName 后缀。
 // 用在 refreshModel: / layoutName: 决定 nameLbl 的 lineBreakMode 与 max width
 // ——保留 @SpaceName 后缀（byTruncatingHead）仅在外部消息场景开启，避免影响普通群气泡。
 +(BOOL) hasExternalSpaceSuffix:(WKMessageModel*)messageModel {
@@ -772,7 +777,7 @@ static NSMutableDictionary *flameNodeCacheDict;
 }
 
 +(CGSize) getNicknameSize:(WKMessageModel*)messageModel {
-    // YUJ-210: 优先用 attributed name（含 @SpaceName 后缀）测宽，避免
+    // : 优先用 attributed name（含 @SpaceName 后缀）测宽，避免
     // WKTextMessageCell.getContentSize 用 `MAX(size.width, nicknameWidth)`
     // 算气泡宽度时漏掉后缀，导致 nameLbl 被 messageContentView.lim_width 截断。
     CGFloat maxWidth = [WKApp shared].config.messageContentMaxWidth;
@@ -797,7 +802,7 @@ static NSMutableDictionary *flameNodeCacheDict;
 
     WKChannelInfo *fromChannelInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:messageModel.fromUid channelType:WK_PERSON]];
 
-    // 实名认证 ✓ 徽章宽度（YUJ-381）：tri-state fallback 与 refresh:/layoutName 一致
+    // 实名认证 ✓ 徽章宽度（）：tri-state fallback 与 refresh:/layoutName 一致
     // member.extra 显式 @NO 直接视为未实名，nil 才回退到 person.extra。
     // 几何同步 layoutName：6pt 间距 + 12pt 图标宽。
     NSNumber *memberFlag = [WKChannelUtil isRealnameVerifiedFromExtra:messageModel.memberOfFrom.extra];
@@ -1207,7 +1212,7 @@ static NSMutableDictionary<NSString*, UIImage*> *_bubbleImageCache;
         }
 
         self.nameLbl.lim_top =  -self.nameLbl.lim_height - 4.0f;
-        // YUJ-210: 外部消息昵称拼 @SpaceName 后缀时，nameLbl 允许的最大宽度放宽到
+        // : 外部消息昵称拼 @SpaceName 后缀时，nameLbl 允许的最大宽度放宽到
         // 气泡消息正文最大宽度 (messageContentMaxWidth)，避免 100pt 硬限截断；
         // 若仍溢出，refreshModel: 已切到 byTruncatingHead 保留尾部 @SpaceName。
         // 普通群气泡维持 WK_NICKNAME_MAX_WIDTH，避免行内布局回归。
@@ -1229,7 +1234,7 @@ static NSMutableDictionary<NSString*, UIImage*> *_bubbleImageCache;
         self.botBadgeLbl.frame = badgeFrame;
     }
 
-    // 实名认证 ✓ 徽章布局（YUJ-381）
+    // 实名认证 ✓ 徽章布局（）
     // 与 botBadge 同 row，紧贴在 nameLbl 右侧，间距 6pt（对齐 AI 文字徽章节奏）。
     // 用 imgView 自身 lim_height 算垂直居中，避免和 botBadge 公式不一致。
     CGFloat afterNameRight = self.nameLbl.lim_left + self.nameLbl.lim_width;
@@ -1472,12 +1477,27 @@ static NSMutableDictionary<NSString*, UIImage*> *_bubbleImageCache;
 -(void) cancelAnimate {
     [[self targetView].layer removeAllAnimations];
     if(!self.completionAnmiate) {
-        [[self targetView].layer animateSpringFrom:@(0.9f) to:@(1.0f) keyPath:@"transform.scale" duration:0.5f delay:0.0f initialVelocity:0.0f damping:80.0f removeOnCompletion:false additive:false completion:^(BOOL v){
-            self.frame = self.originalViewFrame;
-            self.completionAnmiate  = true;
-        }];
+        // Native CASpringAnimation replacement for TelegramUtils' CALayer.animateSpringFrom...
+        CASpringAnimation *spring = [CASpringAnimation animationWithKeyPath:@"transform.scale"];
+        spring.fromValue = @(0.9f);
+        spring.toValue = @(1.0f);
+        spring.damping = 80.0f;
+        spring.initialVelocity = 0.0f;
+        spring.duration = 0.5f;
+        spring.beginTime = CACurrentMediaTime();
+        spring.fillMode = kCAFillModeForwards;
+        spring.removedOnCompletion = NO;
+        [[self targetView].layer addAnimation:spring forKey:@"cancelAnimateSpring"];
+
+        // Mirror the original completion behavior via dispatch_after since CAAnimation has no completion block.
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (!weakSelf) return;
+            weakSelf.frame = weakSelf.originalViewFrame;
+            weakSelf.completionAnmiate = true;
+        });
     }
-   
+
     self.hasAnimate = false;
 }
 

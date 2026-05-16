@@ -1,5 +1,5 @@
 //
-//  WKTapLongTapOrDoubleTapGestureRecognizer.swift
+//  TapLongTapOrDoubleTapGestureRecognizerWrap.swift
 //  WuKongBase
 //
 //  Created by tt on 2022/6/21.
@@ -15,21 +15,21 @@ import UIKit
     let action:  (_ gesture:TapLongTapOrDoubleTapGestureRecognizerWrap)->Void?
     @objc public var tapActionAtPoint: ((CGPoint) ->WKTapLongTapOrDoubleTapGestureRecognizerEvent )?
     @objc public var longTap: ((CGPoint, TapLongTapOrDoubleTapGestureRecognizerWrap) -> Void)?
-    
+
     @objc public init(action: @escaping (_ gesture:TapLongTapOrDoubleTapGestureRecognizerWrap)->Void) {
         self.action = action
         self.tapPoint = CGPoint()
         self.tapAction = WKTapLongTapOrDoubleTapGestureTap
-       
+
     }
-    
+
     @objc  public func setup() {
         self.gesture = TapLongTapOrDoubleTapGestureRecognizer(target: self, action: #selector(self.tapLongTapOrDoubleTapGesture(_:)))
-        
+
         self.gesture!.tapActionAtPoint = { [weak self] point in
             if let strongSelf = self {
                 if  let event = strongSelf.tapActionAtPoint?(point) {
-                    
+
                     switch event.action {
                     case WKTapLongTapOrDoubleTapGestureRecognizerActionWaitForSingleTap:
                         return .waitForSingleTap
@@ -44,16 +44,17 @@ import UIKit
             }
             return .fail
         }
-        
+
         self.gesture!.longTap = {  point, recognizer in
             self.longTap?(point,self)
         }
 
     }
-    
-    @objc public func attachTo(view:UIView) {
+
+    @objc public func attachToView(_ view: UIView) {
         view.addGestureRecognizer(self.gesture!)
     }
+
     @objc
     func tapLongTapOrDoubleTapGesture(_ recognizer: TapLongTapOrDoubleTapGestureRecognizer) {
         switch recognizer.state {
@@ -75,8 +76,8 @@ import UIKit
                     break
                 }
                 self.action(self)
-                
-                
+
+
             }
         default:
             break
@@ -84,5 +85,3 @@ import UIKit
     }
 
 }
-
-

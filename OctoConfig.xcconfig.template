@@ -1,0 +1,112 @@
+// =============================================================================
+// OctoConfig.xcconfig.template — Octo iOS 私有配置模板
+//
+// 用法：
+//   1. 复制本模板为 OctoConfig.xcconfig（已加入 .gitignore，不会入库）
+//        cp OctoConfig.xcconfig.template OctoConfig.xcconfig
+//   2. 把下面的占位值替换为你自己的真实值
+//   3. 重新执行 pod install
+//        Podfile post_install 会自动把 OctoConfig.xcconfig 注入到所有
+//        Pods 生成的 xcconfig 中（#include?，软引用），从而对主工程及
+//        所有 Pods 目标可见。
+//   4. 编译运行
+//
+// 缺失本文件不会导致编译失败（#include? 软引用），但相关功能不工作：
+//   - 缺 APPLE_TEAM_ID        → 自动签名失败（手动签名仍可用）
+//   - 缺 OCTO_BUGLY_APP_ID_*  → 崩溃统计不上报
+//   - 缺 OCTO_IM_DEFAULT_HOST → App 启动后会显示空的服务器地址，需手动输入
+//
+// 注意：xcconfig 文件中 `//` 是注释起始符。如要写带协议的 URL，需省略
+// 协议（写 host）或用变量拆分。
+// =============================================================================
+
+
+// ── Apple 开发者团队 ──────────────────────────────────────────────────────
+// 你的 10 位 Team ID。可在 https://developer.apple.com/account 找到。
+
+APPLE_TEAM_ID = YOUR_TEAM_ID
+
+
+// ── Bugly 崩溃 + 卡顿采集（腾讯，闭源 SDK）─────────────────────────────────
+// 控制台：https://bugly.qq.com
+// 开源版默认不附带 Bugly.framework（闭源二进制，11MB）。如需启用：
+//   1. 到 https://bugly.qq.com 注册账号、创建应用、下载 Bugly iOS SDK
+//   2. 解压得到 Bugly.framework，放到：
+//        Modules/WuKongBase/WuKongBase/Bugly.framework/
+//   3. 把下面的 OCTO_BUGLY_APP_ID_MAIN 填入你在 Bugly 控制台拿到的 AppId
+//   4. 重新 pod install
+//      Podfile 会自动检测：framework 文件存在 + AppId 已配置 → 启用编译，
+//      OCTO_ENABLE_BUGLY=1 宏会被注入到 WuKongBase 和主 App target。
+// 任一条件不满足都会跳过 Bugly，不会编译失败。
+//
+// 项目当前在两处分别启动 Bugly（主 App 入口 + WuKongBase 内部）。
+
+OCTO_BUGLY_APP_ID_MAIN = YOUR_BUGLY_APP_ID
+OCTO_BUGLY_APP_ID_SDK  = YOUR_BUGLY_APP_ID
+
+
+// ── IM 服务网关预设列表 ───────────────────────────────────────────────────
+// 配套后端：https://github.com/Mininglamp-OSS/octo-server
+// 支持 3 个预设槽位，会出现在 App 内"切换服务器"弹窗里。
+// 用户长按登录页 App 名字 / 设置入口可呼出该弹窗。
+// 留空的槽位自动跳过（不会显示空选项）。
+// 仅 host，不带协议、不带端口。HTTPS 与否在 _HTTPS 字段控制（默认 YES）。
+//
+// 示例：
+//   OCTO_IM_PRESET_1_HOST  = im.example.com
+//   OCTO_IM_PRESET_1_LABEL = 国内正式版
+//   OCTO_IM_PRESET_2_HOST  = im-test.example.com
+//   OCTO_IM_PRESET_2_LABEL = 测试环境
+//   OCTO_IM_PRESET_3_HOST  = im-intl.example.com
+//   OCTO_IM_PRESET_3_LABEL = 国际版
+
+OCTO_IM_PRESET_1_HOST  = your.im.server.example.com
+OCTO_IM_PRESET_1_LABEL = 默认服务器
+OCTO_IM_PRESET_1_HTTPS = YES
+
+OCTO_IM_PRESET_2_HOST  =
+OCTO_IM_PRESET_2_LABEL =
+OCTO_IM_PRESET_2_HTTPS = YES
+
+OCTO_IM_PRESET_3_HOST  =
+OCTO_IM_PRESET_3_LABEL =
+OCTO_IM_PRESET_3_HTTPS = YES
+
+// 兼容旧字段：仅当上面 3 个槽位都为空时回落到这里。新部署请用 PRESET_1。
+OCTO_IM_DEFAULT_HOST  = your.im.server.example.com
+OCTO_IM_DEFAULT_LABEL = 默认服务器
+
+
+// ── Universal Links / Associated Domains ─────────────────────────────────
+// 仅域名，不含 applinks: 前缀。
+// PR #121 round 2 起，Octo/Octo.entitlements 已改为 applinks:$(OCTO_ASSOCIATED_DOMAIN)，
+// Xcode 12+ 在签名阶段会对 entitlements 文件做 build setting 替换，
+// 修改本变量后 Clean Build Folder 重新签名即可生效。
+
+OCTO_ASSOCIATED_DOMAIN = your.universal-link.example.com
+
+
+// ── App 自定义 URL Scheme ─────────────────────────────────────────────────
+// 用于：① 实名认证 / OIDC 后端回跳本 App（如 octo://verified）
+//      ② 系统分享扩展跨进程拉起主 App（如 octo://share）
+//      ③ 通用深度链接入口
+// 只填 scheme 名（不带 ://）。改这个需要同步修改后端发出回跳 URL 的配置。
+
+OCTO_URL_SCHEME = octo
+
+
+// ── App Group（跨进程数据共享） ──────────────────────────────────────────
+// 用于主 App ↔ ShareExtension 之间通过 NSUserDefaults / 共享文件容器交换数据。
+// 必须与 Apple Developer 后台配置的 App Group ID 完全一致（包含 group. 前缀）；
+// 外部团队签名必须用自己 provision 过的 group，不允许沿用默认值。
+// 同时出现在两处 entitlements: Octo/Octo.entitlements、ShareExtension/ShareExtension.entitlements。
+
+OCTO_APP_GROUP = group.com.example.octo
+
+
+// ── 邀请链接 ─────────────────────────────────────────────────────────────
+// 用户在 App 内点 "邀请好友" 时拼到分享文案后的 URL。
+// 默认指向 OCTO 开源主页；私有部署通常会指向自己的下载页。
+
+OCTO_INVITE_URL = https://github.com/Mininglamp-OSS
+

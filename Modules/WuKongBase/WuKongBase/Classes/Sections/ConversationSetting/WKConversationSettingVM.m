@@ -181,7 +181,7 @@
         }];
         if(isExternalGroup) {
             groupNameItem[@"tagText"] = LLang(@"外部群");
-            // 与 Web 端 PR #980 / Android YUJ-90 保持一致：Semi 紫色填充、白色文字
+            // 与 Web 端 PR #980 / Android 保持一致：Semi 紫色填充、白色文字
             groupNameItem[@"tagBackgroundColor"] = [UIColor colorWithRed:114.0f/255.0f green:46.0f/255.0f blue:209.0f/255.0f alpha:1.0f];
             groupNameItem[@"tagTextColor"] = [UIColor whiteColor];
         }

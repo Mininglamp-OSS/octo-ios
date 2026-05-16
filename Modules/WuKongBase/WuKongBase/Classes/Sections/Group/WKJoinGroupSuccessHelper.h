@@ -2,7 +2,7 @@
 //  WKJoinGroupSuccessHelper.h
 //  WuKongBase
 //
-//  YUJ-141 (iOS) — 对齐 Web PR#1068 / YUJ-100/YUJ-106:
+//  (iOS) — 对齐 Web PR#1068 / /:
 //  用户通过邀请链接/扫码/直接接受邀请进入一个属于「其它 Space」的群时：
 //    1) 服务端加群 API 返回成功后，**不能**直接把 viewer 切到目标 Space；
 //    2) 先把「本次加群成功 + 目标 Space」记录下来（in-memory + UserDefaults 兜底）；

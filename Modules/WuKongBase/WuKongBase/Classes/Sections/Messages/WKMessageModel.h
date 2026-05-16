@@ -7,7 +7,7 @@
 
 #import <Foundation/Foundation.h>
 #import <WuKongIMSDK/WuKongIMSDK.h>
-@class RadialStatusNode;
+#import "WKRadialProgressView.h"
 NS_ASSUME_NONNULL_BEGIN
 
 typedef enum : NSUInteger {
@@ -136,7 +136,7 @@ typedef enum : NSUInteger {
 
 
 @property(nonatomic,assign) CGFloat flameIconSizeFactor; // 阅后即焚icon大小比率
-@property(nonatomic,strong) RadialStatusNode *flameNode; // 阅后即焚的动画
+@property(nonatomic,strong) WKRadialProgressView *flameNode; // 阅后即焚的动画
 @property(nonatomic,assign) BOOL flameFinished; // flame的动画完成
 @property(nonatomic,copy) void(^OnFlameFinished)(void); // flame动画完成回调
 
@@ -157,8 +157,8 @@ typedef enum : NSUInteger {
 // 兜底策略（策略 B）：extra 没有时, 回落到 memberOfFrom.extra 对应键, 避免 SetEffectiveSpaceID 漏发时 UI 静默失败.
 @property(nonatomic,assign,readonly) BOOL fromIsExternal;              // 发送者是否为外部成员
 @property(nonatomic,copy,readonly,nullable)   NSString *fromSourceSpaceName; // 发送者来源 space 名称
-@property(nonatomic,copy,readonly,nullable)   NSString *fromHomeSpaceId;     // 发送者归属 space id (YUJ-63)
-@property(nonatomic,copy,readonly,nullable)   NSString *fromHomeSpaceName;   // 发送者归属 space 名称 (YUJ-63)
+@property(nonatomic,copy,readonly,nullable)   NSString *fromHomeSpaceId;     // 发送者归属 space id ()
+@property(nonatomic,copy,readonly,nullable)   NSString *fromHomeSpaceName;   // 发送者归属 space 名称 ()
 
 @property(nonatomic,assign) WKStreamFlag streamFlag;
 

@@ -183,7 +183,7 @@
         _externalGroupTagLbl.text = LLang(@"外部");
         _externalGroupTagLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
         _externalGroupTagLbl.textColor = [UIColor whiteColor];
-        // 紫色 #722ED1（对齐 dmwork-web PR #980 Semi 紫色 Tag；Android YUJ-90 同色）
+        // 紫色 #722ED1（对齐 dmwork-web PR #980 Semi 紫色 Tag；Android 同色）
         _externalGroupTagLbl.backgroundColor = [UIColor colorWithRed:114.0f/255.0f green:46.0f/255.0f blue:209.0f/255.0f alpha:1.0f];
         _externalGroupTagLbl.textAlignment = NSTextAlignmentCenter;
         _externalGroupTagLbl.layer.cornerRadius = 4.0f;

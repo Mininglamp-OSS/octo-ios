@@ -86,7 +86,14 @@
             self.visibleEdgeInsets = insets;
         }
         
-        self.inviteMsg = [NSString stringWithFormat:@"我正在使用【%@】app，体验还不错。你也赶快来下载玩玩吧！https://www.githubim.cn",self.appName];
+        // PR #121 round 4 review 🟡: 邀请链接默认指向 OCTO 开源主页, 可通过
+        // OctoConfig.xcconfig 的 OCTO_INVITE_URL 注入 Info.plist OCTOInviteURL
+        // 覆盖（私有部署通常会指向自己的下载页）。
+        NSString *inviteURL = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOInviteURL"];
+        if (inviteURL.length == 0 || [inviteURL hasPrefix:@"$("]) {
+            inviteURL = @"https://github.com/Mininglamp-OSS";
+        }
+        self.inviteMsg = [NSString stringWithFormat:@"我正在使用【%@】app，体验还不错。你也赶快来下载玩玩吧！%@", self.appName, inviteURL];
         NSString *tempDir= NSTemporaryDirectory();
         self.videoCacheDir = [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"wukong_video_cache"]];
         [WKFileUtil createDirectoryIfNotExist: self.videoCacheDir];
@@ -94,7 +101,7 @@
         self.systemUID = @"u_10000";
         self.fileHelperUID = @"fileHelper";
         self.botfatherUID = @"botfather";
-        // YUJ-219-A4: default when backend appconfig.system_bot_uids is missing
+        // : default when backend appconfig.system_bot_uids is missing
         // (e.g. A2 backend not deployed). Keep these three UIDs treated as
         // system bots so per-Space filtering still works locally.
         self.systemBotUIDs = @[@"botfather", @"u_10000", @"fileHelper"];
@@ -467,7 +474,7 @@
 
 @property(nonatomic,assign) BOOL startRequestAppModule;
 
-/// 入队等 config 请求完成的 callback 队列（YUJ-396 R3 / Jerry-Xin #112 warning）。
+/// 入队等 config 请求完成的 callback 队列（R3 / warning）。
 /// 老实现 startRequest==YES 时会丢掉后来者的 callback; 现在统一用一个队列,
 /// 请求完成（成功 / 失败）时一次性 drain。线程语义: 调用点基本是 main thread（UI
 /// 入口），但防御性地加 @synchronized(self) 保证跨线程安全。
@@ -477,19 +484,19 @@
 
 @implementation WKAppRemoteConfig
 
-// Cache key for oidc_providers raw array（王立涛 develop_fix commit 625cc7c 引入）。
+// Cache key for oidc_providers raw array（王立涛 ommit 625cc7c 引入）。
 // Hydrate at init 让登录页冷启动的 first frame 即可渲染 SSO 按钮,
 // 不必等 appconfig API 返回。2026-05-11 阶段 1.2 合并 develop_fix 后
-// 实现采用 王立涛的缓存语义 + develop (YUJ-396) 的强类型 parseArray:。
+// 实现采用 王立涛的缓存语义 + develop () 的强类型 parseArray:。
 static NSString * const kOidcProvidersCacheKey = @"WKOidcProvidersCacheV1";
 
 - (instancetype)init {
     if(self = [super init]) {
-        // YUJ-396: 冷启动 appconfig 未到时不能是 nil, 否则调用侧需要 nil-check。
+        // : 冷启动 appconfig 未到时不能是 nil, 否则调用侧需要 nil-check。
         // 空数组语义即「没有可用 provider」, 实名认证入口走 toast 兜底。
         _oidcProviders = @[];
         _pendingConfigCallbacks = [NSMutableArray array];
-        // 从持久化缓存 hydrate oidcProviders（王立涛 develop_fix commit 625cc7c 引入）:
+        // 从持久化缓存 hydrate oidcProviders（王立涛 ommit 625cc7c 引入）:
         // 登录页 first frame 即可渲染 SSO 按钮, 不用等 appconfig 请求返回。
         // requestConfig: 成功后会覆盖为最新数据。
         NSArray *cachedRaw = [[NSUserDefaults standardUserDefaults] arrayForKey:kOidcProvidersCacheKey];
@@ -517,8 +524,8 @@ static NSString * const kOidcProvidersCacheKey = @"WKOidcProvidersCacheV1";
     }
 }
 
-/// 王立涛 develop_fix 625cc7c 引入: 绕过 requestSuccess 缓存强制刷新 appconfig,
-/// 用于网络恢复 / 手动刷新 SSO 按钮等场景。配合 develop (YUJ-396) 的 pending queue,
+/// 王立涛 引入: 绕过 requestSuccess 缓存强制刷新 appconfig,
+/// 用于网络恢复 / 手动刷新 SSO 按钮等场景。配合 develop () 的 pending queue,
 /// 不会破坏已入队 callback; startRequest 的去重仍然有效。
 -(void) refreshConfig:(void(^__nullable)(NSError  * __nullable error))callback {
     self.requestSuccess = NO;
@@ -527,7 +534,7 @@ static NSString * const kOidcProvidersCacheKey = @"WKOidcProvidersCacheV1";
 
 -(void) requestConfig:(void(^)(NSError  * __nullable error))callback {
 
-    // ========== appconfig 路径（YUJ-396 R3 callback 队列化） ==========
+    // ========== appconfig 路径（R3 callback 队列化） ==========
     // 已加载成功 → 立刻 callback。
     if(self.requestSuccess) {
         if(callback) {
@@ -535,7 +542,7 @@ static NSString * const kOidcProvidersCacheKey = @"WKOidcProvidersCacheV1";
         }
     } else {
         // 未加载 / in-flight —— 统一把 callback 入队, 请求完成时一次性 drain。
-        // 解决 Jerry-Xin #112 Round 3 warning: 老实现在 startRequest==YES 时
+        // 解决 Round 3 warning: 老实现在 startRequest==YES 时
         // 整个 if 块被跳过, 后来者的 callback 被静默丢弃, 调用侧（如
         // WKRealnameVerifyManager.startVerificationFromVC:）无法等 loading 完成。
         if(callback) {
@@ -572,7 +579,7 @@ static NSString * const kOidcProvidersCacheKey = @"WKOidcProvidersCacheV1";
                     weakSelf.threadOn = [resultDict[@"thread_on"] boolValue];
                 }
 
-                // YUJ-219-A4: consume system_bot_uids from backend appconfig.
+                // : consume system_bot_uids from backend appconfig.
                 // Response shape (A2): {"system_bot_uids": ["botfather", "u_10000", "fileHelper"]}.
                 // When the field is missing (A2 not deployed), keep the fallback
                 // configured in WKAppConfig's -init.
@@ -589,13 +596,13 @@ static NSString * const kOidcProvidersCacheKey = @"WKOidcProvidersCacheV1";
                     }
                 }
 
-                // YUJ-396 + develop_fix 625cc7c 合并:
-                // - parseArray: 强类型解析 (YUJ-396, Aegis 实名认证 accountUrl 链消费)
+                // + 合并:
+                // - parseArray: 强类型解析 (, Aegis 实名认证 accountUrl 链消费)
                 // - raw array 持久化缓存 (王立涛 develop_fix, 登录页冷启动即可渲染 SSO 按钮)
                 id oidcProvidersRaw = resultDict[@"oidc_providers"];
                 if([oidcProvidersRaw isKindOfClass:[NSArray class]]) {
                     weakSelf.oidcProviders = [WKOidcProviderConfig parseArray:oidcProvidersRaw];
-                    // YUJ-420 R3 fix (Jerry-Xin Critical): plist-sanitize raw array 再写 NSUserDefaults。
+                    // R3 fix (Jerry-Xin Critical): plist-sanitize raw array 再写 NSUserDefaults。
                     // 原实现直接 setObject:oidcProvidersRaw, 若后端下发 {"name": null}
                     // 则 NSArray 中会包含 NSDictionary 内含 NSNull, plist 序列化抛
                     // NSInvalidArgumentException → NSUserDefaults write crash。
@@ -617,7 +624,7 @@ static NSString * const kOidcProvidersCacheKey = @"WKOidcProvidersCacheV1";
                 weakSelf.startRequest = false;
                 // Notify SSO 登录页等待 remote config 的观察者（王立涛 develop_fix）
                 [[NSNotificationCenter defaultCenter] postNotificationName:WKNOTIFY_REMOTECONFIG_LOADED object:nil];
-                // Drain pending config callbacks queue (develop YUJ-396)
+                // Drain pending config callbacks queue (develop )
                 [weakSelf _fireAndClearPendingConfigCallbacks:nil];
             }).catch(^(NSError *error){
                 WKLogError(@"请求远程配置失败！->%@",error);
@@ -633,7 +640,7 @@ static NSString * const kOidcProvidersCacheKey = @"WKOidcProvidersCacheV1";
     // 注意: 这里的 `callback` 是本次 requestConfig: 调用的参数闭包;
     // 老实现会在 startRequestAppModule==NO 时挂到 appmodule 请求的 then/catch,
     // 这意味着 appconfig 和 appmodule 都可能各触发一次同一个 callback。
-    // 与 YUJ-396 无关, 保留原行为不引入回归。
+    // 与 无关, 保留原行为不引入回归。
     if(!self.requestAppModuleSuccess && !self.startRequestAppModule) {
         self.startRequestAppModule = true;
         __weak typeof(self) weakSelf = self;

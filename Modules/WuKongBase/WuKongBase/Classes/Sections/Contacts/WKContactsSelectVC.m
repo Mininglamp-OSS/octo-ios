@@ -26,7 +26,7 @@
 // Generation token: 每次 parseData 重置时 +1，sortAndGroup 异步回调写入前对比,
 // 只接受最新 generation 的结果。避免快速搜索时旧异步回调把过期数据混进新 items 容器,
 // 造成 sectionTitleArr 与 items 不一致或列表显示错误联系人。
-// (Jerry-Xin R3 review fix, YUJ-418)
+// (Jerry-Xin R3 review fix, )
 @property(nonatomic,assign) NSInteger parseGeneration;
 /// 默认被选中的用户集合
 @property(nonatomic, strong) NSMutableArray<WKContactsSelect*> *selectedArray;
@@ -74,7 +74,7 @@
         self.maxSelectMembers = self.data.count;
     }
 
-    // YUJ-381 (#118 review fix): 选人列表也要听 prefetcher 回写通知。
+    // (#118 review fix): 选人列表也要听 prefetcher 回写通知。
     // WKContactsSelectCell 在 person 缓存无 realname 时触发 prefetch，
     // /users/<uid> 返回前 cell 已经渲染完，没这个监听就要等 cell 被回收
     // 重建才能看见徽章 —— 复现「选人列表覆盖不可靠」review 评论。
@@ -317,7 +317,7 @@
 // 请求有效联系人数据
 -(void) parseData:(NSArray<WKContactsSelect*>*) data {
     // Bump generation 方初始化,异步回调将根据 gen 识别老结果
-    // (Jerry-Xin R3 fix, YUJ-418)
+    // (Jerry-Xin R3 fix, )
     NSInteger gen = ++self.parseGeneration;
     self.items = [NSMutableArray array];
     self.sectionTitleArr = @[];
@@ -389,7 +389,7 @@
 // parseData 每次 bump generation 并传入此方法,异步 finish block 返回时对比
 // weakSelf.parseGeneration 是否等于当初的 gen,不等则丢弃旧结果,
 // 避免快速搜索时旧搜索回调污染新 items/sectionTitleArr。
-// (YUJ-418)
+// ()
 -(void) sortAndGroup:(NSArray<WKContactsSelect*>*)items generation:(NSInteger)gen {
     __weak typeof(self) weakSelf = self;
     [WKChineseSort sortAndGroup:items key:@"displayName" finish:^(bool isSuccess, NSMutableArray *unGroupArr, NSMutableArray *sectionTitleArr, NSMutableArray<NSMutableArray *> *sortedObjArr) {

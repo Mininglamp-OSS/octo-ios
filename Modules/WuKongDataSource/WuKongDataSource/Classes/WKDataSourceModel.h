@@ -32,7 +32,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,assign) long version; // 群版本号
 @property(nonatomic,strong,nullable) NSNumber *isExternalGroup; // 外部群标识；nil 表示后端未返回，下游应保留旧值
 // ---------- 外部群 (External Group) Phase 1 扩展字段 ----------
-@property(nonatomic,strong,nullable) NSNumber *allowExternal;   // 是否允许邀请外部成员 (0|1)；nil 表示后端未返回，下游应保留旧值 (YUJ-27)
+@property(nonatomic,strong,nullable) NSNumber *allowExternal;   // 是否允许邀请外部成员 (0|1)；nil 表示后端未返回，下游应保留旧值 ()
 @property(nonatomic,copy,nullable)   NSString *spaceId;         // 群归属 Space ID
 @end
 
@@ -56,7 +56,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,assign) BOOL isExternal; // 是否为外部成员（来自其他 Space）
 @property(nonatomic,copy)   NSString *sourceSpaceId; // 来源 space id（外部成员）
 @property(nonatomic,copy)   NSString *sourceSpaceName; // 来源 space 名称（外部成员）
-@property(nonatomic,copy)   NSString *homeSpaceId; // 视角相对判定使用：成员 home space（YUJ-63）
+@property(nonatomic,copy)   NSString *homeSpaceId; // 视角相对判定使用：成员 home space（）
 @property(nonatomic,copy)   NSString *homeSpaceName; // 视角相对判定使用：成员 home space 名称
 
 

@@ -42,6 +42,35 @@ TODO: Add long description of the pod here.
  
   s.private_header_files = 'WuKongBase/Classes/Vendor/**/*'
   s.source_files = 'WuKongBase/Classes/**/*'
+  # 排除许可证不兼容或已替换的代码：
+  # - SoundTouch (LGPL v2.1) — 已用 no-op stub 替换变声功能
+  # - TelegramUtils 中依赖 librlottie 的子目录（AnimatedStickerNode 等）—
+  #   外部消费方已删除
+  # TelegramUtils 其余文件保留在编译链内，因为 TapLongTapOrDoubleTapGestureRecognizer
+  # 还被 WKMessageCell / WKTextMessageCell / WKVoiceMessageCell 在用（长按手势）。
+  # 完整剥离 TelegramUtils 是 P5 长期工作。
+  s.exclude_files = [
+    'WuKongBase/Classes/Vendor/SoundTouch/**/*',
+    'WuKongBase/Classes/Vendor/LegacyComponents/**/*',
+    # TelegramUtils 排除：依赖已断链子目录（librlottie / ContextUI / POP / 其他）
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/AnimatedStickerNode/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/TelegramAnimatedStickerNode/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/AnimationCompression/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/LiMaoMock/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/ReactionSelectionNode/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/ContextUI/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/TextSelectionNode/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/LegacyComponents/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/RadialStatusNode/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/ShimmerEffect/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/GradientBackground/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/MetalImageView/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/MediaResources/**/*',
+    # 保留编译：Display (含 TapLongTapOrDoubleTapGestureRecognizer) + 它依赖的支撑模块
+    # SwiftSignalKit / AppBundle / Utils / ObjCRuntimeUtils / UIKitRuntimeUtils / Markdown
+    # / GZip / Svg / ManagedFile / AnimatedCountLabelNode / AnimatedNavigationStripeNode
+    # / TelegramUIPreferences / Others / YuvConversion
+  ]
 #  s.preserve_paths = 'ios/arm/*.{a}'
 #   s.vendored_frameworks  = 'ios/WuKongIMSDK.framework'
   
@@ -60,7 +89,12 @@ TODO: Add long description of the pod here.
 #   s.xcconfig = { "OTHER_LDFLAGS" => "-ObjC" }
 #  s.vendored_libraries = 'WuKongBase/WuKongIMSDK-Framework/ios/*.{a}'
 #  s.resource  = 'WuKongBase/WuKongIMSDK-Framework/ios/WuKongIMSDK.framework/Versions/A/Resources/WuKongIMSDK.bundle'
-  s.vendored_frameworks = 'WuKongBase/Bugly.framework'
+  # Bugly.framework 是腾讯闭源 SDK，开源版默认不附带（避免分发闭源二进制 + 减小仓库体积）。
+  # 仅当用户把 Bugly.framework 放回 WuKongBase/Bugly.framework/ 时，自动加入编译。
+  # Podfile 会检测同样条件并设置 OCTO_ENABLE_BUGLY=1 预处理宏。
+  if File.exist?(File.expand_path('WuKongBase/Bugly.framework', __dir__))
+    s.vendored_frameworks = 'WuKongBase/Bugly.framework'
+  end
 #  s.libraries = 'opencore-amrnb', 'opencore-amrwb','vo-amrwbenc', 'sqlite3', 'stdc++','xml2'
   s.libraries = 'c++','stdc++'
 #  s.dependency 'FLEX'
@@ -96,7 +130,7 @@ TODO: Add long description of the pod here.
 #  s.dependency 'VIMediaCache', '~> 0.4'
   s.dependency 'AsyncDisplayKit', '~> 1.0'
   s.dependency 'FPSCounter', '~> 4.1'
-  s.dependency 'librlottie', '~> 0.1'
+  # librlottie (LGPL) 已在 P5 移除 — 消费方 WKAnimatedStickerNode/WKMessageStickerCell 均为死代码
   s.dependency 'libcmark_gfm'
   s.dependency 'RiveRuntime', '~> 6.11'
   s.pod_target_xcconfig = {

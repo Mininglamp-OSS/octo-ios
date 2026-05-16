@@ -27,7 +27,7 @@
 
 @property(nonatomic,strong) WKOfficialTag *officialTag; // 官方图标
 
-// YUJ-381 / dmwork-web#1169 Phase A —— 私聊顶部实名 ✓ 徽章
+// / Phase A —— 私聊顶部实名 ✓ 徽章
 // 12×12pt 蓝勾，紧贴 titleLbl 右侧，节奏与 botBadgeLbl 对齐。
 @property(nonatomic,strong) UIImageView *realnameVerifiedImgView;
 
@@ -296,7 +296,7 @@
         self.botBadgeLbl.frame = frame;
     }
 
-    // YUJ-381 实名 ✓ 徽章：仅私聊（且非系统/文件助手/机器人）展示。
+    // 实名 ✓ 徽章：仅私聊（且非系统/文件助手/机器人）展示。
     BOOL canShowRealname = channel.channelType == WK_PERSON
         && ![channel.channelId isEqualToString:[WKApp shared].config.systemUID]
         && ![channel.channelId isEqualToString:[WKApp shared].config.fileHelperUID]
@@ -414,7 +414,7 @@
     return _botBadgeLbl;
 }
 
-// YUJ-381：私聊顶部实名 ✓ 徽章
+// ：私聊顶部实名 ✓ 徽章
 - (UIImageView *)realnameVerifiedImgView {
     if(!_realnameVerifiedImgView) {
         _realnameVerifiedImgView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 12.0f, 12.0f)];

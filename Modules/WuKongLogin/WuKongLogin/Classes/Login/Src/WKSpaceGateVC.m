@@ -149,7 +149,7 @@
     [[NSUserDefaults standardUserDefaults] synchronize];
     [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
 
-    // YUJ-372 Phase 2: 如果是从扫码/邀请命中 need_space 拉起的 Space Gate（
+    // Phase 2: 如果是从扫码/邀请命中 need_space 拉起的 Space Gate（
     // WKGroupScanJoinVC 会把群邀请上下文落盘到 `pendingGroupInvite`），加 Space
     // 成功后自动重放 WKPOINT_SCAN_HANDLER_JOIN_GROUP 重试入群。dispatch_after
     // 给 WKPOINT_LOGIN_SUCCESS 的 resetRootViewController + 同步数据一点缓冲，
@@ -157,7 +157,7 @@
     [self replayPendingGroupInviteIfAny];
 }
 
-/// YUJ-372 Phase 2：消费一次性的 pendingGroupInvite，用扫码 handler 重放群入场。
+/// Phase 2：消费一次性的 pendingGroupInvite，用扫码 handler 重放群入场。
 /// 本方法做"读后即清"，无论后续 replay 是否成功都不再重放。
 - (void)replayPendingGroupInviteIfAny {
     NSDictionary *pending = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"pendingGroupInvite"];

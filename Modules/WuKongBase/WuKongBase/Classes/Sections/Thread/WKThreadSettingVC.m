@@ -60,7 +60,7 @@
     [self loadThreadInfo];
     [self loadMembers];
 
-    // YUJ-381：实名状态预拉取回写后局部刷宫格（uid 命中本子区成员才刷）
+    // ：实名状态预拉取回写后局部刷宫格（uid 命中本子区成员才刷）
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(realnameVerifiedUpdated:)
                                                  name:WKRealnameVerifiedUpdatedNotification
@@ -227,7 +227,7 @@
     nameLbl.lim_top = avatarView.lim_bottom + 5.0f;
     nameLbl.lim_left = view.lim_width / 2.0f - nameLbl.lim_width / 2.0f;
 
-    // YUJ-381 实名 ✓ 徽章（子区宫格，与 WKConversationGroupSettingVC 同款节奏）。
+    // 实名 ✓ 徽章（子区宫格，与 WKConversationGroupSettingVC 同款节奏）。
     // 子区 member dict 自身不带 realname_verified，直接读 person 缓存；缺数据
     // 时由 WKRealnamePrefetcher 补一次，回写后会发 WKRealnameVerifiedUpdatedNotification
     // —— 本 VC 听这个通知后 reload 一次宫格即可。

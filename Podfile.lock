@@ -55,7 +55,7 @@ PODS:
   - LBXScan/UI (2.5.1):
     - LBXScan/Types (~> 2.2)
   - libcmark_gfm (0.29.4)
-  - librlottie (0.1.7)
+  - librlottie (0.2.1)
   - libwebp (1.5.0):
     - libwebp/demux (= 1.5.0)
     - libwebp/mux (= 1.5.0)
@@ -112,7 +112,6 @@ PODS:
     - LBXScan/LBXZXing (~> 2.5)
     - LBXScan/UI (~> 2.5)
     - libcmark_gfm
-    - librlottie (~> 0.1)
     - lottie-ios (~> 2.5.3)
     - M80AttributedLabel (~> 1.9.9)
     - MBProgressHUD (~> 1.1.0)
@@ -164,11 +163,11 @@ PODS:
 
 DEPENDENCIES:
   - Aspects
-  - AsyncDisplayKit (from `https://github.com/tangtaoit/AsyncDisplayKit.git`)
+  - AsyncDisplayKit (from `https://github.com/tangtaoit/AsyncDisplayKit.git`, commit `3f2a0b8f5069ddefd53cf4796da22eec105c5c7c`)
   - DoraemonKit/Core (~> 3.1.2)
   - DoraemonKit/WithGPS (~> 3.1.2)
   - libcmark_gfm
-  - librlottie (from `https://github.com/tangtaoit/librlottie.git`)
+  - librlottie (~> 0.2.1)
   - ReactiveObjC
   - Socket.IO-Client-Swift
   - SocketRocket
@@ -178,8 +177,8 @@ DEPENDENCIES:
   - WuKongDataSource (from `./Modules/WuKongDataSource`)
   - WuKongIMSDK (from `./Modules/WuKongIMiOSSDK`)
   - WuKongLogin (from `./Modules/WuKongLogin`)
-  - YBImageBrowser/NOSD (from `https://github.com/tangtaoit/YBImageBrowser.git`)
-  - YYImage/WebP (from `https://github.com/tangtaoit/YYImage.git`)
+  - YBImageBrowser/NOSD (from `https://github.com/tangtaoit/YBImageBrowser.git`, commit `9e888bf25f8774f9b084ba3d26d5794cb68aeb0c`)
+  - YYImage/WebP (from `https://github.com/tangtaoit/YYImage.git`, commit `be7dc29bbd79153ea03c5018ee2ab2512a16f3fd`)
 
 SPEC REPOS:
   trunk:
@@ -197,6 +196,7 @@ SPEC REPOS:
     - GZIP
     - LBXScan
     - libcmark_gfm
+    - librlottie
     - libwebp
     - lottie-ios
     - M80AttributedLabel
@@ -222,9 +222,8 @@ SPEC REPOS:
 
 EXTERNAL SOURCES:
   AsyncDisplayKit:
+    :commit: 3f2a0b8f5069ddefd53cf4796da22eec105c5c7c
     :git: https://github.com/tangtaoit/AsyncDisplayKit.git
-  librlottie:
-    :git: https://github.com/tangtaoit/librlottie.git
   WuKongBase:
     :path: "./Modules/WuKongBase"
   WuKongContacts:
@@ -236,17 +235,16 @@ EXTERNAL SOURCES:
   WuKongLogin:
     :path: "./Modules/WuKongLogin"
   YBImageBrowser:
+    :commit: 9e888bf25f8774f9b084ba3d26d5794cb68aeb0c
     :git: https://github.com/tangtaoit/YBImageBrowser.git
   YYImage:
+    :commit: be7dc29bbd79153ea03c5018ee2ab2512a16f3fd
     :git: https://github.com/tangtaoit/YYImage.git
 
 CHECKOUT OPTIONS:
   AsyncDisplayKit:
     :commit: 3f2a0b8f5069ddefd53cf4796da22eec105c5c7c
     :git: https://github.com/tangtaoit/AsyncDisplayKit.git
-  librlottie:
-    :commit: bed3cfe62cdb77d728adfe76893ff51b69c05e08
-    :git: https://github.com/tangtaoit/librlottie.git
   YBImageBrowser:
     :commit: 9e888bf25f8774f9b084ba3d26d5794cb68aeb0c
     :git: https://github.com/tangtaoit/YBImageBrowser.git
@@ -270,7 +268,7 @@ SPEC CHECKSUMS:
   GZIP: 3c0abf794bfce8c7cb34ea05a1837752416c8868
   LBXScan: 90ca10d0c38fb4a5a6980d7782354f3f69f50093
   libcmark_gfm: aed11fc48515bec53902b0fd4cddcbd42b5e94c2
-  librlottie: b1439ecf2d19dc5db01b9fe94975548863c56cc7
+  librlottie: 31aadd1f842008260fa7387f7fcb837b2fabeeea
   libwebp: 02b23773aedb6ff1fd38cec7a77b81414c6842a8
   lottie-ios: a50d5c0160425cd4b01b852bb9578963e6d92d31
   M80AttributedLabel: 77fedfe63804c989a6de0fa4d400ea8cad3ab441
@@ -291,7 +289,7 @@ SPEC CHECKSUMS:
   Toast: 1f5ea13423a1e6674c4abdac5be53587ae481c4e
   TOCropViewController: da59f531f8ac8a94ef6d6c0fc34009350f9e8bfe
   TZImagePickerController: 2cad3db94ba70eb947d26c10ff5c66c9a93798c8
-  WuKongBase: 6919caa16c3b92a891560d6d6457075a45e0e8b2
+  WuKongBase: e934b49864cb22f7d8909f23d3a0b689ad515f32
   WuKongContacts: 8d67498a5c219c1f6520bd81224ef55d836f63a6
   WuKongDataSource: b9089cb962310af96af523032df4534e272cd932
   WuKongIMSDK: b3905b92aa9eb313052c8b2d88271494ac7293a6
@@ -301,6 +299,6 @@ SPEC CHECKSUMS:
   ZLImageEditor: ee86f044fb7c5dec6b5de49eb7bb6fd42286f2ae
   ZLPhotoBrowser: 6fb0eff03c8269001e29ef233e7bdab0691e05fe
 
-PODFILE CHECKSUM: eb3e66be12b2b8c378858ed1ea2de332fa1393ef
+PODFILE CHECKSUM: 2e8970db6453e6203617196736e90d1c38e4b957
 
 COCOAPODS: 1.16.2

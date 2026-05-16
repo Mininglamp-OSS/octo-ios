@@ -405,6 +405,15 @@ bool needRemind = false; // 是否需要提醒
         [[WKSDK shared].reminderManager sync];
     } else if([cmd isEqualToString:WKCMDSyncConversationExtra]) { // 同组最近会话扩展
         [[WKSDK shared].conversationManager syncExtra];
+    } else if([cmd isEqualToString:WKCMDConversationDeleted]) { // 最近会话被删除（web 端解散群/删除会话 → 服务端 fanout 此 CMD）
+        // 对齐 web `packages/dmworkbase/src/module.tsx` 的 "conversationDeleted" 分支：
+        // 从本地 DB 删除该会话并触发 onConversationDelete: 让 UI 移除对应行。
+        NSString *channelID = param[@"channel_id"];
+        NSNumber *channelType = param[@"channel_type"];
+        if(channelID.length > 0 && channelType) {
+            WKChannel *channel = [[WKChannel alloc] initWith:channelID channelType:channelType.intValue];
+            [[WKSDK shared].conversationManager deleteConversation:channel];
+        }
     }
 }
 

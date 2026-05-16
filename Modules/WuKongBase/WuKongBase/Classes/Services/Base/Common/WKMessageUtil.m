@@ -161,7 +161,7 @@
     if([fromSourceSpaceNameRaw isKindOfClass:[NSString class]] && [(NSString*)fromSourceSpaceNameRaw length] > 0) {
         message.extra[@"from_source_space_name"] = fromSourceSpaceNameRaw;
     }
-    // YUJ-63 viewer-relative home space
+    // viewer-relative home space
     id fromHomeSpaceIdRaw = messageDict[@"from_home_space_id"];
     if([fromHomeSpaceIdRaw isKindOfClass:[NSString class]] && [(NSString*)fromHomeSpaceIdRaw length] > 0) {
         message.extra[@"from_home_space_id"] = fromHomeSpaceIdRaw;
@@ -171,7 +171,7 @@
         message.extra[@"from_home_space_name"] = fromHomeSpaceNameRaw;
     }
 
-    // ---------- 外部群 · Reply 子字典字段（YUJ-131，对齐 web PR #1073） ----------
+    // ---------- 外部群 · Reply 子字典字段（，对齐 web PR #1073） ----------
     // payloadDict 是协议层 content 原始 dict。decodeReply 把 reply 展开成 WKReply 对象
     // 但不保留同类外部群字段；这里从 payloadDict[@"reply"] 再读一次，把 4 个字段
     // 安置到 WKReply 关联属性上，供消息气泡内的 Reply 预览 + 输入框 Reply 预览统一使用。
@@ -291,14 +291,14 @@
     return messageExtra;
 }
 
-#pragma mark - YUJ-131 · Reply external-group helper
+#pragma mark - · Reply external-group helper
 
 + (void)applyMsgLevelExternalFieldsToReply:(WKReply*)reply dict:(NSDictionary*)dict {
     if(!reply || ![dict isKindOfClass:[NSDictionary class]]) {
         return;
     }
 
-    // from_home_space_id —— 新路径优先（YUJ-63 viewer-relative）
+    // from_home_space_id —— 新路径优先（viewer-relative）
     id homeIdRaw = dict[@"from_home_space_id"];
     if([homeIdRaw isKindOfClass:[NSString class]] && [(NSString*)homeIdRaw length] > 0) {
         reply.fromHomeSpaceId = homeIdRaw;

@@ -23,7 +23,7 @@
 
 @property(nonatomic,strong) UILabel *botBadgeLbl; // AI标识
 
-// 实名认证 ✓ 迷你徽章（YUJ-381 / dmwork-web#1169 Phase A）
+// 实名认证 ✓ 迷你徽章（/ Phase A）
 // 12×12 pt 蓝勾，显示在昵称右侧 padding.left = 2pt；未实名隐藏，不加任何灰标。
 @property(nonatomic,strong) UIImageView *realnameVerifiedImgView;
 
@@ -47,7 +47,7 @@
 - (void)refresh:(WKChannelMember*)member checkOn:(BOOL)checkOn online:(WKUserOnlineResp*)online{
     self.online = online;
 
-    // v2 外部群：昵称后追加灰色「@SpaceName」内联后缀（YUJ-66 / web PR #1013 对齐）
+    // v2 外部群：昵称后追加灰色「@SpaceName」内联后缀（/ web PR #1013 对齐）
     // 取代 v1 紫色「外部」Tag + 「来自 XX」副标题。判定走 viewer-relative。
     NSString *baseName = [self getName:member] ?: @"";
     NSString *viewerSpaceId = [WKExternalViewerResolver currentViewerSpaceId];
@@ -60,7 +60,7 @@
         // viewerSpaceId 为空（未选空间）时 resolver 返回 isExternal=YES，但
         // 这种场景 sourceSpaceName 仍可显示，语义与 web 一致。
         //
-        // YUJ-190: 对齐 android PR#141 (YUJ-184) 换行方案 — @SpaceName 前
+        // : 对齐 android PR#141 () 换行方案 — @SpaceName 前
         // 插入 `\n` 强制换到第二行，避免长 baseName + @SpaceName 被 tail
         // truncate 折断（企微样式）。
         suffix = [NSString stringWithFormat:@"\n@%@", ext.sourceSpaceName];
@@ -109,8 +109,8 @@
         self.botBadgeLbl.frame = frame;
     }
 
-    // 实名认证 ✓ 徽章（YUJ-381 / dmwork-web#1169 Phase A）
-    // Tri-state fallback（YUJ-384 P1-2）：仅在 member.extra 字段缺失（nil）时才
+    // 实名认证 ✓ 徽章（/ Phase A）
+    // Tri-state fallback（P1-2）：仅在 member.extra 字段缺失（nil）时才
     // 回退到 person cache；显式 @NO 直接视为未实名，避免 stale person cache 给
     // 已取消实名的用户错误打勾。
     NSNumber *memberFlag = [WKChannelUtil isRealnameVerifiedFromExtra:member.extra];
@@ -124,7 +124,7 @@
     }
     self.realnameVerifiedImgView.hidden = !verified;
 
-    // YUJ-381：未确认已实名时（member 显式 @NO 或两侧都缺数据），后台拉一次
+    // ：未确认已实名时（member 显式 @NO 或两侧都缺数据），后台拉一次
     // /users/<uid> 把 person 缓存补齐，回写后 channelInfoUpdate 会驱动重刷。
     if(!verified && member.memberUid.length > 0) {
         [WKRealnamePrefetcher ensureFetched:member.memberUid];
@@ -184,7 +184,7 @@
     self.nameLbl.lim_height = self.contentView.lim_height;
     self.nameLbl.lim_top = 0.0f;
 
-    // YUJ-381：长昵称场景必须保证实名 / AI 徽章不被挤掉。
+    // ：长昵称场景必须保证实名 / AI 徽章不被挤掉。
     // 先把要显示的 badge 总占用宽度算出来，nameLbl.lim_width 预留好这部分，
     // UILabel 默认 NSLineBreakByTruncatingTail 会自动 ... 截断。
     CGFloat rightSafePad = 15.0f;        // cell 末尾基础右边距
@@ -213,7 +213,7 @@
     CGFloat afterNameRight = self.nameLbl.lim_left + MIN(textWidth, self.nameLbl.lim_width);
     CGFloat badgeCenterY = self.contentView.lim_height / 2.0f;
 
-    // 实名认证 ✓ 徽章布局（YUJ-381）：贴在昵称右侧 padding.left = 2pt，12×12pt。
+    // 实名认证 ✓ 徽章布局（）：贴在昵称右侧 padding.left = 2pt，12×12pt。
     if (!self.realnameVerifiedImgView.hidden) {
         self.realnameVerifiedImgView.lim_width = realnameBadgeW;
         self.realnameVerifiedImgView.lim_height = 12.0f;
@@ -278,7 +278,7 @@
         _realnameVerifiedImgView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 12.0f, 12.0f)];
         _realnameVerifiedImgView.contentMode = UIViewContentModeScaleAspectFit;
         // 资源路径必须带 Common/ 前缀：Images.xcassets/Common/Contents.json 设了
-        // provides-namespace: true（YUJ-384 P0-1）。漏前缀会 imageNamed: 返 nil → 空框。
+        // provides-namespace: true（P0-1）。漏前缀会 imageNamed: 返 nil → 空框。
         _realnameVerifiedImgView.image = [[WKApp shared] loadImage:@"Common/ic_realname_verified_mini" moduleID:@"WuKongBase"];
         _realnameVerifiedImgView.hidden = YES;
     }

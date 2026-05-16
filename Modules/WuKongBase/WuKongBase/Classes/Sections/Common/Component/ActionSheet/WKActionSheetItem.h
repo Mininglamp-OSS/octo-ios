@@ -1,6 +1,6 @@
 //
 //  ActionSheetItem.h
-//  qiyunxin
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
 //
 //  Created by Mac on 2017/12/9.
 //  Copyright © 2017年 aiti. All rights reserved.

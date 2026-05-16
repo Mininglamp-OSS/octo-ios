@@ -426,16 +426,6 @@ static dispatch_queue_t _imsocketQueue;
     connectPacket.uid = uid;
     connectPacket.token = token;
 
-    // 添加详细日志用于诊断
-    NSLog(@"📤 发送连接包:");
-    NSLog(@"   version: %d", connectPacket.version);
-    NSLog(@"   deviceFlag: %d", connectPacket.deviceFlag);
-    NSLog(@"   uid: %@", uid);
-    NSLog(@"   token: %@...", [token substringToIndex:MIN(10, token.length)]);
-    NSLog(@"   deviceId: %@", connectPacket.deviceId);
-    NSLog(@"   clientTimestamp: %llu", (unsigned long long)connectPacket.clientTimestamp);
-    NSLog(@"   clientKey length: %lu", (unsigned long)connectPacket.clientKey.length);
-
     [self sendPacket:connectPacket];
 }
 

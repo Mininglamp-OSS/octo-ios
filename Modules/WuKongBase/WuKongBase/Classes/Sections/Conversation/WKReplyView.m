@@ -56,7 +56,7 @@
 - (void)setMessage:(WKMessage *)message {
     _message = message;
 
-    // YUJ-131 · 输入框上方「引用某条消息」预览也要显示 @SpaceName —— 对齐 web PR #1073.
+    // · 输入框上方「引用某条消息」预览也要显示 @SpaceName —— 对齐 web PR #1073.
     // 数据来源：这条 *被引用* 消息自身的 msg-level 外部群字段（WKMessageUtil toMessage 已写入 message.extra）。
     NSString *baseName = @"---";
     if(message.from) {
@@ -93,7 +93,7 @@
 
 }
 
-// YUJ-131 · 拼接「发送者 displayName + 灰色 @SpaceName 后缀」。样式与 WKMemberCell v2 对齐。
+// · 拼接「发送者 displayName + 灰色 @SpaceName 后缀」。样式与 WKMemberCell v2 对齐。
 - (NSAttributedString *)buildNameAttrWithBase:(NSString *)baseName
                                     spaceName:(NSString *)spaceName {
     UIFont *baseFont = self.nameLbl.font

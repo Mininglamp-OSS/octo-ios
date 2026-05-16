@@ -2,7 +2,7 @@
 //  WKOidcProviderConfig.h
 //  WuKongBase
 //
-//  YUJ-396 / GH dmwork-web#1174 — 后端 /v1/common/appconfig 返回的
+//  / — 后端 /v1/common/appconfig 返回的
 //  oidc_providers[] 数组的 entry 模型。字段跟 dmworkim
 //  modules/common/api.go 的下发口径对齐:
 //    { id, name, authorize_path, account_url, reset_password_url }
@@ -11,7 +11,7 @@
 //  im-prod → accounts.example.com）。客户端把 Aegis 账户页 / 实名认证入口
 //  的域名读点全部收敛到这个模型, 不再允许任何 hardcoded prod 常量。
 //
-//  Required / Optional（Jerry-Xin #112 review suggestion 1 后对齐）:
+//  Required / Optional（review suggestion 1 后对齐）:
 //    required: id, authorize_path（authorize_path 必须 '/' 开头且不以 '//' 开头）
 //    optional: name, account_url, reset_password_url
 //  name 只是 UI 展示字段, 缺失时调用侧应 fallback 到 id 显示; account_url
@@ -29,7 +29,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,copy) NSString *providerId;
 
 /// 展示名（"xming" 等）。**Optional** — 缺失的 entry 仍保留, 调用侧 UI 可 fallback
-/// 到 providerId 展示。YUJ-396 P-S1: 修复原实现 required-else-skip 与注释矛盾。
+/// 到 providerId 展示。P-S1: 修复原实现 required-else-skip 与注释矛盾。
 @property(nonatomic,copy,nullable) NSString *name;
 
 /// OIDC authorize 的服务端相对路径（如 "/auth/oidc/xming/authorize"）。**Required**,
@@ -41,7 +41,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// javascript:/data: 等协议的值被 parse 时置 nil（entry 保留但字段 nil）。
 /// 此字段是「基址 URL」语义, 带 query (?...) 或 fragment (#...) 均判为配置错误,
 /// parser 同样置 nil（避免 buildVerifyURLFromAccountUrl: 拼出 `base?x=1/path?anchor=...`
-/// 之类语义歧义的 URL; YUJ-396 Round 2 / Jerry-Xin #112 suggestion）。
+/// 之类语义歧义的 URL; Round 2 / suggestion）。
 /// 这个字段是按环境下发的核心点, 无此字段时调用侧 toast 兜底不跳转。
 @property(nonatomic,copy,nullable) NSString *accountUrl;
 
@@ -56,13 +56,13 @@ NS_ASSUME_NONNULL_BEGIN
 ///   - authorize_path 不是 '/' 开头 / 以 '//' 开头 / 非 NSString
 ///
 /// 保留 entry 但字段置 nil 的情形:
-///   - name 缺失（YUJ-396 P-S1: 改了, 保留 entry; 原先会跳）
+///   - name 缺失（P-S1: 改了, 保留 entry; 原先会跳）
 ///   - account_url / reset_password_url 为非 https 协议 / 无 host
 ///
 /// 整个 appconfig 接口不会因单条 provider 配置坏而整体降级。
 + (NSArray<WKOidcProviderConfig*> *)parseArray:(nullable NSArray *)raw;
 
-/// 拼 OIDC authorize URL (WKLoginView / WKRegisterVC 共用 helper, YUJ-420 R1 fix)。
+/// 拼 OIDC authorize URL (WKLoginView / WKRegisterVC 共用 helper, R1 fix)。
 ///
 /// 引入背景: Jerry-Xin R1 给 PR #114 指出 authorize URL 用
 /// URLQueryAllowedCharacterSet 手拼 query 时, 逻辑符 `&`/`=`/`+` 不会被转义
@@ -89,7 +89,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// 递归剩定任意 NSArray / NSDictionary 中的 NSNull, 产出 plist-safe 副本用于
 /// 安全写 NSUserDefaults / Info.plist 等 plist-支持的存储。
 ///
-/// YUJ-420 R3 fix (Jerry-Xin PR #114 Critical): 后端 /common/appconfig 下发的
+/// R3 fix (Jerry-Xin PR #114 Critical): 后端 /common/appconfig 下发的
 /// oidc_providers[].{name, account_url, reset_password_url} 等 optional 字段若下发
 /// 为 JSON null, NSJSONSerialization 会映射为 NSNull。NSNull 不是 plist 类型,
 /// 直接 setObject: 到 NSUserDefaults 会抛 NSInvalidArgumentException。

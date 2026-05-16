@@ -2,7 +2,7 @@
 //  WKJoinGroupSuccessHelper.m
 //  WuKongBase
 //
-//  YUJ-141 — see header for contract.
+//  — see header for contract.
 //
 
 #import "WKJoinGroupSuccessHelper.h"

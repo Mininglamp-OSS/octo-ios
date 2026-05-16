@@ -25,7 +25,7 @@
 @property(nonatomic,strong) UIView *userHeader;
 @property(nonatomic,strong) WKUserAvatar *userAvatarView; // 用户头像
 @property(nonatomic,strong) UIImageView *sexImgView; // 性别
-// YUJ-381 / dmwork-web#1169 Phase A — 用户名片实名 ✓ 徽章
+// / Phase A — 用户名片实名 ✓ 徽章
 // 12×12pt 蓝勾，贴在 nameLbl 右侧 padding.left = 2pt；性别图标顺延到徽章右侧。
 // 数据源：viewModel.channelInfo.extra[@"realname_verified"]（loadPersonChannelInfo
 // 后由 WKUserInfoVM.channelInfoFromUser 写入，对齐 web orgData.realname_verified）。
@@ -41,7 +41,7 @@
 @property(nonatomic,strong) UIView *footerHeader;
 @property(nonatomic,strong) UIButton *sendBtn; // 发送消息
 @property(nonatomic,strong) UIButton *addFriendBtn; // 添加好友
-// YUJ-137: 外部群成员 DM 拦截提示（对齐 web PR #1021）。
+// : 外部群成员 DM 拦截提示（对齐 web PR #1021）。
 @property(nonatomic,strong) UILabel *externalHintLbl;
 
 // ---------- 视频通话 ----------
@@ -205,7 +205,7 @@
         [self.sexImgView setImage:[self imageName:@"Common/Index/SexMan"]];
     }
 
-    // YUJ-381：实名 ✓ 徽章显隐。直接读 person 缓存的 extra；UserModel/channelInfoFromUser
+    // ：实名 ✓ 徽章显隐。直接读 person 缓存的 extra；UserModel/channelInfoFromUser
     // 已把后端顶层 realname_verified 写进来，与 web `orgData.realname_verified` 对齐。
     NSNumber *verifiedFlag = [WKChannelUtil isRealnameVerifiedFromExtra:self.viewModel.channelInfo.extra];
     self.realnameVerifiedImgView.hidden = !verifiedFlag.boolValue;
@@ -220,22 +220,22 @@
     NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
     BOOL isSpaceMode = currentSpaceId && currentSpaceId.length > 0;
 
-    // YUJ-137 (iOS P1, 对齐 web PR #1021 + Android YUJ-67)：
+    // (iOS P1, 对齐 web PR #1021 + Android )：
     // 跨 Space 外部成员 DM 拦截 —— Phase 1 仅前端 UI 层抑制，后端 Phase 2
     // 会补齐好友/同 Space 服务端校验。优先级放在好友/Space 分支之前：即便
     // follow=friend 也不给直接 DM 入口，只能继续在群里交流。
     //
-    // 判定字段沿用 WKExternalViewerResolver（YUJ-93），
+    // 判定字段沿用 WKExternalViewerResolver（），
     // 数据源优先级：memberOfUser.extra（群内 subscriber，最准）→
     // channelInfo.extra（旧版 /users/{uid}?group_no=... 写入的
     // is_external / source_space_name 兼容字段）。
     //
-    // 与 main 上 PR#81 (YUJ-190) 的 apply-friend-btn 隐藏协作：
+    // 与 main 上 PR#81 () 的 apply-friend-btn 隐藏协作：
     // 二者判定口径相同（viewer-relative via WKExternalViewerResolver）。
-    // YUJ-137 的 Gate 覆盖 send-msg 按钮 + 非 Space 的 follow=friend 场景，
-    // 并以静态 hint 替换 footer；YUJ-190 的 isExternalForViewer 分支在
+    // 的 Gate 覆盖 send-msg 按钮 + 非 Space 的 follow=friend 场景，
+    // 并以静态 hint 替换 footer；的 isExternalForViewer 分支在
     // Space 模式下把 footerHeader 收起 — 本次合并后 Gate 命中会先走 hint
-    // 路径（footerHeader 可见），YUJ-190 分支对同一场景变成 dead code，
+    // 路径（footerHeader 可见），分支对同一场景变成 dead code，
     // 保留不移除以满足「双方逻辑都走 isExternalForViewer」的约束。
     BOOL shouldHideDM = [WKUserInfoExternalGate
         shouldHideDMWithMemberExtras:self.viewModel.memberOfUser.extra
@@ -244,7 +244,7 @@
                              isSelf:[self isSelf]];
 
     if (shouldHideDM) {
-        // YUJ-137 footer = 仅一条「仅可在群内交流」文案（对齐 web
+        // footer = 仅一条「仅可在群内交流」文案（对齐 web
         // UserInfo.getBottomPanel 的 div.wk-userinfo-footer-external-hint
         // 整块替换逻辑）：sendBtn / addFriendBtn / videoCallBtn 全部让位，
         // 保留 footer 容器显示静态 hint。
@@ -260,11 +260,11 @@
     } else if([self isSelf]) {
         self.footerHeader.hidden = YES;
     } else if (isSpaceMode) {
-        // YUJ-190: 对齐 web PR#1013/#1091 与 android PR#135 —
+        // : 对齐 web PR#1013/#1091 与 android PR#135 —
         // 跨 Space 外部成员在 UserInfo 页不显示任何 footer 按钮（发消息 /
         // 申请加好友），外部成员仅限群内沟通。
-        // 注：在 YUJ-137 Gate 命中外部成员时已被上面分支拦截；此处保留
-        // 作为 Space-mode 判定兜底，与 YUJ-190 原有行为一致。
+        // 注：在 Gate 命中外部成员时已被上面分支拦截；此处保留
+        // 作为 Space-mode 判定兜底，与 原有行为一致。
         BOOL isExternal = [self.viewModel isExternalForViewer];
         if (isExternal) {
             self.sendBtn.hidden = YES;
@@ -276,7 +276,7 @@
             self.addFriendBtn.hidden = YES;
             self.footerHeader.hidden = NO;
         } else {
-            // YUJ-206：同 Space 非好友 → 直接"发送消息"（对齐 web
+            // ：同 Space 非好友 → 直接"发送消息"（对齐 web
             // UserInfo/index.tsx:52-55 / 企微语义）。
             //
             // 嘉伟 2026-05-01 Android 真机实测复现：外部群里点成员显示
@@ -383,7 +383,7 @@
         }
         preView = view;
     }
-    // YUJ-381 实名 ✓ 徽章定位：贴在 nameLbl 右侧 padding.left = 6pt。
+    // 实名 ✓ 徽章定位：贴在 nameLbl 右侧 padding.left = 6pt。
     // 资源 Common/ic_realname_verified_card 是 200×143 横向 tag，按高度 16pt
     // 算 aspect-fit 宽度，避免压扁。徽章 superview 是 userHeader，nameLbl
     // 在 userInfoBoxView 内，需要把 box 偏移加上。
@@ -479,7 +479,7 @@
     return _sexImgView;
 }
 
-// YUJ-381 / dmwork-web#1169 Phase A —— 用户名片实名 ✓ 徽章
+// / Phase A —— 用户名片实名 ✓ 徽章
 // 资源：Common/ic_realname_verified_card（200×143 横向 tag 图，aspectFit 缩放保持比例）。
 - (UIImageView *)realnameVerifiedImgView {
     if(!_realnameVerifiedImgView) {
@@ -625,7 +625,7 @@
     return _addFriendBtn;
 }
 
-// YUJ-137: 外部群成员 DM 拦截后显示「仅可在群内交流」的静态提示。
+// : 外部群成员 DM 拦截后显示「仅可在群内交流」的静态提示。
 // 同时作为 sendBtn/addFriendBtn 的替身（大小与 footer 一致，居中显示）。
 - (UILabel *)externalHintLbl {
     if(!_externalHintLbl) {

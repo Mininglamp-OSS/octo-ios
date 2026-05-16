@@ -2,7 +2,7 @@
 //  WKRealnamePrefetcher.h
 //  WuKongBase
 //
-//  YUJ-381 / dmwork-web#1169 Phase A — 不依赖打开名片预拉取实名状态
+//  / Phase A — 不依赖打开名片预拉取实名状态
 //
 //  问题：UserModel 加上了 realname_verified 解析后，person 缓存只在打开
 //  WKUserInfoVC（loadPersonChannelInfo:）时才会被写入。群聊气泡 / 成员

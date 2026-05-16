@@ -17,7 +17,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,copy) NSString *keyword;
 @property(nonatomic,assign) NSInteger timestamp; // 消息时间
 
-// YUJ-156 搜索结果外部群/发送者 `@SpaceName` 后缀，viewer-relative 判定。
+// 搜索结果外部群/发送者 `@SpaceName` 后缀，viewer-relative 判定。
 // 字段契约与 WKExternalExtrasKey* 对齐。消息搜索场景优先使用 message 级 from_*
 // 字段（sender 的 home_space），缺失时回退到 channel 级（会话所属 home_space）。
 // 全部字段可选，缺失时等同于非外部，保留旧行为。

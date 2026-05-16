@@ -58,7 +58,7 @@ typedef enum :NSUInteger {
 // Bot标识
 @property(nonatomic,strong) UILabel *botBadgeLbl;
 // 实名认证 ✓ 迷你徽章（12×12pt 蓝勾）
-// YUJ-381 / dmwork-web#1169 Phase A — 聊天气泡作者名旁的实名徽章。
+// / Phase A — 聊天气泡作者名旁的实名徽章。
 // 仅在群聊 + 作者已实名 (orgData.realname_verified) 时显示；hidden 由 refreshModel 控制。
 @property(nonatomic,strong) UIImageView *realnameVerifiedImgView;
 // 气泡背景
@@ -157,7 +157,7 @@ typedef enum :NSUInteger {
                                viewerSpaceId:(nullable NSString*)viewerSpaceId;
 
 /**
- YUJ-210: 判定 messageModel 相对当前 viewer 是否属于外部（即 nameLbl 是否
+ : 判定 messageModel 相对当前 viewer 是否属于外部（即 nameLbl 是否
  会拼 `@SpaceName` 后缀）。refreshModel: / layoutName: 用它决定
  `numberOfLines` / `lineBreakMode` / 宽度上限是否放宽——
  普通群气泡维持 byTruncatingTail + WK_NICKNAME_MAX_WIDTH，不受影响。

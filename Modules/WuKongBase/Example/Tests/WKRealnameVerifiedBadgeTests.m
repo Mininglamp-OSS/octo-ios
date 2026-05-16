@@ -1,17 +1,19 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 //
 //  WKRealnameVerifiedBadgeTests.m
 //  WuKongBase Tests
 //
-//  YUJ-381 / dmwork-web#1169 Phase A — 聊天气泡 + 群成员列表实名 ✓ 徽章
+//  / Phase A — 聊天气泡 + 群成员列表实名 ✓ 徽章
 //  可见性单元测试。跨端对齐：web `RealnameVerifiedBadge` / android
 //  `ic_realname_verified.xml`。
 //
 //  覆盖：
 //    1. WKChannelUtil isRealnameVerifiedFromExtra: — tri-state 纯函数
-//       (YUJ-384 P1-2)：@YES / @NO / nil 三态，NSNumber / NSString /
+//       (P1-2)：@YES / @NO / nil 三态，NSNumber / NSString /
 //       nil / NSNull / 未预期类型 多种形态容忍度。
 //    2. WKMemberCell — 显式 true 显；显式 false 隐；字段缺失隐；cell 复用；
-//       image 必须非 nil（YUJ-384 P0-1 回归保护：Images.xcassets/Common/
+//       image 必须非 nil（P0-1 回归保护：Images.xcassets/Common/
 //       provides-namespace 漏 Common/ 前缀时 imageNamed: 返 nil，单测拦截）。
 //    3. WKMessageCell — 属性存在性（保证编译面）。
 //
@@ -110,7 +112,7 @@
     UIImageView *badge = [self badgeOnCell:cell];
     XCTAssertNotNil(badge);
     XCTAssertNotNil(badge.image,
-                    @"图片资源必须加载成功 — Common/ namespace 前缀遗漏会让 imageNamed: 返 nil (YUJ-384 P0)");
+                    @"图片资源必须加载成功 — Common/ namespace 前缀遗漏会让 imageNamed: 返 nil (P0)");
 }
 
 - (void)test_memberCell_verifiedShowsBadge {

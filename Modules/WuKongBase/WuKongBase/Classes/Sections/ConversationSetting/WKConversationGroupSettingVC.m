@@ -101,7 +101,7 @@
     // 监听群成员更新通知
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(memberUpdate) name:WKNOTIFY_GROUP_MEMBERUPDATE object:nil];
 
-    // YUJ-381 实名状态预拉取回写：宫格里 topNMembers 命中时局部刷一下宫格，避免
+    // 实名状态预拉取回写：宫格里 topNMembers 命中时局部刷一下宫格，避免
     // 「实名状态拉到了但宫格没更新，必须打开名片才看到徽章」。
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(realnameVerifiedUpdated:) name:WKRealnameVerifiedUpdatedNotification object:nil];
 
@@ -330,7 +330,7 @@
      nameLbl.lim_width = avatarView.lim_width;
      nameLbl.lim_height = 17.0f;
 
-    // v2 外部群后缀（YUJ-93）：viewer-relative 判定外部时 name 后拼接「 @SpaceName」
+    // v2 外部群后缀（）：viewer-relative 判定外部时 name 后拼接「 @SpaceName」
     // 使用 attributedText 以便后缀用浅灰色，与 Android AllMembersAdapter 一致。
     NSString *viewerSpaceId = [WKExternalViewerResolver currentViewerSpaceId];
     WKExternalResolveResult *ext = [WKExternalViewerResolver resolveFromExtras:member.extra
@@ -353,7 +353,7 @@
      nameLbl.lim_top = avatarView.lim_bottom + 5.0f;
      nameLbl.lim_left = view.lim_width/2.0f - nameLbl.lim_width/2.0f;
 
-    // YUJ-381 实名 ✓ 徽章：宫格 cell 昵称后内联 10×10 蓝勾。
+    // 实名 ✓ 徽章：宫格 cell 昵称后内联 10×10 蓝勾。
     // 设计原则：实名标识优先 —— 长名时强制 ... 截断保住徽章可见。
     NSNumber *memberFlag = [WKChannelUtil isRealnameVerifiedFromExtra:member.extra];
     BOOL realnameVerified = NO;

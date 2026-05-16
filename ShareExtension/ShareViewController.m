@@ -1,3 +1,5 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 //
 //  ShareViewController.m
 //  ShareExtension
@@ -7,7 +9,18 @@
 #import <MobileCoreServices/MobileCoreServices.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
-static NSString *const kAppGroupId = @"group.com.example.octo";
+// PR #121 round 4 review 🟡: app group 不再 hardcode example-app。
+// 通过本扩展 Info.plist 的 OCTOAppGroup 字段 (由 OctoConfig.xcconfig
+// 的 OCTO_APP_GROUP 注入) 动态读取。外部团队签名必须填自己 provision
+// 过的 group, 否则 -initWithSuiteName: 返回 nil 导致跨进程数据失效。
+static NSString *_OctoAppGroupId(void) {
+    NSString *fromPlist = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOAppGroup"];
+    if (fromPlist.length > 0 && ![fromPlist hasPrefix:@"$("]) {
+        return fromPlist;
+    }
+    return @"group.com.example.octo";
+}
+#define kAppGroupId (_OctoAppGroupId())
 static NSString *const kShareDataKey = @"WKShareExtensionData";
 static NSString *const kShareDirName = @"ShareExtensionFiles";
 
@@ -248,7 +261,15 @@ static NSString *const kShareDirName = @"ShareExtensionFiles";
 }
 
 - (void)openMainApp {
-    NSURL *url = [NSURL URLWithString:@"botgate://share"];
+    // PR #121 Allen review 🟡 #2: scheme 由 OctoConfig.xcconfig 的 OCTO_URL_SCHEME
+    // 注入到本扩展 Info.plist 的 OCTOURLScheme 字段，默认 `octo`，
+    // 历史上写死 `botgate`。与主 App 的 appOpenURL: 同 scheme 不同 host。
+    NSString *scheme = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOURLScheme"];
+    if (scheme.length == 0 || [scheme isEqualToString:@"$(OCTO_URL_SCHEME)"]) {
+        scheme = @"octo";
+    }
+    NSString *urlString = [NSString stringWithFormat:@"%@://share", scheme];
+    NSURL *url = [NSURL URLWithString:urlString];
 
     // iOS 18+: 必须用非 deprecated 的 open:options:completionHandler:
     // 通过 responder chain 找到 UIApplication 实例，直接 cast 调用

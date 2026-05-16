@@ -14,8 +14,22 @@
 
 已知历史包袱（不要再往里加东西，优先逐步迁出）:
 
-- `Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/` —— Telegram
-  桌面客户端移植代码，大部分显示层 (`Display/`) 未被实例化。新代码请勿依赖此目录。
+- `Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/` ——
+  **GPL v2 代码**。Display / Utils / AppBundle / GZip / Svg / Markdown 等基础
+  子目录仍在编译链中，因为 `ContextControllerSourceNode` /
+  `ContextExtractedContentContainingNode` / `TapLongTapOrDoubleTapGestureRecognizer`
+  / `ContextGesture` 在 `WKMessageCell` 等核心消息 cell 中是 active 依赖（自定义
+  状态机，与 navigation pop / scrollview 协作良好，原生 UIGestureRecognizer 替代
+  会出现手势冲突）。已通过 `WuKongBase.podspec exclude_files` 排除明确不需要的
+  子目录（AnimatedStickerNode / ContextUI / ReactionSelectionNode /
+  TextSelectionNode / RadialStatusNode / ShimmerEffect / GradientBackground /
+  MetalImageView / MediaResources / LegacyComponents / LiMaoMock /
+  AnimationCompression / TelegramAnimatedStickerNode）。
+  **任何新代码禁止 import 此目录下的符号**。完整剥离是长期工作。
+
+- `Modules/WuKongBase/WuKongBase/Classes/Vendor/SoundTouch/` ——
+  **LGPL v2.1，已在 P5 从编译链中排除**（podspec `exclude_files`）。
+  `CWVoiceChangePlayCell` 变声功能已降级为无变调直播，待用 `AVAudioUnitTimePitch` 替换。
 
 ## 调试工具的生命周期
 

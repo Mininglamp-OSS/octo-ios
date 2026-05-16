@@ -408,13 +408,13 @@
     // 启动 PC 在线状态轮询（服务器只推送登录不推送退出，需要轮询检测退出）
     [self startPCOnlineCheckTimer];
 
-    // YUJ-141: 消费跨 Space 加群通知（见 WKGroupScanJoinVC.joinBtnPressed）。
+    // : 消费跨 Space 加群通知（见 WKGroupScanJoinVC.joinBtnPressed）。
     // 放在 viewDidAppear 而非 viewWillAppear — WKGroupScanJoinVC pop 的动画
     // 完成后主列表才真正回到前台，这时候 window 才有资格承载 Dialog。
     [self consumeJoinGroupSuccessNoticeIfAny];
 }
 
-/// YUJ-141: 消费一次性「跨 Space 加群成功」通知 — 弹双行 dialog + 紫色切换按钮。
+/// : 消费一次性「跨 Space 加群成功」通知 — 弹双行 dialog + 紫色切换按钮。
 /// 本方法被设计成幂等且每次 viewDidAppear 调用 — Helper 的 consumeNotice 保证
 /// 读后即清，不会重复弹窗。
 - (void)consumeJoinGroupSuccessNoticeIfAny {
@@ -737,7 +737,7 @@
     [popupView showFromView:_navLeftView ?: self.navigationBar.titleLabel];
 }
 
-/// YUJ-141: 抽出的 Space 切换执行体 — 原 `onSpaceSelected` 闭包内的实现，
+/// : 抽出的 Space 切换执行体 — 原 `onSpaceSelected` 闭包内的实现，
 /// 由 popup 选择 + 跨 Space 加群 dialog「切换过去」按钮共用，行为必须完全一致
 /// （清缓存 → 重置 VM → 重新同步会话 + 联系人）。
 - (void)performSwitchToSpaceId:(NSString *)spaceId
@@ -1080,7 +1080,7 @@
                     // 不再从 DB 重新加载（handleSyncConversation 的 delegate 已更新内存数据）
                     // 直接记录白名单并刷新分组
                     [weakSelf.conversationListVM snapshotSyncedGroupIds];
-                    // YUJ-215: snapshot 后再 prune 一遍，对齐 performSwitchToSpaceId 流程
+                    // : snapshot 后再 prune 一遍，对齐 performSwitchToSpaceId 流程
                     [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
                     // YUJ-bot-isolation: 同步路径 race 兜底——若 registry 加载早于 sync
                     // 写库，onSpaceBotRegistryDidLoad 那次 prune 跑在空 VM 上没用；这里
@@ -1089,7 +1089,7 @@
                     if(curSpaceForPrune.length > 0) {
                         [weakSelf.conversationListVM pruneNonCurrentSpaceBotsForSpace:curSpaceForPrune];
                     }
-                    // YUJ-218: backend sync 可能不返回 botfather（按 X-Space-Id 过滤时）—
+                    // : backend sync 可能不返回 botfather（按 X-Space-Id 过滤时）—
                     // 本地兜底合成占位 entry，保证系统 bot 可见；已存在则无操作。
                     [weakSelf.conversationListVM ensureSystemBotsVisible];
                     [weakSelf rebuildGroupDisplayAndReload];
@@ -1102,7 +1102,7 @@
             [self.conversationListVM loadConversationList:^{
                 // 无sync时也记录白名单（DB中的数据视为当前空间的）
                 [weakSelf.conversationListVM snapshotSyncedGroupIds];
-                // YUJ-215: prune 残留（见 performSwitchToSpaceId 注释）
+                // : prune 残留（见 performSwitchToSpaceId 注释）
                 [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
                 // YUJ-bot-isolation: 同 sync 完成路径，DB 冷启动也必须 bot prune
                 // 一次，避免上次 session 残留的跨 Space Bot 行被 sortConversationList 浮回。
@@ -1110,7 +1110,7 @@
                 if(curSpaceForPrune2.length > 0) {
                     [weakSelf.conversationListVM pruneNonCurrentSpaceBotsForSpace:curSpaceForPrune2];
                 }
-                // YUJ-218: DB 冷启动也兜底（上次 sync 若未写入 botfather，DB 同样缺失）。
+                // : DB 冷启动也兜底（上次 sync 若未写入 botfather，DB 同样缺失）。
                 [weakSelf.conversationListVM ensureSystemBotsVisible];
                 [weakSelf rebuildGroupDisplayAndReload];
                 [weakSelf refreshBadge];
@@ -1199,7 +1199,7 @@
             __weak typeof(self) weakSelf = self;
             [self.conversationListVM loadConversationList:^{
                 [weakSelf.conversationListVM snapshotSyncedGroupIds];
-                // YUJ-215: Space 切换完成后再扫一遍 VM，把任何 WKSpaceFilter 明确 Skip
+                // : Space 切换完成后再扫一遍 VM，把任何 WKSpaceFilter 明确 Skip
                 // 的群聊从 conversation array 踢出。reset() 已清空，但 sync 回来的批次
                 // 以及中间 onConversationUpdate 里 FailOpen 走回 existsInList 分支都
                 // 可能把不该属于当前 Space 的群带回来——最后一次 prune 保证 snapshot
@@ -1215,7 +1215,7 @@
                 if(curSpaceForPrune3.length > 0) {
                     [weakSelf.conversationListVM pruneNonCurrentSpaceBotsForSpace:curSpaceForPrune3];
                 }
-                // YUJ-218: 切 Space 后若 backend sync 在新 Space 未返回 botfather，
+                // : 切 Space 后若 backend sync 在新 Space 未返回 botfather，
                 // 本地兜底合成占位 entry，保证用户立即看到系统 bot 入口。
                 [weakSelf.conversationListVM ensureSystemBotsVisible];
                 [weakSelf rebuildGroupDisplayAndReload];
@@ -1296,9 +1296,9 @@
             [filtered addObject:conversation];
             continue;
         }
-        // YUJ-209: 新消息到达路径必须与冷启动 / Space 切换路径（WKConversationListVM.shouldShowConversation）
+        // : 新消息到达路径必须与冷启动 / Space 切换路径（WKConversationListVM.shouldShowConversation）
         // 对齐——两者都走 WKSpaceFilter。否则外部群收到新消息时会被错挂到 viewer 当前 Space 列表，
-        // 污染 conversationListVM 单例的内存状态（DB / SDK 层已正确，见 YUJ-209 根因）。
+        // 污染 conversationListVM 单例的内存状态（DB / SDK 层已正确，见 根因）。
         //   - Keep: channelInfo.space_id == currentSpaceId 或 member.source_space_id == currentSpaceId
         //   - Skip: channelInfo.space_id 明确不匹配且我不是外部成员 → 不加入当前 Space 列表
         //   - FailOpen: channelInfo/member 未缓存，降级走下方白名单 / existsInList 原有逻辑（fail-open 原则）
@@ -1324,7 +1324,7 @@
             // FailOpen：WKChannelInfo 或 member.extra 未缓存（EP1 尚未回写）
             // → 继续走下方原有 existsInList / whitelist / verifyAndAddGroupsToList 兜底路径。
             //
-            // YUJ-215: 清残留 + 禁走 existsInList 裸放行。
+            // : 清残留 + 禁走 existsInList 裸放行。
             // 真机复现：user 在 Space A 打开外部群 EDF，切到 Space B，EDF 新消息 → 错挂 B。
             // 原因：访问 EDF 会触发 SDK 内存/DB 层把 EDF 的 WKConversation 物化到当前进程
             // 的 conversation list 里（即使 Space 切换 reset 了 VM，某些路径——如 SDK
@@ -1379,7 +1379,7 @@
         } else {
             // 群聊不在列表中：检查白名单决定是否允许添加
             if(conversation.channel.channelType == WK_GROUP) {
-                // YUJ-215 (对齐 Android Round-2 PR#155): 白名单未初始化（nil）时
+                // (对齐 Android Round-2 PR#155): 白名单未初始化（nil）时
                 // 不再裸放行——强制走 verifyAndAddGroupsToList 回兜。
                 // 背景：iOS 原 isGroupInWhitelist 对 nil 返回 YES（pre-sync fail-open），
                 // 与 Android 原 spaceConversationKeys.isEmpty() 短路等价。Android PR#155
@@ -1512,10 +1512,10 @@
     }
 }
 
-/// YUJ-219-C: 判断 channel 是否为系统 Bot（botfather / u_10000 / fileHelper 等）。
+/// : 判断 channel 是否为系统 Bot（botfather / u_10000 / fileHelper 等）。
 /// SYSTEM_BOTS 集合在本单先取 WKAppConfig 已有的三个 UID，口径与
 /// `isConversationInCurrentSpace` 放行"全局可见"的那三项保持一致。
-/// 后续 YUJ-219-A4 会把集合迁到 appconfig system_bot_uids 下发，本单不触碰。
+/// 后续 会把集合迁到 appconfig system_bot_uids 下发，本单不触碰。
 -(BOOL) isSystemBotChannel:(WKChannel*)channel {
     NSString *channelId = channel.channelId;
     if(!channelId || channelId.length == 0) {
@@ -1529,7 +1529,7 @@
         || (fileHelperUID.length > 0 && [channelId isEqualToString:fileHelperUID]);
 }
 
-/// YUJ-219-C: 判断 message.content.contentDict[@"space_id"] 是否精确匹配当前 Space。
+/// : 判断 message.content.contentDict[@"space_id"] 是否精确匹配当前 Space。
 /// 无 space_id / 非字符串类型 → 视为非当前 Space（防止 SystemBot 无 space_id 的跨 Space
 /// 消息 bump 当前 Space 的 lastMsg timestamp / unread / 排序）。
 -(BOOL) isMessageFromCurrentSpace:(WKMessage*)message spaceId:(NSString*)spaceId {
@@ -1558,7 +1558,7 @@
               conversation.channel.channelId, cur ?: @"<nil>", existsInList);
 #endif
     }
-    // YUJ-219-C: push 路径对称 gate —— 必须在 getRealShowConversationWrap 之前做判定。
+    // : push 路径对称 gate —— 必须在 getRealShowConversationWrap 之前做判定。
     // validation-report.md §3 / §5 判定 iOS 是"半保险"：spaceFilteredLastMessage 能擦
     // preview 文字，但 replaceAtChannel 裸替换会照常 bump lastMessage.timestamp 和
     // unreadCount → 当前 Space 列表被他 Space push 冒顶 + 红点。
@@ -1635,7 +1635,7 @@
     }
 
     // 群聊：先走 WKSpaceFilter（支持外部群 source_space_id 兜底，对齐 shouldShowConversation 与
-    // YUJ-209 的串台修复）。FailOpen 场景下再降级到 sync 白名单，保持兜底一致性。
+    // 的串台修复）。FailOpen 场景下再降级到 sync 白名单，保持兜底一致性。
     if(conversation.channel.channelType == WK_GROUP) {
         WKSpaceFilterDecision decision = [[WKSpaceFilter shared]
                                            decideChannel:channelId
@@ -1644,7 +1644,7 @@
             return YES;
         }
         if(decision == WKSpaceFilterDecisionSkip) {
-            // YUJ-215: Skip 时若 VM 中仍残留该 channel，同步清掉，保证
+            // : Skip 时若 VM 中仍残留该 channel，同步清掉，保证
             // "Skip 决定 ⇒ 从 conversation array 移除"这一语义在所有 Skip 入口
             // （filter 批次 + 单条判定）上一致。避免访问过群后单例内存仍持有该条
             // 目，下次 sort / rebuildGroupDisplayAndReload 再把它浮回当前 Space。
@@ -1654,7 +1654,7 @@
             return NO;
         }
         // FailOpen：channelInfo / member 未缓存 → 走白名单兜底。
-        // YUJ-215: 白名单未初始化（nil）时不再默认 YES——Space 切换 race 窗口需要
+        // : 白名单未初始化（nil）时不再默认 YES——Space 切换 race 窗口需要
         // 严格过滤（对齐 Android Round-2 PR#155 去 isEmpty() 短路模式）。
         if(![self.conversationListVM isGroupWhitelistInitialized]) {
             return NO;
@@ -1915,7 +1915,7 @@
                 // 群聊 tab 下 tableView 真实 row 来自 groupDisplayList(含分类 header),
                 // filteredConversations 下标和 row 不可直接等同。走 rebuild 路径即可。
                 // 私聊 tab 下 indexAtChannel: 返回的就是 row, 但还是做 bounds 校验防御。
-                // (Jerry-Xin R2 blocking fix, YUJ-415)
+                // (Jerry-Xin R2 blocking fix, )
                 if (_conversationListVM.filterType == WKConversationFilterGroup) {
                     [self rebuildGroupDisplayAndReload];
                 } else {
@@ -1942,7 +1942,7 @@
             [self uiAddOrUpdateConversationForOne:conversation];
         }else{
             // Bounds-check: 群聊 tab 下 filteredConversations 下标和真实 row 不一致,
-            // 直接 reload 可能越界。(Jerry-Xin R2 fix, YUJ-415)
+            // 直接 reload 可能越界。(Jerry-Xin R2 fix, )
             if (_conversationListVM.filterType == WKConversationFilterGroup) {
                 [self rebuildGroupDisplayAndReload];
             } else {
@@ -2703,7 +2703,7 @@
     }
 
     // 从 apiBaseUrl 提取服务器根路径（去掉 /api/v1/ 部分）
-    // 例如：https://api-test.example.com/api/v1/ -> https://api-test.example.com/
+    // 例如：https://im.your.server.example.com/api/v1/ -> https://im.your.server.example.com/
     NSURL *apiURL = [NSURL URLWithString:apiBaseUrl];
     NSString *baseURL = [NSString stringWithFormat:@"%@://%@/", apiURL.scheme, apiURL.host];
 

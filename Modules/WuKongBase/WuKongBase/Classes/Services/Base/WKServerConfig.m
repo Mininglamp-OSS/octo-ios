@@ -10,7 +10,6 @@
 static NSString * const kWKCustomServerIPKey   = @"WKCustomServerIP";
 static NSString * const kWKCustomHttpsOnKey    = @"WKCustomHttpsOn";
 static NSString * const kWKServerHistoryKey    = @"WKServerHistory";
-static NSString * const kDefaultServerIP       = @"api.example.com";
 
 @implementation WKServerConfig
 
@@ -19,7 +18,21 @@ static NSString * const kDefaultServerIP       = @"api.example.com";
     if (customIP.length > 0) {
         return customIP;
     }
-    return kDefaultServerIP;
+    // PR #121 round 4 review 🟡: 优先用 OCTO_IM_DEFAULT_HOST, 缺省时回退到
+    // OCTO_IM_PRESET_1_HOST（与 README 引导一致 —— 用户只填 PRESET_1 也能跑起来）。
+    // xcconfig 未替换时字面量 "$(...)" 也视为缺省。
+    NSString *defaultHost = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOIMDefaultHost"];
+    if (defaultHost.length > 0 && ![defaultHost hasPrefix:@"$("]) {
+        return defaultHost;
+    }
+    NSArray<NSDictionary *> *presets = [self presetServers];
+    if (presets.count > 0) {
+        NSString *firstHost = presets.firstObject[@"ip"];
+        if (firstHost.length > 0) {
+            return firstHost;
+        }
+    }
+    return @"";
 }
 
 + (BOOL)httpsOn {
@@ -47,11 +60,39 @@ static NSString * const kDefaultServerIP       = @"api.example.com";
 #pragma mark - 历史记录
 
 + (NSArray<NSDictionary *> *)presetServers {
-    return @[
-        @{@"ip": @"api.example.com",      @"https": @(YES), @"label": @"国内正式版"},
-        @{@"ip": @"api-test.example.com",  @"https": @(YES), @"label": @"国内测试版"},
-        @{@"ip": @"api-test.example.com",          @"https": @(YES), @"label": @"国际版"},
-    ];
+    NSMutableArray *result = [NSMutableArray array];
+    // 1. 优先读多 preset 槽位（OctoConfig.xcconfig 的 OCTO_IM_PRESET_N_*）
+    NSArray *presets = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOIMPresets"];
+    if ([presets isKindOfClass:[NSArray class]]) {
+        for (id item in presets) {
+            if (![item isKindOfClass:[NSDictionary class]]) continue;
+            NSString *host  = item[@"host"];
+            NSString *label = item[@"label"];
+            NSString *https = item[@"https"];
+            if (host.length == 0) continue;
+            // xcconfig 未替换时会保留字面量 "$(OCTO_IM_PRESET_N_HOST)"，跳过
+            if ([host hasPrefix:@"$("]) continue;
+            BOOL httpsOn = !([https isEqualToString:@"NO"] || [https isEqualToString:@"no"] || [https isEqualToString:@"false"]);
+            [result addObject:@{
+                @"ip": host,
+                @"https": @(httpsOn),
+                @"label": label.length > 0 ? label : host,
+            }];
+        }
+    }
+    // 2. 兼容回退：如果没有 preset 槽位，使用旧的单 default key
+    if (result.count == 0) {
+        NSString *host  = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOIMDefaultHost"];
+        NSString *label = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOIMDefaultLabel"];
+        if (host.length > 0 && ![host hasPrefix:@"$("]) {
+            [result addObject:@{
+                @"ip": host,
+                @"https": @(YES),
+                @"label": label.length > 0 ? label : host,
+            }];
+        }
+    }
+    return result;
 }
 
 + (NSArray<NSDictionary *> *)serverHistory {

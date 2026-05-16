@@ -53,12 +53,12 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 -(BOOL) isGroupInWhitelist:(NSString*)channelId;
 
 /// 白名单是否已被 snapshot/sync 初始化过。
-/// YUJ-215: 新消息路径需要区分「白名单 nil（race / 重置中）」vs「白名单空集（明确无群）」——
+/// : 新消息路径需要区分「白名单 nil（race / 重置中）」vs「白名单空集（明确无群）」——
 /// 前者不能再作 fail-open 默认通过，必须走 verifyAndAddGroupsToList 回兜，
 /// 否则外部群新消息会在 Space 切换瞬态窗口里绕过 SpaceFilter 污染当前 Space 列表。
 -(BOOL) isGroupWhitelistInitialized;
 
-/// YUJ-215: 从当前 VM 的 conversationWrapModels 中裁剪掉当前 Space 不应展示的群聊。
+/// : 从当前 VM 的 conversationWrapModels 中裁剪掉当前 Space 不应展示的群聊。
 /// 扫描所有 WK_GROUP 条目，对每一条调 WKSpaceFilter —— 拿到 Skip 就移除残留，
 /// 避免「访问过群后内存层 / SDK cache 残留 → 新消息路径将其浮到当前 Space 列表顶部」。
 /// 在 Space 切换完成（snapshotSyncedGroupIds 之后）和 filter 批次结束时调用。
@@ -72,13 +72,13 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 触发时调用。返回被移除的 channelId 列表。
 -(NSArray<NSString*>*) pruneNonCurrentSpaceBotsForSpace:(NSString*)spaceId;
 
-/// YUJ-218: 后端 sync 在当前 Space 不返回 botfather 时本地兜底合成占位 conversation，
+/// : 后端 sync 在当前 Space 不返回 botfather 时本地兜底合成占位 conversation，
 /// 保证用户能看到系统 bot 入口（对齐 Android Round-3 Fix C）。
 /// 调用时机：sync 完成 / Space 切换后的 loadConversationList 之后，
 /// 即在 snapshotSyncedGroupIds + pruneNonCurrentSpaceGroups 之后 / UI 刷新之前。
 /// 硬约束：
 ///   1. 只挂在 VM 层 conversationWrapModels，不写入 WKSDK conversationManager / DB —
-///      避免污染 YUJ-215 修复的持久化层（群聊 cache 清理策略针对 DB，不影响此 VM-only
+///      避免污染 修复的持久化层（群聊 cache 清理策略针对 DB，不影响此 VM-only
 ///      合成条目）；占位 conversation 随下次 reset / loadConversationList 自然丢弃。
 ///   2. 尊重 WKBotFatherHidden_<spaceId> 用户隐藏标记 — 已删除过的 Space 不自动恢复，
 ///      对齐 shouldShowConversation / filterConversationsBySpace 的既有语义。

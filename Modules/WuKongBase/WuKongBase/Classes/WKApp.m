@@ -96,7 +96,10 @@
 #import "WKKeyboardService.h"
 #import <ZLPhotoBrowser/ZLPhotoBrowser-Swift.h>
 #import "WKSDWebImageDownloaderOperation.h"
+// Bugly (腾讯崩溃统计) 是闭源 SDK。开源版默认禁用，启用方式见 AppDelegate.m 头部说明。
+#ifdef OCTO_ENABLE_BUGLY
 #import <Bugly/Bugly.h>
+#endif
 #import "WKMyInviteCodeVC.h"
 #import "WKProhibitwordsService.h"
 // #import "WKANRWatchdog.h"  // Disabled: 调试期完成使命，见 CLAUDE.md
@@ -249,6 +252,7 @@ static WKApp *_instance;
 }
 
 -(void) traceConfig {
+#ifdef OCTO_ENABLE_BUGLY
     BuglyConfig *config = [[BuglyConfig alloc] init];
 #ifndef __OPTIMIZE__ // DEBUG模式
     config.debugMode = false;
@@ -257,11 +261,24 @@ static WKApp *_instance;
 #else
     config.reportLogLevel = BuglyLogLevelWarn;
 #endif
-    
-    [Bugly startWithAppId:@"82f8dd98ff" config:config];
+
+    NSString *buglyAppIdSDK = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOBuglyAppIdSDK"];
+    // PR #121 round 3 review 🟡: 校验占位符 — 主开关 OCTO_ENABLE_BUGLY 由
+    // Podfile post_install 根据 OCTO_BUGLY_APP_ID_MAIN 决定，但 SDK 侧的
+    // OCTO_BUGLY_APP_ID_SDK 是独立字段，用户可能漏填。下列情形一律不启动:
+    //   - 空 / nil
+    //   - 模板占位符 YOUR_BUGLY_APP_ID
+    //   - 未替换的 $(OCTO_BUGLY_APP_ID_SDK) 字面量（OctoConfig 未注入时的产物）
+    BOOL buglySDKIdValid = buglyAppIdSDK.length > 0
+        && ![buglyAppIdSDK isEqualToString:@"YOUR_BUGLY_APP_ID"]
+        && ![buglyAppIdSDK hasPrefix:@"$("];
+    if (buglySDKIdValid) {
+        [Bugly startWithAppId:buglyAppIdSDK config:config];
+    }
     if([WKApp shared].isLogined) {
         [Bugly setUserIdentifier: [WKApp shared].loginInfo.uid];
     }
+#endif
 }
 
 -(void) debugSetting {
@@ -273,14 +290,17 @@ static WKApp *_instance;
 }
 
 -(BOOL) appOpenURL:(NSURL *)url options:(NSDictionary<UIApplicationOpenURLOptionsKey,id> *)options {
-    // 处理 Share Extension 跳转
-    if ([url.scheme isEqualToString:@"botgate"] && [url.host isEqualToString:@"share"]) {
+    // 处理 Share Extension 跳转：跨进程 URL 走 `<OCTO_URL_SCHEME>://share`
+    // (与实名回跳同 scheme，通过 host 区分入口)。scheme 由 OctoConfig.xcconfig
+    // 的 OCTO_URL_SCHEME 决定，默认 `octo`。历史上写死 `botgate`，
+    // 见 PR #121 Allen review 🟡 #2。
+    if ([url.scheme isEqualToString:WKRealnameVerifiedURLScheme] && [url.host isEqualToString:@"share"]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [self handleShareExtensionData];
         });
         return YES;
     }
-    // 实名认证回跳 octo://verified
+    // 实名认证回跳 <OCTO_URL_SCHEME>://verified
     if([WKRealnameVerifyManager isVerifiedCallbackURL:url]) {
         [WKRealnameVerifyManager handleVerifiedCallback:url];
         return YES;
@@ -289,7 +309,7 @@ static WKApp *_instance;
 }
 
 -(BOOL) appContinueUserActivity:(NSUserActivity *)userActivity restorationHandler:(void (^)(NSArray<id<UIUserActivityRestoring>> * _Nullable))restorationHandler {
-    // 实名认证回跳不走 Universal Link (YUJ-396 Round 2 / Jerry-Xin #112 blocking 2):
+    // 实名认证回跳不走 Universal Link (Round 2 / blocking 2):
     // Aegis return_to 统一走 `octo://verified` 自定义 scheme (由
     // appDidOpenURL:options: 处理), 本入口不再识别 Aegis host 的 web URL。
     // 调用 isVerifiedCallbackURL: 仍然保留做防御（万一老版本 Aegis 回跳
@@ -1523,7 +1543,7 @@ static WKApp *_instance;
             vc.groupAvatar = result.data[@"avatar"] ?: @"";
             vc.memberCount = [result.data[@"member_count"] integerValue];
             vc.isMember = [result.data[@"is_member"] boolValue];
-            // YUJ-141: 扫码/邀请链接携带的目标 Space 上下文（后端契约：space_id / space_name）。
+            // : 扫码/邀请链接携带的目标 Space 上下文（后端契约：space_id / space_name）。
             // 允许字段缺失 — 缺失时走 legacy 同 Space 路径，不弹切换 dialog。
             vc.targetSpaceId = [result.data[@"space_id"] isKindOfClass:[NSString class]] ? result.data[@"space_id"] : nil;
             vc.targetSpaceName = [result.data[@"space_name"] isKindOfClass:[NSString class]] ? result.data[@"space_name"] : nil;
@@ -1936,14 +1956,24 @@ static WKApp *_instance;
 
 #pragma mark - Share Extension
 
-static NSString *const kShareAppGroupId = @"group.com.example.octo";
+// PR #121 round 4 review 🟡: app group 由 OctoConfig.xcconfig 的 OCTO_APP_GROUP
+// 注入到 Info.plist 的 OCTOAppGroup 字段。外部团队签名必须改成自己
+// provision 过的 group，不允许 hardcode example-app 字符串。
+// 默认回退保持 group.com.example.octo 仅用于本地构建。
+static NSString *_OctoShareAppGroupId(void) {
+    NSString *fromPlist = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOAppGroup"];
+    if (fromPlist.length > 0 && ![fromPlist hasPrefix:@"$("]) {
+        return fromPlist;
+    }
+    return @"group.com.example.octo";
+}
 static NSString *const kShareDataKey = @"WKShareExtensionData";
 static NSString *const kShareDirName = @"ShareExtensionFiles";
 
 -(void) handleShareExtensionData {
     if (![WKApp shared].isLogined) return;
 
-    NSUserDefaults *shared = [[NSUserDefaults alloc] initWithSuiteName:kShareAppGroupId];
+    NSUserDefaults *shared = [[NSUserDefaults alloc] initWithSuiteName:_OctoShareAppGroupId()];
     NSArray *fileInfos = [shared objectForKey:kShareDataKey];
     if (!fileInfos || fileInfos.count == 0) return;
 
@@ -2062,7 +2092,7 @@ static NSString *const kShareDirName = @"ShareExtensionFiles";
 
     // 清理共享目录
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_global_queue(0, 0), ^{
-        NSURL *container = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:kShareAppGroupId];
+        NSURL *container = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:_OctoShareAppGroupId()];
         NSURL *dir = [container URLByAppendingPathComponent:kShareDirName];
         [[NSFileManager defaultManager] removeItemAtURL:dir error:nil];
     });

@@ -82,7 +82,7 @@
     if([externalGroupRaw isKindOfClass:[NSNumber class]] || [externalGroupRaw isKindOfClass:[NSString class]]) {
         channelInfo.extra[@"is_external_group"] = @([externalGroupRaw integerValue] == 1 ? 1 : 0);
     }
-    // YUJ-27 allow_external: 是否允许邀请外部成员
+    // allow_external: 是否允许邀请外部成员
     id allowExternalRaw = resultDict[@"allow_external"];
     if([allowExternalRaw isKindOfClass:[NSNumber class]] || [allowExternalRaw isKindOfClass:[NSString class]]) {
         channelInfo.extra[@"allow_external"] = @([allowExternalRaw integerValue] == 1 ? 1 : 0);
@@ -161,9 +161,9 @@
     return WKGroupTypeCommon;
 }
 
-#pragma mark - 实名认证（YUJ-381 / dmwork-web#1169 Phase A）
+#pragma mark - 实名认证（/ Phase A）
 
-// Tri-state：nil=字段缺失 / @YES=显式真 / @NO=显式假（YUJ-384 P1-2）。
+// Tri-state：nil=字段缺失 / @YES=显式真 / @NO=显式假（P1-2）。
 // 调用方用这个区分决定是否 fallback 到 person cache。
 +(NSNumber *) isRealnameVerifiedFromExtra:(NSDictionary *)extra {
     if(!extra || ![extra isKindOfClass:[NSDictionary class]]) {

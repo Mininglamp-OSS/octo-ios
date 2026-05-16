@@ -1,5 +1,75 @@
-# Merge conflict artifacts
-*.orig
-.claude
+# ───────── macOS ─────────
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# ───────── Xcode 用户态 ─────────
 xcuserdata/
 *.xcuserstate
+*.xcuserdatad/
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+*.swp
+*.swo
+
+# ───────── Xcode 构建产物 ─────────
+build/
+DerivedData/
+.build/
+*.o
+*.a
+*.so
+*.app
+*.framework
+
+# ───────── CocoaPods ─────────
+# 项目级 Pods 不入库（构建时 pod install 即可）
+Pods/
+# 子模块 Example 工程的 Pods/ 也不入库
+Modules/*/Example/Pods/
+
+# ───────── Carthage ─────────
+Carthage/Build/
+Carthage/Checkouts/
+
+# ───────── Swift Package Manager ─────────
+.swiftpm/
+Package.resolved
+
+# ───────── fastlane ─────────
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# ───────── 本地配置（敏感凭据走配置文件，不入库）─────────
+# 真实的 AppKey / 服务器地址 / Team ID 等
+*.local.xcconfig
+OctoConfig.xcconfig
+*.p12
+*.cer
+*.mobileprovision
+GoogleService-Info.plist
+google-services.json
+firebase.json
+
+# ───────── 合并冲突遗留 ─────────
+*.orig
+*.rej
+
+# ───────── 工具链缓存 ─────────
+.claude
+.idea/
+.vscode/
+*.iml
+
+# ───────── Python 调试脚本（项目根有 test_*.py）─────────
+__pycache__/
+*.pyc
+.venv/
+venv/

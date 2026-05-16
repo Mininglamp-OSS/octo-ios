@@ -1,3 +1,5 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 //
 //  LiMaoDataSourceTests.m
 //  LiMaoDataSourceTests
@@ -26,7 +28,7 @@
     [super tearDown];
 }
 
-#pragma mark - External Group (YUJ-92 EP1) — WKGroupModel fromMap
+#pragma mark - External Group (EP1) — WKGroupModel fromMap
 
 // 群级：is_external_group = 1 / allow_external = 0 / space_id 同时存在时，字段应全部透传
 - (void)test_groupModel_fromMap_allExternalFieldsPresent {
@@ -83,7 +85,7 @@
     XCTAssertEqual(m.allowExternal.integerValue, 0);
 }
 
-#pragma mark - External Group (YUJ-92 EP1) — WKGroupMemberModel fromMap
+#pragma mark - External Group (EP1) — WKGroupMemberModel fromMap
 
 // 成员级：5 个外部字段全部透传到 model
 - (void)test_memberModel_fromMap_allExternalFieldsPresent {
@@ -134,7 +136,7 @@
     XCTAssertNil(m.homeSpaceName);
 }
 
-#pragma mark - External Group (YUJ-92 EP1) — WKGroupMemberModel toChannelMember
+#pragma mark - External Group (EP1) — WKGroupMemberModel toChannelMember
 
 // toChannelMember: 外部成员字段必须透传到 channelMember.extra
 - (void)test_memberModel_toChannelMember_externalMemberExtras {

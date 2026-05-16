@@ -1597,7 +1597,7 @@
         && ![msgSpaceId isKindOfClass:[NSNull class]]
         && ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0);
     if(!hasSpaceId) {
-        // YUJ-219-A4: 系统bot(botfather/u_10000/fileHelper 等 appconfig.system_bot_uids)
+        // : 系统bot(botfather/u_10000/fileHelper 等 appconfig.system_bot_uids)
         // 的无 space_id 消息在空间模式下隐藏；普通个人聊天保持向前兼容（可见）。
         NSArray<NSString*> *systemBotUIDs = [WKApp shared].config.systemBotUIDs;
         NSString *channelId = self.channel.channelId;
@@ -1751,18 +1751,29 @@
 
 //通过删除然后插入的方式更新cell
 -(void) refreshCellForDeleteAndInsert:(WKMessageModel*) messageModel {
-    
+
     NSIndexPath *indexPath =  [self.dataProvider replaceMessage:messageModel atClientMsgNo:messageModel.clientMsgNo];
     if(indexPath) {
         WKMessageBaseCell *cell = (WKMessageBaseCell *)[self.tableView cellForRowAtIndexPath:indexPath];
         [cell refresh:messageModel];
         if (@available(iOS 11.0, *)) {
-            [self.tableView performBatchUpdates:^{
-                [self.tableView deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationFade];
-                [self.tableView insertRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationFade];
-            } completion:nil];
+            // Bugly 兜底：dp/tv 漂移时 performBatchUpdates 内部 delete+insert 同 path 会触发
+            // NSInternalInconsistencyException。漂移直接 reloadData 收敛；正常时 @try 兜底。
+            if (![self isTableViewRowCountInSyncWithDataProvider]) {
+                [self.tableView reloadData];
+            } else {
+                @try {
+                    [self.tableView performBatchUpdates:^{
+                        [self.tableView deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationFade];
+                        [self.tableView insertRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationFade];
+                    } completion:nil];
+                } @catch (NSException *ex) {
+                    NSLog(@"[WKMessageListView] refreshCellForDeleteAndInsert drift caught: %@, fallback reloadData", ex);
+                    [self.tableView reloadData];
+                }
+            }
         }
-        
+
     }else {
         [self.dataProvider addMessage:messageModel];
         [self.tableView reloadData];
@@ -2169,7 +2180,13 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         
     }
     if(needRelodData) {
-        [self.tableView reloadData];
+        // Bugly 兜底：极少情况下 onMessageUpdate 处于外层嵌套 batchUpdates / 嵌套 RunLoop 中，
+        // 裸 reloadData 也可能命中 UITableView 内部一致性断言。包 @try 收敛成无害。
+        @try {
+            [self.tableView reloadData];
+        } @catch (NSException *ex) {
+            NSLog(@"[WKMessageListView] onMessageUpdate trailing reloadData caught: %@", ex);
+        }
     }
 }
 
@@ -2470,7 +2487,7 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     // cell 不在视口时也要 mark：从上层 +300ms gate 走到这里只差 100ms，cell 仍消失
     // 说明用户在做快速滚动，机会已用掉；mark 掉避免回滑重播。
     // 注意：mark 之前 sourceRect 还没计算，不会误把 bottom-center fallback 给不可见消息
-    // 放特效（lml2468 review R1）—— 我们 mark 后直接 return，不进 trigger 路径。
+    // 放特效（review R1）—— 我们 mark 后直接 return，不进 trigger 路径。
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         NSIndexPath *indexPath = [self.dataProvider indexPathAtClientMsgNo:message.clientMsgNo];
@@ -2609,7 +2626,7 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         }
 
         // sourceRect 必定非空：本方法开头已确保 cell 存在并成功计算出 sourceRect。
-        // 历史版本里的 bottom-center fallback 已移除（lml2468 review R1）—— cell 不在视口时
+        // 历史版本里的 bottom-center fallback 已移除（review R1）—— cell 不在视口时
         // mark 后直接 return，绝不进入下面的 trigger 路径，避免给不可见消息放特效。
         [[WKMessageEffectManager shared] triggerEffect:effectType
                                             inHostView:self

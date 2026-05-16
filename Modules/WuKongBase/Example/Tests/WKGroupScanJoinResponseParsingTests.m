@@ -1,8 +1,10 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 //
 //  WKGroupScanJoinResponseParsingTests.m
 //  LiMaoBase_Tests
 //
-//  YUJ-213 — 验证 scanjoin 成功回调对 response 字段（space_id / space_name /
+//  — 验证 scanjoin 成功回调对 response 字段（space_id / space_name /
 //  group_name / is_external）解析的硬约束。这些约束全部是「grep-style」对
 //  `WKGroupScanJoinVC.m` 源码做断言：
 //
@@ -11,9 +13,9 @@
 //    3. 识别 `is_external` 并在 `== 1` 时跳过跨 Space Toast
 //    4. 保留 legacy fallback（weakSelf.targetSpaceId / targetSpaceName / groupName）
 //    5. 公共群 / 同 Space 的 "不弹" 守卫落在 Helper，call-site 不重复判断
-//       （避免 YUJ-170 round 2 的 "死代码" 陷阱）
+//       （避免 round 2 的 "死代码" 陷阱）
 //
-//  YUJ-372 Phase 2 — 新增 need_space 响应的解析 + pendingGroupInvite 落盘与
+//  Phase 2 — 新增 need_space 响应的解析 + pendingGroupInvite 落盘与
 //  重放两阶段测试：
 //
 //    6. 识别 `status == "need_space"` 响应；命中时不走 computeAndSave / 不
@@ -120,7 +122,7 @@
 
 - (void)testScanJoinStillCallsComputeAndSaveHelper {
     // 避免回归：同/跨 Space 判定仍然下沉到 WKJoinGroupSuccessHelper，
-    // call-site 不重复实现 (YUJ-170 round 2 死代码教训)。
+    // call-site 不重复实现 (round 2 死代码教训)。
     XCTAssertTrue([self.vcSource containsString:@"computeAndSaveWithGroupNo"],
                   @"跨 Space 判定必须委托给 Helper，不能 call-site 重写");
     XCTAssertTrue([self.vcSource containsString:@"WKJoinGroupSuccessHelper"],
@@ -144,7 +146,7 @@
                   @"Dialog 中必须出现统一 i18n 逻辑 key 的引用，便于跨端对齐");
 }
 
-#pragma mark - YUJ-372 Phase 2: need_space 分支 & pendingGroupInvite 落盘
+#pragma mark - Phase 2: need_space 分支 & pendingGroupInvite 落盘
 
 - (void)testScanJoinParses_NeedSpaceStatus {
     // 后端 dmworkim PR#1320 契约：无 Space 用户 scanjoin 返回 status=need_space。
@@ -159,7 +161,7 @@
     // 命中 need_space 时把群邀请上下文暂存到 NSUserDefaults key `pendingGroupInvite`。
     XCTAssertTrue([self.vcSource containsString:@"pendingGroupInvite"],
                   @"scanjoin need_space 分支必须把邀请上下文暂存到"
-                  @"NSUserDefaults key `pendingGroupInvite`（YUJ-372 契约）");
+                  @"NSUserDefaults key `pendingGroupInvite`（契约）");
     XCTAssertTrue([self.vcSource containsString:@"NSUserDefaults"],
                   @"need_space 分支必须使用 NSUserDefaults 暂存");
     // 关键字段都要落盘，Space Gate 重放时要用。
@@ -200,13 +202,13 @@
                    @"need_space 分支内不得调用 computeAndSaveWithGroupNo（跨 Space Toast 不适用于零 Space 用户）");
 }
 
-#pragma mark - YUJ-372 Phase 2: WKSpaceGateVC replay 侧
+#pragma mark - Phase 2: WKSpaceGateVC replay 侧
 
 - (void)testSpaceGate_Enter_ReplaysPendingGroupInvite {
     // 加 Space 成功（enterApp）后必须调用 replayPendingGroupInviteIfAny，
     // 一次性消费 NSUserDefaults 并通过 WKPOINT_SCAN_HANDLER_JOIN_GROUP 重放。
     XCTAssertTrue([self.spaceGateSource containsString:@"replayPendingGroupInviteIfAny"],
-                  @"WKSpaceGateVC 必须定义 replayPendingGroupInviteIfAny 方法（YUJ-372）");
+                  @"WKSpaceGateVC 必须定义 replayPendingGroupInviteIfAny 方法（）");
     XCTAssertTrue([self.spaceGateSource containsString:@"pendingGroupInvite"],
                   @"WKSpaceGateVC 必须读 NSUserDefaults key `pendingGroupInvite`");
     XCTAssertTrue([self.spaceGateSource containsString:@"removeObjectForKey:@\"pendingGroupInvite\""],

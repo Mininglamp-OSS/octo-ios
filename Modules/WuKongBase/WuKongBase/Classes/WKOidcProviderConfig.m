@@ -2,7 +2,7 @@
 //  WKOidcProviderConfig.m
 //  WuKongBase
 //
-//  YUJ-396 — 见 .h 注释。
+//  — 见 .h 注释。
 //
 
 #import "WKOidcProviderConfig.h"
@@ -22,7 +22,7 @@
     if(![scheme isEqualToString:@"https"]) return nil;
     // host 必须有值; schemes://emptyhost/... 在构造 NSURL 时可能过掉, 这里兜底。
     if(u.host.length == 0) return nil;
-    // YUJ-396 Round 2 / Jerry-Xin #112 suggestion: 拒绝带 query 或 fragment 的
+    // Round 2 / suggestion: 拒绝带 query 或 fragment 的
     // base URL。后端下发 `https://accounts.example.com?x=1` 时 buildVerifyURLFromAccountUrl:
     // 会拼成 `https://accounts.example.com?x=1/profile/info?anchor=verification`,
     // query 结构不合法且把 `/profile/info` 吞进 query 参数值里, 浏览器解析歧义,
@@ -58,7 +58,7 @@
         id pathVal = d[@"authorize_path"];
         if(![self isSafeAuthorizePath:pathVal]) continue;
 
-        // YUJ-396 P-S1 (Jerry-Xin #112 review suggestion 1): name 改为 optional,
+        // P-S1 (review suggestion 1): name 改为 optional,
         // 缺失 / 空串仍保留 entry（只是 name=nil）, UI 侧 fallback 到 providerId 展示。
         // 原实现 name required-else-skip 与 .h 注释 "可缺" 矛盾; 同时 name 只是
         // 展示字段, 业务上有 account_url 就能用。
@@ -79,7 +79,7 @@
     return [out copy];
 }
 
-// YUJ-420 R1 fix (Jerry-Xin 🔴 Critical): WKLoginView / WKRegisterVC 两处 buildOidcAuthorizeURL 共用 helper。
+// R1 fix (Critical): WKLoginView / WKRegisterVC 两处 buildOidcAuthorizeURL 共用 helper。
 // 原实现用 URLQueryAllowedCharacterSet + stringByAddingPercentEncodingWithAllowedCharacters 手拼
 // query, 该字符集不转义 `&`/`=`/`+` — authcode 或 device_name 出现这些字符时会被
 // 截断或注入旁的 query param。
@@ -141,7 +141,7 @@
 }
 
 
-// YUJ-420 R3 fix (Jerry-Xin Critical): 递归剥 NSNull, 产出 plist-safe 副本。
+// R3 fix (Jerry-Xin Critical): 递归剥 NSNull, 产出 plist-safe 副本。
 // 详见 .h 注释。
 + (nullable id)plistSanitize:(nullable id)value {
     if(value == nil) return nil;

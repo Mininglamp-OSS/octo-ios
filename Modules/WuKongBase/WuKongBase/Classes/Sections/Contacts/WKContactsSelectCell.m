@@ -19,7 +19,7 @@
 @interface WKContactsSelectCell()<WKCheckBoxDelegate>
 
 @property(nonatomic,strong) UILabel *botBadgeLbl;
-// YUJ-381 / dmwork-web#1169 Phase A —— 选人列表实名 ✓ 徽章（拉人 / 新建群）
+// / Phase A —— 选人列表实名 ✓ 徽章（拉人 / 新建群）
 @property(nonatomic,strong) UIImageView *realnameVerifiedImgView;
 
 @end
@@ -60,7 +60,7 @@
     _botBadgeLbl.hidden = YES;
     [self.contentView addSubview:_botBadgeLbl];
 
-    // YUJ-381 实名 ✓ 徽章
+    // 实名 ✓ 徽章
     _realnameVerifiedImgView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 12.0f, 12.0f)];
     _realnameVerifiedImgView.contentMode = UIViewContentModeScaleAspectFit;
     _realnameVerifiedImgView.image = [WKApp.shared loadImage:@"Common/ic_realname_verified_mini" moduleID:@"WuKongBase"];
@@ -91,7 +91,7 @@
         self.botBadgeLbl.frame = frame;
     }
 
-    // YUJ-381 实名 ✓ 徽章：只对人 + 非机器人显示。数据走 person 缓存（预拉取器
+    // 实名 ✓ 徽章：只对人 + 非机器人显示。数据走 person 缓存（预拉取器
     // 在没数据时主动补一次 /users/<uid>，channelInfoUpdate 会驱动 reload）。
     BOOL canShowRealname = !_contactSelectModel.robot && _contactSelectModel.uid.length > 0;
     BOOL realnameVerified = NO;
@@ -148,7 +148,7 @@
     self.nameLbl.lim_left = self.avatarImgView.lim_right + nameLeft;
     self.nameLbl.lim_top = self.lim_height/2.0f - self.nameLbl.lim_height/2.0f;
 
-    // YUJ-381：实名 → AI 串行排，徽章必出（长名内容由 sizeToFit 决定，列表多数场景够用）。
+    // ：实名 → AI 串行排，徽章必出（长名内容由 sizeToFit 决定，列表多数场景够用）。
     CGFloat afterNameRight = self.nameLbl.lim_right;
     if (!self.realnameVerifiedImgView.hidden) {
         self.realnameVerifiedImgView.lim_width = 12.0f;

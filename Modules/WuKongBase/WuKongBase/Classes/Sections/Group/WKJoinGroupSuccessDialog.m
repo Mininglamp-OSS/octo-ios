@@ -2,7 +2,7 @@
 //  WKJoinGroupSuccessDialog.m
 //  WuKongBase
 //
-//  YUJ-141 — see header.
+//  — see header.
 //
 
 #import "WKJoinGroupSuccessDialog.h"
@@ -82,7 +82,7 @@
     [self addSubview:_cardView];
 
     // 第一行：已加入 "xxx"
-    // YUJ-213: 三端统一 i18n key 命名 `group_join_cross_space_notice` — iOS 的
+    // : 三端统一 i18n key 命名 `group_join_cross_space_notice` — iOS 的
     // Localizable.strings 采用"中文即 key"约定，这里保持中文源串作为 key，
     // 逻辑 key 在注释中记录便于跨端检索。首行对应 `group_join_cross_space_notice.title`。
     _line1Lbl = [[UILabel alloc] init];
