@@ -9,20 +9,23 @@
 Pod::Spec.new do |s|
   s.name             = 'WuKongDataSource'
   s.version          = '0.1.0'
-  s.summary          = 'Octo iOS data-source abstraction layer used across all modules.'
+  s.summary          = 'A short description of WuKongDataSource.'
+
+# This description is used to generate tags and improve search results.
+#   * Think: What does it do? Why did you write it? What is the focus?
+#   * Try to keep it short, snappy and to the point.
+#   * Write the description between the DESC delimiters below.
+#   * Finally, don't worry about the indent, CocoaPods strips it!
 
   s.description      = <<-DESC
-WuKongDataSource defines the data-source protocols and base implementations
-shared by WuKongBase, WuKongContacts and WuKongLogin. It decouples UI
-components from concrete data-fetch strategies, making the modules easier
-to unit-test and swap out in host apps.
+TODO: Add long description of the pod here.
                        DESC
 
-  s.homepage         = 'https://github.com/Mininglamp-OSS/octo-ios'
+  s.homepage         = 'https://github.com/tangtaoit/WuKongDataSource'
   # s.screenshots     = 'www.example.com/screenshots_1', 'www.example.com/screenshots_2'
-  s.license          = { :type => 'Apache-2.0', :file => 'LICENSE' }
-  s.author           = { 'MININGLAMP Technology' => 'https://github.com/Mininglamp-OSS' }
-  s.source           = { :git => 'https://github.com/Mininglamp-OSS/octo-ios', :tag => s.version.to_s }
+  s.license          = { :type => 'MIT', :file => 'LICENSE' }
+  s.author           = { 'tangtaoit' => 'tt@wukong.ai' }
+  s.source           = { :git => 'https://github.com/tangtaoit/WuKongDataSource.git', :tag => s.version.to_s }
   # s.social_media_url = 'https://twitter.com/<TWITTER_USERNAME>'
 
   s.ios.deployment_target = '14.0'

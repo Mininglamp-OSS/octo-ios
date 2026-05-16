@@ -1,5 +1,3 @@
-// Copyright 2026 MININGLAMP Technology and the OCTO contributors
-// SPDX-License-Identifier: Apache-2.0
 /*Copyright (c) 2003-2004, Mark Borgerding
   Lots of modifications by Jean-Marc Valin
   Copyright (c) 2005-2007, Xiph.Org Foundation

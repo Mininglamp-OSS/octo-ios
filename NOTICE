@@ -4,60 +4,88 @@ Copyright 2026 MININGLAMP Technology and the OCTO contributors
 This product includes software developed by:
   MININGLAMP Technology and the OCTO open source contributors.
 
-Licensed under the Apache License, Version 2.0 (the "License").
+Octo's own additions and modifications (主 App、扩展、本仓库新写的替换组件等)
+are licensed under the Apache License, Version 2.0 (the "License").
 You may obtain a copy of the License at
 
     http://www.apache.org/licenses/LICENSE-2.0
 
+Portions of this product are derived from upstream open-source projects and
+remain under their original licenses. See the sections below for details.
+
 
 ================================================================================
-Third-Party Software Notices and Information
+Upstream Origin (本项目 fork 自以下上游项目，保留其原始许可证)
 ================================================================================
-
-This product bundles or depends on the following third-party software.
-The original copyright notices and license terms apply to those portions.
-Detailed component-by-component attributions are listed below.
-
-(详细第三方组件归属由 P5 阶段调研后补全。本节当前为占位，开源前必须填齐。)
-
-
---------------------------------------------------------------------------------
-Origin / Upstream
---------------------------------------------------------------------------------
-
-This project incorporates code derived from the following upstream projects.
-Where their license requires attribution, that attribution is preserved here.
 
   - WuKongIM iOS SDK
       MIT License
       Copyright (c) 2019 tangtaoit
       https://github.com/WuKongIM/WuKongIMiOSSDK
-      (This project incorporates and extends the SDK under the terms of
-      the MIT License; modifications are licensed under Apache 2.0.)
+      Used at:
+        Modules/WuKongIMiOSSDK/
+      Status: 原始 SDK 源文件保留 MIT 协议与命名，未做版权归属变更。
+      本项目对该 SDK 的派生修改也以 MIT 协议继续发布。
 
-  - TangSengDaoDao iOS
+  - WuKongBase / WuKongLogin / WuKongContacts / WuKongDataSource
+      MIT License (per upstream podspec)
+      Copyright (c) 2019 tangtaoit <tt@wukong.ai>
+      https://github.com/tangtaoit/
+      Used at:
+        Modules/WuKongBase/
+        Modules/WuKongLogin/
+        Modules/WuKongContacts/
+        Modules/WuKongDataSource/
+      Status: 上游业务模块代码保留 MIT 协议。MININGLAMP 在本项目中提交的
+      新增/修改文件单独以 Apache 2.0 发布（仅限本仓库内可识别为新增的文件，
+      详见各文件顶部的 SPDX 标识）。
+
+  - TangSengDaoDao iOS (主 App 壳)
       Apache License, Version 2.0
       https://github.com/TangSengDaoDao/TangSengDaoDaoiOS
+      Used at: TangSengDaoDao/ 目录中部分初始文件
+
+
+================================================================================
+Bundled Third-Party Components
+================================================================================
+
+  [x] opencore-amr                Apache 2.0      Compliant.
+                                                  Bundled as static .a in WuKongIMSDK.
+
+  [REMOVED in P5] librlottie       LGPL            从 Podfile 与本仓库构建链中移除。
+                                                  消费方 WKAnimatedStickerNode /
+                                                  WKMessageStickerCell 均为死代码，已删除。
+
+  [EXCLUDED in P5] SoundTouch       LGPL v2.1       通过 WuKongBase.podspec exclude_files
+                                                  从编译链中排除。变声功能降级为无变调
+                                                  播放，待用 AVAudioUnitTimePitch 替换。
+                                                  原文件仍在仓库中以保留 LGPL 归属。
+
+  [!]   TelegramUtils (Telegram iOS)  GPL v2        许可证不兼容，已在 P5 完成全部 4 个外部
+                                                  消费组件替换（WKShimmerView / WKRadialProgressView
+                                                  / WKGestureContainerNode / WKContentContainerNode），
+                                                  并通过 WuKongBase.podspec exclude_files 把整个
+                                                  TelegramUtils 目录从编译链中彻底排除。
+                                                  源文件保留在仓库内以维持 GPL v2 归属声明。
+                                                  详见 TelegramUtils/LICENSE 与 README.md。
+
+  [REMOVED with TelegramUtils] Facebook POP      BSD+Patents  仅在 TelegramUtils/RadialStatusNode
+                                                              内部使用，随 TelegramUtils 整体排除。
+
+  [REMOVED with TelegramUtils] nanosvg           zlib         仅在 TelegramUtils/Svg/ 内部使用，
+                                                              随 TelegramUtils 整体排除。
 
 
 --------------------------------------------------------------------------------
-Bundled Third-Party Components (to be finalized)
+其他通过 CocoaPods 引入的依赖
 --------------------------------------------------------------------------------
 
-The following components ship inside this repository and require explicit
-attribution. The exact list and license obligations are pending final review;
-all entries below are placeholders that will be confirmed or removed.
-
-  [ ] SoundTouch                      LGPL v2.1   REMOVED from build (P5): podspec exclude_files.
-                                                  CWVoiceChangePlayCell voice-change disabled;
-                                                  pending replacement with AVAudioUnitTimePitch.
-  [!] TelegramUtils (Telegram iOS)    GPL v2      ACTIVE dependency — license incompatibility.
-                                                  Replacement in progress (P5 long-term).
-                                                  See TelegramUtils/README.md for component list.
-  [ ] Facebook POP                    BSD+Patents Used only inside TelegramUtils; removed when
-                                                  TelegramUtils replacement is complete.
-  [ ] nanosvg                         zlib        Used only inside TelegramUtils/Svg/.
-  [x] opencore-amr                    Apache 2.0  Compliant. Bundled as static .a in WuKongIMSDK.
+Podfile 声明的所有依赖（AFNetworking / SDWebImage / FMDB / MBProgressHUD /
+SSZipArchive / SocketRocket / Aspects / ReactiveObjC / Socket.IO-Client-Swift
+/ YBImageBrowser / YYImage / AsyncDisplayKit / libcmark_gfm / DoraemonKit /
+Bugly 等）均按各自上游协议发布，本项目不修改其源码。详见 Podfile.lock 与
+对应 pod 的 LICENSE 文件。
 
 
 ================================================================================

@@ -1,5 +1,3 @@
-// Copyright 2026 MININGLAMP Technology and the OCTO contributors
-// SPDX-License-Identifier: Apache-2.0
 //
 //  NSString+Extension.h
 //  03-大文件下载(合理)

@@ -9,19 +9,23 @@
 Pod::Spec.new do |s|
   s.name             = 'WuKongLogin'
   s.version          = '0.1.0'
-  s.summary          = 'Octo iOS login module — account registration, sign-in, and third-party auth.'
+  s.summary          = 'A short description of WuKongLogin.'
+
+# This description is used to generate tags and improve search results.
+#   * Think: What does it do? Why did you write it? What is the focus?
+#   * Try to keep it short, snappy and to the point.
+#   * Write the description between the DESC delimiters below.
+#   * Finally, don't worry about the indent, CocoaPods strips it!
 
   s.description      = <<-DESC
-WuKongLogin handles all authentication flows for the Octo iOS client:
-phone/email registration and sign-in, Apple Sign-In, and OIDC-based
-single sign-on. Designed to be drop-in replaceable for custom auth backends.
+TODO: Add long description of the pod here.
                        DESC
 
-  s.homepage         = 'https://github.com/Mininglamp-OSS/octo-ios'
+  s.homepage         = 'https://github.com/tangtaoit/WuKongLogin'
   # s.screenshots     = 'www.example.com/screenshots_1', 'www.example.com/screenshots_2'
-  s.license          = { :type => 'Apache-2.0', :file => 'LICENSE' }
-  s.author           = { 'MININGLAMP Technology' => 'https://github.com/Mininglamp-OSS' }
-  s.source           = { :git => 'https://github.com/Mininglamp-OSS/octo-ios', :tag => s.version.to_s }
+  s.license          = { :type => 'MIT', :file => 'LICENSE' }
+  s.author           = { 'tangtaoit' => 'tt@wukong.ai' }
+  s.source           = { :git => 'https://github.com/tangtaoit/WuKongLogin.git', :tag => s.version.to_s }
   # s.social_media_url = 'https://twitter.com/<TWITTER_USERNAME>'
 
   s.ios.deployment_target = '14.0'

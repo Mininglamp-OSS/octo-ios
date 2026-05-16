@@ -1,40 +1,37 @@
 # TelegramUtils
 
-> **⚠️ GPL v2 — License incompatibility under active resolution**
+> **⚠️ GPL v2 — 已从编译链整体排除（P5 完成）**
 
-This directory contains display-layer utilities derived from
-[Telegram iOS](https://github.com/TelegramMessenger/Telegram-iOS),
-which is licensed under **GNU GPL v2**.
+这个目录包含派生自 [Telegram iOS](https://github.com/TelegramMessenger/Telegram-iOS)
+的显示层工具代码，许可证为 **GNU GPL v2**。
 
-## Why it exists
+## 当前状态
 
-The Octo iOS client's message-cell rendering (context menus, animated
-stickers, gradient backgrounds, shimmer effects, image browser status
-indicators) was built on top of Telegram's `AsyncDisplayKit`-based
-node system. These are the components currently in use:
+✅ **本目录已通过 WuKongBase.podspec 的 `exclude_files` 从编译链中完全排除**。
+保留源文件仅为维持 GPL v2 归属声明（满足 §4(b)(d) 修改记录要求）。
 
-| Component | Used by |
-|---|---|
-| `ContextUI` / `ContextExtractedContentContainingNode` | `WKMessageCell` (long-press context menu) |
-| `RadialStatusNode` | `WKImageBrowser` (loading indicator) |
-| `GradientBackgroundNode` | `WKSpaceGateVC` (gradient background) |
-| `ShimmerEffect` | `WKStickerImageView` |
-| `AnimatedStickerNode` (TelegramAnimatedStickerNode) | `WKMessageStickerCell` (removed P5) |
+P5 阶段完成了所有外部消费组件的原生替换：
 
-## Replacement plan
+| 原 TelegramUtils 组件 | 替换为 | 位置 |
+|---|---|---|
+| `ContextExtractedContentContainingNode` | `WKContentContainerNode` | `Sections/Messages/` |
+| `ContextControllerSourceNode` | `WKGestureContainerNode` | `Sections/Messages/` |
+| `RadialStatusNode` | `WKRadialProgressView` | `Sections/Common/Component/` |
+| `StickerShimmerEffectNode` | `WKShimmerView` | `Sections/Common/Component/` |
+| `GradientBackgroundNode.generatePreview` | CoreGraphics CGGradient | `GenerateImageUtils.swift` |
+| `AnimatedStickerNode` (librlottie) | 已删除（消费方为死代码） | — |
+| `ContextController` (长按菜单) | 自定义 UIKit 实现 `showInlineMenuForCell` | `WKConversationContextImpl.m` |
 
-Tracked as **P5-long-term** in the open-source roadmap.
+## 不要做的事
 
-Replacements:
-- `ContextUI` → `UIContextMenuInteraction` (iOS 13+)
-- `RadialStatusNode` → `UIActivityIndicatorView` or custom CALayer
-- `GradientBackgroundNode` → `CAGradientLayer`
-- `ShimmerEffect` → `CAGradientLayer` animation
+- **不要新增任何 `#import` 引用本目录下的文件** —— CLAUDE.md 中有相关规范
+- 不要删除本目录或里面的 LICENSE 文件 —— 这是 GPL v2 归属义务要求
+- 如果发现项目里有任何残留对本目录符号的引用，意味着 podspec exclude_files
+  没生效或者编译会失败，应立刻报告
 
-Contributions for any of the above are very welcome — see
-[CONTRIBUTING.md](../../../../../../../../../../../CONTRIBUTING.md).
+## 已删除/排除的相关项
 
-## Do NOT add new dependencies
+- `librlottie` pod 依赖（LGPL）— 仅 `AnimatedStickerNode/` 使用，随排除
+- Facebook POP（BSD+Patents）— 仅 `RadialStatusNode/` 使用，随排除
+- nanosvg（zlib）— 仅 `Svg/` 使用，随排除
 
-New code **must not** import from this directory.
-See `CLAUDE.md` (repository root) for the enforcement rule.

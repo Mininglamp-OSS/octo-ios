@@ -15,10 +15,11 @@
 已知历史包袱（不要再往里加东西，优先逐步迁出）:
 
 - `Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/` ——
-  **GPL v2 代码（许可证不兼容，P5 长期替换中）**。
-  现有消费方（`WKMessageCell` / `WKImageBrowser` / `WKSpaceGateVC` / `WKStickerImageView`）
-  在替换完成前继续使用，但**任何新代码禁止 import 此目录下的符号**。
-  替换计划见 `TelegramUtils/README.md`。
+  **GPL v2 代码，已在 P5 完成全部外部消费组件替换并从 podspec 编译链中整体排除**
+  （见 `WuKongBase.podspec` 的 `exclude_files`）。
+  源文件仍保留在仓库中以维持 GPL v2 归属声明，但**任何新代码禁止 import 此目录下的符号**。
+  替换组件：WKShimmerView / WKRadialProgressView / WKGestureContainerNode / WKContentContainerNode。
+  详见 `TelegramUtils/README.md`。
 
 - `Modules/WuKongBase/WuKongBase/Classes/Vendor/SoundTouch/` ——
   **LGPL v2.1，已在 P5 从编译链中排除**（podspec `exclude_files`）。

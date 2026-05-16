@@ -1,5 +1,3 @@
-// Copyright 2026 MININGLAMP Technology and the OCTO contributors
-// SPDX-License-Identifier: Apache-2.0
 //
 //  WKConstant.h
 //  WuKongBase
@@ -448,6 +446,7 @@ static NSString *WKCMDSyncMessageReaction = @"syncMessageReaction"; // 同步消
 static NSString *WKCMDMessageEerase = @"messageEerase"; // 擦除消息
 static NSString *WKCMDSyncReminders = @"syncReminders"; // 同步提醒项
 static NSString *WKCMDSyncConversationExtra = @"syncConversationExtra"; // 同步最近会话扩展
+static NSString *WKCMDConversationDeleted = @"conversationDeleted"; // 最近会话被删除（如 web 端解散群后下发，对齐 web `module.tsx` "conversationDeleted" 分支）
 
 
 //RTC

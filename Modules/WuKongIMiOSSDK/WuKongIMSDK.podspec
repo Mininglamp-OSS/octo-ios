@@ -9,22 +9,23 @@
 Pod::Spec.new do |s|
   s.name             = 'WuKongIMSDK'
   s.version          = '1.1.0'
-  s.summary          = 'Octo IM protocol SDK for iOS — connection management, messaging and local storage.'
+  s.summary          = '悟空IM是一款简单，高效，支持完全私有化的即时通讯.'
 
 # This description is used to generate tags and improve search results.
+#   * Think: What does it do? Why did you write it? What is the focus?
+#   * Try to keep it short, snappy and to the point.
+#   * Write the description between the DESC delimiters below.
+#   * Finally, don't worry about the indent, CocoaPods strips it!
 
   s.description      = <<-DESC
-WuKongIMSDK is the IM protocol layer of the Octo iOS client.
-It manages the persistent TCP connection to the Octo server, handles
-message sending and receiving, local SQLite storage (FMDB), sequence
-synchronisation, heartbeat and auto-reconnect logic.
+悟空IM是一款简单，高效，支持完全私有化的即时通讯，提供群聊，点对点通讯解决方案.
                        DESC
 
-  s.homepage         = 'https://github.com/Mininglamp-OSS/octo-ios'
+  s.homepage         = 'https://github.com/WuKongIM/WuKongIMiOSSDK'
   # s.screenshots     = 'www.example.com/screenshots_1', 'www.example.com/screenshots_2'
-  s.license          = { :type => 'Apache-2.0', :file => 'LICENSE' }
-  s.author           = { 'MININGLAMP Technology' => 'https://github.com/Mininglamp-OSS' }
-  s.source           = { :git => "https://github.com/Mininglamp-OSS/octo-ios.git" }
+  s.license          = { :type => 'MIT', :file => 'LICENSE' }
+  s.author           = { 'tangtaoit' => 'tt@tgo.ai' }
+  s.source           = { :git => "https://github.com/WuKongIM/WuKongIMiOSSDK.git" }
   # s.social_media_url = 'https://twitter.com/<TWITTER_USERNAME>'
   s.platform     = :ios, '14.0'
   s.requires_arc = true

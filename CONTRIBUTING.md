@@ -56,7 +56,7 @@ Swift / C++ / Header 文件相同；Python / Shell 用 `#` 开头。
 
 ### 命名
 
-- Objective-C 类前缀：`WK*`（开源前会迁移到 `OCTO*`，请关注 P7 阶段公告）
+- Objective-C 类前缀：`WK*`（WuKong 系列模块沿用上游命名，遵循 MIT 协议保留）；主 App 内部新写的类可使用自有前缀
 - Swift 公开类型：与所属模块语义一致，无前缀
 - 资源、Asset Catalog 项命名使用 snake_case
 

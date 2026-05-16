@@ -1,5 +1,3 @@
-// Copyright 2026 MININGLAMP Technology and the OCTO contributors
-// SPDX-License-Identifier: Apache-2.0
 //
 //  UIViewController+YJKeyBoard.h
 //  一行代码解决iOS键盘遮挡问题

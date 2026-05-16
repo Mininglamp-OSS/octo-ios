@@ -9,20 +9,23 @@
 Pod::Spec.new do |s|
   s.name             = 'WuKongBase'
   s.version          = '0.1.0'
-  s.summary          = 'Octo iOS core module — chat UI, conversation list, notifications and common utilities.'
+  s.summary          = 'A short description of WuKongBase.'
+
+# This description is used to generate tags and improve search results.
+#   * Think: What does it do? Why did you write it? What is the focus?
+#   * Try to keep it short, snappy and to the point.
+#   * Write the description between the DESC delimiters below.
+#   * Finally, don't worry about the indent, CocoaPods strips it!
 
   s.description      = <<-DESC
-WuKongBase is the foundational module of the Octo iOS client.
-It provides the full chat experience: conversation list, message cells,
-input bar, voice/video, notifications, web view bridge, and shared
-utilities used across all other Octo modules.
+TODO: Add long description of the pod here.
                        DESC
 
-  s.homepage         = 'https://github.com/Mininglamp-OSS/octo-ios'
+  s.homepage         = 'https://github.com/tangtaoit/WuKongBase'
   # s.screenshots     = 'www.example.com/screenshots_1', 'www.example.com/screenshots_2'
-  s.license          = { :type => 'Apache-2.0', :file => 'LICENSE' }
-  s.author           = { 'MININGLAMP Technology' => 'https://github.com/Mininglamp-OSS' }
-  s.source           = { :git => 'https://github.com/Mininglamp-OSS/octo-ios', :tag => s.version.to_s }
+  s.license          = { :type => 'MIT', :file => 'LICENSE' }
+  s.author           = { 'tangtaoit' => 'tt@wukong.ai' }
+  s.source           = { :git => 'https://github.com/tangtaoit/WuKongBase.git', :tag => s.version.to_s }
   # s.social_media_url = 'https://twitter.com/<TWITTER_USERNAME>'
 
   s.ios.deployment_target = '14.0'
@@ -39,16 +42,15 @@ utilities used across all other Octo modules.
  
   s.private_header_files = 'WuKongBase/Classes/Vendor/**/*'
   s.source_files = 'WuKongBase/Classes/**/*'
-  # SoundTouch (LGPL v2.1) — excluded; replaced by no-op stub.
-  # TelegramUtils/AnimatedStickerNode + TelegramAnimatedStickerNode depend on
-  # librlottie (LGPL) which was removed in P5. External consumers (WKAnimatedStickerNode,
-  # WKMessageStickerCell) were already deleted. Exclude these subdirectories from
-  # compilation to avoid the missing librlottie import error.
+  # 排除许可证不兼容或已替换的代码（P5 处理）：
+  # - SoundTouch (LGPL v2.1) — 已用 no-op stub 替换变声功能
+  # - TelegramUtils (GPL v2) — 4 个外部消费组件已在 P5 全部替换为原生实现
+  #   (WKShimmerView/WKRadialProgressView/WKGestureContainerNode/WKContentContainerNode)，
+  #   现在 TelegramUtils 整个目录无任何外部 consumer，直接从编译链整体排除。
+  #   源文件保留在仓库内以维持 GPL v2 归属声明（见 TelegramUtils/LICENSE 与 README.md）。
   s.exclude_files = [
     'WuKongBase/Classes/Vendor/SoundTouch/**',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/AnimatedStickerNode/**',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/TelegramAnimatedStickerNode/**',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/AnimationCompression/**',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/**',
   ]
 #  s.preserve_paths = 'ios/arm/*.{a}'
 #   s.vendored_frameworks  = 'ios/WuKongIMSDK.framework'
@@ -104,7 +106,7 @@ utilities used across all other Octo modules.
 #  s.dependency 'VIMediaCache', '~> 0.4'
   s.dependency 'AsyncDisplayKit', '~> 1.0'
   s.dependency 'FPSCounter', '~> 4.1'
-  s.dependency 'librlottie', '~> 0.1'
+  # librlottie (LGPL) 已在 P5 移除 — 消费方 WKAnimatedStickerNode/WKMessageStickerCell 均为死代码
   s.dependency 'libcmark_gfm'
   s.dependency 'RiveRuntime', '~> 6.11'
   s.pod_target_xcconfig = {

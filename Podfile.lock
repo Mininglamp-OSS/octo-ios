@@ -55,7 +55,7 @@ PODS:
   - LBXScan/UI (2.5.1):
     - LBXScan/Types (~> 2.2)
   - libcmark_gfm (0.29.4)
-  - librlottie (0.1.7)
+  - librlottie (0.2.1)
   - libwebp (1.5.0):
     - libwebp/demux (= 1.5.0)
     - libwebp/mux (= 1.5.0)
@@ -168,7 +168,6 @@ DEPENDENCIES:
   - DoraemonKit/Core (~> 3.1.2)
   - DoraemonKit/WithGPS (~> 3.1.2)
   - libcmark_gfm
-  - librlottie (from `https://github.com/tangtaoit/librlottie.git`)
   - ReactiveObjC
   - Socket.IO-Client-Swift
   - SocketRocket
@@ -197,6 +196,7 @@ SPEC REPOS:
     - GZIP
     - LBXScan
     - libcmark_gfm
+    - librlottie
     - libwebp
     - lottie-ios
     - M80AttributedLabel
@@ -223,8 +223,6 @@ SPEC REPOS:
 EXTERNAL SOURCES:
   AsyncDisplayKit:
     :git: https://github.com/tangtaoit/AsyncDisplayKit.git
-  librlottie:
-    :git: https://github.com/tangtaoit/librlottie.git
   WuKongBase:
     :path: "./Modules/WuKongBase"
   WuKongContacts:
@@ -244,9 +242,6 @@ CHECKOUT OPTIONS:
   AsyncDisplayKit:
     :commit: 3f2a0b8f5069ddefd53cf4796da22eec105c5c7c
     :git: https://github.com/tangtaoit/AsyncDisplayKit.git
-  librlottie:
-    :commit: bed3cfe62cdb77d728adfe76893ff51b69c05e08
-    :git: https://github.com/tangtaoit/librlottie.git
   YBImageBrowser:
     :commit: 9e888bf25f8774f9b084ba3d26d5794cb68aeb0c
     :git: https://github.com/tangtaoit/YBImageBrowser.git
@@ -270,7 +265,7 @@ SPEC CHECKSUMS:
   GZIP: 3c0abf794bfce8c7cb34ea05a1837752416c8868
   LBXScan: 90ca10d0c38fb4a5a6980d7782354f3f69f50093
   libcmark_gfm: aed11fc48515bec53902b0fd4cddcbd42b5e94c2
-  librlottie: b1439ecf2d19dc5db01b9fe94975548863c56cc7
+  librlottie: 31aadd1f842008260fa7387f7fcb837b2fabeeea
   libwebp: 02b23773aedb6ff1fd38cec7a77b81414c6842a8
   lottie-ios: a50d5c0160425cd4b01b852bb9578963e6d92d31
   M80AttributedLabel: 77fedfe63804c989a6de0fa4d400ea8cad3ab441
@@ -291,16 +286,16 @@ SPEC CHECKSUMS:
   Toast: 1f5ea13423a1e6674c4abdac5be53587ae481c4e
   TOCropViewController: da59f531f8ac8a94ef6d6c0fc34009350f9e8bfe
   TZImagePickerController: 2cad3db94ba70eb947d26c10ff5c66c9a93798c8
-  WuKongBase: 9f55790121719625134250c015c5299f28970c34
-  WuKongContacts: e668fd9c42bfca351d07dcbc754cd0ab5f8c6a2c
-  WuKongDataSource: 9dd2dd21b5380fce636208fa7c40d539c9c9bc88
-  WuKongIMSDK: 38f7e8762543790e7d8fe42f0278886c8173855f
-  WuKongLogin: 1b69a9787043f01d5ca95d7c8f77f670826eaa3a
+  WuKongBase: deda4f51189b53953e2e0247727aa8518c0d9d9c
+  WuKongContacts: 8401d54a9fb6c7a82c09a91cb5ea6072cea7b329
+  WuKongDataSource: bc96d433dda17d92952c92281de9ed28972ff7fe
+  WuKongIMSDK: 3133f0bc3c035677992b985571a9e20a5cc65f99
+  WuKongLogin: 99de53506b86712adb2535ffb82bf0380043926b
   YBImageBrowser: 7ecc8bf33ffa5f3b94c397c29b4f3638dd37f527
   YYImage: 6db68da66f20d9f169ceb94dfb9947c3867b9665
   ZLImageEditor: ee86f044fb7c5dec6b5de49eb7bb6fd42286f2ae
   ZLPhotoBrowser: 6fb0eff03c8269001e29ef233e7bdab0691e05fe
 
-PODFILE CHECKSUM: bd9921c237a334cbf398158592e57d98054119ea
+PODFILE CHECKSUM: 3b9d77d8cd49e97edd629d9a727ddd7c3abac358
 
 COCOAPODS: 1.16.2

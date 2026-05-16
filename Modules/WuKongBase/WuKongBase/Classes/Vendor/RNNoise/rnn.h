@@ -1,5 +1,3 @@
-// Copyright 2026 MININGLAMP Technology and the OCTO contributors
-// SPDX-License-Identifier: Apache-2.0
 /* Copyright (c) 2017 Jean-Marc Valin */
 /*
    Redistribution and use in source and binary forms, with or without

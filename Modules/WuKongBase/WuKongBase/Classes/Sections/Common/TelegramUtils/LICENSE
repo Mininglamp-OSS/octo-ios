@@ -9,19 +9,27 @@ The original source is available at:
 https://github.com/TelegramMessenger/Telegram-iOS
 
 ============================================================
-IMPORTANT — LICENSE COMPATIBILITY NOTICE
+CURRENT STATUS — EXCLUDED FROM BUILD
 ============================================================
 
-This GPL v2 code is currently bundled inside the Octo iOS project
-(Apache License 2.0). This creates a known license incompatibility.
+This GPL v2 code has been completely excluded from the Octo iOS build
+via WuKongBase.podspec's `exclude_files`. Source files are retained in
+the repository solely to preserve the GPL v2 attribution required by
+sections 4(b) and 4(d) of the license.
 
-Status: PENDING REPLACEMENT (tracked as P5 in the open-source
-preparation roadmap). The plan is to replace all TelegramUtils
-display-layer usage with native UIKit/SwiftUI equivalents.
+All four external consumer components have been replaced with native
+UIKit / CoreGraphics implementations during the P5 phase:
 
-Until the replacement is complete, this directory MUST NOT be
-treated as Apache 2.0 code. The GPL v2 obligations apply to the
-portions of the project that link against this code.
+  ContextExtractedContentContainingNode → WKContentContainerNode
+  ContextControllerSourceNode           → WKGestureContainerNode
+  RadialStatusNode                      → WKRadialProgressView
+  StickerShimmerEffectNode              → WKShimmerView
+  GradientBackgroundNode (preview)      → CoreGraphics CGGradient
+  ContextController (long-press menu)   → custom showInlineMenuForCell
 
-Contributors: please do NOT add new dependencies on this directory.
-See CONTRIBUTING.md for guidance.
+See README.md in this directory for details.
+
+If a future change re-introduces a build-time dependency on any file
+in this directory, the project will lose its Apache 2.0 license clarity
+and revert to a GPL v2 obligation. Please open an issue first.
+
