@@ -89,7 +89,12 @@ TODO: Add long description of the pod here.
 #   s.xcconfig = { "OTHER_LDFLAGS" => "-ObjC" }
 #  s.vendored_libraries = 'WuKongBase/WuKongIMSDK-Framework/ios/*.{a}'
 #  s.resource  = 'WuKongBase/WuKongIMSDK-Framework/ios/WuKongIMSDK.framework/Versions/A/Resources/WuKongIMSDK.bundle'
-  s.vendored_frameworks = 'WuKongBase/Bugly.framework'
+  # Bugly.framework 是腾讯闭源 SDK，开源版默认不附带（避免分发闭源二进制 + 减小仓库体积）。
+  # 仅当用户把 Bugly.framework 放回 WuKongBase/Bugly.framework/ 时，自动加入编译。
+  # Podfile 会检测同样条件并设置 OCTO_ENABLE_BUGLY=1 预处理宏。
+  if File.exist?(File.expand_path('WuKongBase/Bugly.framework', __dir__))
+    s.vendored_frameworks = 'WuKongBase/Bugly.framework'
+  end
 #  s.libraries = 'opencore-amrnb', 'opencore-amrwb','vo-amrwbenc', 'sqlite3', 'stdc++','xml2'
   s.libraries = 'c++','stdc++'
 #  s.dependency 'FLEX'

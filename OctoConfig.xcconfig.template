@@ -27,10 +27,19 @@
 APPLE_TEAM_ID = YOUR_TEAM_ID
 
 
-// ── Bugly 崩溃 + 卡顿采集（腾讯）──────────────────────────────────────────
+// ── Bugly 崩溃 + 卡顿采集（腾讯，闭源 SDK）─────────────────────────────────
 // 控制台：https://bugly.qq.com
+// 开源版默认不附带 Bugly.framework（闭源二进制，11MB）。如需启用：
+//   1. 到 https://bugly.qq.com 注册账号、创建应用、下载 Bugly iOS SDK
+//   2. 解压得到 Bugly.framework，放到：
+//        Modules/WuKongBase/WuKongBase/Bugly.framework/
+//   3. 把下面的 OCTO_BUGLY_APP_ID_MAIN 填入你在 Bugly 控制台拿到的 AppId
+//   4. 重新 pod install
+//      Podfile 会自动检测：framework 文件存在 + AppId 已配置 → 启用编译，
+//      OCTO_ENABLE_BUGLY=1 宏会被注入到 WuKongBase 和主 App target。
+// 任一条件不满足都会跳过 Bugly，不会编译失败。
+//
 // 项目当前在两处分别启动 Bugly（主 App 入口 + WuKongBase 内部）。
-// 若不需要 Bugly，留空即可，启动时会跳过。
 
 OCTO_BUGLY_APP_ID_MAIN = YOUR_BUGLY_APP_ID
 OCTO_BUGLY_APP_ID_SDK  = YOUR_BUGLY_APP_ID

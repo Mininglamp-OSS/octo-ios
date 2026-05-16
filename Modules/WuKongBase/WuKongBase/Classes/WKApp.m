@@ -96,7 +96,10 @@
 #import "WKKeyboardService.h"
 #import <ZLPhotoBrowser/ZLPhotoBrowser-Swift.h>
 #import "WKSDWebImageDownloaderOperation.h"
+// Bugly (腾讯崩溃统计) 是闭源 SDK。开源版默认禁用，启用方式见 AppDelegate.m 头部说明。
+#ifdef OCTO_ENABLE_BUGLY
 #import <Bugly/Bugly.h>
+#endif
 #import "WKMyInviteCodeVC.h"
 #import "WKProhibitwordsService.h"
 // #import "WKANRWatchdog.h"  // Disabled: 调试期完成使命，见 CLAUDE.md
@@ -249,6 +252,7 @@ static WKApp *_instance;
 }
 
 -(void) traceConfig {
+#ifdef OCTO_ENABLE_BUGLY
     BuglyConfig *config = [[BuglyConfig alloc] init];
 #ifndef __OPTIMIZE__ // DEBUG模式
     config.debugMode = false;
@@ -257,7 +261,7 @@ static WKApp *_instance;
 #else
     config.reportLogLevel = BuglyLogLevelWarn;
 #endif
-    
+
     NSString *buglyAppIdSDK = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOBuglyAppIdSDK"];
     if (buglyAppIdSDK.length > 0) {
         [Bugly startWithAppId:buglyAppIdSDK config:config];
@@ -265,6 +269,7 @@ static WKApp *_instance;
     if([WKApp shared].isLogined) {
         [Bugly setUserIdentifier: [WKApp shared].loginInfo.uid];
     }
+#endif
 }
 
 -(void) debugSetting {

@@ -45,6 +45,44 @@ post_install do |installer|
         end
     end
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Bugly 动态启用：仅当 OctoConfig.xcconfig 里 OCTO_BUGLY_APP_ID_MAIN
+    # 填了真实值（不是占位符）+ Modules/WuKongBase/WuKongBase/Bugly.framework/
+    # 文件存在时，自动开启 OCTO_ENABLE_BUGLY 预处理宏。
+    # podspec 那边已经 conditionally vendored_frameworks（同一条件）。
+    # ─────────────────────────────────────────────────────────────────────
+    bugly_app_id = octo_config['OCTO_BUGLY_APP_ID_MAIN'].to_s
+    bugly_placeholder = bugly_app_id.empty? || bugly_app_id == 'YOUR_BUGLY_APP_ID'
+    bugly_framework_path = File.expand_path('Modules/WuKongBase/WuKongBase/Bugly.framework', __dir__)
+    bugly_enabled = !bugly_placeholder && File.exist?(bugly_framework_path)
+    puts "Bugly: #{bugly_enabled ? 'ENABLED (framework + AppId 都已配置)' : 'DISABLED (缺 framework 或未配置 AppId)'}"
+
+    bugly_consumer_targets = %w[WuKongBase]
+    aggregate_user_targets = installer.aggregate_targets.map(&:user_targets).flatten.map(&:name)
+    installer.pods_project.targets.each do |target|
+        next unless bugly_consumer_targets.include?(target.name)
+        target.build_configurations.each do |config|
+            defs = Array(config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'])
+            defs = ['$(inherited)'] if defs.empty?
+            defs.reject! { |d| d == 'OCTO_ENABLE_BUGLY=1' }
+            defs << 'OCTO_ENABLE_BUGLY=1' if bugly_enabled
+            config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = defs
+        end
+    end
+    # 也给主 App target (OctoiOS) 注入相同的宏
+    user_project_for_bugly = installer.aggregate_targets[0].user_project
+    user_project_for_bugly.targets.each do |target|
+        next unless target.name == 'OctoiOS' || target.name == 'TangSengDaoDaoiOS'
+        target.build_configurations.each do |config|
+            defs = Array(config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'])
+            defs = ['$(inherited)'] if defs.empty?
+            defs.reject! { |d| d == 'OCTO_ENABLE_BUGLY=1' }
+            defs << 'OCTO_ENABLE_BUGLY=1' if bugly_enabled
+            config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = defs
+        end
+    end
+    user_project_for_bugly.save
+
     # 把 OctoConfig.xcconfig 软引用注入到每一个 Pods xcconfig
     octo_include_line = "#include? \"../../OctoConfig.xcconfig\"\n"
     Dir.glob(File.join(__dir__, 'Pods/Target Support Files/**/*.xcconfig')).each do |xcconfig|

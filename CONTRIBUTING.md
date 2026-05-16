@@ -70,7 +70,34 @@ Swift / C++ / Header 文件相同；Python / Shell 用 `#` 开头。
 
 - 不要把日志写完整 token / 密码 / userInfo 字典 — 见 [P0 提交记录](https://github.com/) 关于敏感日志的清理
 - 不要给 `NSObject` / `UIView` / `NSNotificationCenter` 这种基类做 swizzle，详见 [CLAUDE.md 中的 Swizzle/+load 白名单规范](./CLAUDE.md)
-- 不要让任何线上分支保留 `NSAllowsArbitraryLoads = YES`（应改为按域名白名单）
+
+### 关于 ATS (App Transport Security)
+
+`TangSengDaoDao/Info.plist` 中 `NSAllowsArbitraryLoads = YES` 是**有意保留**的设置，
+原因：
+- **聊天消息中的图片 URL** 来自任意域名，无法预先限定 HTTPS
+- **用户自部署 IM 服务器** 可能没有 TLS 证书（本地局域网部署场景）
+- **WebView 加载第三方网页** 时同样需要支持 HTTP
+
+如果你的部署环境能保证所有出站流量都走 HTTPS（例如企业内 CDN 已统一），
+建议在你的 fork 中改用 `NSExceptionDomains` 白名单方案：
+
+```xml
+<key>NSAppTransportSecurity</key>
+<dict>
+    <key>NSExceptionDomains</key>
+    <dict>
+        <key>your.cdn.example.com</key>
+        <dict>
+            <key>NSExceptionAllowsInsecureHTTPLoads</key>
+            <true/>
+        </dict>
+    </dict>
+</dict>
+```
+
+App Store 审核接受 `NSAllowsArbitraryLoads = YES`，前提是你在提审备注里
+说明 IM 类应用的合理用途（聊天图片、自部署服务器）。
 
 ---
 

@@ -19,7 +19,13 @@
 #import "SELUpdateAlert.h"
 #import "WKDBRepairViewController.h"
 #import <WuKongIMSDK/WKDB.h>
+// Bugly (腾讯崩溃统计) 是闭源 SDK。开源版默认禁用，用户如需启用：
+// 1. 把 Bugly.framework 放到 Modules/WuKongBase/WuKongBase/Bugly.framework/
+// 2. WuKongBase.podspec 加回 s.vendored_frameworks = 'WuKongBase/Bugly.framework'
+// 3. OctoConfig.xcconfig 加 GCC_PREPROCESSOR_DEFINITIONS = $(inherited) OCTO_ENABLE_BUGLY=1
+#ifdef OCTO_ENABLE_BUGLY
 #import <Bugly/Bugly.h>
+#endif
 #import <WebKit/WebKit.h>
 
 #ifdef DEBUG
@@ -76,7 +82,8 @@
     [[DoraemonManager shareInstance] installWithPid:@""];
 #endif
 
-    // Bugly 崩溃 + 卡顿采集
+    // Bugly 崩溃 + 卡顿采集（开源默认禁用，见上方 #ifdef OCTO_ENABLE_BUGLY 说明）
+#ifdef OCTO_ENABLE_BUGLY
     BuglyConfig *buglyConfig = [[BuglyConfig alloc] init];
     buglyConfig.channel = @"TestFlight";
     buglyConfig.blockMonitorEnable = YES;       // 开启卡顿监控
@@ -85,6 +92,7 @@
     if (buglyAppId.length > 0) {
         [Bugly startWithAppId:buglyAppId config:buglyConfig];
     }
+#endif
 
     // 预热 WKWebView：首次初始化会启动 WebKit 进程（~200-500ms），
     // 提前在启动时完成，后续聊天中表格渲染不再卡顿
@@ -307,6 +315,7 @@
 
 /// 设置 Bugly 用户标识（参考 Android WKBaseApplication + LoginModel）
 - (void)updateBuglyUserId {
+#ifdef OCTO_ENABLE_BUGLY
     NSString *shortNo = [WKApp shared].loginInfo.extra[@"short_no"];
     NSString *uid = [WKApp shared].loginInfo.uid;
     NSString *name = [WKApp shared].loginInfo.extra[@"name"];
@@ -324,6 +333,7 @@
     if (name.length > 0) {
         [Bugly setUserValue:name forKey:@"name"];
     }
+#endif
 }
 
 @end
