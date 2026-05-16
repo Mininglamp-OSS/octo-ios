@@ -52,7 +52,24 @@ TODO: Add long description of the pod here.
   s.exclude_files = [
     'WuKongBase/Classes/Vendor/SoundTouch/**/*',
     'WuKongBase/Classes/Vendor/LegacyComponents/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/**/*',
+    # TelegramUtils 排除：依赖已断链子目录（librlottie / ContextUI / POP / 其他）
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/AnimatedStickerNode/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/TelegramAnimatedStickerNode/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/AnimationCompression/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/LiMaoMock/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/ReactionSelectionNode/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/ContextUI/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/TextSelectionNode/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/LegacyComponents/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/RadialStatusNode/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/ShimmerEffect/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/GradientBackground/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/MetalImageView/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/MediaResources/**/*',
+    # 保留编译：Display (含 TapLongTapOrDoubleTapGestureRecognizer) + 它依赖的支撑模块
+    # SwiftSignalKit / AppBundle / Utils / ObjCRuntimeUtils / UIKitRuntimeUtils / Markdown
+    # / GZip / Svg / ManagedFile / AnimatedCountLabelNode / AnimatedNavigationStripeNode
+    # / TelegramUIPreferences / Others / YuvConversion
   ]
 #  s.preserve_paths = 'ios/arm/*.{a}'
 #   s.vendored_frameworks  = 'ios/WuKongIMSDK.framework'

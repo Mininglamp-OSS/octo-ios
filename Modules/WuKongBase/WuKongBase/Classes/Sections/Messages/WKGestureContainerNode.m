@@ -25,6 +25,9 @@
     _longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLongPress:)];
     _longPress.minimumPressDuration = 0.4;
     _longPress.delegate = self;
+    // 不消费触摸事件，让 UINavigationController.interactivePopGestureRecognizer
+    // 右滑返回手势能正常收到触摸（修复 P5 重写引入的回归）
+    _longPress.cancelsTouchesInView = NO;
     [self.view addGestureRecognizer:_longPress];
 }
 
@@ -60,6 +63,18 @@
     if (_shouldBeginBlock) {
         return _shouldBeginBlock(point);
     }
+    return YES;
+}
+
+/// 让 pan 类手势（含导航控制器右滑返回、列表滚动）优先生效。
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    return [otherGestureRecognizer isKindOfClass:[UIPanGestureRecognizer class]];
+}
+
+/// 允许与其它 cell 内部手势同时识别（不抢占）。
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
     return YES;
 }
 
