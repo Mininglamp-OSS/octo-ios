@@ -1,3 +1,5 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 /*
 * Copyright (c) 2018 Samsung Electronics Co., Ltd. All rights reserved.
 *

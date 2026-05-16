@@ -1,3 +1,5 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 //
 //  WKRocketEffect.m → 「炸弹」— 参考游戏引擎多层粒子爆炸
 //

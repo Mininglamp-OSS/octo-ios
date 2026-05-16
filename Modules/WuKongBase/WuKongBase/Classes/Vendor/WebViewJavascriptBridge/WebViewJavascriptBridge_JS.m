@@ -1,3 +1,5 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 // This file contains the source for the Javascript side of the
 // WebViewJavascriptBridge. It is plaintext, but converted to an NSString
 // via some preprocessor tricks.

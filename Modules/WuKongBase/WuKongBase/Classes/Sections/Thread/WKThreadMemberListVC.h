@@ -1,3 +1,5 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 #import "WKBaseVC.h"
 
 NS_ASSUME_NONNULL_BEGIN

@@ -1,3 +1,5 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 #import <Foundation/Foundation.h>
 #import <AVFoundation/AVFoundation.h>
 @protocol Mp3RecorderDelegate <NSObject>

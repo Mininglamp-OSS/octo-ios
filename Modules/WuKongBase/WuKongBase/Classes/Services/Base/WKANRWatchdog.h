@@ -1,3 +1,5 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 //  WKANRWatchdog.h — 主线程卡死检测（临时调试工具，上线前删除）
 
 #import <Foundation/Foundation.h>

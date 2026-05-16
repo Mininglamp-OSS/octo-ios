@@ -1,3 +1,5 @@
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
+// SPDX-License-Identifier: Apache-2.0
 // The MIT License (MIT)
 //
 // Copyright (c) 2014 Suyeol Jeon (http:xoul.kr)
