@@ -3,7 +3,7 @@
 //  ATIMExample
 //
 //  Created by chenyisi on 15/12/10.
-//  Copyright © 2015年 qiyunxin. All rights reserved.
+//  Copyright 2026 MININGLAMP Technology and the OCTO contributors
 //
 
 #import <UIKit/UIKit.h>

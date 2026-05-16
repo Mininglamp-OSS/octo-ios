@@ -258,7 +258,10 @@ static WKApp *_instance;
     config.reportLogLevel = BuglyLogLevelWarn;
 #endif
     
-    [Bugly startWithAppId:@"82f8dd98ff" config:config];
+    NSString *buglyAppIdSDK = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOBuglyAppIdSDK"];
+    if (buglyAppIdSDK.length > 0) {
+        [Bugly startWithAppId:buglyAppIdSDK config:config];
+    }
     if([WKApp shared].isLogined) {
         [Bugly setUserIdentifier: [WKApp shared].loginInfo.uid];
     }
@@ -289,7 +292,7 @@ static WKApp *_instance;
 }
 
 -(BOOL) appContinueUserActivity:(NSUserActivity *)userActivity restorationHandler:(void (^)(NSArray<id<UIUserActivityRestoring>> * _Nullable))restorationHandler {
-    // 实名认证回跳不走 Universal Link (YUJ-396 Round 2 / Jerry-Xin #112 blocking 2):
+    // 实名认证回跳不走 Universal Link (Round 2 / blocking 2):
     // Aegis return_to 统一走 `octo://verified` 自定义 scheme (由
     // appDidOpenURL:options: 处理), 本入口不再识别 Aegis host 的 web URL。
     // 调用 isVerifiedCallbackURL: 仍然保留做防御（万一老版本 Aegis 回跳
@@ -1523,7 +1526,7 @@ static WKApp *_instance;
             vc.groupAvatar = result.data[@"avatar"] ?: @"";
             vc.memberCount = [result.data[@"member_count"] integerValue];
             vc.isMember = [result.data[@"is_member"] boolValue];
-            // YUJ-141: 扫码/邀请链接携带的目标 Space 上下文（后端契约：space_id / space_name）。
+            // : 扫码/邀请链接携带的目标 Space 上下文（后端契约：space_id / space_name）。
             // 允许字段缺失 — 缺失时走 legacy 同 Space 路径，不弹切换 dialog。
             vc.targetSpaceId = [result.data[@"space_id"] isKindOfClass:[NSString class]] ? result.data[@"space_id"] : nil;
             vc.targetSpaceName = [result.data[@"space_name"] isKindOfClass:[NSString class]] ? result.data[@"space_name"] : nil;

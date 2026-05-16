@@ -26,7 +26,7 @@ static NSString *const kMemberSourceSpaceIdExtraKey = @"source_space_id";
     WKChannel *channel = [WKChannel channelID:channelId channelType:channelType];
     WKChannelInfo *info = [[WKChannelInfoDB shared] queryChannelInfo:channel];
     if (!info || !info.extra) return nil;
-    // 依赖 EP1（YUJ-92）在 channelInfo.extra 中持久化 `space_id` 字段。
+    // 依赖 EP1（）在 channelInfo.extra 中持久化 `space_id` 字段。
     // EP1 合并前此处恒为 nil，SpaceFilter 会 fail-open 降级到白名单。
     id value = info.extra[kChannelSpaceIdExtraKey];
     if ([value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0) {
@@ -44,7 +44,7 @@ static NSString *const kMemberSourceSpaceIdExtraKey = @"source_space_id";
     WKChannel *channel = [WKChannel channelID:channelId channelType:channelType];
     WKChannelMember *member = [[WKChannelMemberDB shared] get:channel memberUID:myUID];
     if (!member || !member.extra) return nil;
-    // 依赖 EP1（YUJ-92）在 WKGroupMemberModel.toChannelMember 中把
+    // 依赖 EP1（）在 WKGroupMemberModel.toChannelMember 中把
     // `source_space_id` 写入 member.extra。EP1 合并前此处恒为 nil，
     // WKSpaceFilter 会 fail-open 降级到 WKConversationListVM 的
     // syncedGroupChannelIds 白名单兜底，行为等价当前 develop。

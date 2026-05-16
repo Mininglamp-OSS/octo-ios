@@ -43,9 +43,9 @@ gh pr create --repo Mininglamp-OSS/octo-ios \
   --base main --head develop \
   --title "release: v1.x.y" \
   --body "本次发版内容：
-- YUJ-209 / YUJ-215 外部群 SpaceFilter + 缓存污染修复
-- YUJ-210 气泡 @SpaceName 不截断
-- YUJ-213 扫码入群 Toast
+- internal-ref 外部群 SpaceFilter + 缓存污染修复
+-  气泡 @SpaceName 不截断
+-  扫码入群 Toast
 - ...（列 merged PR / YUJ 编号）"
 ```
 

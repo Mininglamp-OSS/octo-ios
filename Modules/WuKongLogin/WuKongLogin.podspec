@@ -21,11 +21,11 @@ Pod::Spec.new do |s|
 TODO: Add long description of the pod here.
                        DESC
 
-  s.homepage         = 'https://github.com/tangtaoit/WuKongLogin'
+  s.homepage         = 'https://github.com/Mininglamp-OSS/octo-ios'
   # s.screenshots     = 'www.example.com/screenshots_1', 'www.example.com/screenshots_2'
-  s.license          = { :type => 'MIT', :file => 'LICENSE' }
-  s.author           = { 'tangtaoit' => 'tt@wukong.ai' }
-  s.source           = { :git => 'https://github.com/tangtaoit/WuKongLogin.git', :tag => s.version.to_s }
+  s.license          = { :type => 'Apache-2.0', :file => 'LICENSE' }
+  s.author           = { 'MININGLAMP Technology' => 'https://github.com/Mininglamp-OSS' }
+  s.source           = { :git => 'https://github.com/Mininglamp-OSS/octo-ios', :tag => s.version.to_s }
   # s.social_media_url = 'https://twitter.com/<TWITTER_USERNAME>'
 
   s.ios.deployment_target = '14.0'

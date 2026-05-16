@@ -10,7 +10,6 @@
 static NSString * const kWKCustomServerIPKey   = @"WKCustomServerIP";
 static NSString * const kWKCustomHttpsOnKey    = @"WKCustomHttpsOn";
 static NSString * const kWKServerHistoryKey    = @"WKServerHistory";
-static NSString * const kDefaultServerIP       = @"api.example.com";
 
 @implementation WKServerConfig
 
@@ -19,7 +18,8 @@ static NSString * const kDefaultServerIP       = @"api.example.com";
     if (customIP.length > 0) {
         return customIP;
     }
-    return kDefaultServerIP;
+    NSString *defaultHost = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOIMDefaultHost"];
+    return defaultHost ?: @"";
 }
 
 + (BOOL)httpsOn {
@@ -47,11 +47,12 @@ static NSString * const kDefaultServerIP       = @"api.example.com";
 #pragma mark - 历史记录
 
 + (NSArray<NSDictionary *> *)presetServers {
-    return @[
-        @{@"ip": @"api.example.com",      @"https": @(YES), @"label": @"国内正式版"},
-        @{@"ip": @"api-test.example.com",  @"https": @(YES), @"label": @"国内测试版"},
-        @{@"ip": @"api-test.example.com",          @"https": @(YES), @"label": @"国际版"},
-    ];
+    NSString *host  = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOIMDefaultHost"];
+    NSString *label = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOIMDefaultLabel"];
+    if (host.length == 0) {
+        return @[];
+    }
+    return @[@{@"ip": host, @"https": @(YES), @"label": label ?: host}];
 }
 
 + (NSArray<NSDictionary *> *)serverHistory {

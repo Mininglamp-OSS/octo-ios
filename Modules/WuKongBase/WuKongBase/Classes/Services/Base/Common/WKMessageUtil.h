@@ -18,7 +18,7 @@ NS_ASSUME_NONNULL_BEGIN
 +(WKReaction*) toReaction:(NSDictionary*)dataDict;
 
 /**
- YUJ-131 — populate a decoded WKReply with the four external-group fields
+ — populate a decoded WKReply with the four external-group fields
  carried on the reply sub-dict (`from_home_space_id`, `from_home_space_name`,
  `from_is_external`, `from_source_space_name`). The naming mirrors the
  msg-level fields handled in +toMessage: so UI layers can use a single

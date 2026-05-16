@@ -18,9 +18,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 +(WKGroupType) groupType:(WKChannelInfo*)channelInfo;
 
-#pragma mark - 实名认证徽章（YUJ-381 / dmwork-web#1169 Phase A）
+#pragma mark - 实名认证徽章（/ Phase A）
 
-/// Tri-state 读取 extra[@"realname_verified"]（YUJ-384 P1-2 修复）：
+/// Tri-state 读取 extra[@"realname_verified"]（P1-2 修复）：
 ///   - @YES：字段显式为真（数值 1 / @YES / "1" / "true" / "YES"）
 ///   - @NO ：字段显式为假（0 / "0" / "false" 等）
 ///   - nil ：字段缺失 / NSNull / 非 NSDictionary 输入

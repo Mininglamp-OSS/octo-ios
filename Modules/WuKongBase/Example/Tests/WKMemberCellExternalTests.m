@@ -2,11 +2,11 @@
 //  WKMemberCellExternalTests.m
 //  LiMaoBase_Tests
 //
-//  YUJ-190 — 群成员面板外部成员 @SpaceName 换行显示单元测试。
+//  — 群成员面板外部成员 @SpaceName 换行显示单元测试。
 //
 //  参考：
-//    - WKMentionUserCellTests (YUJ-135) — 同款 viewer-relative 规则 + 复用测试模式
-//    - Android PR#141 (YUJ-184) — @SpaceName 换行到第二行，企微样式对齐
+//    - WKMentionUserCellTests () — 同款 viewer-relative 规则 + 复用测试模式
+//    - Android PR#141 () — @SpaceName 换行到第二行，企微样式对齐
 //    - Web PR#1013 — @SpaceName 后缀数据规则
 //
 //  覆盖 3 个场景：
@@ -73,7 +73,7 @@
     UILabel *lbl = [self nameLbl];
     XCTAssertNotNil(lbl.attributedText);
     XCTAssertGreaterThan(lbl.attributedText.length, 0);
-    // YUJ-190 关键断言：@SpaceName 前必须是换行符而不是空格，防止 tail truncate 折断 SpaceName
+    // 关键断言：@SpaceName 前必须是换行符而不是空格，防止 tail truncate 折断 SpaceName
     NSString *visible = lbl.attributedText.string;
     XCTAssertTrue([visible containsString:@"\n@OctoWork"],
                   @"expected '\\n@OctoWork' suffix, got: %@", visible);

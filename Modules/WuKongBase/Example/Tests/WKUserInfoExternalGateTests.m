@@ -2,13 +2,13 @@
 //  WKUserInfoExternalGateTests.m
 //  WuKongBase_Tests
 //
-//  YUJ-137 (iOS P1) — DM gate unit tests, parallel to web
+//  (iOS P1) — DM gate unit tests, parallel to web
 //  `UserInfoExternalHint.test.tsx` (PR #1021) and Android UserDetail
 //  viewer-relative DM suppression.
 //
 //  Only the gate is exercised here; button / label layout lives in
 //  WKUserInfoVC and is verified via Simulator screenshots (see
-//  attached QA evidence on YUJ-137).
+//  attached QA evidence on ).
 //
 
 @import XCTest;
@@ -72,7 +72,7 @@
 
 #pragma mark - 4. Legacy-only fallback: channelInfo.extra carries
 //                 is_external=1 and no group-member context → hide DM.
-//                 Guards against the YUJ-137 backend-rollout window where
+//                 Guards against the backend-rollout window where
 //                 /users/{uid} still writes legacy keys.
 
 - (void)testLegacyChannelInfoFallback_HidesDM_WhenNoMemberExtras {
@@ -88,7 +88,7 @@
     XCTAssertTrue(hide, @"无群成员上下文时应按 channelInfo 的 legacy is_external 降级判定");
 }
 
-#pragma mark - YUJ-206 Space-mode 免好友短路分支（shouldUseSpaceModeSendMessage）
+#pragma mark - Space-mode 免好友短路分支（shouldUseSpaceModeSendMessage）
 //                 锁定优先级：external hint > self > Space-mode 非bot → sendMsg
 //                 > Space-mode bot > 非Space-mode follow
 

@@ -34,7 +34,7 @@
 
 @property(nonatomic,strong) UIButton *moreButtonItem; // 顶部右边更多按钮
 
-@property(nonatomic,strong) UIButton *copyInviteBtn; // 复制邀请链接按钮（YUJ-97）
+@property(nonatomic,strong) UIButton *copyInviteBtn; // 复制邀请链接按钮（）
 @property(nonatomic,copy) NSString *inviteUrl; // 跨 Space 邀请链接（v2 外部群入群入口）
 
 
@@ -63,7 +63,7 @@
     
     [self.qrcodeBoxView addSubview:self.remarkLbl];
 
-    // YUJ-97: 复制邀请链接按钮，挂在 qrcode box 外部底部，默认隐藏直到请求返回 invite_url
+    // : 复制邀请链接按钮，挂在 qrcode box 外部底部，默认隐藏直到请求返回 invite_url
     [self.view addSubview:self.copyInviteBtn];
 
     //
@@ -83,7 +83,7 @@
         }
          weakSelf.qrcodeImgView.image =  [LBXScanNative createQRWithString:model.qrcode QRSize:weakSelf.qrcodeImgView.lim_size];
         [weakSelf.activityView stopAnimating];
-        // YUJ-97: 拿到 invite_url 后再显示复制按钮。空字符串 / nil 保持隐藏以兼容旧后端。
+        // : 拿到 invite_url 后再显示复制按钮。空字符串 / nil 保持隐藏以兼容旧后端。
         [weakSelf applyInviteUrl:model.inviteUrl];
 
     });
@@ -256,10 +256,10 @@
     return [WKApp.shared loadImage:name moduleID:@"WuKongBase"];
 }
 
-#pragma mark - YUJ-97 复制邀请链接
+#pragma mark - 复制邀请链接
 
 // 按钮懒加载：默认隐藏，等 applyInviteUrl: 收到非空字符串后再显示。
-// 防御 YUJ-53 静默失败：显式在 applyInviteUrl: 里校验 model.inviteUrl 的类型和长度，
+// 防御 静默失败：显式在 applyInviteUrl: 里校验 model.inviteUrl 的类型和长度，
 // 避免后端字段改名后 UI 悄悄退化（按钮常驻不可点 / 点击后复制空串）。
 -(UIButton*) copyInviteBtn {
     if(!_copyInviteBtn) {

@@ -74,7 +74,7 @@ static const NSInteger kPageSize = 15;
     self.segmentControl.frame = CGRectMake(padding, navBottom + 12, self.view.lim_width - padding * 2, 32);
 
     CGFloat tableTop = self.segmentControl.lim_bottom + 10;
-    CGFloat tableBottom = 80;
+    CGFloat tableBottom = 60 + self.view.safeAreaInsets.bottom + 12;
     self.tableView.frame = CGRectMake(0, tableTop, self.view.lim_width, self.view.lim_height - tableTop - tableBottom);
 
     CGFloat btnWidth = self.view.lim_width - padding * 2;

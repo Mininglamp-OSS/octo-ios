@@ -4,7 +4,7 @@
 //
 //  Viewer-relative external-member resolver, aligned with
 //  dmwork-web `resolveExternalForViewer` (PR #997) and
-//  dmwork-android `ExternalViewerResolver` (YUJ-87 PR #122).
+//  dmwork-android `ExternalViewerResolver` (PR #122).
 //
 //  Decision rule (priority):
 //    if homeSpaceId is non-empty:
@@ -14,7 +14,7 @@
 //        isExternal = isExternalLegacy == 1
 //        sourceSpaceName = sourceSpaceNameLegacy
 //
-//  Created for YUJ-93 (iOS EP2).
+//  Created for (iOS EP2).
 //
 
 #import <Foundation/Foundation.h>
@@ -22,7 +22,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 // --- extras key contract (locked by unit test WKExternalViewerResolverTests) ---
-// Changing these strings is a cross-layer contract break (see YUJ-53 silent-fail).
+// Changing these strings is a cross-layer contract break (see silent-fail).
 extern NSString *const WKExternalExtrasKeyHomeSpaceId;
 extern NSString *const WKExternalExtrasKeyHomeSpaceName;
 extern NSString *const WKExternalExtrasKeyIsExternal;
@@ -67,7 +67,7 @@ extern NSString *const WKExternalExtrasKeySourceSpaceName;
  Returns the currently active space id, read fresh every call from
  NSUserDefaults "currentSpaceId". Returning a fresh value each time is
  required so UI re-renders pick up Space switches without manual cache
- invalidation (YUJ-93 acceptance: Space switch re-render).
+ invalidation (acceptance: Space switch re-render).
  */
 + (nullable NSString *)currentViewerSpaceId;
 

@@ -2,14 +2,14 @@
 //  WKConversationListVMSystemBotsTests.m
 //  LiMaoBase_Tests
 //
-//  YUJ-218 — `WKConversationListVM.ensureSystemBotsVisible` 单元测试。
+//  — `WKConversationListVM.ensureSystemBotsVisible` 单元测试。
 //
 //  场景：后端 sync 在当前 Space 不返回 botfather 时，VM 应本地兜底合成占位
 //  conversation；同时尊重 WKBotFatherHidden_<spaceId> 隐藏标记、已存在 entry
 //  时无操作、不写入 WKSDK cache。
 //
 //  对齐 Android Round-3 Fix C 的行为合约，硬约束：
-//    - 仅挂在 VM 层 conversationWrapModels，不污染 WKSDK 持久化层（YUJ-215 修复）
+//    - 仅挂在 VM 层 conversationWrapModels，不污染 WKSDK 持久化层（修复）
 //    - 用户已删除（WKBotFatherHidden_*） → 不自动恢复
 //    - 空 botfatherUID（定制部署） → 不合成
 //

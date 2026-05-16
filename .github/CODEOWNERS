@@ -2,7 +2,7 @@
 # 语法：<path> <@github-user>...
 # GitHub 按文件 path 自动把 PR 指定给此处列出的 owner。
 # 多匹配优先最后一条（更具体的规则放下面）。
-# 参考：https://docs.github.com/en/repositories/managing-your-repositories-settings-and-security/customizing-your-repository/about-code-owners
+# 参考：https://docs.github.com/en/repositories/managing-your-repositories-settings-and-features/managing-repository-settings/about-code-owners
 
 # 默认：全仓所有文件的 backup reviewer
 *                                       @yujiawei
@@ -12,22 +12,22 @@
 /.github/                               @yujiawei
 /CODEOWNERS                             @yujiawei
 
-# 后端协议强类型模型 (YUJ-396 / Aegis)
+# 后端协议强类型模型（appconfig / OIDC / 实名认证）
 **/WKAppConfig.*                        @yujiawei
 **/WKOidcProviderConfig.*               @yujiawei
 **/WKRealnameVerifyManager.*            @yujiawei
 **/realname/*                           @yujiawei
 
-# 登录 / OIDC (Aegis Phase 2)
+# 登录 / OIDC
 **/WKLoginView.*                        @yujiawei
 **/WKRegisterVC.*                       @yujiawei
 **/Login/**                             @yujiawei
 
-# 聊天特效 (zhangqian / 王立涛 feature track, 等邀请后加)
+# 聊天特效（待邀请后取消注释）
 # **/WKMessageEffectManager.*           @zhangqian
 # **/Effects/**                         @zhangqian
 
-# Pods 工程 (review 风险高, Yu 必须看)
+# Pods 工程（review 风险高）
 /Pods/Pods.xcodeproj/                   @yujiawei
 
 # 单元测试

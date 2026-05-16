@@ -4,7 +4,7 @@
 //
 //  Pure gate for the UserInfo screen that decides whether to collapse
 //  the "send message" / "add friend" footer into a static external-hint
-//  label. Aligned with dmwork-web PR #1021 (YUJ-67) and Android
+//  label. Aligned with dmwork-web PR #1021 () and Android
 //  UserDetailActivity viewer-relative external logic.
 //
 //  Decision rule (priority — matches web vm.tsx isExternalToViewer):
@@ -18,10 +18,10 @@
 //
 //  This gate is intentionally decoupled from WKExternalViewerResolver
 //  (which stays a pure field-level function, hard constraint of
-//  YUJ-93 test contract) so it can be unit-tested without touching any
+//  test contract) so it can be unit-tested without touching any
 //  UIKit / WKSDK state.
 //
-//  Created for YUJ-137 (iOS P1, parallel to Android YUJ-67).
+//  Created for (iOS P1, parallel to Android ).
 //
 
 #import <Foundation/Foundation.h>
@@ -50,7 +50,7 @@ NS_ASSUME_NONNULL_BEGIN
                              isSelf:(BOOL)isSelf;
 
 /**
- YUJ-206 — Space-mode send-message shortcut, aligned with web
+ — Space-mode send-message shortcut, aligned with web
  UserInfo/index.tsx:52-55 / 企微语义 and Android
  UserDetailExternalHelper.shouldUseSpaceModeSendMessage.
 

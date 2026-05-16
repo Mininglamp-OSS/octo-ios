@@ -165,7 +165,7 @@
     return filtered;
 }
 
-/// YUJ-219-A4: 判断当前频道是否为系统bot频道。
+/// : 判断当前频道是否为系统bot频道。
 /// 从 appconfig.system_bot_uids 读取（fallback `@[@"botfather", @"u_10000", @"fileHelper"]`），
 /// 让 u_10000、fileHelper 跨 Space 历史消息也按空间过滤。
 -(BOOL) isSystemBotChannel {

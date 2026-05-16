@@ -903,7 +903,7 @@
                 contain = true;
             }
             if(contain) {
-                // YUJ-135 透传 member.extra 给 cell model，供 WKExternalViewerResolver 判定 @SpaceName 后缀。
+                // 透传 member.extra 给 cell model，供 WKExternalViewerResolver 判定 @SpaceName 后缀。
                 [users addObject:[WKMentionUserCellModel uid:member.memberUid
                                                         name:member.displayName
                                                    avatarURL:[NSURL URLWithString: [WKAvatarUtil getAvatar:member.memberUid]]

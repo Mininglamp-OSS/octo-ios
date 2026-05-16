@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>china</string>
+	<string>zh-Hans</string>
 	<key>CFBundleDisplayName</key>
 	<string>Octo</string>
 	<key>CFBundleExecutable</key>
@@ -66,6 +66,14 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>OCTOBuglyAppIdMain</key>
+	<string>$(OCTO_BUGLY_APP_ID_MAIN)</string>
+	<key>OCTOBuglyAppIdSDK</key>
+	<string>$(OCTO_BUGLY_APP_ID_SDK)</string>
+	<key>OCTOIMDefaultHost</key>
+	<string>$(OCTO_IM_DEFAULT_HOST)</string>
+	<key>OCTOIMDefaultLabel</key>
+	<string>$(OCTO_IM_DEFAULT_LABEL)</string>
 	<key>NSCameraUsageDescription</key>
 	<string>“Octo”需要您的同意,才能访问相机﻿﻿，用于拍照聊天和扫一扫加好友</string>
 	<key>NSContactsUsageDescription</key>

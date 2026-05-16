@@ -2,13 +2,13 @@
 //  WKSearchMessageCellExternalTests.m
 //  LiMaoBase_Tests
 //
-//  YUJ-156 — 搜索消息结果 cell 外部群/发送者 @SpaceName 后缀单元测试。
+//  — 搜索消息结果 cell 外部群/发送者 @SpaceName 后缀单元测试。
 //
 //  覆盖：
 //    1. 外部频道（home_space_id ≠ viewer）→ nameLbl.attributedText 含 " @SpaceName"
 //    2. 同 Space → plain text，attributedText 为 nil
 //    3. Legacy 降级 is_external + source_space_name → @SpaceName 仍生效
-//    4. cell 复用：外部 → 内部 → attributedText 必须清空（YUJ-98 坑点）
+//    4. cell 复用：外部 → 内部 → attributedText 必须清空（坑点）
 //
 //  注：消息名来自 channelInfo.displayName（SDK 管理），无 channelInfo 时 name=""，
 //  因此测试直接 set model 的频道，允许 name 为空；重点断言 attributedText 组件。
@@ -98,7 +98,7 @@
     XCTAssertTrue([lbl.attributedText.string hasSuffix:@" @CustomerCo"]);
 }
 
-// YUJ-98 坑点：cell 复用时 attributedText / text 互斥，refresh 必须显式重置。
+// 坑点：cell 复用时 attributedText / text 互斥，refresh 必须显式重置。
 - (void)testCellReuse_ExternalThenInternal_ClearsAttributedText {
     WKSearchMessageModel *ext = [self modelWithHomeSpaceId:@"spaceA"
                                               homeSpaceName:@"OctoWork"

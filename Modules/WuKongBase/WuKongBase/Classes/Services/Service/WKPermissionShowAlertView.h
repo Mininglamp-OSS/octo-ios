@@ -1,6 +1,6 @@
 //
 //  ATShowAlertView.h
-//  qiyunxin
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
 //
 //  Created by Mac on 2018/1/16.
 //  Copyright © 2018年 aiti. All rights reserved.

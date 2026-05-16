@@ -63,11 +63,11 @@
 
     NSMutableAttributedString *nameAttr = [self highlightText:model.name?:@""];
 
-    // YUJ-156 搜索结果外部成员/群 `@SpaceName` 跨 Space 后缀。
-    // Pattern 复用 YUJ-135 WKMentionUserCell / YUJ-129 WKMessageCell —— 字段契约
+    // 搜索结果外部成员/群 `@SpaceName` 跨 Space 后缀。
+    // Pattern 复用 WKMentionUserCell / WKMessageCell —— 字段契约
     // (`home_space_id` / `home_space_name` / `is_external` / `source_space_name`) 走
     // viewer-relative resolver 判定。isExternal && sourceSpaceName 非空 → 在 <mark>
-    // 高亮后拼灰紫 ` @{SpaceName}` 后缀；否则保持原 attributedText（YUJ-98 坑点：
+    // 高亮后拼灰紫 ` @{SpaceName}` 后缀；否则保持原 attributedText（坑点：
     // cell 复用时不能残留上次外部渲染，所以 refresh 每次都重新构建 nameAttr）。
     WKExternalResolveResult *ext = [WKExternalViewerResolver
         resolveWithHomeSpaceId:model.home_space_id
@@ -76,7 +76,7 @@
          sourceSpaceNameLegacy:model.source_space_name
                  viewerSpaceId:[WKExternalViewerResolver currentViewerSpaceId]];
     if (ext.isExternal && ext.sourceSpaceName.length > 0) {
-        // 灰紫 0x8B5CF6 与 WKMessageCell (YUJ-129) / Android ForegroundColorSpan 像素级一致。
+        // 灰紫 0x8B5CF6 与 WKMessageCell () / Android ForegroundColorSpan 像素级一致。
         UIColor *suffixColor = [UIColor colorWithRed:0x8B/255.0 green:0x5C/255.0 blue:0xF6/255.0 alpha:1.0];
         NSString *suffix = [NSString stringWithFormat:@" @%@", ext.sourceSpaceName];
         [nameAttr appendAttributedString:[[NSAttributedString alloc] initWithString:suffix

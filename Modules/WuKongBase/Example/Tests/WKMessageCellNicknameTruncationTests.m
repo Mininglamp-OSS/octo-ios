@@ -2,7 +2,7 @@
 //  WKMessageCellNicknameTruncationTests.m
 //  WuKongBase Tests
 //
-//  YUJ-210 — iOS 气泡 @SpaceName 昵称截断修复回归。
+//  — iOS 气泡 @SpaceName 昵称截断修复回归。
 //
 //  背景：`WKMessageCell.layoutName` 历史上把 nameLbl 宽度硬限到
 //  WK_NICKNAME_MAX_WIDTH = 100pt，长昵称 + 长 @SpaceName 会被 UIKit

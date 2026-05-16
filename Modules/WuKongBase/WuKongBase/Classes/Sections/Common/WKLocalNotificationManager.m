@@ -273,7 +273,6 @@ static WKLocalNotificationManager *_instance = nil;
 // 点击通知时打开对应聊天窗口并定位到消息
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response withCompletionHandler:(void (^)(void))completionHandler API_AVAILABLE(ios(10.0)) {
     NSDictionary *userInfo = response.notification.request.content.userInfo;
-    NSLog(@"[PushDebug] didReceiveNotificationResponse userInfo=%@", userInfo);
 
     // Debug 面板已关闭
     // [self showPushDebugPanel:userInfo];

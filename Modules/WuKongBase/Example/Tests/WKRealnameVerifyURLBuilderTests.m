@@ -2,7 +2,7 @@
 //  WKRealnameVerifyURLBuilderTests.m
 //  WuKongBase Tests
 //
-//  YUJ-396 / GH dmwork-web#1174 —
+//  / —
 //    iOS 端「去认证」URL 按环境从 appconfig.oidc_providers[].account_url 读,
 //    不再硬编码 prod 域。这里用纯函数测试 URL 拼接 + https/host 安全守卫合约,
 //    与 Web 端 resolveRealnameVerifyUrl 对齐口径。
@@ -34,7 +34,7 @@
 }
 
 - (void)test_testAccountUrl_buildsTestVerifyURL_imTestScenario {
-    // 本测试就是 YUJ-396 修复的核心目标: im-test 环境不能再跳 prod Aegis。
+    // 本测试就是 修复的核心目标: im-test 环境不能再跳 prod Aegis。
     NSURL *url = [WKRealnameVerifyManager buildVerifyURLFromAccountUrl:@"https://accounts-test.imocto.cn"];
     XCTAssertNotNil(url);
     XCTAssertEqualObjects(url.absoluteString,
@@ -81,7 +81,7 @@
     XCTAssertNil([WKRealnameVerifyManager buildVerifyURLFromAccountUrl:@"https://"]);
 }
 
-#pragma mark - defense-in-depth: query / fragment (YUJ-396 R3 suggestion 1)
+#pragma mark - defense-in-depth: query / fragment (R3 suggestion 1)
 
 // buildVerifyURLFromAccountUrl: 作为 public header 方法, 允许外部调用者绕过
 // WKOidcProviderConfig.parseArray 直接传 accountUrl。深层防御: 就算 parser 层

@@ -54,7 +54,7 @@
 /// 决定是否在头像页右上角显示"修改头像"入口。
 @property (nonatomic, copy) NSString *botCreatorUid;
 
-// --- YUJ-146 (GH#76) external-user fields ---
+// --- (GH#76) external-user fields ---
 // homeSpaceId: 用户的归属 Space，跨 Space 判定的权威字段（来自后端
 // /users/<uid> 响应里的 home_space_id）。对齐 web PR #977。
 // isExternal: 老的 flag，保留做兼容 fallback；当后端未回 home_space_id
@@ -62,7 +62,7 @@
 @property (nonatomic, copy) NSString *homeSpaceId;
 @property (nonatomic, assign) NSInteger isExternal;
 
-// --- YUJ-381 / dmwork-web#1169 实名认证字段 ---
+// --- / 实名认证字段 ---
 // 对齐 web `orgData.realname_verified`：/users/<uid> 响应顶层下发，需要回写
 // 到 person 缓存的 extra，让 WKMessageCell / WKMemberCell / WKUserInfoVC
 // 的实名徽章 fallback 路径能拿到 @YES。原本 UserModel 漏字段导致
@@ -71,7 +71,7 @@
 @property (nonatomic, assign) BOOL realnameVerified;
 @property (nonatomic, assign) NSTimeInterval realnameVerifiedAt;
 
-// YUJ-146: viewer-relative 判定「当前用户是否对观察者是外部」。
+// : viewer-relative 判定「当前用户是否对观察者是外部」。
 // 优先用 homeSpaceId vs 当前 viewer space；没有时 fallback 到 legacy
 // is_external。注意：不做 loginInfo.uid 自我判定，调用方已在各 handler
 // 头部自己过滤了 self。
@@ -91,7 +91,7 @@
 @property(nonatomic,copy) NSString *botCreatorName;
 @property(nonatomic,copy) NSString *botCreatorUid;
 
-// YUJ-146: 缓存当前 uid 的 home_space_id / is_external，供
+// : 缓存当前 uid 的 home_space_id / is_external，供
 // user.info.addBlack / user.info.freeFriend handler 做同 Space 判定。
 // 每次 loadPersonChannelInfo 完成后覆写一次。
 @property(nonatomic,copy) NSString *userHomeSpaceId;
@@ -143,7 +143,7 @@
         weakSelf.botCreatorName = user.botCreatorName ?: @"";
         weakSelf.botCreatorUid = user.botCreatorUid ?: @"";
 
-        // YUJ-146: 缓存 home_space_id / is_external，供
+        // : 缓存 home_space_id / is_external，供
         // user.info.addBlack / user.info.freeFriend handler 判同 Space。
         weakSelf.userHomeSpaceId = user.homeSpaceId ?: @"";
         weakSelf.userIsExternalLegacy = user.isExternal;
@@ -339,7 +339,7 @@
         if([uid isEqualToString:[WKApp shared].loginInfo.uid]) {
             return nil;
         }
-        // YUJ-146 (GH#76)：同 Space 用户资料页整行隐藏「解除好友关系」。
+        // (GH#76)：同 Space 用户资料页整行隐藏「解除好友关系」。
         // 跨 Space 才允许出现此 row。判定失败（缺字段）时按 legacy
         // is_external fallback，保持老数据的旧行为。
         if(![weakSelf isExternalUser]) {
@@ -369,7 +369,7 @@
         if([uid isEqualToString:[WKApp shared].loginInfo.uid]) {
             return nil;
         }
-        // YUJ-146 (GH#76)：同 Space 用户资料页整行隐藏「拉入黑名单/拉出
+        // (GH#76)：同 Space 用户资料页整行隐藏「拉入黑名单/拉出
         // 黑名单」。对齐 web PR #977 UserInfo 同 Space 收敛。
         if(![weakSelf isExternalUser]) {
             return nil;
@@ -419,7 +419,7 @@
         };
     } category:WKPOINT_CATEGORY_USER_INFO_ITEM sort:1000];
     
-    // 来源 — 群内外部成员显示 home_space_name（YUJ-93 viewer-relative）
+    // 来源 — 群内外部成员显示 home_space_name（viewer-relative）
     // 优先级：群内 memberOfUser.extra 的 viewer-relative 判定 →
     //         个人详情的 channelInfo.extra[@"source_desc"]（旧兼容）
     // 自己查自己 / 同 Space / 没有 sourceSpaceName → 整行隐藏
@@ -592,7 +592,7 @@
     return  self.channelInfo && self.channelInfo.status == WKChannelStatusBlacklist;
 }
 
-// YUJ-146 (GH#76): 当前页面的 uid 对观察者是否「外部」。规则对齐
+// (GH#76): 当前页面的 uid 对观察者是否「外部」。规则对齐
 // web `resolveExternalForViewer` / android ExternalViewerResolver：
 //   - 有 home_space_id 时权威：home_space_id != viewer_space_id → 外部
 //   - 无 home_space_id 时 fallback：legacy is_external == 1 → 外部
@@ -672,7 +672,7 @@
     [info setSettingValue:user.screenshot forKey:WKChannelExtraKeyScreenshot];
     [info setSettingValue:user.revokeRemind forKey:WKChannelExtraKeyRevokeRemind];
     [info setSettingValue:user.chatPwdOn forKey:WKChannelExtraKeyChatPwd];
-    // YUJ-381 / dmwork-web#1169：把 /users/<uid> 顶层 realname_verified 回写到
+    // / ：把 /users/<uid> 顶层 realname_verified 回写到
     // person 缓存的 extra，保证 WKMessageCell / WKMemberCell / WKUserInfoVC 在
     // member.extra 缺失或 stale 时能 fallback 到 person 拿到正确值。
     info.extra[@"realname_verified"] = @(user.realnameVerified);
@@ -693,10 +693,10 @@
     }
 }
 
-#pragma mark - YUJ-190 external-for-viewer
+#pragma mark - external-for-viewer
 
-// YUJ-190: 公共入口。对齐 web `resolveExternalForViewer` (PR #1013/#1091)
-// 和 android `ExternalViewerResolver.isExternalForViewer` (YUJ-189 PR #135)。
+// : 公共入口。对齐 web `resolveExternalForViewer` (PR #1013/#1091)
+// 和 android `ExternalViewerResolver.isExternalForViewer` (PR #135)。
 // 优先级：
 //   1) 群内路径：memberOfUser.extra 有 home_space_id 时权威
 //   2) 个人详情缓存：userHomeSpaceId（loadPersonChannelInfo 回填）
@@ -777,16 +777,16 @@
     u.botDescription = [dictory objectForKey:@"bot_description"] ?: @"";
     u.botCreatorName = [dictory objectForKey:@"bot_creator_name"] ?: @"";
     u.botCreatorUid = [dictory objectForKey:@"bot_creator_uid"] ?: @"";
-    // YUJ-146 (GH#76) external-user fields
+    // (GH#76) external-user fields
     u.homeSpaceId = [dictory objectForKey:@"home_space_id"] ?: @"";
     u.isExternal = [[dictory objectForKey:@"is_external"] integerValue];
-    // YUJ-381 / dmwork-web#1169：解析顶层实名认证字段（对齐 web orgData.realname_verified）
+    // / ：解析顶层实名认证字段（对齐 web orgData.realname_verified）
     u.realnameVerified = [[dictory objectForKey:@"realname_verified"] boolValue];
     u.realnameVerifiedAt = [[dictory objectForKey:@"realname_verified_at"] doubleValue];
     return u;
 }
 
-// YUJ-146 (GH#76): UserModel 本地判定「相对当前 viewer space 是否外部」。
+// (GH#76): UserModel 本地判定「相对当前 viewer space 是否外部」。
 // 规则与 WKUserInfoVM 上的同名 helper 保持一致，便于以后的调用方（非
 // VM 上下文）复用。
 -(BOOL) isExternalUser {

@@ -224,7 +224,7 @@ static NSMutableDictionary *_jsTableHeights;
         CGRect usedRect = [lm usedRectForTextContainer:tc];
         CGFloat w = MIN(ceil(usedRect.size.width), maxWidth);
 
-        // YUJ-420 R4 fix (lml2468 Critical privacy): 测量在 cell 渲染热径上,
+        // R4 fix (Critical privacy): 测量在 cell 渲染热径上,
         // 不能打消息正文预览(用户数据 + 性能污染). DEBUG-only 保留测量维度 metadata。
 #if DEBUG
         NSLog(@"[BubbleHeight] measure: textLen=%lu maxW=%.1f | tvH=%.2f brH=%.2f → h=%.0f w=%.0f",
@@ -1523,7 +1523,7 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
     self.replyBox.hidden = YES;
     if([[self class] hasReply:model]) {
         self.replyBox.hidden = NO;
-        // YUJ-131 · 消息气泡内的引用预览追加 @SpaceName —— 对齐 web PR #1073 / Android ReplyExternalFieldsHelper
+        // · 消息气泡内的引用预览追加 @SpaceName —— 对齐 web PR #1073 / Android ReplyExternalFieldsHelper
         NSString *baseName = model.content.reply.fromName.length > 0
             ? model.content.reply.fromName : LLang(@"未知用户");
         NSString *viewerSpaceId = [WKExternalViewerResolver currentViewerSpaceId];
@@ -1869,10 +1869,10 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         self.nameLbl.lim_width = self.messageContentView.lim_width;
     }
 
-    // YUJ-381 实名 ✓ 徽章 + Bot 标识：紧跟 nameLbl 右侧，realname → bot 串行。
+    // 实名 ✓ 徽章 + Bot 标识：紧跟 nameLbl 右侧，realname → bot 串行。
     // 父类 layoutName 在 WKTextMessageCell 这里被完全覆写，必须在子类显式排
     // realnameVerifiedImgView，否则它会停留在 initUI 时的 (0,0,12,12) 旧 frame
-    // —— 表现为「徽章卡在气泡左上角」（YUJ-384 P1-1 同型坑）。
+    // —— 表现为「徽章卡在气泡左上角」（P1-1 同型坑）。
     CGFloat afterNameRight = self.nameLbl.lim_left + self.nameLbl.lim_width;
     if (!self.realnameVerifiedImgView.hidden) {
         self.realnameVerifiedImgView.lim_width = 12.0f;
@@ -1956,8 +1956,8 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
     return _replyNameLbl;
 }
 
-// YUJ-131 · 拼接「发送者名 + 灰色 @SpaceName 后缀」的 NSAttributedString。
-// 样式对齐 WKMemberCell v2（YUJ-66）：基名用 isSend-aware 主色，@Space 用浅灰 + 更小字号。
+// · 拼接「发送者名 + 灰色 @SpaceName 后缀」的 NSAttributedString。
+// 样式对齐 WKMemberCell v2（）：基名用 isSend-aware 主色，@Space 用浅灰 + 更小字号。
 // 传入 baseColor 而不是读 replyNameLbl.textColor —— 调用方在 build 之后才 set textColor，
 // 这里直接计算最终色以避免依赖顺序。
 - (NSAttributedString *)buildReplyNameAttrWithBase:(NSString *)baseName

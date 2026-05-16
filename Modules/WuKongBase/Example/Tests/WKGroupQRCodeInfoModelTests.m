@@ -2,12 +2,12 @@
 //  WKGroupQRCodeInfoModelTests.m
 //  LiMaoBase_Tests
 //
-//  YUJ-97 (iOS EP8) — ChannelQrcodeResp.invite_url 字段透传单元测试。
+//  (iOS EP8) — ChannelQrcodeResp.invite_url 字段透传单元测试。
 //
 //  对齐 web PR #971 / #972：二维码页复制的应该是 `invite_url`（跨 Space 扫码
 //  入群链接），而不是 `qrcode` 字段（二维码图片内容）。
 //
-//  这些用例是对 YUJ-53 静默失败模式的直接防御：如果后端字段改名或类型变化，
+//  这些用例是对 静默失败模式的直接防御：如果后端字段改名或类型变化，
 //  model 层必须归一化为 nil，而不是把错误类型的对象塞到 UI 层。
 //
 
@@ -92,7 +92,7 @@
     XCTAssertEqualObjects(m.inviteUrl, @"");
 }
 
-#pragma mark - 契约锁死（防 YUJ-53）
+#pragma mark - 契约锁死（防 ）
 
 - (void)testFromMap_KeyIsInviteUrl_NotInviteURL {
     // 锁死字段名大小写：后端契约是 snake_case `invite_url`。

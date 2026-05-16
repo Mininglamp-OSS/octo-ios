@@ -2,17 +2,81 @@
  platform :ios, '14.0'
 workspace 'TangSengDaoDaoiOS.xcworkspace'
 
+# ─────────────────────────────────────────────────────────────────────────────
+# OctoConfig.xcconfig 解析
+# 私有配置（Apple Team ID / Bugly AppKey / IM 服务器等）统一放在
+# OctoConfig.xcconfig（gitignored），由本 Podfile 在 post_install 阶段：
+#   1. 读出所需变量（如 APPLE_TEAM_ID）赋给 build_settings；
+#   2. 把 #include? "../../OctoConfig.xcconfig" 注入每个 Pods xcconfig，
+#      让主工程通过 Pods 链路自动看到这些变量。
+# 见 OctoConfig.xcconfig.template 了解如何配置。
+# ─────────────────────────────────────────────────────────────────────────────
+
+OCTO_CONFIG_FILE = File.expand_path('OctoConfig.xcconfig', __dir__)
+
+def parse_octo_xcconfig(path)
+    return {} unless File.exist?(path)
+    vars = {}
+    File.foreach(path) do |line|
+        stripped = line.strip
+        next if stripped.empty? || stripped.start_with?('//')
+        if stripped =~ /^([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$/
+            value = $2.strip.sub(%r{\s*//.*$}, '').strip
+            vars[$1] = value
+        end
+    end
+    vars
+end
+
 post_install do |installer|
-    # 填写你自己的开发者团队的team id
-    dev_team = "D5G47RYK64"
-    project = installer.aggregate_targets[0].user_project
-    project.targets.each do |target|
-        target.build_configurations.each do |config|
-            if dev_team.empty? and !config.build_settings['DEVELOPMENT_TEAM'].nil?
-                dev_team = config.build_settings['DEVELOPMENT_TEAM']
+    octo_config = parse_octo_xcconfig(OCTO_CONFIG_FILE)
+    dev_team = octo_config['APPLE_TEAM_ID'].to_s
+    dev_team = dev_team.empty? || dev_team == 'YOUR_TEAM_ID' ? '' : dev_team
+
+    # 兼容回退：若 OctoConfig.xcconfig 缺失，沿用项目原本设置的 DEVELOPMENT_TEAM
+    if dev_team.empty?
+        project = installer.aggregate_targets[0].user_project
+        project.targets.each do |target|
+            target.build_configurations.each do |config|
+                if dev_team.empty? && !config.build_settings['DEVELOPMENT_TEAM'].nil?
+                    dev_team = config.build_settings['DEVELOPMENT_TEAM']
+                end
             end
         end
     end
+
+    # 把 OctoConfig.xcconfig 软引用注入到每一个 Pods xcconfig
+    octo_include_line = "#include? \"../../OctoConfig.xcconfig\"\n"
+    Dir.glob(File.join(__dir__, 'Pods/Target Support Files/**/*.xcconfig')).each do |xcconfig|
+        contents = File.read(xcconfig)
+        unless contents.include?('OctoConfig.xcconfig')
+            File.write(xcconfig, octo_include_line + contents)
+        end
+    end
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 把 OctoConfig.xcconfig 设为 ShareExtension / NotificationService /
+    # NotificationContent 三个扩展的 baseConfigurationReference。这些扩展
+    # 不在 Podfile 里，没有 Pods xcconfig 链路，必须直接绑定才能让
+    # `$(APPLE_TEAM_ID)` 等变量在 codesign 阶段被替换。
+    # 幂等：第一次 pod install 写入到 .xcodeproj，后续保持不变。
+    # ─────────────────────────────────────────────────────────────────────
+    user_project = installer.aggregate_targets[0].user_project
+    octo_xcconfig_path = 'OctoConfig.xcconfig'
+    octo_file_ref = user_project.files.find { |f| f.path == octo_xcconfig_path }
+    unless octo_file_ref
+        octo_file_ref = user_project.new_file(octo_xcconfig_path)
+    end
+    extension_target_names = %w[ShareExtension NotificationService NotificationContent]
+    user_project.targets.each do |target|
+        next unless extension_target_names.include?(target.name)
+        target.build_configurations.each do |config|
+            if config.base_configuration_reference.nil?
+                config.base_configuration_reference = octo_file_ref
+            end
+        end
+    end
+    user_project.save
 
     # Fix bundle targets' 'Signing Certificate' to 'Sign to Run Locally'
     installer.pods_project.targets.each do |target|
@@ -127,6 +191,8 @@ abstract_target 'TangSengDaoDaoiOSBase' do
     project 'TangSengDaoDaoiOS.xcodeproj'
     
   use_frameworks!
+  # TODO(P5/P7): 下面 4 个 pod 引用 tangtaoit 的个人 GitHub fork。
+  # 正式发布前应迁移到 Mininglamp-OSS 组织下的 fork 或使用官方上游。
   pod 'YBImageBrowser/NOSD', :git=>'https://github.com/tangtaoit/YBImageBrowser.git'
   pod 'YYImage/WebP', :git => 'https://github.com/tangtaoit/YYImage.git'
   pod 'AsyncDisplayKit', :git => 'https://github.com/tangtaoit/AsyncDisplayKit.git'

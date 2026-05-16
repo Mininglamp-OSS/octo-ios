@@ -1161,6 +1161,21 @@
     return tabbarItem;
 }
 
+// Bugly build55 兜底：channelInfoUpdate / channelInfoDelete 是 IM 异步回调，
+// 可能在 self.items 已被另一路径（applyIncrementalUpdate / rebuildTableData）改动
+// 但 tableView 还没 reloadData 的间隙抵达。直接走 insert/delete/reloadRows 会触发
+// UITableView 内部 NSInternalInconsistencyException → SIGABRT。
+// 调用任何增量 API 之前先用这个 helper 自检；不一致就降级为 reloadData。
+-(BOOL) isTableViewInSyncWithItems {
+    if (!self.tableView) return NO;
+    if ((NSInteger)self.items.count != [self.tableView numberOfSections]) return NO;
+    for (NSInteger s = 0; s < (NSInteger)self.items.count; s++) {
+        NSArray *arr = self.items[s];
+        if ((NSInteger)arr.count != [self.tableView numberOfRowsInSection:s]) return NO;
+    }
+    return YES;
+}
+
 -(void) addOrUpdateContactsWithChannelInfo:(WKChannelInfo*)channelInfo {
     if(self.items.count<=1) {
         return;
@@ -1228,7 +1243,7 @@
         }
         hasChange = true;
     }
-    // YUJ-381：实名状态变化也要触发局部刷新。WKRealnamePrefetcher 把 realname_verified
+    // ：实名状态变化也要触发局部刷新。WKRealnamePrefetcher 把 realname_verified
     // 写进 person 缓存后会回调 channelInfoUpdate；如果只比 name/online/avatar 那几项，
     // 拉取来的实名 @YES 会被吞掉 → cell 不更新 → 用户看不到徽章（除非打开名片）。
     {
@@ -1242,8 +1257,18 @@
     }
     if(hasChange && existIndexPath) {
         // 局部刷新单行，不做全量 reloadData
-        [self.tableView reloadRowsAtIndexPaths:@[existIndexPath]
-                              withRowAnimation:UITableViewRowAnimationNone];
+        // Bugly build55 兜底：tv/items 漂移时 reloadRows 会触发 NSInternalInconsistencyException
+        if (![self isTableViewInSyncWithItems]) {
+            [self.tableView reloadData];
+        } else {
+            @try {
+                [self.tableView reloadRowsAtIndexPaths:@[existIndexPath]
+                                      withRowAnimation:UITableViewRowAnimationNone];
+            } @catch (NSException *ex) {
+                NSLog(@"[WKContactsVC] update reloadRows drift caught: %@, fallback reloadData", ex);
+                [self.tableView reloadData];
+            }
+        }
     }
     // 注意：不更新 allContactInfos。allContactInfos 只由 applyIncrementalUpdate（API数据）维护，
     // 避免 DB 版本的 robot 等字段与 API 不一致导致计数错误。cellModel 已更新，显示是对的。
@@ -1260,13 +1285,25 @@
         if([newFirstLetter isEqualToString:letter]) {
             NSMutableArray *items = self.items[i+1];
             WKContactsCellModel *cellModel = [self toContactsCellModel:channelInfo];
+
+            // Bugly build55 兜底：mutate items 前先校验 tv/items 是否同步。
+            // 不同步就 mutate 后 reloadData 收敛；同步则走 insertRows + @try 兜底。
+            BOOL inSyncBefore = [self isTableViewInSyncWithItems];
             [items insertObject:cellModel atIndex:0];
             has = true;
 
-            // 局部插入单行
-            NSIndexPath *insertPath = [NSIndexPath indexPathForRow:0 inSection:i+1];
-            [self.tableView insertRowsAtIndexPaths:@[insertPath]
-                                  withRowAnimation:UITableViewRowAnimationAutomatic];
+            if (!inSyncBefore) {
+                [self.tableView reloadData];
+            } else {
+                NSIndexPath *insertPath = [NSIndexPath indexPathForRow:0 inSection:i+1];
+                @try {
+                    [self.tableView insertRowsAtIndexPaths:@[insertPath]
+                                          withRowAnimation:UITableViewRowAnimationAutomatic];
+                } @catch (NSException *ex) {
+                    NSLog(@"[WKContactsVC] insertRows drift caught: %@, fallback reloadData", ex);
+                    [self.tableView reloadData];
+                }
+            }
             break;
         }
         i++;
@@ -1337,24 +1374,47 @@
             [contactsItems removeObjectAtIndex:existIndexPath.row];
         }
 
+        // Bugly build55 兜底：mutate 前 tv/items 漂移就直接 reloadData，不再走增量 delete。
+        // （注意：上面 contactsItems 已经 remove，但 reloadData 会以最新 items 重建，无碍）
+        BOOL inSyncForDelete = ((NSInteger)contactsItems.count + 1 == [self.tableView numberOfRowsInSection:existIndexPath.section]);
+
         if(contactsItems.count == 0) {
             // section 清空：需要同时删除行和 section
-            [self.tableView beginUpdates];
-            [self.tableView deleteRowsAtIndexPaths:@[existIndexPath]
-                                  withRowAnimation:UITableViewRowAnimationAutomatic];
-            if(self.items.count > existIndexPath.section) {
+            if (self.items.count > existIndexPath.section) {
                 [self.items removeObjectAtIndex:existIndexPath.section];
             }
-            if(self.sectionTitleArr.count > existIndexPath.section-1) {
+            if (self.sectionTitleArr.count > existIndexPath.section-1) {
                 [self.sectionTitleArr removeObjectAtIndex:existIndexPath.section-1];
             }
-            [self.tableView deleteSections:[NSIndexSet indexSetWithIndex:existIndexPath.section]
-                          withRowAnimation:UITableViewRowAnimationAutomatic];
-            [self.tableView endUpdates];
+
+            if (!inSyncForDelete) {
+                [self.tableView reloadData];
+            } else {
+                @try {
+                    [self.tableView beginUpdates];
+                    [self.tableView deleteRowsAtIndexPaths:@[existIndexPath]
+                                          withRowAnimation:UITableViewRowAnimationAutomatic];
+                    [self.tableView deleteSections:[NSIndexSet indexSetWithIndex:existIndexPath.section]
+                                  withRowAnimation:UITableViewRowAnimationAutomatic];
+                    [self.tableView endUpdates];
+                } @catch (NSException *ex) {
+                    NSLog(@"[WKContactsVC] delete rows+section drift caught: %@, fallback reloadData", ex);
+                    [self.tableView reloadData];
+                }
+            }
         } else {
             // 局部删除单行
-            [self.tableView deleteRowsAtIndexPaths:@[existIndexPath]
-                                  withRowAnimation:UITableViewRowAnimationAutomatic];
+            if (!inSyncForDelete) {
+                [self.tableView reloadData];
+            } else {
+                @try {
+                    [self.tableView deleteRowsAtIndexPaths:@[existIndexPath]
+                                          withRowAnimation:UITableViewRowAnimationAutomatic];
+                } @catch (NSException *ex) {
+                    NSLog(@"[WKContactsVC] delete rows drift caught: %@, fallback reloadData", ex);
+                    [self.tableView reloadData];
+                }
+            }
         }
 
         // 维护 allContactInfos 数组

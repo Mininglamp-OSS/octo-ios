@@ -2,7 +2,7 @@
 //  WKUserInfoVMExternalTests.m
 //  LiMaoBase_Tests
 //
-//  YUJ-190 — WKUserInfoVM.isExternalForViewer viewer-relative 判定单元测试。
+//  — WKUserInfoVM.isExternalForViewer viewer-relative 判定单元测试。
 //  直接锁住「外部成员 → UserInfo 页不显示申请加好友按钮」的判定规则。
 //
 //  参考：

@@ -300,7 +300,7 @@
             NSString *rawName = friend[@"channel_name"]?:@"";
             NSString *name = (remark.length > 0) ? [self stripHTMLTags:remark] : [self stripHTMLTags:rawName];
             NSString *uid = friend[@"channel_id"]?:@"";
-            // YUJ-156 外部成员 @SpaceName 字段透传：后端若返回 home_space_* / is_external
+            // 外部成员 @SpaceName 字段透传：后端若返回 home_space_* / is_external
             // / source_space_name 则原样挂到 cell model，cell 侧走 WKExternalViewerResolver
             // 判定。字段缺失保持 nil → 非外部行为，向后兼容。
             NSMutableDictionary *friendItem = [@{
@@ -340,7 +340,7 @@
             NSString *gRawName = group[@"channel_name"]?:@"";
             NSString *name = (gRemark.length > 0) ? [self stripHTMLTags:gRemark] : [self stripHTMLTags:gRawName];
             NSString *groupNo = group[@"channel_id"]?:@"";
-            // YUJ-156 外部群 @SpaceName：与 friends 一致，字段透传不改搜索逻辑。
+            // 外部群 @SpaceName：与 friends 一致，字段透传不改搜索逻辑。
             NSMutableDictionary *groupItem = [@{
                @"class":WKSearchContactsModel.class,
                @"name":name?:@"",
@@ -516,7 +516,7 @@
                 @"showBottomLine":@(NO),
                 @"showTopLine":@(NO),
                 @"bottomLeftSpace":@(0.0),
-                // YUJ-156 外部群/发送者 @SpaceName：消息级 from_home_space_* 优先
+                // 外部群/发送者 @SpaceName：消息级 from_home_space_* 优先
                 // （sender 维度），回退 channel 级 home_space_* （会话维度），最后
                 // legacy is_external / source_space_name。三端字段契约一致。
                 @"home_space_id": msgHomeSpaceId?:@"",
@@ -602,7 +602,7 @@
     return items;
 }
 
-// YUJ-156 帮助方法：将后端返回的 home_space_id / home_space_name / is_external /
+// 帮助方法：将后端返回的 home_space_id / home_space_name / is_external /
 // source_space_name 字段透传到 cell model dict。字段全部可选，缺失保留 nil → cell
 // 侧 resolver 判定为非外部，向后兼容。"不改搜索逻辑本身" 硬约束：此方法只负责
 // 字段拷贝，不做任何业务判断。

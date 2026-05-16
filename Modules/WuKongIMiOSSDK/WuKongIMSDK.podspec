@@ -23,8 +23,8 @@ Pod::Spec.new do |s|
 
   s.homepage         = 'https://github.com/WuKongIM/WuKongIMiOSSDK'
   # s.screenshots     = 'www.example.com/screenshots_1', 'www.example.com/screenshots_2'
-  s.license          = { :type => 'MIT', :file => 'LICENSE' }
-  s.author           = { 'tangtaoit' => 'tt@tgo.ai' }
+  s.license          = { :type => 'Apache-2.0', :file => 'LICENSE' }
+  s.author           = { 'MININGLAMP Technology' => 'https://github.com/Mininglamp-OSS' }
   s.source           = { :git => "https://github.com/WuKongIM/WuKongIMiOSSDK.git" }
   # s.social_media_url = 'https://twitter.com/<TWITTER_USERNAME>'
   s.platform     = :ios, '14.0'

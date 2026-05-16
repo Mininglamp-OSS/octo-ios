@@ -1,0 +1,61 @@
+Octo iOS
+Copyright 2026 MININGLAMP Technology and the OCTO contributors
+
+This product includes software developed by:
+  MININGLAMP Technology and the OCTO open source contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License").
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+
+================================================================================
+Third-Party Software Notices and Information
+================================================================================
+
+This product bundles or depends on the following third-party software.
+The original copyright notices and license terms apply to those portions.
+Detailed component-by-component attributions are listed below.
+
+(详细第三方组件归属由 P5 阶段调研后补全。本节当前为占位，开源前必须填齐。)
+
+
+--------------------------------------------------------------------------------
+Origin / Upstream
+--------------------------------------------------------------------------------
+
+This project incorporates code derived from the following upstream projects.
+Where their license requires attribution, that attribution is preserved here.
+
+  - WuKongIM iOS SDK
+      MIT License
+      Copyright (c) 2019 tangtaoit
+      https://github.com/WuKongIM/WuKongIMiOSSDK
+      (This project incorporates and extends the SDK under the terms of
+      the MIT License; modifications are licensed under Apache 2.0.)
+
+  - TangSengDaoDao iOS
+      Apache License, Version 2.0
+      https://github.com/TangSengDaoDao/TangSengDaoDaoiOS
+
+
+--------------------------------------------------------------------------------
+Bundled Third-Party Components (to be finalized)
+--------------------------------------------------------------------------------
+
+The following components ship inside this repository and require explicit
+attribution. The exact list and license obligations are pending final review;
+all entries below are placeholders that will be confirmed or removed.
+
+  [ ] SoundTouch                      LGPL v2.1   (license review pending)
+  [ ] Telegram Display utilities      GPL v2      (license review pending)
+  [ ] librlottie                      LGPL        (license review pending)
+  [ ] Facebook POP                    BSD+Patents
+  [ ] nanosvg                         zlib
+  [ ] opencore-amr                    Apache 2.0
+
+
+================================================================================
+End of NOTICE
+================================================================================

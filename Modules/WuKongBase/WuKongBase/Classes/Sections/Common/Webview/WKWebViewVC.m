@@ -351,7 +351,6 @@
     NSMutableURLRequest *newRequest = [WKWebViewCookieMgr newRequest:navigationAction.request];
     [webView loadRequest:newRequest];
      */
-    NSLog(@"%@",navigationAction.request.allHTTPHeaderFields);
     NSString* reqUrl = navigationAction.request.URL.absoluteString;
     if([reqUrl hasPrefix:@"http"] && ![self.url.host containsString:@"pgyer.com"]) { // pgyper 特殊处理下
         self.currentUrl = navigationAction.request.URL;

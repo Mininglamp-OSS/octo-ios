@@ -208,20 +208,16 @@ API_AVAILABLE(ios(13.0))
         ASUserDetectionStatus realUserStatus = credential.realUserStatus;
         //  需要使用钥匙串的方式保存用户的唯一信息 这里暂且处于测试阶段 是否的NSUserDefaults
         [[NSUserDefaults standardUserDefaults] setValue:userId forKey:@"ShareCurrentIdentifier"];
-        
-        NSLog(@"credential---->%@",identityToken);
-        
+
     } else if ([authorization.credential isKindOfClass:[ASPasswordCredential class]]) {
-        
+
         // 用户登录使用现有的密码凭证
         ASPasswordCredential *passwordCredential = authorization.credential;
         // 密码凭证对象的用户标识 用户的唯一标识
         NSString *user = passwordCredential.user;
         // 密码凭证对象的密码
         NSString *password = passwordCredential.password;
-        
-        NSLog(@"credential2---->%@",[NSString stringWithFormat:@"%@",passwordCredential]);
-        
+
     } else {
         
     }

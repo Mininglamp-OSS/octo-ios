@@ -458,7 +458,7 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
             }
         }
 
-        // YUJ-420 R4 fix (lml2468 Critical privacy): 生产日志不能打 context 内容
+        // R4 fix (Critical privacy): 生产日志不能打 context 内容
         // (fullContext/memberContext/chatContext/personalContext/contextText
         // 都含用户原始聊天文本/成员名/语音转写);
         // 仅保留 DEBUG-only 的元数据(长度、nil-ness) 帮助排查。

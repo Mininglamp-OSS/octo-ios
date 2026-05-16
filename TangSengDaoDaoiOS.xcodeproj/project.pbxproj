@@ -147,6 +147,7 @@
 		AA110005239265E900D092BA /* WKDBRepairViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = WKDBRepairViewController.m; sourceTree = "<group>"; };
 		DE5455F84CCB2C45ED689AA0 /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; sourceTree = "<group>"; };
 		E0C47A5DA8752F76B27D6B91 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig"; sourceTree = "<group>"; };
+		F9A37A32F1F58BBBCA58B52D /* OctoConfig.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = OctoConfig.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -304,6 +305,7 @@
 				D0600169DB45E883707B86A6 /* Pods */,
 				1882D30109100A187BA46643 /* Frameworks */,
 				71AB707E244CB611003EFC21 /* TangSengDaoDao-Bridging-Header.h */,
+				F9A37A32F1F58BBBCA58B52D /* OctoConfig.xcconfig */,
 			);
 			sourceTree = "<group>";
 		};
@@ -677,6 +679,7 @@
 /* Begin XCBuildConfiguration section */
 		4B5FF74F2F908A62005CCF01 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F9A37A32F1F58BBBCA58B52D /* OctoConfig.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
@@ -684,7 +687,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = D5G47RYK64;
+				DEVELOPMENT_TEAM = "$(APPLE_TEAM_ID)";
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -710,6 +713,7 @@
 		};
 		4B5FF7502F908A62005CCF01 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F9A37A32F1F58BBBCA58B52D /* OctoConfig.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
@@ -717,7 +721,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = D5G47RYK64;
+				DEVELOPMENT_TEAM = "$(APPLE_TEAM_ID)";
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -743,12 +747,13 @@
 		};
 		7130BFCB24C6817600B9E04B /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F9A37A32F1F58BBBCA58B52D /* OctoConfig.xcconfig */;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = D5G47RYK64;
+				DEVELOPMENT_TEAM = "$(APPLE_TEAM_ID)";
 				INFOPLIST_FILE = NotificationService/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -767,12 +772,13 @@
 		};
 		7130BFCC24C6817600B9E04B /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F9A37A32F1F58BBBCA58B52D /* OctoConfig.xcconfig */;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = D5G47RYK64;
+				DEVELOPMENT_TEAM = "$(APPLE_TEAM_ID)";
 				INFOPLIST_FILE = NotificationService/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -791,12 +797,13 @@
 		};
 		7130BFE324C6832F00B9E04B /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F9A37A32F1F58BBBCA58B52D /* OctoConfig.xcconfig */;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = D5G47RYK64;
+				DEVELOPMENT_TEAM = "$(APPLE_TEAM_ID)";
 				INFOPLIST_FILE = NotificationContent/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -815,12 +822,13 @@
 		};
 		7130BFE424C6832F00B9E04B /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = F9A37A32F1F58BBBCA58B52D /* OctoConfig.xcconfig */;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = D5G47RYK64;
+				DEVELOPMENT_TEAM = "$(APPLE_TEAM_ID)";
 				INFOPLIST_FILE = NotificationContent/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -977,7 +985,7 @@
 				CODE_SIGN_ENTITLEMENTS = TangSengDaoDao/TangSengDaoDao.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 57;
+				CURRENT_PROJECT_VERSION = 58;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = D5G47RYK64;
 				ENABLE_BITCODE = NO;
@@ -1088,7 +1096,7 @@
 				CODE_SIGN_ENTITLEMENTS = TangSengDaoDao/TangSengDaoDao.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 57;
+				CURRENT_PROJECT_VERSION = 58;
 				DEFINES_MODULE = YES;
 				DEVELOPMENT_TEAM = D5G47RYK64;
 				ENABLE_BITCODE = NO;

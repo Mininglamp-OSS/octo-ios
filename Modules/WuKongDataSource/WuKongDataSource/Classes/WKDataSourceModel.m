@@ -40,7 +40,7 @@
     if([isExternalGroupRaw isKindOfClass:[NSNumber class]] || [isExternalGroupRaw isKindOfClass:[NSString class]]) {
         groupModel.isExternalGroup = @([isExternalGroupRaw integerValue] == 1);
     }
-    // YUJ-27 allow_external: 是否允许邀请外部成员
+    // allow_external: 是否允许邀请外部成员
     id allowExternalRaw = dictory[@"allow_external"];
     if([allowExternalRaw isKindOfClass:[NSNumber class]] || [allowExternalRaw isKindOfClass:[NSString class]]) {
         groupModel.allowExternal = @([allowExternalRaw integerValue] == 1);
@@ -99,7 +99,7 @@
     if([sourceSpaceNameRaw isKindOfClass:[NSString class]]) {
         model.sourceSpaceName = sourceSpaceNameRaw;
     }
-    // YUJ-63 home_space_id / home_space_name: viewer-relative 判定依据
+    // home_space_id / home_space_name: viewer-relative 判定依据
     id homeSpaceIdRaw = dictory[@"home_space_id"];
     if([homeSpaceIdRaw isKindOfClass:[NSString class]]) {
         model.homeSpaceId = homeSpaceIdRaw;
@@ -149,7 +149,7 @@
     if(self.sourceSpaceName && self.sourceSpaceName.length > 0) {
         channelMember.extra[@"source_space_name"] = self.sourceSpaceName;
     }
-    // YUJ-63 home_space_*: 所有成员都可能有（viewer-relative 判断需要区分"外部成员的 home Space"和"我自己当前 Space"）
+    // home_space_*: 所有成员都可能有（viewer-relative 判断需要区分"外部成员的 home Space"和"我自己当前 Space"）
     if(self.homeSpaceId && self.homeSpaceId.length > 0) {
         channelMember.extra[@"home_space_id"] = self.homeSpaceId;
     }

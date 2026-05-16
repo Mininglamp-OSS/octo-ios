@@ -1,6 +1,6 @@
 //
 //  ZCCustomKeyBoardView.m
-//  qiyunxin
+// Copyright 2026 MININGLAMP Technology and the OCTO contributors
 //
 //  Created by Qiyunxin01 on 16/6/18.
 //  Copyright © 2016年 aiti. All rights reserved.

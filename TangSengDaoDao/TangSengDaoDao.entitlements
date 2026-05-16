@@ -6,8 +6,7 @@
 	<string>development</string>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
-		<string>applinks:githubim.com</string>
-		<string>applinks:api-test.example.com</string>
+		<string>applinks:your.universal-link.example.com</string>
 	</array>
 	<key>com.apple.security.application-groups</key>
 	<array>

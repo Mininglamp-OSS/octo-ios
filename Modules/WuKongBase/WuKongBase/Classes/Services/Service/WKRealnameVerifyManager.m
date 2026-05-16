@@ -2,10 +2,10 @@
 //  WKRealnameVerifyManager.m
 //  WuKongBase
 //
-//  YUJ-391 / Aegis Phase 2c — 「去认证」入口直跳 Aegis 账户页
-//  YUJ-396 / GH dmwork-web#1174 — 按环境从 appconfig.oidc_providers[].account_url
+//  / Aegis Phase 2c — 「去认证」入口直跳 Aegis 账户页
+//  / — 按环境从 appconfig.oidc_providers[].account_url
 //                                 读取 Aegis 域名, 不再硬编码 prod URL
-//  YUJ-396 Round 2 / Jerry-Xin #112 review blocking 2 — 移除 Universal Link
+//  Round 2 / Jerry-Xin #112 review blocking 2 — 移除 Universal Link
 //                                 fallback, 回跳只走 dmwork:// custom scheme
 //
 
@@ -144,7 +144,7 @@ static NSString *const WKAegisAccountVerificationPath = @"/profile/info?anchor=v
 /// 等价于 Web 端 resolveRealnameVerifyUrl(ok=true) 分支。
 ///
 /// query / fragment 的守卫与 WKOidcProviderConfig.sanitizeHttpsURL: 同语义, 这里
-/// 是深层防御（defense-in-depth, YUJ-396 R3 suggestion 1）—— 该方法是 public
+/// 是深层防御（defense-in-depth, R3 suggestion 1）—— 该方法是 public
 /// header 导出的, 允许外部调用者传入 parser 层之外的 accountUrl 值, 即使 parser
 /// 层改了也不能让 builder 拼出语义歧义的 URL。
 + (nullable NSURL *)buildVerifyURLFromAccountUrl:(nullable NSString *)accountUrl {
@@ -179,7 +179,7 @@ static NSString *const WKAegisAccountVerificationPath = @"/profile/info?anchor=v
         return;
     }
 
-    // YUJ-396 R3 / Jerry-Xin #112 warning: 区分「appconfig 仍在加载」vs「appconfig
+    // R3 / Jerry-Xin #112 warning: 区分「appconfig 仍在加载」vs「appconfig
     // 已加载但没下发 provider」。之前实现把两者都当「未配置」→ 首次冷启动 /
     // 慢网下看到错误 toast 但实际只是请求没回来。
     //
@@ -221,7 +221,7 @@ static NSString *const WKAegisAccountVerificationPath = @"/profile/info?anchor=v
 /// 抽出来是为了 startVerificationFromVC: 的「已加载」与「加载后回调」两条路径
 /// 共享同一套「拿不到可用 accountUrl / URL 拼坏」的 toast 兜底, 不让分支漂移。
 - (void)_resolveProviderAndLaunchFromVC:(UIViewController *)fromVC {
-    // YUJ-396: 从 appconfig.oidc_providers 里读 accountUrl; 未登录 / 无 provider /
+    // : 从 appconfig.oidc_providers 里读 accountUrl; 未登录 / 无 provider /
     // provider 未配 accountUrl → 明确 toast, 不跳 prod 域。
     NSString *accountUrl = [WKRealnameVerifyManager primaryAegisAccountUrl];
     if(accountUrl.length == 0) {

@@ -176,7 +176,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,copy) NSString *systemUID; // 系统通知的uid
 @property(nonatomic,copy) NSString *botfatherUID; // BotFather的uid
 
-// YUJ-219-A4: System bot UIDs whose conversations require per-Space message
+// : System bot UIDs whose conversations require per-Space message
 // isolation. Comes from backend `common/appconfig` -> `system_bot_uids`;
 // defaults to @[@"botfather", @"u_10000", @"fileHelper"] when the appconfig
 // response does not include the field (keeps behavior usable when A2 backend
@@ -212,9 +212,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,assign) BOOL threadOn; // 子区功能开关
 
 // Aegis OIDC SSO providers downloaded from `common/appconfig` -> `oidc_providers`.
-// YUJ-396 / GH dmwork-web#1174 / develop_fix 625cc7c 合并合定义:
+// / / 合并合定义:
 // - 登录页 (王立涛 develop_fix): 显示/隐藏 SSO 按钮, init 从 NSUserDefaults 缓存 hydrate 冷启动即可渲染。
-// - 实名认证 (YUJ-396): WKRealnameVerifyManager 读每 entry 的 accountUrl 拼账户页 URL,
+// - 实名认证 (): WKRealnameVerifyManager 读每 entry 的 accountUrl 拼账户页 URL,
 //   不再硬编码 prod 常量。accountUrl 按环境不同 (accounts-test.imocto.cn im-test /
 //   accounts.example.com im-prod)。未下发 / 非数组 → @[], 调用侧 toast 兜底。
 // Mirrors web dmworkbase OidcProviderConfig / dmworklogin SSOProvider
@@ -229,7 +229,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// 请求远程配置。可以安全多次调用：
 ///   - `requestSuccess == YES` → 立刻 callback(nil)
 ///   - 有 in-flight 请求 → 本 callback 挂到内部队列, 请求完成时一起 fire
-///     （YUJ-396 R3 / Jerry-Xin #112 review warning: 老实现在 startRequest==YES
+///     （R3 / review warning: 老实现在 startRequest==YES
 ///       时会静默丢 callback, 导致调用侧（如 WKRealnameVerifyManager）无法等待
 ///       appconfig loading 完成）
 ///   - 未请求 → 本次起请求, callback 同样入队等完成

@@ -3,7 +3,7 @@
 //  TangSengDaoDao
 //
 //  Created by tt on 2019/11/30.
-//  Copyright © 2019 xinbida. All rights reserved.
+//  Copyright 2026 MININGLAMP Technology and the OCTO contributors
 //
 
 #import "AppDelegate.h"
@@ -79,7 +79,10 @@
     buglyConfig.channel = @"TestFlight";
     buglyConfig.blockMonitorEnable = YES;       // 开启卡顿监控
     buglyConfig.blockMonitorTimeout = 1.0;      // 主线程卡顿超过 1 秒上报堆栈
-    [Bugly startWithAppId:@"a66cf95f92" config:buglyConfig];
+    NSString *buglyAppId = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOBuglyAppIdMain"];
+    if (buglyAppId.length > 0) {
+        [Bugly startWithAppId:buglyAppId config:buglyConfig];
+    }
 
     // 预热 WKWebView：首次初始化会启动 WebKit 进程（~200-500ms），
     // 提前在启动时完成，后续聊天中表格渲染不再卡顿
@@ -224,7 +227,6 @@
             }
         };
     NSString *myToken = getDeviceToken();
-    NSLog(@"myToken----------->%@",myToken);
     [WKApp shared].loginInfo.deviceToken = myToken;
     [[WKApp shared].loginInfo save];
    NSString *bundleID = [[[NSBundle mainBundle] infoDictionary] objectForKey:@"CFBundleIdentifier"];

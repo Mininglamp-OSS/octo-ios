@@ -2,14 +2,14 @@
 //  WKMentionUserCellTests.m
 //  LiMaoBase_Tests
 //
-//  YUJ-135 — @Mention 候选菜单外部成员 @SpaceName 后缀单元测试。
+//  — @Mention 候选菜单外部成员 @SpaceName 后缀单元测试。
 //
 //  参考：
-//    - WKMemberCell (YUJ-93 PR #66) — 同款 viewer-relative 规则的 UI 对齐
+//    - WKMemberCell (PR #66) — 同款 viewer-relative 规则的 UI 对齐
 //    - Android RemindMemberAdapter.java — 跨端行为对齐
 //    - Web createMentionSuggestion — @SpaceName 行为对齐
 //
-//  覆盖 4 个场景 + 1 个 YUJ-98 坑点专项（cell 复用时 attributedText 与 text 互斥）。
+//  覆盖 4 个场景 + 1 个 坑点专项（cell 复用时 attributedText 与 text 互斥）。
 //  测试直接驱动 cell.refresh:，断言 nameLbl.text / nameLbl.attributedText。
 //  设 viewerSpaceId 通过 NSUserDefaults "currentSpaceId"，与 WKExternalViewerResolver.currentViewerSpaceId 对齐。
 //
@@ -76,7 +76,7 @@
     [self.cell refresh:m];
 
     UILabel *lbl = [self nameLbl];
-    // 外部路径必须走 attributedText（YUJ-98 互斥约束：attributedText 非空时 text 不可见）。
+    // 外部路径必须走 attributedText（互斥约束：attributedText 非空时 text 不可见）。
     XCTAssertNotNil(lbl.attributedText);
     XCTAssertGreaterThan(lbl.attributedText.length, 0);
     XCTAssertEqualObjects([self visibleNameString], @"Alice @OctoWork");
@@ -134,7 +134,7 @@
     XCTAssertEqualObjects(lbl.text, @"Dan");
 }
 
-#pragma mark - YUJ-98 坑点：cell 复用时 attributedText / text 互斥，必须显式清空
+#pragma mark - 坑点：cell 复用时 attributedText / text 互斥，必须显式清空
 
 - (void)testCellReuse_ExternalThenInternal_ClearsAttributedText {
     // 第一轮：外部成员 → attributedText 有后缀

@@ -2,7 +2,7 @@
 //  WKOidcProviderConfigParseTests.m
 //  WuKongBase Tests
 //
-//  YUJ-396 P-S2 / Jerry-Xin #112 review suggestion 2 —
+//  P-S2 / Jerry-Xin #112 review suggestion 2 —
 //    锁 WKOidcProviderConfig.parseArray 的 entry 筛选合约。
 //
 //  cover:
@@ -11,7 +11,7 @@
 //    3. entry 不是 dict → 跳过
 //    4. id 缺失 / 非 string / 空串 → 跳过 entry
 //    5. authorize_path 非合规（缺 / '//' 开头 / 不 '/' 开头 / 非 string）→ 跳过 entry
-//    6. name 缺失 / 空串 → 保留 entry（YUJ-396 P-S1 改动）, name=nil
+//    6. name 缺失 / 空串 → 保留 entry（P-S1 改动）, name=nil
 //    7. account_url 非 https（http / javascript: / 无 host）→ entry 保留, accountUrl=nil
 //    8. 正常 entry → 字段齐全拼回
 //    9. 混合合法 / 非法 entries → 只保留合法部分
@@ -104,7 +104,7 @@
     XCTAssertEqualObjects([WKOidcProviderConfig parseArray:raw], @[]);
 }
 
-#pragma mark - name optional (YUJ-396 P-S1)
+#pragma mark - name optional (P-S1)
 
 - (void)test_missingName_entryKept_nameNil {
     // name 缺失 → entry 保留, name=nil（UI 侧 fallback 到 providerId）
@@ -169,7 +169,7 @@
     XCTAssertNil(out.firstObject.accountUrl);
 }
 
-#pragma mark - account_url rejects query / fragment (YUJ-396 Round 2 suggestion)
+#pragma mark - account_url rejects query / fragment (Round 2 suggestion)
 
 // buildVerifyURLFromAccountUrl: 在 accountUrl 末尾拼固定 path `/profile/info?anchor=verification`。
 // 若 accountUrl 本身已经带 query 或 fragment, 拼出来的 URL 语义歧义:

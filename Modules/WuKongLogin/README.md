@@ -22,7 +22,7 @@ pod 'WuKongLogin'
 
 ## Author
 
-tangtaoit, tt@wukong.ai
+MININGLAMP Technology, https://github.com/Mininglamp-OSS
 
 ## License
 

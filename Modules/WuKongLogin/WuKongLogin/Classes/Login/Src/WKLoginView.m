@@ -349,7 +349,7 @@
 }
 
 // Build OIDC authorize URL for the webview to load.
-// Delegates to WKOidcProviderConfig shared helper (YUJ-420 R1: centralize URL
+// Delegates to WKOidcProviderConfig shared helper (R1: centralize URL
 // construction + safe query encoding + redacted logging; see WKOidcProviderConfig.m
 // for full implementation rationale).
 //
@@ -357,7 +357,7 @@
 // 查设备 token; 若 OIDC 回跳 flag 不是 3, IM CONNECT 查不到对应 device-token row 会
 // 被静默关 socket。WKLoginVM / WKRegisterVM 所有 native 登录接口也都发 flag=3。
 - (NSURL *)buildOidcAuthorizeURL:(WKOidcProviderConfig *)provider authcode:(NSString *)authcode {
-    // YUJ-420 R1 fix (Jerry-Xin Critical): delegate to WKOidcProviderConfig shared helper,
+    // R1 fix (Jerry-Xin Critical): delegate to WKOidcProviderConfig shared helper,
     // which uses NSURLComponents + NSURLQueryItem for RFC 3986-safe query encoding and
     // avoids logging full authorize URL (authcode / device_* redacted).
     return [WKOidcProviderConfig buildAuthorizeURLForProvider:provider

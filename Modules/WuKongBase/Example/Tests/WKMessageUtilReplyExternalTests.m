@@ -2,9 +2,9 @@
 //  WKMessageUtilReplyExternalTests.m
 //  LiMaoBase_Tests
 //
-//  YUJ-131 · iOS P0 — unit tests for +applyMsgLevelExternalFieldsToReply:dict:.
+//  · iOS P0 — unit tests for +applyMsgLevelExternalFieldsToReply:dict:.
 //  Mirrors the 5 scenarios from dmwork-web PR #1073 Reply.decode tests plus
-//  one extra case for the YUJ-53 silent-fail reply-field-missing downgrade.
+//  one extra case for the silent-fail reply-field-missing downgrade.
 //
 //  These run purely in-process: the helper writes to WKReply associated
 //  properties (via WKReply+ExternalGroup), no UI / NSUserDefaults deps.
@@ -115,7 +115,7 @@
 }
 
 // Scenario 5 — non-external viewer-relative：home_id == viewer，legacy 说 external 也不采信.
-// （对齐 resolver 的 "home wins over legacy" 规则，YUJ-93）
+// （对齐 resolver 的 "home wins over legacy" 规则，）
 - (void)testApply_NewPath_WinsOverLegacy_NotExternal {
     WKReply *reply = [WKReply new];
     NSDictionary *dict = @{
@@ -136,7 +136,7 @@
     XCTAssertEqualObjects(r.sourceSpaceName, @"");
 }
 
-// Scenario 6 — 全缺失降级场景（YUJ-53 silent-fail 防御）：reply dict 不带任何外部群字段时，
+// Scenario 6 — 全缺失降级场景（silent-fail 防御）：reply dict 不带任何外部群字段时，
 // UI 不应该崩溃，也不该误判为 external。
 - (void)testApply_AllFieldsMissing_DefaultsToNonExternal {
     WKReply *reply = [WKReply new];

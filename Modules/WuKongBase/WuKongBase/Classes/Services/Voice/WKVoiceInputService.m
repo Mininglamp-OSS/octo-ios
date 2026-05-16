@@ -125,7 +125,7 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
     });
 
     [[WKAPIClient sharedClient] GET:path parameters:nil].then(^(NSDictionary *resp) {
-        // YUJ-420 R4 fix (lml2468 Critical privacy): 不打 context 字段内容(用户数据)。
+        // R4 fix (Critical privacy): 不打 context 字段内容(用户数据)。
 #if DEBUG
         {
             NSString *_ctx = resp[@"context"];
@@ -229,7 +229,7 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
         formFields[@"member_context"] = memberContext;
     }
 
-    // YUJ-420 R4 fix (lml2468 Critical privacy): 不打 context 字段内容。
+    // R4 fix (Critical privacy): 不打 context 字段内容。
 #if DEBUG
     NSLog(@"[VoiceInput] transcribe m4a request: contextText.len=%lu chatContext.len=%lu personalContext.len=%lu memberContext.len=%lu audio=%lu bytes",
           (unsigned long)contextText.length,
@@ -254,7 +254,7 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
                 return;
             }
 
-            // YUJ-420 R4 fix (lml2468 Critical privacy): 不打转写文本原文(用户语音内容)。
+            // R4 fix (Critical privacy): 不打转写文本原文(用户语音内容)。
 #if DEBUG
             {
                 NSString *_t = responseObject[@"text"];
@@ -305,7 +305,7 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
     if (personalContext.length > 0) formFields[@"personal_context"] = personalContext;
     if (memberContext.length > 0) formFields[@"member_context"] = memberContext;
 
-    // YUJ-420 R4 fix (lml2468 Critical privacy): 不打转写请求的 context 字段内容
+    // R4 fix (Critical privacy): 不打转写请求的 context 字段内容
     // (context_text / chat_context / personal_context / member_context 均是用户数据);
     // 仅保留 DEBUG-only 的长度类 metadata 。
 #if DEBUG

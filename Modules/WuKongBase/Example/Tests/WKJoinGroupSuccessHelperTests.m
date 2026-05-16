@@ -2,7 +2,7 @@
 //  WKJoinGroupSuccessHelperTests.m
 //  LiMaoBase_Tests
 //
-//  YUJ-141 (iOS) — `WKJoinGroupSuccessHelper` 单元测试。对齐 Web PR#1068 的
+//  (iOS) — `WKJoinGroupSuccessHelper` 单元测试。对齐 Web PR#1068 的
 //  `computeAndSaveJoinSuccess` + `consumeJoinSuccessNotice` 契约：
 //    - 只在「viewer 与 target 不同 Space」时保存跨 Space 通知；
 //    - consume 是一次性（读后即清）；

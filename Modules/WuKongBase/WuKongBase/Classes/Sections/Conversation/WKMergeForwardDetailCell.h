@@ -22,7 +22,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,assign) BOOL hideAvatar; // 隐藏头像
 
-// YUJ-130 / Web PR#981-982 / Android ChatMultiForwardDetailAdapter 对齐：
+// / Web PR#981-982 / Android ChatMultiForwardDetailAdapter 对齐：
 // 合并转发详情里每条消息作者的外部群字段（来自父 WKMergeForwardContent.users
 // 中匹配 message.fromUid 的条目），用于 viewer-relative 渲染「 @SpaceName」后缀。
 // 可读键：is_external / source_space_name / home_space_id / home_space_name。

@@ -2,7 +2,7 @@
 //  WKRealnameVerifyCallbackTests.m
 //  WuKongBase Tests
 //
-//  YUJ-396 Round 2 / Jerry-Xin #112 review blocking 2 — 锁定 Option B:
+//  Round 2 / Jerry-Xin #112 review blocking 2 — 锁定 Option B:
 //  `isVerifiedCallbackURL:` 只认自定义 scheme `octo://verified`, **不认** Universal
 //  Link `https://.../verified`（Aegis host 没在 entitlement applinks:* 里, UL
 //  fallback 代码过去就是死码, Round 2 彻底删除; return_to 统一走 app scheme）。

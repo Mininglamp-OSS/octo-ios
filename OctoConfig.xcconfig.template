@@ -1,0 +1,55 @@
+// =============================================================================
+// OctoConfig.xcconfig.template — Octo iOS 私有配置模板
+//
+// 用法：
+//   1. 复制本模板为 OctoConfig.xcconfig（已加入 .gitignore，不会入库）
+//        cp OctoConfig.xcconfig.template OctoConfig.xcconfig
+//   2. 把下面的占位值替换为你自己的真实值
+//   3. 重新执行 pod install
+//        Podfile post_install 会自动把 OctoConfig.xcconfig 注入到所有
+//        Pods 生成的 xcconfig 中（#include?，软引用），从而对主工程及
+//        所有 Pods 目标可见。
+//   4. 编译运行
+//
+// 缺失本文件不会导致编译失败（#include? 软引用），但相关功能不工作：
+//   - 缺 APPLE_TEAM_ID        → 自动签名失败（手动签名仍可用）
+//   - 缺 OCTO_BUGLY_APP_ID_*  → 崩溃统计不上报
+//   - 缺 OCTO_IM_DEFAULT_HOST → App 启动后会显示空的服务器地址，需手动输入
+//
+// 注意：xcconfig 文件中 `//` 是注释起始符。如要写带协议的 URL，需省略
+// 协议（写 host）或用变量拆分。
+// =============================================================================
+
+
+// ── Apple 开发者团队 ──────────────────────────────────────────────────────
+// 你的 10 位 Team ID。可在 https://developer.apple.com/account 找到。
+
+APPLE_TEAM_ID = YOUR_TEAM_ID
+
+
+// ── Bugly 崩溃 + 卡顿采集（腾讯）──────────────────────────────────────────
+// 控制台：https://bugly.qq.com
+// 项目当前在两处分别启动 Bugly（主 App 入口 + WuKongBase 内部）。
+// 若不需要 Bugly，留空即可，启动时会跳过。
+
+OCTO_BUGLY_APP_ID_MAIN = YOUR_BUGLY_APP_ID
+OCTO_BUGLY_APP_ID_SDK  = YOUR_BUGLY_APP_ID
+
+
+// ── IM 服务网关默认地址 ───────────────────────────────────────────────────
+// 配套后端：https://github.com/Mininglamp-OSS/octo-server
+// 仅 host，不带协议、不带端口。HTTPS 与否在另一个 key 控制。
+// 用户可在 App 内"切换服务器"页面覆盖。
+// （本变量将在 P1c 阶段接入到 WKServerConfig.m，目前仅占位）
+
+OCTO_IM_DEFAULT_HOST  = your.im.server.example.com
+OCTO_IM_DEFAULT_LABEL = 默认服务器
+
+
+// ── Universal Links / Associated Domains ─────────────────────────────────
+// 仅域名，不含 applinks: 前缀。
+// 注意：Apple 的 .entitlements 文件不支持 xcconfig 替换，本变量预留给
+// 未来"启动脚本生成 entitlements"方案。当前阶段需直接编辑
+// TangSengDaoDao/TangSengDaoDao.entitlements 以替换为你自己的域名。
+
+OCTO_ASSOCIATED_DOMAIN = your.universal-link.example.com

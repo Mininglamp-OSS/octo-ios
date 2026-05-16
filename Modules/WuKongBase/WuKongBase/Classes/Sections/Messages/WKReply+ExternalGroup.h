@@ -2,7 +2,7 @@
 //  WKReply+ExternalGroup.h
 //  WuKongBase
 //
-//  YUJ-131 (iOS P0) — reply-level external-group fields for @SpaceName suffix
+//  (iOS P0) — reply-level external-group fields for @SpaceName suffix
 //  in quoted-message previews. Mirrors dmwork-web PR #1073 (Reply.prototype
 //  .decode monkey-patch) and dmwork-android's ReplyExternalFieldsHelper.
 //
@@ -13,7 +13,7 @@
 //  Contract: field names and raw-dict keys are identical to the msg-level
 //  fields WKMessageUtil writes onto WKMessage.extra — `from_home_space_id`,
 //  `from_home_space_name`, `from_is_external`, `from_source_space_name`.
-//  Changing them is a cross-layer break (see YUJ-53 silent-fail).
+//  Changing them is a cross-layer break (see silent-fail).
 //
 
 #import <Foundation/Foundation.h>
@@ -29,16 +29,16 @@ NS_ASSUME_NONNULL_BEGIN
  */
 @interface WKReply (ExternalGroup)
 
-/// 被回复消息发送者归属空间 ID（YUJ-63 viewer-relative path）
+/// 被回复消息发送者归属空间 ID（viewer-relative path）
 @property (nonatomic, copy, nullable) NSString *fromHomeSpaceId;
 
-/// 被回复消息发送者归属空间名称（YUJ-63 viewer-relative path）
+/// 被回复消息发送者归属空间名称（viewer-relative path）
 @property (nonatomic, copy, nullable) NSString *fromHomeSpaceName;
 
-/// Legacy `is_external` flag（被回复消息发送者，YUJ-28 路径）
+/// Legacy `is_external` flag（被回复消息发送者，路径）
 @property (nonatomic, assign) BOOL fromIsExternal;
 
-/// Legacy `source_space_name`（被回复消息发送者，YUJ-28 路径）
+/// Legacy `source_space_name`（被回复消息发送者，路径）
 @property (nonatomic, copy, nullable) NSString *fromSourceSpaceName;
 
 @end
