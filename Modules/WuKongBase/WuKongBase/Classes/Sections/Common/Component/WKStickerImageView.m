@@ -11,6 +11,7 @@
 #import <WuKongBase/WuKongBase-Swift.h>
 #import <SDWebImage/SDWebImage.h>
 #import "WuKongBase.h"
+#import "WKShimmerView.h"
 @interface WKStickerImageViewInner : SDAnimatedImageView
 
 
@@ -21,7 +22,7 @@
 @interface WKStickerImageView ()
 
 @property(nonatomic,strong) WKStickerImageViewInner *stickerImgView;
-@property(nonatomic,strong) StickerShimmerEffectNode *placeholder;
+@property(nonatomic,strong) WKShimmerView *placeholder;
 
 @property(nonatomic,assign) CGSize size;
 
@@ -66,18 +67,18 @@
 }
 
 -(void) renderPlaceholder {
-    if(!self.placeholder.view.superview) {
-        [self addSubview:self.placeholder.view];
+    if(!self.placeholder.superview) {
+        [self addSubview:self.placeholder];
     }
-   
+
     if(self.placehoderSvg && ![self.placehoderSvg isEqualToString:@""]) {
         [self.placeholder updateWithBackgroundColor:nil foregroundColor:[UIColor colorWithRed:0.0f green:0.0f blue:0.0f alpha:0.5f] shimmeringColor:[UIColor colorWithRed:116.0f/255.0f green:131.0f/255.0f blue:145.0f/255.0f alpha:1.0f] data:[self.placehoderSvg dataUsingEncoding:NSUTF8StringEncoding] size:CGSizeMake(self.size.width, self.size.height) imageSize:CGSizeMake(512.0f, 512.0f) isDecode:false];
-        
+
         [self.placeholder updateAbsoluteRect:CGRectMake(0.0f, 0.0f, self.size.width, self.size.height) within:CGSizeMake(self.size.width, self.size.height)];
-        
+
         self.placeholder.frame = self.bounds;
     }else {
-        [self.placeholder.view removeFromSuperview];
+        [self.placeholder removeFromSuperview];
     }
 }
 
@@ -104,7 +105,7 @@
     
     UIImage *placeholderImg;
    
-    if(!self.placeholder.view.superview) {
+    if(!self.placeholder.superview) {
         placeholderImg = [WKApp shared].config.defaultStickerPlaceholder;
     }
    
@@ -117,20 +118,18 @@
 
 -(void) removePlaceholder:(BOOL) animated {
     if(!animated) {
-        [self.placeholder removeFromSupernode];
+        [self.placeholder removeFromSuperview];
     }else {
-        self.placeholder.alpha = 0.0;
-        [self.placeholder.layer animateAlphaFrom:1.0f to:0.0f duration:0.2f delay:0 timingFunction:@"easeInEaseOut" mediaTimingFunction:nil removeOnCompletion:true completion:^(BOOL completion) {
-            [self.placeholder removeFromSupernode];
-           
-        }];
+        [self.placeholder layer_animateAlphaFrom:1.0f to:0.0f duration:0.2 delay:0
+                                  timingFunction:@"easeInEaseOut" mediaTimingFunction:nil
+                             removeOnCompletion:YES completion:nil];
     }
 }
 
-- (StickerShimmerEffectNode *)placeholder {
+- (WKShimmerView *)placeholder {
     if(!_placeholder) {
-        _placeholder = [[StickerShimmerEffectNode alloc] init];
-        [_placeholder setUserInteractionEnabled:false];
+        _placeholder = [[WKShimmerView alloc] init];
+        _placeholder.userInteractionEnabled = NO;
     }
     return _placeholder;
 }

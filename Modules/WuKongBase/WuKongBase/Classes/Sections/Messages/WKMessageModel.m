@@ -484,13 +484,13 @@
     return _tmpObject;
 }
 
-- (RadialStatusNode *)flameNode {
+- (WKRadialProgressView *)flameNode {
     if(!_flameNode) {
         if(![self needFlame]) {
             return nil;
         }
         // 阅后即焚
-        _flameNode = [[RadialStatusNode alloc] initWithBackgroundNodeColor:[UIColor colorWithWhite:0.0f alpha:0.5f] enableBlur:false];
+        _flameNode = [[WKRadialProgressView alloc] initWithBackgroundNodeColor:[UIColor colorWithWhite:0.0f alpha:0.5f] enableBlur:false];
         _flameNode.view.lim_size = CGSizeMake(20.0f, 20.0f);
     }
     return _flameNode;

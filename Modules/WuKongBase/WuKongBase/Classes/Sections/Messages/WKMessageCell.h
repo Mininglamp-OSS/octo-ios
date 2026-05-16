@@ -15,8 +15,8 @@
 #import "WKTrailingView.h"
 #import "WKTapLongTapOrDoubleTapGestureRecognizerEvent.h"
 #import "WKUserAvatar.h"
+#import "WKContentContainerNode.h"
 @class TapLongTapOrDoubleTapGestureRecognizerWrap;
-@class ContextExtractedContentContainingNode;
 @class WKMessageCell;
 @class WKBubbleBackgroundView;
 NS_ASSUME_NONNULL_BEGIN
@@ -66,7 +66,7 @@ typedef enum :NSUInteger {
 // 气泡背景
 
 
-@property(nonatomic,strong) ContextExtractedContentContainingNode *mainContextSourceNode;
+@property(nonatomic,strong) WKContentContainerNode *mainContextSourceNode;
 
 @property(nonatomic,strong) UIImageView *bubbleBackgroundView;
 

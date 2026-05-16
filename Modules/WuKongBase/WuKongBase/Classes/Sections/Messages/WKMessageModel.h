@@ -9,7 +9,7 @@
 
 #import <Foundation/Foundation.h>
 #import <WuKongIMSDK/WuKongIMSDK.h>
-@class RadialStatusNode;
+#import "WKRadialProgressView.h"
 NS_ASSUME_NONNULL_BEGIN
 
 typedef enum : NSUInteger {
@@ -138,7 +138,7 @@ typedef enum : NSUInteger {
 
 
 @property(nonatomic,assign) CGFloat flameIconSizeFactor; // 阅后即焚icon大小比率
-@property(nonatomic,strong) RadialStatusNode *flameNode; // 阅后即焚的动画
+@property(nonatomic,strong) WKRadialProgressView *flameNode; // 阅后即焚的动画
 @property(nonatomic,assign) BOOL flameFinished; // flame的动画完成
 @property(nonatomic,copy) void(^OnFlameFinished)(void); // flame动画完成回调
 

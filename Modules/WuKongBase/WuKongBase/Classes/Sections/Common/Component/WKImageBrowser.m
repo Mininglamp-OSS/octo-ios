@@ -18,13 +18,14 @@
 #import "WKVideoData.h"
 #import <ZLImageEditor/ZLImageEditor-Swift.h>
 #import <WuKongBase/WuKongBase-Swift.h>
+#import "WKRadialProgressView.h"
 @import ZLImageEditor;
 
 @interface WKImageBrowser ()<YBImageBrowserDelegate,WKCMDManagerDelegate,WKChatManagerDelegate>
 
 @property(nonatomic,strong) NSArray<WKScanHandler*> *handlers;
 
-@property(nonatomic,strong) RadialStatusNode *flameNode; // 阅后即焚的动画
+@property(nonatomic,strong) WKRadialProgressView *flameNode; // 阅后即焚的动画
 
 @property(nonatomic,strong) WKMessageModel *currentMessageModel;
 
@@ -132,10 +133,10 @@
 }
 
 
-- (RadialStatusNode *)flameNode {
+- (WKRadialProgressView *)flameNode {
     if(!_flameNode) {
         // 阅后即焚
-        _flameNode = [[RadialStatusNode alloc] initWithBackgroundNodeColor:[UIColor colorWithWhite:0.0f alpha:0.5f] enableBlur:false];
+        _flameNode = [[WKRadialProgressView alloc] initWithBackgroundNodeColor:[UIColor colorWithWhite:0.0f alpha:0.5f] enableBlur:false];
         _flameNode.view.lim_size = CGSizeMake(20.0f, 20.0f);
     }
     return _flameNode;

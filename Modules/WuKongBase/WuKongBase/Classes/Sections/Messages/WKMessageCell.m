@@ -22,6 +22,7 @@
 #import "WKExternalViewerResolver.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKTapLongTapOrDoubleTapGestureRecognizerEvent.h"
+#import "WKGestureContainerNode.h"
 
 
 // 整个消息距离顶部的距离
@@ -51,7 +52,7 @@ static NSMutableDictionary *flameNodeCacheDict;
 
 @property(nonatomic,strong) UIButton *navigateToMessageBtn; // 跳到消息的按钮
 
-@property(nonatomic,strong) ContextControllerSourceNode *mainContainerNode;
+@property(nonatomic,strong) WKGestureContainerNode *mainContainerNode;
 
 @property(nonatomic,strong) TapLongTapOrDoubleTapGestureRecognizerWrap *tapLongTapOrDoubleTapGestureRecognizerWrap;
 
@@ -125,9 +126,9 @@ static NSMutableDictionary *flameNodeCacheDict;
 
     
     // ---------- main容器 ----------
-    self.mainContextSourceNode = [[ContextExtractedContentContainingNode alloc] init];
+    self.mainContextSourceNode = [[WKContentContainerNode alloc] init];
 //    self.bubbleSourceNode.view.backgroundColor = [UIColor redColor];
-    self.mainContainerNode = [[ContextControllerSourceNode alloc] init];
+    self.mainContainerNode = [[WKGestureContainerNode alloc] init];
 //    self.mainContainerNode.isGestureEnabled = false;
     [self.contentView addSubnode:self.mainContainerNode];
     [self.mainContainerNode addSubnode:self.mainContextSourceNode];
@@ -139,7 +140,7 @@ static NSMutableDictionary *flameNodeCacheDict;
         }
         return [weakSelf shouldBeginContextGestureAtPoint:point];
     }];
-    [self.mainContainerNode setActivated:^(ContextGesture *gesture, CGPoint point) {
+    [self.mainContainerNode setActivated:^(UIGestureRecognizer *gesture, CGPoint point) {
         if(!weakSelf) {
             return;
         }
@@ -627,7 +628,7 @@ static NSMutableDictionary *flameNodeCacheDict;
     [self.flameBox.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
     
     if(self.messageModel.content.flame && ![self hiddenFlameProgress] && !self.messageModel.flameFinished) {
-        RadialStatusNode *flameNode = [self.messageModel flameNode];
+        WKRadialProgressView *flameNode = [self.messageModel flameNode];
         [self.flameBox addSubview:flameNode.view];
         __weak typeof(self.messageModel) weakMessageModel = self.messageModel;
         [self.messageModel startFlameIfNeed:^{
