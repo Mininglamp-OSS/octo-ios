@@ -5,16 +5,21 @@
 //  WuKongBase Tests
 //
 //  Round 2 / Jerry-Xin #112 review blocking 2 — 锁定 Option B:
-//  `isVerifiedCallbackURL:` 只认自定义 scheme `octo://verified`, **不认** Universal
-//  Link `https://.../verified`（Aegis host 没在 entitlement applinks:* 里, UL
-//  fallback 代码过去就是死码, Round 2 彻底删除; return_to 统一走 app scheme）。
+//  `isVerifiedCallbackURL:` 只认自定义 scheme `<OCTO_URL_SCHEME>://verified`,
+//  **不认** Universal Link `https://.../verified`（Aegis host 没在 entitlement
+//  applinks:* 里, UL fallback 代码过去就是死码, Round 2 彻底删除; return_to
+//  统一走 app scheme）。
+//
+//  P6-b 起 scheme 从硬编码 `dmwork` 改为从 OctoConfig.xcconfig 的 OCTO_URL_SCHEME
+//  动态注入, 默认 `octo`。所有 URL 用全局 `WKRealnameVerifiedURLScheme` 拼装,
+//  与产品代码同步, 避免下游改 scheme 后 tests 失效（Allen #121 review 🟡 项）。
 //
 //  合约（本 suite 把 Option B 固化下来, 防 regress 回 Round 1 的 UL 分支）:
-//    1. `octo://verified` + 任意 query / 任意 host case → 通过
-//    2. `dmwork://<other>`                                → 拒绝
-//    3. 任意 `https://.../verified`                        → 拒绝（UL fallback 已删）
-//    4. 非 http(s) 且 非 dmwork                            → 拒绝
-//    5. nil URL / 空 host                                  → 拒绝
+//    1. `<scheme>://verified` + 任意 query / 任意 host case → 通过
+//    2. `<scheme>://<other>`                                → 拒绝
+//    3. 任意 `https://.../verified`                          → 拒绝（UL fallback 已删）
+//    4. 非 http(s) 且 非 <scheme>                            → 拒绝
+//    5. nil URL / 空 host                                    → 拒绝
 //
 
 @import XCTest;
@@ -25,26 +30,31 @@
 
 @implementation WKRealnameVerifyCallbackTests
 
-#pragma mark - dmwork:// 自定义 scheme
+static NSURL *URLWithScheme(NSString *fmt) {
+    NSString *raw = [NSString stringWithFormat:fmt, WKRealnameVerifiedURLScheme];
+    return [NSURL URLWithString:raw];
+}
 
-- (void)test_dmworkVerified_accepted {
-    NSURL *url = [NSURL URLWithString:@"octo://verified?token=abc&verified=1"];
+#pragma mark - <scheme>:// 自定义 scheme
+
+- (void)test_customSchemeVerified_accepted {
+    NSURL *url = URLWithScheme(@"%@://verified?token=abc&verified=1");
     XCTAssertTrue([WKRealnameVerifyManager isVerifiedCallbackURL:url]);
 }
 
-- (void)test_dmworkVerified_noQuery_accepted {
-    NSURL *url = [NSURL URLWithString:@"octo://verified"];
+- (void)test_customSchemeVerified_noQuery_accepted {
+    NSURL *url = URLWithScheme(@"%@://verified");
     XCTAssertTrue([WKRealnameVerifyManager isVerifiedCallbackURL:url]);
 }
 
-- (void)test_dmworkScheme_wrongHost_rejected {
-    NSURL *url = [NSURL URLWithString:@"dmwork://other"];
+- (void)test_customScheme_wrongHost_rejected {
+    NSURL *url = URLWithScheme(@"%@://other");
     XCTAssertFalse([WKRealnameVerifyManager isVerifiedCallbackURL:url]);
 }
 
-- (void)test_dmworkScheme_emptyHost_rejected {
-    // dmwork://?foo 解析 host 为空
-    NSURL *url = [NSURL URLWithString:@"dmwork:///"];
+- (void)test_customScheme_emptyHost_rejected {
+    // <scheme>:/// 解析 host 为空
+    NSURL *url = URLWithScheme(@"%@:///");
     XCTAssertFalse([WKRealnameVerifyManager isVerifiedCallbackURL:url]);
 }
 
@@ -67,7 +77,7 @@
 }
 
 - (void)test_httpsArbitraryHostVerified_rejected {
-    // 防御: 哪怕下发的 host 名字花里胡哨, 只要是 https 就一律拒, 回跳通道走 dmwork://。
+    // 防御: 哪怕下发的 host 名字花里胡哨, 只要是 https 就一律拒, 回跳通道走 app scheme。
     NSURL *url = [NSURL URLWithString:@"https://accounts-staging.example/verified"];
     XCTAssertFalse([WKRealnameVerifyManager isVerifiedCallbackURL:url]);
 }
@@ -78,7 +88,7 @@
 }
 
 - (void)test_httpVerified_rejected {
-    // http 同 https 一样, 回跳通道只认 dmwork://。
+    // http 同 https 一样, 回跳通道只认 app scheme。
     NSURL *url = [NSURL URLWithString:@"http://accounts-test.example.com/verified"];
     XCTAssertFalse([WKRealnameVerifyManager isVerifiedCallbackURL:url]);
 }

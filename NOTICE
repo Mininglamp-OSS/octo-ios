@@ -60,9 +60,17 @@ Bundled Third-Party Components
                                        源代码副本保留在同目录 arm/opencore-amrnb/, arm/opencore-amrwb/,
                                        arm/vo-amrwbenc/ 子目录中，以满足许可证下游分发义务。
 
-  [REMOVED in P5] librlottie       LGPL            从 Podfile 与本仓库构建链中移除。
-                                                  消费方 WKAnimatedStickerNode /
-                                                  WKMessageStickerCell 均为死代码，已删除。
+  [!]   librlottie                    LGPL            **仍在编译链中（间接依赖）**。
+                                                  通过 SDWebImageLottieCoder（Apache 2.0）
+                                                  传入，rlottie 引擎本体为 LGPL。消费方：
+                                                  WKApp.m 注册 WKSDImageLottieCoder 用于
+                                                  消息列表 Lottie 贴图解码。
+                                                  Podfile 强制使用 SDWebImage 官方 fork
+                                                  librlottie (0.2.1, 源自 Samsung 官方 rlottie)
+                                                  以满足 LGPL 链接条款（动态可替换）。
+                                                  下游分发 Octo iOS 二进制需遵守 LGPL：
+                                                  允许用户替换 librlottie 部分（动态链接）
+                                                  或提供目标文件以便重新链接。
 
   [EXCLUDED in P5] SoundTouch       LGPL v2.1       通过 WuKongBase.podspec exclude_files
                                                   从编译链中排除。变声功能降级为无变调

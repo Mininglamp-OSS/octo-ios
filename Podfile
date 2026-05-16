@@ -7,7 +7,7 @@ workspace 'OctoiOS.xcworkspace'
 # 私有配置（Apple Team ID / Bugly AppKey / IM 服务器等）统一放在
 # OctoConfig.xcconfig（gitignored），由本 Podfile 在 post_install 阶段：
 #   1. 读出所需变量（如 APPLE_TEAM_ID）赋给 build_settings；
-#   2. 把 #include? "../../OctoConfig.xcconfig" 注入每个 Pods xcconfig，
+#   2. 把 #include? "../../../OctoConfig.xcconfig" 注入每个 Pods xcconfig，
 #      让主工程通过 Pods 链路自动看到这些变量。
 # 见 OctoConfig.xcconfig.template 了解如何配置。
 # ─────────────────────────────────────────────────────────────────────────────
@@ -83,8 +83,12 @@ post_install do |installer|
     end
     user_project_for_bugly.save
 
-    # 把 OctoConfig.xcconfig 软引用注入到每一个 Pods xcconfig
-    octo_include_line = "#include? \"../../OctoConfig.xcconfig\"\n"
+    # 把 OctoConfig.xcconfig 软引用注入到每一个 Pods xcconfig。
+    # 路径深度：xcconfig 位于 Pods/Target Support Files/<Pod>/<Pod>.<config>.xcconfig，
+    # 距离仓库根 (OctoConfig.xcconfig) 需要回退 3 层。`#include?` 静默失败，
+    # 路径写错时不会报错，但变量也不会注入 —— 历史上写成 `../../` 因此失效，
+    # 主工程依然吃 pbxproj 里残留的硬编码 DEVELOPMENT_TEAM。
+    octo_include_line = "#include? \"../../../OctoConfig.xcconfig\"\n"
     Dir.glob(File.join(__dir__, 'Pods/Target Support Files/**/*.xcconfig')).each do |xcconfig|
         contents = File.read(xcconfig)
         unless contents.include?('OctoConfig.xcconfig')
