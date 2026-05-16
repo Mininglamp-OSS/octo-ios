@@ -250,7 +250,15 @@ static NSString *const kShareDirName = @"ShareExtensionFiles";
 }
 
 - (void)openMainApp {
-    NSURL *url = [NSURL URLWithString:@"botgate://share"];
+    // PR #121 Allen review 🟡 #2: scheme 由 OctoConfig.xcconfig 的 OCTO_URL_SCHEME
+    // 注入到本扩展 Info.plist 的 OCTOURLScheme 字段，默认 `octo`，
+    // 历史上写死 `botgate`。与主 App 的 appOpenURL: 同 scheme 不同 host。
+    NSString *scheme = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOURLScheme"];
+    if (scheme.length == 0 || [scheme isEqualToString:@"$(OCTO_URL_SCHEME)"]) {
+        scheme = @"octo";
+    }
+    NSString *urlString = [NSString stringWithFormat:@"%@://share", scheme];
+    NSURL *url = [NSURL URLWithString:urlString];
 
     // iOS 18+: 必须用非 deprecated 的 open:options:completionHandler:
     // 通过 responder chain 找到 UIApplication 实例，直接 cast 调用

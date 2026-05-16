@@ -281,14 +281,17 @@ static WKApp *_instance;
 }
 
 -(BOOL) appOpenURL:(NSURL *)url options:(NSDictionary<UIApplicationOpenURLOptionsKey,id> *)options {
-    // 处理 Share Extension 跳转
-    if ([url.scheme isEqualToString:@"botgate"] && [url.host isEqualToString:@"share"]) {
+    // 处理 Share Extension 跳转：跨进程 URL 走 `<OCTO_URL_SCHEME>://share`
+    // (与实名回跳同 scheme，通过 host 区分入口)。scheme 由 OctoConfig.xcconfig
+    // 的 OCTO_URL_SCHEME 决定，默认 `octo`。历史上写死 `botgate`，
+    // 见 PR #121 Allen review 🟡 #2。
+    if ([url.scheme isEqualToString:WKRealnameVerifiedURLScheme] && [url.host isEqualToString:@"share"]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [self handleShareExtensionData];
         });
         return YES;
     }
-    // 实名认证回跳 octo://verified
+    // 实名认证回跳 <OCTO_URL_SCHEME>://verified
     if([WKRealnameVerifyManager isVerifiedCallbackURL:url]) {
         [WKRealnameVerifyManager handleVerifiedCallback:url];
         return YES;

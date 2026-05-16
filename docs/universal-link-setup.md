@@ -125,6 +125,6 @@ Universal Link 应该跳进 App；如果跳了 Safari 说明配置不对。
 
 ## 五、相关文件
 
-- `Octo/Octo.entitlements` — Associated Domains 配置
-- `OctoConfig.xcconfig.template` — `OCTO_ASSOCIATED_DOMAIN` 占位（暂未生效）
+- `Octo/Octo.entitlements` — Associated Domains 配置（`applinks:$(OCTO_ASSOCIATED_DOMAIN)`，签名阶段由 Xcode 替换）
+- `OctoConfig.xcconfig.template` — `OCTO_ASSOCIATED_DOMAIN`（修改后 Clean Build Folder 重新签名生效）
 - `Modules/WuKongBase/WuKongBase/Classes/WKApp.m` — `application:continueUserActivity:` 入口

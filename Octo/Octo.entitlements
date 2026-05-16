@@ -6,7 +6,7 @@
 	<string>development</string>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
-		<string>applinks:your.universal-link.example.com</string>
+		<string>applinks:$(OCTO_ASSOCIATED_DOMAIN)</string>
 	</array>
 	<key>com.apple.security.application-groups</key>
 	<array>

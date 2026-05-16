@@ -2,6 +2,6 @@
 <Workspace
    version = "1.0">
    <FileRef
-      location = "self:LiMaoIMDemo.xcodeproj">
+      location = "self:OctoiOS.xcodeproj">
    </FileRef>
 </Workspace>

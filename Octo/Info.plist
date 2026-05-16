@@ -30,16 +30,6 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>webchat</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>botgate</string>
-			</array>
-		</dict>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
-			<key>CFBundleURLName</key>
 			<string>$(OCTO_URL_SCHEME).realname</string>
 			<key>CFBundleURLSchemes</key>
 			<array>

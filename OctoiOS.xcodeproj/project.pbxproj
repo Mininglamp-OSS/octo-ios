@@ -429,7 +429,7 @@
 				4B5FF74B2F908A62005CCF01 /* PBXTargetDependency */,
 			);
 			name = OctoiOS;
-			productName = LiMaoIMDemo;
+			productName = Octo;
 			productReference = 71D6960323926E3500D092BA /* Octo.app */;
 			productType = "com.apple.product-type.application";
 		};
