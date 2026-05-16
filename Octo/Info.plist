@@ -74,6 +74,33 @@
 	<string>$(OCTO_IM_DEFAULT_HOST)</string>
 	<key>OCTOIMDefaultLabel</key>
 	<string>$(OCTO_IM_DEFAULT_LABEL)</string>
+	<key>OCTOIMPresets</key>
+	<array>
+		<dict>
+			<key>host</key>
+			<string>$(OCTO_IM_PRESET_1_HOST)</string>
+			<key>label</key>
+			<string>$(OCTO_IM_PRESET_1_LABEL)</string>
+			<key>https</key>
+			<string>$(OCTO_IM_PRESET_1_HTTPS)</string>
+		</dict>
+		<dict>
+			<key>host</key>
+			<string>$(OCTO_IM_PRESET_2_HOST)</string>
+			<key>label</key>
+			<string>$(OCTO_IM_PRESET_2_LABEL)</string>
+			<key>https</key>
+			<string>$(OCTO_IM_PRESET_2_HTTPS)</string>
+		</dict>
+		<dict>
+			<key>host</key>
+			<string>$(OCTO_IM_PRESET_3_HOST)</string>
+			<key>label</key>
+			<string>$(OCTO_IM_PRESET_3_LABEL)</string>
+			<key>https</key>
+			<string>$(OCTO_IM_PRESET_3_HTTPS)</string>
+		</dict>
+	</array>
 	<key>OCTOURLScheme</key>
 	<string>$(OCTO_URL_SCHEME)</string>
 	<key>NSCameraUsageDescription</key>

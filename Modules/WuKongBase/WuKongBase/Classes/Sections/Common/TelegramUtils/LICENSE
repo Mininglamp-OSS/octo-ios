@@ -9,27 +9,38 @@ The original source is available at:
 https://github.com/TelegramMessenger/Telegram-iOS
 
 ============================================================
-CURRENT STATUS — EXCLUDED FROM BUILD
+CURRENT STATUS — PARTIALLY COMPILED
 ============================================================
 
-This GPL v2 code has been completely excluded from the Octo iOS build
-via WuKongBase.podspec's `exclude_files`. Source files are retained in
-the repository solely to preserve the GPL v2 attribution required by
-sections 4(b) and 4(d) of the license.
+Some subdirectories (Display, Utils, AppBundle, SwiftSignalKit, Markdown,
+GZip, Svg, ManagedFile, etc.) are still compiled into the Octo iOS build
+because WKMessageCell and related chat UI depend on:
 
-All four external consumer components have been replaced with native
-UIKit / CoreGraphics implementations during the P5 phase:
+  - ContextControllerSourceNode (long-press source node)
+  - ContextExtractedContentContainingNode (content container)
+  - TapLongTapOrDoubleTapGestureRecognizer (custom gesture state machine)
+  - ContextGesture (UIGestureRecognizer subclass with beginDelay)
 
-  ContextExtractedContentContainingNode → WKContentContainerNode
-  ContextControllerSourceNode           → WKGestureContainerNode
-  RadialStatusNode                      → WKRadialProgressView
-  StickerShimmerEffectNode              → WKShimmerView
-  GradientBackgroundNode (preview)      → CoreGraphics CGGradient
-  ContextController (long-press menu)   → custom showInlineMenuForCell
+These custom gesture/node types coordinate correctly with
+UINavigationController.interactivePopGestureRecognizer and UIScrollView's
+panGestureRecognizer. Naive UIKit replacements (UILongPressGestureRecognizer
++ UITapGestureRecognizer) cause back-swipe failures and tableview scrolling
+issues. Replacing them properly requires reimplementing the custom gesture
+state machine, which is non-trivial.
 
-See README.md in this directory for details.
+Other subdirectories are excluded via WuKongBase.podspec exclude_files
+(see README.md in this directory for the list and reasons).
 
-If a future change re-introduces a build-time dependency on any file
-in this directory, the project will lose its Apache 2.0 license clarity
-and revert to a GPL v2 obligation. Please open an issue first.
+============================================================
+LICENSE COMPATIBILITY NOTICE
+============================================================
+
+Because GPL v2 code is linked into the Octo iOS application binary, the
+license obligations of GPL v2 apply to the portions of the project that
+link against this code. Anyone distributing built binaries of Octo iOS
+must comply with GPL v2 terms for those portions.
+
+If your use case requires fully Apache 2.0 (e.g., commercial closed-source),
+you must first replace the active Telegram-derived code listed above with
+your own implementation. Contributions toward that goal are welcome.
 

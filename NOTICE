@@ -69,13 +69,22 @@ Bundled Third-Party Components
                                                   播放，待用 AVAudioUnitTimePitch 替换。
                                                   原文件仍在仓库中以保留 LGPL 归属。
 
-  [!]   TelegramUtils (Telegram iOS)  GPL v2        许可证不兼容，已在 P5 完成全部 4 个外部
-                                                  消费组件替换（WKShimmerView / WKRadialProgressView
-                                                  / WKGestureContainerNode / WKContentContainerNode），
-                                                  并通过 WuKongBase.podspec exclude_files 把整个
-                                                  TelegramUtils 目录从编译链中彻底排除。
-                                                  源文件保留在仓库内以维持 GPL v2 归属声明。
-                                                  详见 TelegramUtils/LICENSE 与 README.md。
+  [!]   TelegramUtils (Telegram iOS)  GPL v2        部分子目录仍在编译链中：
+                                                  Display / Utils / AppBundle / GZip / Svg /
+                                                  Markdown / SwiftSignalKit 等基础模块。
+                                                  原因：ContextControllerSourceNode /
+                                                  TapLongTapOrDoubleTapGestureRecognizer 等
+                                                  自定义手势状态机被 WKMessageCell 使用，
+                                                  原生 UIGestureRecognizer 替代会与
+                                                  navigation pop / tableview 滚动冲突。
+                                                  已排除子目录：AnimatedStickerNode /
+                                                  ContextUI / ReactionSelectionNode /
+                                                  TextSelectionNode / RadialStatusNode /
+                                                  ShimmerEffect / GradientBackground /
+                                                  MetalImageView / MediaResources /
+                                                  LegacyComponents 等。
+                                                  详见 TelegramUtils/LICENSE 与 README.md，
+                                                  以及 WuKongBase.podspec 的 exclude_files。
 
   [REMOVED with TelegramUtils] Facebook POP      BSD+Patents  仅在 TelegramUtils/RadialStatusNode
                                                               内部使用，随 TelegramUtils 整体排除。

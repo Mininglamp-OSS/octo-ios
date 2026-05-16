@@ -41,7 +41,6 @@
 		71D6961323926E3700D092BA /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 71D6961123926E3700D092BA /* LaunchScreen.storyboard */; };
 		71D6961623926E3700D092BA /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 71D6961523926E3700D092BA /* main.m */; };
 		71DB3FA6239B5DE700181E94 /* WKMainTabController.m in Sources */ = {isa = PBXBuildFile; fileRef = 71DB3FA5239B5DE700181E94 /* WKMainTabController.m */; };
-		71F7E3DC2A47F66900E8D20D /* QUESTION.md in Resources */ = {isa = PBXBuildFile; fileRef = 71F7E3DB2A47F66900E8D20D /* QUESTION.md */; };
 		AA110003239265E900D092BA /* WKDBRecoveryManager.m in Sources */ = {isa = PBXBuildFile; fileRef = AA110002239265E900D092BA /* WKDBRecoveryManager.m */; };
 		AA110006239265E900D092BA /* WKDBRepairViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = AA110005239265E900D092BA /* WKDBRepairViewController.m */; };
 /* End PBXBuildFile section */
@@ -140,7 +139,6 @@
 		71D6961523926E3700D092BA /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
 		71DB3FA4239B5DE700181E94 /* WKMainTabController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WKMainTabController.h; sourceTree = "<group>"; };
 		71DB3FA5239B5DE700181E94 /* WKMainTabController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMainTabController.m; sourceTree = "<group>"; };
-		71F7E3DB2A47F66900E8D20D /* QUESTION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = QUESTION.md; sourceTree = "<group>"; };
 		AA110001239265E900D092BA /* WKDBRecoveryManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WKDBRecoveryManager.h; sourceTree = "<group>"; };
 		AA110002239265E900D092BA /* WKDBRecoveryManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = WKDBRecoveryManager.m; sourceTree = "<group>"; };
 		AA110004239265E900D092BA /* WKDBRepairViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WKDBRepairViewController.h; sourceTree = "<group>"; };
@@ -151,7 +149,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		4B5FF74D2F908A62005CCF01 /* Exceptions for "ShareExtension" folder in "ShareExtension" target */ = {
+		4B5FF74D2F908A62005CCF01 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -161,18 +159,7 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		4B5FF7422F908A62005CCF01 /* ShareExtension */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				4B5FF74D2F908A62005CCF01 /* Exceptions for "ShareExtension" folder in "ShareExtension" target */,
-			);
-			explicitFileTypes = {
-			};
-			explicitFolders = (
-			);
-			path = ShareExtension;
-			sourceTree = "<group>";
-		};
+		4B5FF7422F908A62005CCF01 /* ShareExtension */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (4B5FF74D2F908A62005CCF01 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = ShareExtension; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -294,7 +281,6 @@
 		71D695FA23926E3500D092BA = {
 			isa = PBXGroup;
 			children = (
-				71F7E3DB2A47F66900E8D20D /* QUESTION.md */,
 				71C88A0126CA06E4000A42EE /* Vendor */,
 				7191FCB223A6139A00FFFDC1 /* README.md */,
 				71D6960523926E3500D092BA /* Octo */,
@@ -513,7 +499,6 @@
 			files = (
 				71D6961323926E3700D092BA /* LaunchScreen.storyboard in Resources */,
 				719FDA5D2595FBFC000C25D6 /* Localizable.strings in Resources */,
-				71F7E3DC2A47F66900E8D20D /* QUESTION.md in Resources */,
 				71D6961023926E3700D092BA /* Assets.xcassets in Resources */,
 				7191FCB323A6139A00FFFDC1 /* README.md in Resources */,
 				71D6960E23926E3600D092BA /* Main.storyboard in Resources */,
@@ -553,9 +538,13 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-OctoiOSBase-OctoiOS/Pods-OctoiOSBase-OctoiOS-resources-${CONFIGURATION}-input-files.xcfilelist",
 			);
+			inputPaths = (
+			);
 			name = "[CP] Copy Pods Resources";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-OctoiOSBase-OctoiOS/Pods-OctoiOSBase-OctoiOS-resources-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -570,9 +559,13 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-OctoiOSBase-OctoiOS/Pods-OctoiOSBase-OctoiOS-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
+			inputPaths = (
+			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-OctoiOSBase-OctoiOS/Pods-OctoiOSBase-OctoiOS-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;

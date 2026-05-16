@@ -45,12 +45,34 @@ OCTO_BUGLY_APP_ID_MAIN = YOUR_BUGLY_APP_ID
 OCTO_BUGLY_APP_ID_SDK  = YOUR_BUGLY_APP_ID
 
 
-// ── IM 服务网关默认地址 ───────────────────────────────────────────────────
+// ── IM 服务网关预设列表 ───────────────────────────────────────────────────
 // 配套后端：https://github.com/Mininglamp-OSS/octo-server
-// 仅 host，不带协议、不带端口。HTTPS 与否在另一个 key 控制。
-// 用户可在 App 内"切换服务器"页面覆盖。
-// （本变量将在 P1c 阶段接入到 WKServerConfig.m，目前仅占位）
+// 支持 3 个预设槽位，会出现在 App 内"切换服务器"弹窗里。
+// 用户长按登录页 App 名字 / 设置入口可呼出该弹窗。
+// 留空的槽位自动跳过（不会显示空选项）。
+// 仅 host，不带协议、不带端口。HTTPS 与否在 _HTTPS 字段控制（默认 YES）。
+//
+// 示例：
+//   OCTO_IM_PRESET_1_HOST  = im.example.com
+//   OCTO_IM_PRESET_1_LABEL = 国内正式版
+//   OCTO_IM_PRESET_2_HOST  = im-test.example.com
+//   OCTO_IM_PRESET_2_LABEL = 测试环境
+//   OCTO_IM_PRESET_3_HOST  = im-intl.example.com
+//   OCTO_IM_PRESET_3_LABEL = 国际版
 
+OCTO_IM_PRESET_1_HOST  = your.im.server.example.com
+OCTO_IM_PRESET_1_LABEL = 默认服务器
+OCTO_IM_PRESET_1_HTTPS = YES
+
+OCTO_IM_PRESET_2_HOST  =
+OCTO_IM_PRESET_2_LABEL =
+OCTO_IM_PRESET_2_HTTPS = YES
+
+OCTO_IM_PRESET_3_HOST  =
+OCTO_IM_PRESET_3_LABEL =
+OCTO_IM_PRESET_3_HTTPS = YES
+
+// 兼容旧字段：仅当上面 3 个槽位都为空时回落到这里。新部署请用 PRESET_1。
 OCTO_IM_DEFAULT_HOST  = your.im.server.example.com
 OCTO_IM_DEFAULT_LABEL = 默认服务器
 

@@ -47,12 +47,39 @@ static NSString * const kWKServerHistoryKey    = @"WKServerHistory";
 #pragma mark - 历史记录
 
 + (NSArray<NSDictionary *> *)presetServers {
-    NSString *host  = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOIMDefaultHost"];
-    NSString *label = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOIMDefaultLabel"];
-    if (host.length == 0) {
-        return @[];
+    NSMutableArray *result = [NSMutableArray array];
+    // 1. 优先读多 preset 槽位（OctoConfig.xcconfig 的 OCTO_IM_PRESET_N_*）
+    NSArray *presets = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOIMPresets"];
+    if ([presets isKindOfClass:[NSArray class]]) {
+        for (id item in presets) {
+            if (![item isKindOfClass:[NSDictionary class]]) continue;
+            NSString *host  = item[@"host"];
+            NSString *label = item[@"label"];
+            NSString *https = item[@"https"];
+            if (host.length == 0) continue;
+            // xcconfig 未替换时会保留字面量 "$(OCTO_IM_PRESET_N_HOST)"，跳过
+            if ([host hasPrefix:@"$("]) continue;
+            BOOL httpsOn = !([https isEqualToString:@"NO"] || [https isEqualToString:@"no"] || [https isEqualToString:@"false"]);
+            [result addObject:@{
+                @"ip": host,
+                @"https": @(httpsOn),
+                @"label": label.length > 0 ? label : host,
+            }];
+        }
     }
-    return @[@{@"ip": host, @"https": @(YES), @"label": label ?: host}];
+    // 2. 兼容回退：如果没有 preset 槽位，使用旧的单 default key
+    if (result.count == 0) {
+        NSString *host  = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOIMDefaultHost"];
+        NSString *label = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOIMDefaultLabel"];
+        if (host.length > 0 && ![host hasPrefix:@"$("]) {
+            [result addObject:@{
+                @"ip": host,
+                @"https": @(YES),
+                @"label": label.length > 0 ? label : host,
+            }];
+        }
+    }
+    return result;
 }
 
 + (NSArray<NSDictionary *> *)serverHistory {
