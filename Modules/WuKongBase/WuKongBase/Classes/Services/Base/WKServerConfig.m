@@ -18,8 +18,21 @@ static NSString * const kWKServerHistoryKey    = @"WKServerHistory";
     if (customIP.length > 0) {
         return customIP;
     }
+    // PR #121 round 4 review 🟡: 优先用 OCTO_IM_DEFAULT_HOST, 缺省时回退到
+    // OCTO_IM_PRESET_1_HOST（与 README 引导一致 —— 用户只填 PRESET_1 也能跑起来）。
+    // xcconfig 未替换时字面量 "$(...)" 也视为缺省。
     NSString *defaultHost = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOIMDefaultHost"];
-    return defaultHost ?: @"";
+    if (defaultHost.length > 0 && ![defaultHost hasPrefix:@"$("]) {
+        return defaultHost;
+    }
+    NSArray<NSDictionary *> *presets = [self presetServers];
+    if (presets.count > 0) {
+        NSString *firstHost = presets.firstObject[@"ip"];
+        if (firstHost.length > 0) {
+            return firstHost;
+        }
+    }
+    return @"";
 }
 
 + (BOOL)httpsOn {

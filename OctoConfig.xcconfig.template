@@ -79,17 +79,34 @@ OCTO_IM_DEFAULT_LABEL = 默认服务器
 
 // ── Universal Links / Associated Domains ─────────────────────────────────
 // 仅域名，不含 applinks: 前缀。
-// 注意：Apple 的 .entitlements 文件不支持 xcconfig 替换，本变量预留给
-// 未来"启动脚本生成 entitlements"方案。当前阶段需直接编辑
-// Octo/Octo.entitlements 以替换为你自己的域名。
+// PR #121 round 2 起，Octo/Octo.entitlements 已改为 applinks:$(OCTO_ASSOCIATED_DOMAIN)，
+// Xcode 12+ 在签名阶段会对 entitlements 文件做 build setting 替换，
+// 修改本变量后 Clean Build Folder 重新签名即可生效。
 
 OCTO_ASSOCIATED_DOMAIN = your.universal-link.example.com
 
 
 // ── App 自定义 URL Scheme ─────────────────────────────────────────────────
 // 用于：① 实名认证 / OIDC 后端回跳本 App（如 octo://verified）
-//      ② 通用深度链接入口
+//      ② 系统分享扩展跨进程拉起主 App（如 octo://share）
+//      ③ 通用深度链接入口
 // 只填 scheme 名（不带 ://）。改这个需要同步修改后端发出回跳 URL 的配置。
 
 OCTO_URL_SCHEME = octo
+
+
+// ── App Group（跨进程数据共享） ──────────────────────────────────────────
+// 用于主 App ↔ ShareExtension 之间通过 NSUserDefaults / 共享文件容器交换数据。
+// 必须与 Apple Developer 后台配置的 App Group ID 完全一致（包含 group. 前缀）；
+// 外部团队签名必须用自己 provision 过的 group，不允许沿用默认值。
+// 同时出现在两处 entitlements: Octo/Octo.entitlements、ShareExtension/ShareExtension.entitlements。
+
+OCTO_APP_GROUP = group.com.example.octo
+
+
+// ── 邀请链接 ─────────────────────────────────────────────────────────────
+// 用户在 App 内点 "邀请好友" 时拼到分享文案后的 URL。
+// 默认指向 OCTO 开源主页；私有部署通常会指向自己的下载页。
+
+OCTO_INVITE_URL = https://github.com/Mininglamp-OSS
 

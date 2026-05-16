@@ -4,6 +4,8 @@
 <dict>
 	<key>OCTOURLScheme</key>
 	<string>$(OCTO_URL_SCHEME)</string>
+	<key>OCTOAppGroup</key>
+	<string>$(OCTO_APP_GROUP)</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionAttributes</key>

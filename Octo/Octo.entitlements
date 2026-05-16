@@ -10,7 +10,7 @@
 	</array>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.com.example.octo</string>
+		<string>$(OCTO_APP_GROUP)</string>
 	</array>
 </dict>
 </plist>

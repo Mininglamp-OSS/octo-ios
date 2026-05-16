@@ -93,6 +93,10 @@
 	</array>
 	<key>OCTOURLScheme</key>
 	<string>$(OCTO_URL_SCHEME)</string>
+	<key>OCTOAppGroup</key>
+	<string>$(OCTO_APP_GROUP)</string>
+	<key>OCTOInviteURL</key>
+	<string>$(OCTO_INVITE_URL)</string>
 	<key>NSCameraUsageDescription</key>
 	<string>“Octo”需要您的同意,才能访问相机﻿﻿，用于拍照聊天和扫一扫加好友</string>
 	<key>NSContactsUsageDescription</key>

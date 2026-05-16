@@ -53,6 +53,9 @@ cd octo-ios
 cp OctoConfig.xcconfig.template OctoConfig.xcconfig
 # 编辑 OctoConfig.xcconfig，至少填入：
 #   APPLE_TEAM_ID            （你的 10 位 Apple Team ID）
+#   OCTO_APP_GROUP           （你在 Apple Developer 后台 provision 的 App Group，
+#                              如 group.com.yourorg.octo；与 Apple 后台必须一致，
+#                              否则主 App 与分享扩展之间的共享数据会静默失败）
 #   OCTO_IM_PRESET_1_HOST    （你部署的 octo-server 地址）
 #   OCTO_IM_PRESET_1_LABEL   （切换服务器面板上显示的名字）
 
@@ -123,10 +126,12 @@ Universal Links 配置见 [docs/universal-link-setup.md](docs/universal-link-set
 | 字段 | 是否必填 | 用途 |
 |---|---|---|
 | `APPLE_TEAM_ID` | ✅ | 自动签名（通过 `$(APPLE_TEAM_ID)` 注入 pbxproj） |
-| `OCTO_IM_PRESET_{1,2,3}_HOST` | 至少 1 个 | 最多 3 个 IM 网关预设，在"切换服务器"面板显示 |
+| `OCTO_APP_GROUP` | ✅ | 主 App ↔ ShareExtension 跨进程数据共享所用 App Group ID（必须与 Apple Developer 后台 provisioning 一致） |
+| `OCTO_IM_PRESET_{1,2,3}_HOST` | 至少 1 个 | 最多 3 个 IM 网关预设，在"切换服务器"面板显示。`OCTO_IM_DEFAULT_HOST` 未设时也作默认。 |
 | `OCTO_IM_PRESET_{1,2,3}_LABEL` |  | 各预设的显示名 |
-| `OCTO_URL_SCHEME` |  | 深链 / OIDC 回跳的自定义 URL scheme（默认 `octo`） |
-| `OCTO_ASSOCIATED_DOMAIN` |  | Universal Link 域名 |
+| `OCTO_URL_SCHEME` |  | 深链 / OIDC 回跳 / 分享扩展回跳的自定义 URL scheme（默认 `octo`） |
+| `OCTO_ASSOCIATED_DOMAIN` |  | Universal Link 域名（签名阶段注入 `Octo.entitlements`） |
+| `OCTO_INVITE_URL` |  | 邀请好友文案末尾拼接的链接（默认 `https://github.com/Mininglamp-OSS`） |
 | `OCTO_BUGLY_APP_ID_MAIN` |  | 腾讯 Bugly 崩溃统计（可选，详见下方） |
 
 ### 可选集成

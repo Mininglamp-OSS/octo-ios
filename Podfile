@@ -246,11 +246,22 @@ abstract_target 'OctoiOSBase' do
     project 'OctoiOS.xcodeproj'
     
   use_frameworks!
-  # TODO(P5/P7): 下面 4 个 pod 引用 tangtaoit 的个人 GitHub fork。
-  # 正式发布前应迁移到 Mininglamp-OSS 组织下的 fork 或使用官方上游。
-  pod 'YBImageBrowser/NOSD', :git=>'https://github.com/tangtaoit/YBImageBrowser.git'
-  pod 'YYImage/WebP', :git => 'https://github.com/tangtaoit/YYImage.git'
-  pod 'AsyncDisplayKit', :git => 'https://github.com/tangtaoit/AsyncDisplayKit.git'
+  # ─────────────────────────────────────────────────────────────────────
+  # 下面 3 个 pod 引用 tangtaoit (TangSengDaoDao 原作者) 的个人 GitHub fork。
+  # 这些 fork 与上游主线有本仓库依赖的 patch（NOSD / WebP subspec / iOS 14
+  # 兼容性 fix）, 切回官方上游会缺 patch 编译失败。
+  #
+  # 已知供应链风险（PR #121 round 4 review 🟡）:
+  #   - tangtaoit 帐号若关停 / 仓库改名 → pod install 立即失败
+  #   - HEAD-of-master 不锁定 → 上游强推可能改变行为
+  #
+  # 缓解：每个依赖 `:commit` 锁到具体 SHA, 屏蔽 HEAD 漂移。彻底解决方案
+  # （fork 到 Mininglamp-OSS 组织 或 迁移上游官方版）放在 OSS release
+  # 之后的 P9 工作, 进度跟踪 issue # TBD。
+  # ─────────────────────────────────────────────────────────────────────
+  pod 'YBImageBrowser/NOSD', :git => 'https://github.com/tangtaoit/YBImageBrowser.git', :commit => '9e888bf25f8774f9b084ba3d26d5794cb68aeb0c'
+  pod 'YYImage/WebP',        :git => 'https://github.com/tangtaoit/YYImage.git',        :commit => 'be7dc29bbd79153ea03c5018ee2ab2512a16f3fd'
+  pod 'AsyncDisplayKit',     :git => 'https://github.com/tangtaoit/AsyncDisplayKit.git', :commit => '3f2a0b8f5069ddefd53cf4796da22eec105c5c7c'
   # librlottie (LGPL) — 透过 SDWebImageLottieCoder 间接依赖，rlottie 引擎是
   # WKLottieStickerCell / WKEmojiStickerCell 真正在用的 Lottie 渲染器。
   # 使用 CocoaPods 官方仓库版本（SDWebImage 维护，源自 Samsung 官方 rlottie），

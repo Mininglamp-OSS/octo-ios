@@ -86,7 +86,14 @@
             self.visibleEdgeInsets = insets;
         }
         
-        self.inviteMsg = [NSString stringWithFormat:@"我正在使用【%@】app，体验还不错。你也赶快来下载玩玩吧！https://www.githubim.cn",self.appName];
+        // PR #121 round 4 review 🟡: 邀请链接默认指向 OCTO 开源主页, 可通过
+        // OctoConfig.xcconfig 的 OCTO_INVITE_URL 注入 Info.plist OCTOInviteURL
+        // 覆盖（私有部署通常会指向自己的下载页）。
+        NSString *inviteURL = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOInviteURL"];
+        if (inviteURL.length == 0 || [inviteURL hasPrefix:@"$("]) {
+            inviteURL = @"https://github.com/Mininglamp-OSS";
+        }
+        self.inviteMsg = [NSString stringWithFormat:@"我正在使用【%@】app，体验还不错。你也赶快来下载玩玩吧！%@", self.appName, inviteURL];
         NSString *tempDir= NSTemporaryDirectory();
         self.videoCacheDir = [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"wukong_video_cache"]];
         [WKFileUtil createDirectoryIfNotExist: self.videoCacheDir];

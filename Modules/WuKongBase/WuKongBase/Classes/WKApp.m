@@ -1956,14 +1956,24 @@ static WKApp *_instance;
 
 #pragma mark - Share Extension
 
-static NSString *const kShareAppGroupId = @"group.com.example.octo";
+// PR #121 round 4 review 🟡: app group 由 OctoConfig.xcconfig 的 OCTO_APP_GROUP
+// 注入到 Info.plist 的 OCTOAppGroup 字段。外部团队签名必须改成自己
+// provision 过的 group，不允许 hardcode example-app 字符串。
+// 默认回退保持 group.com.example.octo 仅用于本地构建。
+static NSString *_OctoShareAppGroupId(void) {
+    NSString *fromPlist = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOAppGroup"];
+    if (fromPlist.length > 0 && ![fromPlist hasPrefix:@"$("]) {
+        return fromPlist;
+    }
+    return @"group.com.example.octo";
+}
 static NSString *const kShareDataKey = @"WKShareExtensionData";
 static NSString *const kShareDirName = @"ShareExtensionFiles";
 
 -(void) handleShareExtensionData {
     if (![WKApp shared].isLogined) return;
 
-    NSUserDefaults *shared = [[NSUserDefaults alloc] initWithSuiteName:kShareAppGroupId];
+    NSUserDefaults *shared = [[NSUserDefaults alloc] initWithSuiteName:_OctoShareAppGroupId()];
     NSArray *fileInfos = [shared objectForKey:kShareDataKey];
     if (!fileInfos || fileInfos.count == 0) return;
 
@@ -2082,7 +2092,7 @@ static NSString *const kShareDirName = @"ShareExtensionFiles";
 
     // 清理共享目录
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_global_queue(0, 0), ^{
-        NSURL *container = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:kShareAppGroupId];
+        NSURL *container = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:_OctoShareAppGroupId()];
         NSURL *dir = [container URLByAppendingPathComponent:kShareDirName];
         [[NSFileManager defaultManager] removeItemAtURL:dir error:nil];
     });

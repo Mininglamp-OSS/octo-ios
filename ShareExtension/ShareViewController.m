@@ -9,7 +9,18 @@
 #import <MobileCoreServices/MobileCoreServices.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
-static NSString *const kAppGroupId = @"group.com.example.octo";
+// PR #121 round 4 review 🟡: app group 不再 hardcode example-app。
+// 通过本扩展 Info.plist 的 OCTOAppGroup 字段 (由 OctoConfig.xcconfig
+// 的 OCTO_APP_GROUP 注入) 动态读取。外部团队签名必须填自己 provision
+// 过的 group, 否则 -initWithSuiteName: 返回 nil 导致跨进程数据失效。
+static NSString *_OctoAppGroupId(void) {
+    NSString *fromPlist = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOAppGroup"];
+    if (fromPlist.length > 0 && ![fromPlist hasPrefix:@"$("]) {
+        return fromPlist;
+    }
+    return @"group.com.example.octo";
+}
+#define kAppGroupId (_OctoAppGroupId())
 static NSString *const kShareDataKey = @"WKShareExtensionData";
 static NSString *const kShareDirName = @"ShareExtensionFiles";
 

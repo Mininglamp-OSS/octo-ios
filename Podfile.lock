@@ -163,7 +163,7 @@ PODS:
 
 DEPENDENCIES:
   - Aspects
-  - AsyncDisplayKit (from `https://github.com/tangtaoit/AsyncDisplayKit.git`)
+  - AsyncDisplayKit (from `https://github.com/tangtaoit/AsyncDisplayKit.git`, commit `3f2a0b8f5069ddefd53cf4796da22eec105c5c7c`)
   - DoraemonKit/Core (~> 3.1.2)
   - DoraemonKit/WithGPS (~> 3.1.2)
   - libcmark_gfm
@@ -177,8 +177,8 @@ DEPENDENCIES:
   - WuKongDataSource (from `./Modules/WuKongDataSource`)
   - WuKongIMSDK (from `./Modules/WuKongIMiOSSDK`)
   - WuKongLogin (from `./Modules/WuKongLogin`)
-  - YBImageBrowser/NOSD (from `https://github.com/tangtaoit/YBImageBrowser.git`)
-  - YYImage/WebP (from `https://github.com/tangtaoit/YYImage.git`)
+  - YBImageBrowser/NOSD (from `https://github.com/tangtaoit/YBImageBrowser.git`, commit `9e888bf25f8774f9b084ba3d26d5794cb68aeb0c`)
+  - YYImage/WebP (from `https://github.com/tangtaoit/YYImage.git`, commit `be7dc29bbd79153ea03c5018ee2ab2512a16f3fd`)
 
 SPEC REPOS:
   trunk:
@@ -222,6 +222,7 @@ SPEC REPOS:
 
 EXTERNAL SOURCES:
   AsyncDisplayKit:
+    :commit: 3f2a0b8f5069ddefd53cf4796da22eec105c5c7c
     :git: https://github.com/tangtaoit/AsyncDisplayKit.git
   WuKongBase:
     :path: "./Modules/WuKongBase"
@@ -234,8 +235,10 @@ EXTERNAL SOURCES:
   WuKongLogin:
     :path: "./Modules/WuKongLogin"
   YBImageBrowser:
+    :commit: 9e888bf25f8774f9b084ba3d26d5794cb68aeb0c
     :git: https://github.com/tangtaoit/YBImageBrowser.git
   YYImage:
+    :commit: be7dc29bbd79153ea03c5018ee2ab2512a16f3fd
     :git: https://github.com/tangtaoit/YYImage.git
 
 CHECKOUT OPTIONS:
@@ -296,6 +299,6 @@ SPEC CHECKSUMS:
   ZLImageEditor: ee86f044fb7c5dec6b5de49eb7bb6fd42286f2ae
   ZLPhotoBrowser: 6fb0eff03c8269001e29ef233e7bdab0691e05fe
 
-PODFILE CHECKSUM: 3d5cf1af146aa9b5b93922674894827b9babde2d
+PODFILE CHECKSUM: 2e8970db6453e6203617196736e90d1c38e4b957
 
 COCOAPODS: 1.16.2

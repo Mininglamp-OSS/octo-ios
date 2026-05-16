@@ -54,6 +54,9 @@ cd octo-ios
 cp OctoConfig.xcconfig.template OctoConfig.xcconfig
 # Edit OctoConfig.xcconfig — at minimum:
 #   APPLE_TEAM_ID            (your 10-char Apple Team ID)
+#   OCTO_APP_GROUP           (your provisioned App Group ID, e.g. group.com.yourorg.octo —
+#                             must match Apple Developer config; cross-process share between
+#                             main app and ShareExtension will silently fail otherwise)
 #   OCTO_IM_PRESET_1_HOST    (host of your deployed octo-server)
 #   OCTO_IM_PRESET_1_LABEL   (display name shown in the server picker)
 
@@ -124,10 +127,12 @@ template lists every supported field — main ones:
 | Field | Required | Purpose |
 |---|---|---|
 | `APPLE_TEAM_ID` | ✅ | Auto-signing (injected into pbxproj via `$(APPLE_TEAM_ID)`) |
-| `OCTO_IM_PRESET_{1,2,3}_HOST` | one required | Up to 3 preset IM gateway hosts, shown in the server picker |
+| `OCTO_APP_GROUP` | ✅ | App Group ID for main app ↔ ShareExtension cross-process data (must match Apple Developer provisioning) |
+| `OCTO_IM_PRESET_{1,2,3}_HOST` | one required | Up to 3 preset IM gateway hosts, shown in the server picker. Preset 1 is also used as default if `OCTO_IM_DEFAULT_HOST` is unset. |
 | `OCTO_IM_PRESET_{1,2,3}_LABEL` |  | Display name for each preset |
-| `OCTO_URL_SCHEME` |  | Custom URL scheme for deep-links / OIDC callback (default `octo`) |
-| `OCTO_ASSOCIATED_DOMAIN` |  | Universal Link domain |
+| `OCTO_URL_SCHEME` |  | Custom URL scheme for deep-links / OIDC / share extension callback (default `octo`) |
+| `OCTO_ASSOCIATED_DOMAIN` |  | Universal Link domain (substituted into `Octo.entitlements` at sign time) |
+| `OCTO_INVITE_URL` |  | URL appended to invite-friend message (default `https://github.com/Mininglamp-OSS`) |
 | `OCTO_BUGLY_APP_ID_MAIN` |  | Optional Tencent Bugly crash reporting (see below) |
 
 ### Optional integrations
