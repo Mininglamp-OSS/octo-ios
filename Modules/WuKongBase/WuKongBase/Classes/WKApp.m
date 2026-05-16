@@ -263,7 +263,16 @@ static WKApp *_instance;
 #endif
 
     NSString *buglyAppIdSDK = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOBuglyAppIdSDK"];
-    if (buglyAppIdSDK.length > 0) {
+    // PR #121 round 3 review 🟡: 校验占位符 — 主开关 OCTO_ENABLE_BUGLY 由
+    // Podfile post_install 根据 OCTO_BUGLY_APP_ID_MAIN 决定，但 SDK 侧的
+    // OCTO_BUGLY_APP_ID_SDK 是独立字段，用户可能漏填。下列情形一律不启动:
+    //   - 空 / nil
+    //   - 模板占位符 YOUR_BUGLY_APP_ID
+    //   - 未替换的 $(OCTO_BUGLY_APP_ID_SDK) 字面量（OctoConfig 未注入时的产物）
+    BOOL buglySDKIdValid = buglyAppIdSDK.length > 0
+        && ![buglyAppIdSDK isEqualToString:@"YOUR_BUGLY_APP_ID"]
+        && ![buglyAppIdSDK hasPrefix:@"$("];
+    if (buglySDKIdValid) {
         [Bugly startWithAppId:buglyAppIdSDK config:config];
     }
     if([WKApp shared].isLogined) {

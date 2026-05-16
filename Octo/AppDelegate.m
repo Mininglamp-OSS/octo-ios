@@ -89,7 +89,15 @@
     buglyConfig.blockMonitorEnable = YES;       // 开启卡顿监控
     buglyConfig.blockMonitorTimeout = 1.0;      // 主线程卡顿超过 1 秒上报堆栈
     NSString *buglyAppId = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOBuglyAppIdMain"];
-    if (buglyAppId.length > 0) {
+    // 占位符防御：OCTO_ENABLE_BUGLY 编译开关由 Podfile post_install 在
+    // OCTO_BUGLY_APP_ID_MAIN 通过校验后开启，但 Info.plist 的字面值在
+    // 极端情况下仍可能是 "YOUR_BUGLY_APP_ID" 或未替换的 $(...) 字面量
+    // （例如手工编辑 Podfile 绕开校验）—— 启动时再校验一遍兜底，
+    // 避免 Bugly 用占位字符串启动后污染崩溃看板。
+    BOOL buglyMainIdValid = buglyAppId.length > 0
+        && ![buglyAppId isEqualToString:@"YOUR_BUGLY_APP_ID"]
+        && ![buglyAppId hasPrefix:@"$("];
+    if (buglyMainIdValid) {
         [Bugly startWithAppId:buglyAppId config:buglyConfig];
     }
 #endif
