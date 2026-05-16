@@ -34,8 +34,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// 实名认证 deep-link（自定义 URL scheme）
 /// 与 verify-service 的 return_to 参数一致；
-/// 同时必须在 TangSengDaoDao/Info.plist CFBundleURLSchemes 登记 "dmwork"。
-extern NSString *const WKRealnameVerifiedURLScheme;   // @"dmwork"
+/// 值在运行时从 Info.plist OCTOURLScheme（OctoConfig.xcconfig 注入）读取，
+/// 默认 "octo"。需在 Info.plist CFBundleURLSchemes 同步登记。
+extern NSString *WKRealnameVerifiedURLScheme;
 extern NSString *const WKRealnameVerifiedURLHost;     // @"verified"
 
 @interface WKRealnameVerifyManager : NSObject

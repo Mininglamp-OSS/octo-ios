@@ -40,10 +40,10 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>dmwork.realname</string>
+			<string>$(OCTO_URL_SCHEME).realname</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>dmwork</string>
+				<string>$(OCTO_URL_SCHEME)</string>
 			</array>
 		</dict>
 	</array>
@@ -74,6 +74,8 @@
 	<string>$(OCTO_IM_DEFAULT_HOST)</string>
 	<key>OCTOIMDefaultLabel</key>
 	<string>$(OCTO_IM_DEFAULT_LABEL)</string>
+	<key>OCTOURLScheme</key>
+	<string>$(OCTO_URL_SCHEME)</string>
 	<key>NSCameraUsageDescription</key>
 	<string>“Octo”需要您的同意,才能访问相机﻿﻿，用于拍照聊天和扫一扫加好友</string>
 	<key>NSContactsUsageDescription</key>

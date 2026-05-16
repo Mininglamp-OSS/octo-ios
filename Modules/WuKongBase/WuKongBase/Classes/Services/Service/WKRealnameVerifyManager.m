@@ -16,8 +16,25 @@
 #import "WKOidcProviderConfig.h"
 #import <PromiseKit/PromiseKit.h>
 
-NSString *const WKRealnameVerifiedURLScheme = @"dmwork";
+// 自定义回跳 scheme：默认从 Info.plist 的 OCTOURLScheme 读
+// （来自 OctoConfig.xcconfig 的 OCTO_URL_SCHEME 变量替换），
+// 缺省值为 "octo"。改这个需要同步更新后端 return_to 配置。
 NSString *const WKRealnameVerifiedURLHost   = @"verified";
+
+static NSString *_WKResolveURLScheme(void) {
+    NSString *fromPlist = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOURLScheme"];
+    if (fromPlist.length > 0 && ![fromPlist isEqualToString:@"$(OCTO_URL_SCHEME)"]) {
+        return fromPlist;
+    }
+    return @"octo";
+}
+
+NSString *WKRealnameVerifiedURLScheme;
+
+__attribute__((constructor))
+static void _WKRealnameVerifiedURLSchemeInit(void) {
+    WKRealnameVerifiedURLScheme = _WKResolveURLScheme();
+}
 
 // Aegis 账户页实名认证锚点路径。domain 部分从 appconfig 读, 拼接规则
 // 与 Web 端 resolveRealnameVerifyUrl 对齐（路径 / fragment 口径一致）。

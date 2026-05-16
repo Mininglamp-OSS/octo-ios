@@ -53,3 +53,12 @@ OCTO_IM_DEFAULT_LABEL = 默认服务器
 // TangSengDaoDao/TangSengDaoDao.entitlements 以替换为你自己的域名。
 
 OCTO_ASSOCIATED_DOMAIN = your.universal-link.example.com
+
+
+// ── App 自定义 URL Scheme ─────────────────────────────────────────────────
+// 用于：① 实名认证 / OIDC 后端回跳本 App（如 octo://verified）
+//      ② 通用深度链接入口
+// 只填 scheme 名（不带 ://）。改这个需要同步修改后端发出回跳 URL 的配置。
+
+OCTO_URL_SCHEME = octo
+
