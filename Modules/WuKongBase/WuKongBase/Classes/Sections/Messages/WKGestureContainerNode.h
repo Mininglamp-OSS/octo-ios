@@ -29,6 +29,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// Compatibility shim — no-op (Telegram used this to update highlight animation rect).
 - (void)targetNodeForActivationProgressContentRectForOCWithRect:(CGRect)rect;
 
+/// Compatibility setter for the original block-based ObjC API used by WKMessageCell.
+- (void)setShouldBegin:(BOOL (^)(CGPoint point))block;
+
+/// Compatibility setter; the `gesture` argument receives the UILongPressGestureRecognizer.
+- (void)setActivated:(void (^)(id _Nullable gesture, CGPoint point))block;
+
 @end
 
 NS_ASSUME_NONNULL_END

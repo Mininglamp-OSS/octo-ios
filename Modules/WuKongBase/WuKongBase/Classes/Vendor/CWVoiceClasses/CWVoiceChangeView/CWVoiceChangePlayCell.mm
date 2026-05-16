@@ -205,7 +205,7 @@ static CGFloat const levelMargin = 2.0;
     // SoundTouch (LGPL) removed. Voice-change pitch shift is disabled.
     // Audio plays back at original pitch via CWAudioPlayer.
     // TODO: replace with AVAudioEngine + AVAudioUnitTimePitch to restore.
-    [[CWAudioPlayer sharedInstance] playWithPath:path];
+    [[CWAudioPlayer shareInstance] playAudioWith:path];
 }
 
 - (void)playVoiceChange:(NSString *)path {

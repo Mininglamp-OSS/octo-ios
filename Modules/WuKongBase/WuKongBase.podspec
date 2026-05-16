@@ -42,15 +42,17 @@ TODO: Add long description of the pod here.
  
   s.private_header_files = 'WuKongBase/Classes/Vendor/**/*'
   s.source_files = 'WuKongBase/Classes/**/*'
-  # 排除许可证不兼容或已替换的代码（P5 处理）：
+  # 排除许可证不兼容或已替换的代码：
   # - SoundTouch (LGPL v2.1) — 已用 no-op stub 替换变声功能
-  # - TelegramUtils (GPL v2) — 4 个外部消费组件已在 P5 全部替换为原生实现
-  #   (WKShimmerView/WKRadialProgressView/WKGestureContainerNode/WKContentContainerNode)，
-  #   现在 TelegramUtils 整个目录无任何外部 consumer，直接从编译链整体排除。
-  #   源文件保留在仓库内以维持 GPL v2 归属声明（见 TelegramUtils/LICENSE 与 README.md）。
+  # - TelegramUtils 中依赖 librlottie 的子目录（AnimatedStickerNode 等）—
+  #   外部消费方已删除
+  # TelegramUtils 其余文件保留在编译链内，因为 TapLongTapOrDoubleTapGestureRecognizer
+  # 还被 WKMessageCell / WKTextMessageCell / WKVoiceMessageCell 在用（长按手势）。
+  # 完整剥离 TelegramUtils 是 P5 长期工作。
   s.exclude_files = [
-    'WuKongBase/Classes/Vendor/SoundTouch/**',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/**',
+    'WuKongBase/Classes/Vendor/SoundTouch/**/*',
+    'WuKongBase/Classes/Vendor/LegacyComponents/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/**/*',
   ]
 #  s.preserve_paths = 'ios/arm/*.{a}'
 #   s.vendored_frameworks  = 'ios/WuKongIMSDK.framework'

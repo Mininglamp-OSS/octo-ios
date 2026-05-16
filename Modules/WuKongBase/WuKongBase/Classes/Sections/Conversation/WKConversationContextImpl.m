@@ -12,7 +12,6 @@
 #import "WKInputMentionCache.h"
 #import "WKReplyView.h"
 #import "WKMessageEditView.h"
-#import "WKContextMenusVC.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 
 @interface WKConversationContextImpl ()

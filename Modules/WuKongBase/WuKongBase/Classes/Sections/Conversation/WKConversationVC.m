@@ -18,7 +18,6 @@
 #import "WKConversationView+Robot.h"
 #import "WKMessageListView+Position.h"
 #import <WuKongBase/WuKongBase-Swift.h>
-#import "Svg.h"
 #import "WKThemeUtil.h"
 #import "WKThreadService.h"
 #import "WKThreadModel.h"

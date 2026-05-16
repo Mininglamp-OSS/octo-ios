@@ -87,6 +87,28 @@ post_install do |installer|
             config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
             config.build_settings['ENABLE_BITCODE'] = 'NO'
             config.build_settings["EXCLUDED_ARCHS[sdk=iphonesimulator*]"] = "arm64"
+            # librlottie 0.2.1 (SDWebImage 官方 fork) 的 hmap 把 `config.h` 错误地
+            # 映射到 `librlottie/config.h`（不存在）。关 hmap，并手动把所有 rlottie
+            # 内部头文件目录加入 HEADER_SEARCH_PATHS，让 `<vrect.h>` 等 angled include
+            # 能正常解析（这些文件本身就在同一目录下，需要 -I 找到它们）。
+            if target.name == 'librlottie'
+              config.build_settings['USE_HEADERMAP'] = 'NO'
+              dirs = %w[
+                generate
+                rlottie/inc
+                rlottie/src/vector
+                rlottie/src/vector/freetype
+                rlottie/src/vector/pixman
+                rlottie/src/vector/stb
+                rlottie/src/lottie
+                rlottie/src/lottie/rapidjson
+                rlottie/src/lottie/rapidjson/internal
+                rlottie/src/lottie/rapidjson/error
+                rlottie/src/binding/c
+              ]
+              config.build_settings['HEADER_SEARCH_PATHS'] ||= ['$(inherited)']
+              dirs.each { |d| config.build_settings['HEADER_SEARCH_PATHS'] << "\"${PODS_TARGET_SRCROOT}/#{d}\"" }
+            end
         end
 
     end
@@ -187,7 +209,11 @@ abstract_target 'TangSengDaoDaoiOSBase' do
   pod 'YBImageBrowser/NOSD', :git=>'https://github.com/tangtaoit/YBImageBrowser.git'
   pod 'YYImage/WebP', :git => 'https://github.com/tangtaoit/YYImage.git'
   pod 'AsyncDisplayKit', :git => 'https://github.com/tangtaoit/AsyncDisplayKit.git'
-  # librlottie (LGPL) 已移除 — 依赖它的 WKAnimatedStickerNode / WKMessageStickerCell 均为死代码，已在 P5 删除
+  # librlottie (LGPL) — 透过 SDWebImageLottieCoder 间接依赖，rlottie 引擎是
+  # WKLottieStickerCell / WKEmojiStickerCell 真正在用的 Lottie 渲染器。
+  # 使用 CocoaPods 官方仓库版本（SDWebImage 维护，源自 Samsung 官方 rlottie），
+  # 不再走 tangtaoit 个人 fork，规避供应链风险。
+  pod 'librlottie', '~> 0.2.1'
   
   pod 'WuKongIMSDK',  :path => './Modules/WuKongIMiOSSDK'   ## WuKongBase 基础工具包  源码地址 https://github.com/WuKongIM/WuKongIMiOSSDK
 #  pod 'WuKongIMSDK',  :path => '../../../wukongIM/iOS/WuKongIMiOSSDK'

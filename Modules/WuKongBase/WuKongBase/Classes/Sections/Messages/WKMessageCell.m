@@ -1473,12 +1473,27 @@ static NSMutableDictionary<NSString*, UIImage*> *_bubbleImageCache;
 -(void) cancelAnimate {
     [[self targetView].layer removeAllAnimations];
     if(!self.completionAnmiate) {
-        [[self targetView].layer animateSpringFrom:@(0.9f) to:@(1.0f) keyPath:@"transform.scale" duration:0.5f delay:0.0f initialVelocity:0.0f damping:80.0f removeOnCompletion:false additive:false completion:^(BOOL v){
-            self.frame = self.originalViewFrame;
-            self.completionAnmiate  = true;
-        }];
+        // Native CASpringAnimation replacement for TelegramUtils' CALayer.animateSpringFrom...
+        CASpringAnimation *spring = [CASpringAnimation animationWithKeyPath:@"transform.scale"];
+        spring.fromValue = @(0.9f);
+        spring.toValue = @(1.0f);
+        spring.damping = 80.0f;
+        spring.initialVelocity = 0.0f;
+        spring.duration = 0.5f;
+        spring.beginTime = CACurrentMediaTime();
+        spring.fillMode = kCAFillModeForwards;
+        spring.removedOnCompletion = NO;
+        [[self targetView].layer addAnimation:spring forKey:@"cancelAnimateSpring"];
+
+        // Mirror the original completion behavior via dispatch_after since CAAnimation has no completion block.
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (!weakSelf) return;
+            weakSelf.frame = weakSelf.originalViewFrame;
+            weakSelf.completionAnmiate = true;
+        });
     }
-   
+
     self.hasAnimate = false;
 }
 
