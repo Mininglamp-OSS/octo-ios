@@ -1,6 +1,6 @@
 # Uncomment the next line to define a global platform for your project
  platform :ios, '14.0'
-workspace 'TangSengDaoDaoiOS.xcworkspace'
+workspace 'OctoiOS.xcworkspace'
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OctoConfig.xcconfig 解析
@@ -72,7 +72,7 @@ post_install do |installer|
     # 也给主 App target (OctoiOS) 注入相同的宏
     user_project_for_bugly = installer.aggregate_targets[0].user_project
     user_project_for_bugly.targets.each do |target|
-        next unless target.name == 'OctoiOS' || target.name == 'TangSengDaoDaoiOS'
+        next unless target.name == 'OctoiOS'
         target.build_configurations.each do |config|
             defs = Array(config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'])
             defs = ['$(inherited)'] if defs.empty?
@@ -229,7 +229,7 @@ post_install do |installer|
 end
 
 
-abstract_target 'TangSengDaoDaoiOSBase' do
+abstract_target 'OctoiOSBase' do
 
 #  pod 'lottie-ios', '~> 2.5.3'
   pod 'Socket.IO-Client-Swift'
@@ -239,7 +239,7 @@ abstract_target 'TangSengDaoDaoiOSBase' do
   pod 'ReactiveObjC'
 
   target 'OctoiOS' do
-    project 'TangSengDaoDaoiOS.xcodeproj'
+    project 'OctoiOS.xcodeproj'
     
   use_frameworks!
   # TODO(P5/P7): 下面 4 个 pod 引用 tangtaoit 的个人 GitHub fork。

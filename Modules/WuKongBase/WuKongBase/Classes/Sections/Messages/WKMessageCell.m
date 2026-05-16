@@ -20,7 +20,11 @@
 #import "WKExternalViewerResolver.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKTapLongTapOrDoubleTapGestureRecognizerEvent.h"
-#import "WKGestureContainerNode.h"
+// 用 Telegram 原版 ContextControllerSourceNode + ContextExtractedContentContainingNode
+// (在 TelegramUtils/Display/Source/ 中) 替代 P5 写的 WKGestureContainerNode /
+// WKContentContainerNode —— 因 P5 自写版用普通 UILongPressGestureRecognizer
+// 在聊天 tableview 上吃掉 navigation pop / scroll 手势。原版自带定制的
+// ContextGesture（beginDelay = 0.12 + 内部状态机），与 scrollview 协作良好。
 
 
 // 整个消息距离顶部的距离
@@ -50,7 +54,7 @@ static NSMutableDictionary *flameNodeCacheDict;
 
 @property(nonatomic,strong) UIButton *navigateToMessageBtn; // 跳到消息的按钮
 
-@property(nonatomic,strong) WKGestureContainerNode *mainContainerNode;
+@property(nonatomic,strong) ContextControllerSourceNode *mainContainerNode;
 
 @property(nonatomic,strong) TapLongTapOrDoubleTapGestureRecognizerWrap *tapLongTapOrDoubleTapGestureRecognizerWrap;
 
@@ -124,9 +128,9 @@ static NSMutableDictionary *flameNodeCacheDict;
 
     
     // ---------- main容器 ----------
-    self.mainContextSourceNode = [[WKContentContainerNode alloc] init];
+    self.mainContextSourceNode = [[ContextExtractedContentContainingNode alloc] init];
 //    self.bubbleSourceNode.view.backgroundColor = [UIColor redColor];
-    self.mainContainerNode = [[WKGestureContainerNode alloc] init];
+    self.mainContainerNode = [[ContextControllerSourceNode alloc] init];
 //    self.mainContainerNode.isGestureEnabled = false;
     [self.contentView addSubnode:self.mainContainerNode];
     [self.mainContainerNode addSubnode:self.mainContextSourceNode];
@@ -138,7 +142,7 @@ static NSMutableDictionary *flameNodeCacheDict;
         }
         return [weakSelf shouldBeginContextGestureAtPoint:point];
     }];
-    [self.mainContainerNode setActivated:^(UIGestureRecognizer *gesture, CGPoint point) {
+    [self.mainContainerNode setActivated:^(ContextGesture *gesture, CGPoint point) {
         if(!weakSelf) {
             return;
         }

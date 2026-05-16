@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		16C552F232D5A008552410EA /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 69A72504AD69BFBD2705F757 /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework */; };
+		16C552F232D5A008552410EA /* Pods_OctoiOSBase_OctoiOS.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 69A72504AD69BFBD2705F757 /* Pods_OctoiOSBase_OctoiOS.framework */; };
 		4B5FF74C2F908A62005CCF01 /* ShareExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 4B5FF7412F908A62005CCF01 /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7130BFC524C6817600B9E04B /* NotificationService.m in Sources */ = {isa = PBXBuildFile; fileRef = 7130BFC424C6817600B9E04B /* NotificationService.m */; };
 		7130BFC924C6817600B9E04B /* NotificationService.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 7130BFC124C6817600B9E04B /* NotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -87,10 +87,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		0C771557D3DDC04A6AE9B613 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig"; sourceTree = "<group>"; };
+		0C771557D3DDC04A6AE9B613 /* Pods-OctoiOSBase-OctoiOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-OctoiOSBase-OctoiOS.debug.xcconfig"; path = "Target Support Files/Pods-OctoiOSBase-OctoiOS/Pods-OctoiOSBase-OctoiOS.debug.xcconfig"; sourceTree = "<group>"; };
 		4B5FF7412F908A62005CCF01 /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
-		69A72504AD69BFBD2705F757 /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_TangSengDaoDaoiOSBase_OctoiOS.framework; sourceTree = BUILT_PRODUCTS_DIR; };
-		71018ED405ABC6ED8448075E /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig"; sourceTree = "<group>"; };
+		69A72504AD69BFBD2705F757 /* Pods_OctoiOSBase_OctoiOS.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_OctoiOSBase_OctoiOS.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		71018ED405ABC6ED8448075E /* Pods-OctoiOSBase-OctoiOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-OctoiOSBase-OctoiOS.release.xcconfig"; path = "Target Support Files/Pods-OctoiOSBase-OctoiOS/Pods-OctoiOSBase-OctoiOS.release.xcconfig"; sourceTree = "<group>"; };
 		71275E7D240A7BD600A7502C /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		71275E7F240A7BDB00A7502C /* MapKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MapKit.framework; path = System/Library/Frameworks/MapKit.framework; sourceTree = SDKROOT; };
 		71275E81240A7C2400A7502C /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
@@ -110,8 +110,8 @@
 		7191FCB223A6139A00FFFDC1 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		719FDA5E2595FBFC000C25D6 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
 		719FDA602595FC2C000C25D6 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
-		71AA883E24057A6B000FCF65 /* TangSengDaoDao.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TangSengDaoDao.entitlements; sourceTree = "<group>"; };
-		71AB707E244CB611003EFC21 /* TangSengDaoDao-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TangSengDaoDao-Bridging-Header.h"; sourceTree = "<group>"; };
+		71AA883E24057A6B000FCF65 /* Octo.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Octo.entitlements; sourceTree = "<group>"; };
+		71AB707E244CB611003EFC21 /* Octo-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Octo-Bridging-Header.h"; sourceTree = "<group>"; };
 		71C88A0326CA06E4000A42EE /* SELUpdateAlertConst.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = SELUpdateAlertConst.h; sourceTree = "<group>"; };
 		71C88A0426CA06E4000A42EE /* SELUpdateAlert.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SELUpdateAlert.m; sourceTree = "<group>"; };
 		71C88A0526CA06E4000A42EE /* SELUpdateAlertConst.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SELUpdateAlertConst.m; sourceTree = "<group>"; };
@@ -128,7 +128,7 @@
 		71D140C6251EF1AD0000137A /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		71D140C8251EF1B80000137A /* CoreMotion.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMotion.framework; path = System/Library/Frameworks/CoreMotion.framework; sourceTree = SDKROOT; };
 		71D1418E252017BA0000137A /* GLKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = GLKit.framework; path = System/Library/Frameworks/GLKit.framework; sourceTree = SDKROOT; };
-		71D6960323926E3500D092BA /* TangSengDaoDao.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TangSengDaoDao.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		71D6960323926E3500D092BA /* Octo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Octo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		71D6960623926E3500D092BA /* AppDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppDelegate.h; sourceTree = "<group>"; };
 		71D6960723926E3500D092BA /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; };
 		71D6960923926E3500D092BA /* ViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ViewController.h; sourceTree = "<group>"; };
@@ -145,8 +145,8 @@
 		AA110002239265E900D092BA /* WKDBRecoveryManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = WKDBRecoveryManager.m; sourceTree = "<group>"; };
 		AA110004239265E900D092BA /* WKDBRepairViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = WKDBRepairViewController.h; sourceTree = "<group>"; };
 		AA110005239265E900D092BA /* WKDBRepairViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = WKDBRepairViewController.m; sourceTree = "<group>"; };
-		DE5455F84CCB2C45ED689AA0 /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS/Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig"; sourceTree = "<group>"; };
-		E0C47A5DA8752F76B27D6B91 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig"; path = "Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig"; sourceTree = "<group>"; };
+		DE5455F84CCB2C45ED689AA0 /* Pods-OctoiOSBase-OctoiOS.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-OctoiOSBase-OctoiOS.debug.xcconfig"; path = "Target Support Files/Pods-OctoiOSBase-OctoiOS/Pods-OctoiOSBase-OctoiOS.debug.xcconfig"; sourceTree = "<group>"; };
+		E0C47A5DA8752F76B27D6B91 /* Pods-OctoiOSBase-OctoiOS.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-OctoiOSBase-OctoiOS.release.xcconfig"; path = "Target Support Files/Pods-OctoiOSBase-OctoiOS/Pods-OctoiOSBase-OctoiOS.release.xcconfig"; sourceTree = "<group>"; };
 		F9A37A32F1F58BBBCA58B52D /* OctoConfig.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; path = OctoConfig.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -217,7 +217,7 @@
 				71D140B6251EEAF00000137A /* libz.tbd in Frameworks */,
 				7132A163240ABB92007F9BE2 /* libc.tbd in Frameworks */,
 				7132A15C240AB4B8007F9BE2 /* libc++.tbd in Frameworks */,
-				16C552F232D5A008552410EA /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework in Frameworks */,
+				16C552F232D5A008552410EA /* Pods_OctoiOSBase_OctoiOS.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -246,7 +246,7 @@
 				71275E7D240A7BD600A7502C /* UIKit.framework */,
 				7130BFD324C6832F00B9E04B /* UserNotifications.framework */,
 				7130BFD524C6832F00B9E04B /* UserNotificationsUI.framework */,
-				69A72504AD69BFBD2705F757 /* Pods_TangSengDaoDaoiOSBase_OctoiOS.framework */,
+				69A72504AD69BFBD2705F757 /* Pods_OctoiOSBase_OctoiOS.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -297,14 +297,14 @@
 				71F7E3DB2A47F66900E8D20D /* QUESTION.md */,
 				71C88A0126CA06E4000A42EE /* Vendor */,
 				7191FCB223A6139A00FFFDC1 /* README.md */,
-				71D6960523926E3500D092BA /* TangSengDaoDao */,
+				71D6960523926E3500D092BA /* Octo */,
 				7130BFC224C6817600B9E04B /* NotificationService */,
 				7130BFD724C6832F00B9E04B /* NotificationContent */,
 				4B5FF7422F908A62005CCF01 /* ShareExtension */,
 				71D6960423926E3500D092BA /* Products */,
 				D0600169DB45E883707B86A6 /* Pods */,
 				1882D30109100A187BA46643 /* Frameworks */,
-				71AB707E244CB611003EFC21 /* TangSengDaoDao-Bridging-Header.h */,
+				71AB707E244CB611003EFC21 /* Octo-Bridging-Header.h */,
 				F9A37A32F1F58BBBCA58B52D /* OctoConfig.xcconfig */,
 			);
 			sourceTree = "<group>";
@@ -312,7 +312,7 @@
 		71D6960423926E3500D092BA /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				71D6960323926E3500D092BA /* TangSengDaoDao.app */,
+				71D6960323926E3500D092BA /* Octo.app */,
 				7130BFC124C6817600B9E04B /* NotificationService.appex */,
 				7130BFD224C6832F00B9E04B /* NotificationContent.appex */,
 				4B5FF7412F908A62005CCF01 /* ShareExtension.appex */,
@@ -320,10 +320,10 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		71D6960523926E3500D092BA /* TangSengDaoDao */ = {
+		71D6960523926E3500D092BA /* Octo */ = {
 			isa = PBXGroup;
 			children = (
-				71AA883E24057A6B000FCF65 /* TangSengDaoDao.entitlements */,
+				71AA883E24057A6B000FCF65 /* Octo.entitlements */,
 				71D6960623926E3500D092BA /* AppDelegate.h */,
 				71D6960723926E3500D092BA /* AppDelegate.m */,
 				71D6960923926E3500D092BA /* ViewController.h */,
@@ -341,16 +341,16 @@
 				AA110005239265E900D092BA /* WKDBRepairViewController.m */,
 				719FDA5F2595FBFC000C25D6 /* Localizable.strings */,
 			);
-			path = TangSengDaoDao;
+			path = Octo;
 			sourceTree = "<group>";
 		};
 		D0600169DB45E883707B86A6 /* Pods */ = {
 			isa = PBXGroup;
 			children = (
-				DE5455F84CCB2C45ED689AA0 /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.debug.xcconfig */,
-				71018ED405ABC6ED8448075E /* Pods-TangSengDaoDaoiOSBase-TangSengDaoDaoiOS.release.xcconfig */,
-				0C771557D3DDC04A6AE9B613 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig */,
-				E0C47A5DA8752F76B27D6B91 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig */,
+				DE5455F84CCB2C45ED689AA0 /* Pods-OctoiOSBase-OctoiOS.debug.xcconfig */,
+				71018ED405ABC6ED8448075E /* Pods-OctoiOSBase-OctoiOS.release.xcconfig */,
+				0C771557D3DDC04A6AE9B613 /* Pods-OctoiOSBase-OctoiOS.debug.xcconfig */,
+				E0C47A5DA8752F76B27D6B91 /* Pods-OctoiOSBase-OctoiOS.release.xcconfig */,
 			);
 			path = Pods;
 			sourceTree = "<group>";
@@ -433,7 +433,7 @@
 			);
 			name = OctoiOS;
 			productName = LiMaoIMDemo;
-			productReference = 71D6960323926E3500D092BA /* TangSengDaoDao.app */;
+			productReference = 71D6960323926E3500D092BA /* Octo.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -462,7 +462,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 71D695FE23926E3500D092BA /* Build configuration list for PBXProject "TangSengDaoDaoiOS" */;
+			buildConfigurationList = 71D695FE23926E3500D092BA /* Build configuration list for PBXProject "OctoiOS" */;
 			compatibilityVersion = "Xcode 9.3";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -538,7 +538,7 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(DERIVED_FILE_DIR)/Pods-TangSengDaoDaoiOSBase-OctoiOS-checkManifestLockResult.txt",
+				"$(DERIVED_FILE_DIR)/Pods-OctoiOSBase-OctoiOS-checkManifestLockResult.txt",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -551,15 +551,15 @@
 			files = (
 			);
 			inputFileListPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS-resources-${CONFIGURATION}-input-files.xcfilelist",
+				"${PODS_ROOT}/Target Support Files/Pods-OctoiOSBase-OctoiOS/Pods-OctoiOSBase-OctoiOS-resources-${CONFIGURATION}-input-files.xcfilelist",
 			);
 			name = "[CP] Copy Pods Resources";
 			outputFileListPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS-resources-${CONFIGURATION}-output-files.xcfilelist",
+				"${PODS_ROOT}/Target Support Files/Pods-OctoiOSBase-OctoiOS/Pods-OctoiOSBase-OctoiOS-resources-${CONFIGURATION}-output-files.xcfilelist",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS-resources.sh\"\n";
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-OctoiOSBase-OctoiOS/Pods-OctoiOSBase-OctoiOS-resources.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
 		410EB1233C71A847B3317F56 /* [CP] Embed Pods Frameworks */ = {
@@ -568,15 +568,15 @@
 			files = (
 			);
 			inputFileListPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS-frameworks-${CONFIGURATION}-input-files.xcfilelist",
+				"${PODS_ROOT}/Target Support Files/Pods-OctoiOSBase-OctoiOS/Pods-OctoiOSBase-OctoiOS-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+				"${PODS_ROOT}/Target Support Files/Pods-OctoiOSBase-OctoiOS/Pods-OctoiOSBase-OctoiOS-frameworks-${CONFIGURATION}-output-files.xcfilelist",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-TangSengDaoDaoiOSBase-OctoiOS/Pods-TangSengDaoDaoiOSBase-OctoiOS-frameworks.sh\"\n";
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-OctoiOSBase-OctoiOS/Pods-OctoiOSBase-OctoiOS-frameworks.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */
@@ -977,12 +977,12 @@
 		};
 		71D6963023926E3700D092BA /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 0C771557D3DDC04A6AE9B613 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.debug.xcconfig */;
+			baseConfigurationReference = 0C771557D3DDC04A6AE9B613 /* Pods-OctoiOSBase-OctoiOS.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_WEAK = YES;
-				CODE_SIGN_ENTITLEMENTS = TangSengDaoDao/TangSengDaoDao.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Octo/Octo.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 58;
@@ -995,7 +995,8 @@
 					"$(PROJECT_DIR)/Vendor/WebRTC",
 				);
 				GCC_INPUT_FILETYPE = automatic;
-				INFOPLIST_FILE = TangSengDaoDao/Info.plist;
+				GCC_PREPROCESSOR_DEFINITIONS = "$(inherited)";
+				INFOPLIST_FILE = Octo/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Octo;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
@@ -1073,13 +1074,13 @@
 					"\"WuKongIMSDK\"",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.example-app.octo;
-				PRODUCT_NAME = TangSengDaoDao;
+				PRODUCT_NAME = Octo;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SWIFT_OBJC_BRIDGING_HEADER = "TangSengDaoDao-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "Octo-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -1088,12 +1089,12 @@
 		};
 		71D6963123926E3700D092BA /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = E0C47A5DA8752F76B27D6B91 /* Pods-TangSengDaoDaoiOSBase-OctoiOS.release.xcconfig */;
+			baseConfigurationReference = E0C47A5DA8752F76B27D6B91 /* Pods-OctoiOSBase-OctoiOS.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_WEAK = YES;
-				CODE_SIGN_ENTITLEMENTS = TangSengDaoDao/TangSengDaoDao.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Octo/Octo.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 58;
@@ -1106,7 +1107,8 @@
 					"$(PROJECT_DIR)/Vendor/WebRTC",
 				);
 				GCC_INPUT_FILETYPE = automatic;
-				INFOPLIST_FILE = TangSengDaoDao/Info.plist;
+				GCC_PREPROCESSOR_DEFINITIONS = "$(inherited)";
+				INFOPLIST_FILE = Octo/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Octo;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
@@ -1184,13 +1186,13 @@
 					"\"WuKongIMSDK\"",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.example-app.octo;
-				PRODUCT_NAME = TangSengDaoDao;
+				PRODUCT_NAME = Octo;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
-				SWIFT_OBJC_BRIDGING_HEADER = "TangSengDaoDao-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "Octo-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -1226,7 +1228,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		71D695FE23926E3500D092BA /* Build configuration list for PBXProject "TangSengDaoDaoiOS" */ = {
+		71D695FE23926E3500D092BA /* Build configuration list for PBXProject "OctoiOS" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				71D6962D23926E3700D092BA /* Debug */,

@@ -43,7 +43,7 @@ Upstream Origin (本项目 fork 自以下上游项目，保留其原始许可证
   - TangSengDaoDao iOS (主 App 壳)
       Apache License, Version 2.0
       https://github.com/TangSengDaoDao/TangSengDaoDaoiOS
-      Used at: TangSengDaoDao/ 目录中部分初始文件
+      Used at: Octo/ 目录中部分初始文件（原 TangSengDaoDao/ 目录，P8 重命名为 Octo/）
 
 
 ================================================================================

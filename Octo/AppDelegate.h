@@ -1,23 +1,25 @@
 // Copyright 2026 MININGLAMP Technology and the OCTO contributors
 // SPDX-License-Identifier: Apache-2.0
 //
-//  ViewController.m
-//  TangSengDaoDao
+//  AppDelegate.h
+//  Octo
 //
 //  Created by tt on 2019/11/30.
 //  Copyright 2026 MININGLAMP Technology and the OCTO contributors
 //
 
-#import "ViewController.h"
-@interface ViewController ()
+#import <UIKit/UIKit.h>
+
+@interface WKAppInstall : NSObject
+
+
 
 @end
 
-@implementation ViewController
+@interface AppDelegate : UIResponder <UIApplicationDelegate>
 
-- (void)viewDidLoad {
-    [super viewDidLoad];
-}
+@property (strong, nonatomic) UIWindow *window;
 
 
 @end
+

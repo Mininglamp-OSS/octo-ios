@@ -73,7 +73,7 @@ Swift / C++ / Header 文件相同；Python / Shell 用 `#` 开头。
 
 ### 关于 ATS (App Transport Security)
 
-`TangSengDaoDao/Info.plist` 中 `NSAllowsArbitraryLoads = YES` 是**有意保留**的设置，
+`Octo/Info.plist` 中 `NSAllowsArbitraryLoads = YES` 是**有意保留**的设置，
 原因：
 - **聊天消息中的图片 URL** 来自任意域名，无法预先限定 HTTPS
 - **用户自部署 IM 服务器** 可能没有 TLS 证书（本地局域网部署场景）

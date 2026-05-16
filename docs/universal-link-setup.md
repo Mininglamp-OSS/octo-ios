@@ -42,7 +42,7 @@ Universal Links 让 `https://your.domain/path` 这样的链接在用户点击时
 
 ### Step 2: 改 Xcode entitlements
 
-打开 `TangSengDaoDao/TangSengDaoDao.entitlements`，把 placeholder
+打开 `Octo/Octo.entitlements`，把 placeholder
 替换成你的真实域名：
 
 ```xml
@@ -125,6 +125,6 @@ Universal Link 应该跳进 App；如果跳了 Safari 说明配置不对。
 
 ## 五、相关文件
 
-- `TangSengDaoDao/TangSengDaoDao.entitlements` — Associated Domains 配置
+- `Octo/Octo.entitlements` — Associated Domains 配置
 - `OctoConfig.xcconfig.template` — `OCTO_ASSOCIATED_DOMAIN` 占位（暂未生效）
 - `Modules/WuKongBase/WuKongBase/Classes/WKApp.m` — `application:continueUserActivity:` 入口

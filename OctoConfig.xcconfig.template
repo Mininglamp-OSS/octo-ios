@@ -59,7 +59,7 @@ OCTO_IM_DEFAULT_LABEL = 默认服务器
 // 仅域名，不含 applinks: 前缀。
 // 注意：Apple 的 .entitlements 文件不支持 xcconfig 替换，本变量预留给
 // 未来"启动脚本生成 entitlements"方案。当前阶段需直接编辑
-// TangSengDaoDao/TangSengDaoDao.entitlements 以替换为你自己的域名。
+// Octo/Octo.entitlements 以替换为你自己的域名。
 
 OCTO_ASSOCIATED_DOMAIN = your.universal-link.example.com
 

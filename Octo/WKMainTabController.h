@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 //  WKMainTabController.h
-//  TangSengDaoDao
+//  Octo
 //
 //  Created by tt on 2019/12/7.
 //  Copyright 2026 MININGLAMP Technology and the OCTO contributors
