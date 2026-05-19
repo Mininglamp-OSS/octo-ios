@@ -76,11 +76,29 @@ import iosMath
         return result
     }
 
+    /// TeX 源最大长度，超过直接拒绝渲染。远端消息可能塞超长公式刷栈/OOM，
+    /// iosMath 解析超长公式本身也慢得离谱。回退到 monospace 至少可读。
+    private static let maxTexLength: Int = 4096
+    /// 渲染图像最大像素面积，超过拒绝 UIGraphicsImageRenderer 分配。
+    /// 防御点：MTMathUILabel 解析成功但矩阵/巨型公式输出极宽极高，瞬时
+    /// 分配几十 MB 位图导致 OOM。2M 像素 ≈ 8MB RGBA，温和上限。
+    private static let maxImageArea: CGFloat = 2_000_000
+
     private static func _renderUncached(tex: String,
                                          key: NSString,
                                          fontSize: CGFloat,
                                          textColor: UIColor,
                                          isDisplay: Bool) -> WKMathImageResult? {
+
+        // 长度闸：缓存以 (tex, ...) 为 key, 缓存 LRU 只能在分配之后才驱逐,
+        // 所以源长度必须在 MTMathUILabel 解析前先拦。
+        if tex.count > maxTexLength {
+            #if DEBUG
+            NSLog("[WKMathImageRenderer] rejecting tex (len=%d > %d) tex_prefix=%@",
+                  tex.count, maxTexLength, String(tex.prefix(80)))
+            #endif
+            return nil
+        }
 
         // 构建 MTMathUILabel；解析失败时 .error 非空。
         let label = MTMathUILabel()
@@ -125,6 +143,15 @@ import iosMath
         let pad: CGFloat = 1.0
         let imageW = ceil(width) + pad * 2
         let imageH = ceil(height) + pad * 2
+        // 面积闸：在 UIGraphicsImageRenderer 分配前拦截。RGBA 4 字节, 2M 像素 ≈ 8MB,
+        // 单条消息天花板, 防止矩阵/超宽公式撑爆。回退到 monospace 也至少可读。
+        if imageW * imageH > maxImageArea {
+            #if DEBUG
+            NSLog("[WKMathImageRenderer] rejecting oversized image (%.0fx%.0f area=%.0f > %.0f) tex_prefix=%@",
+                  imageW, imageH, imageW * imageH, maxImageArea, String(tex.prefix(80)))
+            #endif
+            return nil
+        }
         let size = CGSize(width: imageW, height: imageH)
 
         let format = UIGraphicsImageRendererFormat.default()
