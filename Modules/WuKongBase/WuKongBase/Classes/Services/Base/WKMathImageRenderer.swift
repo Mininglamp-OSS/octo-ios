@@ -43,7 +43,14 @@ import iosMath
     }()
 
     /// 渲染 LaTeX 数学到 UIImage。失败返回 nil（调用方走 monospace 回退）。
-    /// 必须在主线程调用（iosMath 的 MTMathUILabel 是 UIView 子类）。
+    ///
+    /// 线程安全：MTMathUILabel 是 UIView 子类，离主线程创建会触发 Main Thread Checker。
+    /// 但 WKMessageListView 的预测高度路径 (precacheHeightForMessage:) 把
+    /// parseAndCacheTextMessage: 派到 global queue 上跑，链路会带到这里。
+    /// 所以这里非主线程时先查 NSCache（线程安全）；缓存命中就直接返回避免 hop；
+    /// 缓存未命中再 dispatch_sync 到主线程做真渲染。
+    /// 调用方 parseAndCacheTextMessage: 在 bg 是非阻塞的（dispatch_async），main
+    /// 不会等 bg 完成 → dispatch_sync 不会死锁。
     @objc public static func render(tex: String,
                                     fontSize: CGFloat,
                                     textColor: UIColor,
@@ -54,6 +61,26 @@ import iosMath
         if let cached = cache.object(forKey: key) {
             return cached
         }
+        if Thread.isMainThread {
+            return _renderUncached(tex: tex, key: key, fontSize: fontSize, textColor: textColor, isDisplay: isDisplay)
+        }
+        var result: WKMathImageResult?
+        DispatchQueue.main.sync {
+            // 主线程上有可能其他 caller 已经 fill 了，再 check 一次。
+            if let cached = cache.object(forKey: key) {
+                result = cached
+            } else {
+                result = _renderUncached(tex: tex, key: key, fontSize: fontSize, textColor: textColor, isDisplay: isDisplay)
+            }
+        }
+        return result
+    }
+
+    private static func _renderUncached(tex: String,
+                                         key: NSString,
+                                         fontSize: CGFloat,
+                                         textColor: UIColor,
+                                         isDisplay: Bool) -> WKMathImageResult? {
 
         // 构建 MTMathUILabel；解析失败时 .error 非空。
         let label = MTMathUILabel()

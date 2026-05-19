@@ -46,15 +46,35 @@ private let kMathPlaceholderString = String(kMathPlaceholderChar)
 
     @objc public static func containsLaTeX(_ text: String) -> Bool {
         if text.isEmpty { return false }
-        let patterns = [
+        let nsRange = NSRange(text.startIndex..., in: text)
+        // 命令类：\section / \textbf / \begin 等，以及 \( \) \[ \] 数学分隔符。
+        let cmdPatterns = [
             #"\\(?:section|subsection|subsubsection|paragraph|textbf|textit|emph|texttt|underline|begin|end|label|ref|cite|item|textbar|textbackslash|par)\b"#,
             #"\\[\(\)\[\]]"#
         ]
-        let nsRange = NSRange(text.startIndex..., in: text)
-        for p in patterns {
+        for p in cmdPatterns {
             if let re = try? NSRegularExpression(pattern: p),
                re.firstMatch(in: text, options: [], range: nsRange) != nil {
                 return true
+            }
+        }
+        // $$ ... $$ display math：宽松，任何成对的 $$ 都算（数学语义明确，几乎不可能误判）。
+        if let re = try? NSRegularExpression(pattern: #"\$\$[^\n]+\$\$"#),
+           re.firstMatch(in: text, options: [], range: nsRange) != nil {
+            return true
+        }
+        // $ ... $ inline math：易跟货币（$10, $5）冲突，必须内部含 math-ish 字符
+        // (\\ / ^ / _ / { / })。这样 "$x^2$" "$\Phi_k$" "$a_1$" 命中，"$10" "价格 $5"
+        // 不命中。单字母变量 "$y$" 会漏，建议用户写 \(y\) — 可接受。
+        if let re = try? NSRegularExpression(pattern: #"\$[^\$\n]{1,200}\$"#) {
+            let matches = re.matches(in: text, options: [], range: nsRange)
+            let nsText = text as NSString
+            for m in matches {
+                let innerRange = NSRange(location: m.range.location + 1, length: m.range.length - 2)
+                let inner = nsText.substring(with: innerRange)
+                if inner.range(of: #"[\\\^_\{\}]"#, options: .regularExpression) != nil {
+                    return true
+                }
             }
         }
         return false
@@ -133,6 +153,8 @@ private let kMathPlaceholderString = String(kMathPlaceholderChar)
             }
 
             // P4: $ ... $  (inline, single line, no nested $)
+            // 内部必须含 math-ish 字符（\ ^ _ { }）才当数学，否则 "$5 $" "价格 $A $"
+            // 这种货币 / 普通文本里的孤立 $ 会被错吃。与 containsLaTeX 的安全闸对齐。
             if c == "$" {
                 var j = i + 1
                 var found = -1
@@ -143,9 +165,11 @@ private let kMathPlaceholderString = String(kMathPlaceholderChar)
                 }
                 if found > i + 1 {
                     let tex = String(chars[(i + 1)..<found])
-                    emit(tex, isDisplay: false)
-                    i = found + 1
-                    continue
+                    if hasMathChar(tex) {
+                        emit(tex, isDisplay: false)
+                        i = found + 1
+                        continue
+                    }
                 }
             }
 
@@ -204,6 +228,17 @@ private let kMathPlaceholderString = String(kMathPlaceholderChar)
         for c in s {
             if prevBackslash && c.isLetter { return true }
             prevBackslash = (c == "\\")
+        }
+        return false
+    }
+
+    /// 内部含 \ / ^ / _ / { / } 任意一个即视为数学（区别于纯数字货币 / 普通文本）。
+    private static func hasMathChar(_ s: String) -> Bool {
+        for c in s {
+            switch c {
+            case "\\", "^", "_", "{", "}": return true
+            default: continue
+            }
         }
         return false
     }

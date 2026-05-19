@@ -278,10 +278,10 @@ static NSMutableDictionary *_jsTableHeights;
     if(message.remoteExtra.contentEdit) {
         key = [NSString stringWithFormat:@"%@-edit-%lu",message.clientMsgNo,message.remoteExtra.editedAt];
     }
-    id rawContent = message.remoteExtra.contentEdit ?: [message content];
-    if ([rawContent isKindOfClass:[WKTextContent class]] && [((WKTextContent*)rawContent).format isEqualToString:@"html"]) {
-        key = [NSString stringWithFormat:@"%@-%lu",key,(unsigned long)WKApp.shared.config.style];
-    }
+    // 始终把当前 style 拼进 key：cmark renderer 的色板 / 数学 attachment 的图像
+    // 都跟 isDark 绑定，深色模式切换后必须 invalidate 旧 attrStr。原实现只在 html
+    // 路径加了 style，markdown / LaTeX 走另外的分支会拿到陈旧颜色。
+    key = [NSString stringWithFormat:@"%@-style-%lu",key,(unsigned long)WKApp.shared.config.style];
     return key;
 }
 

@@ -23,6 +23,17 @@
 
 @implementation WKLaTeXPreprocessorTests
 
+/// 模拟真实 UI 入口（WKTextMessageCell.getContentAttrStr:）的 gate flow:
+/// 先 containsLaTeX 判断，命中才 preprocess。未命中返回空 segments 的原文。
+/// 数学分隔符相关用例必须走这条路径，因为 containsLaTeX gate 不放行就永远不会
+/// 跑 preprocess，pure-preprocess 的测试通过≠实际 UI 命中。
+- (WKLaTeXPreprocessResult *)preprocessThroughGate:(NSString *)input {
+    if (![WKLaTeXPreprocessor containsLaTeX:input]) {
+        return [[WKLaTeXPreprocessResult alloc] initWithMarkdown:input mathSegments:@[]];
+    }
+    return [WKLaTeXPreprocessor preprocess:input];
+}
+
 #pragma mark - containsLaTeX
 
 - (void)test_containsLaTeX_basic_commands_match {
@@ -36,6 +47,23 @@
 - (void)test_containsLaTeX_math_delimiters_match {
     XCTAssertTrue([WKLaTeXPreprocessor containsLaTeX:@"\\(x^2\\)"]);
     XCTAssertTrue([WKLaTeXPreprocessor containsLaTeX:@"\\[x^2\\]"]);
+    // $$ ... $$ display 数学：纯文本上下文（无任何 \cmd）也要命中。
+    XCTAssertTrue([WKLaTeXPreprocessor containsLaTeX:@"a $$x^2$$ b"]);
+    XCTAssertTrue([WKLaTeXPreprocessor containsLaTeX:@"$$\\sum_i x_i$$"]);
+    // $ ... $ inline 数学（带 math-ish 字符）：纯文本上下文也要命中。
+    XCTAssertTrue([WKLaTeXPreprocessor containsLaTeX:@"a $x^2$ b"]);
+    XCTAssertTrue([WKLaTeXPreprocessor containsLaTeX:@"价格相关变量 $a_1$"]);
+    XCTAssertTrue([WKLaTeXPreprocessor containsLaTeX:@"反斜杠数学 $\\Phi$"]);
+}
+
+- (void)test_containsLaTeX_currency_safeguard {
+    // 货币 / 普通 $ 文本不应触发预处理（防止误判 → 把正文吞掉）。
+    XCTAssertFalse([WKLaTeXPreprocessor containsLaTeX:@"价格是 $10"]);
+    XCTAssertFalse([WKLaTeXPreprocessor containsLaTeX:@"成本 $100K 收入 $200K"]);
+    XCTAssertFalse([WKLaTeXPreprocessor containsLaTeX:@"$ + $"]); // 单字符 + 符号，无 math-ish
+    // 已知漏检：单字母变量 $y$ 内部无 \^_{} 字符，gate 拒绝。
+    // 用户应改写为 \(y\)，这是为防货币误判付出的可接受代价。
+    XCTAssertFalse([WKLaTeXPreprocessor containsLaTeX:@"$y$"]);
 }
 
 - (void)test_containsLaTeX_negative {
@@ -178,36 +206,51 @@
     XCTAssertFalse([r.markdown containsString:@"\\unknowncmd"]);
 }
 
-#pragma mark - Math: standard delimiters
+#pragma mark - Math: standard delimiters (must pass through containsLaTeX gate)
 
-- (void)test_math_inline_single_dollar {
-    WKLaTeXPreprocessResult *r = [WKLaTeXPreprocessor preprocess:@"a $x^2$ b"];
-    XCTAssertEqual(r.mathSegments.count, 1);
+- (void)test_math_inline_single_dollar_through_gate {
+    WKLaTeXPreprocessResult *r = [self preprocessThroughGate:@"a $x^2$ b"];
+    XCTAssertEqual(r.mathSegments.count, 1, @"$...$ 必须经 gate 抽到数学段");
     XCTAssertEqualObjects(r.mathSegments[0].tex, @"x^2");
     XCTAssertFalse(r.mathSegments[0].isDisplay);
-    // 占位符 ￼ (U+FFFC)
     XCTAssertTrue([r.markdown containsString:@"￼"]);
 }
 
-- (void)test_math_display_double_dollar {
-    WKLaTeXPreprocessResult *r = [WKLaTeXPreprocessor preprocess:@"$$\\sum_i x_i$$"];
+- (void)test_math_display_double_dollar_through_gate {
+    WKLaTeXPreprocessResult *r = [self preprocessThroughGate:@"$$\\sum_i x_i$$"];
     XCTAssertEqual(r.mathSegments.count, 1);
     XCTAssertEqualObjects(r.mathSegments[0].tex, @"\\sum_i x_i");
     XCTAssertTrue(r.mathSegments[0].isDisplay);
 }
 
 - (void)test_math_inline_paren_escape {
-    WKLaTeXPreprocessResult *r = [WKLaTeXPreprocessor preprocess:@"\\(x^2\\)"];
+    WKLaTeXPreprocessResult *r = [self preprocessThroughGate:@"\\(x^2\\)"];
     XCTAssertEqual(r.mathSegments.count, 1);
     XCTAssertEqualObjects(r.mathSegments[0].tex, @"x^2");
     XCTAssertFalse(r.mathSegments[0].isDisplay);
 }
 
 - (void)test_math_display_bracket_escape {
-    WKLaTeXPreprocessResult *r = [WKLaTeXPreprocessor preprocess:@"\\[\\int_0^1\\]"];
+    WKLaTeXPreprocessResult *r = [self preprocessThroughGate:@"\\[\\int_0^1\\]"];
     XCTAssertEqual(r.mathSegments.count, 1);
     XCTAssertEqualObjects(r.mathSegments[0].tex, @"\\int_0^1");
     XCTAssertTrue(r.mathSegments[0].isDisplay);
+}
+
+- (void)test_math_currency_not_extracted_through_gate {
+    // 通过 gate 入口：货币应当原样保留，不抽段
+    WKLaTeXPreprocessResult *r = [self preprocessThroughGate:@"成本 $100 收入 $200"];
+    XCTAssertEqual(r.mathSegments.count, 0, @"货币不应被当作数学抽走");
+    XCTAssertTrue([r.markdown containsString:@"$100"]);
+    XCTAssertTrue([r.markdown containsString:@"$200"]);
+}
+
+- (void)test_math_currency_mixed_with_real_math {
+    // 同段既有真数学又有货币 → 数学被抽，货币保留
+    WKLaTeXPreprocessResult *r = [self preprocessThroughGate:@"变量 $x_1$ 的价格是 $5 元"];
+    XCTAssertEqual(r.mathSegments.count, 1, @"应当只抽 $x_1$，不抽 $5");
+    XCTAssertEqualObjects(r.mathSegments[0].tex, @"x_1");
+    XCTAssertTrue([r.markdown containsString:@"$5 元"]);
 }
 
 #pragma mark - Math: fallback (...) heuristic
