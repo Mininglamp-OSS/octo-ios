@@ -84,13 +84,14 @@ static NSString *const WKAegisAccountVerificationPath = @"/profile/info?anchor=v
     if(!url) return NO;
     NSString *scheme = url.scheme.lowercaseString;
     NSString *host   = url.host.lowercaseString;
-    // 仅支持自定义 scheme `octo://verified`, 不支持 Universal Link 降级。
+    // 仅支持自定义 scheme `<scheme>://verified`（scheme 由 OCTO_URL_SCHEME 决定,
+    // 默认 octo, 见 WKRealnameVerifiedURLScheme）, 不支持 Universal Link 降级。
     //
     // Round 2 决定（见本文件头部注释 + PR #112 review blocking 2）:
     // UL 降级会要求 entitlement applinks:* 列出所有 Aegis host, 但 Aegis host
     // 是按环境后端动态下发的, 静态 entitlement 与动态配置 在架构上冲突, 同时
     // Aegis 侧还要持 AASA 文件, 运维成本高。Aegis return_to 现在统一用
-    // octo://verified app scheme 回跳 —— 与 Android、Web 的 `?verified=1`
+    // <scheme>://verified app scheme 回跳 —— 与 Android、Web 的 `?verified=1`
     // 一致, 0 entitlement 维护成本, 未来新增环境 0 发版成本。
     return [scheme isEqualToString:WKRealnameVerifiedURLScheme] &&
            [host isEqualToString:WKRealnameVerifiedURLHost];
