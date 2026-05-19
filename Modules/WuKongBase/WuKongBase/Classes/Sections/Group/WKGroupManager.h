@@ -28,7 +28,6 @@ typedef enum : NSUInteger {
     WKGroupSettingKeyForbidden, // 群禁言
     WKGroupSettingKeyForbiddenAddFriend, // 群内禁止互相加好友
     WKGroupSettingKeyScreenshot, // 截屏通知
-    WKGroupSettingKeyRevokeRemind, // 撤回提醒
     WKGroupSettingKeyJoinGroupRemind, // 进群提醒
     WKGroupSettingKeyChatPwdOn, // 聊天密码开关
     WKGroupSettingKeyReceipt, // 回执开关

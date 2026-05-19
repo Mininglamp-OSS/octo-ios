@@ -204,22 +204,6 @@
     return false;
 }
 
--(void) channel:(WKChannel*)channel revokeRemind:(BOOL)on {
-    if(channel.channelType == WK_PERSON) {
-        [self updateUserSetting:channel.channelId settingDict:@{WKChannelExtraKeyRevokeRemind:@(on?1:0)}];
-    }else {
-        [self updateGroupSetting:WKGroupSettingKeyRevokeRemind on:on groupNo:channel.channelId];
-    }
-}
-
--(BOOL)revokeRemind:(WKChannel*)channel {
-    WKChannelInfo *channelInfo = [[WKSDK shared].channelManager getChannelInfo:channel];
-    if(channelInfo) {
-        return [channelInfo settingForKey:WKChannelExtraKeyRevokeRemind defaultValue:false];
-    }
-    return false;
-}
-
 -(void) channel:(WKChannel*)channel joinGroupRemind:(BOOL)on {
     if(channel.channelType == WK_PERSON) {
         [self updateUserSetting:channel.channelId settingDict:@{WKChannelExtraKeyJoinGroupRemind:@(on?1:0)}];

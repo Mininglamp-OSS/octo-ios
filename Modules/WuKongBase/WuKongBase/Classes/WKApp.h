@@ -269,7 +269,6 @@ NS_ASSUME_NONNULL_END
 FOUNDATION_EXPORT WKChannelExtraKey const _Nullable  WKChannelExtraKeyShortNo; // 短编号
 FOUNDATION_EXPORT WKChannelExtraKey const _Nullable  WKChannelExtraKeyScreenshot; // 截屏通知
 FOUNDATION_EXPORT WKChannelExtraKey const _Nullable  WKChannelExtraKeyForbiddenAddFriend; // 禁止互加好友
-FOUNDATION_EXPORT WKChannelExtraKey const _Nullable  WKChannelExtraKeyRevokeRemind; // 撤回通知
 FOUNDATION_EXPORT WKChannelExtraKey const _Nullable  WKChannelExtraKeyJoinGroupRemind; // 进群通知
 FOUNDATION_EXPORT WKChannelExtraKey const _Nullable  WKChannelExtraKeyChatPwd; // 聊天密码
 

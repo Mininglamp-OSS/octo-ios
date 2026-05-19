@@ -25,7 +25,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,assign) BOOL forbiddenAddFriend; // 是否禁止互加好友
 @property(nonatomic,assign) BOOL screenshot; // 截屏通知
 @property(nonatomic,assign) BOOL joinGroupRemind; // 进群通知
-@property(nonatomic,assign) BOOL revokeRemind; // 撤回通知
 @property(nonatomic,assign) BOOL invite; // 群聊邀请确认
 @property(nonatomic,assign) BOOL chatPwdOn; // 聊天密码开关
 @property(nonatomic,assign) BOOL allowViewHistoryMsg; //允许新成员查看历史消息
