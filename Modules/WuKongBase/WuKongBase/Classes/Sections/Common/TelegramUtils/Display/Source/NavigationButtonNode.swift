@@ -325,7 +325,7 @@ private final class NavigationButtonItemNode: ImmediateTextNode {
 }
 
 
-public final class NavigationButtonNode: ContextControllerSourceNode {
+public final class NavigationButtonNode: OctoMessageGestureContainerNode {
     private var nodes: [NavigationButtonItemNode] = []
     
     public var singleCustomNode: ASDisplayNode? {

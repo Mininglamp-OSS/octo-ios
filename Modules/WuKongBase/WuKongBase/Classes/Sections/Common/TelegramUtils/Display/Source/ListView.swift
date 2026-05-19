@@ -137,7 +137,7 @@ public enum GeneralScrollDirection {
 private func cancelContextGestures(view: UIView) {
     if let gestureRecognizers = view.gestureRecognizers {
         for gesture in gestureRecognizers {
-            if let gesture = gesture as? ContextGesture {
+            if let gesture = gesture as? OctoContextGesture {
                 gesture.cancel()
             }
         }

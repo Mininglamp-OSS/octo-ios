@@ -649,7 +649,7 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     
     open var tabBarItemContextActionType: TabBarItemContextActionType = .none
     
-    open func tabBarItemContextAction(sourceNode: ContextExtractedContentContainingNode, gesture: ContextGesture) {
+    open func tabBarItemContextAction(sourceNode: OctoMessageContentContainingNode, gesture: OctoContextGesture) {
     }
     
     open func tabBarDisabledAction() {

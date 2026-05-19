@@ -46,9 +46,12 @@ TODO: Add long description of the pod here.
   # - SoundTouch (LGPL v2.1) — 已用 no-op stub 替换变声功能
   # - TelegramUtils 中依赖 librlottie 的子目录（AnimatedStickerNode 等）—
   #   外部消费方已删除
-  # TelegramUtils 其余文件保留在编译链内，因为 TapLongTapOrDoubleTapGestureRecognizer
-  # 还被 WKMessageCell / WKTextMessageCell / WKVoiceMessageCell 在用（长按手势）。
-  # 完整剥离 TelegramUtils 是 P5 长期工作。
+  # - TelegramUtils/Display/Source/{ContextGesture, ContextControllerSourceNode,
+  #   TapLongTapOrDoubleTapGestureRecognizer, ContextContentSourceNode}.swift
+  #   已物理删除并由 Sections/Common/MessageGesture/ 下的 Octo 自实现替代；
+  #   exclude_files 留作护栏，防止后续 git revert 回来又被编进二进制。
+  # TelegramUtils 其余文件保留在编译链内（cells 不再依赖它们的 GPL 实现，但
+  # NavigationBar 等内部链路仍在用）。完整剥离是 P5 长期工作。
   s.exclude_files = [
     'WuKongBase/Classes/Vendor/SoundTouch/**/*',
     'WuKongBase/Classes/Vendor/LegacyComponents/**/*',
@@ -66,7 +69,14 @@ TODO: Add long description of the pod here.
     'WuKongBase/Classes/Sections/Common/TelegramUtils/GradientBackground/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/MetalImageView/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/MediaResources/**/*',
-    # 保留编译：Display (含 TapLongTapOrDoubleTapGestureRecognizer) + 它依赖的支撑模块
+    # 护栏：上述 4 个 GPL 文件已删除，留 exclude 防止误恢复
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/Source/ContextGesture.swift',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/Source/ContextControllerSourceNode.swift',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/Source/TapLongTapOrDoubleTapGestureRecognizer.swift',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/Source/ContextContentSourceNode.swift',
+    # ContextContentContainerNode 只被 ContextUI 消费（已 exclude），随之排除
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/Source/ContextContentContainerNode.swift',
+    # 保留编译：Display 其余文件 + 它依赖的支撑模块
     # SwiftSignalKit / AppBundle / Utils / ObjCRuntimeUtils / UIKitRuntimeUtils / Markdown
     # / GZip / Svg / ManagedFile / AnimatedCountLabelNode / AnimatedNavigationStripeNode
     # / TelegramUIPreferences / Others / YuvConversion

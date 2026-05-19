@@ -45,7 +45,7 @@ public class ImmediateTextNode: TextNode {
         }
     }
     
-    private var tapRecognizer: TapLongTapOrDoubleTapGestureRecognizer?
+    private var tapRecognizer: OctoTapLongTapOrDoubleTapRecognizer?
     private var linkHighlightingNode: LinkHighlightingNode?
     
     public var linkHighlightColor: UIColor?
@@ -133,7 +133,7 @@ public class ImmediateTextNode: TextNode {
     private func updateInteractiveActions() {
         if self.highlightAttributeAction != nil {
             if self.tapRecognizer == nil {
-                let tapRecognizer = TapLongTapOrDoubleTapGestureRecognizer(target: self, action: #selector(self.tapAction(_:)))
+                let tapRecognizer = OctoTapLongTapOrDoubleTapRecognizer(target: self, action: #selector(self.tapAction(_:)))
                 tapRecognizer.highlight = { [weak self] point in
                     if let strongSelf = self {
                         var rects: [CGRect]?
@@ -184,7 +184,7 @@ public class ImmediateTextNode: TextNode {
         }
     }
     
-    @objc private func tapAction(_ recognizer: TapLongTapOrDoubleTapGestureRecognizer) {
+    @objc private func tapAction(_ recognizer: OctoTapLongTapOrDoubleTapRecognizer) {
         switch recognizer.state {
             case .ended:
                 if let (gesture, location) = recognizer.lastRecognizedGestureAndLocation {
@@ -264,7 +264,7 @@ public class ImmediateTextView: TextView {
         }
     }
     
-    private var tapRecognizer: TapLongTapOrDoubleTapGestureRecognizer?
+    private var tapRecognizer: OctoTapLongTapOrDoubleTapRecognizer?
     private var linkHighlightingNode: LinkHighlightingNode?
     
     public var linkHighlightColor: UIColor?
@@ -323,7 +323,7 @@ public class ImmediateTextView: TextView {
     private func updateInteractiveActions() {
         if self.highlightAttributeAction != nil {
             if self.tapRecognizer == nil {
-                let tapRecognizer = TapLongTapOrDoubleTapGestureRecognizer(target: self, action: #selector(self.tapAction(_:)))
+                let tapRecognizer = OctoTapLongTapOrDoubleTapRecognizer(target: self, action: #selector(self.tapAction(_:)))
                 tapRecognizer.highlight = { [weak self] point in
                     if let strongSelf = self {
                         var rects: [CGRect]?
@@ -374,7 +374,7 @@ public class ImmediateTextView: TextView {
         }
     }
     
-    @objc private func tapAction(_ recognizer: TapLongTapOrDoubleTapGestureRecognizer) {
+    @objc private func tapAction(_ recognizer: OctoTapLongTapOrDoubleTapRecognizer) {
         switch recognizer.state {
         case .ended:
             if let (gesture, location) = recognizer.lastRecognizedGestureAndLocation {
