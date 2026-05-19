@@ -25,6 +25,7 @@
     groupModel.forbidden = dictory[@"forbidden"]?[dictory[@"forbidden"] boolValue]:false;
     groupModel.forbiddenAddFriend = dictory[@"forbidden_add_friend"]?[dictory[@"forbidden_add_friend"] boolValue]:false;
     groupModel.screenshot = dictory[@"screenshot"]?[dictory[@"screenshot"] boolValue]:false;
+    groupModel.revokeRemind = dictory[@"revoke_remind"]?[dictory[@"revoke_remind"] boolValue]:false;
     groupModel.joinGroupRemind = dictory[@"join_group_remind"]?[dictory[@"join_group_remind"] boolValue]:false;
     groupModel.invite = dictory[@"invite"]?[dictory[@"invite"] boolValue]:false;
     groupModel.chatPwdOn = dictory[@"chat_pwd_on"]?[dictory[@"chat_pwd_on"] boolValue]:false;

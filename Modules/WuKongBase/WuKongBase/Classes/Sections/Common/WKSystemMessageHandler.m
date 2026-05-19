@@ -285,7 +285,11 @@ bool needRemind = false; // 是否需要提醒
         revokeMessage = [[WKMessageDB shared] getMessageWithMessageId:messageId];
     }
    if(revokeMessage) {
-       [[WKSDK shared].chatManager syncMessageExtra:revokeMessage.channel complete:nil];
+       if(![[WKChannelSettingManager shared] revokeRemind:revokeMessage.channel]) {
+           [[WKMessageManager shared] deleteMessages:@[[[WKMessageModel alloc] initWithMessage:revokeMessage]]]; // 如果设置了不撤回不提醒则直接删除消息
+       }else{
+           [[WKSDK shared].chatManager syncMessageExtra:revokeMessage.channel complete:nil];
+       }
    }
     
 }

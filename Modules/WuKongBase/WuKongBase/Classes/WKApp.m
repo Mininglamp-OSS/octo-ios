@@ -2138,6 +2138,7 @@ static NSString *const kShareDirName = @"ShareExtensionFiles";
 NSString * const WKChannelExtraKeyScreenshot = @"screenshot"; // 截屏通知
 NSString * const WKChannelExtraKeyShortNo = @"short_no"; // 短编码
 NSString * const  WKChannelExtraKeyForbiddenAddFriend = @"forbidden_add_friend"; // 禁止互加好友
+NSString * const WKChannelExtraKeyRevokeRemind = @"revoke_remind"; // 撤回通知
 NSString * const WKChannelExtraKeyJoinGroupRemind = @"join_group_remind"; // 进群提醒
 NSString * const WKChannelExtraKeyChatPwd = @"chat_pwd_on"; // 聊天密码
 NSString * const WKChannelExtraKeySource = @"source"; // 来源

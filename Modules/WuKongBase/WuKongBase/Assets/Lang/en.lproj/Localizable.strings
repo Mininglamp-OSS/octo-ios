@@ -168,6 +168,8 @@
 // WKConversationNotifySettingVM
 "在对话中的截屏，各方均会收到通知"= "Take screenshots in the conversation and all parties will be notified";
 "截屏通知"="Screenshot Notification";
+"在对话中的消息撤回，各方均会收到通知"="Messages in the conversation are withdrawn, all parties will be notified";
+"撤回通知"="Withdrawal Notice";
 "关闭后，成员进群将不会响铃/震动"="After closing, members will not ring/vibrate when entering the group";
 "成员进群提醒"="Group Reminder";
 

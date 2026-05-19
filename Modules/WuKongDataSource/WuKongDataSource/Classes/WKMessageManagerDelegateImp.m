@@ -133,8 +133,12 @@
 
     // 先请求服务端，成功后再执行本地撤回，避免超时后本地假撤回但服务端拒绝
     [[WKAPIClient sharedClient] POST:[NSString stringWithFormat:@"message/revoke?channel_id=%@&channel_type=%hhu&message_id=%@&client_msg_no=%@",message.channel.channelId,message.channel.channelType,messageID,message.clientMsgNo] parameters:nil].then(^{
-        message.message.remoteExtra.revoke = true;
-        message.message.remoteExtra.revoker = [WKApp shared].loginInfo.uid;
+        if(![[WKChannelSettingManager shared] revokeRemind:message.channel]) {
+            message.message.isDeleted = true;
+        }else{
+            message.message.remoteExtra.revoke = true;
+            message.message.remoteExtra.revoker = [WKApp shared].loginInfo.uid;
+        }
         [[WKSDK shared].chatManager callMessageUpdateDelegate:message.message];
         if(complete) {
             complete(nil);

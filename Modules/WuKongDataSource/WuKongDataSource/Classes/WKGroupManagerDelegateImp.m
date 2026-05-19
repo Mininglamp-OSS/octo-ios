@@ -198,6 +198,7 @@
     [channelInfo setSettingValue:groupModel.forbiddenAddFriend forKey:WKChannelExtraKeyForbiddenAddFriend];
     [channelInfo setSettingValue:groupModel.screenshot forKey:WKChannelExtraKeyScreenshot];
     [channelInfo setSettingValue:groupModel.joinGroupRemind forKey:WKChannelExtraKeyJoinGroupRemind];
+    [channelInfo setSettingValue:groupModel.revokeRemind forKey:WKChannelExtraKeyRevokeRemind];
     [channelInfo setSettingValue:groupModel.chatPwdOn forKey:WKChannelExtraKeyChatPwd];
     [channelInfo setSettingValue:groupModel.allowViewHistoryMsg forKey:WKChannelExtraKeyAllowViewHistoryMsg];
     // groups/{groupNo} 也会返回 is_external_group / allow_external / space_id，
@@ -280,6 +281,9 @@
             break;
         case WKGroupSettingKeyScreenshot:
             keyStr = @"screenshot";
+            break;
+        case WKGroupSettingKeyRevokeRemind:
+            keyStr = @"revoke_remind";
             break;
         case WKGroupSettingKeyJoinGroupRemind:
             keyStr = @"join_group_remind";

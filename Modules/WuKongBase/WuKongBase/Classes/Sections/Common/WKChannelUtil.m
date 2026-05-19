@@ -140,6 +140,9 @@
     if(resultDict[@"screenshot"]) {
         [channelInfo setSettingValue:[resultDict[@"screenshot"] boolValue] forKey:WKChannelExtraKeyScreenshot];
     }
+    if(resultDict[@"revoke_remind"]) {
+        [channelInfo setSettingValue:[resultDict[@"revoke_remind"] boolValue] forKey:WKChannelExtraKeyRevokeRemind];
+    }
     if(resultDict[@"allow_view_history_msg"]) {
         [channelInfo setSettingValue:[resultDict[@"allow_view_history_msg"] boolValue] forKey:WKChannelExtraKeyAllowViewHistoryMsg];
     }

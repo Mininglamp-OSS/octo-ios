@@ -29,6 +29,7 @@
 @property (nonatomic, strong) NSString *shortNo;
 @property (nonatomic, assign) BOOL chatPwdOn;
 @property (nonatomic, assign) BOOL screenshot;
+@property (nonatomic, assign) BOOL revokeRemind;
 @property (nonatomic, assign) BOOL receipt;
 @property (nonatomic, assign) BOOL online;
 @property (nonatomic, assign) NSInteger lastOffline;
@@ -669,6 +670,7 @@
     [info setExtraValue:user.sourceDesc?:@"" forKey:WKChannelExtraKeySource];
     [info setExtraValue:user.vercode?:@"" forKey:WKChannelExtraKeyVercode];
     [info setSettingValue:user.screenshot forKey:WKChannelExtraKeyScreenshot];
+    [info setSettingValue:user.revokeRemind forKey:WKChannelExtraKeyRevokeRemind];
     [info setSettingValue:user.chatPwdOn forKey:WKChannelExtraKeyChatPwd];
     // / ：把 /users/<uid> 顶层 realname_verified 回写到
     // person 缓存的 extra，保证 WKMessageCell / WKMemberCell / WKUserInfoVC 在
@@ -755,6 +757,7 @@
     u.shortNo = [dictory objectForKey:@"short_no"] ?: @"";
     u.chatPwdOn = [[dictory objectForKey:@"chat_pwd_on"] boolValue];
     u.screenshot = [[dictory objectForKey:@"screenshot"] boolValue];
+    u.revokeRemind = [[dictory objectForKey:@"revoke_remind"] boolValue];
     u.receipt = [[dictory objectForKey:@"receipt"] boolValue];
     u.online = [[dictory objectForKey:@"online"] boolValue];
     u.lastOffline = [[dictory objectForKey:@"last_offline"] integerValue];

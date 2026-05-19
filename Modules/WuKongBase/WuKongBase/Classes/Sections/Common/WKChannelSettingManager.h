@@ -39,6 +39,10 @@ NS_ASSUME_NONNULL_BEGIN
 -(BOOL) save:(WKChannel*)channel;
 
 
+// 撤回提醒
+-(void) channel:(WKChannel*)channel revokeRemind:(BOOL)on;
+-(BOOL)revokeRemind:(WKChannel*)channel;
+
 // 进群提醒
 -(void) channel:(WKChannel*)channel joinGroupRemind:(BOOL)on;
 -(BOOL) joinGroupRemind:(WKChannel*)channel;
