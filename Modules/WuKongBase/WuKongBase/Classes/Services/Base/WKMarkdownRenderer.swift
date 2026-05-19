@@ -41,9 +41,9 @@ import libcmark_gfm
         let codeBg: UIColor = isDark
             ? UIColor(white: 1, alpha: 0.1)
             : UIColor(white: 0, alpha: 0.06)
-        let blockquoteColor: UIColor = isDark
-            ? UIColor(red: 170/255, green: 170/255, blue: 170/255, alpha: 1)
-            : UIColor.gray
+        // quote 颜色跟随气泡 textColor（发送紫气泡白字 / 接收白气泡黑字），避免硬编码灰色
+        // 在彩色气泡上变得不可读。视觉区分靠左侧悬挂缩进（见 makeParagraphStyle 的 headIndent）。
+        let blockquoteColor: UIColor = textColor
 
         let baseFont = WKApp.shared().config.appFont(ofSize: fontSize) ?? UIFont.systemFont(ofSize: fontSize)
         let boldFont = UIFont(descriptor: baseFont.fontDescriptor.withSymbolicTraits(.traitBold) ?? baseFont.fontDescriptor, size: fontSize)

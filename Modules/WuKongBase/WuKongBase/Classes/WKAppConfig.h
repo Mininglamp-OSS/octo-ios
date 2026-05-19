@@ -215,8 +215,8 @@ NS_ASSUME_NONNULL_BEGIN
 // / / 合并合定义:
 // - 登录页 (王立涛 develop_fix): 显示/隐藏 SSO 按钮, init 从 NSUserDefaults 缓存 hydrate 冷启动即可渲染。
 // - 实名认证 (): WKRealnameVerifyManager 读每 entry 的 accountUrl 拼账户页 URL,
-//   不再硬编码 prod 常量。accountUrl 按环境不同 (accounts-test.imocto.cn im-test /
-//   accounts.example.com im-prod)。未下发 / 非数组 → @[], 调用侧 toast 兜底。
+//   不再硬编码 prod 常量。accountUrl 按环境不同 (accounts-test.your.server.example.com im-test /
+//   accounts.your.server.example.com im-prod)。未下发 / 非数组 → @[], 调用侧 toast 兜底。
 // Mirrors web dmworkbase OidcProviderConfig / dmworklogin SSOProvider
 // (id/name/authorize_path[/account_url/reset_password_url]).
 @property(nonatomic,copy) NSArray<WKOidcProviderConfig*> *oidcProviders;

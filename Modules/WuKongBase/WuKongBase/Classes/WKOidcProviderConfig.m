@@ -23,8 +23,8 @@
     // host 必须有值; schemes://emptyhost/... 在构造 NSURL 时可能过掉, 这里兜底。
     if(u.host.length == 0) return nil;
     // Round 2 / suggestion: 拒绝带 query 或 fragment 的
-    // base URL。后端下发 `https://accounts.example.com?x=1` 时 buildVerifyURLFromAccountUrl:
-    // 会拼成 `https://accounts.example.com?x=1/profile/info?anchor=verification`,
+    // base URL。后端下发 `https://accounts.your.server.example.com?x=1` 时 buildVerifyURLFromAccountUrl:
+    // 会拼成 `https://accounts.your.server.example.com?x=1/profile/info?anchor=verification`,
     // query 结构不合法且把 `/profile/info` 吞进 query 参数值里, 浏览器解析歧义,
     // 更安全的做法是 parser 层直接拒收 —— accountUrl 的语义就是「基址 URL」,
     // 带 query / fragment 本身是配置错误。

@@ -7,8 +7,8 @@
 //  modules/common/api.go 的下发口径对齐:
 //    { id, name, authorize_path, account_url, reset_password_url }
 //
-//  account_url 会因环境不同而不同（im-test → accounts-test.imocto.cn;
-//  im-prod → accounts.example.com）。客户端把 Aegis 账户页 / 实名认证入口
+//  account_url 会因环境不同而不同（im-test → accounts-test.your.server.example.com;
+//  im-prod → accounts.your.server.example.com）。客户端把 Aegis 账户页 / 实名认证入口
 //  的域名读点全部收敛到这个模型, 不再允许任何 hardcoded prod 常量。
 //
 //  Required / Optional（review suggestion 1 后对齐）:
@@ -36,8 +36,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// 仅放行 '/' 开头且不以 '//' 开头的 path, 防 protocol 跳出注入。格式不合法 entry 跳过。
 @property(nonatomic,copy,nullable) NSString *authorizePath;
 
-/// Aegis 账户中心 URL 基址（如 "https://accounts-test.imocto.cn" 或
-/// "https://accounts.example.com"）。**Optional**, 仅接受 https 协议的 URL,
+/// Aegis 账户中心 URL 基址（如 "https://accounts-test.your.server.example.com" 或
+/// "https://accounts.your.server.example.com"）。**Optional**, 仅接受 https 协议的 URL,
 /// javascript:/data: 等协议的值被 parse 时置 nil（entry 保留但字段 nil）。
 /// 此字段是「基址 URL」语义, 带 query (?...) 或 fragment (#...) 均判为配置错误,
 /// parser 同样置 nil（避免 buildVerifyURLFromAccountUrl: 拼出 `base?x=1/path?anchor=...`

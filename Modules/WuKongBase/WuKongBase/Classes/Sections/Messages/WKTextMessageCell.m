@@ -278,10 +278,10 @@ static NSMutableDictionary *_jsTableHeights;
     if(message.remoteExtra.contentEdit) {
         key = [NSString stringWithFormat:@"%@-edit-%lu",message.clientMsgNo,message.remoteExtra.editedAt];
     }
-    id rawContent = message.remoteExtra.contentEdit ?: [message content];
-    if ([rawContent isKindOfClass:[WKTextContent class]] && [((WKTextContent*)rawContent).format isEqualToString:@"html"]) {
-        key = [NSString stringWithFormat:@"%@-%lu",key,(unsigned long)WKApp.shared.config.style];
-    }
+    // 始终把当前 style 拼进 key：cmark renderer 的色板 / 数学 attachment 的图像
+    // 都跟 isDark 绑定，深色模式切换后必须 invalidate 旧 attrStr。原实现只在 html
+    // 路径加了 style，markdown / LaTeX 走另外的分支会拿到陈旧颜色。
+    key = [NSString stringWithFormat:@"%@-style-%lu",key,(unsigned long)WKApp.shared.config.style];
     return key;
 }
 
@@ -654,9 +654,22 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         renderContent = [[WKMarkdownRenderer removeTableMarkdown:content] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     }
 
+    // LaTeX 预处理：若包含 LaTeX 命令，转成 Markdown，数学段抽成 ￼ 占位符。
+    // 命中预处理后必须走 markdown 渲染路径（即使产物的 containsMarkdown 返回 false）。
+    NSArray<WKLaTeXMathSegment*> *mathSegments = nil;
+    if (![textContent.format isEqualToString:@"html"] && [WKLaTeXPreprocessor containsLaTeX:renderContent]) {
+        @try {
+            WKLaTeXPreprocessResult *pp = [WKLaTeXPreprocessor preprocess:renderContent];
+            renderContent = pp.markdown;
+            mathSegments = pp.mathSegments;
+        } @catch (NSException *exception) {
+            NSLog(@"[LaTeXPreprocessor] exception, fallback to raw text: %@", exception);
+        }
+    }
+
     BOOL useMarkdown = NO;
     if (![textContent.format isEqualToString:@"html"]) {
-        if (renderContent.length > 0 && [WKMarkdownRenderer containsMarkdown:renderContent]) {
+        if (renderContent.length > 0 && (mathSegments != nil || [WKMarkdownRenderer containsMarkdown:renderContent])) {
             UIColor *textColor = message.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
             NSString *colorHex = [textColor toHexRGB];
             NSAttributedString *mdAttr = nil;
@@ -666,6 +679,17 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                 useMarkdown = YES;
                 NSMutableAttributedString *mdMutable = [[NSMutableAttributedString alloc] initWithAttributedString:mdAttr];
                 mdMutable.font = attrStr.font;
+
+                // LaTeX 数学占位符 → 等宽样式 TeX 源文本（Phase 1）。继承占位符所在
+                // run 的颜色/段落样式，所以嵌在 heading/quote/list 里时行高与排版
+                // 与现有 markdown 一致。Phase 2 接入 iosMath 时只改这里的实现。
+                if (mathSegments.count > 0) {
+                    BOOL isDark = [WKApp shared].config.style == WKSystemStyleDark;
+                    [WKLaTeXPreprocessor replaceMathPlaceholdersIn:mdMutable
+                                                         segments:mathSegments
+                                                         fontSize:[WKApp shared].config.messageTextFontSize
+                                                           isDark:isDark];
+                }
 
                 // 从 cmark-gfm 渲染结果中提取可点击的 tokens
                 NSMutableArray<id<WKMatchToken>> *clickableTokens = [NSMutableArray array];
@@ -1166,10 +1190,25 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         CGFloat spacing = (i < segments.count - 1) ? kTableTopSpace : 0;
 
         if ([type isEqualToString:@"text"]) {
-            NSAttributedString *attrForMeasure = nil;
-            if ([WKMarkdownRenderer containsMarkdown:content]) {
+            // LaTeX 预处理：与 layoutSubviews 的实际渲染路径保持一致，否则未预处理
+            // 的原始 LaTeX 命令（\subsection / \textbf / \begin{quote} 等）会被 cmark
+            // 当成普通文本，行数被大量高估，气泡留出大块空白。
+            NSArray<WKLaTeXMathSegment*> *segMathSegments = nil;
+            NSString *measureContent = content;
+            if ([WKLaTeXPreprocessor containsLaTeX:measureContent]) {
                 @try {
-                    attrForMeasure = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+                    WKLaTeXPreprocessResult *pp = [WKLaTeXPreprocessor preprocess:measureContent];
+                    measureContent = pp.markdown;
+                    segMathSegments = pp.mathSegments;
+                } @catch (NSException *e) {
+                    NSLog(@"[LaTeXPreprocessor] seg-measure exception: %@", e);
+                }
+            }
+
+            NSAttributedString *attrForMeasure = nil;
+            if (segMathSegments != nil || [WKMarkdownRenderer containsMarkdown:measureContent]) {
+                @try {
+                    attrForMeasure = [WKMarkdownRenderer render:measureContent fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
                 } @catch (NSException *e) {
                     attrForMeasure = nil;
                 }
@@ -1178,8 +1217,20 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                 NSMutableAttributedString *plainAttr = [[NSMutableAttributedString alloc] init];
                 plainAttr.font = baseFont;
                 plainAttr.textColor = textColor;
-                [plainAttr lim_render:content tokens:nil];
+                [plainAttr lim_render:measureContent tokens:nil];
                 attrForMeasure = plainAttr;
+            }
+            // 数学占位符替换成 iosMath 附件（或 monospace 回退），让 boundingRect 能
+            // 正确累计 attachment 带来的行高变化。注意：与实际渲染共享 NSCache，
+            // 这里命中后 layoutSubviews 那次重渲染无额外开销。
+            if (segMathSegments.count > 0) {
+                BOOL isDark = [WKApp shared].config.style == WKSystemStyleDark;
+                NSMutableAttributedString *mutableMeasure = [[NSMutableAttributedString alloc] initWithAttributedString:attrForMeasure];
+                [WKLaTeXPreprocessor replaceMathPlaceholdersIn:mutableMeasure
+                                                     segments:segMathSegments
+                                                     fontSize:[WKApp shared].config.messageTextFontSize
+                                                       isDark:isDark];
+                attrForMeasure = mutableMeasure;
             }
             // boundingRect 是线程安全的，可在后台线程调用
             // +4 补偿 boundingRect 与 UILabel.sizeThatFits 的测量偏差
@@ -1365,6 +1416,17 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                 NSString *type = seg[@"type"];
                 NSString *content = seg[@"content"];
                 if ([type isEqualToString:@"text"]) {
+                    // LaTeX 预处理：与 getContentAttrStr: 主路径同源逻辑。
+                    NSArray<WKLaTeXMathSegment*> *segMathSegments = nil;
+                    if ([WKLaTeXPreprocessor containsLaTeX:content]) {
+                        @try {
+                            WKLaTeXPreprocessResult *pp = [WKLaTeXPreprocessor preprocess:content];
+                            content = pp.markdown;
+                            segMathSegments = pp.mathSegments;
+                        } @catch (NSException *e) {
+                            NSLog(@"[LaTeXPreprocessor] table seg exception: %@", e);
+                        }
+                    }
                     // 统一用 WKMarkdownRenderer 渲染文本段（和 getContentAttrStr: 同一套逻辑，确保高度一致）
                     UILabel *lbl;
                     if (!firstTextUsed) {
@@ -1381,13 +1443,20 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                         lbl.backgroundColor = [UIColor clearColor];
                         [self.messageContentView addSubview:lbl];
                     }
-                    if ([WKMarkdownRenderer containsMarkdown:content]) {
+                    if (segMathSegments != nil || [WKMarkdownRenderer containsMarkdown:content]) {
                         NSAttributedString *mdAttr = nil;
                         @try {
                             mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex dynamicTextColor:textColor];
                         } @catch (NSException *e) { mdAttr = nil; }
                         if (mdAttr) {
                             NSMutableAttributedString *mutable = [[NSMutableAttributedString alloc] initWithAttributedString:mdAttr];
+                            if (segMathSegments.count > 0) {
+                                BOOL isDark = [WKApp shared].config.style == WKSystemStyleDark;
+                                [WKLaTeXPreprocessor replaceMathPlaceholdersIn:mutable
+                                                                     segments:segMathSegments
+                                                                     fontSize:[WKApp shared].config.messageTextFontSize
+                                                                       isDark:isDark];
+                            }
                             // 提取 markdown 链接 token 并移除 NSLinkAttributeName（UILabel 不支持）
                             NSMutableArray<id<WKMatchToken>> *tokens = [NSMutableArray array];
                             [mutable enumerateAttribute:NSLinkAttributeName inRange:NSMakeRange(0, mutable.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {

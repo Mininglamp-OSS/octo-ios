@@ -132,6 +132,7 @@ TODO: Add long description of the pod here.
   s.dependency 'FPSCounter', '~> 4.1'
   # librlottie (LGPL) 已在 P5 移除 — 消费方 WKAnimatedStickerNode/WKMessageStickerCell 均为死代码
   s.dependency 'libcmark_gfm'
+  s.dependency 'iosMath', '~> 0.9'  # LaTeX 数学公式渲染（纯 OC + CoreText，无 WebView）
   s.dependency 'RiveRuntime', '~> 6.11'
   s.pod_target_xcconfig = {
     'SWIFT_INCLUDE_PATHS' => '$(inherited)'
