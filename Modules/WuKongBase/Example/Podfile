@@ -1,9 +1,9 @@
 use_frameworks!
 
-platform :ios, '8.0'
+platform :ios, '14.0'
 
 target 'LiMaoBase_Example' do
-  pod 'LiMaoBase', :path => '../'
+  pod 'WuKongBase', :path => '../'
 
   target 'LiMaoBase_Tests' do
     inherit! :search_paths

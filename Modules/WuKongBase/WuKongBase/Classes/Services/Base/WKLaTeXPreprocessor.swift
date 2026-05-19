@@ -59,7 +59,9 @@ private let kMathPlaceholderString = String(kMathPlaceholderChar)
             }
         }
         // $$ ... $$ display math：宽松，任何成对的 $$ 都算（数学语义明确，几乎不可能误判）。
-        if let re = try? NSRegularExpression(pattern: #"\$\$[^\n]+\$\$"#),
+        // 允许跨行但不跨段落（\n\n）——跟 extractMath P1 的扫描语义一致, 否则
+        // 常见的 `$$\n x^2 \n$$` 这类块级公式会被 gate 挡掉。
+        if let re = try? NSRegularExpression(pattern: #"\$\$(?:(?!\n\n)[\s\S])*?\$\$"#),
            re.firstMatch(in: text, options: [], range: nsRange) != nil {
             return true
         }
@@ -76,6 +78,15 @@ private let kMathPlaceholderString = String(kMathPlaceholderChar)
                     return true
                 }
             }
+        }
+        // 容错括号 (...) 内含 \cmd —— 跟 extractMath P5 启发式对齐。
+        // 检测放宽：只要看到 "( <非换行字符> \<letter>"" 就放行 preprocess; extract
+        // 内部还会按"括号平衡 + 不跨段落 + containsTeXCommand"严格校验, 误放行只是
+        // 多跑一次 no-op preprocess, 无副作用。否则 `see (\Phi_k)` 这种独立消息会
+        // 被 gate 挡掉永远不进 preprocess。
+        if let re = try? NSRegularExpression(pattern: #"\([^\n]*?\\[a-zA-Z]"#),
+           re.firstMatch(in: text, options: [], range: nsRange) != nil {
+            return true
         }
         return false
     }

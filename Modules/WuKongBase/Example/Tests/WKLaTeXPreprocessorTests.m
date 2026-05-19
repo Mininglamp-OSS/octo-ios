@@ -253,6 +253,42 @@
     XCTAssertTrue([r.markdown containsString:@"$5 元"]);
 }
 
+- (void)test_math_paren_fallback_through_gate {
+    // 容错括号 (\Phi_k) 单独成消息：gate 必须放行，否则 extractMath 永远没机会跑。
+    WKLaTeXPreprocessResult *r = [self preprocessThroughGate:@"see (\\Phi_k)"];
+    XCTAssertEqual(r.mathSegments.count, 1, @"(\\Phi_k) 必须经 gate 抽到数学段");
+    XCTAssertEqualObjects(r.mathSegments[0].tex, @"\\Phi_k");
+}
+
+- (void)test_math_paren_fallback_nested_through_gate {
+    // 含嵌套括号 + 内部 \cmd 的真实 CoCraft 场景
+    WKLaTeXPreprocessResult *r = [self preprocessThroughGate:@"条件是 (\\Phi_k(C) > \\Phi_k(A))"];
+    XCTAssertEqual(r.mathSegments.count, 1);
+    XCTAssertEqualObjects(r.mathSegments[0].tex, @"\\Phi_k(C) > \\Phi_k(A)");
+}
+
+- (void)test_math_paren_normal_text_through_gate_no_extract {
+    // 普通括号 (just plain text)：gate 可能放行，但 extractMath 一定不抽段
+    WKLaTeXPreprocessResult *r = [self preprocessThroughGate:@"(just plain text)"];
+    XCTAssertEqual(r.mathSegments.count, 0, @"普通括号不应被当数学");
+}
+
+- (void)test_math_display_multiline_through_gate {
+    // 多行 $$..$$：开闭分隔符跨行（单段落内）。extract 支持, gate 必须放行。
+    NSString *src = @"前文\n$$\n x^2 \n$$\n后文";
+    WKLaTeXPreprocessResult *r = [self preprocessThroughGate:src];
+    XCTAssertEqual(r.mathSegments.count, 1, @"多行 $$..$$ 必须经 gate 抽到");
+    XCTAssertTrue(r.mathSegments[0].isDisplay);
+    XCTAssertTrue([r.mathSegments[0].tex containsString:@"x^2"], @"got: %@", r.mathSegments[0].tex);
+}
+
+- (void)test_math_display_does_not_cross_paragraph_through_gate {
+    // 中间有空行（段落断）→ gate 与 extract 都应拒绝
+    NSString *src = @"$$\n\nx^2\n\n$$";
+    WKLaTeXPreprocessResult *r = [self preprocessThroughGate:src];
+    XCTAssertEqual(r.mathSegments.count, 0, @"跨段落 $$..$$ 不应被抽");
+}
+
 #pragma mark - Math: fallback (...) heuristic
 
 - (void)test_math_paren_fallback_simple {

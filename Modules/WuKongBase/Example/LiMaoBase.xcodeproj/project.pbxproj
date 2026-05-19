@@ -20,27 +20,27 @@
 		6003F5B2195388D20070C39A /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6003F591195388D20070C39A /* UIKit.framework */; };
 		6003F5BA195388D20070C39A /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 6003F5B8195388D20070C39A /* InfoPlist.strings */; };
 		6003F5BC195388D20070C39A /* Tests.m in Sources */ = {isa = PBXBuildFile; fileRef = 6003F5BB195388D20070C39A /* Tests.m */; };
+		71719F9F1E33DC2100824A3D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 71719F9D1E33DC2100824A3D /* LaunchScreen.storyboard */; };
+		7CFCAE9A9883FDF5BD053505 /* Pods_LiMaoBase_Tests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7E3C41DA1F0876AA7579845F /* Pods_LiMaoBase_Tests.framework */; };
+		873B8AEB1B1F5CCA007FD442 /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 873B8AEA1B1F5CCA007FD442 /* Main.storyboard */; };
 		93FBC126DB4B04BC75AF04E2 /* WKExternalViewerResolverTests.m in Sources */ = {isa = PBXBuildFile; fileRef = 85EB8C00E7C49A151B670678 /* WKExternalViewerResolverTests.m */; };
+		A1410000000000000000F001 /* WKJoinGroupSuccessHelperTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A1410000000000000000F002 /* WKJoinGroupSuccessHelperTests.m */; };
+		A2130000000000000000F001 /* WKGroupScanJoinResponseParsingTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */; };
+		A35414ED98745ED690EC26AF /* Pods_LiMaoBase_Example.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F569B6CE3F4D594F10B3833 /* Pods_LiMaoBase_Example.framework */; };
 		A97C0DE197001001E7B8C3A1 /* WKGroupQRCodeInfoModelTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A97C0DE197001001E7B8C3A2 /* WKGroupQRCodeInfoModelTests.m */; };
+		B2180000000000000000F001 /* WKConversationListVMSystemBotsTests.m in Sources */ = {isa = PBXBuildFile; fileRef = B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */; };
 		B49640EA6FC4C273CD92871A /* WKMentionUserCellTests.m in Sources */ = {isa = PBXBuildFile; fileRef = B2CA62921B187BCA0DFC746C /* WKMentionUserCellTests.m */; };
 		C129ABC0AF00000000000001 /* WKMessageCellAttributedNameTests.m in Sources */ = {isa = PBXBuildFile; fileRef = C129ABC0AF00000000000002 /* WKMessageCellAttributedNameTests.m */; };
 		C210ABC0AF00000000000001 /* WKMessageCellNicknameTruncationTests.m in Sources */ = {isa = PBXBuildFile; fileRef = C210ABC0AF00000000000002 /* WKMessageCellNicknameTruncationTests.m */; };
 		D210ABC0AF00000000000001 /* WKLaTeXPreprocessorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = D210ABC0AF00000000000002 /* WKLaTeXPreprocessorTests.m */; };
-		E131A7B4F1310001000001E1 /* WKMessageUtilReplyExternalTests.m in Sources */ = {isa = PBXBuildFile; fileRef = E131A7B4F1310001000001E2 /* WKMessageUtilReplyExternalTests.m */; };
-		F1900190F19001000190F101 /* WKMemberCellExternalTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F1900190F19001000190F102 /* WKMemberCellExternalTests.m */; };
-		F1900190F19001000190F201 /* WKUserInfoVMExternalTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F1900190F19001000190F202 /* WKUserInfoVMExternalTests.m */; };
-		F1900190F19001000190F301 /* WKUserInfoExternalGateTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F1900190F19001000190F302 /* WKUserInfoExternalGateTests.m */; };
-		A1410000000000000000F001 /* WKJoinGroupSuccessHelperTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A1410000000000000000F002 /* WKJoinGroupSuccessHelperTests.m */; };
-		A2130000000000000000F001 /* WKGroupScanJoinResponseParsingTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */; };
-		B2180000000000000000F001 /* WKConversationListVMSystemBotsTests.m in Sources */ = {isa = PBXBuildFile; fileRef = B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */; };
 		D5810000000000000000F001 /* WKRealnameVerifiedBadgeTests.m in Sources */ = {isa = PBXBuildFile; fileRef = D5810000000000000000F002 /* WKRealnameVerifiedBadgeTests.m */; };
+		E131A7B4F1310001000001E1 /* WKMessageUtilReplyExternalTests.m in Sources */ = {isa = PBXBuildFile; fileRef = E131A7B4F1310001000001E2 /* WKMessageUtilReplyExternalTests.m */; };
 		E3960000000000000000F001 /* WKRealnameVerifyURLBuilderTests.m in Sources */ = {isa = PBXBuildFile; fileRef = E3960000000000000000F002 /* WKRealnameVerifyURLBuilderTests.m */; };
 		E3960000000000000001F001 /* WKOidcProviderConfigParseTests.m in Sources */ = {isa = PBXBuildFile; fileRef = E3960000000000000001F002 /* WKOidcProviderConfigParseTests.m */; };
 		E3960000000000000002F001 /* WKRealnameVerifyCallbackTests.m in Sources */ = {isa = PBXBuildFile; fileRef = E3960000000000000002F002 /* WKRealnameVerifyCallbackTests.m */; };
-		71719F9F1E33DC2100824A3D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 71719F9D1E33DC2100824A3D /* LaunchScreen.storyboard */; };
-		7CFCAE9A9883FDF5BD053505 /* Pods_LiMaoBase_Tests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7E3C41DA1F0876AA7579845F /* Pods_LiMaoBase_Tests.framework */; };
-		873B8AEB1B1F5CCA007FD442 /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 873B8AEA1B1F5CCA007FD442 /* Main.storyboard */; };
-		A35414ED98745ED690EC26AF /* Pods_LiMaoBase_Example.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F569B6CE3F4D594F10B3833 /* Pods_LiMaoBase_Example.framework */; };
+		F1900190F19001000190F101 /* WKMemberCellExternalTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F1900190F19001000190F102 /* WKMemberCellExternalTests.m */; };
+		F1900190F19001000190F201 /* WKUserInfoVMExternalTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F1900190F19001000190F202 /* WKUserInfoVMExternalTests.m */; };
+		F1900190F19001000190F301 /* WKUserInfoExternalGateTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F1900190F19001000190F302 /* WKUserInfoExternalGateTests.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -77,30 +77,30 @@
 		6003F5B7195388D20070C39A /* Tests-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Tests-Info.plist"; sourceTree = "<group>"; };
 		6003F5B9195388D20070C39A /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		6003F5BB195388D20070C39A /* Tests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Tests.m; sourceTree = "<group>"; };
-		85EB8C00E7C49A151B670678 /* WKExternalViewerResolverTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKExternalViewerResolverTests.m; sourceTree = "<group>"; };
-		A97C0DE197001001E7B8C3A2 /* WKGroupQRCodeInfoModelTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKGroupQRCodeInfoModelTests.m; sourceTree = "<group>"; };
-		B2CA62921B187BCA0DFC746C /* WKMentionUserCellTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMentionUserCellTests.m; sourceTree = "<group>"; };
-		C129ABC0AF00000000000002 /* WKMessageCellAttributedNameTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMessageCellAttributedNameTests.m; sourceTree = "<group>"; };
-		C210ABC0AF00000000000002 /* WKMessageCellNicknameTruncationTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMessageCellNicknameTruncationTests.m; sourceTree = "<group>"; };
-		D210ABC0AF00000000000002 /* WKLaTeXPreprocessorTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKLaTeXPreprocessorTests.m; sourceTree = "<group>"; };
-		E131A7B4F1310001000001E2 /* WKMessageUtilReplyExternalTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMessageUtilReplyExternalTests.m; sourceTree = "<group>"; };
-		F1900190F19001000190F102 /* WKMemberCellExternalTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMemberCellExternalTests.m; sourceTree = "<group>"; };
-		F1900190F19001000190F202 /* WKUserInfoVMExternalTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKUserInfoVMExternalTests.m; sourceTree = "<group>"; };
-		F1900190F19001000190F302 /* WKUserInfoExternalGateTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKUserInfoExternalGateTests.m; sourceTree = "<group>"; };
-		A1410000000000000000F002 /* WKJoinGroupSuccessHelperTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKJoinGroupSuccessHelperTests.m; sourceTree = "<group>"; };
-		A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKGroupScanJoinResponseParsingTests.m; sourceTree = "<group>"; };
-		B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKConversationListVMSystemBotsTests.m; sourceTree = "<group>"; };
-		D5810000000000000000F002 /* WKRealnameVerifiedBadgeTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKRealnameVerifiedBadgeTests.m; sourceTree = "<group>"; };
-		E3960000000000000000F002 /* WKRealnameVerifyURLBuilderTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKRealnameVerifyURLBuilderTests.m; sourceTree = "<group>"; };
-		E3960000000000000001F002 /* WKOidcProviderConfigParseTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKOidcProviderConfigParseTests.m; sourceTree = "<group>"; };
-		E3960000000000000002F002 /* WKRealnameVerifyCallbackTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKRealnameVerifyCallbackTests.m; sourceTree = "<group>"; };
 		606FC2411953D9B200FFA9A0 /* Tests-Prefix.pch */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Tests-Prefix.pch"; sourceTree = "<group>"; };
 		71719F9E1E33DC2100824A3D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		7E3C41DA1F0876AA7579845F /* Pods_LiMaoBase_Tests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_LiMaoBase_Tests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		85EB8C00E7C49A151B670678 /* WKExternalViewerResolverTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKExternalViewerResolverTests.m; sourceTree = "<group>"; };
 		873B8AEA1B1F5CCA007FD442 /* Main.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = Main.storyboard; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		996488C1EDA937D964C11C1B /* README.md */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = net.daringfireball.markdown; name = README.md; path = ../README.md; sourceTree = "<group>"; };
+		A1410000000000000000F002 /* WKJoinGroupSuccessHelperTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKJoinGroupSuccessHelperTests.m; sourceTree = "<group>"; };
+		A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKGroupScanJoinResponseParsingTests.m; sourceTree = "<group>"; };
+		A97C0DE197001001E7B8C3A2 /* WKGroupQRCodeInfoModelTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKGroupQRCodeInfoModelTests.m; sourceTree = "<group>"; };
+		B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKConversationListVMSystemBotsTests.m; sourceTree = "<group>"; };
+		B2CA62921B187BCA0DFC746C /* WKMentionUserCellTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMentionUserCellTests.m; sourceTree = "<group>"; };
 		B2F58DC0A88459C00B4A8A5C /* Pods-LiMaoBase_Tests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-LiMaoBase_Tests.release.xcconfig"; path = "Target Support Files/Pods-LiMaoBase_Tests/Pods-LiMaoBase_Tests.release.xcconfig"; sourceTree = "<group>"; };
+		C129ABC0AF00000000000002 /* WKMessageCellAttributedNameTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMessageCellAttributedNameTests.m; sourceTree = "<group>"; };
+		C210ABC0AF00000000000002 /* WKMessageCellNicknameTruncationTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMessageCellNicknameTruncationTests.m; sourceTree = "<group>"; };
 		CCF15211C1DD406AC1E63FB4 /* Pods-LiMaoBase_Tests.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-LiMaoBase_Tests.debug.xcconfig"; path = "Target Support Files/Pods-LiMaoBase_Tests/Pods-LiMaoBase_Tests.debug.xcconfig"; sourceTree = "<group>"; };
+		D210ABC0AF00000000000002 /* WKLaTeXPreprocessorTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKLaTeXPreprocessorTests.m; sourceTree = "<group>"; };
+		D5810000000000000000F002 /* WKRealnameVerifiedBadgeTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKRealnameVerifiedBadgeTests.m; sourceTree = "<group>"; };
+		E131A7B4F1310001000001E2 /* WKMessageUtilReplyExternalTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMessageUtilReplyExternalTests.m; sourceTree = "<group>"; };
+		E3960000000000000000F002 /* WKRealnameVerifyURLBuilderTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKRealnameVerifyURLBuilderTests.m; sourceTree = "<group>"; };
+		E3960000000000000001F002 /* WKOidcProviderConfigParseTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKOidcProviderConfigParseTests.m; sourceTree = "<group>"; };
+		E3960000000000000002F002 /* WKRealnameVerifyCallbackTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKRealnameVerifyCallbackTests.m; sourceTree = "<group>"; };
+		F1900190F19001000190F102 /* WKMemberCellExternalTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMemberCellExternalTests.m; sourceTree = "<group>"; };
+		F1900190F19001000190F202 /* WKUserInfoVMExternalTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKUserInfoVMExternalTests.m; sourceTree = "<group>"; };
+		F1900190F19001000190F302 /* WKUserInfoExternalGateTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKUserInfoExternalGateTests.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -259,6 +259,7 @@
 				6003F587195388D20070C39A /* Frameworks */,
 				6003F588195388D20070C39A /* Resources */,
 				E6831B4B892D090FC14D2DF5 /* [CP] Embed Pods Frameworks */,
+				5A315A9261DD94A81038C4C1 /* [CP] Copy Pods Resources */,
 			);
 			buildRules = (
 			);
@@ -387,6 +388,26 @@
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-LiMaoBase_Tests/Pods-LiMaoBase_Tests-frameworks.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
+		5A315A9261DD94A81038C4C1 /* [CP] Copy Pods Resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-LiMaoBase_Example/Pods-LiMaoBase_Example-resources.sh",
+				"${PODS_CONFIGURATION_BUILD_DIR}/RiveRuntime/runtime_ios_privacy.bundle",
+				"${PODS_ROOT}/WuKongIMSDK/ios/WuKongIMSDK.framework/WuKongIMSDK.bundle",
+			);
+			name = "[CP] Copy Pods Resources";
+			outputPaths = (
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/runtime_ios_privacy.bundle",
+				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/WuKongIMSDK.bundle",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-LiMaoBase_Example/Pods-LiMaoBase_Example-resources.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
 		AFAFF9E0B4F4CC6F5888ECD6 /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -416,11 +437,81 @@
 			);
 			inputPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-LiMaoBase_Example/Pods-LiMaoBase_Example-frameworks.sh",
-				"${BUILT_PRODUCTS_DIR}/LiMaoBase/LiMaoBase.framework",
+				"${BUILT_PRODUCTS_DIR}/25519/_25519.framework",
+				"${BUILT_PRODUCTS_DIR}/AFNetworking/AFNetworking.framework",
+				"${BUILT_PRODUCTS_DIR}/ActionSheetPicker-3.0/ActionSheetPicker_3_0.framework",
+				"${BUILT_PRODUCTS_DIR}/AsyncDisplayKit/AsyncDisplayKit.framework",
+				"${BUILT_PRODUCTS_DIR}/CocoaAsyncSocket/CocoaAsyncSocket.framework",
+				"${BUILT_PRODUCTS_DIR}/CocoaLumberjack/CocoaLumberjack.framework",
+				"${BUILT_PRODUCTS_DIR}/DGActivityIndicatorView/DGActivityIndicatorView.framework",
+				"${BUILT_PRODUCTS_DIR}/FMDB/FMDB.framework",
+				"${BUILT_PRODUCTS_DIR}/FPSCounter/FPSCounter.framework",
+				"${BUILT_PRODUCTS_DIR}/GZIP/GZIP.framework",
+				"${BUILT_PRODUCTS_DIR}/LBXScan/LBXScan.framework",
+				"${BUILT_PRODUCTS_DIR}/M80AttributedLabel/M80AttributedLabel.framework",
+				"${BUILT_PRODUCTS_DIR}/MBProgressHUD/MBProgressHUD.framework",
+				"${BUILT_PRODUCTS_DIR}/MJRefresh/MJRefresh.framework",
+				"${BUILT_PRODUCTS_DIR}/PINCache/PINCache.framework",
+				"${BUILT_PRODUCTS_DIR}/PINRemoteImage/PINRemoteImage.framework",
+				"${BUILT_PRODUCTS_DIR}/PromiseKit/PromiseKit.framework",
+				"${BUILT_PRODUCTS_DIR}/SDWebImage/SDWebImage.framework",
+				"${BUILT_PRODUCTS_DIR}/SDWebImageLottieCoder/SDWebImageLottieCoder.framework",
+				"${BUILT_PRODUCTS_DIR}/SDWebImageWebPCoder/SDWebImageWebPCoder.framework",
+				"${BUILT_PRODUCTS_DIR}/SQLCipher/SQLCipher.framework",
+				"${BUILT_PRODUCTS_DIR}/TOCropViewController/TOCropViewController.framework",
+				"${BUILT_PRODUCTS_DIR}/TZImagePickerController/TZImagePickerController.framework",
+				"${BUILT_PRODUCTS_DIR}/Toast/Toast.framework",
+				"${BUILT_PRODUCTS_DIR}/WuKongBase/WuKongBase.framework",
+				"${PODS_ROOT}/WuKongIMSDK/ios/WuKongIMSDK.framework",
+				"${BUILT_PRODUCTS_DIR}/YBImageBrowser/YBImageBrowser.framework",
+				"${BUILT_PRODUCTS_DIR}/YYImage/YYImage.framework",
+				"${BUILT_PRODUCTS_DIR}/ZLImageEditor/ZLImageEditor.framework",
+				"${BUILT_PRODUCTS_DIR}/ZLPhotoBrowser/ZLPhotoBrowser.framework",
+				"${BUILT_PRODUCTS_DIR}/iosMath/iosMath.framework",
+				"${BUILT_PRODUCTS_DIR}/libcmark_gfm/libcmark_gfm.framework",
+				"${BUILT_PRODUCTS_DIR}/librlottie/librlottie.framework",
+				"${BUILT_PRODUCTS_DIR}/libwebp/libwebp.framework",
+				"${BUILT_PRODUCTS_DIR}/lottie-ios/Lottie.framework",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/RiveRuntime/RiveRuntime.framework/RiveRuntime",
 			);
 			name = "[CP] Embed Pods Frameworks";
 			outputPaths = (
-				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/LiMaoBase.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/_25519.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/AFNetworking.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/ActionSheetPicker_3_0.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/AsyncDisplayKit.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/CocoaAsyncSocket.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/CocoaLumberjack.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/DGActivityIndicatorView.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/FMDB.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/FPSCounter.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/GZIP.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/LBXScan.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/M80AttributedLabel.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/MBProgressHUD.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/MJRefresh.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/PINCache.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/PINRemoteImage.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/PromiseKit.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/SDWebImage.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/SDWebImageLottieCoder.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/SDWebImageWebPCoder.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/SQLCipher.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/TOCropViewController.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/TZImagePickerController.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/Toast.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/WuKongBase.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/WuKongIMSDK.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/YBImageBrowser.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/YYImage.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/ZLImageEditor.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/ZLPhotoBrowser.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/iosMath.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libcmark_gfm.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/librlottie.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libwebp.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/Lottie.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/RiveRuntime.framework",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
