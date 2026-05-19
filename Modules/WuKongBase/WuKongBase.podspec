@@ -69,6 +69,11 @@ TODO: Add long description of the pod here.
     'WuKongBase/Classes/Sections/Common/TelegramUtils/GradientBackground/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/MetalImageView/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/MediaResources/**/*',
+    # PR-A: 实测无外部消费方 + 无 Display 内部消费，可立即下线（GPL 体积持续瘦身）
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/Utils/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/Svg/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/YuvConversion/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/TelegramUIPreferences/**/*',
     # 护栏：上述 4 个 GPL 文件已删除，留 exclude 防止误恢复
     'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/Source/ContextGesture.swift',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/Source/ContextControllerSourceNode.swift',
