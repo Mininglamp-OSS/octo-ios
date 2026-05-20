@@ -991,7 +991,10 @@
 					"$(PROJECT_DIR)/Vendor/WebRTC",
 				);
 				GCC_INPUT_FILETYPE = automatic;
-				GCC_PREPROCESSOR_DEFINITIONS = "$(inherited)";
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"OCTO_ENABLE_BUGLY=1",
+				);
 				INFOPLIST_FILE = Octo/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Octo;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
@@ -1103,7 +1106,10 @@
 					"$(PROJECT_DIR)/Vendor/WebRTC",
 				);
 				GCC_INPUT_FILETYPE = automatic;
-				GCC_PREPROCESSOR_DEFINITIONS = "$(inherited)";
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"OCTO_ENABLE_BUGLY=1",
+				);
 				INFOPLIST_FILE = Octo/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Octo;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";

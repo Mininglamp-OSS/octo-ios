@@ -70,11 +70,39 @@ TODO: Add long description of the pod here.
 #   s.xcconfig = { "OTHER_LDFLAGS" => "-ObjC" }
 #  s.vendored_libraries = 'WuKongBase/WuKongIMSDK-Framework/ios/*.{a}'
 #  s.resource  = 'WuKongBase/WuKongIMSDK-Framework/ios/WuKongIMSDK.framework/Versions/A/Resources/WuKongIMSDK.bundle'
-  # Bugly.framework 是腾讯闭源 SDK，开源版默认不附带（避免分发闭源二进制 + 减小仓库体积）。
-  # 仅当用户把 Bugly.framework 放回 WuKongBase/Bugly.framework/ 时，自动加入编译。
-  # Podfile 会检测同样条件并设置 OCTO_ENABLE_BUGLY=1 预处理宏。
-  if File.exist?(File.expand_path('WuKongBase/Bugly.framework', __dir__))
+  # Bugly 崩溃上报（腾讯闭源 SDK）—— 双路径自动启用：
+  #   1) 优先：本地 Bugly.framework（用户自己控制版本时）
+  #      仓库默认不附带（避免在公开 repo 分发闭源二进制）
+  #   2) 否则：若 OctoConfig.xcconfig 里填了 OCTO_BUGLY_APP_ID_MAIN，
+  #      自动从 CocoaPods 拉 Tencent 官方 pod 'Bugly' (~> 2.6)，
+  #      pod install 自动从 Tencent CDN 下载，无需手动放 .framework。
+  #   3) 都未满足：DISABLED，不增加 app 体积，不影响其他功能。
+  # Podfile post_install 同样的 AppId 判定来设置 OCTO_ENABLE_BUGLY=1 宏。
+  #
+  # 注意 WuKongBase 故意**不**用 static_framework — 否则 Bugly 符号解析压力
+  # 会下放给 WuKongDataSource / WuKongLogin / WuKongContacts 这些下游 pod，
+  # 它们都得加 -framework Bugly。dynamic + Podfile 的 monkey-patch 压住
+  # CocoaPods 的"transitive static"误报，是最简洁的方案。
+  local_bugly_path = File.expand_path('WuKongBase/Bugly.framework', __dir__)
+  bugly_will_be_used = false
+  if File.exist?(local_bugly_path)
     s.vendored_frameworks = 'WuKongBase/Bugly.framework'
+    bugly_will_be_used = true
+  else
+    octo_config_path = File.expand_path('../../OctoConfig.xcconfig', __dir__)
+    if File.exist?(octo_config_path)
+      bugly_app_id = ''
+      File.foreach(octo_config_path) do |line|
+        if line.strip =~ /^OCTO_BUGLY_APP_ID_MAIN\s*=\s*(.+)$/
+          bugly_app_id = $1.strip.sub(%r{\s*//.*$}, '').strip
+          break
+        end
+      end
+      if !bugly_app_id.empty? && bugly_app_id != 'YOUR_BUGLY_APP_ID'
+        s.dependency 'Bugly', '~> 2.6'
+        bugly_will_be_used = true
+      end
+    end
   end
 #  s.libraries = 'opencore-amrnb', 'opencore-amrwb','vo-amrwbenc', 'sqlite3', 'stdc++','xml2'
   s.libraries = 'c++','stdc++'
@@ -121,8 +149,13 @@ TODO: Add long description of the pod here.
   # 下编译不过 — 已淘汰。)
   s.dependency 'SPConfetti', '~> 1.4'             # MIT, ivanvorobei
   s.dependency 'SwiftConfettiView', '~> 2.0'      # MIT, ugurethemaydin (含 burst/depth)
+  # Bugly 启用时（s.dependency 'Bugly' 或本地 vendored_frameworks），WuKongBase
+  # 自身也必须 link Bugly 才能解析 _OBJC_CLASS_$_Bugly 等符号；CocoaPods 对
+  # static_framework + 跨 pod 依赖的自动 link 不到位，这里显式加。
+  bugly_ldflag = bugly_will_be_used ? ' -framework "Bugly"' : ''
   s.pod_target_xcconfig = {
-    'SWIFT_INCLUDE_PATHS' => '$(inherited)'
+    'SWIFT_INCLUDE_PATHS' => '$(inherited)',
+    'OTHER_LDFLAGS' => '$(inherited)' + bugly_ldflag
   }
   
 #  s.dependency 'SVGKit'
