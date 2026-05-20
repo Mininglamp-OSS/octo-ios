@@ -355,6 +355,58 @@
     }];
 }
 
+-(NSURLSessionUploadTask*) createFileUploadPutTask:(NSString*)uploadUrl
+                                            fileURL:(NSString*)fileUrl
+                                        contentType:(NSString*)contentType
+                                 contentDisposition:(NSString*)contentDisposition
+                                           progress:(void (^)(NSProgress *uploadProgress))uploadProgressBlock
+                                   completeCallback:(void(^)(NSInteger statusCode, NSError *error))completeCallback {
+    NSURL *localFileURL;
+    if ([fileUrl hasPrefix:@"file://"]) {
+        localFileURL = [NSURL fileURLWithPath:[fileUrl substringFromIndex:[@"file://" length]]];
+    } else if ([fileUrl hasPrefix:@"/"]) {
+        localFileURL = [NSURL fileURLWithPath:fileUrl];
+    } else {
+        localFileURL = [NSURL URLWithString:fileUrl];
+    }
+    NSURL *putURL = [NSURL URLWithString:uploadUrl];
+    if (!putURL || !localFileURL) {
+        if (completeCallback) {
+            completeCallback(0, [NSError errorWithDomain:@"WKAPIClient" code:-1 userInfo:@{NSLocalizedDescriptionKey: @"invalid uploadUrl or fileURL"}]);
+        }
+        return nil;
+    }
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:putURL];
+    request.HTTPMethod = @"PUT";
+    [request setValue:contentType forHTTPHeaderField:@"Content-Type"];
+    if (contentDisposition.length > 0) {
+        [request setValue:contentDisposition forHTTPHeaderField:@"Content-Disposition"];
+    }
+    // COS 预签名 URL 不要 Authorization；AFJSONRequestSerializer 也不该参与直传
+    // → 这里直接走 AFURLSessionManager 层（绕开公共 header）。
+
+    NSURLSessionUploadTask *task = [_sessionManager uploadTaskWithRequest:request
+                                                                 fromFile:localFileURL
+                                                                 progress:^(NSProgress * _Nonnull uploadProgress) {
+        if (uploadProgressBlock) {
+            uploadProgressBlock(uploadProgress);
+        }
+    } completionHandler:^(NSURLResponse * _Nonnull response, id  _Nullable responseObject, NSError * _Nullable error) {
+        NSInteger statusCode = 0;
+        if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+            statusCode = ((NSHTTPURLResponse *)response).statusCode;
+        }
+        if (!error && (statusCode < 200 || statusCode >= 300)) {
+            error = [NSError errorWithDomain:@"WKAPIClient" code:statusCode userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"PUT 上传返回非 2xx: %ld", (long)statusCode]}];
+        }
+        if (completeCallback) {
+            completeCallback(statusCode, error);
+        }
+    }];
+    return task;
+}
+
 -(AnyPromise*) POST:(NSString*)path parameters:(nullable id)parameters{
     return [self POST:path parameters:parameters headers:nil];
 }

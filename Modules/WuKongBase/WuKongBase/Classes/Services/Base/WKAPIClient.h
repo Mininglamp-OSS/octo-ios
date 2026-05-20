@@ -112,6 +112,23 @@ NS_ASSUME_NONNULL_BEGIN
 -(NSURLSessionDataTask*_Nullable) createFileUploadTask:(NSString* _Nonnull)path fileURL:(NSString*_Nullable)fileUrl  progress:(void (^_Nullable)(NSProgress * _Nullable uploadProgress)) uploadProgressBlock completeCallback:(void(^_Nullable)(id _Nullable responseObj,NSError * _Nullable error)) completeCallback;
 
 
+/**
+ 直传到预签名 URL（COS 等 OSS 直传模式）。
+ 用 PUT + 原始 body，Content-Type 必须与后端签 URL 时的一致，否则签名校验失败。
+
+ @param uploadUrl     完整预签名 PUT URL（不是 API path，是 OSS host）
+ @param fileUrl       本地文件路径，支持 "file://" 前缀
+ @param contentType   必须严格匹配预签名时声明的值
+ @param contentDisposition  可选，凭证里带就传，没有就别传
+ */
+-(NSURLSessionUploadTask*_Nullable) createFileUploadPutTask:(NSString*_Nonnull)uploadUrl
+                                                     fileURL:(NSString*_Nonnull)fileUrl
+                                                 contentType:(NSString*_Nonnull)contentType
+                                          contentDisposition:(NSString*_Nullable)contentDisposition
+                                                    progress:(void (^_Nullable)(NSProgress * _Nullable uploadProgress))uploadProgressBlock
+                                            completeCallback:(void(^_Nullable)(NSInteger statusCode, NSError * _Nullable error))completeCallback;
+
+
 
 
 /**
