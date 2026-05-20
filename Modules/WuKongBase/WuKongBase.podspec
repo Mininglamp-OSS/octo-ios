@@ -74,6 +74,12 @@ TODO: Add long description of the pod here.
     'WuKongBase/Classes/Sections/Common/TelegramUtils/Svg/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/YuvConversion/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/TelegramUIPreferences/**/*',
+    # PR-B: 预飞 grep 0 内部下游，build 验证型一并下线
+    # (ObjCRuntimeUtils 被 UIKitRuntimeUtils 6 个文件用，留到 PR-C 跟 UIKitRuntimeUtils
+    # 一起处理；强行 exclude 会编译挂)
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/Others/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/ManagedFile/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/GZip/**/*',
     # 护栏：上述 4 个 GPL 文件已删除，留 exclude 防止误恢复
     'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/Source/ContextGesture.swift',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/Source/ContextControllerSourceNode.swift',
