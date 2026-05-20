@@ -122,6 +122,16 @@ Bundled Third-Party Components
                                                   消费方 WKConfettiView.swift 在两库之间切换，
                                                   选定后会移除另一个 pod。
 
+  [x]   crowd-cheering-yahoo.wav       CC0             礼花爆开时的"全场欢呼"短音。
+        (cheer_short.m4a)                              来源：https://freesound.org/s/511788/
+                                                  作者：kinoton
+                                                  License: Creative Commons 0
+                                                  （CC0 / Public Domain Dedication，免归属，
+                                                  本项目仍记录出处便于追溯）
+                                                  改动：用 ffmpeg 裁前 2.10s 并转 AAC 96kbps
+                                                  m4a，资产位于 WuKongBase/Assets/Other/
+                                                  cheer_short.m4a (~26KB)。
+
 
 --------------------------------------------------------------------------------
 其他通过 CocoaPods 引入的依赖
