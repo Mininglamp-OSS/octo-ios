@@ -86,6 +86,7 @@ TODO: Add long description of the pod here.
     'WuKongBase/Classes/Sections/Common/TelegramUtils/UIKitRuntimeUtils/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/ObjCRuntimeUtils/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/SwiftSignalKit/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/Markdown/**/*',
   ]
 #  s.preserve_paths = 'ios/arm/*.{a}'
 #   s.vendored_frameworks  = 'ios/WuKongIMSDK.framework'
