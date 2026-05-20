@@ -14,22 +14,37 @@
 
 已知历史包袱（不要再往里加东西，优先逐步迁出）:
 
-- `Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/` ——
-  **GPL v2 代码**。Display / Utils / AppBundle / GZip / Svg / Markdown 等基础
-  子目录仍在编译链中，因为 `ContextControllerSourceNode` /
-  `ContextExtractedContentContainingNode` / `TapLongTapOrDoubleTapGestureRecognizer`
-  / `ContextGesture` 在 `WKMessageCell` 等核心消息 cell 中是 active 依赖（自定义
-  状态机，与 navigation pop / scrollview 协作良好，原生 UIGestureRecognizer 替代
-  会出现手势冲突）。已通过 `WuKongBase.podspec exclude_files` 排除明确不需要的
-  子目录（AnimatedStickerNode / ContextUI / ReactionSelectionNode /
-  TextSelectionNode / RadialStatusNode / ShimmerEffect / GradientBackground /
-  MetalImageView / MediaResources / LegacyComponents / LiMaoMock /
-  AnimationCompression / TelegramAnimatedStickerNode）。
-  **任何新代码禁止 import 此目录下的符号**。完整剥离是长期工作。
+- **TelegramUtils** (`Sections/Common/TelegramUtils/`) ——
+  2026-05 已整体物理删除（GPL v2，原 25 个子目录 / 270+ 文件）。替代方案：
+  - 长按出菜单：`ContextGesture` / `ContextControllerSourceNode` /
+    `ContextExtractedContentContainingNode` / `TapLongTapOrDoubleTapGestureRecognizer`
+    → `Sections/Common/MessageGesture/` 下 Octo 自实现
+    （`OctoContextGesture` / `OctoMessageGestureContainerNode` /
+    `OctoMessageContentContainingNode` / `OctoTapLongTapOrDoubleTapRecognizer`）。
+    行为目标对齐：beginDelay = 0.12s、左缘 8pt 让位给 interactivePop、
+    `shouldRecognizeSimultaneouslyWith UIPanGestureRecognizer = false` 不抢
+    tableview 的 pan。
+  - 贴纸 shimmer：`StickerShimmerEffectNode`
+    → `Sections/Common/Component/WKShimmerView`。
+  - 其余 (Display / SwiftSignalKit / UIKitRuntimeUtils / ObjCRuntimeUtils /
+    AppBundle / AnimatedCount* / AnimatedNav* / Markdown / Utils / Svg /
+    YuvConversion / TelegramUIPreferences / Others / ManagedFile / GZip /
+    ContextUI / ReactionSelectionNode / TextSelectionNode / RadialStatusNode /
+    GradientBackground / MetalImageView / MediaResources / LegacyComponents /
+    LiMaoMock / AnimationCompression / AnimatedStickerNode /
+    TelegramAnimatedStickerNode)：深度审计后确认全部 0 外部消费方 +
+    0 动态查找，是历史死代码，直接 git rm 移除。
+  **任何新代码禁止 import 不存在的 TelegramUtils 符号**。
 
-- `Modules/WuKongBase/WuKongBase/Classes/Vendor/SoundTouch/` ——
-  **LGPL v2.1，已在 P5 从编译链中排除**（podspec `exclude_files`）。
-  `CWVoiceChangePlayCell` 变声功能已降级为无变调直播，待用 `AVAudioUnitTimePitch` 替换。
+- **SoundTouch** (`Vendor/SoundTouch/`) ——
+  2026-05 已物理删除（LGPL v2.1）。消费链
+  (`CWVoiceChangePlayCell.mm` / `CWVoiceChangePlayView` / `CWChangeVoiceView` /
+  `WKVoicePanel.m`) 早先已 stub 为 no-op，0 `#include "SoundTouch.h"` 残留。
+  CW* 声纹录制/播放 UI 仍在用，只是变声 pitch shift 功能下线，
+  **待用 `AVAudioUnitTimePitch` 重新实现变声**。
+
+- **LegacyComponents** (`Vendor/LegacyComponents/`, POP 系列) ——
+  2026-05 已物理删除。0 消费方，是历史遗留死代码。
 
 ## 调试工具的生命周期
 

@@ -59,12 +59,11 @@ chore(deps): SDWebImage 升级到 5.10
 
 ## 许可证边界
 
-本仓库包含多种许可证的代码，请勿混淆边界：
+本仓库源码与发布二进制均为完整 Apache 2.0，请保持这一现状：
 
 - **主 App**（`Octo/` 及扩展）和我们新写的代码 → **Apache 2.0**
 - **`WuKong*` 模块** → **MIT**（上游 WuKongIM SDK）。**不要修改其许可证或删除原始署名**
-- **`WuKongBase/.../TelegramUtils/`** 中部分代码 → **GPL v2**。新代码**禁止** `#import` 此目录下的符号。
-  详见 [`TelegramUtils/README.md`](Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/README.md)。
+- **不要新增 GPL / LGPL / Affero 依赖**（不论是 CocoaPods pod 还是 vendored 源码）。历史的 `TelegramUtils/`（GPL v2）与 `SoundTouch`（LGPL v2.1）都已移除，新增强 copyleft 代码会让二进制重新背上分发义务。
 
 工程层面更多约束见 [CLAUDE.md](CLAUDE.md)（swizzle 白名单、调试工具生命周期等）。
 
@@ -88,7 +87,7 @@ chore(deps): SDWebImage 升级到 5.10
 ## License
 
 提交贡献即视为你同意：主 App 新代码以本项目的
-[Apache License 2.0](LICENSE) 发布；对 MIT / GPL 部分的修改则遵循对应上游许可证。
+[Apache License 2.0](LICENSE) 发布；对 MIT 部分的修改则遵循对应上游许可证。
 
 ## 有问题？
 

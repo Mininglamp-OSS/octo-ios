@@ -3,6 +3,19 @@
 workspace 'OctoiOS.xcworkspace'
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Monkey-patch: 关掉 CocoaPods "transitive static binary" 检查
+# ─────────────────────────────────────────────────────────────────────────────
+# 启用 Bugly（腾讯静态 SDK）时这条检查会硬阻断 pod install:
+#   [!] target has transitive dependencies that include statically linked binaries
+# 这个检查在 use_frameworks!（动态）+ 静态 SDK 组合下永远报错，但实际链接
+# 完全可行。社区标准做法是 monkey-patch 关掉，Tencent / Alibaba / Bytedance
+# 系 SDK 都这么搞。我们用 static_framework = true 让 WuKongBase 把 Bugly
+# 静态吸收进自身，主工程依然 use_frameworks! 动态化其他 Swift 库。
+class Pod::Installer::Xcode::TargetValidator
+  def verify_no_static_framework_transitive_dependencies; end
+end
+
+# ─────────────────────────────────────────────────────────────────────────────
 # OctoConfig.xcconfig 解析
 # 私有配置（Apple Team ID / Bugly AppKey / IM 服务器等）统一放在
 # OctoConfig.xcconfig（gitignored），由本 Podfile 在 post_install 阶段：
@@ -46,16 +59,23 @@ post_install do |installer|
     end
 
     # ─────────────────────────────────────────────────────────────────────
-    # Bugly 动态启用：仅当 OctoConfig.xcconfig 里 OCTO_BUGLY_APP_ID_MAIN
-    # 填了真实值（不是占位符）+ Modules/WuKongBase/WuKongBase/Bugly.framework/
-    # 文件存在时，自动开启 OCTO_ENABLE_BUGLY 预处理宏。
-    # podspec 那边已经 conditionally vendored_frameworks（同一条件）。
+    # Bugly 动态启用：source of truth 是 WuKongBase.podspec — 它根据
+    # OctoConfig.xcconfig 决定是否声明 s.dependency 'Bugly'，或本地放
+    # framework。这里直接看 installer 里 Bugly pod 是否进了 target，避免
+    # Podfile 自己再 parse 一次配置文件造成判定分叉。
     # ─────────────────────────────────────────────────────────────────────
-    bugly_app_id = octo_config['OCTO_BUGLY_APP_ID_MAIN'].to_s
-    bugly_placeholder = bugly_app_id.empty? || bugly_app_id == 'YOUR_BUGLY_APP_ID'
-    bugly_framework_path = File.expand_path('Modules/WuKongBase/WuKongBase/Bugly.framework', __dir__)
-    bugly_enabled = !bugly_placeholder && File.exist?(bugly_framework_path)
-    puts "Bugly: #{bugly_enabled ? 'ENABLED (framework + AppId 都已配置)' : 'DISABLED (缺 framework 或未配置 AppId)'}"
+    bugly_installed_via_pod = installer.pod_targets.any? { |pt| pt.name == 'Bugly' }
+    local_bugly_path = File.expand_path('Modules/WuKongBase/WuKongBase/Bugly.framework', __dir__)
+    local_bugly_exists = File.exist?(local_bugly_path)
+    bugly_enabled = bugly_installed_via_pod || local_bugly_exists
+    bugly_source = if local_bugly_exists
+                     'local framework'
+                   elsif bugly_installed_via_pod
+                     'pod Bugly ~> 2.6 (Tencent CDN)'
+                   else
+                     'n/a'
+                   end
+    puts "Bugly: #{bugly_enabled ? "ENABLED via #{bugly_source}" : 'DISABLED (未配置 OCTO_BUGLY_APP_ID_MAIN, 也未放 local framework)'}"
 
     bugly_consumer_targets = %w[WuKongBase]
     aggregate_user_targets = installer.aggregate_targets.map(&:user_targets).flatten.map(&:name)
@@ -69,19 +89,27 @@ post_install do |installer|
             config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = defs
         end
     end
-    # 也给主 App target (OctoiOS) 注入相同的宏
-    user_project_for_bugly = installer.aggregate_targets[0].user_project
-    user_project_for_bugly.targets.each do |target|
-        next unless target.name == 'OctoiOS'
-        target.build_configurations.each do |config|
-            defs = Array(config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'])
-            defs = ['$(inherited)'] if defs.empty?
-            defs.reject! { |d| d == 'OCTO_ENABLE_BUGLY=1' }
-            defs << 'OCTO_ENABLE_BUGLY=1' if bugly_enabled
-            config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = defs
+    # 主 App target (OctoiOS) 的 OCTO_ENABLE_BUGLY=1 宏：注入到 Pods 聚合
+    # xcconfig（每次 pod install 重新生成），不再写主工程的 pbxproj —— 那样
+    # 会让 pbxproj 永久带着这个宏，clean clone 没装 Bugly 就编译挂
+    # (PR #125 round 5 review 🟡)
+    aggregate_xcconfigs = Dir.glob(File.join(__dir__,
+        'Pods/Target Support Files/Pods-OctoiOSBase-OctoiOS/*.xcconfig'))
+    aggregate_xcconfigs.each do |xcconfig_path|
+        content = File.read(xcconfig_path)
+        # 先把可能残留的宏抹掉（无论开关状态，幂等）
+        content = content.gsub(/\s+OCTO_ENABLE_BUGLY=1\b/, '')
+        if bugly_enabled
+            if content =~ /^GCC_PREPROCESSOR_DEFINITIONS\s*=\s*(.*)$/
+                content = content.sub(/^GCC_PREPROCESSOR_DEFINITIONS\s*=\s*(.*)$/) do
+                    "GCC_PREPROCESSOR_DEFINITIONS = #{$1.rstrip} OCTO_ENABLE_BUGLY=1"
+                end
+            else
+                content += "\nGCC_PREPROCESSOR_DEFINITIONS = $(inherited) OCTO_ENABLE_BUGLY=1\n"
+            end
         end
+        File.write(xcconfig_path, content)
     end
-    user_project_for_bugly.save
 
     # 把 OctoConfig.xcconfig 软引用注入到每一个 Pods xcconfig。
     # 路径深度：xcconfig 位于 Pods/Target Support Files/<Pod>/<Pod>.<config>.xcconfig，

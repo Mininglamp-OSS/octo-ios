@@ -16,8 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/Source-Apache_2.0-blue.svg" alt="源码 Apache 2.0"></a>
-  <a href="./NOTICE"><img src="https://img.shields.io/badge/Binary-GPL_v2-red.svg" alt="二进制实际 GPL v2"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="许可 Apache 2.0"></a>
   <a href="https://developer.apple.com/ios/"><img src="https://img.shields.io/badge/Platform-iOS%2014.0%2B-lightgrey.svg" alt="Platform iOS 14.0+"></a>
   <a href="https://developer.apple.com/swift/"><img src="https://img.shields.io/badge/Lang-Objective--C%20%2F%20Swift-orange.svg" alt="Objective-C / Swift"></a>
   <a href="./README.md"><img src="https://img.shields.io/badge/lang-English-blue.svg" alt="English"></a>
@@ -28,8 +27,6 @@
 > 🌐 **语言**: [English](README.md) · **简体中文**
 
 # OCTO iOS（简体中文）
-
-> ⚠️ **许可证现状**：本仓库新代码采用 Apache 2.0，但**发布的二进制实际受 GPL v2 约束**——因为 `Modules/WuKongBase/.../TelegramUtils/` 仍然链接 GPL v2 代码（消息 cell 的手势状态机依赖）。如需 100% Apache 2.0 二进制（商业闭源发布），请先阅读下方 [许可](#-许可) 章节，先替换 Telegram 派生的手势/上下文菜单代码，再分发。剥离方案与依赖面见 [`TelegramUtils/README.md`](Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/README.md)。
 
 > **原生 iOS 客户端** —— Objective-C + Swift，通过 WuKongIM TCP 协议与 `octo-server` 通信。
 
@@ -209,19 +206,15 @@ OCTO 遵循三条共用原则 —— 这套矩阵里的每个仓都一致：
 
 ## 📄 许可
 
-本仓库**混合多种许可证** —— 简单标"Apache 2.0"对**二进制**而言不准确：
+本仓库以 **[Apache License 2.0](LICENSE)** 发布。我们自己的源码与编出的二进制**不含静态链接的 GPL / 强 copyleft 代码** —— 历史上链接的 `TelegramUtils/`（GPL v2）子树与 `SoundTouch`（LGPL v2.1）已全部移除。
+
+唯一一个传递依赖 **`librlottie`（LGPL v2.1）** 是通过 `SDWebImageLottieCoder` 引入的 *动态链接* 组件（用于 Lottie 贴图解码）。LGPL 动态链接例外条款下与 Apache 2.0 分发兼容，但下游分发者仍需履行 LGPL 对该组件的义务（允许用户替换 `librlottie` 动态库 / 提供可重新链接的目标文件）。详见 [NOTICE](NOTICE)。
 
 | 层 | 许可证 | 说明 |
 |---|---|---|
 | 我们新写的代码（`Octo/`、扩展、各模块新代码） | **Apache 2.0** | 见 [LICENSE](LICENSE) |
 | `WuKong*` 模块 | **MIT** | 上游 [WuKongIM iOS SDK](https://github.com/WuKongIM/WuKongIMiOSSDK) —— 保留原署名 |
-| `WuKongBase/.../TelegramUtils/`（当前在编译链中的子集） | **GPL v2** | 派生自 [Telegram iOS](https://github.com/TelegramMessenger/Telegram-iOS)，被 `WKMessageCell` 等消息 cell 通过自定义手势状态机静态链接进二进制。剥离需要重写 `TapLongTapOrDoubleTapGestureRecognizer` + `ContextGesture` |
-
-**二进制分发的实际影响：**
-
-- 当前 Octo iOS 二进制由于静态链接 GPL v2 代码，**整体受 GPL v2 约束**。
-- 如分发 Octo iOS 二进制，**必须**对被链接的 GPL 部分履行 GPL v2 义务（开放源码、不得附加额外限制等）。
-- 如需 **100% Apache 2.0 二进制**（商业闭源发布），需要先替换 TelegramUtils 中仍在使用的符号。当前依赖面与替换计划见 [`TelegramUtils/README.md`](Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/README.md) 与 [`TelegramUtils/LICENSE`](Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/LICENSE)。
+| `librlottie`（传递依赖，动态链接） | **LGPL v2.1** | 通过 `SDWebImageLottieCoder` 引入；分发义务详见 [NOTICE](NOTICE) |
 
 完整第三方致谢见 [NOTICE](NOTICE)。
 
@@ -231,7 +224,6 @@ OCTO 遵循三条共用原则 —— 这套矩阵里的每个仓都一致：
 
 - **[WuKongIM iOS SDK](https://github.com/WuKongIM/WuKongIMiOSSDK)** —— 实时消息协议 SDK，由 `octo-server` 驱动。
 - **[TangSengDaoDao iOS](https://github.com/TangSengDaoDao/TangSengDaoDaoiOS)** —— 本项目聊天 UI 的上游脚手架。
-- **[Telegram iOS](https://github.com/TelegramMessenger/Telegram-iOS)** —— 消息 cell 当前仍使用的部分显示层组件。
 
 完整的致谢与第三方组件清单见 [NOTICE](NOTICE)。
 
