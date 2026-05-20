@@ -42,17 +42,16 @@ TODO: Add long description of the pod here.
  
   s.private_header_files = 'WuKongBase/Classes/Vendor/**/*'
   s.source_files = 'WuKongBase/Classes/**/*'
-  # 排除许可证不兼容的代码：
-  # - SoundTouch (LGPL v2.1) — 已用 no-op stub 替换变声功能
-  # - TelegramUtils (GPL v2) — 已于 2026-05 整体物理移除，cell 端长按出菜单
-  #   由 Sections/Common/MessageGesture/ 下的 Octo 自实现接管，
+  # 排除许可证不兼容的代码：当前无遗留。
+  # 历史记录：
+  # - SoundTouch (LGPL v2.1) — 2026-05 物理移除，消费链已先 stub 为 no-op
+  #   (CWVoiceChangePlayCell.mm 等)，变声功能待用 AVAudioUnitTimePitch 重写。
+  # - TelegramUtils (GPL v2) — 2026-05 整体物理移除，cell 端长按出菜单由
+  #   Sections/Common/MessageGesture/ 下的 Octo 自实现接管，
   #   StickerShimmerEffectNode 由 Sections/Common/Component/WKShimmerView 替代。
-  #   仓库内已无 TelegramUtils 目录，下方 exclude_files 不再需要 TelegramUtils
-  #   相关条目。
-  s.exclude_files = [
-    'WuKongBase/Classes/Vendor/SoundTouch/**/*',
-    'WuKongBase/Classes/Vendor/LegacyComponents/**/*',
-  ]
+  # - LegacyComponents (POP, Apache 2.0 实际许可) — 2026-05 物理移除，
+  #   0 消费方，是历史遗留死代码。
+  s.exclude_files = []
 #  s.preserve_paths = 'ios/arm/*.{a}'
 #   s.vendored_frameworks  = 'ios/WuKongIMSDK.framework'
   
