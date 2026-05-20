@@ -24,6 +24,11 @@
 
 @interface WKAPIClient()
 @property(nonatomic,strong) AFHTTPSessionManager *sessionManager;
+/// 专用于 COS / OSS 直传的 session manager。
+/// 与主 sessionManager 隔离，使用 AFHTTPResponseSerializer（不做 JSON 校验），
+/// 避免 COS PUT 成功但响应空 body / 非 JSON Content-Type 时被 AFJSONResponseSerializer
+/// 误报为失败（PR review #125 round 5 critical）。
+@property(nonatomic,strong) AFURLSessionManager *cosUploadSessionManager;
 @end
 @implementation WKAPIClient
 
@@ -332,12 +337,15 @@
     if (contentDisposition.length > 0) {
         [request setValue:contentDisposition forHTTPHeaderField:@"Content-Disposition"];
     }
-    // COS 预签名 URL 不要 Authorization；AFJSONRequestSerializer 也不该参与直传
-    // → 这里直接走 AFURLSessionManager 层（绕开公共 header）。
+    // COS 预签名 URL 不要 Authorization；AFJSONRequestSerializer 也不该参与直传。
+    // 这里走 self.cosUploadSessionManager（专用 AFURLSessionManager + raw
+    // AFHTTPResponseSerializer），避免主 sessionManager 的 JSON serializer 在
+    // COS 成功响应（空 body 或非 JSON Content-Type）上把 statusCode=200 也误报
+    // 为 NSError。
 
-    NSURLSessionUploadTask *task = [_sessionManager uploadTaskWithRequest:request
-                                                                 fromFile:localFileURL
-                                                                 progress:^(NSProgress * _Nonnull uploadProgress) {
+    NSURLSessionUploadTask *task = [self.cosUploadSessionManager uploadTaskWithRequest:request
+                                                                              fromFile:localFileURL
+                                                                              progress:^(NSProgress * _Nonnull uploadProgress) {
         if (uploadProgressBlock) {
             uploadProgressBlock(uploadProgress);
         }
@@ -346,6 +354,7 @@
         if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
             statusCode = ((NSHTTPURLResponse *)response).statusCode;
         }
+        // 显式 2xx 校验是 source of truth — serializer 只做解码不参与判定
         if (!error && (statusCode < 200 || statusCode >= 300)) {
             error = [NSError errorWithDomain:@"WKAPIClient" code:statusCode userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"PUT 上传返回非 2xx: %ld", (long)statusCode]}];
         }
@@ -354,6 +363,16 @@
         }
     }];
     return task;
+}
+
+- (AFURLSessionManager *)cosUploadSessionManager {
+    if (!_cosUploadSessionManager) {
+        _cosUploadSessionManager = [[AFURLSessionManager alloc]
+            initWithSessionConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]];
+        // raw HTTP serializer — 不做 JSON 解析 / 不校验 Content-Type
+        _cosUploadSessionManager.responseSerializer = [AFHTTPResponseSerializer serializer];
+    }
+    return _cosUploadSessionManager;
 }
 
 -(AnyPromise*) getUploadCredentialsForPath:(NSString*)path
