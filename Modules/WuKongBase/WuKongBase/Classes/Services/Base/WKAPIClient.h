@@ -94,25 +94,6 @@ NS_ASSUME_NONNULL_BEGIN
                                              NSError * _Nullable error))completeCallback;
 
 /**
- 上传聊天文件
- @param serverPath 服务器上的路径
- @param localURL 本地文件url
- */
--(void) uploadChatFile:(NSString*_Nullable)serverPath localURL:(NSURL*)localURL progress:(void(^_Nullable)(NSProgress * _Nonnull progress)) progressCallback completeCallback:(void(^_Nullable)(id __nullable resposeObject,NSError * __nullable error)) completeCallback;
-
-/**
- 创建一个上传任务
-
- @param path 请求路径
- @param fileUrl 文件路径
- @param uploadProgressBlock 上传进度回调
- @param completeCallback 完成回调
- @return 任务对象
- */
--(NSURLSessionDataTask*_Nullable) createFileUploadTask:(NSString* _Nonnull)path fileURL:(NSString*_Nullable)fileUrl  progress:(void (^_Nullable)(NSProgress * _Nullable uploadProgress)) uploadProgressBlock completeCallback:(void(^_Nullable)(id _Nullable responseObj,NSError * _Nullable error)) completeCallback;
-
-
-/**
  直传到预签名 URL（COS 等 OSS 直传模式）。
  用 PUT + 原始 body，Content-Type 必须与后端签 URL 时的一致，否则签名校验失败。
 
@@ -127,6 +108,26 @@ NS_ASSUME_NONNULL_BEGIN
                                           contentDisposition:(NSString*_Nullable)contentDisposition
                                                     progress:(void (^_Nullable)(NSProgress * _Nullable uploadProgress))uploadProgressBlock
                                             completeCallback:(void(^_Nullable)(NSInteger statusCode, NSError * _Nullable error))completeCallback;
+
+/**
+ 取得 COS 预签名直传凭证。query 参数走 NSURLQueryItem 编码，安全处理
+ filename 里的 & = ? + # 等特殊字符（否则会污染签名 → 403）。
+
+ @param path        服务端用于签 URL 的对象 key，调用方负责构造
+                    （如 "/<channelType>/<channelId>/<uuid>.jpg" 或 "/sticker/<uuid>.jpg"）
+ @param type        资源类型，常用 "chat" / "sticker"
+ @param filename    原始文件名，可含中文 / 空格 / & = 等
+ @param contentType MIME，PUT 时必须用一样的值
+ @param fileSize    文件字节数
+
+ returns Promise<NSDictionary> { uploadUrl, downloadUrl, contentType,
+                                  contentDisposition?, key?, expiredTime? }
+ */
+-(AnyPromise*_Nonnull) getUploadCredentialsForPath:(NSString*_Nonnull)path
+                                              type:(NSString*_Nonnull)type
+                                          filename:(NSString*_Nonnull)filename
+                                       contentType:(NSString*_Nonnull)contentType
+                                          fileSize:(long long)fileSize;
 
 
 

@@ -328,29 +328,93 @@
 
 
 #pragma mark -> 添加单个表情
-//获取表情图片上传地址
+// 上传表情：COS 预签名直传（对齐 WKFileUploadTask + web/task.ts），
+// 不再走老的 GET file/upload?type=sticker + POST multipart 链路 —
+// 服务端已切换到 file/upload/credentials + PUT。
 - (void)getNewEmojiAddressInStickerCollectionVC:(NSData *)imageData {
     [self.view showHUD];
-    
+
+    NSString *ext = [self extensionForImageData:imageData];        // png / jpg / gif / webp
+    NSString *contentType = [self mimeForExtension:ext];
+    NSString *uuid = [[[NSUUID UUID] UUIDString] stringByReplacingOccurrencesOfString:@"-" withString:@""];
+    NSString *fileName = [NSString stringWithFormat:@"%@.%@", uuid, ext];
+    NSString *path = [NSString stringWithFormat:@"/sticker/%@", fileName];
+
+    // 写到 tmp 文件，createFileUploadPutTask: 需要 fileURL。
+    NSString *tmpPath = [NSTemporaryDirectory() stringByAppendingPathComponent:fileName];
+    NSError *writeErr = nil;
+    if (![imageData writeToFile:tmpPath options:NSDataWritingAtomic error:&writeErr]) {
+        WKLogError(@"sticker tmp write failed: %@", writeErr);
+        [self.view switchHUDError:LLangW(@"上传失败", self)];
+        return;
+    }
+
     __weak typeof(self) weakSelf = self;
-    [[WKAPIClient sharedClient] GET:@"file/upload?type=sticker" parameters:nil].then(^(NSDictionary *resultDict) {
-        NSString *urlString = resultDict[@"url"];
-        if (urlString && urlString.length > 0) {
-            [weakSelf updateNewEmojiInStickerCollectionVC:imageData urlString:urlString];
+    void (^cleanup)(void) = ^{ [[NSFileManager defaultManager] removeItemAtPath:tmpPath error:nil]; };
+
+    AnyPromise *credPromise = [[WKAPIClient sharedClient] getUploadCredentialsForPath:path
+                                                                                  type:@"sticker"
+                                                                              filename:fileName
+                                                                           contentType:contentType
+                                                                              fileSize:(long long)imageData.length];
+    credPromise.then(^(NSDictionary *result){
+        NSString *uploadUrl = result[@"uploadUrl"];
+        NSString *downloadUrl = result[@"downloadUrl"];
+        NSString *signedContentType = result[@"contentType"] ?: contentType;
+        NSString *contentDisposition = result[@"contentDisposition"];
+        if (uploadUrl.length == 0 || downloadUrl.length == 0) {
+            cleanup();
+            [weakSelf.view switchHUDError:LLangW(@"上传失败", weakSelf)];
+            return;
         }
+        NSURLSessionUploadTask *task = [[WKAPIClient sharedClient]
+            createFileUploadPutTask:uploadUrl
+                            fileURL:[@"file://" stringByAppendingString:tmpPath]
+                        contentType:signedContentType
+                 contentDisposition:contentDisposition
+                           progress:^(NSProgress * _Nullable progress) {
+                               WKLogDebug(@"sticker upload progress:%@", @(progress.fractionCompleted));
+                           }
+                   completeCallback:^(NSInteger statusCode, NSError * _Nullable error) {
+                       cleanup();
+                       if (error) {
+                           WKLogError(@"sticker PUT failed status=%ld err=%@", (long)statusCode, error);
+                           [weakSelf.view switchHUDError:LLangW(@"上传失败", weakSelf)];
+                           return;
+                       }
+                       [weakSelf addNewEmojiInStickerCollectionVC:imageData urlString:downloadUrl];
+                   }];
+        if (task) {
+            [task resume];
+        } else {
+            cleanup();
+            [weakSelf.view switchHUDError:LLangW(@"上传失败", weakSelf)];
+        }
+    }).catch(^(NSError *error){
+        cleanup();
+        WKLogError(@"sticker credentials failed: %@", error);
+        [weakSelf.view switchHUDError:LLangW(@"上传失败", weakSelf)];
     });
 }
 
-//上传表情图片文件
-- (void)updateNewEmojiInStickerCollectionVC:(NSData *)imageData urlString:(NSString *)string {
-    __weak typeof(self) weakSelf = self;
-    [[WKAPIClient sharedClient] fileUpload:string data:imageData progress:^(NSProgress * _Nonnull progress) {
-        WKLogDebug(@"progress:%@", @(progress.fractionCompleted));
-    } completeCallback:^(id  _Nullable resposeObject, NSError * _Nullable error) {
-        NSDictionary *resultDict = (NSDictionary *)resposeObject;
-        NSString *urlString = resultDict[@"path"];
-        [weakSelf addNewEmojiInStickerCollectionVC:imageData urlString:urlString];
-    }];
+// 由文件头几个字节判断图片格式。来源 magic bytes 是公开格式规范。
+- (NSString *)extensionForImageData:(NSData *)data {
+    if (data.length < 4) return @"png";
+    const uint8_t *b = (const uint8_t *)data.bytes;
+    if (b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) return @"png";
+    if (b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return @"jpg";
+    if (b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x38) return @"gif";
+    if (data.length >= 12 && b[0] == 0x52 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x46 &&
+        b[8] == 0x57 && b[9] == 0x45 && b[10] == 0x42 && b[11] == 0x50) return @"webp";
+    return @"png";
+}
+
+- (NSString *)mimeForExtension:(NSString *)ext {
+    if ([ext isEqualToString:@"png"])  return @"image/png";
+    if ([ext isEqualToString:@"jpg"])  return @"image/jpeg";
+    if ([ext isEqualToString:@"gif"])  return @"image/gif";
+    if ([ext isEqualToString:@"webp"]) return @"image/webp";
+    return @"image/png";
 }
 
 //添加单个自定义表情

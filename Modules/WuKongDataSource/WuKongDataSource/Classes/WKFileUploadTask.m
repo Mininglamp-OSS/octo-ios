@@ -73,20 +73,17 @@
     return @"";
 }
 
-// 获取预签名直传凭证（COS 等 OSS 直传模式）
-// path/filename/contentType/fileSize 都参与 URL 签名，必须真实，否则 COS PUT 会
-// 拿 SignatureDoesNotMatch。对齐 web `octo-web/.../task.ts` 的 getUploadCredentials。
+// 获取预签名直传凭证 — 委托给 WKAPIClient 统一的 NSURLQueryItem 安全编码版本，
+// filename 含 & = ? 等特殊字符时不会污染签名（对齐 web/.../task.ts）。
 -(AnyPromise*) getUploadCredentials:(NSString*)path
                            filename:(NSString*)filename
                         contentType:(NSString*)contentType
                            fileSize:(long long)fileSize {
-    NSString *url = [NSString stringWithFormat:@"%@file/upload/credentials?path=%@&type=chat&filename=%@&contentType=%@&fileSize=%lld",
-                     [WKApp shared].config.fileBaseUrl,
-                     [self urlEncode:path],
-                     [self urlEncode:filename],
-                     [self urlEncode:contentType],
-                     fileSize];
-    return [[WKAPIClient sharedClient] GET:url parameters:nil];
+    return [[WKAPIClient sharedClient] getUploadCredentialsForPath:path
+                                                              type:@"chat"
+                                                          filename:filename
+                                                       contentType:contentType
+                                                          fileSize:fileSize];
 }
 
 -(NSString*) urlEncode:(NSString*)raw {

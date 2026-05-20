@@ -60,7 +60,7 @@ Bundled Third-Party Components
                                        源代码副本保留在同目录 arm/opencore-amrnb/, arm/opencore-amrwb/,
                                        arm/vo-amrwbenc/ 子目录中，以满足许可证下游分发义务。
 
-  [!]   librlottie                    LGPL            **仍在编译链中（间接依赖）**。
+  [x]   librlottie                    LGPL            **动态链接，可替换**。
                                                   通过 SDWebImageLottieCoder（Apache 2.0）
                                                   传入，rlottie 引擎本体为 LGPL。消费方：
                                                   WKApp.m 注册 WKSDImageLottieCoder 用于
@@ -72,33 +72,43 @@ Bundled Third-Party Components
                                                   允许用户替换 librlottie 部分（动态链接）
                                                   或提供目标文件以便重新链接。
 
-  [EXCLUDED in P5] SoundTouch       LGPL v2.1       通过 WuKongBase.podspec exclude_files
-                                                  从编译链中排除。变声功能降级为无变调
-                                                  播放，待用 AVAudioUnitTimePitch 替换。
-                                                  原文件仍在仓库中以保留 LGPL 归属。
+  [REMOVED 2026-05] SoundTouch        LGPL v2.1       已物理移除（git rm 67 个 .cpp/.h/.mm）。
+                                                  消费链 (CWVoiceChangePlayCell.mm 等)
+                                                  早先已 stub 为 no-op，#include "SoundTouch.h"
+                                                  全部清零。变声 pitch shift 功能下线，
+                                                  待用 AVAudioUnitTimePitch 重新实现。
 
-  [!]   TelegramUtils (Telegram iOS)  GPL v2        部分子目录仍在编译链中：
-                                                  Display / Utils / AppBundle / GZip / Svg /
-                                                  Markdown / SwiftSignalKit 等基础模块。
-                                                  原因：ContextControllerSourceNode /
-                                                  TapLongTapOrDoubleTapGestureRecognizer 等
-                                                  自定义手势状态机被 WKMessageCell 使用，
-                                                  原生 UIGestureRecognizer 替代会与
-                                                  navigation pop / tableview 滚动冲突。
-                                                  已排除子目录：AnimatedStickerNode /
-                                                  ContextUI / ReactionSelectionNode /
-                                                  TextSelectionNode / RadialStatusNode /
-                                                  ShimmerEffect / GradientBackground /
+  [REMOVED 2026-05] TelegramUtils      GPL v2          已整体物理移除（git rm 270+ 文件 /
+  (Telegram iOS)                                    62500 行）。原核心 cell 长按出菜单的 4
+                                                  件套 (ContextGesture / ContextControllerSourceNode /
+                                                  ContextExtractedContentContainingNode /
+                                                  TapLongTapOrDoubleTapGestureRecognizer) 由
+                                                  Modules/.../Sections/Common/MessageGesture/
+                                                  下的 Octo clean-room 自实现替代
+                                                  (OctoContextGesture / OctoMessageGestureContainerNode /
+                                                  OctoMessageContentContainingNode /
+                                                  OctoTapLongTapOrDoubleTapRecognizer)。
+                                                  贴纸 shimmer (StickerShimmerEffectNode)
+                                                  由 Sections/Common/Component/WKShimmerView
+                                                  替代。其余 Display / SwiftSignalKit /
+                                                  UIKitRuntimeUtils / ObjCRuntimeUtils /
+                                                  AppBundle / Markdown / Utils / Svg /
+                                                  YuvConversion / TelegramUIPreferences /
+                                                  Others / ManagedFile / GZip / ContextUI /
+                                                  ReactionSelectionNode / TextSelectionNode /
+                                                  RadialStatusNode / GradientBackground /
                                                   MetalImageView / MediaResources /
-                                                  LegacyComponents 等。
-                                                  详见 TelegramUtils/LICENSE 与 README.md，
-                                                  以及 WuKongBase.podspec 的 exclude_files。
+                                                  LegacyComponents / LiMaoMock /
+                                                  AnimationCompression / AnimatedStickerNode /
+                                                  TelegramAnimatedStickerNode 经深度审计后
+                                                  全部为 0 外部消费方 + 0 动态查找的死代码，
+                                                  随 TelegramUtils 一并 git rm。
 
-  [REMOVED with TelegramUtils] Facebook POP      BSD+Patents  仅在 TelegramUtils/RadialStatusNode
-                                                              内部使用，随 TelegramUtils 整体排除。
+  [REMOVED 2026-05] Facebook POP       Apache 2.0      原 Vendor/LegacyComponents/ 目录 (POP
+                                                  动画系列)，0 消费方。已 git rm。
 
-  [REMOVED with TelegramUtils] nanosvg           zlib         仅在 TelegramUtils/Svg/ 内部使用，
-                                                              随 TelegramUtils 整体排除。
+  [REMOVED with TelegramUtils] nanosvg zlib            仅在 TelegramUtils/Svg/ 内部使用，
+                                                  随 TelegramUtils 一并移除。
 
 
 --------------------------------------------------------------------------------

@@ -281,22 +281,6 @@
     return task;
 }
 
--(void) uploadChatFile:(NSString*)serverPath localURL:(NSURL*)localURL progress:(void(^_Nullable)(NSProgress * _Nonnull progress)) progressCallback completeCallback:(void(^_Nullable)(id __nullable resposeObject,NSError * __nullable error)) completeCallback {
-    [self getChatUploadURL:serverPath].then(^(NSDictionary*result){
-        NSString *uploadUrl = result[@"url"];
-        [self fileUpload:uploadUrl fileURL:localURL.absoluteString progress:progressCallback completeCallback:completeCallback];
-    }).catch(^(NSError *error){
-        if(completeCallback) {
-            completeCallback(nil,error);
-        }
-    });
-}
-
-// 获取上传地址
--(AnyPromise*) getChatUploadURL:(NSString*)path{
-    return  [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"%@file/upload?path=%@&type=chat",[WKApp shared].config.fileBaseUrl,path] parameters:nil];
-}
-
 -(NSURLSessionDownloadTask*) createDownloadTask:(NSString*)path storePath:(NSString*_Nonnull)storePath progress:(void (^)(NSProgress *downloadProgress)) downloadProgressBlock completeCallback:(void(^)(NSError *error)) completeCallback{
     NSString *requestPath = path;
     if(_config.requestPathReplace) {
@@ -318,41 +302,6 @@
         }
     }];
     return task;
-}
-
--(NSURLSessionDataTask*) createFileUploadTask:(NSString*)path fileURL:(NSString*)fileUrl  progress:(void (^)(NSProgress *uploadProgress)) uploadProgressBlock completeCallback:(void(^)(id responseObj,NSError *error)) completeCallback{
-
-    NSString *requestPath = path;
-    if(_config.requestPathReplace) {
-        requestPath = _config.requestPathReplace(path);
-    }
-    [self resetPublicHeader];
-    return [_sessionManager POST:[self pathURLEncode:requestPath] parameters:nil headers:nil constructingBodyWithBlock:^(id<AFMultipartFormData>  _Nonnull formData) {
-        NSError *fileError;
-        NSURL *localFileURL;
-        if ([fileUrl hasPrefix:@"file://"]) {
-            NSString *filePath = [fileUrl substringFromIndex:[@"file://" length]];
-            localFileURL = [NSURL fileURLWithPath:filePath];
-        } else {
-            localFileURL = [NSURL URLWithString:[fileUrl stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding]];
-        }
-        [formData appendPartWithFileURL:localFileURL name:@"file" error:&fileError];
-        if(fileError) {
-            WKLogError(@"file: %@ fileError-> %@",fileUrl,fileError);
-        }
-    } progress:^(NSProgress * _Nonnull uploadProgress) {
-        if(uploadProgressBlock) {
-            uploadProgressBlock(uploadProgress);
-        }
-    } success:^(NSURLSessionDataTask * _Nonnull task, id  _Nullable responseObject) {
-        if(completeCallback) {
-            completeCallback(responseObject, nil);
-        }
-    } failure:^(NSURLSessionDataTask * _Nullable task, NSError * _Nonnull error) {
-        if(completeCallback) {
-            completeCallback(nil, error);
-        }
-    }];
 }
 
 -(NSURLSessionUploadTask*) createFileUploadPutTask:(NSString*)uploadUrl
@@ -405,6 +354,30 @@
         }
     }];
     return task;
+}
+
+-(AnyPromise*) getUploadCredentialsForPath:(NSString*)path
+                                       type:(NSString*)type
+                                   filename:(NSString*)filename
+                                contentType:(NSString*)contentType
+                                   fileSize:(long long)fileSize {
+    // 用 NSURLComponents + NSURLQueryItem 来构造 query —— 它会对 value 里的
+    // & = ? + # 等特殊字符做正确的 percent-encode，避免类似
+    // "Q&A=final.pdf" 这种 filename 把后续参数顶掉造成签名失败。
+    NSString *base = [NSString stringWithFormat:@"%@file/upload/credentials", [WKApp shared].config.fileBaseUrl];
+    NSURLComponents *components = [NSURLComponents componentsWithString:base];
+    if (!components) {
+        return [AnyPromise promiseWithValue:[NSError errorWithDomain:@"WKAPIClient" code:-1 userInfo:@{NSLocalizedDescriptionKey: @"invalid fileBaseUrl"}]];
+    }
+    components.queryItems = @[
+        [NSURLQueryItem queryItemWithName:@"path"        value:path        ?: @""],
+        [NSURLQueryItem queryItemWithName:@"type"        value:type        ?: @""],
+        [NSURLQueryItem queryItemWithName:@"filename"    value:filename    ?: @""],
+        [NSURLQueryItem queryItemWithName:@"contentType" value:contentType ?: @""],
+        [NSURLQueryItem queryItemWithName:@"fileSize"    value:[NSString stringWithFormat:@"%lld", fileSize]],
+    ];
+    NSString *url = components.URL.absoluteString ?: base;
+    return [self GET:url parameters:nil];
 }
 
 -(AnyPromise*) POST:(NSString*)path parameters:(nullable id)parameters{
