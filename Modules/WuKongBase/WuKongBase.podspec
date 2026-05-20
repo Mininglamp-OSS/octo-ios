@@ -115,7 +115,12 @@ TODO: Add long description of the pod here.
   s.dependency 'libcmark_gfm'
   s.dependency 'iosMath', '~> 0.9'  # LaTeX 数学公式渲染（纯 OC + CoreText，无 WebView）
   s.dependency 'RiveRuntime', '~> 6.11'
-  s.dependency 'SPConfetti', '~> 1.4'  # 🎉/🎊 表情礼花动画，MIT (ivanvorobei)
+  # 🎉/🎊 表情礼花动画 — 引入 2 个 MIT 候选，运行时由 WKConfettiView
+  # 内的 Backend 枚举决定用哪个；选定后可移除另一个。
+  # (SAConfettiView 评估过但其 pod 2016 年版本是 Swift 2/3 代码，在新 Swift
+  # 下编译不过 — 已淘汰。)
+  s.dependency 'SPConfetti', '~> 1.4'             # MIT, ivanvorobei
+  s.dependency 'SwiftConfettiView', '~> 2.0'      # MIT, ugurethemaydin (含 burst/depth)
   s.pod_target_xcconfig = {
     'SWIFT_INCLUDE_PATHS' => '$(inherited)'
   }

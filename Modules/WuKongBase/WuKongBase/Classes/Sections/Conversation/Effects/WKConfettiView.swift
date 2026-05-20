@@ -3,28 +3,44 @@
 //
 // WKConfettiView
 // --------------
-// 🎉 / 🎊 表情触发的彩纸礼花效果。本类是 SPConfetti (MIT, ivanvorobei)
-// 的 thin wrapper，对外保持 WKPartyEffect.m 原本就在用的 OC 初始化
-// 签名 (init(frame:customImage:))，让上层调用零修改。
+// 🎉 / 🎊 表情触发的彩纸礼花效果。本类是 thin wrapper —— 同时支持 2 个
+// 第三方 MIT 库，运行时由 `Backend.current` 常量选择哪个，方便目视对比
+// 哪种风格更符合产品观感。
 //
-// 行为：
-//   1) 加入视图层级 (didMoveToSuperview != nil) 时启动 SPConfetti 全屏粒子
-//   2) 从视图层级移除时停止粒子
-//   3) WKMessageEffectView 在 ~10s 后会把整个容器移走（已有逻辑），随之触发停止
+// 切换方式：改 `Backend.current` 这一个常量后 rebuild。
 //
-// customImage：保留参数兼容旧签名，SPConfetti 没有该 API；当前忽略
-//             （传 nil 即可，业务上 WKPartyEffect.m 也是传 nil）。
+// 两个候选（全部 MIT、CocoaPods 可用、新 Swift 能编）：
+//   .swiftConfettiView   2.0.0 (2026-02) — 含 burst / depth / 3D 感 / haptic / sound
+//                                          预设 .perfect = intense burst
+//   .spConfetti          1.4.0 (2022-01) — 简洁，4 种发射方向 + 6 种粒子
 //
-// SPConfetti 来源 / license 详见 NOTICE。
+// 选定一种后，可以从 podspec 移掉另外一个 pod，并把 Backend 简化掉。
+//
+// 公共 OC 调用面保持 init(frame:customImage:) / init(frame:) 不变 —
+// 上层 WKPartyEffect.m 永远零改动。
+//
+// 各库 license / 致谢见 NOTICE。
 
 import Foundation
 import UIKit
 import SPConfetti
+import SwiftConfettiView
 
 @objc public final class WKConfettiView: UIView {
 
+    /// 当前选用的礼花库。改这一行 + rebuild 即可换风格。
+    private enum Backend {
+        case swiftConfettiView
+        case spConfetti
+
+        static let current: Backend = .swiftConfettiView   // ← 切这里
+    }
+
     private let customImage: UIImage?
     private var didStart = false
+
+    // SwiftConfettiView 的实例视图（生命周期挂在 WKConfettiView 上）
+    private var swiftConfettiInstance: SwiftConfettiView?
 
     // MARK: - Init (保持 OC 调用面不变)
 
@@ -50,21 +66,51 @@ import SPConfetti
         isUserInteractionEnabled = false
     }
 
-    // MARK: - Lifecycle
+    // MARK: - Lifecycle dispatch
 
     public override func didMoveToSuperview() {
         super.didMoveToSuperview()
-        if superview != nil, !didStart {
-            didStart = true
-            // 默认 6s 撒落 + 4s 余韵 = 与 WKMessageEffectView 的 10s 移除节奏对齐。
-            // 形状选 [.triangle, .arc, .polygon, .star] 模拟真实彩纸 + 亮片混合。
-            SPConfetti.startAnimating(
-                .fullWidthToDown,
-                particles: [.triangle, .arc, .polygon, .star],
-                duration: 6.0
-            )
-        } else if superview == nil, didStart {
-            SPConfetti.stopAnimating()
+        guard superview != nil, !didStart else {
+            if superview == nil, didStart { stop() }
+            return
+        }
+        didStart = true
+        start()
+    }
+
+    private func start() {
+        switch Backend.current {
+        case .swiftConfettiView: startSwiftConfetti()
+        case .spConfetti:        startSPConfetti()
         }
     }
+
+    private func stop() {
+        switch Backend.current {
+        case .swiftConfettiView: swiftConfettiInstance?.stopConfetti()
+        case .spConfetti:        SPConfetti.stopAnimating()
+        }
+    }
+
+    // MARK: - SwiftConfettiView 2.0.0 (preset .perfect: burst + depth + haptic)
+
+    private func startSwiftConfetti() {
+        let v = SwiftConfettiView(frame: bounds)
+        v.applyPreset(.perfect)
+        v.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(v)
+        v.startConfetti()
+        swiftConfettiInstance = v
+    }
+
+    // MARK: - SPConfetti 1.4.0
+
+    private func startSPConfetti() {
+        SPConfetti.startAnimating(
+            .fullWidthToDown,
+            particles: [.triangle, .arc, .polygon, .star],
+            duration: 6.0
+        )
+    }
 }
+

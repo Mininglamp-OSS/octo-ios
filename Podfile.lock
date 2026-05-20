@@ -97,6 +97,7 @@ PODS:
     - SQLCipher/common
   - SSZipArchive (2.2.3)
   - Starscream (4.0.8)
+  - SwiftConfettiView (2.0.0)
   - Toast (4.1.1)
   - TOCropViewController (2.5.5)
   - TZImagePickerController (3.6.9)
@@ -125,6 +126,7 @@ PODS:
     - SDWebImageLottieCoder (~> 0.1.0)
     - SDWebImageWebPCoder (~> 0.6.1)
     - SPConfetti (~> 1.4)
+    - SwiftConfettiView (~> 2.0)
     - Toast (~> 4.0)
     - TOCropViewController (~> 2.5.3)
     - TZImagePickerController (~> 3.6.4)
@@ -220,6 +222,7 @@ SPEC REPOS:
     - SQLCipher
     - SSZipArchive
     - Starscream
+    - SwiftConfettiView
     - Toast
     - TOCropViewController
     - TZImagePickerController
@@ -294,10 +297,11 @@ SPEC CHECKSUMS:
   SQLCipher: eb79c64049cb002b4e9fcb30edb7979bf4706dfc
   SSZipArchive: 62d4947b08730e4cda640473b0066d209ff033c9
   Starscream: 19b5533ddb925208db698f0ac508a100b884a1b9
+  SwiftConfettiView: 46ab15ee65ec09dcd3e47295c4f1d2df28999408
   Toast: 1f5ea13423a1e6674c4abdac5be53587ae481c4e
   TOCropViewController: da59f531f8ac8a94ef6d6c0fc34009350f9e8bfe
   TZImagePickerController: 2cad3db94ba70eb947d26c10ff5c66c9a93798c8
-  WuKongBase: a622b8df0dfa67724c7154702458d316a9cb2e66
+  WuKongBase: 49131c7976a269719a263752d0a11de32c49e6c2
   WuKongContacts: 8d67498a5c219c1f6520bd81224ef55d836f63a6
   WuKongDataSource: b9089cb962310af96af523032df4534e272cd932
   WuKongIMSDK: b3905b92aa9eb313052c8b2d88271494ac7293a6
