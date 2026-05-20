@@ -44,14 +44,14 @@ TODO: Add long description of the pod here.
   s.source_files = 'WuKongBase/Classes/**/*'
   # 排除许可证不兼容或已替换的代码：
   # - SoundTouch (LGPL v2.1) — 已用 no-op stub 替换变声功能
-  # - TelegramUtils 中依赖 librlottie 的子目录（AnimatedStickerNode 等）—
-  #   外部消费方已删除
-  # - TelegramUtils/Display/Source/{ContextGesture, ContextControllerSourceNode,
-  #   TapLongTapOrDoubleTapGestureRecognizer, ContextContentSourceNode}.swift
-  #   已物理删除并由 Sections/Common/MessageGesture/ 下的 Octo 自实现替代；
-  #   exclude_files 留作护栏，防止后续 git revert 回来又被编进二进制。
-  # TelegramUtils 其余文件保留在编译链内（cells 不再依赖它们的 GPL 实现，但
-  # NavigationBar 等内部链路仍在用）。完整剥离是 P5 长期工作。
+  # - TelegramUtils (GPL v2) — cell 端长按出菜单已被 Octo 自实现替代
+  #   (Sections/Common/MessageGesture/)；深度审计后确认整个 Display 子树
+  #   + 它的支撑层 (AppBundle / AnimatedCount* / AnimatedNav* / UIKit*Utils /
+  #   ObjC*Utils / SwiftSignalKit) 全部 0 外部消费方、0 动态查找，是一整套
+  #   自我引用的死代码，本次单 PR 整体下线。
+  #
+  #   仍在编译链里的 GPL 残留只剩 Markdown（被 WKMarkdownParser 用），
+  #   下个 PR 把 WKMarkdownParser 改成直接调 libcmark_gfm 后即可清掉。
   s.exclude_files = [
     'WuKongBase/Classes/Vendor/SoundTouch/**/*',
     'WuKongBase/Classes/Vendor/LegacyComponents/**/*',
@@ -69,28 +69,23 @@ TODO: Add long description of the pod here.
     'WuKongBase/Classes/Sections/Common/TelegramUtils/GradientBackground/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/MetalImageView/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/MediaResources/**/*',
-    # PR-A: 实测无外部消费方 + 无 Display 内部消费，可立即下线（GPL 体积持续瘦身）
+    # PR-A
     'WuKongBase/Classes/Sections/Common/TelegramUtils/Utils/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/Svg/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/YuvConversion/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/TelegramUIPreferences/**/*',
-    # PR-B: 预飞 grep 0 内部下游，build 验证型一并下线
-    # (ObjCRuntimeUtils 被 UIKitRuntimeUtils 6 个文件用，留到 PR-C 跟 UIKitRuntimeUtils
-    # 一起处理；强行 exclude 会编译挂)
+    # PR-B
     'WuKongBase/Classes/Sections/Common/TelegramUtils/Others/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/ManagedFile/**/*',
     'WuKongBase/Classes/Sections/Common/TelegramUtils/GZip/**/*',
-    # 护栏：上述 4 个 GPL 文件已删除，留 exclude 防止误恢复
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/Source/ContextGesture.swift',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/Source/ContextControllerSourceNode.swift',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/Source/TapLongTapOrDoubleTapGestureRecognizer.swift',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/Source/ContextContentSourceNode.swift',
-    # ContextContentContainerNode 只被 ContextUI 消费（已 exclude），随之排除
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/Source/ContextContentContainerNode.swift',
-    # 保留编译：Display 其余文件 + 它依赖的支撑模块
-    # SwiftSignalKit / AppBundle / Utils / ObjCRuntimeUtils / UIKitRuntimeUtils / Markdown
-    # / GZip / Svg / ManagedFile / AnimatedCountLabelNode / AnimatedNavigationStripeNode
-    # / TelegramUIPreferences / Others / YuvConversion
+    # PR-C 整套死代码群一次下线（深度审计：0 外部消费 + 0 动态查找）
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/AppBundle/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/AnimatedCountLabelNode/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/AnimatedNavigationStripeNode/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/UIKitRuntimeUtils/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/ObjCRuntimeUtils/**/*',
+    'WuKongBase/Classes/Sections/Common/TelegramUtils/SwiftSignalKit/**/*',
   ]
 #  s.preserve_paths = 'ios/arm/*.{a}'
 #   s.vendored_frameworks  = 'ios/WuKongIMSDK.framework'

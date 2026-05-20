@@ -15,24 +15,33 @@
 已知历史包袱（不要再往里加东西，优先逐步迁出）:
 
 - `Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/` ——
-  **GPL v2 代码**。Display / Utils / AppBundle / GZip / Svg / Markdown 等基础
-  子目录仍在编译链中。原本作为消息 cell 长按出菜单核心的
+  **GPL v2 代码**。原本作为消息 cell 长按出菜单核心的
   `ContextGesture` / `ContextControllerSourceNode` /
   `ContextExtractedContentContainingNode` / `TapLongTapOrDoubleTapGestureRecognizer`
-  四个文件**已被 Octo 自实现替代**，源码位于
+  四个文件已被 Octo 自实现替代，源码位于
   `Modules/WuKongBase/WuKongBase/Classes/Sections/Common/MessageGesture/`
   （`OctoContextGesture` / `OctoMessageGestureContainerNode` /
   `OctoMessageContentContainingNode` / `OctoTapLongTapOrDoubleTapRecognizer`）。
   cell 通过 `OctoMessageGestureContainerNode` 挂载手势，行为目标对齐：
   beginDelay = 0.12s、左缘 8pt 让位给 interactivePop、
   `shouldRecognizeSimultaneouslyWith UIPanGestureRecognizer = false` 不抢
-  tableview 的 pan。老 4 个 GPL 文件已 `git rm`，podspec `exclude_files`
-  留护栏防止误恢复。已通过 `WuKongBase.podspec exclude_files` 排除明确不需要的
-  子目录（AnimatedStickerNode / ContextUI / ReactionSelectionNode /
-  TextSelectionNode / RadialStatusNode / ShimmerEffect / GradientBackground /
-  MetalImageView / MediaResources / LegacyComponents / LiMaoMock /
-  AnimationCompression / TelegramAnimatedStickerNode）。
-  **任何新代码禁止 import TelegramUtils 下的符号**。完整剥离是长期工作。
+  tableview 的 pan。
+
+  **2026-05 整体瘦身**：深度审计后确认 Display + AppBundle + AnimatedCount* +
+  AnimatedNav* + UIKitRuntimeUtils + ObjCRuntimeUtils + SwiftSignalKit 这套
+  7 子目录是一整套自我引用的死代码（0 外部消费方、0 动态查找），单 PR 整体
+  `git rm` + exclude_files 护栏一次下线。
+
+  **当前唯一仍在编译链的 GPL 文件**：`Markdown/`（被 `WKMarkdownParser.h/m` +
+  `WKMessageModel.m` 用）。下一个 PR 把 `WKMarkdownParser` 改成直接调
+  `libcmark_gfm`（已在 podspec 依赖里），即可清掉最后一处。
+
+  其它已 exclude 的 GPL 子目录：AnimatedStickerNode / ContextUI /
+  ReactionSelectionNode / TextSelectionNode / RadialStatusNode / ShimmerEffect /
+  GradientBackground / MetalImageView / MediaResources / LegacyComponents /
+  LiMaoMock / AnimationCompression / TelegramAnimatedStickerNode / Utils / Svg /
+  YuvConversion / TelegramUIPreferences / Others / ManagedFile / GZip。
+  **任何新代码禁止 import TelegramUtils 下的符号**。
 
 - `Modules/WuKongBase/WuKongBase/Classes/Vendor/SoundTouch/` ——
   **LGPL v2.1，已在 P5 从编译链中排除**（podspec `exclude_files`）。
