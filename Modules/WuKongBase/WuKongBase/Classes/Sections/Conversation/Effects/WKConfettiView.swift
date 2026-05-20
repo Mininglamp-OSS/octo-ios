@@ -308,16 +308,26 @@ import SwiftConfettiView
     }
 
     /// 在 WuKongBase 资源 bundle 里找 cheer_short.m4a。
-    /// CocoaPods 用 resource_bundles 打包时是一个独立 .bundle 子文件夹。
+    /// CocoaPods 用 resource_bundles 打包时是一个独立 .bundle 子文件夹，
+    /// 并且保留了源目录结构（文件在 `Other/` 子目录下，不是 bundle 根）。
     private static func locateCheerSoundURL() -> URL? {
         let mainBundle = Bundle(for: WKConfettiView.self)
+        // 1) bundle 根（防御性，万一打包方式变了）
         if let url = mainBundle.url(forResource: "cheer_short", withExtension: "m4a") {
             return url
         }
-        if let resBundleURL = mainBundle.url(forResource: "WuKongBase_resources", withExtension: "bundle"),
-           let resBundle = Bundle(url: resBundleURL),
-           let url = resBundle.url(forResource: "cheer_short", withExtension: "m4a") {
+        if let url = mainBundle.url(forResource: "cheer_short", withExtension: "m4a", subdirectory: "Other") {
             return url
+        }
+        // 2) WuKongBase_resources.bundle 子 bundle（实际打包路径）
+        if let resBundleURL = mainBundle.url(forResource: "WuKongBase_resources", withExtension: "bundle"),
+           let resBundle = Bundle(url: resBundleURL) {
+            if let url = resBundle.url(forResource: "cheer_short", withExtension: "m4a", subdirectory: "Other") {
+                return url
+            }
+            if let url = resBundle.url(forResource: "cheer_short", withExtension: "m4a") {
+                return url
+            }
         }
         return nil
     }
