@@ -6,6 +6,7 @@
 //
 
 #import "WKFileUploadTask.h"
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 @interface WKFileUploadTask ()
 @property(nonatomic,strong) NSMutableArray<NSURLSessionTask*> *tasks;
 
@@ -30,17 +31,16 @@
     }
 
     NSString *randomFileName = [[[NSUUID UUID] UUIDString] stringByReplacingOccurrencesOfString:@"-" withString:@""];
-    NSString *ext = media.extension ?: @"";
-    NSString *path = [NSString stringWithFormat:@"/%d/%@/%@%@",self.message.channel.channelType,self.message.channel.channelId,randomFileName,ext];
     NSString *localPath = media.localPath;
+    NSString *ext = [self resolveExtensionFromMedia:media localPath:localPath useThumb:NO];
 
     // ---- 如果是声音文件，则上传转码后的副本也就是amr文件 ----
     if([media isKindOfClass:[WKVoiceContent class]]) {
-        ext = media.thumbExtension ?: @"";
-        path = [NSString stringWithFormat:@"/%d/%@/%@%@",self.message.channel.channelType,self.message.channel.channelId,randomFileName,ext];
         localPath = media.thumbPath;
+        ext = [self resolveExtensionFromMedia:media localPath:localPath useThumb:YES];
     }
 
+    NSString *path = [NSString stringWithFormat:@"/%d/%@/%@%@",self.message.channel.channelType,self.message.channel.channelId,randomFileName,ext];
     NSString *fileUrl = [NSString stringWithFormat:@"file://%@",localPath];
 
     if(self.message.contentType == WK_SMALLVIDEO) { // 小视频
@@ -54,6 +54,23 @@
     }
 
 
+}
+
+// 解析扩展名 — 三层兜底：
+//   1) media.extension / thumbExtension（业务模型显式声明）
+//   2) localPath.pathExtension（系统从文件名解析，自动去 ".tar.gz" 这种取最后一段）
+//   3) "" — 无扩展文件也允许上传，contentType 会兜底成 application/octet-stream
+// 返回值带前导 "."（与 media.extension 现有约定保持一致），无扩展返回 ""。
+-(NSString*) resolveExtensionFromMedia:(id<WKMediaProto>)media localPath:(NSString*)localPath useThumb:(BOOL)useThumb {
+    NSString *modelExt = useThumb ? media.thumbExtension : media.extension;
+    if (modelExt.length > 0) {
+        return [modelExt hasPrefix:@"."] ? modelExt : [@"." stringByAppendingString:modelExt];
+    }
+    NSString *fileExt = localPath.pathExtension; // 无点，无扩展时返回 ""
+    if (fileExt.length > 0) {
+        return [@"." stringByAppendingString:fileExt];
+    }
+    return @"";
 }
 
 // 获取预签名直传凭证（COS 等 OSS 直传模式）
@@ -79,12 +96,19 @@
 
 // 通过扩展名推断 MIME。COS 预签名时服务端按 contentType 签 URL，
 // 客户端 PUT 必须用一样的值；不匹配 → 403 SignatureDoesNotMatch。
+//
+// 三层兜底：硬编码高频表 → 系统 UTType（iOS 14+，覆盖广） →
+// application/octet-stream（也覆盖了"无扩展文件"这条路径）。
 -(NSString*) mimeTypeForExtension:(NSString*)extWithDot {
     NSString *ext = extWithDot;
     if ([ext hasPrefix:@"."]) {
         ext = [ext substringFromIndex:1];
     }
     ext = ext.lowercaseString;
+    if (ext.length == 0) {
+        // 无扩展 — 跟 web 行为对齐：直接走 octet-stream，服务端会按二进制流签
+        return @"application/octet-stream";
+    }
     // 图片
     if ([ext isEqualToString:@"jpg"] || [ext isEqualToString:@"jpeg"]) return @"image/jpeg";
     if ([ext isEqualToString:@"png"]) return @"image/png";
@@ -134,6 +158,13 @@
     if ([ext isEqualToString:@"tar"]) return @"application/x-tar";
     if ([ext isEqualToString:@"gz"] || [ext isEqualToString:@"gzip"]) return @"application/gzip";
     if ([ext isEqualToString:@"bz2"]) return @"application/x-bzip2";
+
+    // 系统兜底：UTType 数据库覆盖远比硬编码全，apk/dmg/odt/keynote/numbers 等都能命中
+    UTType *type = [UTType typeWithFilenameExtension:ext];
+    NSString *systemMime = type.preferredMIMEType;
+    if (systemMime.length > 0) {
+        return systemMime;
+    }
     return @"application/octet-stream";
 }
 
@@ -150,7 +181,12 @@
 -(void) createAndAddUploadTask:(NSString*)path sourceFileURL:(NSString*)fileURL localFilePath:(NSString*)localPath ext:(NSString*)ext {
 
     id<WKMediaProto> media = [self getMessageMedia:self.message];
-    NSString *filename = localPath.lastPathComponent ?: [NSString stringWithFormat:@"file%@", ext ?: @""];
+    NSString *filename = localPath.lastPathComponent;
+    if (filename.length == 0) {
+        // localPath 为空 / 异常 → 用 "file" + 扩展兜底，保证 credentials API 必有
+        // 非空 filename 参数（服务端用 filename 拼 Content-Disposition）。
+        filename = [@"file" stringByAppendingString:(ext ?: @"")];
+    }
     NSString *contentType = [self mimeTypeForExtension:ext];
     long long fileSize = [self fileSizeAtPath:localPath];
 
@@ -217,7 +253,10 @@
     NSString *coverExt = @".jpg";
     NSString *coverContentType = @"image/jpeg";
     NSString *path = [NSString stringWithFormat:@"/%d/%@/%@%@",self.message.channel.channelType,self.message.channel.channelId,randomFileName,coverExt];
-    NSString *coverFilename = coverFileURL.lastPathComponent ?: [@"cover" stringByAppendingString:coverExt];
+    NSString *coverFilename = coverFileURL.lastPathComponent;
+    if (coverFilename.length == 0) {
+        coverFilename = [@"cover" stringByAppendingString:coverExt];
+    }
     long long coverSize = [self fileSizeAtPath:coverFileURL];
 
     __weak typeof(self) weakSelf = self;
