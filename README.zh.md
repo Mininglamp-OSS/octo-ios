@@ -206,12 +206,15 @@ OCTO 遵循三条共用原则 —— 这套矩阵里的每个仓都一致：
 
 ## 📄 许可
 
-本仓库以 **[Apache License 2.0](LICENSE)** 发布。源码与二进制均为完整 Apache 2.0 —— 历史上链接的 `TelegramUtils/` (GPL v2) 子树与 `SoundTouch` (LGPL v2.1) 已全部移除，无 GPL/LGPL 静态依赖（迁移记录见 [NOTICE](NOTICE)）。
+本仓库以 **[Apache License 2.0](LICENSE)** 发布。我们自己的源码与编出的二进制**不含静态链接的 GPL / 强 copyleft 代码** —— 历史上链接的 `TelegramUtils/`（GPL v2）子树与 `SoundTouch`（LGPL v2.1）已全部移除。
+
+唯一一个传递依赖 **`librlottie`（LGPL v2.1）** 是通过 `SDWebImageLottieCoder` 引入的 *动态链接* 组件（用于 Lottie 贴图解码）。LGPL 动态链接例外条款下与 Apache 2.0 分发兼容，但下游分发者仍需履行 LGPL 对该组件的义务（允许用户替换 `librlottie` 动态库 / 提供可重新链接的目标文件）。详见 [NOTICE](NOTICE)。
 
 | 层 | 许可证 | 说明 |
 |---|---|---|
 | 我们新写的代码（`Octo/`、扩展、各模块新代码） | **Apache 2.0** | 见 [LICENSE](LICENSE) |
 | `WuKong*` 模块 | **MIT** | 上游 [WuKongIM iOS SDK](https://github.com/WuKongIM/WuKongIMiOSSDK) —— 保留原署名 |
+| `librlottie`（传递依赖，动态链接） | **LGPL v2.1** | 通过 `SDWebImageLottieCoder` 引入；分发义务详见 [NOTICE](NOTICE) |
 
 完整第三方致谢见 [NOTICE](NOTICE)。
 

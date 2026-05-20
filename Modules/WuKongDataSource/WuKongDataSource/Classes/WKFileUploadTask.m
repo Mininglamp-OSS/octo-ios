@@ -86,11 +86,6 @@
                                                           fileSize:fileSize];
 }
 
--(NSString*) urlEncode:(NSString*)raw {
-    if (!raw) return @"";
-    return [raw stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]] ?: @"";
-}
-
 // 通过扩展名推断 MIME。COS 预签名时服务端按 contentType 签 URL，
 // 客户端 PUT 必须用一样的值；不匹配 → 403 SignatureDoesNotMatch。
 //

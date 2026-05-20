@@ -1,342 +1,140 @@
+// Copyright 2026 MININGLAMP. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
 //
-//  WKConfettiView.swift
-//  WuKongBase
+// WKConfettiView
+// --------------
+// 🎉 / 🎊 表情触发的彩纸礼花动画。基于 Apple 标准 CAEmitterLayer 粒子
+// 系统的 clean-room 实现（不再 derive 自任何 GPL 上游）。
 //
-//  基于 Telegram-iOS `submodules/ConfettiEffect/Sources/ConfettiView.swift` 移植，
-//  保留完整的 2D 物理模拟（重力、质量、角速度、湍流、减速相位），
-//  但去掉对 TelegramUtils/Display 模块的依赖，改用自包含的 CADisplayLink 与
-//  UIGraphicsImageRenderer 实现。对外仅暴露 @objc API 供 Objective-C 调用。
+// 消费方（仅这两个）：
+//   - WKPartyEffect.m: `[[WKConfettiView alloc] initWithFrame:b customImage:nil]`
+//   - addSubview，10 秒后由 WKMessageEffectView 自动移除整体容器
+//
+// 设计要点：
+//   1) 顶部一条线发射器 emitterShape=.line，birthRate 批量喷洒
+//   2) 短脉冲（约 0.4s）后把 birthRate 置零，已生成的粒子继续下落+旋转
+//   3) 每片纸屑：随机颜色（六色调色盘），随机自旋，重力加速
+//   4) lifetime 6s + alphaSpeed 衰减让尾段自然褪色，避免硬切换
+//   5) customImage 非空则覆盖默认彩色矩形纹理（外部传入特殊贴图时备用）
 
 import Foundation
 import UIKit
-
-private struct CVVector2 {
-    var x: Float
-    var y: Float
-}
-
-private final class CVParticleLayer: CALayer {
-    let mass: Float
-    var velocity: CVVector2
-    var angularVelocity: Float
-    var rotationAngle: Float = 0.0
-    var localTime: Float = 0.0
-    var type: Int
-
-    init(image: CGImage, size: CGSize, position: CGPoint, mass: Float, velocity: CVVector2, angularVelocity: Float, type: Int) {
-        self.mass = mass
-        self.velocity = velocity
-        self.angularVelocity = angularVelocity
-        self.type = type
-
-        super.init()
-
-        self.contents = image
-        self.bounds = CGRect(origin: .zero, size: size)
-        self.position = position
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func action(forKey event: String) -> CAAction? {
-        return NSNull()
-    }
-}
+import QuartzCore
 
 @objc public final class WKConfettiView: UIView {
 
-    private var particles: [CVParticleLayer] = []
-    private var displayLink: CADisplayLink?
-    private var previousTimestamp: CFTimeInterval = 0
-    private var localTime: Float = 0.0
-    private var slowdownStartTimestamps: [Float?] = [nil, nil, nil]
+    private let emitter = CAEmitterLayer()
+    private let customImage: UIImage?
 
-    /// 用自定义图片作为粒子（比如贴纸图），会被染成多种颜色。
+    // MARK: - Lifecycle
+
     @objc public init(frame: CGRect, customImage: UIImage?) {
+        self.customImage = customImage
         super.init(frame: frame)
-        self.isUserInteractionEnabled = false
-        self.setupParticles(customImage: customImage)
-        self.startDisplayLink()
+        setupCommon()
     }
 
-    /// 默认圆形+长条形彩色纸屑。
     @objc public override init(frame: CGRect) {
+        self.customImage = nil
         super.init(frame: frame)
-        self.isUserInteractionEnabled = false
-        self.setupParticles(customImage: nil)
-        self.startDisplayLink()
+        setupCommon()
     }
 
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+    @available(*, unavailable)
+    public required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
     }
 
-    deinit {
-        self.displayLink?.invalidate()
+    private func setupCommon() {
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+        layer.addSublayer(emitter)
+
+        configureEmitter()
+        layoutEmitter()
+
+        // 一次脉冲后停止喷洒，让已生成的粒子继续走完 lifetime。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.emitter.birthRate = 0
+        }
     }
 
-    // MARK: - Setup
+    public override func layoutSubviews() {
+        super.layoutSubviews()
+        layoutEmitter()
+    }
 
-    private func setupParticles(customImage: UIImage?) {
-        let colors: [UIColor] = [
-            UIColor(red: 0x56/255.0, green: 0xCE/255.0, blue: 0x6B/255.0, alpha: 1.0),
-            UIColor(red: 0xCD/255.0, green: 0x89/255.0, blue: 0xD0/255.0, alpha: 1.0),
-            UIColor(red: 0x1E/255.0, green: 0x9A/255.0, blue: 0xFF/255.0, alpha: 1.0),
-            UIColor(red: 0xFF/255.0, green: 0x87/255.0, blue: 0x24/255.0, alpha: 1.0),
+    private func layoutEmitter() {
+        emitter.frame = bounds
+        emitter.emitterPosition = CGPoint(x: bounds.midX, y: -8)
+        emitter.emitterSize = CGSize(width: bounds.width, height: 2)
+    }
+
+    // MARK: - Emitter cells
+
+    private func configureEmitter() {
+        emitter.emitterShape = .line
+        emitter.renderMode = .additive  // 重叠时颜色相加，更"喜庆"
+        emitter.beginTime = CACurrentMediaTime()
+        emitter.emitterCells = makeCells()
+        emitter.birthRate = 1.0
+    }
+
+    /// 每种颜色一个 cell。颜色调色盘选了 6 个比较喜庆的组合。
+    private func makeCells() -> [CAEmitterCell] {
+        let palette: [UIColor] = [
+            UIColor(red: 0.97, green: 0.27, blue: 0.36, alpha: 1.0), // 红
+            UIColor(red: 1.00, green: 0.65, blue: 0.13, alpha: 1.0), // 橙
+            UIColor(red: 1.00, green: 0.85, blue: 0.18, alpha: 1.0), // 黄
+            UIColor(red: 0.30, green: 0.78, blue: 0.45, alpha: 1.0), // 绿
+            UIColor(red: 0.27, green: 0.60, blue: 0.97, alpha: 1.0), // 蓝
+            UIColor(red: 0.74, green: 0.40, blue: 0.93, alpha: 1.0), // 紫
         ]
-        let defaultDotSize = CGSize(width: 8.0, height: 8.0)
-        var images: [(CGImage, CGSize)] = []
 
-        if let customImage = customImage, let _ = customImage.cgImage {
-            // 用自定义图（通常是贴纸）— 原色 + 3 种染色变体，保留风格又有彩色感
-            if let cg = customImage.cgImage {
-                images.append((cg, customImage.size))
-            }
-            for color in colors.prefix(3) {
-                if let tinted = Self.tintedImage(customImage, color: color)?.cgImage {
-                    images.append((tinted, customImage.size))
-                }
-            }
-        } else {
-            // 默认：4 种形状 × 4 种颜色，涵盖圆点 / 短条 / 中条 / 长条，
-            // 与 scale 0.8~1.6 的随机缩放叠加产生自然长短差异
-            let shapeSizes: [CGSize] = [
-                CGSize(width: 8.0, height: 8.0),   // 圆点
-                CGSize(width: 2.0, height: 6.0),   // 短条
-                CGSize(width: 2.0, height: 10.0),  // 中条
-                CGSize(width: 2.0, height: 14.0),  // 长条
-            ]
-            for (idx, spriteSize) in shapeSizes.enumerated() {
-                for color in colors {
-                    if idx == 0 {
-                        if let circle = Self.filledCircleImage(diameter: spriteSize.width, color: color)?.cgImage {
-                            images.append((circle, spriteSize))
-                        }
-                    } else {
-                        if let stripe = Self.stripeImage(size: spriteSize, color: color)?.cgImage {
-                            images.append((stripe, spriteSize))
-                        }
-                    }
-                }
-            }
-        }
+        return palette.map { color in
+            let cell = CAEmitterCell()
+            cell.contents = (customImage?.cgImage) ?? Self.defaultStripImage(color: color).cgImage
 
-        guard !images.isEmpty else { return }
-        let imageCount = images.count
+            // 喷洒强度：每秒每个 cell 出 18 片，6 个 cell × 0.4s 脉冲 ≈ 43 片
+            cell.birthRate = 18.0
+            cell.lifetime = 6.0
+            cell.lifetimeRange = 1.5
 
-        let frameWidth = self.bounds.width
-        let frameHeight = self.bounds.height
-        let angularVelocityRange: Range<Float> = 1.0..<6.0
-        let sizeVariation: Range<Float> = 0.8..<1.6
+            // 速度：往下散开为主（emissionLongitude=π/2 是 +y / 屏幕下方）
+            cell.velocity = 220
+            cell.velocityRange = 80
+            cell.emissionLongitude = .pi / 2
+            cell.emissionRange = .pi / 5  // ±36° 散度
 
-        // 左右两侧喷射的 80×2 个粒子（数量是原来的两倍，去掉顶部下落粒子）
-        let sideMassRange: Range<Float> = 110.0..<120.0
-        let sideOriginYBase: Float = Float(frameHeight * 9.0 / 10.0)
-        let sideOriginVelocityValueRange: Range<Float> = 1.5..<1.8
-        let sideOriginVelocityValueScaling: Float = 2400.0 * Float(frameHeight) / 896.0
-        let sideOriginVelocityBase: Float = Float.pi / 2.0 + atanf(Float(CGFloat(sideOriginYBase) / (frameWidth * 0.8)))
-        let sideOriginVelocityVariation: Float = 0.09
-        let sideOriginVelocityAngleRange: Range<Float> =
-            (sideOriginVelocityBase - sideOriginVelocityVariation)..<(sideOriginVelocityBase + sideOriginVelocityVariation)
-        let originAngleRange: Range<Float> = 0.0..<(Float.pi * 2.0)
-        let originAmplitudeDiameter: CGFloat = 230.0
-        let originAmplitudeRange: Range<Float> = 0.0..<Float(originAmplitudeDiameter / 2.0)
+            // 重力 + 自旋
+            cell.yAcceleration = 110
+            cell.xAcceleration = 0
+            cell.spin = 0
+            cell.spinRange = 8.0  // 每秒 ±8 rad/s
 
-        let sideTypes: [Int] = [0, 1, 2]
-
-        for sideIndex in 0..<2 {
-            let sideSign: Float = sideIndex == 0 ? 1.0 : -1.0
-            let baseOriginX: CGFloat = sideIndex == 0
-                ? -originAmplitudeDiameter / 2.0
-                : (frameWidth + originAmplitudeDiameter / 2.0)
-
-            for i in 0..<80 {
-                let originAngle = Float.random(in: originAngleRange)
-                let originAmplitude = Float.random(in: originAmplitudeRange)
-                let originX = baseOriginX + CGFloat(cosf(originAngle) * originAmplitude)
-                let originY = CGFloat(sideOriginYBase + sinf(originAngle) * originAmplitude)
-
-                let velocityValue = Float.random(in: sideOriginVelocityValueRange) * sideOriginVelocityValueScaling
-                let velocityAngle = Float.random(in: sideOriginVelocityAngleRange)
-                let velocityX = sideSign * velocityValue * sinf(velocityAngle)
-                let velocityY = velocityValue * cosf(velocityAngle)
-                let (image, size) = images[i % imageCount]
-                let sizeScale = CGFloat(Float.random(in: sizeVariation))
-                let particle = CVParticleLayer(
-                    image: image,
-                    size: CGSize(width: size.width * sizeScale, height: size.height * sizeScale),
-                    position: CGPoint(x: originX, y: originY),
-                    mass: Float.random(in: sideMassRange),
-                    velocity: CVVector2(x: velocityX, y: velocityY),
-                    angularVelocity: Float.random(in: angularVelocityRange),
-                    type: sideTypes[i % 3]
-                )
-                self.particles.append(particle)
-                self.layer.addSublayer(particle)
-            }
+            // 大小 + 透明度衰减
+            cell.scale = 0.6
+            cell.scaleRange = 0.2
+            cell.scaleSpeed = -0.04
+            cell.alphaSpeed = -0.18
+            return cell
         }
     }
 
-    // MARK: - Display link
+    // MARK: - Default strip texture
 
-    private func startDisplayLink() {
-        self.previousTimestamp = CACurrentMediaTime()
-        let link = CADisplayLink(target: self, selector: #selector(onDisplayLink))
-        link.add(to: .main, forMode: .common)
-        self.displayLink = link
-    }
-
-    @objc private func onDisplayLink() {
-        let now = CACurrentMediaTime()
-        let dt = now - self.previousTimestamp
-        self.previousTimestamp = now
-        self.step(dt: dt)
-    }
-
-    // MARK: - Physics step (来自 Telegram ConfettiView.step)
-
-    private func step(dt: Double) {
-        let dt = Float(dt)
-        self.slowdownStartTimestamps[0] = 0.33
-
-        var haveParticlesAboveGround = false
-        let maxPositionY = self.bounds.height + 30.0
-
-        let typeDelays: [Float] = [0.0, 0.01, 0.08]
-        var dtAndDamping: [(Float, Float)] = []
-
-        for i in 0..<3 {
-            let typeDelay = typeDelays[i]
-            let currentTime = self.localTime - typeDelay
-            if currentTime < 0.0 {
-                dtAndDamping.append((0.0, 1.0))
-            } else if let slowdownStart = self.slowdownStartTimestamps[i] {
-                let slowdownDt: Float
-                let slowdownDuration: Float = 0.7
-                let damping: Float
-                if currentTime >= slowdownStart && currentTime <= slowdownStart + slowdownDuration {
-                    let slowdownTimestamp: Float = currentTime - slowdownStart
-                    let slowdownRampInDuration: Float = 0.05
-                    let slowdownRampOutDuration: Float = 0.2
-                    let rawSlowdownT: Float
-                    if slowdownTimestamp < slowdownRampInDuration {
-                        rawSlowdownT = slowdownTimestamp / slowdownRampInDuration
-                    } else if slowdownTimestamp >= slowdownDuration - slowdownRampOutDuration {
-                        let reverseTransition = (slowdownTimestamp - (slowdownDuration - slowdownRampOutDuration)) / slowdownRampOutDuration
-                        rawSlowdownT = 1.0 - reverseTransition
-                    } else {
-                        rawSlowdownT = 1.0
-                    }
-                    let slowdownTransition = rawSlowdownT * rawSlowdownT
-                    let slowdownFactor: Float = 0.8 * slowdownTransition + 1.0 * (1.0 - slowdownTransition)
-                    slowdownDt = dt * slowdownFactor
-                    let dampingFactor: Float = 0.937 * slowdownTransition + 1.0 * (1.0 - slowdownTransition)
-                    damping = dampingFactor
-                } else {
-                    slowdownDt = dt
-                    damping = 1.0
-                }
-                dtAndDamping.append((slowdownDt, damping))
-            } else {
-                dtAndDamping.append((dt, 1.0))
-            }
-        }
-        self.localTime += dt
-
-        let g = CVVector2(x: 0.0, y: 9.8)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        var turbulenceVariation: [Float] = []
-        for _ in 0..<20 {
-            turbulenceVariation.append(Float.random(in: -16.0..<16.0) * 60.0)
-        }
-        let turbulenceVariationCount = turbulenceVariation.count
-        var index = 0
-
-        var typesWithPositiveVelocity: [Bool] = [false, false, false]
-
-        for particle in self.particles {
-            let (localDt, _) = dtAndDamping[particle.type]
-            if localDt.isZero {
-                continue
-            }
-            let damping: Float = 0.93
-
-            particle.localTime += localDt
-
-            var position = particle.position
-            position.x += CGFloat(particle.velocity.x * localDt)
-            position.y += CGFloat(particle.velocity.y * localDt)
-            particle.position = position
-
-            particle.rotationAngle += particle.angularVelocity * localDt
-            particle.transform = CATransform3DMakeRotation(CGFloat(particle.rotationAngle), 0.0, 0.0, 1.0)
-
-            let acceleration = g
-            var velocity = particle.velocity
-            velocity.x += acceleration.x * particle.mass * localDt
-            velocity.y += acceleration.y * particle.mass * localDt
-            if velocity.y < 0.0 {
-                velocity.x *= damping
-                velocity.y *= damping
-            } else {
-                velocity.x += turbulenceVariation[index % turbulenceVariationCount] * localDt
-                typesWithPositiveVelocity[particle.type] = true
-            }
-            particle.velocity = velocity
-
-            index += 1
-
-            if position.y < maxPositionY {
-                haveParticlesAboveGround = true
-            }
-        }
-        for i in 0..<3 {
-            if typesWithPositiveVelocity[i] && self.slowdownStartTimestamps[i] == nil {
-                self.slowdownStartTimestamps[i] = max(0.0, self.localTime - typeDelays[i])
-            }
-        }
-        CATransaction.commit()
-        if !haveParticlesAboveGround {
-            self.displayLink?.invalidate()
-            self.displayLink = nil
-            self.removeFromSuperview()
-        }
-    }
-
-    // MARK: - Image helpers (self-contained, 不依赖 TelegramUtils)
-
-    private static func filledCircleImage(diameter: CGFloat, color: UIColor) -> UIImage? {
-        let size = CGSize(width: diameter, height: diameter)
+    /// 8×16 的小矩形纸屑纹理 —— 模拟真实纸屑长条形。带圆角让边缘柔和。
+    private static func defaultStripImage(color: UIColor) -> UIImage {
+        let size = CGSize(width: 8, height: 16)
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { ctx in
-            ctx.cgContext.setFillColor(color.cgColor)
-            ctx.cgContext.fillEllipse(in: CGRect(origin: .zero, size: size))
-        }
-    }
-
-    private static func stripeImage(size: CGSize, color: UIColor) -> UIImage? {
-        let renderer = UIGraphicsImageRenderer(size: size)
-        return renderer.image { ctx in
-            let c = ctx.cgContext
-            c.setFillColor(color.cgColor)
-            c.fillEllipse(in: CGRect(x: 0, y: 0, width: size.width, height: size.width))
-            c.fillEllipse(in: CGRect(x: 0, y: size.height - size.width, width: size.width, height: size.width))
-            c.fill(CGRect(x: 0, y: size.width / 2.0, width: size.width, height: size.height - size.width))
-        }
-    }
-
-    private static func tintedImage(_ image: UIImage, color: UIColor) -> UIImage? {
-        let renderer = UIGraphicsImageRenderer(size: image.size)
-        return renderer.image { ctx in
-            let rect = CGRect(origin: .zero, size: image.size)
-            let c = ctx.cgContext
-            image.draw(in: rect)
-            c.setBlendMode(.sourceIn)
-            c.setFillColor(color.cgColor)
-            c.fill(rect)
+            let cg = ctx.cgContext
+            cg.setFillColor(color.cgColor)
+            let path = UIBezierPath(
+                roundedRect: CGRect(origin: .zero, size: size),
+                cornerRadius: 1.5
+            )
+            path.fill()
         }
     }
 }
