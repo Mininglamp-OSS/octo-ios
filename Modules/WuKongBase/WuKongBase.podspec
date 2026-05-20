@@ -89,8 +89,21 @@ TODO: Add long description of the pod here.
     s.vendored_frameworks = 'WuKongBase/Bugly.framework'
     bugly_will_be_used = true
   else
-    octo_config_path = File.expand_path('../../OctoConfig.xcconfig', __dir__)
-    if File.exist?(octo_config_path)
+    # 从 podspec 所在目录向上找 OctoConfig.xcconfig — 比固定 '../../' 更健壮，
+    # 兼容非标准 :path => 用法 (PR #125 round 5 review 🟡)
+    octo_config_path = nil
+    dir = __dir__
+    loop do
+      candidate = File.join(dir, 'OctoConfig.xcconfig')
+      if File.exist?(candidate)
+        octo_config_path = candidate
+        break
+      end
+      parent = File.expand_path('..', dir)
+      break if parent == dir   # 到根了
+      dir = parent
+    end
+    if octo_config_path
       bugly_app_id = ''
       File.foreach(octo_config_path) do |line|
         if line.strip =~ /^OCTO_BUGLY_APP_ID_MAIN\s*=\s*(.+)$/
@@ -143,12 +156,10 @@ TODO: Add long description of the pod here.
   s.dependency 'libcmark_gfm'
   s.dependency 'iosMath', '~> 0.9'  # LaTeX 数学公式渲染（纯 OC + CoreText，无 WebView）
   s.dependency 'RiveRuntime', '~> 6.11'
-  # 🎉/🎊 表情礼花动画 — 引入 2 个 MIT 候选，运行时由 WKConfettiView
-  # 内的 Backend 枚举决定用哪个；选定后可移除另一个。
-  # (SAConfettiView 评估过但其 pod 2016 年版本是 Swift 2/3 代码，在新 Swift
-  # 下编译不过 — 已淘汰。)
-  s.dependency 'SPConfetti', '~> 1.4'             # MIT, ivanvorobei
-  s.dependency 'SwiftConfettiView', '~> 2.0'      # MIT, ugurethemaydin (含 burst/depth)
+  # 🎉/🎊 表情礼花动画 — 仅 SwiftConfettiView 一项；保留它主要是为了复用
+  # pod 自带的 confetti.mp3 资产（爆裂声），粒子系统是 WKConfettiView 自写
+  # CAEmitterLayer，不走该库的粒子实现。
+  s.dependency 'SwiftConfettiView', '~> 2.0'      # MIT, ugurethemaydin
   # Bugly 启用时（s.dependency 'Bugly' 或本地 vendored_frameworks），WuKongBase
   # 自身也必须 link Bugly 才能解析 _OBJC_CLASS_$_Bugly 等符号；CocoaPods 对
   # static_framework + 跨 pod 依赖的自动 link 不到位，这里显式加。

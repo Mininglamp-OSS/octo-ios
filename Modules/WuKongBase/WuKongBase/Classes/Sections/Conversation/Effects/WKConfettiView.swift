@@ -3,46 +3,38 @@
 //
 // WKConfettiView
 // --------------
-// 🎉 / 🎊 表情触发的彩纸礼花效果。本类是 thin wrapper —— 同时支持 2 个
-// 第三方 MIT 库，运行时由 `Backend.current` 常量选择哪个，方便目视对比
-// 哪种风格更符合产品观感。
+// 🎉 / 🎊 表情触发的彩纸礼花效果。
 //
-// 切换方式：改 `Backend.current` 这一个常量后 rebuild。
+// 视觉链路：
+//   1. 自绘"半透明红色彩纸球 + 顶部 🎀 蝴蝶结 + 金色飘带"（详见
+//      makeConfettiBall）
+//   2. drop-in → 蓄势 → 爆开（闪光 + 冲击环 + 球身淡出）
+//   3. 自写 CAEmitterLayer 瞬发 ~120 片混合形状（矩形 / 星 / 三角）粒子，
+//      初始 360° 任意方向，重力随时间渐升 → 真实抛物线下落
+//   4. 同步播 confetti.mp3（爆裂声）+ cheer_short.m4a（全场欢呼）
 //
-// 两个候选（全部 MIT、CocoaPods 可用、新 Swift 能编）：
-//   .swiftConfettiView   2.0.0 (2026-02) — 含 burst / depth / 3D 感 / haptic / sound
-//                                          预设 .perfect = intense burst
-//   .spConfetti          1.4.0 (2022-01) — 简洁，4 种发射方向 + 6 种粒子
+// 公共 OC 调用面：init(frame:customImage:) / init(frame:)，上层
+// WKPartyEffect.m 零改动。
 //
-// 选定一种后，可以从 podspec 移掉另外一个 pod，并把 Backend 简化掉。
-//
-// 公共 OC 调用面保持 init(frame:customImage:) / init(frame:) 不变 —
-// 上层 WKPartyEffect.m 永远零改动。
-//
-// 各库 license / 致谢见 NOTICE。
+// 第三方资源：
+//   - SwiftConfettiView (MIT) — 仅复用其 pod bundle 里的 confetti.mp3
+//     爆裂声资产；粒子系统是本类自写 CAEmitterLayer，不走该库
+//   - cheer_short.m4a — CC0 公有领域 (Freesound.org #511788 by kinoton)，
+//     裁前 2.10s 编为 AAC m4a
+//   详见 NOTICE。
 
 import Foundation
 import UIKit
 import AVFoundation
-import SPConfetti
 import SwiftConfettiView
 
 @objc public final class WKConfettiView: UIView {
 
-    /// 当前选用的礼花库。改这一行 + rebuild 即可换风格。
-    private enum Backend {
-        case swiftConfettiView
-        case spConfetti
-
-        static let current: Backend = .swiftConfettiView   // ← 切这里
-    }
-
     private let customImage: UIImage?
     private var didStart = false
 
-    // SwiftConfettiView 已不再被 .swiftConfettiView backend 使用 —— 现在 startSwiftConfetti()
-    // 走自写 CAEmitterLayer（见下方）以满足"瞬发 + 真物理"。SwiftConfettiView 的 pod 与
-    // import 暂时保留，待最终选定方案后可在 podspec / 本文件一并清掉。
+    // 自写 CAEmitterLayer 瞬发 + 重力渐升 = 真物理下落（不依赖 SwiftConfettiView
+    // 库的粒子系统，仅复用其 confetti.mp3 资产做爆裂声）
     private var customBurstEmitter: CAEmitterLayer?
     private var burstAudioPlayer: AVAudioPlayer?
     private var cheerAudioPlayer: AVAudioPlayer?
@@ -71,31 +63,15 @@ import SwiftConfettiView
         isUserInteractionEnabled = false
     }
 
-    // MARK: - Lifecycle dispatch
+    // MARK: - Lifecycle
 
     public override func didMoveToSuperview() {
         super.didMoveToSuperview()
-        guard superview != nil, !didStart else {
-            if superview == nil, didStart { stop() }
-            return
-        }
-        didStart = true
-        start()
-    }
-
-    private func start() {
-        switch Backend.current {
-        case .swiftConfettiView: startSwiftConfetti()
-        case .spConfetti:        startSPConfetti()
-        }
-    }
-
-    private func stop() {
-        switch Backend.current {
-        case .swiftConfettiView:
+        if superview != nil, !didStart {
+            didStart = true
+            startConfettiBurst()
+        } else if superview == nil, didStart {
             customBurstEmitter?.birthRate = 0
-        case .spConfetti:
-            SPConfetti.stopAnimating()
         }
     }
 
@@ -125,7 +101,7 @@ import SwiftConfettiView
     //   t=0.43–~5 已发射粒子继续物理演化：初始飞行 → 重力接管 → 抛物线 → 下落
     //   t=6.5    layer 整体清理
 
-    private func startSwiftConfetti() {
+    private func startConfettiBurst() {
         let ballDiameter: CGFloat = 64
         let topInset = max(safeAreaInsets.top + 30, 80)
         let ballCenter = CGPoint(x: bounds.midX, y: bounds.minY + topInset)
@@ -715,15 +691,5 @@ import SwiftConfettiView
         UIColor(red: 0.95, green: 0.85, blue: 0.20, alpha: 1.0), // 金
         UIColor(red: 0.97, green: 0.27, blue: 0.36, alpha: 1.0), // 粉红
     ]
-
-    // MARK: - SPConfetti 1.4.0
-
-    private func startSPConfetti() {
-        SPConfetti.startAnimating(
-            .fullWidthToDown,
-            particles: [.triangle, .arc, .polygon, .star],
-            duration: 6.0
-        )
-    }
 }
 

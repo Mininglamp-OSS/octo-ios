@@ -89,19 +89,27 @@ post_install do |installer|
             config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = defs
         end
     end
-    # 也给主 App target (OctoiOS) 注入相同的宏
-    user_project_for_bugly = installer.aggregate_targets[0].user_project
-    user_project_for_bugly.targets.each do |target|
-        next unless target.name == 'OctoiOS'
-        target.build_configurations.each do |config|
-            defs = Array(config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'])
-            defs = ['$(inherited)'] if defs.empty?
-            defs.reject! { |d| d == 'OCTO_ENABLE_BUGLY=1' }
-            defs << 'OCTO_ENABLE_BUGLY=1' if bugly_enabled
-            config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = defs
+    # 主 App target (OctoiOS) 的 OCTO_ENABLE_BUGLY=1 宏：注入到 Pods 聚合
+    # xcconfig（每次 pod install 重新生成），不再写主工程的 pbxproj —— 那样
+    # 会让 pbxproj 永久带着这个宏，clean clone 没装 Bugly 就编译挂
+    # (PR #125 round 5 review 🟡)
+    aggregate_xcconfigs = Dir.glob(File.join(__dir__,
+        'Pods/Target Support Files/Pods-OctoiOSBase-OctoiOS/*.xcconfig'))
+    aggregate_xcconfigs.each do |xcconfig_path|
+        content = File.read(xcconfig_path)
+        # 先把可能残留的宏抹掉（无论开关状态，幂等）
+        content = content.gsub(/\s+OCTO_ENABLE_BUGLY=1\b/, '')
+        if bugly_enabled
+            if content =~ /^GCC_PREPROCESSOR_DEFINITIONS\s*=\s*(.*)$/
+                content = content.sub(/^GCC_PREPROCESSOR_DEFINITIONS\s*=\s*(.*)$/) do
+                    "GCC_PREPROCESSOR_DEFINITIONS = #{$1.rstrip} OCTO_ENABLE_BUGLY=1"
+                end
+            else
+                content += "\nGCC_PREPROCESSOR_DEFINITIONS = $(inherited) OCTO_ENABLE_BUGLY=1\n"
+            end
         end
+        File.write(xcconfig_path, content)
     end
-    user_project_for_bugly.save
 
     # 把 OctoConfig.xcconfig 软引用注入到每一个 Pods xcconfig。
     # 路径深度：xcconfig 位于 Pods/Target Support Files/<Pod>/<Pod>.<config>.xcconfig，

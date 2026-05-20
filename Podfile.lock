@@ -90,7 +90,6 @@ PODS:
   - Socket.IO-Client-Swift (16.1.1):
     - Starscream (~> 4.0.8)
   - SocketRocket (0.7.1)
-  - SPConfetti (1.4.0)
   - SQLCipher (4.10.0):
     - SQLCipher/standard (= 4.10.0)
   - SQLCipher/common (4.10.0)
@@ -127,7 +126,6 @@ PODS:
     - SDWebImage (~> 5.9.1)
     - SDWebImageLottieCoder (~> 0.1.0)
     - SDWebImageWebPCoder (~> 0.6.1)
-    - SPConfetti (~> 1.4)
     - SwiftConfettiView (~> 2.0)
     - Toast (~> 4.0)
     - TOCropViewController (~> 2.5.3)
@@ -221,7 +219,6 @@ SPEC REPOS:
     - SDWebImageWebPCoder
     - Socket.IO-Client-Swift
     - SocketRocket
-    - SPConfetti
     - SQLCipher
     - SSZipArchive
     - Starscream
@@ -297,7 +294,6 @@ SPEC CHECKSUMS:
   SDWebImageWebPCoder: d0dac55073088d24b2ac1b191a71a8f8d0adac21
   Socket.IO-Client-Swift: 3614bea82ba005df1c2ff01154f4004993e05ad7
   SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
-  SPConfetti: 4ba720ff652d960f59c3e4eadee2c0c3ef6ce9a4
   SQLCipher: eb79c64049cb002b4e9fcb30edb7979bf4706dfc
   SSZipArchive: 62d4947b08730e4cda640473b0066d209ff033c9
   Starscream: 19b5533ddb925208db698f0ac508a100b884a1b9
@@ -305,7 +301,7 @@ SPEC CHECKSUMS:
   Toast: 1f5ea13423a1e6674c4abdac5be53587ae481c4e
   TOCropViewController: da59f531f8ac8a94ef6d6c0fc34009350f9e8bfe
   TZImagePickerController: 2cad3db94ba70eb947d26c10ff5c66c9a93798c8
-  WuKongBase: 636105f2ec1196eff01503d97544469420a992af
+  WuKongBase: cb8e24dcf4a298604c389f81c07ba8a97998be66
   WuKongContacts: 8d67498a5c219c1f6520bd81224ef55d836f63a6
   WuKongDataSource: b9089cb962310af96af523032df4534e272cd932
   WuKongIMSDK: b3905b92aa9eb313052c8b2d88271494ac7293a6
@@ -315,6 +311,6 @@ SPEC CHECKSUMS:
   ZLImageEditor: ee86f044fb7c5dec6b5de49eb7bb6fd42286f2ae
   ZLPhotoBrowser: 6fb0eff03c8269001e29ef233e7bdab0691e05fe
 
-PODFILE CHECKSUM: 85b306a1ca6b7a5e5a6ec02dc25d083c0614b2e7
+PODFILE CHECKSUM: dbc6b4bdea0d233ae82f7eae5ab4330248663e81
 
 COCOAPODS: 1.16.2

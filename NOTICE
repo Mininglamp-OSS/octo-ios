@@ -110,17 +110,13 @@ Bundled Third-Party Components
   [REMOVED with TelegramUtils] nanosvg zlib            仅在 TelegramUtils/Svg/ 内部使用，
                                                   随 TelegramUtils 一并移除。
 
-  [x]   SPConfetti                    MIT             用于 🎉 / 🎊 表情礼花效果（候选 1）。
-                                                  上游：https://github.com/ivanvorobei/SPConfetti
-                                                  Copyright (c) 2021 Ivan Vorobei
-                                                  通过 CocoaPods 依赖（~> 1.4）。
-
-  [x]   SwiftConfettiView             MIT             用于 🎉 / 🎊 表情礼花效果（候选 2）。
+  [x]   SwiftConfettiView             MIT             用于 🎉 / 🎊 表情礼花效果。
                                                   上游：https://github.com/ugurethemaydin/SwiftConfettiView
                                                   Copyright (c) Uğur Ethem Aydın
                                                   通过 CocoaPods 依赖（~> 2.0）。
-                                                  消费方 WKConfettiView.swift 在两库之间切换，
-                                                  选定后会移除另一个 pod。
+                                                  消费方 WKConfettiView.swift 仅复用其 pod
+                                                  自带的 confetti.mp3 爆裂声资产；粒子系统
+                                                  是自写 CAEmitterLayer，不走该库的粒子。
 
   [x]   crowd-cheering-yahoo.wav       CC0             礼花爆开时的"全场欢呼"短音。
         (cheer_short.m4a)                              来源：https://freesound.org/s/511788/
