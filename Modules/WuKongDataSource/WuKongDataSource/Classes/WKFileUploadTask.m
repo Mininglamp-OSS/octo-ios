@@ -85,18 +85,55 @@
         ext = [ext substringFromIndex:1];
     }
     ext = ext.lowercaseString;
+    // 图片
     if ([ext isEqualToString:@"jpg"] || [ext isEqualToString:@"jpeg"]) return @"image/jpeg";
     if ([ext isEqualToString:@"png"]) return @"image/png";
     if ([ext isEqualToString:@"gif"]) return @"image/gif";
     if ([ext isEqualToString:@"webp"]) return @"image/webp";
     if ([ext isEqualToString:@"heic"]) return @"image/heic";
+    if ([ext isEqualToString:@"bmp"]) return @"image/bmp";
+    if ([ext isEqualToString:@"svg"]) return @"image/svg+xml";
+    // 视频
     if ([ext isEqualToString:@"mp4"]) return @"video/mp4";
     if ([ext isEqualToString:@"mov"]) return @"video/quicktime";
+    if ([ext isEqualToString:@"m4v"]) return @"video/x-m4v";
+    if ([ext isEqualToString:@"avi"]) return @"video/x-msvideo";
+    if ([ext isEqualToString:@"mkv"]) return @"video/x-matroska";
+    if ([ext isEqualToString:@"webm"]) return @"video/webm";
+    // 音频
     if ([ext isEqualToString:@"amr"]) return @"audio/amr";
     if ([ext isEqualToString:@"m4a"]) return @"audio/mp4";
     if ([ext isEqualToString:@"mp3"]) return @"audio/mpeg";
     if ([ext isEqualToString:@"wav"]) return @"audio/wav";
+    if ([ext isEqualToString:@"aac"]) return @"audio/aac";
+    if ([ext isEqualToString:@"flac"]) return @"audio/flac";
+    if ([ext isEqualToString:@"ogg"]) return @"audio/ogg";
+    // 文档 — Office
+    if ([ext isEqualToString:@"doc"]) return @"application/msword";
+    if ([ext isEqualToString:@"docx"]) return @"application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    if ([ext isEqualToString:@"xls"]) return @"application/vnd.ms-excel";
+    if ([ext isEqualToString:@"xlsx"]) return @"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    if ([ext isEqualToString:@"ppt"]) return @"application/vnd.ms-powerpoint";
+    if ([ext isEqualToString:@"pptx"]) return @"application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    // 文档 — 其他
     if ([ext isEqualToString:@"pdf"]) return @"application/pdf";
+    if ([ext isEqualToString:@"rtf"]) return @"application/rtf";
+    if ([ext isEqualToString:@"epub"]) return @"application/epub+zip";
+    // 文本
+    if ([ext isEqualToString:@"txt"]) return @"text/plain";
+    if ([ext isEqualToString:@"md"] || [ext isEqualToString:@"markdown"]) return @"text/markdown";
+    if ([ext isEqualToString:@"csv"]) return @"text/csv";
+    if ([ext isEqualToString:@"html"] || [ext isEqualToString:@"htm"]) return @"text/html";
+    if ([ext isEqualToString:@"xml"]) return @"application/xml";
+    if ([ext isEqualToString:@"json"]) return @"application/json";
+    if ([ext isEqualToString:@"log"]) return @"text/plain";
+    // 压缩包
+    if ([ext isEqualToString:@"zip"]) return @"application/zip";
+    if ([ext isEqualToString:@"rar"]) return @"application/vnd.rar";
+    if ([ext isEqualToString:@"7z"]) return @"application/x-7z-compressed";
+    if ([ext isEqualToString:@"tar"]) return @"application/x-tar";
+    if ([ext isEqualToString:@"gz"] || [ext isEqualToString:@"gzip"]) return @"application/gzip";
+    if ([ext isEqualToString:@"bz2"]) return @"application/x-bzip2";
     return @"application/octet-stream";
 }
 
