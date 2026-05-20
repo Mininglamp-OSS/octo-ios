@@ -115,6 +115,7 @@ TODO: Add long description of the pod here.
   s.dependency 'libcmark_gfm'
   s.dependency 'iosMath', '~> 0.9'  # LaTeX 数学公式渲染（纯 OC + CoreText，无 WebView）
   s.dependency 'RiveRuntime', '~> 6.11'
+  s.dependency 'SPConfetti', '~> 1.4'  # 🎉/🎊 表情礼花动画，MIT (ivanvorobei)
   s.pod_target_xcconfig = {
     'SWIFT_INCLUDE_PATHS' => '$(inherited)'
   }

@@ -110,6 +110,15 @@ Bundled Third-Party Components
   [REMOVED with TelegramUtils] nanosvg zlib            仅在 TelegramUtils/Svg/ 内部使用，
                                                   随 TelegramUtils 一并移除。
 
+  [x]   SPConfetti                    MIT             用于 🎉 / 🎊 表情礼花效果。
+                                                  上游：https://github.com/ivanvorobei/SPConfetti
+                                                  Copyright (c) 2021 Ivan Vorobei
+                                                  通过 CocoaPods 依赖（~> 1.4）。消费方：
+                                                  WuKongBase/.../Effects/WKConfettiView.swift
+                                                  对外保持原 OC 调用面 (initWithFrame:customImage:)，
+                                                  内部走 SPConfetti.startAnimating(...)。
+                                                  替代了原先派生自 Telegram-iOS GPL 的实现。
+
 
 --------------------------------------------------------------------------------
 其他通过 CocoaPods 引入的依赖
