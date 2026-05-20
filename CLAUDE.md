@@ -15,33 +15,28 @@
 已知历史包袱（不要再往里加东西，优先逐步迁出）:
 
 - `Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/` ——
-  **GPL v2 代码**。原本作为消息 cell 长按出菜单核心的
-  `ContextGesture` / `ContextControllerSourceNode` /
-  `ContextExtractedContentContainingNode` / `TapLongTapOrDoubleTapGestureRecognizer`
-  四个文件已被 Octo 自实现替代，源码位于
-  `Modules/WuKongBase/WuKongBase/Classes/Sections/Common/MessageGesture/`
-  （`OctoContextGesture` / `OctoMessageGestureContainerNode` /
-  `OctoMessageContentContainingNode` / `OctoTapLongTapOrDoubleTapRecognizer`）。
-  cell 通过 `OctoMessageGestureContainerNode` 挂载手势，行为目标对齐：
-  beginDelay = 0.12s、左缘 8pt 让位给 interactivePop、
-  `shouldRecognizeSimultaneouslyWith UIPanGestureRecognizer = false` 不抢
-  tableview 的 pan。
-
-  **2026-05 整体瘦身**：深度审计后确认 Display + AppBundle + AnimatedCount* +
-  AnimatedNav* + UIKitRuntimeUtils + ObjCRuntimeUtils + SwiftSignalKit 这套
-  7 子目录是一整套自我引用的死代码（0 外部消费方、0 动态查找），单 PR 整体
-  `git rm` + exclude_files 护栏一次下线。
-
-  **当前唯一仍在编译链的 GPL 文件**：`Markdown/`（被 `WKMarkdownParser.h/m` +
-  `WKMessageModel.m` 用）。下一个 PR 把 `WKMarkdownParser` 改成直接调
-  `libcmark_gfm`（已在 podspec 依赖里），即可清掉最后一处。
-
-  其它已 exclude 的 GPL 子目录：AnimatedStickerNode / ContextUI /
-  ReactionSelectionNode / TextSelectionNode / RadialStatusNode / ShimmerEffect /
-  GradientBackground / MetalImageView / MediaResources / LegacyComponents /
-  LiMaoMock / AnimationCompression / TelegramAnimatedStickerNode / Utils / Svg /
-  YuvConversion / TelegramUIPreferences / Others / ManagedFile / GZip。
-  **任何新代码禁止 import TelegramUtils 下的符号**。
+  **2026-05 已整体物理删除**（GPL v2，原 25 个子目录 / 270+ 文件）。
+  替代方案：
+  - 长按出菜单：`ContextGesture` / `ContextControllerSourceNode` /
+    `ContextExtractedContentContainingNode` / `TapLongTapOrDoubleTapGestureRecognizer`
+    → `Sections/Common/MessageGesture/` 下 Octo 自实现
+    （`OctoContextGesture` / `OctoMessageGestureContainerNode` /
+    `OctoMessageContentContainingNode` / `OctoTapLongTapOrDoubleTapRecognizer`）。
+    行为目标对齐：beginDelay = 0.12s、左缘 8pt 让位给 interactivePop、
+    `shouldRecognizeSimultaneouslyWith UIPanGestureRecognizer = false` 不抢
+    tableview 的 pan。
+  - 贴纸 shimmer：`StickerShimmerEffectNode`
+    → `Sections/Common/Component/WKShimmerView`。
+  - 其余 (Display / SwiftSignalKit / UIKitRuntimeUtils / ObjCRuntimeUtils /
+    AppBundle / AnimatedCount* / AnimatedNav* / Markdown / Utils / Svg /
+    YuvConversion / TelegramUIPreferences / Others / ManagedFile / GZip /
+    ContextUI / ReactionSelectionNode / TextSelectionNode / RadialStatusNode /
+    GradientBackground / MetalImageView / MediaResources / LegacyComponents /
+    LiMaoMock / AnimationCompression / AnimatedStickerNode /
+    TelegramAnimatedStickerNode)：深度审计后确认全部 0 外部消费方 +
+    0 动态查找，是历史死代码，直接 git rm 移除。
+  
+  **任何新代码禁止 import 不存在的 TelegramUtils 符号**。
 
 - `Modules/WuKongBase/WuKongBase/Classes/Vendor/SoundTouch/` ——
   **LGPL v2.1，已在 P5 从编译链中排除**（podspec `exclude_files`）。

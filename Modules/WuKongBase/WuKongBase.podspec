@@ -42,51 +42,16 @@ TODO: Add long description of the pod here.
  
   s.private_header_files = 'WuKongBase/Classes/Vendor/**/*'
   s.source_files = 'WuKongBase/Classes/**/*'
-  # 排除许可证不兼容或已替换的代码：
+  # 排除许可证不兼容的代码：
   # - SoundTouch (LGPL v2.1) — 已用 no-op stub 替换变声功能
-  # - TelegramUtils (GPL v2) — cell 端长按出菜单已被 Octo 自实现替代
-  #   (Sections/Common/MessageGesture/)；深度审计后确认整个 Display 子树
-  #   + 它的支撑层 (AppBundle / AnimatedCount* / AnimatedNav* / UIKit*Utils /
-  #   ObjC*Utils / SwiftSignalKit) 全部 0 外部消费方、0 动态查找，是一整套
-  #   自我引用的死代码，本次单 PR 整体下线。
-  #
-  #   仍在编译链里的 GPL 残留只剩 Markdown（被 WKMarkdownParser 用），
-  #   下个 PR 把 WKMarkdownParser 改成直接调 libcmark_gfm 后即可清掉。
+  # - TelegramUtils (GPL v2) — 已于 2026-05 整体物理移除，cell 端长按出菜单
+  #   由 Sections/Common/MessageGesture/ 下的 Octo 自实现接管，
+  #   StickerShimmerEffectNode 由 Sections/Common/Component/WKShimmerView 替代。
+  #   仓库内已无 TelegramUtils 目录，下方 exclude_files 不再需要 TelegramUtils
+  #   相关条目。
   s.exclude_files = [
     'WuKongBase/Classes/Vendor/SoundTouch/**/*',
     'WuKongBase/Classes/Vendor/LegacyComponents/**/*',
-    # TelegramUtils 排除：依赖已断链子目录（librlottie / ContextUI / POP / 其他）
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/AnimatedStickerNode/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/TelegramAnimatedStickerNode/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/AnimationCompression/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/LiMaoMock/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/ReactionSelectionNode/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/ContextUI/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/TextSelectionNode/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/LegacyComponents/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/RadialStatusNode/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/ShimmerEffect/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/GradientBackground/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/MetalImageView/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/MediaResources/**/*',
-    # PR-A
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/Utils/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/Svg/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/YuvConversion/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/TelegramUIPreferences/**/*',
-    # PR-B
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/Others/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/ManagedFile/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/GZip/**/*',
-    # PR-C 整套死代码群一次下线（深度审计：0 外部消费 + 0 动态查找）
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/Display/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/AppBundle/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/AnimatedCountLabelNode/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/AnimatedNavigationStripeNode/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/UIKitRuntimeUtils/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/ObjCRuntimeUtils/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/SwiftSignalKit/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/Markdown/**/*',
   ]
 #  s.preserve_paths = 'ios/arm/*.{a}'
 #   s.vendored_frameworks  = 'ios/WuKongIMSDK.framework'
