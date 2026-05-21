@@ -488,36 +488,20 @@
     }
     self.lastAvatarChannelId = channelId;
 
-    // 最近 tab 的子区行：用父群头像 + 右下角 hash 角标的复合样式（参考 web）。
+    // 最近 tab 的子区行：右下角 hash 角标（参考 web）。头像本身不再 override —
+    // 服务端在子区 channelInfo.logo 里通常已经填了父群头像 URL，原有 hasChannelInfo
+    // 分支能正确加载；之前手动查父群结果父群没缓存就回退占位图，反而把原本能显示
+    // 的群头像盖掉。这里只负责显示 overlay，URL 加载交给下面的通用逻辑。
     BOOL isThreadInRecent = self.recentTabContext
                           && model.channel.channelType == WK_COMMUNITY_TOPIC;
     if (isThreadInRecent) {
-        WKChannel *parent = [self resolveParentGroupChannelForThread:model];
-        if (parent && parent.channelId.length > 0) {
-            // 父群 channelInfo 解析：先走 VM wrap 的 lazy-load 路径（命中 c.channelInfo
-            // 反向引用），再退回 channelManager 的内存缓存；都拿不到就触发 fetch，等
-            // channelInfoUpdate 回调时由 VC 把子区行 reload。
-            WKChannelInfo *parentInfo = [self lookupParentChannelInfo:parent];
-            NSString *avatarURL = nil;
-            if (parentInfo.logo.length > 0 && [parentInfo.logo hasPrefix:@"http"]) {
-                NSString *key = (parentInfo.avatarCacheKey.length > 0) ? parentInfo.avatarCacheKey : @"0";
-                NSString *separator = [parentInfo.logo containsString:@"?"] ? @"&" : @"?";
-                avatarURL = [NSString stringWithFormat:@"%@%@v=%@", parentInfo.logo, separator, key];
-            } else {
-                avatarURL = [WKAvatarUtil getGroupAvatar:parent.channelId cacheKey:parentInfo.avatarCacheKey];
-            }
-            [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL] placeholderImage:placeholder options:SDWebImageDelayPlaceholder context:@{
-                SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll),
-            }];
-        }
-        // 右下角 hash 角标：用子区详情页顶部的同一个 hash 图标
         UIImage *hashIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(18, 18)
                                                                               color:[WKApp shared].config.themeColor];
         self.threadAvatarOverlay.image = hashIcon;
         self.threadAvatarOverlay.hidden = NO;
-        return;
+    } else {
+        self.threadAvatarOverlay.hidden = YES;
     }
-    self.threadAvatarOverlay.hidden = YES;
 
     if([model.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
         NSString *avatarURL = hasChannelInfo ? [WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo] : nil;
@@ -534,6 +518,16 @@
             } else {
                 avatarURL = [WKAvatarUtil getGroupAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
             }
+        } else if (self.recentTabContext && model.channel.channelType == WK_COMMUNITY_TOPIC) {
+            // 最近 tab 的子区：直接用父群的头像 URL（getGroupAvatar 不要求 channelInfo
+            // 在手，仅 groupNo 就能拼）。比依赖 thread.channelInfo.logo 的服务端填充
+            // 更稳；overlay 单独叠在右下角即可。
+            WKChannel *parent = [self resolveParentGroupChannelForThread:model];
+            NSString *groupNo = parent.channelId ?: @"";
+            WKChannelInfo *parentInfo = [self lookupParentChannelInfo:parent];
+            avatarURL = [WKAvatarUtil getGroupAvatar:groupNo cacheKey:parentInfo.avatarCacheKey];
+            NSLog(@"[ThreadAvatar] thread=%@ parent=%@ parentInfoCached=%d avatarURL=%@",
+                  model.channel.channelId, groupNo, parentInfo != nil, avatarURL);
         } else {
             // 个人频道：和群频道一样，始终拼接 ?v=cacheKey
             NSString *key = (model.channelInfo.avatarCacheKey.length > 0) ? model.channelInfo.avatarCacheKey : @"0";
@@ -552,7 +546,24 @@
             SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll),
         }];
     } else {
-        self.avatarImgView.avatarImgView.image = placeholder;
+        if (self.recentTabContext && model.channel.channelType == WK_COMMUNITY_TOPIC) {
+            // 子区 channelInfo 还没加载到时，仍然用父群 URL 拼一发 — getGroupAvatar
+            // 不依赖 channelInfo，cacheKey 用 "0" 兜底也能命中已缓存的群头像。
+            WKChannel *parent = [self resolveParentGroupChannelForThread:model];
+            NSString *groupNo = parent.channelId ?: @"";
+            if (groupNo.length > 0) {
+                NSString *avatarURL = [WKAvatarUtil getGroupAvatar:groupNo cacheKey:nil];
+                NSLog(@"[ThreadAvatar][noChannelInfo] thread=%@ parent=%@ avatarURL=%@",
+                      model.channel.channelId, groupNo, avatarURL);
+                [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL] placeholderImage:placeholder options:SDWebImageDelayPlaceholder context:@{
+                    SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll),
+                }];
+            } else {
+                self.avatarImgView.avatarImgView.image = placeholder;
+            }
+        } else {
+            self.avatarImgView.avatarImgView.image = placeholder;
+        }
     }
 }
 
