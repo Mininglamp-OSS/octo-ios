@@ -121,7 +121,10 @@
 
 // 关注 tab 拖拽排序（方案 A）— 长按弹菜单后继续按住可拖动到其他分组
 @property(nonatomic,strong,nullable) UIView *cellDragSnapshot;
+@property(nonatomic,strong,nullable) UIView *cellDragInsertionLine; // 当前手指落点对应的"将插入到这里"指示
 @property(nonatomic,strong,nullable) NSIndexPath *cellDragSourceIndexPath;
+@property(nonatomic,strong,nullable) NSIndexPath *cellDragLastTargetPath; // 上次更新时落在的 target row
+@property(nonatomic,assign) BOOL cellDragLastInsertBelow;
 @property(nonatomic,assign) CGPoint cellDragStartLocation; // 在 self.view 坐标系
 @property(nonatomic,assign) BOOL cellDragInProgress;
 @property(nonatomic,copy,nullable) NSString *cellDragSourceConvName;
@@ -454,6 +457,8 @@
 
 -(void) viewDidDisappear:(BOOL)animated {
     [super viewDidDisappear:animated];
+    // 防 drag snapshot 卡在屏上：界面消失时强制清理
+    [self resetCellDragState];
     if(self.refreshTimer) {
         [self.refreshTimer invalidate];
         self.refreshTimer = nil;
@@ -1917,6 +1922,8 @@
 
     __weak typeof(self) weakSelf = self;
     _conversationTabView.onTabChanged = ^(NSInteger index) {
+        // 切 tab 前若正在拖动，强制清理 — 否则 snapshot 会卡在屏上
+        [weakSelf resetCellDragState];
         NSInteger oldIndex = weakSelf.conversationListVM.filterType;
         // 保存当前 tab 滚动位置
         if (oldIndex == WKConversationFilterFollow) {
@@ -2453,6 +2460,14 @@
     [self.view addSubview:snap];
     self.cellDragSnapshot = snap;
 
+    // 插入指示线：theme 色 2pt 横线，加在 tableView 上跟着滚动
+    UIView *line = [[UIView alloc] init];
+    line.backgroundColor = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+    line.layer.cornerRadius = 1;
+    line.hidden = YES;
+    [self.tableView addSubview:line];
+    self.cellDragInsertionLine = line;
+
     cell.alpha = 0.3; // 原 cell 半透明提示"正在被拖动"
 
     [self updateCellDragAtLocation:loc];
@@ -2473,20 +2488,49 @@
         CGFloat newY = MIN(maxY, self.tableView.contentOffset.y + 8);
         [self.tableView setContentOffset:CGPointMake(0, newY)];
     }
+    // 更新插入位置指示线
+    [self updateInsertionLineAtLocation:loc];
+}
+
+/// 把插入线放到目标行的上 / 下边缘。section header 一律落在 header 下方（即该分组开头）。
+/// 普通行按手指 Y 跟行中线的关系决定插入到上 / 下。
+- (void)updateInsertionLineAtLocation:(CGPoint)loc {
+    if (!self.cellDragInsertionLine) return;
+    CGPoint locInTable = [self.view convertPoint:loc toView:self.tableView];
+    NSIndexPath *path = [self.tableView indexPathForRowAtPoint:locInTable];
+    if (!path) {
+        self.cellDragInsertionLine.hidden = YES;
+        self.cellDragLastTargetPath = nil;
+        return;
+    }
+    CGRect rect = [self.tableView rectForRowAtIndexPath:path];
+    BOOL insertBelow;
+    WKConversationDisplayItem *it = (path.row < (NSInteger)self.groupDisplayList.count) ? self.groupDisplayList[path.row] : nil;
+    if (it.isSectionHeader) {
+        // 落在 section header 上 → 插到该分组最前
+        insertBelow = YES;
+    } else {
+        insertBelow = (locInTable.y - rect.origin.y) > rect.size.height / 2.0;
+    }
+    CGFloat lineY = insertBelow ? CGRectGetMaxY(rect) : CGRectGetMinY(rect);
+    CGFloat lineLeft = 15;
+    CGFloat lineRight = self.tableView.bounds.size.width - 15;
+    self.cellDragInsertionLine.frame = CGRectMake(lineLeft, lineY - 1, lineRight - lineLeft, 2);
+    self.cellDragInsertionLine.hidden = NO;
+    self.cellDragLastTargetPath = path;
+    self.cellDragLastInsertBelow = insertBelow;
 }
 
 - (void)endCellDragAtLocation:(CGPoint)loc model:(WKConversationWrapModel *)model {
-    NSIndexPath *targetPath = nil;
-    CGPoint locInTable = [self.view convertPoint:loc toView:self.tableView];
-    targetPath = [self.tableView indexPathForRowAtPoint:locInTable];
+    NSIndexPath *targetPath = self.cellDragLastTargetPath;
+    if (!targetPath) {
+        CGPoint locInTable = [self.view convertPoint:loc toView:self.tableView];
+        targetPath = [self.tableView indexPathForRowAtPoint:locInTable];
+    }
     if (!targetPath) {
         // 落到了空白处：找最接近的 row
-        CGFloat midY = locInTable.y;
-        if (midY < 0) targetPath = [NSIndexPath indexPathForRow:0 inSection:0];
-        else {
-            NSInteger lastRow = [self.tableView numberOfRowsInSection:0] - 1;
-            if (lastRow >= 0) targetPath = [NSIndexPath indexPathForRow:lastRow inSection:0];
-        }
+        NSInteger lastRow = [self.tableView numberOfRowsInSection:0] - 1;
+        if (lastRow >= 0) targetPath = [NSIndexPath indexPathForRow:lastRow inSection:0];
     }
 
     NSString *targetCategoryId = [self resolveTargetCategoryIdForRow:targetPath.row];
@@ -2543,6 +2587,8 @@
 - (void)cleanupCellDragSnapshot {
     [self.cellDragSnapshot removeFromSuperview];
     self.cellDragSnapshot = nil;
+    [self.cellDragInsertionLine removeFromSuperview];
+    self.cellDragInsertionLine = nil;
     // 还原所有 cell 的 alpha（被拖的 cell 改成 0.3）
     for (UITableViewCell *c in self.tableView.visibleCells) {
         if (c.alpha < 1.0) c.alpha = 1.0;
@@ -2554,6 +2600,7 @@
     self.cellDragInProgress = NO;
     self.cellDragSourceIndexPath = nil;
     self.cellDragSourceConvName = nil;
+    self.cellDragLastTargetPath = nil;
 }
 
 -(void) showConversationMenuForModel:(WKConversationWrapModel *)model atPoint:(CGPoint)point {

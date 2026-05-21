@@ -479,9 +479,45 @@ static WKConversationListVM *_instance;
         });
     }
     dispatch_group_notify(batchGroup, dispatch_get_main_queue(), ^{
+        // listThreads 拿到的子区也同步进 threadWrapModels —— 不然最近 tab 冷启动时
+        // SDK getConversationList 没返回子区，threadWrapModels 是空的，列表里看不到
+        // 任何子区行；用户必须发条子区消息触发 onConversationUpdate 才出来。
+        [self syncThreadWrapModelsFromCachedTopics];
         [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountBatchUpdated" object:nil];
         [[NSNotificationCenter defaultCenter] postNotificationName:WKThreadMessageCountUpdatedNotification object:nil];
     });
+}
+
+/// 把 listThreads 已发现的所有子区同步到 threadWrapModels（最近 tab 平铺渲染源）。
+/// 通过 [conversationManager getConversation:] 查找 SDK 缓存的 WKConversation，
+/// 没有的会向 SDK 注入一个最小占位会话，避免最近 tab 列表里直接漏掉这些子区。
+- (void)syncThreadWrapModelsFromCachedTopics {
+    NSMutableDictionary<NSString *, WKConversationWrapModel *> *byChannel = [NSMutableDictionary dictionary];
+    for (WKConversationWrapModel *m in self.threadWrapModels) {
+        if (m.channel.channelId) byChannel[m.channel.channelId] = m;
+    }
+    BOOL changed = NO;
+    // 遍历各群的 listThreads 结果（threadPreviews 已存在父群的 wrap 上）
+    for (WKConversationWrapModel *parent in self.conversationWrapModels) {
+        if (parent.channel.channelType != WK_GROUP) continue;
+        for (WKThreadModel *t in parent.threadPreviews) {
+            if (t.channelId.length == 0) continue;
+            if (byChannel[t.channelId]) continue; // 已有
+            WKChannel *threadChannel = [WKChannel channelID:t.channelId channelType:WK_COMMUNITY_TOPIC];
+            WKConversation *conv = [[WKSDK shared].conversationManager getConversation:threadChannel];
+            if (!conv) continue; // SDK 没有这个子区的本地会话，最近 tab 没法渲染（缺
+                                 // lastMessage / unread 等），等下一次 onConversationUpdate
+                                 // 路径再补 — 不强行合成空壳会话避免出现"假行"
+            byChannel[t.channelId] = [[WKConversationWrapModel alloc] initWithConversation:conv];
+            changed = YES;
+        }
+    }
+    if (changed) {
+        self.threadWrapModels = [byChannel.allValues copy];
+        if (self.filterType == WKConversationFilterRecent) {
+            [self rebuildFilteredList];
+        }
+    }
 }
 
 /// 用本地会话时间戳排序子区（解决服务端 updated_at 延迟导致首条消息排序不更新）
