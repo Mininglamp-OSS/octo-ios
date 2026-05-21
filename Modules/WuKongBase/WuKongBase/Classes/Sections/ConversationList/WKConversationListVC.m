@@ -19,6 +19,8 @@
 #import "WKCategoryReorderVC.h"
 #import "WKFollowedKeysStore.h"
 #import "WKFollowService.h"
+#import "WKThreadService.h"
+#import "WKThreadModel.h"
 #import <objc/runtime.h>
 #import <WuKongBase/WuKongBase.h>
 #import "WKResource.h"
@@ -2835,15 +2837,50 @@
     __weak typeof(self) weakSelf = self;
     NSString *catName = [self categoryNameById:categoryId];
     NSString *convName = [self displayNameForChannel:[WKChannel groupWithChannelID:groupNo]];
-    // 先 refollow（之前可能 unfollow 过），再 moveGroup 到目标分组
+    // 先 refollow（之前可能 unfollow 过），再 moveGroup 到目标分组，最后 cascade 把
+    // 群下所有子区也加到关注（用户希望"加群即加全部子区"，否则关注 tab 群下空空的）
     [[WKFollowService shared] refollowChannel:groupNo].then(^(id _) {
         return [[WKCategoryService shared] moveGroup:groupNo toCategoryId:categoryId];
     }).then(^(id _) {
-        [[WKFollowedKeysStore shared] reload];
-        [weakSelf loadCategories];
-        [weakSelf showFollowedToast:convName toCategory:catName];
+        [weakSelf cascadeFollowAllThreadsForGroup:groupNo onComplete:^{
+            [[WKFollowedKeysStore shared] reload];
+            [weakSelf loadCategories];
+            [weakSelf showFollowedToast:convName toCategory:catName];
+        }];
+        return (id)nil;
     }).catch(^(NSError *err) {
         [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
+    });
+}
+
+/// 把群下所有子区一并加到关注（用户在最近 tab → 添加到关注 时，期望群下所有子区
+/// 也跟着进同一个分组）。listThreads 拿全量子区，并行 followThread；任意子区失败
+/// 不影响其它，最终 onComplete 触发 reload + toast。
+- (void)cascadeFollowAllThreadsForGroup:(NSString *)groupNo onComplete:(void(^)(void))onComplete {
+    [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel *> *threads) {
+        if (threads.count == 0) {
+            if (onComplete) onComplete();
+            return (id)nil;
+        }
+        dispatch_group_t g = dispatch_group_create();
+        for (WKThreadModel *t in threads) {
+            if (t.channelId.length == 0) continue;
+            dispatch_group_enter(g);
+            [[WKFollowService shared] followThread:t.channelId].then(^(id _) {
+                dispatch_group_leave(g);
+                return (id)nil;
+            }).catch(^(NSError *e) {
+                NSLog(@"[FollowCascade] thread=%@ failed: %@", t.channelId, e);
+                dispatch_group_leave(g);
+            });
+        }
+        dispatch_group_notify(g, dispatch_get_main_queue(), ^{
+            if (onComplete) onComplete();
+        });
+        return (id)nil;
+    }).catch(^(NSError *e) {
+        NSLog(@"[FollowCascade] listThreads failed: %@", e);
+        if (onComplete) onComplete();
     });
 }
 
