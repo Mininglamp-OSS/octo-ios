@@ -18,6 +18,7 @@
 #import "WKCategorySectionCell.h"
 #import "WKCategoryReorderVC.h"
 #import "WKFollowedKeysStore.h"
+#import "WKFollowService.h"
 #import <objc/runtime.h>
 #import <WuKongBase/WuKongBase.h>
 #import "WKResource.h"
@@ -2329,6 +2330,31 @@
     __weak typeof(self) weakSelf = self;
     NSMutableArray<NSDictionary *> *menuItems = [NSMutableArray array];
 
+    BOOL isFollowTab = (_conversationListVM.filterType == WKConversationFilterFollow);
+
+    // 0. 关注 / 取消关注（参考 web PR #27 §4.1/§4.2）
+    //    最近 tab：基于 followedKeys 决定显示 "添加到关注" 还是 "取消关注"
+    //    关注 tab：默认 isFollowed=YES（这里就是它的产生路径），永远显示 "取消关注"
+    WKFollowTargetType targetType = [self followTargetTypeForChannel:model.channel];
+    if (targetType > 0) {
+        WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
+        BOOL isFollowed = isFollowTab
+                       || [store isFollowedWithType:targetType targetId:model.channel.channelId];
+        if (isFollowed) {
+            [menuItems addObject:@{
+                @"title": LLang(@"取消关注"),
+                @"icon": [WKConversationListVC iconUnfollow],
+                @"action": ^{ [weakSelf unfollowConversationModel:model]; }
+            }];
+        } else {
+            [menuItems addObject:@{
+                @"title": LLang(@"添加到关注"),
+                @"icon": [WKConversationListVC iconFollow],
+                @"action": ^{ [weakSelf showAddToFollowDialogForModel:model]; }
+            }];
+        }
+    }
+
     // 1. 关闭/打开通知
     NSString *muteTitle = model.mute ? LLang(@"打开通知") : LLang(@"关闭通知");
     [menuItems addObject:@{
@@ -2344,17 +2370,19 @@
         }
     }];
 
-    // 2. 置顶/取消置顶
-    NSString *stickTitle = model.stick ? LLang(@"取消置顶") : LLang(@"置顶");
-    [menuItems addObject:@{
-        @"title": stickTitle,
-        @"icon": [WKConversationListVC iconStick],
-        @"action": ^{
-            BOOL newStick = !model.stick;
-            [[WKChannelSettingManager shared] channel:model.channel stick:newStick];
-            [weakSelf applyOptimisticConversationUpdateForChannel:model.channel mute:nil stick:@(newStick)];
-        }
-    }];
+    // 2. 置顶/取消置顶（关注 tab 隐藏 — 手工排序替代置顶，对齐 web spec §0）
+    if (!isFollowTab) {
+        NSString *stickTitle = model.stick ? LLang(@"取消置顶") : LLang(@"置顶");
+        [menuItems addObject:@{
+            @"title": stickTitle,
+            @"icon": [WKConversationListVC iconStick],
+            @"action": ^{
+                BOOL newStick = !model.stick;
+                [[WKChannelSettingManager shared] channel:model.channel stick:newStick];
+                [weakSelf applyOptimisticConversationUpdateForChannel:model.channel mute:nil stick:@(newStick)];
+            }
+        }];
+    }
 
     // 3. 移动分组（仅群聊）
     if (model.channel.channelType == WK_GROUP) {
@@ -2450,6 +2478,192 @@
     }
 }
 
+#pragma mark - 关注 / 取消关注
+
+/// 把 iOS 的 channelType 映射到 web FollowService 的 target_type。
+/// 0 表示该 channelType 不参与 follow（系统通知/文件助手/社区等）。
+- (WKFollowTargetType)followTargetTypeForChannel:(WKChannel *)channel {
+    if (!channel || channel.channelId.length == 0) return 0;
+    switch (channel.channelType) {
+        case WK_PERSON: {
+            // 系统 bot / 文件助手 不允许加关注
+            NSString *cid = channel.channelId;
+            NSString *botFather = [WKApp shared].config.botfatherUID;
+            NSString *systemUID = [WKApp shared].config.systemUID;
+            NSString *fileHelperUID = [WKApp shared].config.fileHelperUID;
+            if ((botFather.length > 0 && [cid isEqualToString:botFather])
+                || (systemUID.length > 0 && [cid isEqualToString:systemUID])
+                || (fileHelperUID.length > 0 && [cid isEqualToString:fileHelperUID])) {
+                return 0;
+            }
+            return WKFollowTargetTypeDM;
+        }
+        case WK_GROUP: return WKFollowTargetTypeChannel;
+        case WK_COMMUNITY_TOPIC: return WKFollowTargetTypeThread;
+        default: return 0;
+    }
+}
+
+/// 取消关注。按 channelType 路由到对应 unfollow* API；成功后 reload sidebar
+/// 让 followedKeys / 关注 tab 数据收敛。
+- (void)unfollowConversationModel:(WKConversationWrapModel *)model {
+    WKFollowService *service = [WKFollowService shared];
+    AnyPromise *p = nil;
+    switch (model.channel.channelType) {
+        case WK_PERSON:           p = [service unfollowDM:model.channel.channelId];           break;
+        case WK_GROUP:            p = [service unfollowChannel:model.channel.channelId];      break;
+        case WK_COMMUNITY_TOPIC:  p = [service unfollowThread:model.channel.channelId];       break;
+        default: return;
+    }
+    __weak typeof(self) weakSelf = self;
+    p.then(^(id _) {
+        [[WKFollowedKeysStore shared] reload].then(^(id __) {
+            // 关注 tab 需要把行从分组里抹掉；最近 tab 行还在但 followedKeys 已更新。
+            if (weakSelf.conversationListVM.filterType == WKConversationFilterFollow) {
+                [weakSelf rebuildGroupDisplayAndReload];
+            } else {
+                [weakSelf.conversationListVM rebuildFilteredList];
+                [weakSelf.tableView reloadData];
+            }
+            return (id)nil;
+        });
+    }).catch(^(NSError *err) {
+        [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"取消关注失败")];
+    });
+}
+
+/// "添加到关注" — 对齐 web PR #27 §4.2 的子区特殊规则：
+///  - DM / Group: 弹分组选择 sheet（默认目的地记忆 → 下次直奔上次选的）
+///  - Thread + 父群已关注: 直接 followThread（后端 cascade）
+///  - Thread + 父群未关注: 选分组 → refollow 父群 + moveGroup + followThread 链式
+- (void)showAddToFollowDialogForModel:(WKConversationWrapModel *)model {
+    if (model.channel.channelType == WK_COMMUNITY_TOPIC) {
+        // 子区路径
+        NSString *cid = model.channel.channelId;
+        NSRange sep = [cid rangeOfString:@"____"];
+        if (sep.location == NSNotFound) return;
+        NSString *parentGroupNo = [cid substringToIndex:sep.location];
+        if (parentGroupNo.length == 0) return;
+        BOOL parentFollowed = [[WKFollowedKeysStore shared]
+                                isFollowedWithType:WKFollowTargetTypeChannel
+                                          targetId:parentGroupNo];
+        if (parentFollowed) {
+            // 直接 followThread；后端会把父群的关注状态 cascade 透传
+            [self performFollowThread:cid parentGroupNo:parentGroupNo categoryId:nil];
+        } else {
+            // 父群也未关注，先选分组（用于父群落分组）
+            __weak typeof(self) weakSelf = self;
+            [self pickFollowCategoryWithTitle:LLang(@"添加到关注") onPick:^(NSString * _Nullable categoryId) {
+                [weakSelf performFollowThread:cid parentGroupNo:parentGroupNo categoryId:categoryId];
+            }];
+        }
+        return;
+    }
+    // DM / Group：选分组
+    __weak typeof(self) weakSelf = self;
+    [self pickFollowCategoryWithTitle:LLang(@"添加到关注") onPick:^(NSString * _Nullable categoryId) {
+        if (model.channel.channelType == WK_PERSON) {
+            [weakSelf performFollowDM:model.channel.channelId categoryId:categoryId];
+        } else if (model.channel.channelType == WK_GROUP) {
+            [weakSelf performFollowGroup:model.channel.channelId categoryId:categoryId];
+        }
+    }];
+}
+
+#pragma mark - 关注分组选择 sheet
+
+/// 默认目的地记忆 key（per Space）
+- (NSString *)lastFollowCategoryKey {
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    return [NSString stringWithFormat:@"WKLastFollowCategoryId_%@", spaceId ?: @""];
+}
+
+/// 弹"选择分组" actionSheet。完成回调里 categoryId == nil 表示用户选了"默认分组"
+/// 或新建后还没拿到 id（暂走默认）。
+- (void)pickFollowCategoryWithTitle:(NSString *)title
+                             onPick:(void(^)(NSString * _Nullable categoryId))onPick {
+    NSArray<WKCategoryEntity *> *categories = self.conversationListVM.categoryList;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
+                                                                   message:nil
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+    NSString *lastKey = [self lastFollowCategoryKey];
+    NSString *lastCategoryId = [[NSUserDefaults standardUserDefaults] objectForKey:lastKey];
+
+    BOOL hasAny = NO;
+    for (WKCategoryEntity *cat in categories) {
+        if (cat.is_default) continue;
+        if (cat.category_id.length == 0) continue;
+        hasAny = YES;
+        BOOL isLast = [cat.category_id isEqualToString:lastCategoryId];
+        NSString *t = isLast ? [NSString stringWithFormat:@"✓ %@", cat.name] : cat.name;
+        NSString *catId = cat.category_id;
+        [alert addAction:[UIAlertAction actionWithTitle:t style:UIAlertActionStyleDefault handler:^(UIAlertAction *_) {
+            [[NSUserDefaults standardUserDefaults] setObject:catId forKey:lastKey];
+            if (onPick) onPick(catId);
+        }]];
+    }
+    // 新建分组（一致使用现有 showCreateCategoryDialog 路径，回调链条由 loadCategories 触发）
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"+ 新建分组") style:UIAlertActionStyleDefault handler:^(UIAlertAction *_) {
+        [self showCreateCategoryDialog];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
+    if (!hasAny) {
+        // 没有自建分组：直接走新建（更顺手）
+        [self showCreateCategoryDialog];
+        return;
+    }
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+#pragma mark - 关注实际写操作
+
+- (void)performFollowDM:(NSString *)peerUid categoryId:(NSString *)categoryId {
+    __weak typeof(self) weakSelf = self;
+    [[WKFollowService shared] followDM:peerUid categoryId:categoryId].then(^(id _) {
+        [[WKFollowedKeysStore shared] reload];
+        [weakSelf.tableView reloadData];
+    }).catch(^(NSError *err) {
+        [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
+    });
+}
+
+- (void)performFollowGroup:(NSString *)groupNo categoryId:(NSString *)categoryId {
+    __weak typeof(self) weakSelf = self;
+    // 先 refollow（之前可能 unfollow 过），再 moveGroup 到目标分组
+    [[WKFollowService shared] refollowChannel:groupNo].then(^(id _) {
+        return [[WKCategoryService shared] moveGroup:groupNo toCategoryId:categoryId];
+    }).then(^(id _) {
+        [[WKFollowedKeysStore shared] reload];
+        [weakSelf loadCategories];
+    }).catch(^(NSError *err) {
+        [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
+    });
+}
+
+- (void)performFollowThread:(NSString *)threadChannelId
+              parentGroupNo:(NSString *)parentGroupNo
+                 categoryId:(nullable NSString *)categoryId {
+    __weak typeof(self) weakSelf = self;
+    AnyPromise *chain;
+    if (categoryId.length > 0) {
+        // 父群也未关注：先 refollow 父群 → moveGroup 到选定分组 → followThread
+        chain = [[WKFollowService shared] refollowChannel:parentGroupNo].then(^id(id _) {
+            return [[WKCategoryService shared] moveGroup:parentGroupNo toCategoryId:categoryId];
+        }).then(^id(id _) {
+            return [[WKFollowService shared] followThread:threadChannelId];
+        });
+    } else {
+        // 父群已关注：直接 followThread，后端 cascade
+        chain = [[WKFollowService shared] followThread:threadChannelId];
+    }
+    chain.then(^(id _) {
+        [[WKFollowedKeysStore shared] reload];
+        [weakSelf loadCategories];
+    }).catch(^(NSError *err) {
+        [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
+    });
+}
+
 #pragma mark - 会话菜单图标
 
 + (UIImage *)iconMute:(BOOL)isMuted {
@@ -2505,6 +2719,57 @@
     CGContextAddLineToPoint(ctx, 7, 3);
     CGContextMoveToPoint(ctx, 10, 10);
     CGContextAddLineToPoint(ctx, 10, 17);
+    CGContextStrokePath(ctx);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
++ (UIImage *)iconFollow {
+    CGSize s = CGSizeMake(20, 20);
+    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    [[UIColor colorWithWhite:0.3 alpha:1] setStroke];
+    CGContextSetLineWidth(ctx, 1.5);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+    // 五角星轮廓（添加到关注）
+    CGFloat cx = 10, cy = 10, r = 7;
+    for (int i = 0; i < 5; i++) {
+        CGFloat a = -M_PI/2 + i * 2*M_PI/5;
+        CGFloat x = cx + r * cos(a);
+        CGFloat y = cy + r * sin(a);
+        if (i == 0) CGContextMoveToPoint(ctx, x, y);
+        else CGContextAddLineToPoint(ctx, x, y);
+    }
+    CGContextClosePath(ctx);
+    CGContextStrokePath(ctx);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
++ (UIImage *)iconUnfollow {
+    CGSize s = CGSizeMake(20, 20);
+    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    [[UIColor colorWithWhite:0.3 alpha:1] setStroke];
+    CGContextSetLineWidth(ctx, 1.5);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+    // 五角星 + 斜杠（取消关注）
+    CGFloat cx = 10, cy = 10, r = 6;
+    for (int i = 0; i < 5; i++) {
+        CGFloat a = -M_PI/2 + i * 2*M_PI/5;
+        CGFloat x = cx + r * cos(a);
+        CGFloat y = cy + r * sin(a);
+        if (i == 0) CGContextMoveToPoint(ctx, x, y);
+        else CGContextAddLineToPoint(ctx, x, y);
+    }
+    CGContextClosePath(ctx);
+    CGContextStrokePath(ctx);
+    CGContextMoveToPoint(ctx, 3, 17);
+    CGContextAddLineToPoint(ctx, 17, 3);
     CGContextStrokePath(ctx);
     UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
