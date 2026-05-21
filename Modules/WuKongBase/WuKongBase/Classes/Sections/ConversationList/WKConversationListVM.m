@@ -1189,6 +1189,8 @@ static WKConversationListVM *_instance;
     NSDictionary<NSString *, NSArray<WKSidebarItemEntity *> *> *followItemsByCat = followStore.itemsByCategory;
 
     // 3. 非 default 分组（spec §0：关注 tab 隐藏默认分组）
+    NSSet<NSString *> *followedGroupNos = followStore.followedGroupNos;
+    BOOL hasFollowData = followedGroupNos.count > 0 || followStore.followedKeys.count > 0;
     for (WKCategoryEntity *cat in self.categoryList) {
         if (cat.is_default) continue;
         WKConversationDisplayItem *header = [WKConversationDisplayItem sectionHeaderWithId:cat.category_id title:cat.name isDefault:NO];
@@ -1201,11 +1203,27 @@ static WKConversationListVM *_instance;
             if (dmWrap) [followedDMs addObject:dmWrap];
         }
 
+        // 过滤本分组里"已取消关注"的群 — server 的 categories 接口不 JOIN
+        // conversation_ext，cat.groups 里仍会带 unfollowed 的群（modules/category/
+        // db_group_setting.go:29-42）。客户端按 followedGroupNos 兜底剔掉，否则取消
+        // 关注后关注 tab 还会看到。
+        // hasFollowData=NO 时（store 还没拉到 / 全量为空），不做过滤避免误杀。
+        NSArray<WKCategoryGroup *> *visibleGroups = cat.groups;
+        if (hasFollowData) {
+            NSMutableArray<WKCategoryGroup *> *kept = [NSMutableArray array];
+            for (WKCategoryGroup *cg in cat.groups) {
+                if ([followedGroupNos containsObject:cg.group_no]) {
+                    [kept addObject:cg];
+                }
+            }
+            visibleGroups = kept;
+        }
+
         // 统计：群数 + DM 数 + 群内未读 + DM 未读 + 子区未读 + @提醒
         NSInteger count = 0;
         NSInteger totalUnread = 0;
         BOOL sectionHasMention = NO;
-        for (WKCategoryGroup *cg in cat.groups) {
+        for (WKCategoryGroup *cg in visibleGroups) {
             WKConversationWrapModel *m = groupChannelMap[cg.group_no];
             if (m) {
                 count++;
@@ -1232,7 +1250,7 @@ static WKConversationListVM *_instance;
 
         if(![self.collapsedSections containsObject:cat.category_id]) {
             NSMutableArray<WKConversationWrapModel *> *sectionItems = [NSMutableArray array];
-            for (WKCategoryGroup *cg in cat.groups) {
+            for (WKCategoryGroup *cg in visibleGroups) {
                 WKConversationWrapModel *msg = groupChannelMap[cg.group_no];
                 if(msg) [sectionItems addObject:msg];
             }

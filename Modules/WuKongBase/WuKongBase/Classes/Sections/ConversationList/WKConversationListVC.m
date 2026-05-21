@@ -1992,6 +1992,11 @@
         // 更新 model 中缓存的 channelInfo，避免使用过期数据
         oldModel.channelInfo = channelInfo;
         WKConversation *conversation = [[oldModel getConversation] copy];
+        NSLog(@"[StickDebug] channelInfoUpdate ch=%@ type=%d old(mute=%d stick=%d) new(mute=%d stick=%d) conv.before(mute=%d stick=%d)",
+              channelInfo.channel.channelId, channelInfo.channel.channelType,
+              oldChannelInfo.mute, oldChannelInfo.stick,
+              channelInfo.mute, channelInfo.stick,
+              conversation.mute, conversation.stick);
         conversation.mute = channelInfo.mute;
         conversation.stick = channelInfo.stick;
         if([self hasChange:channelInfo oldChannelInfo:oldChannelInfo]) {
@@ -2415,8 +2420,11 @@
         }
     }];
 
-    // 2. 置顶/取消置顶（关注 tab 隐藏 — 手工排序替代置顶，对齐 web spec §0）
-    if (!isFollowTab) {
+    // 2. 置顶/取消置顶
+    //  - 关注 tab 隐藏（spec §0：手工排序替代置顶）
+    //  - 子区也隐藏（server thread_setting 无 top 字段，UpdateSetting 忽略未知字段，
+    //    点了也不持久化，重启即弹回。详见 octo-server modules/thread/service.go:1010）
+    if (!isFollowTab && model.channel.channelType != WK_COMMUNITY_TOPIC) {
         NSString *stickTitle = model.stick ? LLang(@"取消置顶") : LLang(@"置顶");
         [menuItems addObject:@{
             @"title": stickTitle,
@@ -2429,8 +2437,8 @@
         }];
     }
 
-    // 3. 移动分组（仅群聊）
-    if (model.channel.channelType == WK_GROUP) {
+    // 3. 移动分组（仅关注 tab 下的群聊；最近 tab 用"添加到关注 → 选分组"二级 sheet）
+    if (isFollowTab && model.channel.channelType == WK_GROUP) {
         [menuItems addObject:@{
             @"title": LLang(@"移动分组"),
             @"icon": [WKConversationListVC iconMoveCategory],
@@ -2513,6 +2521,20 @@
     if (!conv) return;
     if (mute) conv.mute = [mute boolValue];
     if (stick) conv.stick = [stick boolValue];
+    // 同时把本地 channelInfo 的 mute/stick 也写过去 — SDK 收到服务端 channelUpdate
+    // 后会 fetch channelInfo 并自动同步到 conversation 上。如果本地 channelInfo 还
+    // 是旧值（stick=NO），SDK sync 会把刚写好的 stick=YES 反向覆盖回 NO,
+    // 造成"置顶 1 秒后弹回"的现象。先把 channelInfo 也置成新值阻断这条路径。
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:channel];
+    if (info) {
+        if (mute) info.mute = [mute boolValue];
+        if (stick) info.stick = [stick boolValue];
+        // addOrUpdateChannelInfoIfNeed 是"有变化才广播"的版本，避免回炮
+        // channelInfoUpdate 触发我们自己再走一遍流程。
+        [[WKSDK shared].channelManager addOrUpdateChannelInfoIfNeed:info];
+    }
+    NSLog(@"[StickDebug] optimistic ch=%@ mute=%@ stick=%@ infoCached=%d",
+          channel.channelId, mute, stick, info != nil);
     // 触发 shadow wrap 重建 → cell 下次 willDisplayCell / 当前 reload 看到新状态
     [self.conversationListVM rebuildFilteredList];
     if (stick) {
