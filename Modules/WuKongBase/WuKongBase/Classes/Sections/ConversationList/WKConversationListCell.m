@@ -819,11 +819,12 @@
 
 #pragma mark - Thread (recent tab) helpers
 
-/// 解析子区的父群 channel。优先 model.parentChannel，再回退用 channelId 的 "____" 切分（iOS 约定）。
+/// 解析子区的父群 channel。**始终用 channelId 的 "____" 切分**，不信
+/// model.parentChannel —— iOS SDK 实测会把 parentChannel 填成 thread 自己
+/// （日志里 parent == thread）。groupNo 取自 channelId 是 iOS 整个代码库的通行做法
+/// （见 WKConversationListVC.m:1965、WKLocalNotificationManager.m 等多处）。
 - (WKChannel *)resolveParentGroupChannelForThread:(WKConversationWrapModel *)model {
     if (model.channel.channelType != WK_COMMUNITY_TOPIC) return nil;
-    WKChannel *p = model.parentChannel;
-    if (p && p.channelId.length > 0) return p;
     NSString *cid = model.channel.channelId;
     NSRange sep = [cid rangeOfString:@"____"];
     if (sep.location == NSNotFound) return nil;
