@@ -364,6 +364,8 @@ static WKConversationListVM *_instance;
 
             NSLog(@"[TabPerf] loadConversationList: mainThread assign+callback, totalFromStart=%.1fms",
                   (CFAbsoluteTimeGetCurrent()-_lcStart)*1000);
+            NSLog(@"[ThreadSync] loadConversationList done: groups+DMs=%ld threadWrapModels=%ld (来源 getConversationList)",
+                  (long)conversationWrapModels.count, (long)threadWrapModels.count);
 
             if(finished) {
                 finished();
@@ -489,34 +491,55 @@ static WKConversationListVM *_instance;
 }
 
 /// 把 listThreads 已发现的所有子区同步到 threadWrapModels（最近 tab 平铺渲染源）。
-/// 通过 [conversationManager getConversation:] 查找 SDK 缓存的 WKConversation，
-/// 没有的会向 SDK 注入一个最小占位会话，避免最近 tab 列表里直接漏掉这些子区。
+/// 优先用 SDK 缓存的真实 WKConversation；SDK 没有时（冷启 SDK 还没把 thread 加载完）
+/// 用 WKThreadModel 信息**合成一个最小 WKConversation**作为占位 — 保证 cell 至少
+/// 能渲染（标题 + 未读数；preview/time 暂空，等真实 conv 到来时由
+/// applyThreadConversationUpdates: setConversation: 替换）。
 - (void)syncThreadWrapModelsFromCachedTopics {
     NSMutableDictionary<NSString *, WKConversationWrapModel *> *byChannel = [NSMutableDictionary dictionary];
     for (WKConversationWrapModel *m in self.threadWrapModels) {
         if (m.channel.channelId) byChannel[m.channel.channelId] = m;
     }
     BOOL changed = NO;
-    // 遍历各群的 listThreads 结果（threadPreviews 已存在父群的 wrap 上）
+    NSInteger parentCount = 0;
+    NSInteger threadsTotal = 0;
+    NSInteger sdkHits = 0;
+    NSInteger synthesized = 0;
     for (WKConversationWrapModel *parent in self.conversationWrapModels) {
         if (parent.channel.channelType != WK_GROUP) continue;
+        parentCount++;
         for (WKThreadModel *t in parent.threadPreviews) {
             if (t.channelId.length == 0) continue;
-            if (byChannel[t.channelId]) continue; // 已有
+            threadsTotal++;
+            if (byChannel[t.channelId]) continue;
             WKChannel *threadChannel = [WKChannel channelID:t.channelId channelType:WK_COMMUNITY_TOPIC];
             WKConversation *conv = [[WKSDK shared].conversationManager getConversation:threadChannel];
-            if (!conv) continue; // SDK 没有这个子区的本地会话，最近 tab 没法渲染（缺
-                                 // lastMessage / unread 等），等下一次 onConversationUpdate
-                                 // 路径再补 — 不强行合成空壳会话避免出现"假行"
-            byChannel[t.channelId] = [[WKConversationWrapModel alloc] initWithConversation:conv];
-            changed = YES;
+            if (conv) {
+                sdkHits++;
+                byChannel[t.channelId] = [[WKConversationWrapModel alloc] initWithConversation:conv];
+                changed = YES;
+            } else {
+                // SDK 没有 → 合成一个最小 WKConversation 作为占位，避免子区在最近
+                // tab 完全消失。lastMessage 留空，cell 显示标题 + 未读数即可，等
+                // 真实消息到来时由 applyThreadConversationUpdates 替换。
+                WKConversation *placeholder = [[WKConversation alloc] init];
+                placeholder.channel = threadChannel;
+                placeholder.unreadCount = t.unreadCount;
+                synthesized++;
+                byChannel[t.channelId] = [[WKConversationWrapModel alloc] initWithConversation:placeholder];
+                changed = YES;
+            }
         }
     }
+    NSLog(@"[ThreadSync] syncThreadWrapModels: parents=%ld threadsInPreviews=%ld sdkHits=%ld synthesized=%ld changed=%d total=%ld",
+          (long)parentCount, (long)threadsTotal, (long)sdkHits, (long)synthesized, changed, (long)byChannel.count);
     if (changed) {
         self.threadWrapModels = [byChannel.allValues copy];
-        // 总是 rebuildFilteredList（不再 gate filterType==Recent）— 用户在 Follow tab
-        // 启动时数据也要准备好，避免切到 Recent 才发现 filteredConversations 里没子区
+        // 总是 rebuildFilteredList — Follow tab 启动时也要让 filteredConversations
+        // 准备好，避免切到 Recent 才发现里面没子区
         [self rebuildFilteredList];
+        NSLog(@"[ThreadSync] threadWrapModels=%ld filteredConversations=%ld filterType=%ld",
+              (long)self.threadWrapModels.count, (long)self.filteredConversations.count, (long)self.filterType);
     }
 }
 
@@ -793,6 +816,9 @@ static WKConversationListVM *_instance;
         }
     }
     self.filteredConversations = [filtered copy];
+    NSLog(@"[ThreadSync] rebuildFilteredList done: filterType=%ld convWraps=%ld threadWraps=%ld filtered=%ld",
+          (long)self.filterType, (long)self.conversationWrapModels.count,
+          (long)self.threadWrapModels.count, (long)self.filteredConversations.count);
 }
 
 -(NSInteger) getFollowUnreadCount {

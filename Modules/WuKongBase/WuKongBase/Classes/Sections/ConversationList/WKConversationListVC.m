@@ -1940,6 +1940,11 @@
         weakSelf.conversationListVM.filterType = index;
         [weakSelf.conversationListVM rebuildFilteredList];
         [weakSelf rebuildGroupDisplayAndReload];
+        NSLog(@"[ThreadSync] onTabChanged → %@ filteredConversations=%ld threadWrapModels=%ld groupDisplayList=%ld",
+              index == WKConversationFilterFollow ? @"Follow" : @"Recent",
+              (long)weakSelf.conversationListVM.filteredConversations.count,
+              (long)weakSelf.conversationListVM.threadWrapModels.count,
+              (long)weakSelf.groupDisplayList.count);
         // 切到最近 tab 时主动再拉一次 thread 数据 — 解决冷启在关注 tab 时
         // SDK 还没把所有 thread 加载到本地 cache，导致 threadWrapModels 是空,
         // 切过来一片空白。fetchThreadCountsForGroups 完成后会回调
