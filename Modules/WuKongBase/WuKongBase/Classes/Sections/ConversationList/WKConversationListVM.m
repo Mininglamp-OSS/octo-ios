@@ -720,8 +720,8 @@ static WKConversationListVM *_instance;
     NSMutableArray *filtered = [NSMutableArray array];
     if (self.filterType == WKConversationFilterRecent) {
         // 最近 tab：DM 用原始 wrap；群用 shadow wrap（不挂子区，避免群行借子区的 lastMessage
-        // 渲染 + 隐藏子区数量指示）；子区独立成行；排序 **只看 timestamp，不看 stick**
-        // —— 这样关注 tab 的置顶不会污染最近 tab 的顺序（用户反馈 #1）。
+        // 渲染 + 隐藏子区数量指示）；子区独立成行；置顶（stick）参与排序 — 用户在最近 tab
+        // 长按置顶时希望能浮顶。
         for (WKConversationWrapModel *model in self.conversationWrapModels) {
             uint8_t type = model.channel.channelType;
             if (![self modelMatchesFilter:model]) continue;
@@ -740,7 +740,9 @@ static WKConversationListVM *_instance;
             [filtered addObject:thread];
         }
         [filtered sortUsingComparator:^NSComparisonResult(WKConversationWrapModel *a, WKConversationWrapModel *b) {
-            // 纯按时间倒序，无置顶（最近 tab 不参与置顶；置顶是关注 tab 的概念）
+            // 置顶优先，再按时间倒序
+            if (a.stick && !b.stick) return NSOrderedAscending;
+            if (!a.stick && b.stick) return NSOrderedDescending;
             if (a.lastMsgTimestamp > b.lastMsgTimestamp) return NSOrderedAscending;
             if (a.lastMsgTimestamp < b.lastMsgTimestamp) return NSOrderedDescending;
             return NSOrderedSame;

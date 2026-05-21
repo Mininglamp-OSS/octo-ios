@@ -494,12 +494,10 @@
     if (isThreadInRecent) {
         WKChannel *parent = [self resolveParentGroupChannelForThread:model];
         if (parent && parent.channelId.length > 0) {
-            WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parent];
-            // 没缓存就触发一次 fetch；本帧用 cacheKey="0" 兜底拿群头像 URL（getGroupAvatar:
-            // 不要求 channelInfo 在手，只要 groupNo 就能拼 URL）。
-            if (!parentInfo) {
-                [[WKSDK shared].channelManager fetchChannelInfo:parent completion:nil];
-            }
+            // 父群 channelInfo 解析：先走 VM wrap 的 lazy-load 路径（命中 c.channelInfo
+            // 反向引用），再退回 channelManager 的内存缓存；都拿不到就触发 fetch，等
+            // channelInfoUpdate 回调时由 VC 把子区行 reload。
+            WKChannelInfo *parentInfo = [self lookupParentChannelInfo:parent];
             NSString *avatarURL = nil;
             if (parentInfo.logo.length > 0 && [parentInfo.logo hasPrefix:@"http"]) {
                 NSString *key = (parentInfo.avatarCacheKey.length > 0) ? parentInfo.avatarCacheKey : @"0";
@@ -835,18 +833,32 @@
     WKChannel *parent = [self resolveParentGroupChannelForThread:model];
     NSString *parentName = nil;
     if (parent) {
-        WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parent];
+        WKChannelInfo *parentInfo = [self lookupParentChannelInfo:parent];
         parentName = parentInfo.displayName;
-        if (!parentInfo) {
-            [[WKSDK shared].channelManager fetchChannelInfo:parent completion:nil];
-        }
     }
     if (parentName.length == 0) {
-        // 名称暂不可用兜底用 groupNo 防止空字符串导致 sourceLbl 显示空白行
-        parentName = parent.channelId ?: @"";
+        // 名称暂不可用：本帧不显示 source 行（避免出现"来源:groupNo乱码"）。
+        // 等 channelInfoUpdate 回调时 VC 会 reload 该行，下次 refresh 取得 displayName。
+        self.threadSourceLbl.hidden = YES;
+        self.threadSourceLbl.text = nil;
+        return;
     }
     self.threadSourceLbl.text = [NSString stringWithFormat:LLang(@"来源:%@"), parentName];
     self.threadSourceLbl.hidden = NO;
+}
+
+/// 父群 channelInfo 三级查找：VM wrap.channelInfo（走 c.channelInfo 反向引用 + lazy load）
+/// → channelManager 内存缓存 → 都没有就触发 fetchChannelInfo，等 channelInfoUpdate 回调
+/// 由 VC 把这一行 reload，下次 refresh 走 wrap 路径已是缓存命中。
+- (WKChannelInfo *)lookupParentChannelInfo:(WKChannel *)parent {
+    if (!parent || parent.channelId.length == 0) return nil;
+    WKConversationWrapModel *parentWrap = [[WKConversationListVM shared] modelAtChannel:parent];
+    WKChannelInfo *info = parentWrap.channelInfo;
+    if (info) return info;
+    info = [[WKSDK shared].channelManager getChannelInfo:parent];
+    if (info) return info;
+    [[WKSDK shared].channelManager fetchChannelInfo:parent completion:nil];
+    return nil;
 }
 
 

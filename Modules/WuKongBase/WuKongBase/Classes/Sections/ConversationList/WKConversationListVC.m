@@ -2010,6 +2010,39 @@
         }
         [self resetHeaderBottomEmptyBackgroundColor];
     }
+    // 最近 tab：父群 channelInfo 到达时，把它名下的所有子区行刷新（拿父群头像 + 来源名）。
+    // 子区行的复合头像和"来源:xxx" 第一次渲染时父群 info 可能还没缓存，渲染走兜底回退；
+    // channelInfoUpdate 触发后必须主动 reload 这些行让 cell 重新走 refreshAvatar/Source 路径。
+    if (_conversationListVM.filterType == WKConversationFilterRecent
+        && channelInfo.channel.channelType == WK_GROUP
+        && channelInfo.channel.channelId.length > 0) {
+        [self reloadThreadRowsForParentGroup:channelInfo.channel.channelId];
+    }
+}
+
+/// 最近 tab：找出所有 parent_channel == groupNo 的子区行 indexPath，触发 reload。
+- (void)reloadThreadRowsForParentGroup:(NSString *)groupNo {
+    if (groupNo.length == 0) return;
+    NSMutableArray<NSIndexPath *> *paths = [NSMutableArray array];
+    NSArray<WKConversationWrapModel *> *threads = self.conversationListVM.threadWrapModels;
+    NSString *prefix = [groupNo stringByAppendingString:@"____"];
+    for (WKConversationWrapModel *t in threads) {
+        if ([t.channel.channelId hasPrefix:prefix]) {
+            NSInteger idx = [self.conversationListVM indexAtChannel:t.channel];
+            if (idx >= 0) {
+                [paths addObject:[NSIndexPath indexPathForRow:idx inSection:0]];
+            }
+        }
+    }
+    if (paths.count == 0) return;
+    NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
+    NSMutableArray<NSIndexPath *> *valid = [NSMutableArray arrayWithCapacity:paths.count];
+    for (NSIndexPath *p in paths) {
+        if (p.row < rowCount) [valid addObject:p];
+    }
+    if (valid.count > 0) {
+        [self.tableView reloadRowsAtIndexPaths:valid withRowAnimation:UITableViewRowAnimationNone];
+    }
 }
 
 -(BOOL) hasChange:(WKChannelInfo*)channelInfo oldChannelInfo:(WKChannelInfo*)oldChannelInfo {
@@ -2470,11 +2503,17 @@
     if (stick) conv.stick = [stick boolValue];
     // 触发 shadow wrap 重建 → cell 下次 willDisplayCell / 当前 reload 看到新状态
     [self.conversationListVM rebuildFilteredList];
-    NSInteger idx = [self.conversationListVM indexAtChannel:channel];
-    NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
-    if (idx >= 0 && idx < rowCount) {
-        [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:idx inSection:0]]
-                              withRowAnimation:UITableViewRowAnimationNone];
+    if (stick) {
+        // 置顶/取消置顶会让该行在最近 tab 内重新排序；reloadRows 只刷一行不够，
+        // 用 reloadData 让其它行的位置也刷新到位。
+        [self.tableView reloadData];
+    } else {
+        NSInteger idx = [self.conversationListVM indexAtChannel:channel];
+        NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
+        if (idx >= 0 && idx < rowCount) {
+            [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:idx inSection:0]]
+                                  withRowAnimation:UITableViewRowAnimationNone];
+        }
     }
 }
 
