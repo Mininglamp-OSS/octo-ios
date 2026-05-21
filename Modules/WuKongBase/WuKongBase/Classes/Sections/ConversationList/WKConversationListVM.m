@@ -653,6 +653,32 @@ static WKConversationListVM *_instance;
     return (now - (NSTimeInterval)ts) >= 3 * 86400;
 }
 
+- (void)applyThreadConversationUpdates:(NSArray<WKConversation*>*)threadConversations {
+    if (threadConversations.count == 0) return;
+    // 把现有 threadWrapModels 按 channelId 建索引，再合并/追加
+    NSMutableDictionary<NSString*, WKConversationWrapModel*> *byChannel = [NSMutableDictionary dictionary];
+    for (WKConversationWrapModel *m in self.threadWrapModels) {
+        if (m.channel.channelId) byChannel[m.channel.channelId] = m;
+    }
+    BOOL added = NO;
+    for (WKConversation *c in threadConversations) {
+        if (!c.channel.channelId) continue;
+        WKConversationWrapModel *existing = byChannel[c.channel.channelId];
+        if (existing) {
+            // 已有 wrap 的底层 c 是 SDK 单例，会随 onConversationUpdate 原地更新；
+            // 不需要替换 wrap。
+            continue;
+        }
+        WKConversationWrapModel *fresh = [[WKConversationWrapModel alloc] initWithConversation:c];
+        byChannel[c.channel.channelId] = fresh;
+        added = YES;
+    }
+    if (added) {
+        self.threadWrapModels = [byChannel.allValues copy];
+    }
+    [self rebuildFilteredList];
+}
+
 -(BOOL) modelMatchesFilter:(WKConversationWrapModel *)model {
     uint8_t type = model.channel.channelType;
     if (self.filterType == WKConversationFilterFollow) {
@@ -689,25 +715,39 @@ static WKConversationListVM *_instance;
     }
 
     NSMutableArray *filtered = [NSMutableArray array];
-    for (WKConversationWrapModel *model in self.conversationWrapModels) {
-        if ([self modelMatchesFilter:model]) {
-            [filtered addObject:model];
+    if (self.filterType == WKConversationFilterRecent) {
+        // 最近 tab：DM 用原始 wrap；群用 shadow wrap（不挂子区，避免群行借子区的 lastMessage
+        // 渲染 + 隐藏子区数量指示）；子区独立成行；排序 **只看 timestamp，不看 stick**
+        // —— 这样关注 tab 的置顶不会污染最近 tab 的顺序（用户反馈 #1）。
+        for (WKConversationWrapModel *model in self.conversationWrapModels) {
+            uint8_t type = model.channel.channelType;
+            if (![self modelMatchesFilter:model]) continue;
+            if (type == WK_GROUP) {
+                // shadow wrap：同一个底层 WKConversation，但没有 lastChildConversation/threadCount，
+                // 所以 cell 渲染时取群自己的 lastMessage / 不显示子区角标（修 #2 #4）。
+                // 缺点是 channelInfoInner 缓存丢失，需要 cell 自己懒加载；可以接受。
+                WKConversationWrapModel *shadow = [[WKConversationWrapModel alloc] initWithConversation:[model getConversation]];
+                [filtered addObject:shadow];
+            } else {
+                [filtered addObject:model];
+            }
         }
-    }
-    // 最近 tab：把子区作为独立行混入，按 timestamp 倒序统一排
-    if (self.filterType == WKConversationFilterRecent && self.threadWrapModels.count > 0) {
+        // 子区独立成行
         for (WKConversationWrapModel *thread in self.threadWrapModels) {
-            // 子区不去重 — channelId 带 ____ 前缀，与父群不冲突
             [filtered addObject:thread];
         }
         [filtered sortUsingComparator:^NSComparisonResult(WKConversationWrapModel *a, WKConversationWrapModel *b) {
-            // 置顶优先（DM/群都可能置顶；子区一般不置顶）
-            if (a.stick && !b.stick) return NSOrderedAscending;
-            if (!a.stick && b.stick) return NSOrderedDescending;
+            // 纯按时间倒序，无置顶（最近 tab 不参与置顶；置顶是关注 tab 的概念）
             if (a.lastMsgTimestamp > b.lastMsgTimestamp) return NSOrderedAscending;
             if (a.lastMsgTimestamp < b.lastMsgTimestamp) return NSOrderedDescending;
             return NSOrderedSame;
         }];
+    } else {
+        for (WKConversationWrapModel *model in self.conversationWrapModels) {
+            if ([self modelMatchesFilter:model]) {
+                [filtered addObject:model];
+            }
+        }
     }
     self.filteredConversations = [filtered copy];
 }

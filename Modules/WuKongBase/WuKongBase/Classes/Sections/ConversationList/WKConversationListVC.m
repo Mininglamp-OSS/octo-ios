@@ -1158,11 +1158,13 @@
 
     // 空间隔离：过滤掉不属于当前空间的会话更新
     NSArray<WKConversation*> *filtered = [self filterConversationsBySpace:conversations];
-    // 过滤子区：子区不独立显示在会话列表，但触发父群子区数量刷新 + 消息计数更新
+    // 过滤子区：子区不独立显示在 关注 tab；但 最近 tab 子区是独立行，update 必须能驱动 refresh。
     NSMutableArray<WKConversation*> *nonThreadFiltered = [NSMutableArray array];
     NSMutableSet<NSString*> *refreshGroupNos = [NSMutableSet set];
+    BOOL hasThreadUpdate = NO;
     for (WKConversation *conv in filtered) {
         if (conv.channel.channelType == WK_COMMUNITY_TOPIC) {
+            hasThreadUpdate = YES;
             NSString *threadChannelId = conv.channel.channelId;
             NSRange range = [threadChannelId rangeOfString:@"____"];
             if (range.location != NSNotFound) {
@@ -1180,6 +1182,19 @@
     // 刷新受影响的父群子区数量
     if (refreshGroupNos.count > 0) {
         [self.conversationListVM refreshThreadCountForGroups:refreshGroupNos];
+    }
+    // 最近 tab：子区是独立行，update 必须重建 filteredConversations 并刷新表格
+    // 否则用户看到子区时间戳/preview 都停在旧值（反馈 #3 #4）。
+    if (hasThreadUpdate && self.conversationListVM.filterType == WKConversationFilterRecent) {
+        NSMutableArray<WKConversation*> *threadUpdates = [NSMutableArray array];
+        for (WKConversation *c in conversations) {
+            if (c.channel.channelType == WK_COMMUNITY_TOPIC) [threadUpdates addObject:c];
+        }
+        if (threadUpdates.count > 0) {
+            [self.conversationListVM applyThreadConversationUpdates:threadUpdates];
+            [self refreshTable];
+            [self refreshBadge];
+        }
     }
     filtered = nonThreadFiltered;
     if(filtered.count <= 0) {

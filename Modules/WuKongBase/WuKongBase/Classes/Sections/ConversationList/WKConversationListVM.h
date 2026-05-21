@@ -208,6 +208,10 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// DM/子区 不参与该过滤。
 + (BOOL)isInactiveGroup:(WKConversationWrapModel*)model;
 
+/// 子区会话增量更新（来自 onConversationUpdate）。最近 tab 调，用于刷新
+/// threadWrapModels 集合并触发 rebuildFilteredList。不动 conversationWrapModels。
+- (void)applyThreadConversationUpdates:(NSArray<WKConversation*>*)threadConversations;
+
 /// 刷新指定群组的子区数量
 -(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos;
 
