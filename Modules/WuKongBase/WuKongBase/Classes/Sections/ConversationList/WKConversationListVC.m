@@ -2484,12 +2484,21 @@
     [self.view addSubview:snap];
     self.cellDragSnapshot = snap;
 
-    // 插入指示线：theme 色 2pt 横线，加在 tableView 上跟着滚动
+    // 插入指示线：移到 self.view 顶层（snapshot 同层但后加，更高 z-order）。
+    // 比挂到 tableView 上有两个好处：① 不会被 snapshot 盖住 ② 不会被 tableView
+    // 自身的 scroll/reload 影响。每次 updateInsertionLineAtLocation: 重算 view 坐标。
     UIView *line = [[UIView alloc] init];
-    line.backgroundColor = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
-    line.layer.cornerRadius = 1;
+    UIColor *baseTheme = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+    // 比 theme 紫深 ~15%：让线在白底 / 群头像 / 各种内容上都醒目
+    UIColor *deepTheme = [UIColor colorWithRed:88.0/255 green:48.0/255 blue:220.0/255 alpha:1];
+    line.backgroundColor = deepTheme;
+    line.layer.cornerRadius = 2;
+    line.layer.shadowColor = baseTheme.CGColor;
+    line.layer.shadowOpacity = 0.7;
+    line.layer.shadowOffset = CGSizeZero;
+    line.layer.shadowRadius = 6; // 发光晕 — 被 snapshot 盖到边缘时也能看出位置
     line.hidden = YES;
-    [self.tableView addSubview:line];
+    [self.view addSubview:line];
     self.cellDragInsertionLine = line;
 
     cell.alpha = 0.3; // 原 cell 半透明提示"正在被拖动"
@@ -2548,6 +2557,7 @@
 
 /// 把插入线放到目标行的上 / 下边缘。section header 一律落在 header 下方（即该分组开头）。
 /// 普通行按手指 Y 跟行中线的关系决定插入到上 / 下。
+/// 线挂在 self.view 上（坐标系也用 self.view），所以每次都做一遍 convertRect:。
 - (void)updateInsertionLineAtLocation:(CGPoint)loc {
     if (!self.cellDragInsertionLine) return;
     CGPoint locInTable = [self.view convertPoint:loc toView:self.tableView];
@@ -2557,20 +2567,23 @@
         self.cellDragLastTargetPath = nil;
         return;
     }
-    CGRect rect = [self.tableView rectForRowAtIndexPath:path];
+    CGRect rectInTable = [self.tableView rectForRowAtIndexPath:path];
     BOOL insertBelow;
     WKConversationDisplayItem *it = (path.row < (NSInteger)self.groupDisplayList.count) ? self.groupDisplayList[path.row] : nil;
     if (it.isSectionHeader) {
-        // 落在 section header 上 → 插到该分组最前
         insertBelow = YES;
     } else {
-        insertBelow = (locInTable.y - rect.origin.y) > rect.size.height / 2.0;
+        insertBelow = (locInTable.y - rectInTable.origin.y) > rectInTable.size.height / 2.0;
     }
-    CGFloat lineY = insertBelow ? CGRectGetMaxY(rect) : CGRectGetMinY(rect);
-    CGFloat lineLeft = 15;
-    CGFloat lineRight = self.tableView.bounds.size.width - 15;
-    self.cellDragInsertionLine.frame = CGRectMake(lineLeft, lineY - 1, lineRight - lineLeft, 2);
+    // 换到 self.view 坐标系，再算线的 frame
+    CGRect rectInView = [self.view convertRect:rectInTable fromView:self.tableView];
+    CGFloat lineY = insertBelow ? CGRectGetMaxY(rectInView) : CGRectGetMinY(rectInView);
+    CGFloat lineThickness = 4.0;
+    CGFloat lineLeft = CGRectGetMinX(rectInView) + 12;
+    CGFloat lineRight = CGRectGetMaxX(rectInView) - 12;
+    self.cellDragInsertionLine.frame = CGRectMake(lineLeft, lineY - lineThickness / 2.0, lineRight - lineLeft, lineThickness);
     self.cellDragInsertionLine.hidden = NO;
+    [self.view bringSubviewToFront:self.cellDragInsertionLine]; // 始终在 snapshot 之上
     self.cellDragLastTargetPath = path;
     self.cellDragLastInsertBelow = insertBelow;
 }
