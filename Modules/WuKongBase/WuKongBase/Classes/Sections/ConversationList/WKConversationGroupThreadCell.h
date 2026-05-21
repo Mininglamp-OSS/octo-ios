@@ -8,6 +8,8 @@
 #import "SwipeTableCell.h"
 #import "WKConversationWrapModel.h"
 
+@class WKThreadModel;
+
 NS_ASSUME_NONNULL_BEGIN
 
 @interface WKConversationGroupThreadCell : SwipeTableCell
