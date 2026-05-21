@@ -130,6 +130,7 @@
 @property(nonatomic,assign) BOOL cellDragInProgress;
 @property(nonatomic,copy,nullable) NSString *cellDragSourceConvName;
 @property(nonatomic,copy,nullable) NSString *cellDragSourceChannelId; // 用于识别源 cell 离场触发清理
+@property(nonatomic,weak,nullable) UITableViewCell *cellDragSourceCell; // 直接 weak 持有源 cell，didEndDisplayingCell 用 == 比较更稳
 @property(nonatomic,strong,nullable) CADisplayLink *cellDragAutoScrollLink;
 @property(nonatomic,assign) CGFloat cellDragAutoScrollVelocity; // pts/frame, 0 = 不滚
 @property(nonatomic,assign) BOOL pendingRebuildAfterDrag; // 拖动期间收到的刷新请求暂存，结束时回放
@@ -1022,7 +1023,7 @@
             WKTypingContent *content = (WKTypingContent*)message.content;
             model.typing = YES;
             model.typer = content.typingName;
-            [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:index inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+            [self safeReloadRows:@[[NSIndexPath indexPathForRow:index inSection:0]] animation:UITableViewRowAnimationNone];
         }
     }
     
@@ -1037,7 +1038,7 @@
     if(index!=-1) {
         WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
         model.typing = NO;
-        [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:index inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+        [self safeReloadRows:@[[NSIndexPath indexPathForRow:index inSection:0]] animation:UITableViewRowAnimationNone];
         
 //        [self refreshTable];
     }
@@ -2000,7 +2001,7 @@
                     NSInteger parentIndex = [self.conversationListVM indexAtChannel:parentChannel];
                     NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
                     if (parentIndex >= 0 && parentIndex < rowCount) {
-                        [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:parentIndex inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+                        [self safeReloadRows:@[[NSIndexPath indexPathForRow:parentIndex inSection:0]] animation:UITableViewRowAnimationNone];
                     }
                 }
             }
@@ -2036,7 +2037,7 @@
                 NSInteger newIndex = [self.conversationListVM indexAtChannel:channelInfo.channel];
                 NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
                 if (newIndex >= 0 && newIndex < rowCount) {
-                    [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:newIndex inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+                    [self safeReloadRows:@[[NSIndexPath indexPathForRow:newIndex inSection:0]] animation:UITableViewRowAnimationNone];
                 }
             }
             
@@ -2079,7 +2080,7 @@
         if (p.row < rowCount) [valid addObject:p];
     }
     if (valid.count > 0) {
-        [self.tableView reloadRowsAtIndexPaths:valid withRowAnimation:UITableViewRowAnimationNone];
+        [self safeReloadRows:valid animation:UITableViewRowAnimationNone];
     }
 }
 
@@ -2292,12 +2293,11 @@
     if(conversationModel) {
         [conversationModel cancelChannelRequest];
     }
-    // 拖动期间源 cell 离场（auto-scroll 把它滚出屏外）→ 长按手势会随 cell 回收而销毁,
-    // Ended/Cancelled 不会触发，snapshot 卡死。这里兜底：把 cell 的 alpha 还原 +
-    // 强制清理 drag 状态，让 snapshot 立即消失。
-    if (self.cellDragInProgress
-        && conversationModel
-        && [conversationModel.channel.channelId isEqualToString:self.cellDragSourceChannelId]) {
+    // 拖动期间源 cell 离场 → 长按手势会随 cell 回收销毁,Ended/Cancelled 不会触发,
+    // snapshot 卡死。这里兜底：把 cell 的 alpha 还原 + 强制清理 drag 状态。
+    // 用直接引用比较（cell == cellDragSourceCell）比 channelId 查表更可靠 — 后者
+    // 在表格重排后 conversationAtIndex 可能返回 nil 或别的会话。
+    if (self.cellDragInProgress && cell == self.cellDragSourceCell) {
         cell.alpha = 1.0;
         [self resetCellDragState];
     }
@@ -2493,6 +2493,7 @@
     self.cellDragInsertionLine = line;
 
     cell.alpha = 0.3; // 原 cell 半透明提示"正在被拖动"
+    self.cellDragSourceCell = cell; // weak ref，didEndDisplayingCell 时按引用比较
 
     [self updateCellDragAtLocation:loc];
 }
@@ -2738,12 +2739,28 @@
     self.cellDragSourceIndexPath = nil;
     self.cellDragSourceConvName = nil;
     self.cellDragSourceChannelId = nil;
+    self.cellDragSourceCell = nil;
     self.cellDragLastTargetPath = nil;
     // 拖动期间累积的刷新一次性回放
     if (self.pendingRebuildAfterDrag) {
         self.pendingRebuildAfterDrag = NO;
         [self rebuildGroupDisplayAndReload];
     }
+}
+
+#pragma mark - 拖动期间 reload 安全包装
+
+/// 拖动期间所有 reloadData / reloadRows 都走这里 — 检查 cellDragInProgress,
+/// 是就标记 pending 等结束时统一回放；否则正常 reload。
+/// 这样新消息进来 / 通知刷新 / typing 状态变化都不会把源 cell 抢走导致 snapshot 卡死。
+- (void)safeReloadTable {
+    if (self.cellDragInProgress) { self.pendingRebuildAfterDrag = YES; return; }
+    [self.tableView reloadData];
+}
+
+- (void)safeReloadRows:(NSArray<NSIndexPath *> *)paths animation:(UITableViewRowAnimation)anim {
+    if (self.cellDragInProgress) { self.pendingRebuildAfterDrag = YES; return; }
+    [self.tableView reloadRowsAtIndexPaths:paths withRowAnimation:anim];
 }
 
 -(void) showConversationMenuForModel:(WKConversationWrapModel *)model atPoint:(CGPoint)point {
