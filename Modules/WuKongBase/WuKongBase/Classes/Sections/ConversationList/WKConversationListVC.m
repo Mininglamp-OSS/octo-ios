@@ -2087,8 +2087,13 @@
         WKConversationDisplayItem *item = self.groupDisplayList[indexPath.row];
         if (item.isSectionHeader) return 36.0f;
         WKConversationWrapModel *model = item.conversation;
-        if (model && model.threadCount > 0 && [WKApp shared].remoteConfig.threadOn && [_conversationListVM isThreadExpanded:model.channel.channelId]) {
-            if (model.threadPreviews.count > 0) {
+        // 关注 tab 下，群下面只显示已关注的子区；用 helper 取过滤后的列表来决定 cell 类型
+        NSArray<WKThreadModel *> *visiblePreviews = (model && model.channel.channelType == WK_GROUP)
+            ? [WKConversationGroupThreadCell visibleThreadPreviewsFor:model] : nil;
+        NSInteger visibleCount = (model && model.channel.channelType == WK_GROUP)
+            ? [WKConversationGroupThreadCell visibleThreadCountFor:model] : 0;
+        if (model && visibleCount > 0 && [WKApp shared].remoteConfig.threadOn && [_conversationListVM isThreadExpanded:model.channel.channelId]) {
+            if (visiblePreviews.count > 0) {
                 return [WKConversationGroupThreadCell heightForModel:model];
             } else {
                 return [WKConversationGroupThreadOnlyCell heightForModel:model];
@@ -2126,8 +2131,13 @@
             return cell;
         }
         WKConversationWrapModel *model = item.conversation;
-        if (model && model.threadCount > 0 && [WKApp shared].remoteConfig.threadOn && [_conversationListVM isThreadExpanded:model.channel.channelId]) {
-            if (model.threadPreviews.count > 0) {
+        // 关注 tab：按 followedKeys 过滤后的子区数量决定 cell 类型
+        NSInteger visibleCount = (model && model.channel.channelType == WK_GROUP)
+            ? [WKConversationGroupThreadCell visibleThreadCountFor:model] : 0;
+        NSArray<WKThreadModel *> *visiblePreviews = (model && model.channel.channelType == WK_GROUP)
+            ? [WKConversationGroupThreadCell visibleThreadPreviewsFor:model] : nil;
+        if (model && visibleCount > 0 && [WKApp shared].remoteConfig.threadOn && [_conversationListVM isThreadExpanded:model.channel.channelId]) {
+            if (visiblePreviews.count > 0) {
                 WKConversationGroupThreadCell *cell = [tableView dequeueReusableCellWithIdentifier:@"WKConversationGroupThreadCell" forIndexPath:indexPath];
                 cell.swipeDelegate = self;
                 return cell;
@@ -2481,10 +2491,29 @@
 -(void) showThreadMuteMenuForChannelId:(NSString *)threadChannelId threadName:(NSString *)threadName atPoint:(CGPoint)point {
     WKChannel *threadChannel = [WKChannel channelID:threadChannelId channelType:WK_COMMUNITY_TOPIC];
     BOOL isMuted = [[WKChannelSettingManager shared] mute:threadChannel];
+    BOOL isFollowed = [[WKFollowedKeysStore shared] isFollowedWithType:WKFollowTargetTypeThread targetId:threadChannelId];
 
     NSString *muteTitle = isMuted ? LLang(@"打开通知") : LLang(@"关闭通知");
     NSMutableArray<NSDictionary *> *menuItems = [NSMutableArray array];
     __weak typeof(self) weakSelf = self;
+
+    // 取消关注 — 关注 tab 嵌套子区是已关注子区集合，第一项就放它，符合 spec 子区单独取关
+    if (isFollowed) {
+        [menuItems addObject:@{
+            @"title": LLang(@"取消关注"),
+            @"icon": [WKConversationListVC iconUnfollow],
+            @"action": ^{
+                [[WKFollowService shared] unfollowThread:threadChannelId].then(^(id _) {
+                    [[WKFollowedKeysStore shared] reload];
+                    // 关注 tab：reload 完后 onFollowedKeysStoreDidUpdate: 会
+                    // rebuildGroupDisplayAndReload，子区行自然消失
+                }).catch(^(NSError *err) {
+                    [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"取消关注失败")];
+                });
+            }
+        }];
+    }
+
     [menuItems addObject:@{
         @"title": muteTitle,
         @"icon": [WKConversationListVC iconMute:isMuted],

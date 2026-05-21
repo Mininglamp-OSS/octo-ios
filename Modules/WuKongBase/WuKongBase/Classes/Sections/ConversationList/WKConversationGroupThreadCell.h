@@ -17,6 +17,13 @@ NS_ASSUME_NONNULL_BEGIN
 /// 计算 cell 高度
 +(CGFloat) heightForModel:(WKConversationWrapModel*)model;
 
+/// 关注 tab 视角下该群可见的子区列表 —— model.threadPreviews 过滤掉
+/// 不在 WKFollowedKeysStore.followedKeys 里的子区。store 为空（未加载完）时
+/// 返回 model.threadPreviews 原样，避免冷启动瞬间全部清空。
++ (NSArray<WKThreadModel *> *)visibleThreadPreviewsFor:(WKConversationWrapModel*)model;
+/// 关注 tab 视角下该群"已关注子区"总数（含未在 previews 里的）
++ (NSInteger)visibleThreadCountFor:(WKConversationWrapModel*)model;
+
 /// 子区预览被点击
 @property(nonatomic,copy,nullable) void(^onThreadPreviewTap)(NSString *threadChannelId);
 

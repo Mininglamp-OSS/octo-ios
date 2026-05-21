@@ -285,7 +285,9 @@
         [self.typingIndicatorView stopAnimating];
         self.onlineBadgeView.hidden = YES;
         self.autoDeleteView.hidden = YES;
-        BOOL showToggle = (model.threadCount > 0 && [WKApp shared].remoteConfig.threadOn);
+        // 关注 tab 群行的子区 # 标识：基于关注的子区数，不是全部子区数
+        NSInteger followedThreadCount = [WKConversationGroupThreadCell visibleThreadCountFor:model];
+        BOOL showToggle = (followedThreadCount > 0 && [WKApp shared].remoteConfig.threadOn);
         self.threadToggleBtn.hidden = !showToggle;
         if (showToggle) {
             NSInteger threadUnread = 0;
