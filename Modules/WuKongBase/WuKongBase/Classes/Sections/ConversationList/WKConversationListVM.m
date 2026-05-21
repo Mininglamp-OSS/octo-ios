@@ -19,6 +19,7 @@
 #import "WKApp.h"
 @interface WKConversationListVM ()
 @property(nonatomic,strong) NSMutableArray<WKConversationWrapModel*> *conversationWrapModels;
+@property(nonatomic,copy,readwrite,nullable) NSArray<WKConversationWrapModel*> *threadWrapModels; // 子区独立 wrap，最近 tab 用
 @property(nonatomic,strong) NSMutableDictionary<NSString*, WKConversationWrapModel*> *channelIndex; // channel key → model, O(1) lookup
 @property(nonatomic,strong) NSArray<WKConversationWrapModel*> *filteredConversations; // 过滤后的列表
 @property(nonatomic,strong) NSRecursiveLock *conversationsLock;
@@ -306,6 +307,7 @@ static WKConversationListVM *_instance;
         // 构建子区索引缓存（DB 查询）
         NSMutableDictionary<NSString*, NSMutableArray<WKConversation*>*> *topicsByGroup = [NSMutableDictionary dictionary];
         NSMutableDictionary<NSString*, NSArray<WKReminder*>*> *remindersByChannelId = [NSMutableDictionary dictionary];
+        NSMutableArray<WKConversationWrapModel*> *threadWrapModels = [NSMutableArray array];
         for (WKConversation *conv in conversations) {
             if (conv.channel.channelType != WK_COMMUNITY_TOPIC) continue;
             NSString *channelId = conv.channel.channelId;
@@ -317,6 +319,8 @@ static WKConversationListVM *_instance;
             [topics addObject:conv];
             NSArray<WKReminder*> *reminders = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
             if (reminders.count > 0) remindersByChannelId[channelId] = reminders;
+            // 顺便把子区单独 wrap 出来 — 最近 tab 平铺渲染要用
+            [threadWrapModels addObject:[[WKConversationWrapModel alloc] initWithConversation:conv]];
         }
 
         // 排序（纯内存）
@@ -338,6 +342,7 @@ static WKConversationListVM *_instance;
 
             mainSelf.cachedAllConversations = conversations;
             mainSelf.conversationWrapModels = conversationWrapModels;
+            mainSelf.threadWrapModels = threadWrapModels;
             [mainSelf rebuildChannelIndex];
             mainSelf.cachedTopicsByGroup = topicsByGroup;
             mainSelf.cachedRemindersByChannelId = remindersByChannelId;
@@ -640,16 +645,30 @@ static WKConversationListVM *_instance;
 
 #pragma mark - 过滤
 
++ (BOOL)isInactiveGroup:(WKConversationWrapModel *)model {
+    if (!model || model.channel.channelType != WK_GROUP) return NO;
+    NSInteger ts = model.lastMsgTimestamp; // SDK 10 位秒级时间戳
+    if (ts <= 0) return YES; // 从未活跃过的群也按 stale 处理
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    return (now - (NSTimeInterval)ts) >= 3 * 86400;
+}
+
 -(BOOL) modelMatchesFilter:(WKConversationWrapModel *)model {
     uint8_t type = model.channel.channelType;
-    if (type != WK_GROUP && type != WK_PERSON) {
-        return YES; // 系统通知、文件助手等特殊会话两个 tab 都显示
-    }
     if (self.filterType == WKConversationFilterFollow) {
+        // P2 stage 1：关注 tab 行为不变，仍走分组 group 视图（VC 用 groupDisplayList，
+        // 这里只决定 filteredConversations 内容，对 follow tab 不直接生效）。
+        if (type != WK_GROUP && type != WK_PERSON) return YES;
         return type == WK_GROUP;
-    } else {
-        return type == WK_PERSON;
     }
+    // 最近 tab：DM + 群（3 天活跃）+ 子区，全部平铺
+    if (type == WK_PERSON) return YES;
+    if (type == WK_GROUP) {
+        return ![WKConversationListVM isInactiveGroup:model];
+    }
+    if (type == WK_COMMUNITY_TOPIC) return YES;
+    // 系统通知、文件助手等特殊频道一直展示
+    return YES;
 }
 
 -(void) rebuildFilteredList {
@@ -675,6 +694,21 @@ static WKConversationListVM *_instance;
             [filtered addObject:model];
         }
     }
+    // 最近 tab：把子区作为独立行混入，按 timestamp 倒序统一排
+    if (self.filterType == WKConversationFilterRecent && self.threadWrapModels.count > 0) {
+        for (WKConversationWrapModel *thread in self.threadWrapModels) {
+            // 子区不去重 — channelId 带 ____ 前缀，与父群不冲突
+            [filtered addObject:thread];
+        }
+        [filtered sortUsingComparator:^NSComparisonResult(WKConversationWrapModel *a, WKConversationWrapModel *b) {
+            // 置顶优先（DM/群都可能置顶；子区一般不置顶）
+            if (a.stick && !b.stick) return NSOrderedAscending;
+            if (!a.stick && b.stick) return NSOrderedDescending;
+            if (a.lastMsgTimestamp > b.lastMsgTimestamp) return NSOrderedAscending;
+            if (a.lastMsgTimestamp < b.lastMsgTimestamp) return NSOrderedDescending;
+            return NSOrderedSame;
+        }];
+    }
     self.filteredConversations = [filtered copy];
 }
 
@@ -690,10 +724,22 @@ static WKConversationListVM *_instance;
 
 -(NSInteger) getRecentUnreadCount {
     NSInteger count = 0;
+    // DM + 3 天内活跃的群（与 modelMatchesFilter: 的最近 tab 谓词保持一致）
     for (WKConversationWrapModel *model in self.conversationWrapModels) {
-        if (model.channel.channelType == WK_PERSON && !model.mute) {
+        if (model.mute) continue;
+        uint8_t type = model.channel.channelType;
+        if (type == WK_PERSON) {
             count += model.unreadCount;
+        } else if (type == WK_GROUP) {
+            if (![WKConversationListVM isInactiveGroup:model]) {
+                count += model.unreadCount;
+            }
         }
+    }
+    // 子区单独累加
+    for (WKConversationWrapModel *thread in self.threadWrapModels) {
+        if (thread.mute) continue;
+        count += thread.unreadCount;
     }
     return count;
 }

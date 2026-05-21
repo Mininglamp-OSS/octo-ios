@@ -197,8 +197,16 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 关注 tab 未读数
 -(NSInteger) getFollowUnreadCount;
 
-/// 最近 tab 未读数
+/// 最近 tab 未读数（DM + 3 天内活跃的群 + 子区，全部 !mute）
 -(NSInteger) getRecentUnreadCount;
+
+/// 子区独立 wrap models — 用于"最近 tab 平铺、子区独立成行"。
+/// 与 conversationWrapModels 互不重叠：后者只有 PERSON+GROUP，前者只有 COMMUNITY_TOPIC。
+@property(nonatomic,copy,readonly,nullable) NSArray<WKConversationWrapModel*> *threadWrapModels;
+
+/// 3 天内无活动的群判定。最近 tab 用：列表过滤 + 未读统计都用同一谓词避免不一致。
+/// DM/子区 不参与该过滤。
++ (BOOL)isInactiveGroup:(WKConversationWrapModel*)model;
 
 /// 刷新指定群组的子区数量
 -(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos;

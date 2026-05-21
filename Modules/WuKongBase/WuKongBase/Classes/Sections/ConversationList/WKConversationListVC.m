@@ -17,6 +17,7 @@
 #import "WKCategoryService.h"
 #import "WKCategorySectionCell.h"
 #import "WKCategoryReorderVC.h"
+#import "WKFollowedKeysStore.h"
 #import <objc/runtime.h>
 #import <WuKongBase/WuKongBase.h>
 #import "WKResource.h"
@@ -113,6 +114,7 @@
 @property(nonatomic,assign) BOOL pendingRebuild;
 @property(nonatomic,assign) CGPoint recentTabScrollOffset;
 @property(nonatomic,assign) CGPoint followTabScrollOffset;
+@property(nonatomic,assign) NSTimeInterval lastFollowedKeysReloadAt; // debounce 用，单位秒
 
 @end
 
@@ -412,6 +414,10 @@
     // 放在 viewDidAppear 而非 viewWillAppear — WKGroupScanJoinVC pop 的动画
     // 完成后主列表才真正回到前台，这时候 window 才有资格承载 Dialog。
     [self consumeJoinGroupSuccessNoticeIfAny];
+
+    // 关注 tab 兜底刷新：app 切回前台/列表回到前台时同步一次 sidebar。
+    // debounce ≥30s 在 reloadFollowedKeysIfNeeded 内部判断。
+    [self reloadFollowedKeysIfNeeded:@"viewDidAppear"];
 }
 
 /// : 消费一次性「跨 Space 加群成功」通知 — 弹双行 dialog + 紫色切换按钮。
@@ -476,6 +482,8 @@
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(showCreateCategoryDialog) name:@"WKShowCreateCategoryDialog" object:nil];
     // YUJ-bot-isolation: 当前 Space 的 Bot 列表加载完成 → prune 切换瞬间 race 浮上来的旧 Space Bot
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onSpaceBotRegistryDidLoad:) name:WKSpaceBotRegistryDidLoadNotification object:nil];
+    // 关注 tab 兜底刷新：app 切回前台时拉一次 sidebar/sync 同步 followedKeys + follow_version
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppDidBecomeActive:) name:UIApplicationDidBecomeActiveNotification object:nil];
 }
 
 -(void) removeDelegates {
@@ -483,6 +491,7 @@
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKShowCreateCategoryDialog" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKThreadCountBatchUpdated" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WKSpaceBotRegistryDidLoadNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidBecomeActiveNotification object:nil];
     // 移除连接监听
     [[[WKSDK shared] connectionManager] removeDelegate:self];
     // 移除频道监听
@@ -1510,6 +1519,25 @@
         [self rebuildGroupDisplayAndReload];
         [self refreshBadge];
     }
+}
+
+#pragma mark - 关注 tab sidebar 自动刷新
+
+-(void) onAppDidBecomeActive:(NSNotification*)notification {
+    [self reloadFollowedKeysIfNeeded:@"appDidBecomeActive"];
+}
+
+/// 触发一次 sidebar/sync，debounce ≥30s 避免与 viewDidAppear 在快速切回前后台时重复打。
+/// 详见 spec §4.6 "自动 reload sidebar"。
+-(void) reloadFollowedKeysIfNeeded:(NSString*)reason {
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    NSTimeInterval delta = now - self.lastFollowedKeysReloadAt;
+    if (self.lastFollowedKeysReloadAt > 0 && delta < 30.0) {
+        return; // debounce
+    }
+    self.lastFollowedKeysReloadAt = now;
+    NSLog(@"[FollowedKeys] reload triggered by %@", reason);
+    [[WKFollowedKeysStore shared] reload];
 }
 
 /// : 判断 channel 是否为系统 Bot（botfather / u_10000 / fileHelper 等）。
