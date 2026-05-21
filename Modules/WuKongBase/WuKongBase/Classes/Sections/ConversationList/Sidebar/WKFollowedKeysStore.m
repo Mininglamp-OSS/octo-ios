@@ -56,19 +56,18 @@ NSNotificationName const kWKFollowedKeysStoreDidUpdateNotification = @"kWKFollow
 
 - (AnyPromise *)reload {
     NSString *deviceUUID = [WKLoginInfo shared].deviceUUID ?: @"";
-    return [[[WKSidebarService shared] syncWithTab:WKSidebarTabFollow
-                                           version:0
-                                       lastMsgSeqs:@""
-                                        deviceUUID:deviceUUID]
-            then:^id(WKSidebarSyncResponse *resp) {
-                [self applyItems:resp.items followVersion:resp.follow_version];
-                return nil;
-            }].catch(^(NSError *error) {
-                // 失败也通知 — 让观察者有机会切回兜底状态/重试
-                [[NSNotificationCenter defaultCenter] postNotificationName:kWKFollowedKeysStoreDidUpdateNotification
-                                                                    object:self
-                                                                  userInfo:@{ @"error": error ?: [NSNull null] }];
-            });
+    return [[WKSidebarService shared] syncWithTab:WKSidebarTabFollow
+                                          version:0
+                                      lastMsgSeqs:@""
+                                       deviceUUID:deviceUUID].then(^(WKSidebarSyncResponse *resp) {
+        [self applyItems:resp.items followVersion:resp.follow_version];
+        return (id)nil;
+    }).catch(^(NSError *error) {
+        // 失败也通知 — 让观察者有机会切回兜底状态/重试
+        [[NSNotificationCenter defaultCenter] postNotificationName:kWKFollowedKeysStoreDidUpdateNotification
+                                                            object:self
+                                                          userInfo:@{ @"error": error ?: [NSNull null] }];
+    });
 }
 
 - (void)applyItems:(NSArray<WKSidebarItemEntity *> *)items followVersion:(NSInteger)version {
