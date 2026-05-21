@@ -119,6 +119,13 @@
 @property(nonatomic,assign) CGPoint followTabScrollOffset;
 @property(nonatomic,assign) NSTimeInterval lastFollowedKeysReloadAt; // debounce 用，单位秒
 
+// 关注 tab 拖拽排序（方案 A）— 长按弹菜单后继续按住可拖动到其他分组
+@property(nonatomic,strong,nullable) UIView *cellDragSnapshot;
+@property(nonatomic,strong,nullable) NSIndexPath *cellDragSourceIndexPath;
+@property(nonatomic,assign) CGPoint cellDragStartLocation; // 在 self.view 坐标系
+@property(nonatomic,assign) BOOL cellDragInProgress;
+@property(nonatomic,copy,nullable) NSString *cellDragSourceConvName;
+
 @end
 
 @implementation WKConversationListVC
@@ -2374,18 +2381,179 @@
 }
 
 -(void) onConversationCellLongPress:(UILongPressGestureRecognizer *)gesture {
-    if (gesture.state != UIGestureRecognizerStateBegan) return;
     UITableViewCell *cell = (UITableViewCell *)gesture.view;
     WKConversationWrapModel *model = objc_getAssociatedObject(cell, "conversationModel");
     if (!model) return;
+    BOOL isFollowTab = (self.conversationListVM.filterType == WKConversationFilterFollow);
 
-    // 触觉反馈
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        // 触觉反馈 + 弹菜单（保留原行为）
+        UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        [feedback impactOccurred];
+        CGPoint ptInWindow = [gesture locationInView:nil];
+        [self showConversationMenuForModel:model atPoint:ptInWindow];
+
+        // 关注 tab 才支持拖拽：记录起点 + indexPath，等 Changed 状态超阈值再切到 drag
+        if (isFollowTab) {
+            self.cellDragInProgress = NO;
+            self.cellDragStartLocation = [gesture locationInView:self.view];
+            self.cellDragSourceIndexPath = [self.tableView indexPathForCell:cell];
+            self.cellDragSourceConvName = model.channelInfo.displayName ?: model.channel.channelId;
+        }
+        return;
+    }
+
+    if (!isFollowTab) return; // 最近 tab 不进入 drag 流程
+
+    if (gesture.state == UIGestureRecognizerStateChanged) {
+        CGPoint loc = [gesture locationInView:self.view];
+        CGFloat dx = loc.x - self.cellDragStartLocation.x;
+        CGFloat dy = loc.y - self.cellDragStartLocation.y;
+        CGFloat dist = hypot(dx, dy);
+        if (!self.cellDragInProgress) {
+            // 阈值 12pt — 防止用户长按时手抖触发 drag
+            if (dist > 12.0) {
+                [self beginCellDragForCell:cell atLocation:loc];
+            }
+        } else {
+            [self updateCellDragAtLocation:loc];
+        }
+        return;
+    }
+
+    if (gesture.state == UIGestureRecognizerStateEnded
+        || gesture.state == UIGestureRecognizerStateCancelled
+        || gesture.state == UIGestureRecognizerStateFailed) {
+        if (self.cellDragInProgress) {
+            CGPoint loc = [gesture locationInView:self.view];
+            [self endCellDragAtLocation:loc model:model];
+        } else {
+            [self resetCellDragState];
+        }
+    }
+}
+
+#pragma mark - 关注 tab 拖拽排序（方案 A）
+
+- (void)beginCellDragForCell:(UITableViewCell *)cell atLocation:(CGPoint)loc {
+    self.cellDragInProgress = YES;
+    [self dismissFloatingMenu]; // 关掉菜单
     UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [feedback impactOccurred];
 
-    CGPoint ptInCell = [gesture locationInView:cell];
-    CGPoint ptInWindow = [cell convertPoint:ptInCell toView:nil];
-    [self showConversationMenuForModel:model atPoint:ptInWindow];
+    // 取 cell 截图作为拖动跟随的 snapshot
+    UIView *snap = [cell snapshotViewAfterScreenUpdates:YES];
+    snap.layer.shadowColor = [UIColor blackColor].CGColor;
+    snap.layer.shadowOpacity = 0.18;
+    snap.layer.shadowOffset = CGSizeMake(0, 4);
+    snap.layer.shadowRadius = 8;
+    snap.alpha = 0.95;
+    CGRect cellFrameInView = [self.tableView convertRect:cell.frame toView:self.view];
+    snap.frame = cellFrameInView;
+    [self.view addSubview:snap];
+    self.cellDragSnapshot = snap;
+
+    cell.alpha = 0.3; // 原 cell 半透明提示"正在被拖动"
+
+    [self updateCellDragAtLocation:loc];
+}
+
+- (void)updateCellDragAtLocation:(CGPoint)loc {
+    CGRect f = self.cellDragSnapshot.frame;
+    f.origin.y = loc.y - f.size.height / 2.0f;
+    self.cellDragSnapshot.frame = f;
+    // 接近表格上下边缘时自动滚（简化版 — 每次 update 时 step 一点）
+    CGRect tableInView = [self.view convertRect:self.tableView.bounds fromView:self.tableView];
+    CGFloat edgeZone = 60;
+    if (loc.y < CGRectGetMinY(tableInView) + edgeZone) {
+        CGFloat newY = MAX(0, self.tableView.contentOffset.y - 8);
+        [self.tableView setContentOffset:CGPointMake(0, newY)];
+    } else if (loc.y > CGRectGetMaxY(tableInView) - edgeZone) {
+        CGFloat maxY = MAX(0, self.tableView.contentSize.height - self.tableView.bounds.size.height);
+        CGFloat newY = MIN(maxY, self.tableView.contentOffset.y + 8);
+        [self.tableView setContentOffset:CGPointMake(0, newY)];
+    }
+}
+
+- (void)endCellDragAtLocation:(CGPoint)loc model:(WKConversationWrapModel *)model {
+    NSIndexPath *targetPath = nil;
+    CGPoint locInTable = [self.view convertPoint:loc toView:self.tableView];
+    targetPath = [self.tableView indexPathForRowAtPoint:locInTable];
+    if (!targetPath) {
+        // 落到了空白处：找最接近的 row
+        CGFloat midY = locInTable.y;
+        if (midY < 0) targetPath = [NSIndexPath indexPathForRow:0 inSection:0];
+        else {
+            NSInteger lastRow = [self.tableView numberOfRowsInSection:0] - 1;
+            if (lastRow >= 0) targetPath = [NSIndexPath indexPathForRow:lastRow inSection:0];
+        }
+    }
+
+    NSString *targetCategoryId = [self resolveTargetCategoryIdForRow:targetPath.row];
+    NSString *targetCategoryName = [self categoryNameById:targetCategoryId];
+    NSString *sourceCategoryId = [self resolveTargetCategoryIdForRow:self.cellDragSourceIndexPath.row];
+
+    [self cleanupCellDragSnapshot];
+
+    // 同分组拖动：本期不实现"分组内重排"（要等 P4 follow_sort），不动顺序
+    if (targetCategoryId.length > 0 && [targetCategoryId isEqualToString:sourceCategoryId]) {
+        [self resetCellDragState];
+        return;
+    }
+    // 拖到默认分组 / 不可识别区域：忽略
+    if (targetCategoryId.length == 0) {
+        [self resetCellDragState];
+        return;
+    }
+
+    NSString *convName = self.cellDragSourceConvName ?: @"";
+    [self resetCellDragState];
+
+    // 跨分组移动：DM 用 followDM(peer_uid, category_id) 覆盖；群用 moveGroup
+    __weak typeof(self) weakSelf = self;
+    if (model.channel.channelType == WK_PERSON) {
+        [[WKFollowService shared] followDM:model.channel.channelId categoryId:targetCategoryId].then(^(id _) {
+            [[WKFollowedKeysStore shared] reload];
+            [weakSelf showMovedToast:convName toCategory:targetCategoryName];
+        }).catch(^(NSError *err) {
+            [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"移动失败")];
+        });
+    } else if (model.channel.channelType == WK_GROUP) {
+        [[WKCategoryService shared] moveGroup:model.channel.channelId toCategoryId:targetCategoryId].then(^(id _) {
+            [[WKFollowedKeysStore shared] reload];
+            [weakSelf loadCategories];
+            [weakSelf showMovedToast:convName toCategory:targetCategoryName];
+        }).catch(^(NSError *err) {
+            [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"移动失败")];
+        });
+    }
+}
+
+/// 给定关注 tab 的 row index，返回它属于哪个分类（沿 groupDisplayList 向上找最近的
+/// section header）
+- (NSString *)resolveTargetCategoryIdForRow:(NSInteger)row {
+    if (row < 0 || row >= (NSInteger)self.groupDisplayList.count) return @"";
+    for (NSInteger i = row; i >= 0; i--) {
+        WKConversationDisplayItem *it = self.groupDisplayList[i];
+        if (it.isSectionHeader) return it.sectionId ?: @"";
+    }
+    return @"";
+}
+
+- (void)cleanupCellDragSnapshot {
+    [self.cellDragSnapshot removeFromSuperview];
+    self.cellDragSnapshot = nil;
+    // 还原所有 cell 的 alpha（被拖的 cell 改成 0.3）
+    for (UITableViewCell *c in self.tableView.visibleCells) {
+        if (c.alpha < 1.0) c.alpha = 1.0;
+    }
+}
+
+- (void)resetCellDragState {
+    [self cleanupCellDragSnapshot];
+    self.cellDragInProgress = NO;
+    self.cellDragSourceIndexPath = nil;
+    self.cellDragSourceConvName = nil;
 }
 
 -(void) showConversationMenuForModel:(WKConversationWrapModel *)model atPoint:(CGPoint)point {
@@ -2748,12 +2916,21 @@
 /// 「<会话名> 已添加到 <分组名> 分组」会话名白 bold，分组名主题紫 bold，
 /// 形成对比 — 会话名是"主语"用白色稳重，分组名是"目标"用强调色突出。
 - (void)showFollowedToast:(NSString *)conversationName toCategory:(NSString *)categoryName {
+    [self showFollowOrMoveToast:conversationName verb:LLang(@" 已添加到 ") toCategory:categoryName];
+}
+
+/// 「<会话名> 已移动到 <分组名> 分组」拖拽跨分组完成时用，比"已添加到"更准确
+- (void)showMovedToast:(NSString *)conversationName toCategory:(NSString *)categoryName {
+    [self showFollowOrMoveToast:conversationName verb:LLang(@" 已移动到 ") toCategory:categoryName];
+}
+
+- (void)showFollowOrMoveToast:(NSString *)conversationName verb:(NSString *)verb toCategory:(NSString *)categoryName {
     if (categoryName.length == 0) return;
     if (conversationName.length == 0) conversationName = LLang(@"该会话");
     UIColor *accent = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
     NSAttributedString *attr = [self attrTextWithSegments:@[
         @{ @"text": conversationName,             @"color": [UIColor whiteColor], @"bold": @YES },
-        @{ @"text": LLang(@" 已添加到 "),           @"color": [UIColor whiteColor], @"bold": @NO  },
+        @{ @"text": verb,                          @"color": [UIColor whiteColor], @"bold": @NO  },
         @{ @"text": categoryName,                 @"color": accent,               @"bold": @YES },
         @{ @"text": LLang(@" 分组"),                @"color": [UIColor whiteColor], @"bold": @NO  },
     ]];

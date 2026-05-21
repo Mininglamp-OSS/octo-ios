@@ -290,9 +290,11 @@
 " 分组"=" category";
 "已取消关注 "="Unfollowed ";
 " 已添加到 "=" added to ";
+" 已移动到 "=" moved to ";
 " 已取消关注"=" unfollowed";
 " 已置顶"=" pinned";
 " 已取消置顶"=" unpinned";
+"移动失败"="Failed to move";
 "该会话"="this conversation";
 "无"="Nothing";
 "刚刚"="Just";
