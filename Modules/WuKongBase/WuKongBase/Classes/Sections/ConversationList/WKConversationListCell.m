@@ -656,8 +656,9 @@
         [self.badgeView setBadgeBackgroundColor:[UIColor redColor]];
     }
     
-    // 置顶
-    if(model.stick) { // 置顶
+    // 置顶 — 跨 tab 独立：仅最近 tab 显示置顶背景色。关注 tab 即便 model.stick=YES
+    // 也保持普通背景（spec §0：关注 tab 不显示置顶概念）
+    if(model.stick && self.recentTabContext) {
         [self setBackgroundColor:[WKApp shared].config.backgroundColor];
     }else {
         [self setBackgroundColor:[WKApp shared].config.cellBackgroundColor];

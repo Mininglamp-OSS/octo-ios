@@ -2443,6 +2443,7 @@
                 BOOL newStick = !model.stick;
                 [[WKChannelSettingManager shared] channel:model.channel stick:newStick];
                 [weakSelf applyOptimisticConversationUpdateForChannel:model.channel mute:nil stick:@(newStick)];
+                [weakSelf showStickToast:model.channelInfo.displayName ?: model.channel.channelId stuck:newStick];
             }
         }];
     }
@@ -2530,13 +2531,12 @@
     [self showFloatingMenu:menuItems atPoint:point];
 }
 
-/// 长按菜单点击 mute/stick 后的即时反馈：直接同步本地 wrap.c 状态 + 触发 rebuildFilteredList。
-/// 仅最近 tab 需要（关注 tab 走 channelInfoUpdate → rebuildGroupDisplayAndReload 路径
-/// 由服务端回调自然驱动，不需要本地兜底）。mute / stick 传 nil 表示该字段不变。
+/// 长按菜单点击 mute/stick 后的即时反馈：直接同步本地 wrap.c 状态 + 触发刷新。
+/// 关注 / 最近 两 tab 都需要 — 关注 tab 早先 gate 在 Recent，DM 切换通知后没刷新。
+/// mute / stick 传 nil 表示该字段不变。
 - (void)applyOptimisticConversationUpdateForChannel:(WKChannel *)channel
                                                 mute:(nullable NSNumber *)mute
                                                stick:(nullable NSNumber *)stick {
-    if (self.conversationListVM.filterType != WKConversationFilterRecent) return;
     if (!channel || channel.channelId.length == 0) return;
     WKConversation *conv = nil;
     if (channel.channelType == WK_COMMUNITY_TOPIC) {
@@ -2559,24 +2559,26 @@
     if (info) {
         if (mute) info.mute = [mute boolValue];
         if (stick) info.stick = [stick boolValue];
-        // addOrUpdateChannelInfoIfNeed 是"有变化才广播"的版本，避免回炮
-        // channelInfoUpdate 触发我们自己再走一遍流程。
         [[WKSDK shared].channelManager addOrUpdateChannelInfoIfNeed:info];
     }
     NSLog(@"[StickDebug] optimistic ch=%@ mute=%@ stick=%@ infoCached=%d",
           channel.channelId, mute, stick, info != nil);
-    // 触发 shadow wrap 重建 → cell 下次 willDisplayCell / 当前 reload 看到新状态
-    [self.conversationListVM rebuildFilteredList];
-    if (stick) {
-        // 置顶/取消置顶会让该行在最近 tab 内重新排序；reloadRows 只刷一行不够，
-        // 用 reloadData 让其它行的位置也刷新到位。
-        [self.tableView reloadData];
+    // 关注 tab 走分组展示，需要 rebuildGroupDisplayAndReload；最近 tab 走
+    // filteredConversations。stick 变化两种 tab 都可能改顺序，所以 reloadData。
+    if (self.conversationListVM.filterType == WKConversationFilterFollow) {
+        [self rebuildGroupDisplayAndReload];
     } else {
-        NSInteger idx = [self.conversationListVM indexAtChannel:channel];
-        NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
-        if (idx >= 0 && idx < rowCount) {
-            [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:idx inSection:0]]
-                                  withRowAnimation:UITableViewRowAnimationNone];
+        [self.conversationListVM rebuildFilteredList];
+        if (stick) {
+            // 置顶/取消置顶让该行重新排序；reloadRows 只刷一行不够
+            [self.tableView reloadData];
+        } else {
+            NSInteger idx = [self.conversationListVM indexAtChannel:channel];
+            NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
+            if (idx >= 0 && idx < rowCount) {
+                [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:idx inSection:0]]
+                                      withRowAnimation:UITableViewRowAnimationNone];
+            }
         }
     }
 }
@@ -2741,37 +2743,55 @@
     return @"";
 }
 
-/// 关注成功 toast：「已添加到 <分组名> 分组」，分组名用主题紫色高亮
-- (void)showFollowedToCategoryToast:(NSString *)categoryName {
+/// 「<会话名> 已添加到 <分组名> 分组」会话名白 bold，分组名主题紫 bold，
+/// 形成对比 — 会话名是"主语"用白色稳重，分组名是"目标"用强调色突出。
+- (void)showFollowedToast:(NSString *)conversationName toCategory:(NSString *)categoryName {
     if (categoryName.length == 0) return;
-    UIColor *theme = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
-    [self showAttributedToast:[self attrTextWithPrefix:LLang(@"已添加到 ") accent:categoryName accentColor:theme suffix:LLang(@" 分组")]];
+    if (conversationName.length == 0) conversationName = LLang(@"该会话");
+    UIColor *accent = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+    NSAttributedString *attr = [self attrTextWithSegments:@[
+        @{ @"text": conversationName,             @"color": [UIColor whiteColor], @"bold": @YES },
+        @{ @"text": LLang(@" 已添加到 "),           @"color": [UIColor whiteColor], @"bold": @NO  },
+        @{ @"text": categoryName,                 @"color": accent,               @"bold": @YES },
+        @{ @"text": LLang(@" 分组"),                @"color": [UIColor whiteColor], @"bold": @NO  },
+    ]];
+    [self showAttributedToast:attr];
 }
 
-/// 取消关注成功 toast：「已取消关注 <会话名>」，名字用主题紫色高亮
+/// 「<会话名> 已取消关注」会话名主题紫 bold
 - (void)showUnfollowedToast:(NSString *)conversationName {
     if (conversationName.length == 0) conversationName = LLang(@"该会话");
-    UIColor *theme = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
-    [self showAttributedToast:[self attrTextWithPrefix:LLang(@"已取消关注 ") accent:conversationName accentColor:theme suffix:@""]];
+    UIColor *accent = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+    NSAttributedString *attr = [self attrTextWithSegments:@[
+        @{ @"text": conversationName,           @"color": accent,                @"bold": @YES },
+        @{ @"text": LLang(@" 已取消关注"),        @"color": [UIColor whiteColor],  @"bold": @NO  },
+    ]];
+    [self showAttributedToast:attr];
 }
 
-/// 构建 attr string: prefix + accent(粗 + theme color) + suffix
-- (NSAttributedString *)attrTextWithPrefix:(NSString *)prefix
-                                    accent:(NSString *)accent
-                               accentColor:(UIColor *)accentColor
-                                    suffix:(NSString *)suffix {
-    UIFont *baseFont = [UIFont systemFontOfSize:14];
-    UIFont *accentFont = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
-    UIColor *base = [UIColor whiteColor];
+/// 「<会话名> 已置顶」/「<会话名> 已取消置顶」会话名主题紫 bold
+- (void)showStickToast:(NSString *)conversationName stuck:(BOOL)stuck {
+    if (conversationName.length == 0) conversationName = LLang(@"该会话");
+    UIColor *accent = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+    NSString *verb = stuck ? LLang(@" 已置顶") : LLang(@" 已取消置顶");
+    NSAttributedString *attr = [self attrTextWithSegments:@[
+        @{ @"text": conversationName,           @"color": accent,                @"bold": @YES },
+        @{ @"text": verb,                        @"color": [UIColor whiteColor],  @"bold": @NO  },
+    ]];
+    [self showAttributedToast:attr];
+}
+
+/// 通用 attr 拼接：[{text, color, bold}, ...]
+- (NSAttributedString *)attrTextWithSegments:(NSArray<NSDictionary *> *)segments {
     NSMutableAttributedString *s = [[NSMutableAttributedString alloc] init];
-    if (prefix.length) {
-        [s appendAttributedString:[[NSAttributedString alloc] initWithString:prefix attributes:@{NSFontAttributeName: baseFont, NSForegroundColorAttributeName: base}]];
-    }
-    if (accent.length) {
-        [s appendAttributedString:[[NSAttributedString alloc] initWithString:accent attributes:@{NSFontAttributeName: accentFont, NSForegroundColorAttributeName: accentColor}]];
-    }
-    if (suffix.length) {
-        [s appendAttributedString:[[NSAttributedString alloc] initWithString:suffix attributes:@{NSFontAttributeName: baseFont, NSForegroundColorAttributeName: base}]];
+    for (NSDictionary *seg in segments) {
+        NSString *t = seg[@"text"];
+        if (t.length == 0) continue;
+        UIColor *c = seg[@"color"] ?: [UIColor whiteColor];
+        BOOL bold = [seg[@"bold"] boolValue];
+        UIFont *f = bold ? [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold]
+                         : [UIFont systemFontOfSize:14];
+        [s appendAttributedString:[[NSAttributedString alloc] initWithString:t attributes:@{NSFontAttributeName: f, NSForegroundColorAttributeName: c}]];
     }
     return s;
 }
@@ -2801,10 +2821,11 @@
 - (void)performFollowDM:(NSString *)peerUid categoryId:(NSString *)categoryId {
     __weak typeof(self) weakSelf = self;
     NSString *catName = [self categoryNameById:categoryId];
+    NSString *convName = [self displayNameForChannel:[WKChannel personWithChannelID:peerUid]];
     [[WKFollowService shared] followDM:peerUid categoryId:categoryId].then(^(id _) {
         [[WKFollowedKeysStore shared] reload];
         [weakSelf.tableView reloadData];
-        [weakSelf showFollowedToCategoryToast:catName];
+        [weakSelf showFollowedToast:convName toCategory:catName];
     }).catch(^(NSError *err) {
         [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
     });
@@ -2813,13 +2834,14 @@
 - (void)performFollowGroup:(NSString *)groupNo categoryId:(NSString *)categoryId {
     __weak typeof(self) weakSelf = self;
     NSString *catName = [self categoryNameById:categoryId];
+    NSString *convName = [self displayNameForChannel:[WKChannel groupWithChannelID:groupNo]];
     // 先 refollow（之前可能 unfollow 过），再 moveGroup 到目标分组
     [[WKFollowService shared] refollowChannel:groupNo].then(^(id _) {
         return [[WKCategoryService shared] moveGroup:groupNo toCategoryId:categoryId];
     }).then(^(id _) {
         [[WKFollowedKeysStore shared] reload];
         [weakSelf loadCategories];
-        [weakSelf showFollowedToCategoryToast:catName];
+        [weakSelf showFollowedToast:convName toCategory:catName];
     }).catch(^(NSError *err) {
         [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
     });
@@ -2830,6 +2852,7 @@
                  categoryId:(nullable NSString *)categoryId {
     __weak typeof(self) weakSelf = self;
     NSString *catName = [self categoryNameById:categoryId];
+    NSString *convName = [self displayNameForChannel:[WKChannel channelID:threadChannelId channelType:WK_COMMUNITY_TOPIC]];
     AnyPromise *chain;
     if (categoryId.length > 0) {
         // 父群也未关注：先 refollow 父群 → moveGroup 到选定分组 → followThread
@@ -2846,13 +2869,13 @@
         [[WKFollowedKeysStore shared] reload];
         [weakSelf loadCategories];
         if (catName.length > 0) {
-            [weakSelf showFollowedToCategoryToast:catName];
+            [weakSelf showFollowedToast:convName toCategory:catName];
         } else {
             // 父群已关注的子区是 cascade 路径，没选分组；用父群当前所在分组名提示
             for (WKCategoryEntity *cat in weakSelf.conversationListVM.categoryList) {
                 for (WKCategoryGroup *cg in cat.groups) {
                     if ([cg.group_no isEqualToString:parentGroupNo]) {
-                        [weakSelf showFollowedToCategoryToast:cat.name];
+                        [weakSelf showFollowedToast:convName toCategory:cat.name];
                         return;
                     }
                 }
@@ -2861,6 +2884,18 @@
     }).catch(^(NSError *err) {
         [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
     });
+}
+
+/// 兜底取 channel 的 displayName（cache hit / wrap hit / fallback channelId）
+- (NSString *)displayNameForChannel:(WKChannel *)channel {
+    if (!channel || channel.channelId.length == 0) return @"";
+    WKConversationWrapModel *wrap = [self.conversationListVM modelAtChannel:channel];
+    NSString *name = wrap.channelInfo.displayName;
+    if (name.length > 0) return name;
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:channel];
+    name = info.displayName;
+    if (name.length > 0) return name;
+    return channel.channelId;
 }
 
 #pragma mark - 会话菜单图标

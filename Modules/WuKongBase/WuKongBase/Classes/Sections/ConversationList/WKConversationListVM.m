@@ -1258,13 +1258,11 @@ static WKConversationListVM *_instance;
                 if(msg) [sectionItems addObject:msg];
             }
             [sectionItems addObjectsFromArray:followedDMs];
-            // 置顶优先，再按时间排序（DM/群混合）。后续 P4 排序页落地后改为
-            // 按 follow_sort 排，但本期复用现有 stick + timestamp 节奏。
+            // 关注 tab 不参与置顶排序 — 跨 tab 置顶独立：在最近 tab 置顶不应让关注 tab
+            // 顺序变。每个分组内仍按 timestamp 倒序，未来 P4 排序页落地后改 follow_sort。
             [sectionItems sortUsingComparator:^NSComparisonResult(WKConversationWrapModel *a, WKConversationWrapModel *b) {
-                if(a.stick && !b.stick) return NSOrderedAscending;
-                if(!a.stick && b.stick) return NSOrderedDescending;
-                if(a.lastMsgTimestamp > b.lastMsgTimestamp) return NSOrderedAscending;
-                if(a.lastMsgTimestamp < b.lastMsgTimestamp) return NSOrderedDescending;
+                if (a.lastMsgTimestamp > b.lastMsgTimestamp) return NSOrderedAscending;
+                if (a.lastMsgTimestamp < b.lastMsgTimestamp) return NSOrderedDescending;
                 return NSOrderedSame;
             }];
             for (WKConversationWrapModel *m in sectionItems) {
