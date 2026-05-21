@@ -66,6 +66,7 @@
 @property(nonatomic,strong) UILabel *externalGroupTagLbl; // 外部群 Tag（仅 WK_GROUP 的 is_external_group==1 会话）
 
 @property(nonatomic,strong) UIImageView *threadAvatarOverlay; // 子区头像右下角的 hash 角标（仅 recentTabContext + 子区行）
+@property(nonatomic,strong) UILabel *threadSourceLbl; // 子区行 title 上方的"来源:父群名"，仅最近 tab + 子区显示
 
 @property(nonatomic,copy) NSString *lastAvatarChannelId; // 上一次 refreshAvatar 对应的 channelId，用于判断 cell 是否被复用到不同会话
 
@@ -139,6 +140,15 @@
             self.threadAvatarOverlay.layer.borderColor = [UIColor whiteColor].CGColor;
         }
         [self.contextContainerView addSubview:self.threadAvatarOverlay];
+
+        // 子区行的"来源:父群名"小标题（最近 tab 专用，关注 tab 隐藏）
+        self.threadSourceLbl = [[UILabel alloc] init];
+        self.threadSourceLbl.font = [[WKApp shared].config appFontOfSize:11.0f];
+        self.threadSourceLbl.textColor = [UIColor colorWithRed:148.0f/255.0f green:152.0f/255.0f blue:168.0f/255.0f alpha:1.0f];
+        self.threadSourceLbl.lineBreakMode = NSLineBreakByTruncatingTail;
+        self.threadSourceLbl.numberOfLines = 1;
+        self.threadSourceLbl.hidden = YES;
+        [self.contextContainerView addSubview:self.threadSourceLbl];
 
     }
     return self;
@@ -343,6 +353,9 @@
     // 刷新标题
     [self refreshTitle:model];
 
+    // 子区行的"来源:父群名"小标题（仅最近 tab 显示）
+    [self refreshThreadSource:model];
+
     // 刷新未读数
     [self refreshUnread:model];
 
@@ -479,15 +492,16 @@
     BOOL isThreadInRecent = self.recentTabContext
                           && model.channel.channelType == WK_COMMUNITY_TOPIC;
     if (isThreadInRecent) {
-        WKChannel *parent = model.parentChannel;
+        WKChannel *parent = [self resolveParentGroupChannelForThread:model];
         if (parent && parent.channelId.length > 0) {
             WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parent];
-            // 没缓存就触发一次 fetch，让下次刷新能拿到正确头像；当前帧暂回退到子区自己的 channelInfo
+            // 没缓存就触发一次 fetch；本帧用 cacheKey="0" 兜底拿群头像 URL（getGroupAvatar:
+            // 不要求 channelInfo 在手，只要 groupNo 就能拼 URL）。
             if (!parentInfo) {
                 [[WKSDK shared].channelManager fetchChannelInfo:parent completion:nil];
             }
             NSString *avatarURL = nil;
-            if (parentInfo && [parentInfo.logo hasPrefix:@"http"]) {
+            if (parentInfo.logo.length > 0 && [parentInfo.logo hasPrefix:@"http"]) {
                 NSString *key = (parentInfo.avatarCacheKey.length > 0) ? parentInfo.avatarCacheKey : @"0";
                 NSString *separator = [parentInfo.logo containsString:@"?"] ? @"&" : @"?";
                 avatarURL = [NSString stringWithFormat:@"%@%@v=%@", parentInfo.logo, separator, key];
@@ -784,19 +798,6 @@
     }else { // 单聊
         fullContentStr = [NSString stringWithFormat:@"%@%@",reminderStr,content];
     }
-    // 最近 tab 的子区行：preview 前面追加 "来源:父群名" 前缀（参考 web）。
-    NSString *threadSourcePrefix = nil;
-    if (self.recentTabContext && model.channel.channelType == WK_COMMUNITY_TOPIC) {
-        WKChannel *parent = model.parentChannel;
-        if (parent && parent.channelId.length > 0) {
-            WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parent];
-            NSString *parentName = parentInfo.displayName;
-            if (parentName.length > 0) {
-                threadSourcePrefix = [NSString stringWithFormat:@"%@ ", [NSString stringWithFormat:LLang(@"来源:%@"), parentName]];
-                fullContentStr = [threadSourcePrefix stringByAppendingString:fullContentStr];
-            }
-        }
-    }
     NSMutableAttributedString *contentAttrStr = [[NSMutableAttributedString alloc] init];
     WKRichTextParseOptions *options = [WKRichTextParseOptions new];
     options.disableLink = true;
@@ -804,16 +805,48 @@
     if(reminderStr.length>0) {
         [contentAttrStr addAttribute:NSForegroundColorAttributeName value:[UIColor orangeColor] range:[fullContentStr rangeOfString:reminderStr]];
     }
-    // 给"来源:xxx"用淡灰色，与正文区分（参考 web subtitle 风格）
-    if (threadSourcePrefix.length > 0) {
-        NSRange r = [fullContentStr rangeOfString:threadSourcePrefix];
-        if (r.location != NSNotFound) {
-            [contentAttrStr addAttribute:NSForegroundColorAttributeName
-                                   value:[UIColor colorWithRed:148.0f/255.0f green:152.0f/255.0f blue:168.0f/255.0f alpha:1.0f]
-                                   range:r];
+    return contentAttrStr;
+}
+
+#pragma mark - Thread (recent tab) helpers
+
+/// 解析子区的父群 channel。优先 model.parentChannel，再回退用 channelId 的 "____" 切分（iOS 约定）。
+- (WKChannel *)resolveParentGroupChannelForThread:(WKConversationWrapModel *)model {
+    if (model.channel.channelType != WK_COMMUNITY_TOPIC) return nil;
+    WKChannel *p = model.parentChannel;
+    if (p && p.channelId.length > 0) return p;
+    NSString *cid = model.channel.channelId;
+    NSRange sep = [cid rangeOfString:@"____"];
+    if (sep.location == NSNotFound) return nil;
+    NSString *groupNo = [cid substringToIndex:sep.location];
+    if (groupNo.length == 0) return nil;
+    return [WKChannel channelID:groupNo channelType:WK_GROUP];
+}
+
+/// 子区行 title 上方的"来源:父群名"小标题；仅 recentTabContext + 子区 显示。
+/// 没缓存到父群 channelInfo 时触发 fetch，本帧暂回退到 channelId 的 groupNo 文本兜底。
+- (void)refreshThreadSource:(WKConversationWrapModel *)model {
+    BOOL shouldShow = self.recentTabContext && model.channel.channelType == WK_COMMUNITY_TOPIC;
+    if (!shouldShow) {
+        self.threadSourceLbl.hidden = YES;
+        self.threadSourceLbl.text = nil;
+        return;
+    }
+    WKChannel *parent = [self resolveParentGroupChannelForThread:model];
+    NSString *parentName = nil;
+    if (parent) {
+        WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parent];
+        parentName = parentInfo.displayName;
+        if (!parentInfo) {
+            [[WKSDK shared].channelManager fetchChannelInfo:parent completion:nil];
         }
     }
-    return contentAttrStr;
+    if (parentName.length == 0) {
+        // 名称暂不可用兜底用 groupNo 防止空字符串导致 sourceLbl 显示空白行
+        parentName = parent.channelId ?: @"";
+    }
+    self.threadSourceLbl.text = [NSString stringWithFormat:LLang(@"来源:%@"), parentName];
+    self.threadSourceLbl.hidden = NO;
 }
 
 
@@ -991,9 +1024,18 @@
 
         CGFloat titleLeftToAvatarSpace = 10.0f;
         self.titleLbl.lim_left = self.avatarImgView.lim_right + titleLeftToAvatarSpace;
-        CGFloat textBlockH = 20.0f + 3.0f + 24.0f; // title + gap + content
+        // 子区行多一行"来源:父群名"，textBlock 高度要相应增加
+        CGFloat sourceH = !self.threadSourceLbl.hidden ? 14.0f : 0.0f;
+        CGFloat sourceGap = sourceH > 0 ? 1.0f : 0.0f;
+        CGFloat textBlockH = sourceH + sourceGap + 20.0f + 3.0f + 24.0f; // (source + gap) + title + gap + content
         CGFloat textBlockTop = (self.lim_height - textBlockH) / 2.0f;
-        self.titleLbl.lim_top = textBlockTop;
+        if (!self.threadSourceLbl.hidden) {
+            self.threadSourceLbl.lim_left = self.titleLbl.lim_left;
+            self.threadSourceLbl.lim_top = textBlockTop;
+            self.threadSourceLbl.lim_height = sourceH;
+            self.threadSourceLbl.lim_width = self.lim_width - self.threadSourceLbl.lim_left - 15.0f;
+        }
+        self.titleLbl.lim_top = textBlockTop + sourceH + sourceGap;
 
         [self.lastMsgTimeLbl sizeToFit];
         CGFloat titleMaxWidth = self.lim_width - (self.avatarImgView.lim_right + 5.0f) - (self.lastMsgTimeLbl.lim_width+5.0f + 20.0f)  - 20.0f;
