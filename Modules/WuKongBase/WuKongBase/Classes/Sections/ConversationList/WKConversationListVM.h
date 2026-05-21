@@ -13,8 +13,8 @@
 NS_ASSUME_NONNULL_BEGIN
 
 typedef NS_ENUM(NSInteger, WKConversationFilterType) {
-    WKConversationFilterGroup = 0,   // 群组
-    WKConversationFilterPrivate = 1, // 私聊
+    WKConversationFilterFollow = 0, // 关注（含分组的群 + DM + 子区）
+    WKConversationFilterRecent = 1, // 最近（全平铺时间序）
 };
 
 /// 会话列表展示项（可以是普通会话 或 分组 section header）
@@ -194,11 +194,11 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 全量会话列表（不受 tab 过滤影响，用于跨 tab 检测@提醒等）
 -(NSArray<WKConversationWrapModel*> *) allConversations;
 
-/// 获取群组类未读数
--(NSInteger) getGroupUnreadCount;
+/// 关注 tab 未读数
+-(NSInteger) getFollowUnreadCount;
 
-/// 获取私聊类未读数
--(NSInteger) getPrivateUnreadCount;
+/// 最近 tab 未读数
+-(NSInteger) getRecentUnreadCount;
 
 /// 刷新指定群组的子区数量
 -(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos;

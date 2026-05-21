@@ -645,7 +645,7 @@ static WKConversationListVM *_instance;
     if (type != WK_GROUP && type != WK_PERSON) {
         return YES; // 系统通知、文件助手等特殊会话两个 tab 都显示
     }
-    if (self.filterType == WKConversationFilterGroup) {
+    if (self.filterType == WKConversationFilterFollow) {
         return type == WK_GROUP;
     } else {
         return type == WK_PERSON;
@@ -678,7 +678,7 @@ static WKConversationListVM *_instance;
     self.filteredConversations = [filtered copy];
 }
 
--(NSInteger) getGroupUnreadCount {
+-(NSInteger) getFollowUnreadCount {
     NSInteger count = 0;
     for (WKConversationWrapModel *model in self.conversationWrapModels) {
         if (model.channel.channelType == WK_GROUP && !model.mute) {
@@ -688,7 +688,7 @@ static WKConversationListVM *_instance;
     return count;
 }
 
--(NSInteger) getPrivateUnreadCount {
+-(NSInteger) getRecentUnreadCount {
     NSInteger count = 0;
     for (WKConversationWrapModel *model in self.conversationWrapModels) {
         if (model.channel.channelType == WK_PERSON && !model.mute) {

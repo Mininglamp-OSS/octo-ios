@@ -111,8 +111,8 @@
 @property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeRight;
 @property(nonatomic,assign) BOOL pendingSpaceSwitchLoad;
 @property(nonatomic,assign) BOOL pendingRebuild;
-@property(nonatomic,assign) CGPoint privateTabScrollOffset;
-@property(nonatomic,assign) CGPoint groupTabScrollOffset;
+@property(nonatomic,assign) CGPoint recentTabScrollOffset;
+@property(nonatomic,assign) CGPoint followTabScrollOffset;
 
 @end
 
@@ -1028,7 +1028,7 @@
         }
 //
         // 群聊 tab 使用分组展示列表，index 不匹配，直接全量刷新
-        if (_conversationListVM.filterType == WKConversationFilterGroup) {
+        if (_conversationListVM.filterType == WKConversationFilterFollow) {
             if (left == 0) [self rebuildGroupDisplayAndReload];
         } else {
             UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]];
@@ -1272,7 +1272,7 @@
                     if(existingModel) {
                         [existingModel reloadLastMessage];
                         // 刷新对应Cell的预览显示
-                        if (_conversationListVM.filterType == WKConversationFilterGroup) {
+                        if (_conversationListVM.filterType == WKConversationFilterFollow) {
                             [self rebuildGroupDisplayAndReload];
                         } else {
                             NSInteger idx = [self.conversationListVM indexAtChannel:conversation.channel];
@@ -1351,7 +1351,7 @@
                     WKConversationWrapModel *existingModel = [self.conversationListVM modelAtChannel:conversation.channel];
                     if(existingModel) {
                         [existingModel reloadLastMessage];
-                        if (_conversationListVM.filterType == WKConversationFilterGroup) {
+                        if (_conversationListVM.filterType == WKConversationFilterFollow) {
                             [self rebuildGroupDisplayAndReload];
                         } else {
                             NSInteger idx = [self.conversationListVM indexAtChannel:conversation.channel];
@@ -1597,7 +1597,7 @@
         [self.conversationListVM sortConversationList];
 
         // 群聊 tab 使用分组展示，index 不匹配 tableView，直接全量刷新
-        if (_conversationListVM.filterType == WKConversationFilterGroup) {
+        if (_conversationListVM.filterType == WKConversationFilterFollow) {
             [self rebuildGroupDisplayAndReload];
         } else {
             NSInteger newIndex = [self.conversationListVM indexAtChannel:newModel.channel];
@@ -1744,7 +1744,7 @@
     NSInteger countAfter = [self.conversationListVM conversationCount];
     // 只有过滤后的列表确实多了一行，才做 insertRowsAtIndexPaths
     // 否则直接 reloadData（防止 tab 过滤导致 count 不变触发 Invalid batch updates）
-    if (countAfter == countBefore + 1 && _conversationListVM.filterType != WKConversationFilterGroup) {
+    if (countAfter == countBefore + 1 && _conversationListVM.filterType != WKConversationFilterFollow) {
         [self.tableView insertRowsAtIndexPaths:@[ [NSIndexPath indexPathForRow:insertPlace inSection:0] ] withRowAnimation:UITableViewRowAnimationFade];
     } else {
         [self rebuildGroupDisplayAndReload];
@@ -1826,7 +1826,7 @@
     WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
     model.unreadCount = unreadCount;
     // 群聊 tab 使用分组展示，index 不匹配 tableView 行号，直接全量刷新
-    if (_conversationListVM.filterType == WKConversationFilterGroup) {
+    if (_conversationListVM.filterType == WKConversationFilterFollow) {
         [self rebuildGroupDisplayAndReload];
     } else {
         UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]];
@@ -1854,16 +1854,16 @@
     _conversationTabView.onTabChanged = ^(NSInteger index) {
         NSInteger oldIndex = weakSelf.conversationListVM.filterType;
         // 保存当前 tab 滚动位置
-        if (oldIndex == WKConversationFilterGroup) {
-            weakSelf.groupTabScrollOffset = weakSelf.tableView.contentOffset;
+        if (oldIndex == WKConversationFilterFollow) {
+            weakSelf.followTabScrollOffset = weakSelf.tableView.contentOffset;
         } else {
-            weakSelf.privateTabScrollOffset = weakSelf.tableView.contentOffset;
+            weakSelf.recentTabScrollOffset = weakSelf.tableView.contentOffset;
         }
         weakSelf.conversationListVM.filterType = index;
         [weakSelf.conversationListVM rebuildFilteredList];
         [weakSelf rebuildGroupDisplayAndReload];
         // 恢复目标 tab 的滚动位置
-        CGPoint savedOffset = (index == WKConversationFilterGroup) ? weakSelf.groupTabScrollOffset : weakSelf.privateTabScrollOffset;
+        CGPoint savedOffset = (index == WKConversationFilterFollow) ? weakSelf.followTabScrollOffset : weakSelf.recentTabScrollOffset;
         [weakSelf.tableView setContentOffset:savedOffset animated:NO];
         [weakSelf updateTabUnreadCounts];
         [[NSUserDefaults standardUserDefaults] setInteger:index forKey:@"WKConversationTabIndex"];
@@ -1886,8 +1886,8 @@
 }
 
 -(void) updateTabUnreadCounts {
-    [self.conversationTabView setGroupUnreadCount:[self.conversationListVM getGroupUnreadCount]];
-    [self.conversationTabView setPrivateUnreadCount:[self.conversationListVM getPrivateUnreadCount]];
+    [self.conversationTabView setFollowUnreadCount:[self.conversationListVM getFollowUnreadCount]];
+    [self.conversationTabView setRecentUnreadCount:[self.conversationListVM getRecentUnreadCount]];
 }
 
 -(void) refreshBadge {
@@ -1916,7 +1916,7 @@
                 // filteredConversations 下标和 row 不可直接等同。走 rebuild 路径即可。
                 // 私聊 tab 下 indexAtChannel: 返回的就是 row, 但还是做 bounds 校验防御。
                 // (Jerry-Xin R2 blocking fix, )
-                if (_conversationListVM.filterType == WKConversationFilterGroup) {
+                if (_conversationListVM.filterType == WKConversationFilterFollow) {
                     [self rebuildGroupDisplayAndReload];
                 } else {
                     WKChannel *parentChannel = [WKChannel channelID:parentGroupNo channelType:WK_GROUP];
@@ -1943,7 +1943,7 @@
         }else{
             // Bounds-check: 群聊 tab 下 filteredConversations 下标和真实 row 不一致,
             // 直接 reload 可能越界。(Jerry-Xin R2 fix, )
-            if (_conversationListVM.filterType == WKConversationFilterGroup) {
+            if (_conversationListVM.filterType == WKConversationFilterFollow) {
                 [self rebuildGroupDisplayAndReload];
             } else {
                 NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
@@ -1982,7 +1982,7 @@
 
 -(CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath{
     // 群聊 tab：使用分组展示列表
-    if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
+    if (_conversationListVM.filterType == WKConversationFilterFollow && self.groupDisplayList) {
         if (indexPath.row >= (NSInteger)self.groupDisplayList.count) return 64.0f;
         WKConversationDisplayItem *item = self.groupDisplayList[indexPath.row];
         if (item.isSectionHeader) return 36.0f;
@@ -2008,7 +2008,7 @@
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section{
-    if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
+    if (_conversationListVM.filterType == WKConversationFilterFollow && self.groupDisplayList) {
         return self.groupDisplayList.count;
     }
     return [_conversationListVM conversationCount];
@@ -2016,7 +2016,7 @@
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath{
     // 群聊 tab：使用分组展示列表
-    if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
+    if (_conversationListVM.filterType == WKConversationFilterFollow && self.groupDisplayList) {
         if (indexPath.row >= (NSInteger)self.groupDisplayList.count) {
             return [tableView dequeueReusableCellWithIdentifier:@"WKConversationListCell" forIndexPath:indexPath];
         }
@@ -2059,7 +2059,7 @@
         }
     }
     // 群聊 tab
-    if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
+    if (_conversationListVM.filterType == WKConversationFilterFollow && self.groupDisplayList) {
         if (indexPath.row >= (NSInteger)self.groupDisplayList.count) return;
         WKConversationDisplayItem *item = self.groupDisplayList[indexPath.row];
         if (item.isSectionHeader) {
@@ -2157,14 +2157,14 @@
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
 
     // 群聊 tab: section header 不进入聊天
-    if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
+    if (_conversationListVM.filterType == WKConversationFilterFollow && self.groupDisplayList) {
         if (indexPath.row >= (NSInteger)self.groupDisplayList.count) return;
         WKConversationDisplayItem *item = self.groupDisplayList[indexPath.row];
         if (item.isSectionHeader) return;
     }
 
      WKConversationWrapModel *conversationModel;
-    if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
+    if (_conversationListVM.filterType == WKConversationFilterFollow && self.groupDisplayList) {
         conversationModel = self.groupDisplayList[indexPath.row].conversation;
     } else {
         conversationModel = [_conversationListVM conversationAtIndex:indexPath.row];
@@ -2945,7 +2945,7 @@
 /// 检查群聊和子区中是否有未处理的@提醒，更新 tab 标识
 /// 直接使用 buildGroupDisplayList 中已计算好的结果，避免重复遍历和 DB 查询
 -(void) updateGroupMentionBadge {
-    [_conversationTabView setGroupHasMention:_conversationListVM.lastBuildHasMention];
+    [_conversationTabView setFollowHasMention:_conversationListVM.lastBuildHasMention];
 }
 
 -(void) showCreateCategoryDialog {

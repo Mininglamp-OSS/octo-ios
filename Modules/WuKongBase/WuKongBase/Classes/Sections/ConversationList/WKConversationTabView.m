@@ -16,10 +16,10 @@ static CGFloat const kBadgeSize = 16.0f;
 
 @property (nonatomic, strong) UIView *capsuleContainer;
 @property (nonatomic, strong) UIView *selectedCapsule;
-@property (nonatomic, strong) UIButton *groupBtn;
-@property (nonatomic, strong) UIButton *privateBtn;
-@property (nonatomic, strong) UILabel *groupBadge;
-@property (nonatomic, strong) UILabel *privateBadge;
+@property (nonatomic, strong) UIButton *followBtn;
+@property (nonatomic, strong) UIButton *recentBtn;
+@property (nonatomic, strong) UILabel *followBadge;
+@property (nonatomic, strong) UILabel *recentBadge;
 @property (nonatomic, strong) UILabel *mentionLbl;
 
 @end
@@ -65,25 +65,25 @@ static CGFloat const kBadgeSize = 16.0f;
     UIColor *normalColor = [UIColor colorWithWhite:0.5 alpha:1.0];
     UIFont *selectedFont = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
 
-    _groupBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    [_groupBtn setTitle:LLang(@"群聊") forState:UIControlStateNormal];
-    [_groupBtn setTitleColor:selectedColor forState:UIControlStateNormal];
-    _groupBtn.titleLabel.font = selectedFont;
-    [_groupBtn addTarget:self action:@selector(onGroupTap) forControlEvents:UIControlEventTouchUpInside];
-    [_capsuleContainer addSubview:_groupBtn];
+    _followBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    [_followBtn setTitle:LLang(@"关注") forState:UIControlStateNormal];
+    [_followBtn setTitleColor:selectedColor forState:UIControlStateNormal];
+    _followBtn.titleLabel.font = selectedFont;
+    [_followBtn addTarget:self action:@selector(onFollowTap) forControlEvents:UIControlEventTouchUpInside];
+    [_capsuleContainer addSubview:_followBtn];
 
-    _privateBtn = [UIButton buttonWithType:UIButtonTypeCustom];
-    [_privateBtn setTitle:LLang(@"私聊") forState:UIControlStateNormal];
-    [_privateBtn setTitleColor:normalColor forState:UIControlStateNormal];
-    _privateBtn.titleLabel.font = selectedFont;
-    [_privateBtn addTarget:self action:@selector(onPrivateTap) forControlEvents:UIControlEventTouchUpInside];
-    [_capsuleContainer addSubview:_privateBtn];
+    _recentBtn = [UIButton buttonWithType:UIButtonTypeCustom];
+    [_recentBtn setTitle:LLang(@"最近") forState:UIControlStateNormal];
+    [_recentBtn setTitleColor:normalColor forState:UIControlStateNormal];
+    _recentBtn.titleLabel.font = selectedFont;
+    [_recentBtn addTarget:self action:@selector(onRecentTap) forControlEvents:UIControlEventTouchUpInside];
+    [_capsuleContainer addSubview:_recentBtn];
 
-    _groupBadge = [self createBadgeLabel];
-    [_capsuleContainer addSubview:_groupBadge];
+    _followBadge = [self createBadgeLabel];
+    [_capsuleContainer addSubview:_followBadge];
 
-    _privateBadge = [self createBadgeLabel];
-    [_capsuleContainer addSubview:_privateBadge];
+    _recentBadge = [self createBadgeLabel];
+    [_capsuleContainer addSubview:_recentBadge];
 
     _mentionLbl = [[UILabel alloc] init];
     _mentionLbl.text = @"[有人@我]";
@@ -120,8 +120,8 @@ static CGFloat const kBadgeSize = 16.0f;
     _capsuleContainer.layer.masksToBounds = YES;
 
     CGFloat halfW = capsuleW / 2.0f;
-    _groupBtn.frame = CGRectMake(0, 0, halfW, kCapsuleHeight);
-    _privateBtn.frame = CGRectMake(halfW, 0, halfW, kCapsuleHeight);
+    _followBtn.frame = CGRectMake(0, 0, halfW, kCapsuleHeight);
+    _recentBtn.frame = CGRectMake(halfW, 0, halfW, kCapsuleHeight);
 
     [self layoutSelectedCapsuleAnimated:NO];
     [self layoutBadges];
@@ -159,40 +159,40 @@ static CGFloat const kBadgeSize = 16.0f;
 }
 
 - (void)layoutBadges {
-    [self layoutGroupContent];
-    [self layoutPrivateContent];
+    [self layoutFollowContent];
+    [self layoutRecentContent];
 }
 
-- (CGFloat)extraWidthForGroup {
+- (CGFloat)extraWidthForFollow {
     CGFloat extra = 0;
     if (!_mentionLbl.hidden) {
         [_mentionLbl sizeToFit];
         extra += 2 + _mentionLbl.bounds.size.width + 2;
     }
-    if (!_groupBadge.hidden) {
-        [_groupBadge sizeToFit];
-        extra += 2 + MAX(_groupBadge.bounds.size.width + 6, kBadgeSize);
+    if (!_followBadge.hidden) {
+        [_followBadge sizeToFit];
+        extra += 2 + MAX(_followBadge.bounds.size.width + 6, kBadgeSize);
     }
     return extra;
 }
 
-- (CGFloat)extraWidthForPrivate {
-    if (_privateBadge.hidden) return 0;
-    [_privateBadge sizeToFit];
-    return 2 + MAX(_privateBadge.bounds.size.width + 6, kBadgeSize);
+- (CGFloat)extraWidthForRecent {
+    if (_recentBadge.hidden) return 0;
+    [_recentBadge sizeToFit];
+    return 2 + MAX(_recentBadge.bounds.size.width + 6, kBadgeSize);
 }
 
-- (void)layoutGroupContent {
-    CGFloat extra = [self extraWidthForGroup];
+- (void)layoutFollowContent {
+    CGFloat extra = [self extraWidthForFollow];
     CGFloat offset = -extra / 2.0f;
-    _groupBtn.titleEdgeInsets = UIEdgeInsetsMake(0, offset, 0, -offset);
-    [_groupBtn layoutIfNeeded];
+    _followBtn.titleEdgeInsets = UIEdgeInsetsMake(0, offset, 0, -offset);
+    [_followBtn layoutIfNeeded];
 
-    NSString *title = _groupBtn.titleLabel.text ?: @"";
-    UIFont *font = _groupBtn.titleLabel.font;
+    NSString *title = _followBtn.titleLabel.text ?: @"";
+    UIFont *font = _followBtn.titleLabel.font;
     CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-    CGFloat titleRight = CGRectGetMidX(_groupBtn.frame) + offset + textW / 2.0f;
-    CGFloat btnCenterY = CGRectGetMidY(_groupBtn.frame);
+    CGFloat titleRight = CGRectGetMidX(_followBtn.frame) + offset + textW / 2.0f;
+    CGFloat btnCenterY = CGRectGetMidY(_followBtn.frame);
 
     CGFloat x = titleRight;
     if (!_mentionLbl.hidden) {
@@ -201,37 +201,37 @@ static CGFloat const kBadgeSize = 16.0f;
         _mentionLbl.frame = CGRectMake(x + 2, btnCenterY - lblH / 2.0f + 1, lblW, lblH);
         x += 2 + lblW;
     }
-    if (!_groupBadge.hidden) {
-        CGFloat badgeW = MAX(_groupBadge.bounds.size.width + 6, kBadgeSize);
-        _groupBadge.frame = CGRectMake(x + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
+    if (!_followBadge.hidden) {
+        CGFloat badgeW = MAX(_followBadge.bounds.size.width + 6, kBadgeSize);
+        _followBadge.frame = CGRectMake(x + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
     }
 }
 
-- (void)layoutPrivateContent {
-    CGFloat extra = [self extraWidthForPrivate];
+- (void)layoutRecentContent {
+    CGFloat extra = [self extraWidthForRecent];
     CGFloat offset = -extra / 2.0f;
-    _privateBtn.titleEdgeInsets = UIEdgeInsetsMake(0, offset, 0, -offset);
-    [_privateBtn layoutIfNeeded];
+    _recentBtn.titleEdgeInsets = UIEdgeInsetsMake(0, offset, 0, -offset);
+    [_recentBtn layoutIfNeeded];
 
-    if (_privateBadge.hidden) return;
+    if (_recentBadge.hidden) return;
 
-    NSString *title = _privateBtn.titleLabel.text ?: @"";
-    UIFont *font = _privateBtn.titleLabel.font;
+    NSString *title = _recentBtn.titleLabel.text ?: @"";
+    UIFont *font = _recentBtn.titleLabel.font;
     CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-    CGFloat titleRight = CGRectGetMidX(_privateBtn.frame) + offset + textW / 2.0f;
-    CGFloat btnCenterY = CGRectGetMidY(_privateBtn.frame);
+    CGFloat titleRight = CGRectGetMidX(_recentBtn.frame) + offset + textW / 2.0f;
+    CGFloat btnCenterY = CGRectGetMidY(_recentBtn.frame);
 
-    CGFloat badgeW = MAX(_privateBadge.bounds.size.width + 6, kBadgeSize);
-    _privateBadge.frame = CGRectMake(titleRight + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
+    CGFloat badgeW = MAX(_recentBadge.bounds.size.width + 6, kBadgeSize);
+    _recentBadge.frame = CGRectMake(titleRight + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
 }
 
 #pragma mark - Actions
 
-- (void)onGroupTap {
+- (void)onFollowTap {
     [self setSelectedIndex:0 animated:YES];
 }
 
-- (void)onPrivateTap {
+- (void)onRecentTap {
     [self setSelectedIndex:1 animated:YES];
 }
 
@@ -261,31 +261,31 @@ static CGFloat const kBadgeSize = 16.0f;
     UIColor *normalColor = [UIColor colorWithWhite:0.5 alpha:1.0];
 
     if (_selectedIndex == 0) {
-        [_groupBtn setTitleColor:selectedColor forState:UIControlStateNormal];
-        [_privateBtn setTitleColor:normalColor forState:UIControlStateNormal];
+        [_followBtn setTitleColor:selectedColor forState:UIControlStateNormal];
+        [_recentBtn setTitleColor:normalColor forState:UIControlStateNormal];
     } else {
-        [_groupBtn setTitleColor:normalColor forState:UIControlStateNormal];
-        [_privateBtn setTitleColor:selectedColor forState:UIControlStateNormal];
+        [_followBtn setTitleColor:normalColor forState:UIControlStateNormal];
+        [_recentBtn setTitleColor:selectedColor forState:UIControlStateNormal];
     }
 }
 
 #pragma mark - Badge
 
 - (void)layoutMentionLabel {
-    [self layoutGroupContent];
+    [self layoutFollowContent];
 }
 
-- (void)setGroupHasMention:(BOOL)hasMention {
+- (void)setFollowHasMention:(BOOL)hasMention {
     _mentionLbl.hidden = !hasMention;
     [self layoutMentionLabel];
 }
 
-- (void)setGroupUnreadCount:(NSInteger)count {
+- (void)setFollowUnreadCount:(NSInteger)count {
     // 不再显示未读红点
 }
 
-- (void)setPrivateUnreadCount:(NSInteger)count {
-    [self updateBadge:_privateBadge count:count];
+- (void)setRecentUnreadCount:(NSInteger)count {
+    [self updateBadge:_recentBadge count:count];
     [self layoutBadges];
 }
 
