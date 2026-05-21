@@ -416,6 +416,10 @@ static WKConversationListVM *_instance;
         });
     }
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        // 全量 fetch 完成后也同步 threadWrapModels — 否则 cold boot 走的是这条路径
+        // （loadConversationList → fetchThreadCountsForGroups → 这里），子区永远进不
+        // 了 threadWrapModels，最近 tab 一片空白
+        [self syncThreadWrapModelsFromCachedTopics];
         if (completion) completion();
     });
 }
