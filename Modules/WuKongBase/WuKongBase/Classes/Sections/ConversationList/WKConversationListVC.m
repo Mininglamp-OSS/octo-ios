@@ -2675,14 +2675,24 @@
             if (onPick) onPick(catId);
         }]];
     }
-    // 新建分组（一致使用现有 showCreateCategoryDialog 路径，回调链条由 loadCategories 触发）
+    // 新建分组 — 新建成功后自动用回调把新分组 id 喂给 onPick，避免"新建完只剩一个空分组"
+    // 的割裂感（与右上角的"创建分组"独立入口区分开）。
+    __weak typeof(self) weakSelf = self;
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"+ 新建分组") style:UIAlertActionStyleDefault handler:^(UIAlertAction *_) {
-        [self showCreateCategoryDialog];
+        [weakSelf showCreateCategoryDialogWithCompletion:^(WKCategoryEntity *cat) {
+            if (cat.category_id.length == 0) return;
+            [[NSUserDefaults standardUserDefaults] setObject:cat.category_id forKey:lastKey];
+            if (onPick) onPick(cat.category_id);
+        }];
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
     if (!hasAny) {
-        // 没有自建分组：直接走新建（更顺手）
-        [self showCreateCategoryDialog];
+        // 没有自建分组：直接走新建（更顺手）+ 同样的链路联动
+        [self showCreateCategoryDialogWithCompletion:^(WKCategoryEntity *cat) {
+            if (cat.category_id.length == 0) return;
+            [[NSUserDefaults standardUserDefaults] setObject:cat.category_id forKey:lastKey];
+            if (onPick) onPick(cat.category_id);
+        }];
         return;
     }
     [self presentViewController:alert animated:YES completion:nil];
@@ -3379,6 +3389,13 @@
 }
 
 -(void) showCreateCategoryDialog {
+    [self showCreateCategoryDialogWithCompletion:nil];
+}
+
+/// 创建分组，完成后回调新建的 WKCategoryEntity。如 completion 为 nil，只创建不联动。
+/// 用于"添加到关注/移动到分组 → 新建分组"流程：用户期望新建后会话自动落入新分组，
+/// 不联动会很割裂。
+-(void) showCreateCategoryDialogWithCompletion:(void(^)(WKCategoryEntity *category))completion {
     NSString *spaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
     if(!spaceId || spaceId.length == 0) return;
 
@@ -3393,6 +3410,7 @@
         if(!name || name.length == 0) return;
         [[WKCategoryService shared] createCategory:spaceId name:name].then(^(WKCategoryEntity *cat) {
             [weakSelf loadCategories];
+            if (completion) completion(cat);
         }).catch(^(NSError *error) {
             NSLog(@"创建分组失败: %@", error);
         });
@@ -3401,6 +3419,14 @@
 }
 
 -(void) showMoveToCategoryDialog:(NSString *)groupNo {
+    // 先刷一次 categoryList，避免显示过期分组（用户在 web/另一设备建/删的分类）
+    __weak typeof(self) weakSelf = self;
+    [_conversationListVM loadCategoriesWithCompletion:^{
+        [weakSelf presentMoveToCategorySheet:groupNo];
+    }];
+}
+
+-(void) presentMoveToCategorySheet:(NSString *)groupNo {
     NSArray<WKCategoryEntity *> *categories = _conversationListVM.categoryList;
 
     // 获取群组名称
@@ -3408,9 +3434,10 @@
     NSString *groupName = groupInfo ? groupInfo.displayName : groupNo;
     NSString *titleText = [NSString stringWithFormat:@"%@ \"%@\"", LLang(@"移动"), groupName];
 
-    // 找到当前群聊所在分组
+    // 找到当前群所在分组
     NSString *currentCategoryId = nil;
     for (WKCategoryEntity *cat in categories) {
+        if (cat.is_default) continue;
         if(!cat.category_id || cat.category_id.length == 0) continue;
         for (WKCategoryGroup *cg in cat.groups) {
             if([groupNo isEqualToString:cg.group_no]) {
@@ -3424,19 +3451,13 @@
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:titleText message:nil preferredStyle:UIAlertControllerStyleActionSheet];
     __weak typeof(self) weakSelf = self;
 
-    // 默认分组选项
-    BOOL isInDefault = (currentCategoryId == nil);
-    NSString *defaultTitle = isInDefault ? [NSString stringWithFormat:@"✓ %@", LLang(@"不分组")] : LLang(@"不分组");
-    [alert addAction:[UIAlertAction actionWithTitle:defaultTitle style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-        if(isInDefault) return;
-        [[WKCategoryService shared] moveGroup:groupNo toCategoryId:nil].then(^(id r) {
-            [weakSelf loadCategories];
-        }).catch(^(NSError *e) { NSLog(@"移动分组失败: %@", e); });
-    }]];
-
-    // 各用户自建分组
+    // 仅展示用户自建的非默认分组（spec §0：关注 tab 隐藏默认分组，不再提供"移到不分组"出口
+    // 想让群从某分组里出来用"取消关注"即可）
+    BOOL hasAnyCategory = NO;
     for (WKCategoryEntity *cat in categories) {
+        if (cat.is_default) continue;
         if(!cat.category_id || cat.category_id.length == 0) continue;
+        hasAnyCategory = YES;
         BOOL isCurrent = [cat.category_id isEqualToString:currentCategoryId];
         NSString *title = isCurrent ? [NSString stringWithFormat:@"✓ %@", cat.name] : cat.name;
         NSString *catId = cat.category_id;
@@ -3448,6 +3469,26 @@
         }]];
     }
 
+    // 没有自建分组时直接走"新建分组"流程；新建成功后自动把该群移到新分组
+    if (!hasAnyCategory) {
+        [self showCreateCategoryDialogWithCompletion:^(WKCategoryEntity *cat) {
+            if (cat.category_id.length == 0) return;
+            [[WKCategoryService shared] moveGroup:groupNo toCategoryId:cat.category_id].then(^(id r) {
+                [weakSelf loadCategories];
+            }).catch(^(NSError *e) { NSLog(@"移动分组失败: %@", e); });
+        }];
+        return;
+    }
+
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"+ 新建分组") style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        // 新建后自动把当前群移到新分组（避免"新建一个空分组，原会话没动"的割裂体验）
+        [weakSelf showCreateCategoryDialogWithCompletion:^(WKCategoryEntity *cat) {
+            if (cat.category_id.length == 0) return;
+            [[WKCategoryService shared] moveGroup:groupNo toCategoryId:cat.category_id].then(^(id r) {
+                [weakSelf loadCategories];
+            }).catch(^(NSError *e) { NSLog(@"移动分组失败: %@", e); });
+        }];
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }

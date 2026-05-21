@@ -191,6 +191,57 @@
     });
 }
 
+#pragma mark - 左滑删除（iOS 11+）
+
+- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView
+trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath API_AVAILABLE(ios(11.0)) {
+    if (indexPath.row >= (NSInteger)_reorderList.count) return nil;
+    WKCategoryEntity *cat = _reorderList[indexPath.row];
+    if (cat.is_default || cat.category_id.length == 0) return nil; // 默认分组不允许删
+    __weak typeof(self) weakSelf = self;
+    UIContextualAction *del = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive
+                                                                      title:LLang(@"删除")
+                                                                    handler:^(UIContextualAction *action, UIView *src, void (^completion)(BOOL)) {
+        [weakSelf confirmDeleteCategoryAtIndexPath:indexPath completion:completion];
+    }];
+    UISwipeActionsConfiguration *cfg = [UISwipeActionsConfiguration configurationWithActions:@[del]];
+    cfg.performsFirstActionWithFullSwipe = NO; // 防止误触：必须点击红色按钮才删
+    return cfg;
+}
+
+- (void)confirmDeleteCategoryAtIndexPath:(NSIndexPath *)indexPath completion:(void(^)(BOOL))completion {
+    if (indexPath.row >= (NSInteger)_reorderList.count) { if (completion) completion(NO); return; }
+    WKCategoryEntity *cat = _reorderList[indexPath.row];
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if (spaceId.length == 0 || cat.category_id.length == 0) { if (completion) completion(NO); return; }
+
+    NSString *msg = [NSString stringWithFormat:LLang(@"确认删除分组「%@」？该分组下所有关注会被取消。"), cat.name];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil message:msg preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:^(UIAlertAction *_) {
+        if (completion) completion(NO);
+    }]];
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"删除") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *_) {
+        [[WKCategoryService shared] deleteCategory:spaceId categoryId:cat.category_id].then(^(id r) {
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) { if (completion) completion(YES); return; }
+            NSInteger idx = [strongSelf->_reorderList indexOfObject:cat];
+            if (idx != NSNotFound) {
+                [strongSelf->_reorderList removeObjectAtIndex:idx];
+                [strongSelf->_tableView deleteRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:idx inSection:0]] withRowAnimation:UITableViewRowAnimationAutomatic];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    [strongSelf.tableView reloadData];
+                });
+            }
+            if (completion) completion(YES);
+        }).catch(^(NSError *err) {
+            [self.view showMsg:err.domain ?: LLang(@"删除分组失败")];
+            if (completion) completion(NO);
+        });
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 #pragma mark - 长按拖拽排序
 
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
