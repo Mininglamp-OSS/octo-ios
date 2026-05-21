@@ -280,6 +280,7 @@
 "群聊"="Group Chat";
 "关注"="Follow";
 "最近"="Recent";
+"来源:%@"="From: %@";
 "无"="Nothing";
 "刚刚"="Just";
 "%0.0f分钟"="%0.0f min";

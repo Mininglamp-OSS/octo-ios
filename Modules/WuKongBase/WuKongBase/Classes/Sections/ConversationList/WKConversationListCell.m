@@ -65,6 +65,8 @@
 
 @property(nonatomic,strong) UILabel *externalGroupTagLbl; // 外部群 Tag（仅 WK_GROUP 的 is_external_group==1 会话）
 
+@property(nonatomic,strong) UIImageView *threadAvatarOverlay; // 子区头像右下角的 hash 角标（仅 recentTabContext + 子区行）
+
 @property(nonatomic,copy) NSString *lastAvatarChannelId; // 上一次 refreshAvatar 对应的 channelId，用于判断 cell 是否被复用到不同会话
 
 @end
@@ -121,6 +123,22 @@
         [self.contextContainerView addSubview:self.threadToggleBtn];
         // 外部群 Tag
         [self.contextContainerView addSubview:self.externalGroupTagLbl];
+
+        // 子区头像右下角 hash 角标（最近 tab 子区行专用，默认隐藏）
+        self.threadAvatarOverlay = [[UIImageView alloc] init];
+        self.threadAvatarOverlay.contentMode = UIViewContentModeScaleAspectFit;
+        self.threadAvatarOverlay.hidden = YES;
+        self.threadAvatarOverlay.layer.cornerRadius = 11.0f; // size 22 时刚好圆
+        self.threadAvatarOverlay.layer.masksToBounds = NO;
+        self.threadAvatarOverlay.layer.borderWidth = 1.5f;
+        if (@available(iOS 13.0, *)) {
+            self.threadAvatarOverlay.backgroundColor = [UIColor systemBackgroundColor];
+            self.threadAvatarOverlay.layer.borderColor = [UIColor systemBackgroundColor].CGColor;
+        } else {
+            self.threadAvatarOverlay.backgroundColor = [UIColor whiteColor];
+            self.threadAvatarOverlay.layer.borderColor = [UIColor whiteColor].CGColor;
+        }
+        [self.contextContainerView addSubview:self.threadAvatarOverlay];
 
     }
     return self;
@@ -456,6 +474,39 @@
         self.avatarImgView.avatarImgView.image = placeholder;
     }
     self.lastAvatarChannelId = channelId;
+
+    // 最近 tab 的子区行：用父群头像 + 右下角 hash 角标的复合样式（参考 web）。
+    BOOL isThreadInRecent = self.recentTabContext
+                          && model.channel.channelType == WK_COMMUNITY_TOPIC;
+    if (isThreadInRecent) {
+        WKChannel *parent = model.parentChannel;
+        if (parent && parent.channelId.length > 0) {
+            WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parent];
+            // 没缓存就触发一次 fetch，让下次刷新能拿到正确头像；当前帧暂回退到子区自己的 channelInfo
+            if (!parentInfo) {
+                [[WKSDK shared].channelManager fetchChannelInfo:parent completion:nil];
+            }
+            NSString *avatarURL = nil;
+            if (parentInfo && [parentInfo.logo hasPrefix:@"http"]) {
+                NSString *key = (parentInfo.avatarCacheKey.length > 0) ? parentInfo.avatarCacheKey : @"0";
+                NSString *separator = [parentInfo.logo containsString:@"?"] ? @"&" : @"?";
+                avatarURL = [NSString stringWithFormat:@"%@%@v=%@", parentInfo.logo, separator, key];
+            } else {
+                avatarURL = [WKAvatarUtil getGroupAvatar:parent.channelId cacheKey:parentInfo.avatarCacheKey];
+            }
+            [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL] placeholderImage:placeholder options:SDWebImageDelayPlaceholder context:@{
+                SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll),
+            }];
+        }
+        // 右下角 hash 角标：用子区详情页顶部的同一个 hash 图标
+        UIImage *hashIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(18, 18)
+                                                                              color:[WKApp shared].config.themeColor];
+        self.threadAvatarOverlay.image = hashIcon;
+        self.threadAvatarOverlay.hidden = NO;
+        return;
+    }
+    self.threadAvatarOverlay.hidden = YES;
+
     if([model.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
         NSString *avatarURL = hasChannelInfo ? [WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo] : nil;
         NSLog(@"[DEBUG] 系统通知(u_10000) logo: %@, avatarURL: %@, hasChannelInfo: %d", model.channelInfo.logo, avatarURL, hasChannelInfo);
@@ -729,9 +780,22 @@
         }else {
             fullContentStr = [NSString stringWithFormat:@"%@%@",reminderStr,content];
         }
-        
+
     }else { // 单聊
         fullContentStr = [NSString stringWithFormat:@"%@%@",reminderStr,content];
+    }
+    // 最近 tab 的子区行：preview 前面追加 "来源:父群名" 前缀（参考 web）。
+    NSString *threadSourcePrefix = nil;
+    if (self.recentTabContext && model.channel.channelType == WK_COMMUNITY_TOPIC) {
+        WKChannel *parent = model.parentChannel;
+        if (parent && parent.channelId.length > 0) {
+            WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parent];
+            NSString *parentName = parentInfo.displayName;
+            if (parentName.length > 0) {
+                threadSourcePrefix = [NSString stringWithFormat:@"%@ ", [NSString stringWithFormat:LLang(@"来源:%@"), parentName]];
+                fullContentStr = [threadSourcePrefix stringByAppendingString:fullContentStr];
+            }
+        }
     }
     NSMutableAttributedString *contentAttrStr = [[NSMutableAttributedString alloc] init];
     WKRichTextParseOptions *options = [WKRichTextParseOptions new];
@@ -739,6 +803,15 @@
     [contentAttrStr lim_parse:fullContentStr mentionInfo:nil options:options];
     if(reminderStr.length>0) {
         [contentAttrStr addAttribute:NSForegroundColorAttributeName value:[UIColor orangeColor] range:[fullContentStr rangeOfString:reminderStr]];
+    }
+    // 给"来源:xxx"用淡灰色，与正文区分（参考 web subtitle 风格）
+    if (threadSourcePrefix.length > 0) {
+        NSRange r = [fullContentStr rangeOfString:threadSourcePrefix];
+        if (r.location != NSNotFound) {
+            [contentAttrStr addAttribute:NSForegroundColorAttributeName
+                                   value:[UIColor colorWithRed:148.0f/255.0f green:152.0f/255.0f blue:168.0f/255.0f alpha:1.0f]
+                                   range:r];
+        }
     }
     return contentAttrStr;
 }
@@ -895,6 +968,14 @@
         CGFloat avatarSize = 52.0f;
         self.avatarImgView.frame = CGRectMake(15.0f, 0, avatarSize, avatarSize);
         self.avatarImgView.lim_top = self.lim_height/2.0f - self.avatarImgView.lim_height/2.0f;
+        // 子区头像右下角 hash 角标（仅最近 tab + 子区行显示）
+        if (!self.threadAvatarOverlay.hidden) {
+            CGFloat overlaySize = 22.0f;
+            self.threadAvatarOverlay.frame = CGRectMake(
+                self.avatarImgView.lim_right - overlaySize + 2.0f,
+                self.avatarImgView.lim_bottom - overlaySize + 2.0f,
+                overlaySize, overlaySize);
+        }
         // 在线标记
         if(self.model.channelInfo && self.model.channelInfo.online) {
             self.onlineBadgeView.lim_left = self.avatarImgView.lim_right - self.onlineBadgeView.lim_width;
