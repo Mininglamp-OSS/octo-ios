@@ -1989,9 +1989,15 @@
             if (_conversationListVM.filterType == WKConversationFilterFollow) {
                 [self rebuildGroupDisplayAndReload];
             } else {
+                // 最近 tab：群行用 shadow wrap，其 .c 指向旧 WKConversation 单例。
+                // 上面 channelInfoUpdate 路径已经把 mute/stick 同步到原始 wrap.c 的 copy，
+                // 但 shadow wrap.c 还指向老的实例 → 直接 reloadRows 渲染不出新的免打扰/置顶。
+                // 触发 rebuildFilteredList 让 shadow 从 conversationWrapModels[i].c 取最新值。
+                [self.conversationListVM rebuildFilteredList];
+                NSInteger newIndex = [self.conversationListVM indexAtChannel:channelInfo.channel];
                 NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
-                if (index < rowCount) {
-                    [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:index inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+                if (newIndex >= 0 && newIndex < rowCount) {
+                    [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:newIndex inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
                 }
             }
             
@@ -2329,7 +2335,12 @@
         @"title": muteTitle,
         @"icon": [WKConversationListVC iconMute:model.mute],
         @"action": ^{
-            [[WKChannelSettingManager shared] channel:model.channel mute:!model.mute];
+            BOOL newMute = !model.mute;
+            [[WKChannelSettingManager shared] channel:model.channel mute:newMute];
+            // 最近 tab 用 shadow wrap，服务端 channelInfoUpdate 之前 muteIcon
+            // 没法立即反映；这里主动把状态同步到原始 wrap 的 c 上 + 触发 rebuild，
+            // 让用户拿到即时反馈（与 web 的 optimistic update 同节奏）。
+            [weakSelf applyOptimisticConversationUpdateForChannel:model.channel mute:@(newMute) stick:nil];
         }
     }];
 
@@ -2339,7 +2350,9 @@
         @"title": stickTitle,
         @"icon": [WKConversationListVC iconStick],
         @"action": ^{
-            [[WKChannelSettingManager shared] channel:model.channel stick:!model.stick];
+            BOOL newStick = !model.stick;
+            [[WKChannelSettingManager shared] channel:model.channel stick:newStick];
+            [weakSelf applyOptimisticConversationUpdateForChannel:model.channel mute:nil stick:@(newStick)];
         }
     }];
 
@@ -2390,6 +2403,7 @@
 
     NSString *muteTitle = isMuted ? LLang(@"打开通知") : LLang(@"关闭通知");
     NSMutableArray<NSDictionary *> *menuItems = [NSMutableArray array];
+    __weak typeof(self) weakSelf = self;
     [menuItems addObject:@{
         @"title": muteTitle,
         @"icon": [WKConversationListVC iconMute:isMuted],
@@ -2398,9 +2412,42 @@
             // 依赖服务端 PUT groups/{groupNo}/threads/{shortID}/setting 成功后,
             // 通过 SendChannelUpdate 推送 channel update CMD,客户端拉取最新 channelInfo 并刷新 UI。
             [[WKChannelSettingManager shared] channel:threadChannel mute:newMute];
+            // 最近 tab 同样需要即时反馈；子区 wrap 在 threadWrapModels 里。
+            [weakSelf applyOptimisticConversationUpdateForChannel:threadChannel mute:@(newMute) stick:nil];
         }
     }];
     [self showFloatingMenu:menuItems atPoint:point];
+}
+
+/// 长按菜单点击 mute/stick 后的即时反馈：直接同步本地 wrap.c 状态 + 触发 rebuildFilteredList。
+/// 仅最近 tab 需要（关注 tab 走 channelInfoUpdate → rebuildGroupDisplayAndReload 路径
+/// 由服务端回调自然驱动，不需要本地兜底）。mute / stick 传 nil 表示该字段不变。
+- (void)applyOptimisticConversationUpdateForChannel:(WKChannel *)channel
+                                                mute:(nullable NSNumber *)mute
+                                               stick:(nullable NSNumber *)stick {
+    if (self.conversationListVM.filterType != WKConversationFilterRecent) return;
+    if (!channel || channel.channelId.length == 0) return;
+    WKConversation *conv = nil;
+    if (channel.channelType == WK_COMMUNITY_TOPIC) {
+        // 子区不在 conversationWrapModels，从 threadWrapModels 找
+        for (WKConversationWrapModel *m in self.conversationListVM.threadWrapModels) {
+            if ([m.channel isEqual:channel]) { conv = [m getConversation]; break; }
+        }
+    } else {
+        WKConversationWrapModel *orig = [self.conversationListVM modelAtChannel:channel];
+        conv = [orig getConversation];
+    }
+    if (!conv) return;
+    if (mute) conv.mute = [mute boolValue];
+    if (stick) conv.stick = [stick boolValue];
+    // 触发 shadow wrap 重建 → cell 下次 willDisplayCell / 当前 reload 看到新状态
+    [self.conversationListVM rebuildFilteredList];
+    NSInteger idx = [self.conversationListVM indexAtChannel:channel];
+    NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
+    if (idx >= 0 && idx < rowCount) {
+        [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:idx inSection:0]]
+                              withRowAnimation:UITableViewRowAnimationNone];
+    }
 }
 
 #pragma mark - 会话菜单图标
