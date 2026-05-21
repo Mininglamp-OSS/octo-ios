@@ -485,6 +485,8 @@
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onSpaceBotRegistryDidLoad:) name:WKSpaceBotRegistryDidLoadNotification object:nil];
     // 关注 tab 兜底刷新：app 切回前台时拉一次 sidebar/sync 同步 followedKeys + follow_version
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppDidBecomeActive:) name:UIApplicationDidBecomeActiveNotification object:nil];
+    // followedKeys 更新（reload 后 / 写操作后）→ 关注 tab 重建展示列表，让新加/取消的 DM 在分组里立即生效
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onFollowedKeysStoreDidUpdate:) name:kWKFollowedKeysStoreDidUpdateNotification object:nil];
 }
 
 -(void) removeDelegates {
@@ -493,6 +495,7 @@
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKThreadCountBatchUpdated" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WKSpaceBotRegistryDidLoadNotification object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidBecomeActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:kWKFollowedKeysStoreDidUpdateNotification object:nil];
     // 移除连接监听
     [[[WKSDK shared] connectionManager] removeDelegate:self];
     // 移除频道监听
@@ -1541,6 +1544,15 @@
 
 -(void) onAppDidBecomeActive:(NSNotification*)notification {
     [self reloadFollowedKeysIfNeeded:@"appDidBecomeActive"];
+}
+
+-(void) onFollowedKeysStoreDidUpdate:(NSNotification*)notification {
+    // 任意 follow/unfollow 写操作完成 + reload 完成都会 post 这个通知。
+    // 关注 tab 需要把新加的 DM/取消的会话在分组里更新；最近 tab 不需要重建（数据源是 IM cache），
+    // 但长按菜单下次弹出时已经能拿到最新 followedKeys。
+    if (self.conversationListVM.filterType == WKConversationFilterFollow) {
+        [self rebuildGroupDisplayAndReload];
+    }
 }
 
 /// 触发一次 sidebar/sync，debounce ≥30s 避免与 viewDidAppear 在快速切回前后台时重复打。

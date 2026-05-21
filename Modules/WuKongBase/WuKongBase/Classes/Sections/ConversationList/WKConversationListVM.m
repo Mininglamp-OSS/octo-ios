@@ -13,6 +13,8 @@
 #import "WKThreadCreatedContent.h"
 #import "WKCategoryEntity.h"
 #import "WKCategoryService.h"
+#import "WKFollowedKeysStore.h"
+#import "WKSidebarItemEntity.h"
 #import <WuKongIMSDK/WKReminderDB.h>
 #import "WKSpaceFilter.h"
 #import "WKSpaceBotRegistry.h"
@@ -1157,16 +1159,18 @@ static WKConversationListVM *_instance;
 
 -(NSArray<WKConversationDisplayItem *> *) buildGroupDisplayList {
     CFAbsoluteTime _bgStart = CFAbsoluteTimeGetCurrent();
-    // 1. 建立 channelId → WKConversationWrapModel 映射（仅群聊）
-    NSMutableDictionary<NSString *, WKConversationWrapModel *> *channelMap = [NSMutableDictionary dictionary];
+    // 1. 建立 channelId → WKConversationWrapModel 映射（群 + DM 都加入，关注 tab 需要 DM）
+    NSMutableDictionary<NSString *, WKConversationWrapModel *> *groupChannelMap = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString *, WKConversationWrapModel *> *dmChannelMap = [NSMutableDictionary dictionary];
     for (WKConversationWrapModel *model in self.conversationWrapModels) {
         if(model.channel.channelType == WK_GROUP) {
-            channelMap[model.channel.channelId] = model;
+            groupChannelMap[model.channel.channelId] = model;
+        } else if (model.channel.channelType == WK_PERSON) {
+            dmChannelMap[model.channel.channelId] = model;
         }
     }
 
     NSMutableArray<WKConversationDisplayItem *> *displayList = [NSMutableArray array];
-    NSMutableSet<NSString *> *groupedChannelIds = [NSMutableSet set];
 
     // 使用 loadConversationList 时预建的子区索引缓存，无缓存时现场构建（首次调用等边界情况）
     NSDictionary<NSString*, NSArray<WKConversation*>*> *topicsByGroup = self.cachedTopicsByGroup;
@@ -1177,33 +1181,47 @@ static WKConversationListVM *_instance;
         remindersByChannelId = self.cachedRemindersByChannelId ?: @{};
     }
 
-    // 2. 收集已归组的 channelId，找到 is_default 分类
-    WKCategoryEntity *defaultCategory = nil;
-    for (WKCategoryEntity *cat in self.categoryList) {
-        if (cat.is_default) defaultCategory = cat;
-        for (WKCategoryGroup *cg in cat.groups) {
-            [groupedChannelIds addObject:cg.group_no];
-        }
-    }
+    // 关注 tab 数据装配（P2-2）：合并 WKFollowedKeysStore 提供的 DM 入分组。
+    // store.itemsByCategory[category_id] 是后端 sidebar/sync 已按 follow_sort 排好的
+    // 该分组下所有关注项（含群/DM/子区）；这里只取 DM（target_type=1），群仍以
+    // cat.groups 为权威（categoryList 是 categories 接口的直接结果）。
+    WKFollowedKeysStore *followStore = [WKFollowedKeysStore shared];
+    NSDictionary<NSString *, NSArray<WKSidebarItemEntity *> *> *followItemsByCat = followStore.itemsByCategory;
 
-    // 3. 非 default 分组
+    // 3. 非 default 分组（spec §0：关注 tab 隐藏默认分组）
     for (WKCategoryEntity *cat in self.categoryList) {
         if (cat.is_default) continue;
         WKConversationDisplayItem *header = [WKConversationDisplayItem sectionHeaderWithId:cat.category_id title:cat.name isDefault:NO];
-        // 统计分组内群聊数量 + 群聊未读 + 子区未读 + @提醒
+        // 解析本分组的 DM 关注项
+        NSArray<WKSidebarItemEntity *> *items = followItemsByCat[cat.category_id ?: @""] ?: @[];
+        NSMutableArray<WKConversationWrapModel *> *followedDMs = [NSMutableArray array];
+        for (WKSidebarItemEntity *it in items) {
+            if (it.target_type != WKFollowTargetTypeDM) continue;
+            WKConversationWrapModel *dmWrap = dmChannelMap[it.target_id];
+            if (dmWrap) [followedDMs addObject:dmWrap];
+        }
+
+        // 统计：群数 + DM 数 + 群内未读 + DM 未读 + 子区未读 + @提醒
         NSInteger count = 0;
         NSInteger totalUnread = 0;
         BOOL sectionHasMention = NO;
         for (WKCategoryGroup *cg in cat.groups) {
-            WKConversationWrapModel *m = channelMap[cg.group_no];
+            WKConversationWrapModel *m = groupChannelMap[cg.group_no];
             if (m) {
                 count++;
                 totalUnread += m.unreadCount;
-                // 累加该群聊下所有子区的未读
                 totalUnread += [self threadUnreadForGroup:cg.group_no topicsByGroup:topicsByGroup];
-                // 检测群聊及子区的@提醒
                 if (!sectionHasMention) {
                     sectionHasMention = [self hasMentionForGroup:cg.group_no model:m topicsByGroup:topicsByGroup remindersByChannelId:remindersByChannelId];
+                }
+            }
+        }
+        for (WKConversationWrapModel *dm in followedDMs) {
+            count++;
+            if (!dm.mute) totalUnread += dm.unreadCount;
+            if (!sectionHasMention && dm.simpleReminders.count > 0) {
+                for (WKReminder *r in dm.simpleReminders) {
+                    if (r.type == WKReminderTypeMentionMe) { sectionHasMention = YES; break; }
                 }
             }
         }
@@ -1215,10 +1233,12 @@ static WKConversationListVM *_instance;
         if(![self.collapsedSections containsObject:cat.category_id]) {
             NSMutableArray<WKConversationWrapModel *> *sectionItems = [NSMutableArray array];
             for (WKCategoryGroup *cg in cat.groups) {
-                WKConversationWrapModel *msg = channelMap[cg.group_no];
+                WKConversationWrapModel *msg = groupChannelMap[cg.group_no];
                 if(msg) [sectionItems addObject:msg];
             }
-            // 置顶优先，再按时间排序
+            [sectionItems addObjectsFromArray:followedDMs];
+            // 置顶优先，再按时间排序（DM/群混合）。后续 P4 排序页落地后改为
+            // 按 follow_sort 排，但本期复用现有 stick + timestamp 节奏。
             [sectionItems sortUsingComparator:^NSComparisonResult(WKConversationWrapModel *a, WKConversationWrapModel *b) {
                 if(a.stick && !b.stick) return NSOrderedAscending;
                 if(!a.stick && b.stick) return NSOrderedDescending;
@@ -1232,68 +1252,9 @@ static WKConversationListVM *_instance;
         }
     }
 
-    // 4. 默认分组（未归组群聊）
-    NSMutableArray<WKConversationWrapModel *> *ungrouped = [NSMutableArray array];
-    for (WKConversationWrapModel *model in self.conversationWrapModels) {
-        if(model.channel.channelType == WK_GROUP && ![groupedChannelIds containsObject:model.channel.channelId]) {
-            [ungrouped addObject:model];
-        }
-    }
-    [ungrouped sortUsingComparator:^NSComparisonResult(WKConversationWrapModel *a, WKConversationWrapModel *b) {
-        if(a.stick && !b.stick) return NSOrderedAscending;
-        if(!a.stick && b.stick) return NSOrderedDescending;
-        if(a.lastMsgTimestamp > b.lastMsgTimestamp) return NSOrderedAscending;
-        if(a.lastMsgTimestamp < b.lastMsgTimestamp) return NSOrderedDescending;
-        return NSOrderedSame;
-    }];
-
-    // 4. 将未归组群聊合并到服务端的 is_default 分类中显示
-    if (defaultCategory) {
-        // 把未归组群聊也加入 default 分类的 groups 列表一起显示
-        NSMutableArray<WKConversationWrapModel *> *defaultItems = [NSMutableArray array];
-        if (defaultCategory.groups) {
-            for (WKCategoryGroup *cg in defaultCategory.groups) {
-                WKConversationWrapModel *m = channelMap[cg.group_no];
-                if (m) [defaultItems addObject:m];
-            }
-        }
-        for (WKConversationWrapModel *m in ungrouped) {
-            [defaultItems addObject:m];
-        }
-        [defaultItems sortUsingComparator:^NSComparisonResult(WKConversationWrapModel *a, WKConversationWrapModel *b) {
-            if(a.stick && !b.stick) return NSOrderedAscending;
-            if(!a.stick && b.stick) return NSOrderedDescending;
-            if(a.lastMsgTimestamp > b.lastMsgTimestamp) return NSOrderedAscending;
-            if(a.lastMsgTimestamp < b.lastMsgTimestamp) return NSOrderedDescending;
-            return NSOrderedSame;
-        }];
-
-        NSString *sectionId = defaultCategory.category_id.length > 0 ? defaultCategory.category_id : @"uncategorized";
-        WKConversationDisplayItem *header = [WKConversationDisplayItem sectionHeaderWithId:sectionId title:defaultCategory.name isDefault:YES];
-        header.groupCount = defaultItems.count;
-        NSInteger defaultUnread = 0;
-        BOOL defaultHasMention = NO;
-        for (WKConversationWrapModel *m in defaultItems) {
-            defaultUnread += m.unreadCount;
-            defaultUnread += [self threadUnreadForGroup:m.channel.channelId topicsByGroup:topicsByGroup];
-            if (!defaultHasMention) {
-                defaultHasMention = [self hasMentionForGroup:m.channel.channelId model:m topicsByGroup:topicsByGroup remindersByChannelId:remindersByChannelId];
-            }
-        }
-        header.unreadCount = defaultUnread;
-        header.hasMention = defaultHasMention;
-        [displayList addObject:header];
-        if (![self.collapsedSections containsObject:sectionId]) {
-            for (WKConversationWrapModel *m in defaultItems) {
-                [displayList addObject:[WKConversationDisplayItem itemWithConversation:m]];
-            }
-        }
-    } else if (ungrouped.count > 0) {
-        // 服务端没有返回 default 分类，本地兜底显示
-        for (WKConversationWrapModel *m in ungrouped) {
-            [displayList addObject:[WKConversationDisplayItem itemWithConversation:m]];
-        }
-    }
+    // 4. 默认分组 / 未归组群聊：spec §0 关注 tab 完全隐藏。原来这里有把未归组群挂到
+    // is_default 分组的逻辑（保持向后兼容用），关注 tab 改版后**不再展示**任何属于
+    // 默认分组的会话（这是产品规则，对齐 web）。若用户有未关注的群想看，最近 tab 仍有。
 
     // 顺便计算全局 hasMention（复用已有的 remindersByChannelId，避免 updateGroupMentionBadge 重复查 DB）
     BOOL globalHasMention = NO;
