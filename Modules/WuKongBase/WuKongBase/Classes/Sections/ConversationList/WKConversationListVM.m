@@ -514,9 +514,9 @@ static WKConversationListVM *_instance;
     }
     if (changed) {
         self.threadWrapModels = [byChannel.allValues copy];
-        if (self.filterType == WKConversationFilterRecent) {
-            [self rebuildFilteredList];
-        }
+        // 总是 rebuildFilteredList（不再 gate filterType==Recent）— 用户在 Follow tab
+        // 启动时数据也要准备好，避免切到 Recent 才发现 filteredConversations 里没子区
+        [self rebuildFilteredList];
     }
 }
 

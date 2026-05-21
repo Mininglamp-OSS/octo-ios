@@ -1940,6 +1940,13 @@
         weakSelf.conversationListVM.filterType = index;
         [weakSelf.conversationListVM rebuildFilteredList];
         [weakSelf rebuildGroupDisplayAndReload];
+        // 切到最近 tab 时主动再拉一次 thread 数据 — 解决冷启在关注 tab 时
+        // SDK 还没把所有 thread 加载到本地 cache，导致 threadWrapModels 是空,
+        // 切过来一片空白。fetchThreadCountsForGroups 完成后会回调
+        // syncThreadWrapModelsFromCachedTopics + rebuildFilteredList。
+        if (index == WKConversationFilterRecent) {
+            [weakSelf.conversationListVM fetchThreadCountsForGroups];
+        }
         // 恢复目标 tab 的滚动位置
         CGPoint savedOffset = (index == WKConversationFilterFollow) ? weakSelf.followTabScrollOffset : weakSelf.recentTabScrollOffset;
         [weakSelf.tableView setContentOffset:savedOffset animated:NO];
