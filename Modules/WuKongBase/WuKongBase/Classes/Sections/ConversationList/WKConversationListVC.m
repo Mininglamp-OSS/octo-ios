@@ -2166,6 +2166,7 @@
             }];
         } else if ([cell isKindOfClass:[WKConversationListCell class]]) {
             WKConversationListCell *listCell = (WKConversationListCell *)cell;
+            listCell.recentTabContext = NO; // 关注 tab 用 group-summary 风格
             [listCell refreshWithModel:conversationModel];
             [listCell setOnToggleThreadPreview:^(NSString *channelId) {
                 [weakSelf.conversationListVM toggleThreadExpanded:channelId];
@@ -2182,6 +2183,7 @@
     WKConversationWrapModel *conversationModel = [_conversationListVM conversationAtIndex:indexPath.row];
     if (!conversationModel) return;
     WKConversationListCell *conversationListCell = (WKConversationListCell *)cell;
+    conversationListCell.recentTabContext = (_conversationListVM.filterType == WKConversationFilterRecent);
     [conversationListCell refreshWithModel:conversationModel];
     // 私聊 tab 添加长按手势
     [self addLongPressGestureToCell:cell forConversation:conversationModel];

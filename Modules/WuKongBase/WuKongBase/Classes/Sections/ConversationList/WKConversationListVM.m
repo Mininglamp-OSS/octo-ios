@@ -655,25 +655,28 @@ static WKConversationListVM *_instance;
 
 - (void)applyThreadConversationUpdates:(NSArray<WKConversation*>*)threadConversations {
     if (threadConversations.count == 0) return;
-    // 把现有 threadWrapModels 按 channelId 建索引，再合并/追加
+    // 把现有 threadWrapModels 按 channelId 建索引
     NSMutableDictionary<NSString*, WKConversationWrapModel*> *byChannel = [NSMutableDictionary dictionary];
     for (WKConversationWrapModel *m in self.threadWrapModels) {
         if (m.channel.channelId) byChannel[m.channel.channelId] = m;
     }
-    BOOL added = NO;
+    BOOL mutated = NO;
     for (WKConversation *c in threadConversations) {
         if (!c.channel.channelId) continue;
         WKConversationWrapModel *existing = byChannel[c.channel.channelId];
         if (existing) {
-            // 已有 wrap 的底层 c 是 SDK 单例，会随 onConversationUpdate 原地更新；
-            // 不需要替换 wrap。
-            continue;
+            // 关键：onConversationUpdate 给到的 WKConversation 已经带最新 lastMessage /
+            // lastMsgTimestamp，重新绑给 wrap 让 cell 拿到新值（对齐 onlyAddOrUpdateConversation:
+            // 里 setConversation: 的处理）。否则子区行 preview/时间戳会停在旧值。
+            [existing setConversation:c];
+            mutated = YES;
+        } else {
+            WKConversationWrapModel *fresh = [[WKConversationWrapModel alloc] initWithConversation:c];
+            byChannel[c.channel.channelId] = fresh;
+            mutated = YES;
         }
-        WKConversationWrapModel *fresh = [[WKConversationWrapModel alloc] initWithConversation:c];
-        byChannel[c.channel.channelId] = fresh;
-        added = YES;
     }
-    if (added) {
+    if (mutated) {
         self.threadWrapModels = [byChannel.allValues copy];
     }
     [self rebuildFilteredList];

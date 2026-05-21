@@ -237,13 +237,16 @@
     self.model = model;
 
     BOOL isGroup = (model.channel.channelType == WK_GROUP);
+    // 最近 tab 上下文下群聊也按 DM 风格展示（显示时间/preview/不显示子区角标）。
+    // 关注 tab 仍走原 group-summary 风格。
+    BOOL renderAsGroupSummary = isGroup && !self.recentTabContext;
 
     BOOL hasChannelInfo  = model.channelInfo?true:false;
     if(!hasChannelInfo) {
         [model startChannelRequest];
     }
 
-    if(isGroup) {
+    if(renderAsGroupSummary) {
         // 群聊：显示头像，隐藏预览/时间
         self.hashTagLbl.hidden = YES;
         self.avatarImgView.hidden = NO;
@@ -790,9 +793,10 @@
     self.contextContainerView.frame = self.contentView.bounds;
 
     BOOL isGroup = (self.model.channel.channelType == WK_GROUP);
+    // 最近 tab 群聊走 DM 布局（避免 group-summary 把头像放大、preview 区被压缩）
+    BOOL useGroupSummaryLayout = isGroup && !self.recentTabContext;
 
-    if(isGroup) {
-        // ========== 群聊布局 ==========
+    if(useGroupSummaryLayout) {
         BOOL showMention = !self.lastContentLbl.hidden;
         CGFloat avatarSize = 52.0f;
         CGFloat rightPadding = 15.0f;
