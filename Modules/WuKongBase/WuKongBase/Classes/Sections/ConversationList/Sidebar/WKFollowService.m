@@ -31,6 +31,12 @@
     return instance;
 }
 
+/// URL query 参数转义。channelId 含 "____" 等保留字符，用 URLQueryAllowedCharacterSet 编码。
+- (NSString *)queryEncode:(NSString *)raw {
+    NSString *s = raw ?: @"";
+    return [s stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]] ?: s;
+}
+
 #pragma mark - DM
 
 - (AnyPromise *)followDM:(NSString *)peerUid categoryId:(nullable NSString *)categoryId {
@@ -43,8 +49,13 @@
 }
 
 - (AnyPromise *)unfollowDM:(NSString *)peerUid {
-    NSDictionary *params = @{ @"peer_uid": peerUid ?: @"" };
-    return [[WKAPIClient sharedClient] DELETE:@"follow/dm" parameters:params];
+    // WKAPIClient 的 requestSerializer 是 JSON, 且 HTTPMethodsEncodingParametersInURI
+    // 只含 GET/HEAD —— DELETE 会把 parameters 当 JSON body 发，但 server 是
+    // c.Query("peer_uid") 只读 URL query。所以这里手动把参数拼进 path,
+    // parameters 传 nil 避免 body。
+    NSString *encoded = [self queryEncode:peerUid];
+    NSString *path = [NSString stringWithFormat:@"follow/dm?peer_uid=%@", encoded];
+    return [[WKAPIClient sharedClient] DELETE:path parameters:nil];
 }
 
 #pragma mark - Channel (Group)
@@ -67,8 +78,10 @@
 }
 
 - (AnyPromise *)unfollowThread:(NSString *)threadChannelId {
-    NSDictionary *params = @{ @"thread_channel_id": threadChannelId ?: @"" };
-    return [[WKAPIClient sharedClient] DELETE:@"follow/thread" parameters:params];
+    // 同 unfollowDM:，server 是 c.Query 只读 query string，不能放 JSON body
+    NSString *encoded = [self queryEncode:threadChannelId];
+    NSString *path = [NSString stringWithFormat:@"follow/thread?thread_channel_id=%@", encoded];
+    return [[WKAPIClient sharedClient] DELETE:path parameters:nil];
 }
 
 #pragma mark - Sort

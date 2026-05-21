@@ -286,6 +286,10 @@
 "+ 新建分组"="+ New Category";
 "添加到关注失败"="Failed to follow";
 "取消关注失败"="Failed to unfollow";
+"已添加到 "="Added to ";
+" 分组"=" category";
+"已取消关注 "="Unfollowed ";
+"该会话"="this conversation";
 "无"="Nothing";
 "刚刚"="Just";
 "%0.0f分钟"="%0.0f min";

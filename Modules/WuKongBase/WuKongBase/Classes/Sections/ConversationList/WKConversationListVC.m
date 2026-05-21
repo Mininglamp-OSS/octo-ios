@@ -2505,6 +2505,7 @@
             @"action": ^{
                 [[WKFollowService shared] unfollowThread:threadChannelId].then(^(id _) {
                     [[WKFollowedKeysStore shared] reload];
+                    [weakSelf showUnfollowedToast:threadName];
                     // 关注 tab：reload 完后 onFollowedKeysStoreDidUpdate: 会
                     // rebuildGroupDisplayAndReload，子区行自然消失
                 }).catch(^(NSError *err) {
@@ -2618,6 +2619,7 @@
         default: return;
     }
     __weak typeof(self) weakSelf = self;
+    NSString *name = model.channelInfo.displayName ?: @"";
     p.then(^(id _) {
         [[WKFollowedKeysStore shared] reload].then(^(id __) {
             // 关注 tab 需要把行从分组里抹掉；最近 tab 行还在但 followedKeys 已更新。
@@ -2627,6 +2629,7 @@
                 [weakSelf.conversationListVM rebuildFilteredList];
                 [weakSelf.tableView reloadData];
             }
+            [weakSelf showUnfollowedToast:name];
             return (id)nil;
         });
     }).catch(^(NSError *err) {
@@ -2729,11 +2732,79 @@
 
 #pragma mark - 关注实际写操作
 
+/// 通过 categoryId 反查分组名（找不到时回退 ""）
+- (NSString *)categoryNameById:(NSString *)categoryId {
+    if (categoryId.length == 0) return @"";
+    for (WKCategoryEntity *cat in self.conversationListVM.categoryList) {
+        if ([cat.category_id isEqualToString:categoryId]) return cat.name ?: @"";
+    }
+    return @"";
+}
+
+/// 关注成功 toast：「已添加到 <分组名> 分组」，分组名用主题紫色高亮
+- (void)showFollowedToCategoryToast:(NSString *)categoryName {
+    if (categoryName.length == 0) return;
+    UIColor *theme = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+    [self showAttributedToast:[self attrTextWithPrefix:LLang(@"已添加到 ") accent:categoryName accentColor:theme suffix:LLang(@" 分组")]];
+}
+
+/// 取消关注成功 toast：「已取消关注 <会话名>」，名字用主题紫色高亮
+- (void)showUnfollowedToast:(NSString *)conversationName {
+    if (conversationName.length == 0) conversationName = LLang(@"该会话");
+    UIColor *theme = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+    [self showAttributedToast:[self attrTextWithPrefix:LLang(@"已取消关注 ") accent:conversationName accentColor:theme suffix:@""]];
+}
+
+/// 构建 attr string: prefix + accent(粗 + theme color) + suffix
+- (NSAttributedString *)attrTextWithPrefix:(NSString *)prefix
+                                    accent:(NSString *)accent
+                               accentColor:(UIColor *)accentColor
+                                    suffix:(NSString *)suffix {
+    UIFont *baseFont = [UIFont systemFontOfSize:14];
+    UIFont *accentFont = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    UIColor *base = [UIColor whiteColor];
+    NSMutableAttributedString *s = [[NSMutableAttributedString alloc] init];
+    if (prefix.length) {
+        [s appendAttributedString:[[NSAttributedString alloc] initWithString:prefix attributes:@{NSFontAttributeName: baseFont, NSForegroundColorAttributeName: base}]];
+    }
+    if (accent.length) {
+        [s appendAttributedString:[[NSAttributedString alloc] initWithString:accent attributes:@{NSFontAttributeName: accentFont, NSForegroundColorAttributeName: accentColor}]];
+    }
+    if (suffix.length) {
+        [s appendAttributedString:[[NSAttributedString alloc] initWithString:suffix attributes:@{NSFontAttributeName: baseFont, NSForegroundColorAttributeName: base}]];
+    }
+    return s;
+}
+
+/// 自定义 toast view（CSToast 默认只接受 NSString，要用 attributedText 必须自己拼一个 UIView 走
+/// showToast:duration:position:completion:）。深色半透明背景 + 圆角，与系统 toast 视觉一致。
+- (void)showAttributedToast:(NSAttributedString *)attrText {
+    if (attrText.length == 0) return;
+    UILabel *lbl = [[UILabel alloc] init];
+    lbl.attributedText = attrText;
+    lbl.numberOfLines = 0;
+    lbl.textAlignment = NSTextAlignmentCenter;
+    UIView *bg = [[UIView alloc] init];
+    bg.backgroundColor = [UIColor colorWithWhite:0 alpha:0.78];
+    bg.layer.cornerRadius = 10;
+    bg.layer.masksToBounds = YES;
+    [bg addSubview:lbl];
+    CGFloat maxLblWidth = MAX(160, self.view.bounds.size.width - 80 - 32);
+    CGSize size = [lbl sizeThatFits:CGSizeMake(maxLblWidth, CGFLOAT_MAX)];
+    CGFloat w = MIN(maxLblWidth, ceil(size.width)) + 32;
+    CGFloat h = ceil(size.height) + 20;
+    bg.frame = CGRectMake(0, 0, w, h);
+    lbl.frame = CGRectMake(16, 10, w - 32, h - 20);
+    [self.view showToast:bg duration:1.6 position:CSToastPositionCenter completion:nil];
+}
+
 - (void)performFollowDM:(NSString *)peerUid categoryId:(NSString *)categoryId {
     __weak typeof(self) weakSelf = self;
+    NSString *catName = [self categoryNameById:categoryId];
     [[WKFollowService shared] followDM:peerUid categoryId:categoryId].then(^(id _) {
         [[WKFollowedKeysStore shared] reload];
         [weakSelf.tableView reloadData];
+        [weakSelf showFollowedToCategoryToast:catName];
     }).catch(^(NSError *err) {
         [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
     });
@@ -2741,12 +2812,14 @@
 
 - (void)performFollowGroup:(NSString *)groupNo categoryId:(NSString *)categoryId {
     __weak typeof(self) weakSelf = self;
+    NSString *catName = [self categoryNameById:categoryId];
     // 先 refollow（之前可能 unfollow 过），再 moveGroup 到目标分组
     [[WKFollowService shared] refollowChannel:groupNo].then(^(id _) {
         return [[WKCategoryService shared] moveGroup:groupNo toCategoryId:categoryId];
     }).then(^(id _) {
         [[WKFollowedKeysStore shared] reload];
         [weakSelf loadCategories];
+        [weakSelf showFollowedToCategoryToast:catName];
     }).catch(^(NSError *err) {
         [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
     });
@@ -2756,6 +2829,7 @@
               parentGroupNo:(NSString *)parentGroupNo
                  categoryId:(nullable NSString *)categoryId {
     __weak typeof(self) weakSelf = self;
+    NSString *catName = [self categoryNameById:categoryId];
     AnyPromise *chain;
     if (categoryId.length > 0) {
         // 父群也未关注：先 refollow 父群 → moveGroup 到选定分组 → followThread
@@ -2771,6 +2845,19 @@
     chain.then(^(id _) {
         [[WKFollowedKeysStore shared] reload];
         [weakSelf loadCategories];
+        if (catName.length > 0) {
+            [weakSelf showFollowedToCategoryToast:catName];
+        } else {
+            // 父群已关注的子区是 cascade 路径，没选分组；用父群当前所在分组名提示
+            for (WKCategoryEntity *cat in weakSelf.conversationListVM.categoryList) {
+                for (WKCategoryGroup *cg in cat.groups) {
+                    if ([cg.group_no isEqualToString:parentGroupNo]) {
+                        [weakSelf showFollowedToCategoryToast:cat.name];
+                        return;
+                    }
+                }
+            }
+        }
     }).catch(^(NSError *err) {
         [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
     });
