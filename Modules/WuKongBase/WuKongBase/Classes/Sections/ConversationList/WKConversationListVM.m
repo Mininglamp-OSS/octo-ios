@@ -1288,19 +1288,41 @@ static WKConversationListVM *_instance;
         [displayList addObject:header];
 
         if(![self.collapsedSections containsObject:cat.category_id]) {
+            // 分组内顺序：优先用 store.itemsByCategory（已按 follow_sort 排好）的顺序,
+            // 保证 P3-1.7 的拖拽排序生效。store 没覆盖到的项（冷启动、新建未同步等）
+            // 兜底按 timestamp 追加在末尾。
             NSMutableArray<WKConversationWrapModel *> *sectionItems = [NSMutableArray array];
-            for (WKCategoryGroup *cg in visibleGroups) {
-                WKConversationWrapModel *msg = groupChannelMap[cg.group_no];
-                if(msg) [sectionItems addObject:msg];
+            NSMutableSet<NSString *> *added = [NSMutableSet set];
+            for (WKSidebarItemEntity *it in items) {
+                WKConversationWrapModel *wrap = nil;
+                if (it.target_type == WKFollowTargetTypeDM) {
+                    wrap = dmChannelMap[it.target_id];
+                } else if (it.target_type == WKFollowTargetTypeChannel) {
+                    wrap = groupChannelMap[it.target_id];
+                }
+                if (wrap && ![added containsObject:wrap.channel.channelId]) {
+                    [sectionItems addObject:wrap];
+                    [added addObject:wrap.channel.channelId];
+                }
             }
-            [sectionItems addObjectsFromArray:followedDMs];
-            // 关注 tab 不参与置顶排序 — 跨 tab 置顶独立：在最近 tab 置顶不应让关注 tab
-            // 顺序变。每个分组内仍按 timestamp 倒序，未来 P4 排序页落地后改 follow_sort。
-            [sectionItems sortUsingComparator:^NSComparisonResult(WKConversationWrapModel *a, WKConversationWrapModel *b) {
+            // store 没覆盖的群 / DM 兜底（按 timestamp 倒序）
+            NSMutableArray<WKConversationWrapModel *> *leftover = [NSMutableArray array];
+            for (WKCategoryGroup *cg in visibleGroups) {
+                if ([added containsObject:cg.group_no]) continue;
+                WKConversationWrapModel *msg = groupChannelMap[cg.group_no];
+                if (msg) { [leftover addObject:msg]; [added addObject:cg.group_no]; }
+            }
+            for (WKConversationWrapModel *dm in followedDMs) {
+                if ([added containsObject:dm.channel.channelId]) continue;
+                [leftover addObject:dm];
+                [added addObject:dm.channel.channelId];
+            }
+            [leftover sortUsingComparator:^NSComparisonResult(WKConversationWrapModel *a, WKConversationWrapModel *b) {
                 if (a.lastMsgTimestamp > b.lastMsgTimestamp) return NSOrderedAscending;
                 if (a.lastMsgTimestamp < b.lastMsgTimestamp) return NSOrderedDescending;
                 return NSOrderedSame;
             }];
+            [sectionItems addObjectsFromArray:leftover];
             for (WKConversationWrapModel *m in sectionItems) {
                 [displayList addObject:[WKConversationDisplayItem itemWithConversation:m]];
             }

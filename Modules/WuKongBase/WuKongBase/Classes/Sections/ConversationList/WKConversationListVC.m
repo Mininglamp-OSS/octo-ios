@@ -126,8 +126,13 @@
 @property(nonatomic,strong,nullable) NSIndexPath *cellDragLastTargetPath; // 上次更新时落在的 target row
 @property(nonatomic,assign) BOOL cellDragLastInsertBelow;
 @property(nonatomic,assign) CGPoint cellDragStartLocation; // 在 self.view 坐标系
+@property(nonatomic,assign) CGPoint cellDragLastLocation; // 最近一次 update 的位置，autoscroll tick 时复用
 @property(nonatomic,assign) BOOL cellDragInProgress;
 @property(nonatomic,copy,nullable) NSString *cellDragSourceConvName;
+@property(nonatomic,copy,nullable) NSString *cellDragSourceChannelId; // 用于识别源 cell 离场触发清理
+@property(nonatomic,strong,nullable) CADisplayLink *cellDragAutoScrollLink;
+@property(nonatomic,assign) CGFloat cellDragAutoScrollVelocity; // pts/frame, 0 = 不滚
+@property(nonatomic,assign) BOOL pendingRebuildAfterDrag; // 拖动期间收到的刷新请求暂存，结束时回放
 
 @end
 
@@ -2175,6 +2180,14 @@
 
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
     CFAbsoluteTime _wdStart = CFAbsoluteTimeGetCurrent();
+    // cell 复用时 alpha 兜底：拖动期间源 cell 被设为 0.3，可能被回收给新行用,
+    // 不重置会让别的行显示成半透明。如果当前行就是 drag 源（channelId 同），保持 0.3。
+    if (self.cellDragInProgress && self.cellDragSourceChannelId.length > 0) {
+        WKConversationWrapModel *m = [_conversationListVM conversationAtIndex:indexPath.row];
+        cell.alpha = [m.channel.channelId isEqualToString:self.cellDragSourceChannelId] ? 0.3 : 1.0;
+    } else {
+        cell.alpha = 1.0;
+    }
     // 让 cell 内部的 pan 手势等 tab swipe 手势失败后再识别
     if (self.tabSwipeLeft || self.tabSwipeRight) {
         for (UIGestureRecognizer *gr in cell.gestureRecognizers) {
@@ -2278,6 +2291,15 @@
     WKConversationWrapModel *conversationModel = [_conversationListVM conversationAtIndex:indexPath.row];
     if(conversationModel) {
         [conversationModel cancelChannelRequest];
+    }
+    // 拖动期间源 cell 离场（auto-scroll 把它滚出屏外）→ 长按手势会随 cell 回收而销毁,
+    // Ended/Cancelled 不会触发，snapshot 卡死。这里兜底：把 cell 的 alpha 还原 +
+    // 强制清理 drag 状态，让 snapshot 立即消失。
+    if (self.cellDragInProgress
+        && conversationModel
+        && [conversationModel.channel.channelId isEqualToString:self.cellDragSourceChannelId]) {
+        cell.alpha = 1.0;
+        [self resetCellDragState];
     }
 }
 
@@ -2400,12 +2422,13 @@
         CGPoint ptInWindow = [gesture locationInView:nil];
         [self showConversationMenuForModel:model atPoint:ptInWindow];
 
-        // 关注 tab 才支持拖拽：记录起点 + indexPath，等 Changed 状态超阈值再切到 drag
+        // 关注 tab 才支持拖拽：记录起点 + indexPath + channelId（拖动期间用于辨认源 cell 是否离场）
         if (isFollowTab) {
             self.cellDragInProgress = NO;
             self.cellDragStartLocation = [gesture locationInView:self.view];
             self.cellDragSourceIndexPath = [self.tableView indexPathForCell:cell];
             self.cellDragSourceConvName = model.channelInfo.displayName ?: model.channel.channelId;
+            self.cellDragSourceChannelId = model.channel.channelId;
         }
         return;
     }
@@ -2444,6 +2467,7 @@
 
 - (void)beginCellDragForCell:(UITableViewCell *)cell atLocation:(CGPoint)loc {
     self.cellDragInProgress = YES;
+    self.pendingRebuildAfterDrag = NO;
     [self dismissFloatingMenu]; // 关掉菜单
     UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [feedback impactOccurred];
@@ -2474,22 +2498,51 @@
 }
 
 - (void)updateCellDragAtLocation:(CGPoint)loc {
+    self.cellDragLastLocation = loc;
     CGRect f = self.cellDragSnapshot.frame;
     f.origin.y = loc.y - f.size.height / 2.0f;
     self.cellDragSnapshot.frame = f;
-    // 接近表格上下边缘时自动滚（简化版 — 每次 update 时 step 一点）
+    // 接近表格上下边缘时设置 auto-scroll 速度，由 CADisplayLink 平滑驱动；
+    // 之前在 gesture update 里直接 setContentOffset 会让带子区预览的高 cell 卡死
+    // —— 高 cell 重新布局时 heightForRow / cellForRow 同步阻塞主线程，gesture update
+    // 又快速堆积 setContentOffset 调用，主线程过载就卡。改 displayLink 每帧只算
+    // 一次稳定多了。
     CGRect tableInView = [self.view convertRect:self.tableView.bounds fromView:self.tableView];
     CGFloat edgeZone = 60;
+    CGFloat maxStep = 12;
+    CGFloat velocity = 0;
     if (loc.y < CGRectGetMinY(tableInView) + edgeZone) {
-        CGFloat newY = MAX(0, self.tableView.contentOffset.y - 8);
-        [self.tableView setContentOffset:CGPointMake(0, newY)];
+        CGFloat depth = (CGRectGetMinY(tableInView) + edgeZone) - loc.y;
+        velocity = -MIN(maxStep, MAX(2, depth / 5.0));
     } else if (loc.y > CGRectGetMaxY(tableInView) - edgeZone) {
-        CGFloat maxY = MAX(0, self.tableView.contentSize.height - self.tableView.bounds.size.height);
-        CGFloat newY = MIN(maxY, self.tableView.contentOffset.y + 8);
-        [self.tableView setContentOffset:CGPointMake(0, newY)];
+        CGFloat depth = loc.y - (CGRectGetMaxY(tableInView) - edgeZone);
+        velocity = MIN(maxStep, MAX(2, depth / 5.0));
+    }
+    self.cellDragAutoScrollVelocity = velocity;
+    if (velocity != 0 && !self.cellDragAutoScrollLink) {
+        self.cellDragAutoScrollLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(onCellDragAutoScrollTick:)];
+        [self.cellDragAutoScrollLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    } else if (velocity == 0 && self.cellDragAutoScrollLink) {
+        [self.cellDragAutoScrollLink invalidate];
+        self.cellDragAutoScrollLink = nil;
     }
     // 更新插入位置指示线
     [self updateInsertionLineAtLocation:loc];
+}
+
+- (void)onCellDragAutoScrollTick:(CADisplayLink *)link {
+    CGFloat v = self.cellDragAutoScrollVelocity;
+    if (v == 0 || !self.cellDragInProgress) {
+        [self.cellDragAutoScrollLink invalidate];
+        self.cellDragAutoScrollLink = nil;
+        return;
+    }
+    CGFloat newY = self.tableView.contentOffset.y + v;
+    CGFloat maxY = MAX(0, self.tableView.contentSize.height - self.tableView.bounds.size.height);
+    newY = MAX(0, MIN(maxY, newY));
+    [self.tableView setContentOffset:CGPointMake(0, newY) animated:NO];
+    // 滚屏时手指虽然没动，但相对内容的位置变了 — 重算插入线
+    [self updateInsertionLineAtLocation:self.cellDragLastLocation];
 }
 
 /// 把插入线放到目标行的上 / 下边缘。section header 一律落在 header 下方（即该分组开头）。
@@ -2536,12 +2589,20 @@
     NSString *targetCategoryId = [self resolveTargetCategoryIdForRow:targetPath.row];
     NSString *targetCategoryName = [self categoryNameById:targetCategoryId];
     NSString *sourceCategoryId = [self resolveTargetCategoryIdForRow:self.cellDragSourceIndexPath.row];
+    NSInteger sourceRow = self.cellDragSourceIndexPath.row;
+    NSInteger destRow = self.cellDragLastInsertBelow ? targetPath.row + 1 : targetPath.row;
+    BOOL insertBelow = self.cellDragLastInsertBelow;
 
     [self cleanupCellDragSnapshot];
 
-    // 同分组拖动：本期不实现"分组内重排"（要等 P4 follow_sort），不动顺序
+    // 同分组拖动 → 分组内重排（参考 web ChatConversationList.handleSortFollowItems:
+    // 本地乐观重排 + PUT /v1/follow/sort 提交完整 bucket 顺序，CAS 失败时 reload）
     if (targetCategoryId.length > 0 && [targetCategoryId isEqualToString:sourceCategoryId]) {
         [self resetCellDragState];
+        if (sourceRow != destRow && sourceRow + 1 != destRow) {
+            // 不是"自己拖到自己原位"才做实际重排
+            [self reorderInCategory:targetCategoryId fromGlobalRow:sourceRow toGlobalRow:destRow];
+        }
         return;
     }
     // 拖到默认分组 / 不可识别区域：忽略
@@ -2573,6 +2634,79 @@
     }
 }
 
+#pragma mark - 关注 tab 分组内重排（PUT /v1/follow/sort）
+
+/// 在某分组内把 fromGlobalRow 拖到 toGlobalRow（global = groupDisplayList 行号）。
+/// 1) 本地乐观更新 displayList 顺序 + reloadData 让用户立刻看到
+/// 2) 计算该分组当前完整顺序 → 调 sortItems:version: 提交
+/// 3) 成功 → reload sidebar 让 store 同步新 follow_sort
+///    版本冲突 → reload + 提示用户
+///    其它错误 → log + 用 server 真值重建（rebuildGroupDisplayAndReload）
+- (void)reorderInCategory:(NSString *)catId fromGlobalRow:(NSInteger)fromIdx toGlobalRow:(NSInteger)toIdx {
+    NSArray<WKConversationDisplayItem *> *list = self.groupDisplayList;
+    if (fromIdx < 0 || fromIdx >= (NSInteger)list.count) return;
+    if (toIdx < 0 || toIdx > (NSInteger)list.count) return;
+    WKConversationDisplayItem *moving = list[fromIdx];
+    if (moving.isSectionHeader || moving.conversation == nil) return;
+
+    // 1) 本地乐观重排 displayList — 用户立即看到新顺序
+    NSMutableArray<WKConversationDisplayItem *> *next = [list mutableCopy];
+    [next removeObjectAtIndex:fromIdx];
+    NSInteger insertAt = toIdx;
+    if (toIdx > fromIdx) insertAt--;
+    if (insertAt > (NSInteger)next.count) insertAt = next.count;
+    [next insertObject:moving atIndex:insertAt];
+    self.groupDisplayList = [next copy];
+    [self.tableView reloadData];
+
+    // 2) 收集该分组内的所有 wrap，按当前顺序生成 sortItems
+    NSInteger sectionStart = -1, sectionEnd = -1;
+    for (NSInteger i = 0; i < (NSInteger)self.groupDisplayList.count; i++) {
+        WKConversationDisplayItem *it = self.groupDisplayList[i];
+        if (it.isSectionHeader && [it.sectionId isEqualToString:catId]) {
+            sectionStart = i + 1;
+            for (NSInteger j = sectionStart; j < (NSInteger)self.groupDisplayList.count; j++) {
+                if (self.groupDisplayList[j].isSectionHeader) { sectionEnd = j; break; }
+            }
+            if (sectionEnd == -1) sectionEnd = self.groupDisplayList.count;
+            break;
+        }
+    }
+    if (sectionStart < 0) return;
+
+    NSMutableArray<WKFollowSortItem *> *sortItems = [NSMutableArray array];
+    NSInteger sortIdx = 0;
+    for (NSInteger i = sectionStart; i < sectionEnd; i++) {
+        WKConversationDisplayItem *it = self.groupDisplayList[i];
+        WKConversationWrapModel *wrap = it.conversation;
+        if (!wrap) continue;
+        WKFollowSortItem *si = [[WKFollowSortItem alloc] init];
+        if (wrap.channel.channelType == WK_PERSON) si.target_type = WKFollowTargetTypeDM;
+        else if (wrap.channel.channelType == WK_GROUP) si.target_type = WKFollowTargetTypeChannel;
+        else continue;
+        si.target_id = wrap.channel.channelId;
+        si.sort = sortIdx++;
+        [sortItems addObject:si];
+    }
+    if (sortItems.count == 0) return;
+
+    NSInteger version = [WKFollowedKeysStore shared].followVersion;
+    __weak typeof(self) weakSelf = self;
+    [[WKFollowService shared] sortItems:sortItems version:version].then(^(id _) {
+        [[WKFollowedKeysStore shared] reload]; // 刷 store 拿到新 follow_sort
+    }).catch(^(NSError *err) {
+        if ([WKFollowService isVersionConflictError:err]) {
+            // 跨设备已改过 — 拉一次最新 + 重建 + 提示
+            [[WKFollowedKeysStore shared] reload];
+            [weakSelf rebuildGroupDisplayAndReload];
+            [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"顺序已被其它设备更新")];
+        } else {
+            NSLog(@"[Sort] failed: %@", err);
+            [weakSelf rebuildGroupDisplayAndReload]; // 回退到 server 真值
+        }
+    });
+}
+
 /// 给定关注 tab 的 row index，返回它属于哪个分类（沿 groupDisplayList 向上找最近的
 /// section header）
 - (NSString *)resolveTargetCategoryIdForRow:(NSInteger)row {
@@ -2589,6 +2723,9 @@
     self.cellDragSnapshot = nil;
     [self.cellDragInsertionLine removeFromSuperview];
     self.cellDragInsertionLine = nil;
+    [self.cellDragAutoScrollLink invalidate];
+    self.cellDragAutoScrollLink = nil;
+    self.cellDragAutoScrollVelocity = 0;
     // 还原所有 cell 的 alpha（被拖的 cell 改成 0.3）
     for (UITableViewCell *c in self.tableView.visibleCells) {
         if (c.alpha < 1.0) c.alpha = 1.0;
@@ -2600,7 +2737,13 @@
     self.cellDragInProgress = NO;
     self.cellDragSourceIndexPath = nil;
     self.cellDragSourceConvName = nil;
+    self.cellDragSourceChannelId = nil;
     self.cellDragLastTargetPath = nil;
+    // 拖动期间累积的刷新一次性回放
+    if (self.pendingRebuildAfterDrag) {
+        self.pendingRebuildAfterDrag = NO;
+        [self rebuildGroupDisplayAndReload];
+    }
 }
 
 -(void) showConversationMenuForModel:(WKConversationWrapModel *)model atPoint:(CGPoint)point {
@@ -3782,6 +3925,12 @@
 }
 
 -(void) rebuildGroupDisplayAndReload {
+    // 拖动期间冻结表格刷新 — 否则源 cell 可能被回收，长按手势随之销毁，
+    // Ended/Cancelled 永不触发，snapshot 就卡在屏上。结束拖动时统一回放一次。
+    if (self.cellDragInProgress) {
+        self.pendingRebuildAfterDrag = YES;
+        return;
+    }
     CFAbsoluteTime _t0 = CFAbsoluteTimeGetCurrent();
     self.groupDisplayList = [_conversationListVM buildGroupDisplayList];
     CFAbsoluteTime _t1 = CFAbsoluteTimeGetCurrent();
@@ -4256,6 +4405,8 @@
 #pragma mark - Pixel Particle Hint
 
 -(void) tryShowPixelHintForMessage:(WKMessage *)message {
+    // 拖动期间不弹像素通知 — 通知 view 抢手势会让长按 Ended 永不触发，snapshot 卡屏
+    if (self.cellDragInProgress) return;
     NSLog(@"[HintDebug] >>> onMessage channel=%@/%d contentType=%ld fromUid=%@ msgSeq=%u",
           message.channel.channelId, message.channel.channelType,
           (long)message.contentType, message.fromUid ?: @"(nil)", message.messageSeq);
