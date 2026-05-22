@@ -3162,80 +3162,247 @@
                                           targetId:parentGroupNo];
         if (parentFollowed) {
             // 直接 followThread；后端会把父群的关注状态 cascade 透传
-            [self performFollowThread:cid parentGroupNo:parentGroupNo categoryId:nil];
+            [self performFollowThread:cid parentGroupNo:parentGroupNo categoryId:nil categoryName:nil];
         } else {
             // 父群也未关注，先选分组（用于父群落分组）
             __weak typeof(self) weakSelf = self;
-            [self pickFollowCategoryWithTitle:LLang(@"添加到关注") onPick:^(NSString * _Nullable categoryId) {
-                [weakSelf performFollowThread:cid parentGroupNo:parentGroupNo categoryId:categoryId];
+            [self pickFollowCategoryWithTitle:LLang(@"添加到关注") onPick:^(NSString * _Nullable categoryId, NSString * _Nullable categoryName) {
+                [weakSelf performFollowThread:cid parentGroupNo:parentGroupNo categoryId:categoryId categoryName:categoryName];
             }];
         }
         return;
     }
     // DM / Group：选分组
     __weak typeof(self) weakSelf = self;
-    [self pickFollowCategoryWithTitle:LLang(@"添加到关注") onPick:^(NSString * _Nullable categoryId) {
+    [self pickFollowCategoryWithTitle:LLang(@"添加到关注") onPick:^(NSString * _Nullable categoryId, NSString * _Nullable categoryName) {
         if (model.channel.channelType == WK_PERSON) {
-            [weakSelf performFollowDM:model.channel.channelId categoryId:categoryId];
+            [weakSelf performFollowDM:model.channel.channelId categoryId:categoryId categoryName:categoryName];
         } else if (model.channel.channelType == WK_GROUP) {
-            [weakSelf performFollowGroup:model.channel.channelId categoryId:categoryId];
+            [weakSelf performFollowGroup:model.channel.channelId categoryId:categoryId categoryName:categoryName];
         }
     }];
 }
 
 #pragma mark - 关注分组选择 sheet
 
-/// 默认目的地记忆 key（per Space）
-- (NSString *)lastFollowCategoryKey {
-    NSString *spaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
-    return [NSString stringWithFormat:@"WKLastFollowCategoryId_%@", spaceId ?: @""];
-}
-
-/// 弹"选择分组" actionSheet。完成回调里 categoryId == nil 表示用户选了"默认分组"
-/// 或新建后还没拿到 id（暂走默认）。
+/// 弹自定义底部分组选择 sheet。设计要点：
+/// 1) 不用 UIAlertController —— 系统 sheet 与项目其他自定义弹窗（showFloatingMenu）
+///    视觉风格不一致；自绘可控背景 / 圆角 / 字体，跟 cellBackgroundColor 联动深色模式。
+/// 2) 分组超过 6 行自动滚动（中间表格部分），头部和底部"+ 新建分组"按钮固定。
+/// 3) 不再显示 ✓ 历史记忆 —— 用户反馈"添加→取消→再添加"会看到上次的勾选状态，
+///    具有误导性。Add-to-follow sheet 的语义是选目的地，不存在"当前归属"。
+/// 4) onPick 同时回传 categoryId + categoryName，下游 toast 不再依赖 categoryList 异步刷新。
 - (void)pickFollowCategoryWithTitle:(NSString *)title
-                             onPick:(void(^)(NSString * _Nullable categoryId))onPick {
-    NSArray<WKCategoryEntity *> *categories = self.conversationListVM.categoryList;
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
-                                                                   message:nil
-                                                            preferredStyle:UIAlertControllerStyleActionSheet];
-    NSString *lastKey = [self lastFollowCategoryKey];
-    NSString *lastCategoryId = [[NSUserDefaults standardUserDefaults] objectForKey:lastKey];
-
-    BOOL hasAny = NO;
-    for (WKCategoryEntity *cat in categories) {
+                             onPick:(void(^)(NSString * _Nullable categoryId, NSString * _Nullable categoryName))onPick {
+    NSArray<WKCategoryEntity *> *all = self.conversationListVM.categoryList;
+    NSMutableArray<WKCategoryEntity *> *cats = [NSMutableArray array];
+    for (WKCategoryEntity *cat in all) {
         if (cat.is_default) continue;
         if (cat.category_id.length == 0) continue;
-        hasAny = YES;
-        BOOL isLast = [cat.category_id isEqualToString:lastCategoryId];
-        NSString *t = isLast ? [NSString stringWithFormat:@"✓ %@", cat.name] : cat.name;
-        NSString *catId = cat.category_id;
-        [alert addAction:[UIAlertAction actionWithTitle:t style:UIAlertActionStyleDefault handler:^(UIAlertAction *_) {
-            [[NSUserDefaults standardUserDefaults] setObject:catId forKey:lastKey];
-            if (onPick) onPick(catId);
-        }]];
+        [cats addObject:cat];
     }
-    // 新建分组 — 新建成功后自动用回调把新分组 id 喂给 onPick，避免"新建完只剩一个空分组"
-    // 的割裂感（与右上角的"创建分组"独立入口区分开）。
-    __weak typeof(self) weakSelf = self;
-    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"+ 新建分组") style:UIAlertActionStyleDefault handler:^(UIAlertAction *_) {
-        [weakSelf showCreateCategoryDialogWithCompletion:^(WKCategoryEntity *cat) {
-            if (cat.category_id.length == 0) return;
-            [[NSUserDefaults standardUserDefaults] setObject:cat.category_id forKey:lastKey];
-            if (onPick) onPick(cat.category_id);
-        }];
-    }]];
-    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
-    if (!hasAny) {
-        // 没有自建分组：直接走新建（更顺手）+ 同样的链路联动
+
+    // 空：直接走新建（与原逻辑一致）
+    if (cats.count == 0) {
         [self showCreateCategoryDialogWithCompletion:^(WKCategoryEntity *cat) {
             if (cat.category_id.length == 0) return;
-            [[NSUserDefaults standardUserDefaults] setObject:cat.category_id forKey:lastKey];
-            if (onPick) onPick(cat.category_id);
+            if (onPick) onPick(cat.category_id, cat.name);
         }];
         return;
     }
-    [self presentViewController:alert animated:YES completion:nil];
+
+    [self presentFollowCategorySheetWithTitle:title categories:cats onPick:onPick];
+}
+
+/// 自定义底部 sheet 主体。表格 maxVisibleRows=6，超出滚动。
+- (void)presentFollowCategorySheetWithTitle:(NSString *)title
+                                  categories:(NSArray<WKCategoryEntity *> *)categories
+                                      onPick:(void(^)(NSString * _Nullable categoryId, NSString * _Nullable categoryName))onPick {
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    if (!window) window = [UIApplication sharedApplication].windows.firstObject;
+
+    // 已有同款 sheet 时直接复用 dismiss 流程，避免叠层
+    UIView *existing = [window viewWithTag:77800];
+    if (existing) [existing removeFromSuperview];
+
+    UIView *overlay = [[UIView alloc] initWithFrame:window.bounds];
+    overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
+    overlay.alpha = 0;
+    overlay.tag = 77800;
+    [window addSubview:overlay];
+
+    // 尺寸常量
+    CGFloat headerH = 48;
+    CGFloat rowH = 52;
+    CGFloat createBtnH = 52;
+    CGFloat maxVisibleRows = 6;
+    CGFloat tableMaxH = rowH * maxVisibleRows;
+    CGFloat tableH = MIN(rowH * categories.count, tableMaxH);
+    CGFloat bottomSafe = 0;
+    if (@available(iOS 11.0, *)) {
+        bottomSafe = window.safeAreaInsets.bottom;
+    }
+    CGFloat sheetH = headerH + tableH + 0.5 + createBtnH + bottomSafe;
+    CGFloat sheetW = window.lim_width;
+
+    UIView *sheet = [[UIView alloc] initWithFrame:CGRectMake(0, window.lim_height, sheetW, sheetH)];
+    sheet.backgroundColor = [WKApp shared].config.cellBackgroundColor;
+    // 顶部圆角
+    if ([sheet respondsToSelector:@selector(setMaskedCorners:)]) {
+        sheet.layer.cornerRadius = 14;
+        sheet.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
+        sheet.layer.masksToBounds = YES;
+    } else {
+        sheet.layer.cornerRadius = 14;
+        sheet.layer.masksToBounds = YES;
+    }
+    [overlay addSubview:sheet];
+
+    // 头部
+    UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, sheetW, headerH)];
+    header.backgroundColor = [UIColor clearColor];
+    [sheet addSubview:header];
+
+    UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(50, 0, sheetW - 100, headerH)];
+    titleLbl.text = title;
+    titleLbl.textAlignment = NSTextAlignmentCenter;
+    titleLbl.font = [[WKApp shared].config appFontOfSizeSemibold:16];
+    titleLbl.textColor = [WKApp shared].config.defaultTextColor;
+    [header addSubview:titleLbl];
+
+    UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    closeBtn.frame = CGRectMake(sheetW - 44, 0, 44, headerH);
+    [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
+    closeBtn.titleLabel.font = [UIFont systemFontOfSize:18];
+    closeBtn.tintColor = [[WKApp shared].config.defaultTextColor colorWithAlphaComponent:0.6];
+    [closeBtn setTitleColor:closeBtn.tintColor forState:UIControlStateNormal];
+    closeBtn.tag = 77810;
+    [closeBtn addTarget:self action:@selector(dismissFollowCategorySheet) forControlEvents:UIControlEventTouchUpInside];
+    [header addSubview:closeBtn];
+
+    UIView *headerSep = [[UIView alloc] initWithFrame:CGRectMake(0, headerH - 0.5, sheetW, 0.5)];
+    headerSep.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.15];
+    [sheet addSubview:headerSep];
+
+    // 中间可滚动的分组列表 — 用 UIScrollView 装 N 个按钮（不复用 UITableView,
+    // 因为 VC 本身是会话列表的 dataSource，叠层 dataSource 会 collide）
+    UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, headerH, sheetW, tableH)];
+    scroll.backgroundColor = [UIColor clearColor];
+    scroll.showsVerticalScrollIndicator = YES;
+    scroll.alwaysBounceVertical = (categories.count > maxVisibleRows);
+    scroll.contentSize = CGSizeMake(sheetW, rowH * categories.count);
+    [sheet addSubview:scroll];
+
+    UIColor *cellTextColor = [WKApp shared].config.defaultTextColor;
+    UIColor *sepColor = [[UIColor grayColor] colorWithAlphaComponent:0.15];
+    for (NSInteger i = 0; i < (NSInteger)categories.count; i++) {
+        WKCategoryEntity *cat = categories[i];
+        UIButton *row = [UIButton buttonWithType:UIButtonTypeCustom];
+        row.frame = CGRectMake(0, i * rowH, sheetW, rowH);
+        row.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+        row.contentEdgeInsets = UIEdgeInsetsMake(0, 20, 0, 20);
+        [row setTitle:cat.name forState:UIControlStateNormal];
+        [row setTitleColor:cellTextColor forState:UIControlStateNormal];
+        [row setTitleColor:[cellTextColor colorWithAlphaComponent:0.5] forState:UIControlStateHighlighted];
+        row.titleLabel.font = [[WKApp shared].config appFontOfSize:16];
+        row.tag = 78000 + i;
+        [row addTarget:self action:@selector(onFollowCategorySheetRowTap:) forControlEvents:UIControlEventTouchUpInside];
+        [scroll addSubview:row];
+
+        if (i < (NSInteger)categories.count - 1) {
+            UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(20, (i + 1) * rowH - 0.5, sheetW - 20, 0.5)];
+            sep.backgroundColor = sepColor;
+            [scroll addSubview:sep];
+        }
+    }
+
+    // 表格下方分隔
+    UIView *bottomSep = [[UIView alloc] initWithFrame:CGRectMake(0, headerH + tableH, sheetW, 0.5)];
+    bottomSep.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.15];
+    [sheet addSubview:bottomSep];
+
+    // 底部"+ 新建分组"按钮固定
+    UIButton *createBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    createBtn.frame = CGRectMake(0, headerH + tableH + 0.5, sheetW, createBtnH);
+    [createBtn setTitle:LLang(@"+ 新建分组") forState:UIControlStateNormal];
+    createBtn.titleLabel.font = [[WKApp shared].config appFontOfSizeMedium:16];
+    UIColor *accent = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+    createBtn.tintColor = accent;
+    [createBtn setTitleColor:accent forState:UIControlStateNormal];
+    createBtn.tag = 77811;
+    [createBtn addTarget:self action:@selector(onFollowCategorySheetCreateTap) forControlEvents:UIControlEventTouchUpInside];
+    [sheet addSubview:createBtn];
+
+    // 关联回调 + 数据源
+    objc_setAssociatedObject(overlay, "sheetOnPick", [onPick copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(overlay, "sheetCategories", categories, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 点 overlay 关闭
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissFollowCategorySheet)];
+    [overlay addGestureRecognizer:tap];
+    // 点 sheet 内部不要冒泡触发 dismiss
+    UITapGestureRecognizer *eat = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(noop)];
+    [sheet addGestureRecognizer:eat];
+
+    // 弹出动画
+    [UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        overlay.alpha = 1;
+        sheet.frame = CGRectMake(0, window.lim_height - sheetH, sheetW, sheetH);
+    } completion:nil];
+}
+
+- (void)noop {}
+
+- (void)dismissFollowCategorySheet {
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    UIView *overlay = [window viewWithTag:77800];
+    if (!overlay) return;
+    UIView *sheet = nil;
+    for (UIView *sub in overlay.subviews) {
+        if ([sub isKindOfClass:[UIView class]]) { sheet = sub; break; }
+    }
+    CGRect end = sheet.frame; end.origin.y = window.lim_height;
+    [UIView animateWithDuration:0.2 animations:^{
+        overlay.alpha = 0;
+        if (sheet) sheet.frame = end;
+    } completion:^(BOOL finished) {
+        [overlay removeFromSuperview];
+    }];
+}
+
+- (void)onFollowCategorySheetCreateTap {
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    UIView *overlay = [window viewWithTag:77800];
+    if (!overlay) return;
+    void(^onPick)(NSString *, NSString *) = objc_getAssociatedObject(overlay, "sheetOnPick");
+    [self dismissFollowCategorySheet];
+    __weak typeof(self) weakSelf = self;
+    [self showCreateCategoryDialogWithCompletion:^(WKCategoryEntity *cat) {
+        if (cat.category_id.length == 0) return;
+        // 把新建分组同步追加到 VM.categoryList，避免 loadCategories 异步未完成
+        // 时下游 categoryNameById: 查不到导致 toast 缺失。
+        NSMutableArray *m = [weakSelf.conversationListVM.categoryList mutableCopy] ?: [NSMutableArray array];
+        BOOL exists = NO;
+        for (WKCategoryEntity *c in m) {
+            if ([c.category_id isEqualToString:cat.category_id]) { exists = YES; break; }
+        }
+        if (!exists) [m addObject:cat];
+        weakSelf.conversationListVM.categoryList = m;
+        if (onPick) onPick(cat.category_id, cat.name);
+    }];
+}
+
+- (void)onFollowCategorySheetRowTap:(UIButton *)btn {
+    NSInteger idx = btn.tag - 78000;
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    UIView *overlay = [window viewWithTag:77800];
+    if (!overlay) return;
+    NSArray<WKCategoryEntity *> *categories = objc_getAssociatedObject(overlay, "sheetCategories");
+    void(^onPick)(NSString *, NSString *) = objc_getAssociatedObject(overlay, "sheetOnPick");
+    [self dismissFollowCategorySheet];
+    if (idx < 0 || idx >= (NSInteger)categories.count) return;
+    WKCategoryEntity *cat = categories[idx];
+    if (onPick) onPick(cat.category_id, cat.name);
 }
 
 #pragma mark - 关注实际写操作
@@ -3333,9 +3500,9 @@
     [self.view showToast:bg duration:1.6 position:CSToastPositionCenter completion:nil];
 }
 
-- (void)performFollowDM:(NSString *)peerUid categoryId:(NSString *)categoryId {
+- (void)performFollowDM:(NSString *)peerUid categoryId:(NSString *)categoryId categoryName:(nullable NSString *)categoryName {
     __weak typeof(self) weakSelf = self;
-    NSString *catName = [self categoryNameById:categoryId];
+    NSString *catName = categoryName.length > 0 ? categoryName : [self categoryNameById:categoryId];
     NSString *convName = [self displayNameForChannel:[WKChannel personWithChannelID:peerUid]];
     [[WKFollowService shared] followDM:peerUid categoryId:categoryId].then(^(id _) {
         [[WKFollowedKeysStore shared] reload];
@@ -3346,9 +3513,9 @@
     });
 }
 
-- (void)performFollowGroup:(NSString *)groupNo categoryId:(NSString *)categoryId {
+- (void)performFollowGroup:(NSString *)groupNo categoryId:(NSString *)categoryId categoryName:(nullable NSString *)categoryName {
     __weak typeof(self) weakSelf = self;
-    NSString *catName = [self categoryNameById:categoryId];
+    NSString *catName = categoryName.length > 0 ? categoryName : [self categoryNameById:categoryId];
     NSString *convName = [self displayNameForChannel:[WKChannel groupWithChannelID:groupNo]];
     // 只关注群本身。P3-1.4 的"加群即加全部子区"按用户要求撤回 —— 子区需要单独
     // 长按走 thread 关注流程（避免一次性把不感兴趣的子区全塞进关注 tab）。
@@ -3365,9 +3532,10 @@
 
 - (void)performFollowThread:(NSString *)threadChannelId
               parentGroupNo:(NSString *)parentGroupNo
-                 categoryId:(nullable NSString *)categoryId {
+                 categoryId:(nullable NSString *)categoryId
+               categoryName:(nullable NSString *)categoryName {
     __weak typeof(self) weakSelf = self;
-    NSString *catName = [self categoryNameById:categoryId];
+    NSString *catName = categoryName.length > 0 ? categoryName : [self categoryNameById:categoryId];
     NSString *convName = [self displayNameForChannel:[WKChannel channelID:threadChannelId channelType:WK_COMMUNITY_TOPIC]];
     AnyPromise *chain;
     if (categoryId.length > 0) {
