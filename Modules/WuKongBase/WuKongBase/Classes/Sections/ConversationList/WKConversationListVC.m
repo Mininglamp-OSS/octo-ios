@@ -1294,6 +1294,14 @@
                 // : 切 Space 后若 backend sync 在新 Space 未返回 botfather，
                 // 本地兜底合成占位 entry，保证用户立即看到系统 bot 入口。
                 [weakSelf.conversationListVM ensureSystemBotsVisible];
+                // : 切换瞬间漏入的跨 Space 会话兜底总清扫 —— 即便闸门
+                // 在某些路径上没拦住（debug 兜底），也能在用户看到列表前最后一次
+                // 把不属于当前 Space 的会话从 VM 中清掉。
+                NSString *sweepSpace = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+                if(sweepSpace.length > 0) {
+                    NSInteger sweptConv = 0, sweptThread = 0;
+                    [weakSelf.conversationListVM sweepForeignToSpace:sweepSpace removedCount:&sweptConv removedThreadCount:&sweptThread];
+                }
                 [weakSelf rebuildGroupDisplayAndReload];
                 [weakSelf refreshBadge];
                 [weakSelf loadCategories];

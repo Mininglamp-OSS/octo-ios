@@ -72,6 +72,19 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 触发时调用。返回被移除的 channelId 列表。
 -(NSArray<NSString*>*) pruneNonCurrentSpaceBotsForSpace:(NSString*)spaceId;
 
+/// Space 切换/sync 完成后的兜底总清扫 —— 把 conversationWrapModels +
+/// threadWrapModels 里凡是不属于指定 Space 的条目全部移除。覆盖 4 类:
+///   - WK_GROUP：WKSpaceFilter.Skip → 移除
+///   - WK_PERSON Bot：WKSpaceBotRegistry.NotMember → 移除
+///   - WK_PERSON 非 Bot：lastMessage.space_id 明确不匹配 → 移除（保守，缺 space_id 保留）
+///   - WK_COMMUNITY_TOPIC：parentGroupNo 不在 syncedGroupChannelIds → 移除
+/// 调用时机：Space 切换 sync 完成 callback 末尾（snapshot/prune 之后），
+/// 兜住"切换瞬间通过 fail-open 漏入的会话"。
+/// outRemovedCount / outRemovedThreadCount 可传 NULL。
+-(void) sweepForeignToSpace:(NSString*)spaceId
+                removedCount:(nullable NSInteger*)outRemovedCount
+         removedThreadCount:(nullable NSInteger*)outRemovedThreadCount;
+
 /// : 后端 sync 在当前 Space 不返回 botfather 时本地兜底合成占位 conversation，
 /// 保证用户能看到系统 bot 入口（对齐 Android Round-3 Fix C）。
 /// 调用时机：sync 完成 / Space 切换后的 loadConversationList 之后，

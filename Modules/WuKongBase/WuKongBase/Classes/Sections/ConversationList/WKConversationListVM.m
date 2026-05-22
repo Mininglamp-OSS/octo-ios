@@ -189,9 +189,120 @@ static WKConversationListVM *_instance;
     return removed;
 }
 
+/// Space 切换/sync 完成后的兜底总清扫 —— 把 conversationWrapModels + threadWrapModels
+/// 里凡是不属于当前 Space 的条目全部移除。和 pruneNonCurrentSpaceGroups /
+/// pruneNonCurrentSpaceBotsForSpace 互补：
+///   - 群聊：仍走 WKSpaceFilter（Skip 移除，Keep/FailOpen 保留）
+///   - Person Bot：仍走 WKSpaceBotRegistry（NotMember 移除，Member/Unknown 保留）
+///   - Person 非 Bot：lastMessage.space_id 明确不匹配 → 移除
+///   - 子区：parentGroupNo 不在 syncedGroupChannelIds → 从 threadWrapModels 移除
+/// 调用时机：Space 切换 sync 完成 callback 末尾（snapshot/prune 之后），
+/// 兜住"切换瞬间通过 fail-open 漏入的会话"。返回 (移除 WrapModel 数, 移除子区数)。
+-(void) sweepForeignToSpace:(NSString*)spaceId removedCount:(NSInteger*)outRemovedCount removedThreadCount:(NSInteger*)outRemovedThreadCount {
+    NSInteger removedConv = 0;
+    NSInteger removedThread = 0;
+    if(spaceId.length == 0) {
+        if(outRemovedCount) *outRemovedCount = 0;
+        if(outRemovedThreadCount) *outRemovedThreadCount = 0;
+        return;
+    }
+
+    // 1) conversationWrapModels 扫描
+    NSArray<WKConversationWrapModel*> *convSnapshot = [self.conversationWrapModels copy];
+    NSArray<NSString*> *systemBotUIDs = [WKApp shared].config.systemBotUIDs;
+    NSString *botfatherUID = [WKApp shared].config.botfatherUID;
+    NSString *systemUID = [WKApp shared].config.systemUID;
+    NSString *fileHelperUID = [WKApp shared].config.fileHelperUID;
+
+    for(WKConversationWrapModel *m in convSnapshot) {
+        WKChannel *ch = m.channel;
+        NSString *cid = ch.channelId;
+        if(cid.length == 0) continue;
+        // 全局可见频道：系统通知 / 文件助手 / botfather —— 永不移除
+        if([cid isEqualToString:systemUID] || [cid isEqualToString:fileHelperUID]
+           || (botfatherUID.length > 0 && [cid isEqualToString:botfatherUID])
+           || (systemBotUIDs.count > 0 && [systemBotUIDs containsObject:cid])) {
+            continue;
+        }
+
+        if(ch.channelType == WK_GROUP) {
+            WKSpaceFilterDecision d = [[WKSpaceFilter shared] decideChannel:cid channelType:ch.channelType];
+            if(d == WKSpaceFilterDecisionSkip) {
+                [self removeAtChannnel:ch];
+                removedConv++;
+            }
+            continue;
+        }
+
+        if(ch.channelType == WK_PERSON) {
+            // 优先 SpaceFilter（前缀 / channelInfo.space_id）
+            WKSpaceFilterDecision d = [[WKSpaceFilter shared] decideChannel:cid channelType:ch.channelType];
+            if(d == WKSpaceFilterDecisionSkip) {
+                [self removeAtChannnel:ch];
+                removedConv++;
+                continue;
+            }
+            // Bot：用 WKSpaceBotRegistry NotMember 兜底
+            WKChannelInfo *info = [[WKChannelInfoDB shared] queryChannelInfo:ch];
+            if(info && info.robot) {
+                WKSpaceBotMembership mem = [[WKSpaceBotRegistry shared] membershipForBotUID:cid inSpace:spaceId];
+                if(mem == WKSpaceBotMembershipNotMember) {
+                    [self removeAtChannnel:ch];
+                    removedConv++;
+                    continue;
+                }
+            }
+            // 非 Bot 普通 DM：看 lastMessage.space_id —— 明确跨 Space 才移除（保守:
+            // 缺 space_id 的旧消息保留，避免误杀历史会话）
+            WKMessage *lastMsg = m.lastMessage;
+            if(lastMsg) {
+                id v = lastMsg.content.contentDict[@"space_id"];
+                if([v isKindOfClass:[NSString class]]) {
+                    NSString *msgSpace = (NSString *)v;
+                    if(msgSpace.length > 0 && ![msgSpace isEqualToString:spaceId]) {
+                        [self removeAtChannnel:ch];
+                        removedConv++;
+                        continue;
+                    }
+                }
+            }
+        }
+    }
+
+    // 2) threadWrapModels 扫描 —— 父群不在白名单 → 移除
+    NSSet<NSString*> *synced = self.syncedGroupChannelIds;
+    if(synced && self.threadWrapModels.count > 0) {
+        NSMutableArray<WKConversationWrapModel*> *kept = [NSMutableArray array];
+        for(WKConversationWrapModel *t in self.threadWrapModels) {
+            NSString *tcid = t.channel.channelId ?: @"";
+            NSRange sep = [tcid rangeOfString:@"____"];
+            if(sep.location == NSNotFound) {
+                [kept addObject:t];
+                continue;
+            }
+            NSString *parentGroupNo = [tcid substringToIndex:sep.location];
+            if([synced containsObject:parentGroupNo]) {
+                [kept addObject:t];
+            } else {
+                removedThread++;
+            }
+        }
+        if(removedThread > 0) {
+            self.threadWrapModels = [kept copy];
+        }
+    }
+
+    if(removedConv > 0 || removedThread > 0) {
+        NSLog(@"🧹 [SpaceSweep] sweepForeignToSpace=%@ removedConv=%ld removedThread=%ld",
+              spaceId, (long)removedConv, (long)removedThread);
+    }
+    if(outRemovedCount) *outRemovedCount = removedConv;
+    if(outRemovedThreadCount) *outRemovedThreadCount = removedThread;
+}
+
 -(BOOL) ensureSystemBotsVisible {
     // : 后端 sync 在当前 Space 不返回 botfather 时的本地兜底。
-    // 对齐 Android Round-3 Fix C：只合成 VM 层占位条目，绝不写入 WKSDK cache / DB，
+    // 对齐 Android Round-3 Fix C：只合成 VM 层占位条目，绝不写入 WKSDK cache / DB,
     // 以免与 的群聊 cache pollution 修复策略冲突（后者针对持久化层）。
     NSString *botfatherUID = [WKApp shared].config.botfatherUID;
     if(!botfatherUID || botfatherUID.length == 0) {
