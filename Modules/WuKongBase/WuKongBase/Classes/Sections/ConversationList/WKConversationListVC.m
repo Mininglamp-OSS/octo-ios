@@ -4533,6 +4533,16 @@
     NSString *loginUid = [WKApp shared].loginInfo.uid;
     if (loginUid.length > 0 && [message.fromUid isEqualToString:loginUid]) return;
 
+    // AI / 机器人的消息不弹像素提醒 — AI 回复频繁会刷屏，只保留人类发的消息
+    if (message.fromUid.length > 0) {
+        WKChannel *senderChannel = [WKChannel channelID:message.fromUid channelType:WK_PERSON];
+        WKChannelInfo *senderInfo = [[WKSDK shared].channelManager getChannelInfo:senderChannel];
+        if (senderInfo && senderInfo.robot) {
+            NSLog(@"[HintDebug] SKIP: sender is robot uid=%@", message.fromUid);
+            return;
+        }
+    }
+
     // 消息ID去重：无论是否可见，都先记录，防止返回页面时重复弹出
     NSNumber *msgIdNum = @(message.messageId);
     if (msgIdNum.unsignedLongLongValue == 0) return;
