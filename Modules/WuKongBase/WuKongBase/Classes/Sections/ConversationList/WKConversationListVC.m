@@ -2113,7 +2113,7 @@
 
     UILabel *desc = [[UILabel alloc] init];
     desc.tag = 9004;
-    desc.text = LLang(@"把重要的群聊、私聊、子区集中在这里，远离嘈杂消息。\n在「最近」长按任意会话，选择「添加到关注」。");
+    desc.text = LLang(@"把重要的群聊、私聊、子区集中在这里，沉浸在你真正关心的对话里。\n在「最近」长按任意会话，选择「添加到关注」。");
     desc.font = [UIFont systemFontOfSize:14];
     desc.textColor = [UIColor colorWithWhite:0.5 alpha:1.0];
     desc.numberOfLines = 0;
