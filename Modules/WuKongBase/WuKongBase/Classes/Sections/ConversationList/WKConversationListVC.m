@@ -2105,7 +2105,7 @@
 
     UILabel *title = [[UILabel alloc] init];
     title.tag = 9003;
-    title.text = LLang(@"整理你的群聊");
+    title.text = LLang(@"关注你最在意的对话");
     title.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
     title.textColor = [WKApp shared].config.defaultTextColor;
     title.textAlignment = NSTextAlignmentCenter;
@@ -2113,7 +2113,7 @@
 
     UILabel *desc = [[UILabel alloc] init];
     desc.tag = 9004;
-    desc.text = LLang(@"创建分组，把群聊按工作、项目、生活分类，快速找到想看的对话。");
+    desc.text = LLang(@"把重要的群聊、私聊、子区集中在这里，远离嘈杂消息。\n在「最近」长按任意会话，选择「添加到关注」。");
     desc.font = [UIFont systemFontOfSize:14];
     desc.textColor = [UIColor colorWithWhite:0.5 alpha:1.0];
     desc.numberOfLines = 0;
