@@ -4249,6 +4249,9 @@
             if(buttonIdx == 1) {
                 [[WKCategoryService shared] deleteCategory:spaceId categoryId:sectionId].then(^(id r) {
                     [weakSelf loadCategories];
+                    // 服务端会把该分组下的全部 follow 一并取消，本地 followedKeys 必须同步刷新,
+                    // 否则最近 tab 长按这些会话还会显示"取消关注"，要等下次 30s debounce 兜底才正确。
+                    [[WKFollowedKeysStore shared] reload];
                 }).catch(^(NSError *e) { NSLog(@"删除分组失败: %@", e); });
             }
         }];

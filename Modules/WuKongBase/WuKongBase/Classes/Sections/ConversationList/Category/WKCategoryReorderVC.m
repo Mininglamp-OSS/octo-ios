@@ -6,6 +6,7 @@
 #import "WKCategoryReorderVC.h"
 #import "WKCategoryEntity.h"
 #import "WKCategoryService.h"
+#import "WKFollowedKeysStore.h"
 #import "WKApp.h"
 #import "UIView+WK.h"
 #import "WuKongBase.h"
@@ -223,6 +224,9 @@ trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath API_
     __weak typeof(self) weakSelf = self;
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"删除") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *_) {
         [[WKCategoryService shared] deleteCategory:spaceId categoryId:cat.category_id].then(^(id r) {
+            // 服务端会把该分组下的全部 follow 一并取消，本地 followedKeys 必须同步刷新,
+            // 否则返回列表页长按这些会话还会显示"取消关注"，要等下次 30s debounce 兜底才正确。
+            [[WKFollowedKeysStore shared] reload];
             __strong typeof(weakSelf) strongSelf = weakSelf;
             if (!strongSelf) { if (completion) completion(YES); return; }
             NSInteger idx = [strongSelf->_reorderList indexOfObject:cat];
