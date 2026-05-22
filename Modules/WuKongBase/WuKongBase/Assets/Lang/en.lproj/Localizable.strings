@@ -304,6 +304,10 @@
 "正在输入"="Typing";
 "%@ 正在输入"="%@ Typing";
 
+// WKThreadSettingVC - rename
+"修改子区名称"="Rename thread";
+"子区名称不能为空"="Thread name cannot be empty";
+
 
 // WKConversationListSelectVM
 
