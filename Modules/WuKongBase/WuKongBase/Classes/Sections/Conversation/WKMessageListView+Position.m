@@ -19,6 +19,11 @@
     __weak typeof(self) weakSelf = self;
     [self.conversationPositionBarView setOnScrollToBottom:^{
         [weakSelf pullBottom];
+        // 「跑到最底部」按钮 = 用户主动声明「我都看完了」，必须显式做三端同步。
+        // 不能复用 refreshNewMsgCount 的 oldMsgCount != newMsgCount 路径 —— 这条
+        // 路径在 browseToOrderSeq=0 起步、newMsgCount 一直是 0 的场景会被 bypass，
+        // 表现就是「视觉上 badge 消了，server 上 unread 没动，杀进程重启又复现」。
+        [weakSelf forceMarkAllAsRead];
     }];
     [self.conversationPositionBarView setOnScrollToPosition:^(WKConversationPosition * _Nonnull position,UITableViewScrollPosition tablePosition) {
         [weakSelf locateMessageCellWithOrderSeqForReminder:position.orderSeq tablePosition:tablePosition];

@@ -281,7 +281,8 @@ static CGFloat const kBadgeSize = 16.0f;
 }
 
 - (void)setFollowUnreadCount:(NSInteger)count {
-    // 不再显示未读红点
+    [self updateBadge:_followBadge count:count];
+    [self layoutBadges];
 }
 
 - (void)setRecentUnreadCount:(NSInteger)count {

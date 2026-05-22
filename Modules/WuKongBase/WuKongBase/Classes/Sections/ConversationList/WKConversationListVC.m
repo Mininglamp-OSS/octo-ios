@@ -1614,6 +1614,8 @@
     if (self.conversationListVM.filterType == WKConversationFilterFollow) {
         [self rebuildGroupDisplayAndReload];
     }
+    // 关注集合变了，两个 tab 的 badge 都要重新算（被关注的群/DM 进出会同时影响两边）
+    [self refreshBadge];
 }
 
 /// 触发一次 sidebar/sync，debounce ≥30s 避免与 viewDidAppear 在快速切回前后台时重复打。
@@ -2136,6 +2138,8 @@
         && channelInfo.channel.channelId.length > 0) {
         [self reloadThreadRowsForParentGroup:channelInfo.channel.channelId];
     }
+    // 静音切换会让 getFollow/RecentUnreadCount 把这条会话计入或排除，必须刷新 tab 红点。
+    [self refreshBadge];
 }
 
 #pragma mark - 关注 tab 空状态引导
@@ -3321,6 +3325,13 @@
                                       withRowAnimation:UITableViewRowAnimationNone];
             }
         }
+    }
+    // mute optimistic 路径自己刷 badge — 不能依赖 SDK 的 channelInfoUpdate 委托：
+    // 本方法已把 channelInfo.mute 写成新值，下面 addOrUpdateChannelInfoIfNeed 进去后
+    // SDK 看到 info 未变会 dedupe → 委托不 fire → channelInfoUpdate: 里挂的 refreshBadge
+    // 在第二次起都不会执行，表现为「第一次能刷新，后续 toggle 失效」。
+    if (mute) {
+        [self refreshBadge];
     }
 }
 

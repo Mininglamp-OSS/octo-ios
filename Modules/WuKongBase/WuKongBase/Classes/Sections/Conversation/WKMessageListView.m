@@ -964,6 +964,15 @@
     [[WKSDK shared].conversationManager setConversationUnreadCount:self.channel unread:self.newMsgCount];
 }
 
+-(void) forceMarkAllAsRead {
+    // 把 browseToOrderSeq 推到最新，避免后续 refreshNewMsgCount 又把 newMsgCount 算回非 0
+    if (self.lastMessage) {
+        self.browseToOrderSeq = self.lastMessage.orderSeq;
+    }
+    self.newMsgCount = 0;
+    [self refreshConversationListNewCount]; // 内部已经做 server + 本地 DB 双写
+}
+
 
 // 第一条可见的cell indexPath
 -(NSIndexPath*) firstVisibleIndexPath {

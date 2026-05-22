@@ -88,6 +88,16 @@ NS_ASSUME_NONNULL_BEGIN
 
 -(void) markReminderDoneIfNeed;
 
+/// 用户主动声明「已读到底」— 触发场景：点击右下角「跑到最底部」箭头按钮。
+/// 内存 / 本地 DB / 服务端三端 unread 强制清成 0，**不依赖 newMsgCount 变化判定**。
+///
+/// 为什么单独留这条路径：
+/// 普通的 `refreshNewMsgCount → refreshConversationListNewCount` 链有个早期 return
+/// 「oldMsgCount != newMsgCount 才同步」。点箭头时如果 browseToOrderSeq 还是 0、
+/// newMsgCount 起步就是 0，整条链就被 bypass，server 端 unread 永远不会被清 → 杀
+/// 进程重启后 sync 拉回旧值，badge 复现。
+-(void) forceMarkAllAsRead;
+
 - (void)stopScrollingAnimation;
 // 添加消息
 -(void) sendMessage:(WKMessageModel*)message;

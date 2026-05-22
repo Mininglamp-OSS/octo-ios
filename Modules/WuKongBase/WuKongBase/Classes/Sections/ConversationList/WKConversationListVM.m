@@ -975,12 +975,16 @@ static WKConversationListVM *_instance;
     // 关注 tab 未读 = 关注集合（DM / 群 / 子区，!mute）的未读总和。
     // 之前直接 sum 全部 WK_GROUP 是错的：用户关注 DM 不会算进去，取消关注的群仍
     // 在算。改成从 followedKeys 推导，与 Follow tab 视觉一致。
+    //
+    // 静音判定走 channelInfo.mute（权威源），而不是 conversation.mute（DB 快照）：
+    // 冷启动时 WKConversation 从 DB 加载、可能跟 channelInfo 的最新 mute 状态没对齐，
+    // 直接读 conversation.mute 会把静音群算进 badge。channelInfo 缺失时退到
+    // conversation.mute 兜底。getChannelInfo: 是同步 cache 查询，不会触发网络请求。
     WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
     if (!store.loaded) return 0;
     NSInteger count = 0;
-    // DM：从 conversationWrapModels 找出在 followedKeys 里的
     for (WKConversationWrapModel *m in self.conversationWrapModels) {
-        if (m.mute) continue;
+        if ([self isChannelMuted:m]) continue;
         if (m.channel.channelType == WK_PERSON) {
             if ([store isFollowedWithType:WKFollowTargetTypeDM targetId:m.channel.channelId]) {
                 count += m.unreadCount;
@@ -991,9 +995,8 @@ static WKConversationListVM *_instance;
             }
         }
     }
-    // 子区：threadWrapModels 里在 followedKeys 的
     for (WKConversationWrapModel *t in self.threadWrapModels) {
-        if (t.mute) continue;
+        if ([self isChannelMuted:t]) continue;
         if ([store isFollowedWithType:WKFollowTargetTypeThread targetId:t.channel.channelId]) {
             count += t.unreadCount;
         }
@@ -1001,11 +1004,21 @@ static WKConversationListVM *_instance;
     return count;
 }
 
+/// 静音判定单一入口：channelInfo.mute 是 SDK 权威源，DB 上的 WKConversation.mute
+/// 是同步快照、冷启动可能滞后，所以优先信 channelInfo，缺失才回退。
+-(BOOL) isChannelMuted:(WKConversationWrapModel *)model {
+    if (!model || !model.channel) return NO;
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:model.channel];
+    if (info) return info.mute;
+    return model.mute;
+}
+
 -(NSInteger) getRecentUnreadCount {
     NSInteger count = 0;
-    // DM + 3 天内活跃的群（与 modelMatchesFilter: 的最近 tab 谓词保持一致）
+    // DM + 3 天内活跃的群（与 modelMatchesFilter: 的最近 tab 谓词保持一致）。
+    // 静音同样走 channelInfo.mute（见 getFollowUnreadCount 注释）。
     for (WKConversationWrapModel *model in self.conversationWrapModels) {
-        if (model.mute) continue;
+        if ([self isChannelMuted:model]) continue;
         uint8_t type = model.channel.channelType;
         if (type == WK_PERSON) {
             count += model.unreadCount;
@@ -1015,9 +1028,8 @@ static WKConversationListVM *_instance;
             }
         }
     }
-    // 子区单独累加
     for (WKConversationWrapModel *thread in self.threadWrapModels) {
-        if (thread.mute) continue;
+        if ([self isChannelMuted:thread]) continue;
         count += thread.unreadCount;
     }
     return count;
@@ -1313,6 +1325,7 @@ static WKConversationListVM *_instance;
     if (!store.loaded) return 0;
     NSInteger total = 0;
     for (WKConversation *conv in topicsByGroup[groupNo]) {
+        if (conv.mute) continue;
         if ([store isFollowedWithType:WKFollowTargetTypeThread targetId:conv.channel.channelId]) {
             total += conv.unreadCount;
         }
@@ -1487,7 +1500,7 @@ static WKConversationListVM *_instance;
             WKConversationWrapModel *m = groupChannelMap[cg.group_no];
             if (m) {
                 count++;
-                totalUnread += m.unreadCount;
+                if (!m.mute) totalUnread += m.unreadCount;
                 totalUnread += [self followedThreadUnreadForGroup:cg.group_no topicsByGroup:topicsByGroup];
                 if (!sectionHasMention) {
                     sectionHasMention = [self hasMentionForGroup:cg.group_no model:m topicsByGroup:topicsByGroup remindersByChannelId:remindersByChannelId];
