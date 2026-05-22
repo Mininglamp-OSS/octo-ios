@@ -78,6 +78,10 @@ NSNotificationName const kWKFollowedKeysStoreDidUpdateNotification = @"kWKFollow
 
     for (WKSidebarItemEntity *it in items) {
         if (it.target_id.length == 0) continue;
+        // 守卫 is_followed：sidebar/sync 的 follow tab 当前只返回 followed 项，但 entity schema
+        // 支持 follow/recent 共用 —— 任何 unfollowed 项混进来都不能被算成已关注（否则会污染
+        // followedKeys / followedGroupNos / 桶展示，破坏菜单态、未读统计和 Follow tab 过滤）。
+        if (!it.is_followed) continue;
         [keys addObject:[it followKey]];
         if (it.target_type == WKFollowTargetTypeChannel) {
             [groupNos addObject:it.target_id];

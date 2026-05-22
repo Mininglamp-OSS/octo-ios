@@ -128,6 +128,7 @@
         @"channel_id":  uid,
         @"follow_sort": @(fs),
         @"timestamp":   @(ts),
+        @"is_followed": @YES, // applyItems 现在会按 is_followed 守卫，helper 默认模拟 follow tab 已 followed
     }];
     if (cat) d[@"category_id"] = cat;
     return [WKSidebarItemEntity fromDict:d];
@@ -157,6 +158,7 @@
     WKSidebarItemEntity *noSort = [WKSidebarItemEntity fromDict:@{
         @"target_type": @1, @"target_id": @"u_last", @"channel_id": @"u_last",
         @"category_id": @"cat",
+        @"is_followed": @YES,
     }];
     [store applyItems:@[noSort, withSort] followVersion:0];
 
@@ -187,9 +189,9 @@
 - (void)testStore_FollowedKeysAndGroupNos {
     WKFollowedKeysStore *store = [[WKFollowedKeysStore alloc] init];
     NSArray *items = @[
-        [WKSidebarItemEntity fromDict:@{ @"target_type": @1, @"target_id": @"u1", @"channel_id": @"u1" }],
-        [WKSidebarItemEntity fromDict:@{ @"target_type": @2, @"target_id": @"g1", @"channel_id": @"g1" }],
-        [WKSidebarItemEntity fromDict:@{ @"target_type": @5, @"target_id": @"t1", @"channel_id": @"t1", @"parent_channel_id": @"g1" }],
+        [WKSidebarItemEntity fromDict:@{ @"target_type": @1, @"target_id": @"u1", @"channel_id": @"u1", @"is_followed": @YES }],
+        [WKSidebarItemEntity fromDict:@{ @"target_type": @2, @"target_id": @"g1", @"channel_id": @"g1", @"is_followed": @YES }],
+        [WKSidebarItemEntity fromDict:@{ @"target_type": @5, @"target_id": @"t1", @"channel_id": @"t1", @"parent_channel_id": @"g1", @"is_followed": @YES }],
     ];
     [store applyItems:items followVersion:0];
 
@@ -200,6 +202,24 @@
 
     XCTAssertEqual(store.followedGroupNos.count, 1u);
     XCTAssertTrue([store.followedGroupNos containsObject:@"g1"]);
+}
+
+- (void)testStore_UnfollowedItem_IsDropped {
+    // applyItems 必须按 is_followed 守卫，即使 sidebar/sync 返回了 is_followed=NO 的项
+    // （未来 recent tab 共用 schema 时尤其需要），都不应进入 followedKeys / followedGroupNos / 桶。
+    WKFollowedKeysStore *store = [[WKFollowedKeysStore alloc] init];
+    NSArray *items = @[
+        [WKSidebarItemEntity fromDict:@{ @"target_type": @1, @"target_id": @"u_yes", @"channel_id": @"u_yes", @"is_followed": @YES, @"category_id": @"cat" }],
+        [WKSidebarItemEntity fromDict:@{ @"target_type": @1, @"target_id": @"u_no",  @"channel_id": @"u_no",  @"is_followed": @NO,  @"category_id": @"cat" }],
+        [WKSidebarItemEntity fromDict:@{ @"target_type": @2, @"target_id": @"g_no",  @"channel_id": @"g_no",  @"is_followed": @NO }],
+    ];
+    [store applyItems:items followVersion:0];
+
+    XCTAssertTrue([store isFollowedWithType:WKFollowTargetTypeDM targetId:@"u_yes"]);
+    XCTAssertFalse([store isFollowedWithType:WKFollowTargetTypeDM targetId:@"u_no"]);
+    XCTAssertFalse([store isFollowedWithType:WKFollowTargetTypeChannel targetId:@"g_no"]);
+    XCTAssertEqual(store.followedGroupNos.count, 0u);
+    XCTAssertEqual(store.itemsByCategory[@"cat"].count, 1u);
 }
 
 - (void)testStore_BumpVersion {
