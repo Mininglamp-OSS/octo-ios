@@ -518,7 +518,14 @@ static WKConversationListVM *_instance;
                 if (t.status != WKThreadStatusActive) continue;
                 WKConversation *conv = [[WKSDK shared].conversationManager getConversation:[t toChannel]];
                 NSTimeInterval ts = conv ? conv.lastMsgTimestamp : 0;
-                if (ts > threeDaysAgo) {
+                if (!conv) {
+                    // SDK 没缓存（冷启子区 lazy load）—— 必须放进 previews,
+                    // 不然 syncThreadWrapModelsFromCachedTopics 那条"SDK miss → 合成
+                    // placeholder"的代码路径根本走不到（它只遍历 parent.threadPreviews）,
+                    // 子区在最近 tab 永远不出现。等真实 conv 到达 applyThreadConversationUpdates
+                    // 会用 setConversation: 替换占位 wrap。
+                    [recentPreviews addObject:t];
+                } else if (ts > threeDaysAgo) {
                     [recentPreviews addObject:t];
                 } else {
                     inactiveCount++;
@@ -580,7 +587,11 @@ static WKConversationListVM *_instance;
                 if (t.status != WKThreadStatusActive) continue;
                 WKConversation *conv = [[WKSDK shared].conversationManager getConversation:[t toChannel]];
                 NSTimeInterval ts = conv ? conv.lastMsgTimestamp : 0;
-                if (ts > threeDaysAgo) {
+                if (!conv) {
+                    // 同 fetchThreadCountsForGroupsWithCompletion: SDK miss 必须收进 previews,
+                    // 否则下游合成 placeholder 路径走不到。
+                    [recentPreviews addObject:t];
+                } else if (ts > threeDaysAgo) {
                     [recentPreviews addObject:t];
                 } else {
                     inactiveCount++;
@@ -634,9 +645,19 @@ static WKConversationListVM *_instance;
         for (WKThreadModel *t in parent.threadPreviews) {
             if (t.channelId.length == 0) continue;
             threadsTotal++;
-            if (byChannel[t.channelId]) continue;
             WKChannel *threadChannel = [WKChannel channelID:t.channelId channelType:WK_COMMUNITY_TOPIC];
             WKConversation *conv = [[WKSDK shared].conversationManager getConversation:threadChannel];
+            WKConversationWrapModel *existing = byChannel[t.channelId];
+            if (existing) {
+                // 已有 wrap：若它是 placeholder（lastMessage 空）而 SDK 现在有真实 conv,
+                // 把 conv 绑进去刷新 preview/timestamp。否则保持原样（避免误覆盖 onConversationUpdate
+                // 已经写过的新值）。这样冷启 SDK 后到的 conv 能补上数据。
+                if (conv && !existing.lastMessage) {
+                    [existing setConversation:conv];
+                    changed = YES;
+                }
+                continue;
+            }
             if (conv) {
                 sdkHits++;
                 byChannel[t.channelId] = [[WKConversationWrapModel alloc] initWithConversation:conv];
@@ -1033,6 +1054,20 @@ static WKConversationListVM *_instance;
     WKConversationWrapModel *result = self.channelIndex[[self channelKey:channel]];
     [_conversationsLock unlock];
     return result;
+}
+
+/// 同 modelAtChannel: 但若主索引找不到，再扫一遍 threadWrapModels —— 子区不在
+/// conversationWrapModels / channelIndex 里，常规查询路径取不到。用于 unread /
+/// channelInfo 这类需要"无论在哪个 wrap 容器都找到"的更新场景。
+-(WKConversationWrapModel*) anyModelAtChannel:(WKChannel*) channel {
+    WKConversationWrapModel *m = [self modelAtChannel:channel];
+    if (m) return m;
+    if (channel.channelType == WK_COMMUNITY_TOPIC) {
+        for (WKConversationWrapModel *t in self.threadWrapModels) {
+            if ([t.channel isEqual:channel]) return t;
+        }
+    }
+    return nil;
 }
 
 -(WKConversationWrapModel*) modelAtIndex:(NSInteger)index {

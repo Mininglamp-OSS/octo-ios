@@ -1228,12 +1228,10 @@
     if (refreshGroupNos.count > 0) {
         [self.conversationListVM refreshThreadCountForGroups:refreshGroupNos];
     }
-    // 最近 tab：子区是独立行，update 必须重建 filteredConversations 并刷新表格
-    // 否则用户看到子区时间戳/preview 都停在旧值（反馈 #3 #4）。
-    if (hasThreadUpdate && self.conversationListVM.filterType == WKConversationFilterRecent) {
-        // 切换 Space 闸门期：syncedGroupChannelIds 还是 nil（reset 刚清空，B 的 snapshot
-        // 没回来）；applyThreadConversationUpdates 内部 nil-check 是 fail-open，会把 A
-        // 的子区漏入 B。这里整批丢弃。
+    // 子区 update 必须不论当前 tab 都 apply 进 threadWrapModels —— 否则用户在
+    // Follow tab 收到子区消息，切到 Recent 看到的还是旧 preview/时间戳/排序。
+    // UI refresh 仍仅在 Recent tab 触发，避免无谓 reload。
+    if (hasThreadUpdate) {
         if (self.spaceSwitchInProgress) {
             NSLog(@"[SpaceGate] drop %d thread updates (switch in progress)", (int)refreshGroupNos.count);
         } else {
@@ -1243,8 +1241,10 @@
             }
             if (threadUpdates.count > 0) {
                 [self.conversationListVM applyThreadConversationUpdates:threadUpdates];
-                [self refreshTable];
-                [self refreshBadge];
+                if (self.conversationListVM.filterType == WKConversationFilterRecent) {
+                    [self refreshTable];
+                    [self refreshBadge];
+                }
             }
         }
     }
@@ -1930,8 +1930,11 @@
 }
 // 更新最近会话未读数
 - (void)onConversationUnreadCountUpdate:(WKChannel*)channel unreadCount:(NSInteger)unreadCount {
-    NSInteger index = [self.conversationListVM indexAtChannel:channel];
-    if(index == -1) {
+    // 关键：用 anyModelAtChannel: 查（含 threadWrapModels），不能用 indexAtChannel: ——
+    // 后者走 filteredConversations，Follow tab 只含 WK_GROUP，DM/子区直接 -1 漏掉,
+    // 已关注的 DM 和嵌套子区的未读永远停在旧值。
+    WKConversationWrapModel *model = [self.conversationListVM anyModelAtChannel:channel];
+    if(!model) {
         return;
     }
 
@@ -1949,16 +1952,20 @@
         }
     }
 
-    WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
     model.unreadCount = unreadCount;
-    // 群聊 tab 使用分组展示，index 不匹配 tableView 行号，直接全量刷新
+    // 关注 tab 用分组展示，cell 行号 ≠ index，全量 rebuild
     if (_conversationListVM.filterType == WKConversationFilterFollow) {
         [self rebuildGroupDisplayAndReload];
     } else {
-        UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]];
-        if ([cell isKindOfClass:[WKConversationListCell class]]) {
-            [(WKConversationListCell *)cell refreshWithModel:model];
-            [cell layoutSubviews];
+        // 最近 tab：尝试找到行号刷 cell；如果不可见（子区在父群下、或被过滤）也无所谓,
+        // 下次滚动到 cell 重用时会从 model 读到新值。
+        NSInteger row = [self.conversationListVM indexAtChannel:channel];
+        if (row >= 0) {
+            UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
+            if ([cell isKindOfClass:[WKConversationListCell class]]) {
+                [(WKConversationListCell *)cell refreshWithModel:model];
+                [cell layoutSubviews];
+            }
         }
     }
     [self refreshBadge];
@@ -2066,6 +2073,12 @@
                     NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
                     if (parentIndex >= 0 && parentIndex < rowCount) {
                         [self safeReloadRows:@[[NSIndexPath indexPathForRow:parentIndex inSection:0]] animation:UITableViewRowAnimationNone];
+                    }
+                    // 最近 tab：子区是独立行，父群刷新涵盖不到自身静音/改名等 channelInfo 变化,
+                    // 还要单独定位子区自身行刷一次。
+                    NSInteger threadIndex = [self.conversationListVM indexAtChannel:channelInfo.channel];
+                    if (threadIndex >= 0 && threadIndex < rowCount) {
+                        [self safeReloadRows:@[[NSIndexPath indexPathForRow:threadIndex inSection:0]] animation:UITableViewRowAnimationNone];
                     }
                 }
             }
@@ -3258,12 +3271,15 @@
         return;
     }
 
-    [self presentFollowCategorySheetWithTitle:title categories:cats onPick:onPick];
+    [self presentFollowCategorySheetWithTitle:title categories:cats selectedCategoryId:nil showCreateRow:YES onPick:onPick];
 }
 
 /// 自定义底部 sheet 主体。表格 maxVisibleRows=6，超出滚动。
+/// selectedCategoryId 非空时该行前缀 ✓ 表示当前归属（移动分组时用，添加关注时传 nil）。
 - (void)presentFollowCategorySheetWithTitle:(NSString *)title
                                   categories:(NSArray<WKCategoryEntity *> *)categories
+                          selectedCategoryId:(nullable NSString *)selectedCategoryId
+                                showCreateRow:(BOOL)showCreateRow
                                       onPick:(void(^)(NSString * _Nullable categoryId, NSString * _Nullable categoryName))onPick {
     UIWindow *window = [UIApplication sharedApplication].keyWindow;
     if (!window) window = [UIApplication sharedApplication].windows.firstObject;
@@ -3289,7 +3305,7 @@
     if (@available(iOS 11.0, *)) {
         bottomSafe = window.safeAreaInsets.bottom;
     }
-    CGFloat sheetH = headerH + tableH + 0.5 + createBtnH + bottomSafe;
+    CGFloat sheetH = headerH + tableH + 0.5 + (showCreateRow ? createBtnH : 0) + bottomSafe;
     CGFloat sheetW = window.lim_width;
 
     UIView *sheet = [[UIView alloc] initWithFrame:CGRectMake(0, window.lim_height, sheetW, sheetH)];
@@ -3348,7 +3364,9 @@
         row.frame = CGRectMake(0, i * rowH, sheetW, rowH);
         row.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
         row.contentEdgeInsets = UIEdgeInsetsMake(0, 20, 0, 20);
-        [row setTitle:cat.name forState:UIControlStateNormal];
+        BOOL isSelected = selectedCategoryId.length > 0 && [cat.category_id isEqualToString:selectedCategoryId];
+        NSString *displayTitle = isSelected ? [NSString stringWithFormat:@"✓ %@", cat.name ?: @""] : (cat.name ?: @"");
+        [row setTitle:displayTitle forState:UIControlStateNormal];
         [row setTitleColor:cellTextColor forState:UIControlStateNormal];
         [row setTitleColor:[cellTextColor colorWithAlphaComponent:0.5] forState:UIControlStateHighlighted];
         row.titleLabel.font = [[WKApp shared].config appFontOfSize:16];
@@ -3363,22 +3381,24 @@
         }
     }
 
-    // 表格下方分隔
-    UIView *bottomSep = [[UIView alloc] initWithFrame:CGRectMake(0, headerH + tableH, sheetW, 0.5)];
-    bottomSep.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.15];
-    [sheet addSubview:bottomSep];
+    // 表格下方分隔（仅在有底部按钮时画）
+    if (showCreateRow) {
+        UIView *bottomSep = [[UIView alloc] initWithFrame:CGRectMake(0, headerH + tableH, sheetW, 0.5)];
+        bottomSep.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.15];
+        [sheet addSubview:bottomSep];
 
-    // 底部"+ 新建分组"按钮固定
-    UIButton *createBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    createBtn.frame = CGRectMake(0, headerH + tableH + 0.5, sheetW, createBtnH);
-    [createBtn setTitle:LLang(@"+ 新建分组") forState:UIControlStateNormal];
-    createBtn.titleLabel.font = [[WKApp shared].config appFontOfSizeMedium:16];
-    UIColor *accent = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
-    createBtn.tintColor = accent;
-    [createBtn setTitleColor:accent forState:UIControlStateNormal];
-    createBtn.tag = 77811;
-    [createBtn addTarget:self action:@selector(onFollowCategorySheetCreateTap) forControlEvents:UIControlEventTouchUpInside];
-    [sheet addSubview:createBtn];
+        // 底部"+ 新建分组"按钮固定
+        UIButton *createBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        createBtn.frame = CGRectMake(0, headerH + tableH + 0.5, sheetW, createBtnH);
+        [createBtn setTitle:LLang(@"+ 新建分组") forState:UIControlStateNormal];
+        createBtn.titleLabel.font = [[WKApp shared].config appFontOfSizeMedium:16];
+        UIColor *accent = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+        createBtn.tintColor = accent;
+        [createBtn setTitleColor:accent forState:UIControlStateNormal];
+        createBtn.tag = 77811;
+        [createBtn addTarget:self action:@selector(onFollowCategorySheetCreateTap) forControlEvents:UIControlEventTouchUpInside];
+        [sheet addSubview:createBtn];
+    }
 
     // 关联回调 + 数据源
     objc_setAssociatedObject(overlay, "sheetOnPick", [onPick copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -4316,70 +4336,60 @@
 }
 
 -(void) presentMoveToCategorySheet:(NSString *)groupNo {
-    NSArray<WKCategoryEntity *> *categories = _conversationListVM.categoryList;
+    NSArray<WKCategoryEntity *> *all = _conversationListVM.categoryList;
 
     // 获取群组名称
     WKChannelInfo *groupInfo = [[WKSDK shared].channelManager getChannelInfo:[WKChannel groupWithChannelID:groupNo]];
     NSString *groupName = groupInfo ? groupInfo.displayName : groupNo;
     NSString *titleText = [NSString stringWithFormat:@"%@ \"%@\"", LLang(@"移动"), groupName];
 
-    // 找到当前群所在分组
+    // 找到当前群所在分组（用于 ✓ 标记）
     NSString *currentCategoryId = nil;
-    for (WKCategoryEntity *cat in categories) {
+    NSMutableArray<WKCategoryEntity *> *cats = [NSMutableArray array];
+    for (WKCategoryEntity *cat in all) {
         if (cat.is_default) continue;
         if(!cat.category_id || cat.category_id.length == 0) continue;
+        [cats addObject:cat];
         for (WKCategoryGroup *cg in cat.groups) {
             if([groupNo isEqualToString:cg.group_no]) {
                 currentCategoryId = cat.category_id;
                 break;
             }
         }
-        if(currentCategoryId) break;
     }
 
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:titleText message:nil preferredStyle:UIAlertControllerStyleActionSheet];
     __weak typeof(self) weakSelf = self;
+    void(^performMove)(NSString *) = ^(NSString *catId) {
+        if(catId.length == 0) return;
+        [[WKCategoryService shared] moveGroup:groupNo toCategoryId:catId].then(^(id r) {
+            // 移动改变了分组归属 → server 上 follow 关系跟着变,
+            // 本地 followedKeys 必须同步刷新，否则长按菜单 / unread 计数会滞后。
+            [[WKFollowedKeysStore shared] reload];
+            [weakSelf loadCategories];
+        }).catch(^(NSError *e) { NSLog(@"移动分组失败: %@", e); });
+    };
 
-    // 仅展示用户自建的非默认分组（spec §0：关注 tab 隐藏默认分组，不再提供"移到不分组"出口
-    // 想让群从某分组里出来用"取消关注"即可）
-    BOOL hasAnyCategory = NO;
-    for (WKCategoryEntity *cat in categories) {
-        if (cat.is_default) continue;
-        if(!cat.category_id || cat.category_id.length == 0) continue;
-        hasAnyCategory = YES;
-        BOOL isCurrent = [cat.category_id isEqualToString:currentCategoryId];
-        NSString *title = isCurrent ? [NSString stringWithFormat:@"✓ %@", cat.name] : cat.name;
-        NSString *catId = cat.category_id;
-        [alert addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-            if(isCurrent) return;
-            [[WKCategoryService shared] moveGroup:groupNo toCategoryId:catId].then(^(id r) {
-                [weakSelf loadCategories];
-            }).catch(^(NSError *e) { NSLog(@"移动分组失败: %@", e); });
-        }]];
-    }
-
-    // 没有自建分组时直接走"新建分组"流程；新建成功后自动把该群移到新分组
-    if (!hasAnyCategory) {
+    // 没有自建分组：直接走新建（新建成功后自动 move）
+    if (cats.count == 0) {
         [self showCreateCategoryDialogWithCompletion:^(WKCategoryEntity *cat) {
             if (cat.category_id.length == 0) return;
-            [[WKCategoryService shared] moveGroup:groupNo toCategoryId:cat.category_id].then(^(id r) {
-                [weakSelf loadCategories];
-            }).catch(^(NSError *e) { NSLog(@"移动分组失败: %@", e); });
+            performMove(cat.category_id);
         }];
         return;
     }
 
-    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"+ 新建分组") style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-        // 新建后自动把当前群移到新分组（避免"新建一个空分组，原会话没动"的割裂体验）
-        [weakSelf showCreateCategoryDialogWithCompletion:^(WKCategoryEntity *cat) {
-            if (cat.category_id.length == 0) return;
-            [[WKCategoryService shared] moveGroup:groupNo toCategoryId:cat.category_id].then(^(id r) {
-                [weakSelf loadCategories];
-            }).catch(^(NSError *e) { NSLog(@"移动分组失败: %@", e); });
-        }];
-    }]];
-    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
+    // 复用 Add-to-follow 的自定义底部 sheet —— iPad-safe（之前用 ActionSheet 没配
+    // popoverPresentationController，iPad 上会崩）。带 ✓ 标记当前归属的分组。
+    NSString *currentIdCapture = currentCategoryId;
+    [self presentFollowCategorySheetWithTitle:titleText
+                                   categories:cats
+                           selectedCategoryId:currentIdCapture
+                                showCreateRow:YES
+                                       onPick:^(NSString * _Nullable categoryId, NSString * _Nullable categoryName) {
+        if (categoryId.length == 0) return;
+        if ([categoryId isEqualToString:currentIdCapture]) return; // 同分组不动作
+        performMove(categoryId);
+    }];
 }
 
 -(void) showSectionManagePopup:(NSString *)sectionId title:(NSString *)title atPoint:(CGPoint)point {

@@ -217,6 +217,10 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 与 conversationWrapModels 互不重叠：后者只有 PERSON+GROUP，前者只有 COMMUNITY_TOPIC。
 @property(nonatomic,copy,readonly,nullable) NSArray<WKConversationWrapModel*> *threadWrapModels;
 
+/// 同 modelAtChannel: 但子区也会被找到（先查 channelIndex，再扫 threadWrapModels）。
+/// 用于 unread / channelInfo 这类更新场景。
+-(nullable WKConversationWrapModel*) anyModelAtChannel:(WKChannel*) channel;
+
 /// 3 天内无活动的群判定。最近 tab 用：列表过滤 + 未读统计都用同一谓词避免不一致。
 /// DM/子区 不参与该过滤。
 + (BOOL)isInactiveGroup:(WKConversationWrapModel*)model;
