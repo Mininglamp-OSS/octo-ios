@@ -1360,9 +1360,8 @@ static WKConversationListVM *_instance;
         header.groupCount = count;
         header.unreadCount = totalUnread;
         header.hasMention = sectionHasMention;
-        // 空分组不显示（连 header 也不要）— 用户期望关注 tab 只看到有关注内容的分组。
-        // 全空的分组（用户建过但还没关注东西、或里面的关注都被取消了）通过分组管理页处理。
-        if (count == 0) continue;
+        // 空分组也要展示 header — 否则用户从引导页新建分组后引导页不消失、看不到自己刚建的分组，
+        // 也无法在分组管理外的位置感知分组存在。空分组下不会渲染任何会话行，只占一个 header。
         [displayList addObject:header];
 
         if(![self.collapsedSections containsObject:cat.category_id]) {
