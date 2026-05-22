@@ -40,6 +40,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// @param shortId 子区 shortId
 - (AnyPromise *)getThread:(NSString *)groupNo shortId:(NSString *)shortId;
 
+/// 修改子区名称 (与 web 端 `PUT groups/{groupNo}/threads/{shortId}` 对齐)
+/// @param groupNo 父群编号
+/// @param shortId 子区 shortId
+/// @param name 新名称 (最多 50 字)
+- (AnyPromise *)updateThread:(NSString *)groupNo shortId:(NSString *)shortId name:(NSString *)name;
+
 /// 加入子区
 /// @param shortId 子区 shortId
 - (AnyPromise *)joinThread:(NSString *)shortId;

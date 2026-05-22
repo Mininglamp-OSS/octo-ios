@@ -69,6 +69,11 @@
     });
 }
 
+- (AnyPromise *)updateThread:(NSString *)groupNo shortId:(NSString *)shortId name:(NSString *)name {
+    NSString *path = [NSString stringWithFormat:@"groups/%@/threads/%@", groupNo, shortId];
+    return [[WKAPIClient sharedClient] PUT:path parameters:@{@"name": name ?: @""}];
+}
+
 - (AnyPromise *)joinThread:(NSString *)shortId {
     NSString *path = [NSString stringWithFormat:@"threads/%@/join", shortId];
     return [[WKAPIClient sharedClient] POST:path parameters:@{}];

@@ -144,6 +144,11 @@
         if(self.conversationView.conversationVM.groupType == WKGroupTypeSuper) {
             needFetch = true; // 超级群每次都获取channelInfo
         }
+        // 子区：服务端 PUT 改名后不一定推 channelUpdate CMD，本地 channelInfo 缓存可能停留在旧 name。
+        // 每次进会话页强制拉一次 thread 详情，让头部标题 / 会话列表 cell 跟着 channelInfoUpdate 自动刷。
+        if(self.channel.channelType == WK_COMMUNITY_TOPIC) {
+            needFetch = true;
+        }
         __weak typeof(self) weakSelf  = self;
         lim_dispatch_main_async_safe(^{
             [weakSelf channelInfoLoadFinished];
@@ -151,7 +156,7 @@
     }else {
         needFetch = true;
     }
-    
+
     if(needFetch) {
         [[WKChannelManager shared] fetchChannelInfo:self.channel];
     }
