@@ -135,6 +135,8 @@
 @property(nonatomic,assign) BOOL cellDragInProgress;
 @property(nonatomic,copy,nullable) NSString *cellDragSourceConvName;
 @property(nonatomic,copy,nullable) NSString *cellDragSourceChannelId; // 用于识别源 cell 离场触发清理
+/// 分组 section header 拖动：拖整段分组重排时记录源 sectionId。非空 → 当前拖动是 section reorder（不是 cell 重排）。
+@property(nonatomic,copy,nullable) NSString *cellDragSourceSectionId;
 @property(nonatomic,weak,nullable) UITableViewCell *cellDragSourceCell; // 直接 weak 持有源 cell，didEndDisplayingCell 用 == 比较更稳
 @property(nonatomic,strong,nullable) CADisplayLink *cellDragAutoScrollLink;
 @property(nonatomic,assign) CGFloat cellDragAutoScrollVelocity; // pts/frame, 0 = 不滚
@@ -2401,6 +2403,9 @@
             sectionCell.onLongPress = ^(NSString *sectionId, NSString *title, CGPoint pointInWindow) {
                 [weakSelf showSectionManagePopup:sectionId title:title atPoint:pointInWindow];
             };
+            sectionCell.onLongPressProgress = ^(UILongPressGestureRecognizer *gesture, NSString *sectionId) {
+                [weakSelf onSectionHeaderLongPress:gesture sectionId:sectionId fromCell:sectionCell];
+            };
             return;
         }
         WKConversationWrapModel *conversationModel = item.conversation;
@@ -2641,6 +2646,172 @@
 
 #pragma mark - 关注 tab 拖拽排序（方案 A）
 
+#pragma mark - 分组 section 长按拖拽重排（关注 tab）
+
+/// 长按分组 header → 弹菜单的同时记录源 section；继续移动手指 > 12pt 后切到拖拽,
+/// 把整段分组拖到目标位置并发起 sortCategories: 提交。
+- (void)onSectionHeaderLongPress:(UILongPressGestureRecognizer *)gesture
+                       sectionId:(NSString *)sectionId
+                        fromCell:(UITableViewCell *)cell {
+    if (sectionId.length == 0) return;
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        // 与 conv cell 拖拽对称：Begin 只记录 source + start location，不立即开拖；
+        // 等手指移过阈值再切到 drag。这样保留菜单点击行为。
+        self.cellDragInProgress = NO;
+        self.cellDragStartLocation = [gesture locationInView:self.view];
+        self.cellDragSourceIndexPath = [self.tableView indexPathForCell:cell];
+        self.cellDragSourceSectionId = sectionId;
+        // 清掉 conv 拖拽用字段，避免分支误判
+        self.cellDragSourceConvName = nil;
+        self.cellDragSourceChannelId = nil;
+        return;
+    }
+
+    if (gesture.state == UIGestureRecognizerStateChanged) {
+        if (self.cellDragSourceSectionId.length == 0) return;
+        CGPoint loc = [gesture locationInView:self.view];
+        CGFloat dx = loc.x - self.cellDragStartLocation.x;
+        CGFloat dy = loc.y - self.cellDragStartLocation.y;
+        if (!self.cellDragInProgress) {
+            if (hypot(dx, dy) > 12.0) {
+                [self beginSectionDragForCell:cell atLocation:loc];
+            }
+        } else {
+            [self updateCellDragAtLocation:loc];
+        }
+        return;
+    }
+
+    if (gesture.state == UIGestureRecognizerStateEnded
+        || gesture.state == UIGestureRecognizerStateCancelled
+        || gesture.state == UIGestureRecognizerStateFailed) {
+        if (self.cellDragInProgress && self.cellDragSourceSectionId.length > 0) {
+            CGPoint loc = [gesture locationInView:self.view];
+            [self endSectionDragAtLocation:loc];
+        } else {
+            [self resetCellDragState];
+        }
+    }
+}
+
+- (void)beginSectionDragForCell:(UITableViewCell *)cell atLocation:(CGPoint)loc {
+    self.cellDragInProgress = YES;
+    self.pendingRebuildAfterDrag = NO;
+    [self dismissFloatingMenu];
+    UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    [feedback impactOccurred];
+
+    // 还原 cell 视觉变换（cell 的 longPress 在 Began 时把 transform 设到 0.98 + bg 高亮,
+    // 不同步还原会让 snapshot 抓到错误形状）
+    cell.transform = CGAffineTransformIdentity;
+    cell.contentView.backgroundColor = [UIColor clearColor];
+
+    UIView *snap = [cell snapshotViewAfterScreenUpdates:YES];
+    snap.layer.shadowColor = [UIColor blackColor].CGColor;
+    snap.layer.shadowOpacity = 0.18;
+    snap.layer.shadowOffset = CGSizeMake(0, 4);
+    snap.layer.shadowRadius = 8;
+    snap.alpha = 0.95;
+    CGRect cellFrameInView = [self.tableView convertRect:cell.frame toView:self.view];
+    snap.frame = cellFrameInView;
+    [self.view addSubview:snap];
+    self.cellDragSnapshot = snap;
+
+    UIView *line = [[UIView alloc] init];
+    UIColor *baseTheme = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+    UIColor *deepTheme = [UIColor colorWithRed:88.0/255 green:48.0/255 blue:220.0/255 alpha:1];
+    line.backgroundColor = deepTheme;
+    line.layer.cornerRadius = 2;
+    line.layer.shadowColor = baseTheme.CGColor;
+    line.layer.shadowOpacity = 0.7;
+    line.layer.shadowOffset = CGSizeZero;
+    line.layer.shadowRadius = 6;
+    line.hidden = YES;
+    [self.view addSubview:line];
+    self.cellDragInsertionLine = line;
+
+    cell.alpha = 0.3;
+    self.cellDragSourceCell = cell;
+
+    [self updateCellDragAtLocation:loc];
+}
+
+- (void)endSectionDragAtLocation:(CGPoint)loc {
+    NSString *sourceSectionId = self.cellDragSourceSectionId;
+    NSIndexPath *targetPath = self.cellDragLastTargetPath;
+    if (!targetPath) {
+        CGPoint locInTable = [self.view convertPoint:loc toView:self.tableView];
+        targetPath = [self.tableView indexPathForRowAtPoint:locInTable];
+    }
+    BOOL insertBelow = self.cellDragLastInsertBelow;
+
+    [self cleanupCellDragSnapshot];
+
+    if (sourceSectionId.length == 0 || !targetPath) {
+        [self resetCellDragState];
+        return;
+    }
+
+    // 解析目标 section: 沿 groupDisplayList 向上找最近 header；insertBelow 决定落在
+    // 该 section 之前还是之后。
+    NSString *targetSectionId = [self resolveTargetCategoryIdForRow:targetPath.row];
+    if (targetSectionId.length == 0 || [targetSectionId isEqualToString:sourceSectionId]) {
+        [self resetCellDragState];
+        return;
+    }
+
+    // 计算 categoryList 中 source / target 的位置 + 决定最终插入索引
+    NSArray<WKCategoryEntity *> *all = self.conversationListVM.categoryList;
+    NSInteger srcIdx = -1, tgtIdx = -1;
+    for (NSInteger i = 0; i < (NSInteger)all.count; i++) {
+        WKCategoryEntity *cat = all[i];
+        if (cat.is_default) continue;
+        if ([cat.category_id isEqualToString:sourceSectionId]) srcIdx = i;
+        else if ([cat.category_id isEqualToString:targetSectionId]) tgtIdx = i;
+    }
+    if (srcIdx < 0 || tgtIdx < 0) {
+        [self resetCellDragState];
+        return;
+    }
+
+    NSInteger insertIdx = insertBelow ? tgtIdx + 1 : tgtIdx;
+    // 移除 src 之后，src 之前的索引不变；src 之后的索引整体 -1
+    if (srcIdx < insertIdx) insertIdx--;
+    if (insertIdx == srcIdx) {
+        // 没动 — 落到自己原位
+        [self resetCellDragState];
+        return;
+    }
+
+    // 1) 本地乐观重排 categoryList
+    NSMutableArray<WKCategoryEntity *> *next = [all mutableCopy];
+    WKCategoryEntity *moving = next[srcIdx];
+    [next removeObjectAtIndex:srcIdx];
+    if (insertIdx > (NSInteger)next.count) insertIdx = next.count;
+    [next insertObject:moving atIndex:insertIdx];
+    self.conversationListVM.categoryList = next;
+    [self resetCellDragState]; // 清拖拽状态（含 sectionId），rebuild 后才能生效
+    [self rebuildGroupDisplayAndReload];
+
+    // 2) 提交完整顺序 — sortCategories 接收所有 category_id 的有序数组
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if (spaceId.length == 0) return;
+    NSMutableArray<NSString *> *ids = [NSMutableArray array];
+    for (WKCategoryEntity *cat in next) {
+        if (cat.category_id.length > 0) [ids addObject:cat.category_id];
+    }
+    __weak typeof(self) weakSelf = self;
+    [[WKCategoryService shared] sortCategories:spaceId categoryIds:ids].then(^(id _) {
+        // server 已采纳新顺序 — 拉一次最新 categories（顺便兜住跨设备同时改的 race）
+        [weakSelf loadCategories];
+    }).catch(^(NSError *err) {
+        NSLog(@"[CategorySort] failed: %@", err);
+        [weakSelf loadCategories]; // 回退到 server 真值
+    });
+}
+
+#pragma mark -
+
 - (void)beginCellDragForCell:(UITableViewCell *)cell atLocation:(CGPoint)loc {
     self.cellDragInProgress = YES;
     self.pendingRebuildAfterDrag = NO;
@@ -2746,8 +2917,11 @@
     CGRect rectInTable = [self.tableView rectForRowAtIndexPath:path];
     BOOL insertBelow;
     WKConversationDisplayItem *it = (path.row < (NSInteger)self.groupDisplayList.count) ? self.groupDisplayList[path.row] : nil;
+    BOOL isSectionDrag = self.cellDragSourceSectionId.length > 0;
     if (it.isSectionHeader) {
-        insertBelow = YES;
+        // 拖会话到 header → 进入该 section 顶部（insertBelow=YES）
+        // 拖 section 到另一个 header → 落到该 section 之前（insertBelow=NO，更直观）
+        insertBelow = !isSectionDrag;
     } else {
         insertBelow = (locInTable.y - rectInTable.origin.y) > rectInTable.size.height / 2.0;
     }
@@ -2928,6 +3102,7 @@
     self.cellDragSourceIndexPath = nil;
     self.cellDragSourceConvName = nil;
     self.cellDragSourceChannelId = nil;
+    self.cellDragSourceSectionId = nil;
     self.cellDragSourceCell = nil;
     self.cellDragLastTargetPath = nil;
     // 拖动期间累积的刷新一次性回放

@@ -150,7 +150,10 @@
 }
 
 - (void)onLongPressGesture:(UILongPressGestureRecognizer *)gesture {
-    if (self.isDefault) return;
+    if (self.isDefault) {
+        // 默认分组不参与管理菜单 / 拖拽
+        return;
+    }
     if (gesture.state == UIGestureRecognizerStateBegan) {
         // 高亮反馈
         [UIView animateWithDuration:0.15 animations:^{
@@ -168,12 +171,17 @@
             self.transform = CGAffineTransformIdentity;
         }];
     }
+    // 总是把 gesture 转发给 VC，让 VC 驱动 Changed/Ended 阶段的拖拽机制。
+    if (self.onLongPressProgress) {
+        self.onLongPressProgress(gesture, self.sectionId);
+    }
 }
 
 - (void)prepareForReuse {
     [super prepareForReuse];
     self.onToggle = nil;
     self.onLongPress = nil;
+    self.onLongPressProgress = nil;
     self.isDefault = NO;
     self.showTopDivider = NO;
 }
