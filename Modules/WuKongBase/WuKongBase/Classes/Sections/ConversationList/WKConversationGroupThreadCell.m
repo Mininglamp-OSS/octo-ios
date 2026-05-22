@@ -103,8 +103,9 @@
 + (NSArray<WKThreadModel *> *)visibleThreadPreviewsFor:(WKConversationWrapModel *)model {
     NSArray<WKThreadModel *> *raw = model.threadPreviews;
     if (raw.count == 0) return raw;
-    NSSet<NSString *> *keys = [WKFollowedKeysStore shared].followedKeys;
-    if (keys.count == 0) return raw; // store 还没加载，先按原样
+    WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
+    if (!store.loaded) return raw; // store 还没成功加载过，先按原样（避免冷启瞬间全部清空）
+    NSSet<NSString *> *keys = store.followedKeys;
     NSMutableArray<WKThreadModel *> *kept = [NSMutableArray array];
     for (WKThreadModel *t in raw) {
         NSString *key = [NSString stringWithFormat:@"%ld::%@", (long)WKFollowTargetTypeThread, t.channelId ?: @""];
@@ -114,15 +115,14 @@
 }
 
 + (NSInteger)visibleThreadCountFor:(WKConversationWrapModel *)model {
-    // 关注 tab 上"该群下已关注的子区数"。简化处理：上限是 model.threadCount,
-    // 但只算 followedKeys 里 parent 等于该群的 thread。
-    NSSet<NSString *> *keys = [WKFollowedKeysStore shared].followedKeys;
-    if (keys.count == 0) return model.threadCount;
+    // 关注 tab 上"该群下已关注的子区数"。
+    WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
+    if (!store.loaded) return model.threadCount; // 未加载先按全量（避免冷启误清）
     NSString *groupNo = model.channel.channelId;
     if (groupNo.length == 0) return 0;
     NSString *prefix = [NSString stringWithFormat:@"%ld::%@____", (long)WKFollowTargetTypeThread, groupNo];
     NSInteger n = 0;
-    for (NSString *k in keys) {
+    for (NSString *k in store.followedKeys) {
         if ([k hasPrefix:prefix]) n++;
     }
     return n;

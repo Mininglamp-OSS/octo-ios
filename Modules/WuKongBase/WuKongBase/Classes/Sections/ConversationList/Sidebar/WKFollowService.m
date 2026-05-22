@@ -31,10 +31,19 @@
     return instance;
 }
 
-/// URL query 参数转义。channelId 含 "____" 等保留字符，用 URLQueryAllowedCharacterSet 编码。
+/// URL query 单个 value 的转义。URLQueryAllowedCharacterSet 还允许 & = ? # 等
+/// query 分隔符通过，单值场景必须移除这些防止参数被截断或污染相邻参数。
 - (NSString *)queryEncode:(NSString *)raw {
     NSString *s = raw ?: @"";
-    return [s stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]] ?: s;
+    static NSCharacterSet *valueAllowed;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSMutableCharacterSet *cs = [[NSCharacterSet URLQueryAllowedCharacterSet] mutableCopy];
+        // 关键：剔掉 query 分隔符
+        [cs removeCharactersInString:@"&=?#+"];
+        valueAllowed = [cs copy];
+    });
+    return [s stringByAddingPercentEncodingWithAllowedCharacters:valueAllowed] ?: s;
 }
 
 #pragma mark - DM

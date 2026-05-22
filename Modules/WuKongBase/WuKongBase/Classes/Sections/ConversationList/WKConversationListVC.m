@@ -135,6 +135,9 @@
 @property(nonatomic,assign) CGFloat cellDragAutoScrollVelocity; // pts/frame, 0 = 不滚
 @property(nonatomic,assign) BOOL pendingRebuildAfterDrag; // 拖动期间收到的刷新请求暂存，结束时回放
 
+// 关注 tab 空状态引导视图：当前 tab 是 Follow + groupDisplayList 为空时显示
+@property(nonatomic,strong,nullable) UIView *followEmptyView;
+
 @end
 
 @implementation WKConversationListVC
@@ -1952,6 +1955,8 @@
         if (index == WKConversationFilterRecent) {
             [weakSelf.conversationListVM fetchThreadCountsForGroups];
         }
+        // 切到关注 tab 也刷新一下空状态显示
+        [weakSelf refreshFollowEmptyVisibility];
         // 恢复目标 tab 的滚动位置
         CGPoint savedOffset = (index == WKConversationFilterFollow) ? weakSelf.followTabScrollOffset : weakSelf.recentTabScrollOffset;
         [weakSelf.tableView setContentOffset:savedOffset animated:NO];
@@ -2069,6 +2074,105 @@
         && channelInfo.channel.channelId.length > 0) {
         [self reloadThreadRowsForParentGroup:channelInfo.channel.channelId];
     }
+}
+
+#pragma mark - 关注 tab 空状态引导
+
+/// 关注 tab 没分组 / 没关注内容时显示的引导视图：折叠图标 + "整理你的群聊" 标题
+/// + 一段说明 + 主题色"+ 新建分组"按钮。参考 web 端同款界面。
+- (UIView *)followEmptyView {
+    if (_followEmptyView) return _followEmptyView;
+    UIView *bg = [[UIView alloc] init];
+    bg.backgroundColor = [WKApp shared].config.backgroundColor;
+    bg.hidden = YES;
+    [self.view addSubview:bg];
+
+    UIView *iconBg = [[UIView alloc] init];
+    iconBg.tag = 9001;
+    iconBg.backgroundColor = [UIColor colorWithRed:235.0/255 green:228.0/255 blue:255.0/255 alpha:1];
+    iconBg.layer.cornerRadius = 22;
+    [bg addSubview:iconBg];
+    UIImageView *icon = [[UIImageView alloc] init];
+    icon.tag = 9002;
+    if (@available(iOS 13.0, *)) {
+        icon.image = [[UIImage systemImageNamed:@"folder"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    } else {
+        icon.image = [WKConversationListVC iconMoveCategory];
+    }
+    icon.tintColor = [UIColor colorWithRed:51.0/255 green:34.0/255 blue:78.0/255 alpha:1];
+    icon.contentMode = UIViewContentModeScaleAspectFit;
+    [iconBg addSubview:icon];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.tag = 9003;
+    title.text = LLang(@"整理你的群聊");
+    title.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
+    title.textColor = [WKApp shared].config.defaultTextColor;
+    title.textAlignment = NSTextAlignmentCenter;
+    [bg addSubview:title];
+
+    UILabel *desc = [[UILabel alloc] init];
+    desc.tag = 9004;
+    desc.text = LLang(@"创建分组，把群聊按工作、项目、生活分类，快速找到想看的对话。");
+    desc.font = [UIFont systemFontOfSize:14];
+    desc.textColor = [UIColor colorWithWhite:0.5 alpha:1.0];
+    desc.numberOfLines = 0;
+    desc.textAlignment = NSTextAlignmentCenter;
+    [bg addSubview:desc];
+
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+    btn.tag = 9005;
+    [btn setTitle:LLang(@"+ 新建分组") forState:UIControlStateNormal];
+    [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    btn.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    btn.backgroundColor = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:88.0/255 green:48.0/255 blue:220.0/255 alpha:1];
+    btn.layer.cornerRadius = 22;
+    btn.layer.masksToBounds = YES;
+    btn.contentEdgeInsets = UIEdgeInsetsMake(0, 24, 0, 24);
+    [btn addTarget:self action:@selector(onFollowEmptyCreateTap) forControlEvents:UIControlEventTouchUpInside];
+    [bg addSubview:btn];
+
+    _followEmptyView = bg;
+    return _followEmptyView;
+}
+
+- (void)layoutFollowEmptyViewIfNeeded {
+    if (!_followEmptyView || _followEmptyView.hidden) return;
+    CGFloat top = self.fixedHeaderContainer.lim_bottom;
+    CGFloat bottom = self.tabBarController.tabBar.frame.size.height;
+    _followEmptyView.frame = CGRectMake(0, top, self.view.lim_width, self.view.lim_height - top - bottom);
+    CGFloat verticalCenter = _followEmptyView.lim_height / 2.0 - 40; // 略上偏一点
+
+    UIView *iconBg = [_followEmptyView viewWithTag:9001];
+    UIImageView *icon = (UIImageView *)[_followEmptyView viewWithTag:9002];
+    UILabel *title = (UILabel *)[_followEmptyView viewWithTag:9003];
+    UILabel *desc = (UILabel *)[_followEmptyView viewWithTag:9004];
+    UIButton *btn = (UIButton *)[_followEmptyView viewWithTag:9005];
+
+    iconBg.frame = CGRectMake((_followEmptyView.lim_width - 80) / 2.0, verticalCenter - 130, 80, 80);
+    icon.frame = CGRectMake(20, 20, 40, 40);
+    title.frame = CGRectMake(0, CGRectGetMaxY(iconBg.frame) + 18, _followEmptyView.lim_width, 26);
+    CGFloat descMaxW = _followEmptyView.lim_width - 80;
+    CGSize descSize = [desc sizeThatFits:CGSizeMake(descMaxW, CGFLOAT_MAX)];
+    desc.frame = CGRectMake((_followEmptyView.lim_width - descMaxW) / 2.0, CGRectGetMaxY(title.frame) + 8, descMaxW, descSize.height);
+    CGFloat btnW = 160;
+    btn.frame = CGRectMake((_followEmptyView.lim_width - btnW) / 2.0, CGRectGetMaxY(desc.frame) + 24, btnW, 44);
+}
+
+- (void)refreshFollowEmptyVisibility {
+    BOOL shouldShow = (self.conversationListVM.filterType == WKConversationFilterFollow)
+                   && self.groupDisplayList.count == 0;
+    if (!shouldShow && !_followEmptyView) return;
+    UIView *v = shouldShow ? self.followEmptyView : _followEmptyView;
+    v.hidden = !shouldShow;
+    if (shouldShow) {
+        [self.view bringSubviewToFront:v];
+        [self layoutFollowEmptyViewIfNeeded];
+    }
+}
+
+- (void)onFollowEmptyCreateTap {
+    [self showCreateCategoryDialog];
 }
 
 /// 最近 tab：找出所有 parent_channel == groupNo 的子区行 indexPath，触发 reload。
@@ -3945,6 +4049,7 @@
     [self.tableView reloadData];
     CFAbsoluteTime _t2 = CFAbsoluteTimeGetCurrent();
     [self updateGroupMentionBadge];
+    [self refreshFollowEmptyVisibility];
     CFAbsoluteTime _t3 = CFAbsoluteTimeGetCurrent();
     NSLog(@"[TabPerf] rebuildGroupDisplayAndReload: buildList=%.1fms reloadData=%.1fms mentionBadge=%.1fms total=%.1fms rows=%lu",
           (_t1-_t0)*1000, (_t2-_t1)*1000, (_t3-_t2)*1000, (_t3-_t0)*1000,

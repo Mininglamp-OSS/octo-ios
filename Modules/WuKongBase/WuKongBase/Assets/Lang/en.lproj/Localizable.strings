@@ -295,6 +295,8 @@
 " 已置顶"=" pinned";
 " 已取消置顶"=" unpinned";
 "移动失败"="Failed to move";
+"整理你的群聊"="Organize your chats";
+"创建分组，把群聊按工作、项目、生活分类，快速找到想看的对话。"="Create categories to sort chats by work, project, or life — find what you need fast.";
 "该会话"="this conversation";
 "无"="Nothing";
 "刚刚"="Just";

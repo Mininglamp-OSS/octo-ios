@@ -306,7 +306,9 @@ static WKConversationListVM *_instance;
             }
         }
 
-        // 构建子区索引缓存（DB 查询）
+        // 构建子区索引缓存（DB 查询）。空间隔离：子区按"父群在不在当前 Space
+        // 白名单"过滤；缺这个 gate 会让另一个 Space 的子区会话漏到最近 tab 列表里。
+        NSSet<NSString *> *syncedGroupsSnapshot = strongSelf.syncedGroupChannelIds;
         NSMutableDictionary<NSString*, NSMutableArray<WKConversation*>*> *topicsByGroup = [NSMutableDictionary dictionary];
         NSMutableDictionary<NSString*, NSArray<WKReminder*>*> *remindersByChannelId = [NSMutableDictionary dictionary];
         NSMutableArray<WKConversationWrapModel*> *threadWrapModels = [NSMutableArray array];
@@ -316,6 +318,9 @@ static WKConversationListVM *_instance;
             NSRange sep = [channelId rangeOfString:@"____"];
             if (sep.location == NSNotFound) continue;
             NSString *groupId = [channelId substringToIndex:sep.location];
+            // 父群不在当前 Space 白名单 → 子区不收（白名单为 nil 表示首次 sync 前
+            // 不过滤，与 shouldShowConversation: 同语义）
+            if (syncedGroupsSnapshot && ![syncedGroupsSnapshot containsObject:groupId]) continue;
             NSMutableArray *topics = topicsByGroup[groupId];
             if (!topics) { topics = [NSMutableArray array]; topicsByGroup[groupId] = topics; }
             [topics addObject:conv];
@@ -504,6 +509,7 @@ static WKConversationListVM *_instance;
     for (WKConversationWrapModel *m in self.threadWrapModels) {
         if (m.channel.channelId) byChannel[m.channel.channelId] = m;
     }
+    NSSet<NSString *> *syncedGroups = self.syncedGroupChannelIds;
     BOOL changed = NO;
     NSInteger parentCount = 0;
     NSInteger threadsTotal = 0;
@@ -511,6 +517,8 @@ static WKConversationListVM *_instance;
     NSInteger synthesized = 0;
     for (WKConversationWrapModel *parent in self.conversationWrapModels) {
         if (parent.channel.channelType != WK_GROUP) continue;
+        // 父群不在当前 Space 白名单 → 整组子区都跳过（避免漏到最近 tab）
+        if (syncedGroups && ![syncedGroups containsObject:parent.channel.channelId]) continue;
         parentCount++;
         for (WKThreadModel *t in parent.threadPreviews) {
             if (t.channelId.length == 0) continue;
@@ -725,9 +733,15 @@ static WKConversationListVM *_instance;
     for (WKConversationWrapModel *m in self.threadWrapModels) {
         if (m.channel.channelId) byChannel[m.channel.channelId] = m;
     }
+    NSSet<NSString *> *syncedGroups = self.syncedGroupChannelIds;
     BOOL mutated = NO;
     for (WKConversation *c in threadConversations) {
         if (!c.channel.channelId) continue;
+        // 空间隔离：父群不在当前 Space 白名单的子区不收（同 loadConversationList 的 gate）
+        NSRange sep = [c.channel.channelId rangeOfString:@"____"];
+        if (sep.location == NSNotFound) continue;
+        NSString *parentGroupNo = [c.channel.channelId substringToIndex:sep.location];
+        if (syncedGroups && ![syncedGroups containsObject:parentGroupNo]) continue;
         WKConversationWrapModel *existing = byChannel[c.channel.channelId];
         if (existing) {
             // 关键：onConversationUpdate 给到的 WKConversation 已经带最新 lastMessage /
@@ -826,10 +840,30 @@ static WKConversationListVM *_instance;
 }
 
 -(NSInteger) getFollowUnreadCount {
+    // 关注 tab 未读 = 关注集合（DM / 群 / 子区，!mute）的未读总和。
+    // 之前直接 sum 全部 WK_GROUP 是错的：用户关注 DM 不会算进去，取消关注的群仍
+    // 在算。改成从 followedKeys 推导，与 Follow tab 视觉一致。
+    WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
+    if (!store.loaded) return 0;
     NSInteger count = 0;
-    for (WKConversationWrapModel *model in self.conversationWrapModels) {
-        if (model.channel.channelType == WK_GROUP && !model.mute) {
-            count += model.unreadCount;
+    // DM：从 conversationWrapModels 找出在 followedKeys 里的
+    for (WKConversationWrapModel *m in self.conversationWrapModels) {
+        if (m.mute) continue;
+        if (m.channel.channelType == WK_PERSON) {
+            if ([store isFollowedWithType:WKFollowTargetTypeDM targetId:m.channel.channelId]) {
+                count += m.unreadCount;
+            }
+        } else if (m.channel.channelType == WK_GROUP) {
+            if ([store isFollowedWithType:WKFollowTargetTypeChannel targetId:m.channel.channelId]) {
+                count += m.unreadCount;
+            }
+        }
+    }
+    // 子区：threadWrapModels 里在 followedKeys 的
+    for (WKConversationWrapModel *t in self.threadWrapModels) {
+        if (t.mute) continue;
+        if ([store isFollowedWithType:WKFollowTargetTypeThread targetId:t.channel.channelId]) {
+            count += t.unreadCount;
         }
     }
     return count;
@@ -1125,6 +1159,21 @@ static WKConversationListVM *_instance;
     return total;
 }
 
+/// 关注 tab section unread 用：只算"已关注"的子区未读，避免父群已关注就把所有缓存
+/// 子区未读都算进去（spec 子区独立关注）。store 未加载时为 0，与渲染口径一致。
+-(NSInteger) followedThreadUnreadForGroup:(NSString *)groupNo
+                            topicsByGroup:(NSDictionary<NSString*, NSArray<WKConversation*>*>*)topicsByGroup {
+    WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
+    if (!store.loaded) return 0;
+    NSInteger total = 0;
+    for (WKConversation *conv in topicsByGroup[groupNo]) {
+        if ([store isFollowedWithType:WKFollowTargetTypeThread targetId:conv.channel.channelId]) {
+            total += conv.unreadCount;
+        }
+    }
+    return total;
+}
+
 /// O(子区数) — 使用预建索引和 reminder 缓存检测@提醒（替代 O(N) 全量遍历 + 逐个 DB 查询版本）
 -(BOOL) hasMentionForGroup:(NSString *)groupNo model:(WKConversationWrapModel *)model topicsByGroup:(NSDictionary<NSString*, NSArray<WKConversation*>*>*)topicsByGroup remindersByChannelId:(NSDictionary<NSString*, NSArray<WKReminder*>*>*)remindersByChannelId {
     if (model && model.simpleReminders.count > 0) {
@@ -1256,7 +1305,10 @@ static WKConversationListVM *_instance;
 
     // 3. 非 default 分组（spec §0：关注 tab 隐藏默认分组）
     NSSet<NSString *> *followedGroupNos = followStore.followedGroupNos;
-    BOOL hasFollowData = followedGroupNos.count > 0 || followStore.followedKeys.count > 0;
+    // 用 store.loaded 而不是 count > 0 — 空 vs 未加载严格区分：sidebar/sync 成功
+    // 返回空集合（用户没关注任何东西）就该展示空，不能 fail-open 回退到 cat.groups
+    // 把所有遗留群一股脑亮出来。
+    BOOL followLoaded = followStore.loaded;
     for (WKCategoryEntity *cat in self.categoryList) {
         if (cat.is_default) continue;
         WKConversationDisplayItem *header = [WKConversationDisplayItem sectionHeaderWithId:cat.category_id title:cat.name isDefault:NO];
@@ -1269,20 +1321,16 @@ static WKConversationListVM *_instance;
             if (dmWrap) [followedDMs addObject:dmWrap];
         }
 
-        // 过滤本分组里"已取消关注"的群 — server 的 categories 接口不 JOIN
-        // conversation_ext，cat.groups 里仍会带 unfollowed 的群（modules/category/
-        // db_group_setting.go:29-42）。客户端按 followedGroupNos 兜底剔掉，否则取消
-        // 关注后关注 tab 还会看到。
-        // hasFollowData=NO 时（store 还没拉到 / 全量为空），不做过滤避免误杀。
-        NSArray<WKCategoryGroup *> *visibleGroups = cat.groups;
-        if (hasFollowData) {
-            NSMutableArray<WKCategoryGroup *> *kept = [NSMutableArray array];
+        // 严格走 followedGroupNos 过滤；store 未加载完成时 visibleGroups 为空数组,
+        // 避免 fail-open 把 server categories 接口返回的 unfollowed 群也展示出来。
+        // 等 store loaded 后 buildGroupDisplayList 会被通知触发重建。
+        NSMutableArray<WKCategoryGroup *> *visibleGroups = [NSMutableArray array];
+        if (followLoaded) {
             for (WKCategoryGroup *cg in cat.groups) {
                 if ([followedGroupNos containsObject:cg.group_no]) {
-                    [kept addObject:cg];
+                    [visibleGroups addObject:cg];
                 }
             }
-            visibleGroups = kept;
         }
 
         // 统计：群数 + DM 数 + 群内未读 + DM 未读 + 子区未读 + @提醒
@@ -1294,7 +1342,7 @@ static WKConversationListVM *_instance;
             if (m) {
                 count++;
                 totalUnread += m.unreadCount;
-                totalUnread += [self threadUnreadForGroup:cg.group_no topicsByGroup:topicsByGroup];
+                totalUnread += [self followedThreadUnreadForGroup:cg.group_no topicsByGroup:topicsByGroup];
                 if (!sectionHasMention) {
                     sectionHasMention = [self hasMentionForGroup:cg.group_no model:m topicsByGroup:topicsByGroup remindersByChannelId:remindersByChannelId];
                 }

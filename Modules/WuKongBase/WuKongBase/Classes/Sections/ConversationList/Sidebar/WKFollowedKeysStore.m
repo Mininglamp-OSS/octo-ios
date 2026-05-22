@@ -12,6 +12,7 @@
 NSNotificationName const kWKFollowedKeysStoreDidUpdateNotification = @"kWKFollowedKeysStoreDidUpdateNotification";
 
 @interface WKFollowedKeysStore ()
+@property (atomic, assign, readwrite) BOOL loaded;
 @property (atomic, assign, readwrite) NSInteger followVersion;
 @property (atomic, strong, readwrite) NSSet<NSString *> *followedKeys;
 @property (atomic, strong, readwrite) NSDictionary<NSString *, NSArray<WKSidebarItemEntity *> *> *itemsByCategory;
@@ -108,6 +109,7 @@ NSNotificationName const kWKFollowedKeysStoreDidUpdateNotification = @"kWKFollow
     self.followedGroupNos = [groupNos copy];
     self.itemsByCategory = [sortedBuckets copy];
     self.followVersion = version;
+    self.loaded = YES;
 
     [[NSNotificationCenter defaultCenter] postNotificationName:kWKFollowedKeysStoreDidUpdateNotification
                                                         object:self

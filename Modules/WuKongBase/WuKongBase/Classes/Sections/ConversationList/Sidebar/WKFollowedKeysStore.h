@@ -21,6 +21,12 @@ extern NSNotificationName const kWKFollowedKeysStoreDidUpdateNotification;
 
 + (instancetype)shared;
 
+/// 是否已成功完成至少一次 sidebar/sync。区分"空"与"未加载"：
+/// - NO：刚初始化 / 加载失败且从未成功过 → 调用方应回退到 legacy 数据（cat.groups）
+/// - YES：至少成功过一次（即便当前 followedKeys 为空也是"用户没关注东西"）→ 调用方
+///   应严格按 followedKeys 渲染，空就空
+@property (atomic, readonly) BOOL loaded;
+
 /// 当前 follow_version，CAS 锚点；写请求前同步读取
 @property (atomic, readonly) NSInteger followVersion;
 
