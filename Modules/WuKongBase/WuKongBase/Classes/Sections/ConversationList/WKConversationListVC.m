@@ -1207,11 +1207,14 @@
     NSArray<WKConversation*> *filtered = [self filterConversationsBySpace:conversations];
     // 过滤子区：子区不独立显示在 关注 tab；但 最近 tab 子区是独立行，update 必须能驱动 refresh。
     NSMutableArray<WKConversation*> *nonThreadFiltered = [NSMutableArray array];
+    NSMutableArray<WKConversation*> *threadUpdates = [NSMutableArray array];
     NSMutableSet<NSString*> *refreshGroupNos = [NSMutableSet set];
-    BOOL hasThreadUpdate = NO;
     for (WKConversation *conv in filtered) {
         if (conv.channel.channelType == WK_COMMUNITY_TOPIC) {
-            hasThreadUpdate = YES;
+            // 关键：thread updates 必须取自 filtered（已经过 filterConversationsBySpace 的 Space 校验），
+            // 不能再从原始 conversations 里捞 —— 否则跨 Space 子区会污染 threadWrapModels 进而
+            // 出现在 Recent tab 并累计到 badge（PR review #1）。
+            [threadUpdates addObject:conv];
             NSString *threadChannelId = conv.channel.channelId;
             NSRange range = [threadChannelId rangeOfString:@"____"];
             if (range.location != NSNotFound) {
@@ -1233,20 +1236,14 @@
     // 子区 update 必须不论当前 tab 都 apply 进 threadWrapModels —— 否则用户在
     // Follow tab 收到子区消息，切到 Recent 看到的还是旧 preview/时间戳/排序。
     // UI refresh 仍仅在 Recent tab 触发，避免无谓 reload。
-    if (hasThreadUpdate) {
+    if (threadUpdates.count > 0) {
         if (self.spaceSwitchInProgress) {
-            NSLog(@"[SpaceGate] drop %d thread updates (switch in progress)", (int)refreshGroupNos.count);
+            NSLog(@"[SpaceGate] drop %d thread updates (switch in progress)", (int)threadUpdates.count);
         } else {
-            NSMutableArray<WKConversation*> *threadUpdates = [NSMutableArray array];
-            for (WKConversation *c in conversations) {
-                if (c.channel.channelType == WK_COMMUNITY_TOPIC) [threadUpdates addObject:c];
-            }
-            if (threadUpdates.count > 0) {
-                [self.conversationListVM applyThreadConversationUpdates:threadUpdates];
-                if (self.conversationListVM.filterType == WKConversationFilterRecent) {
-                    [self refreshTable];
-                    [self refreshBadge];
-                }
+            [self.conversationListVM applyThreadConversationUpdates:threadUpdates];
+            if (self.conversationListVM.filterType == WKConversationFilterRecent) {
+                [self refreshTable];
+                [self refreshBadge];
             }
         }
     }
@@ -1342,6 +1339,22 @@
         // 系统通知和文件助手始终通过
         if([channelId isEqualToString:[WKApp shared].config.systemUID] ||
            [channelId isEqualToString:[WKApp shared].config.fileHelperUID]) {
+            [filtered addObject:conversation];
+            continue;
+        }
+        // 子区(topic) 严格按父群空间校验，不走 existsInList / 白名单 fail-open 路径（PR review #1B）：
+        //   - 解析 channelId 「{groupNo}____{shortId}」拿父群 groupNo
+        //   - 父群必须在当前 Space 群白名单内才放行
+        //   - 白名单未初始化（reset 后 sync 完成前的 race 窗口）一律拒绝（fail-closed），
+        //     避免跨 Space 子区污染 threadWrapModels 进而出现在 Recent / 计入 badge
+        if(conversation.channel.channelType == WK_COMMUNITY_TOPIC) {
+            NSRange sep = [channelId rangeOfString:@"____"];
+            if(sep.location == NSNotFound) continue;
+            NSString *parentGroupNo = [channelId substringToIndex:sep.location];
+            if(![self.conversationListVM isGroupWhitelistInitialized] ||
+               ![self.conversationListVM isGroupInWhitelist:parentGroupNo]) {
+                continue;
+            }
             [filtered addObject:conversation];
             continue;
         }
@@ -1629,6 +1642,18 @@
     self.lastFollowedKeysReloadAt = now;
     NSLog(@"[FollowedKeys] reload triggered by %@", reason);
     [[WKFollowedKeysStore shared] reload];
+    // 同时刷一次 categoryList —— 跨设备新建分类 / 把已关注项移入新分类时，sidebar/sync 会带新
+    // category_id，但本地 categoryList 没有对应 header，buildGroupDisplayList 在 `for (cat in
+    // self.categoryList)` 循环里就跳过这些 sidebar-only 项，导致用户 follow 了却看不到（PR review #2）。
+    // store reload 完成会通过 didUpdateNotification 触发一次 rebuild，但 categories 接口可能更慢回来，
+    // 那次 rebuild 拿到的是旧 categoryList；这里 completion 再补一次 rebuild 兜底。
+    __weak typeof(self) weakSelf = self;
+    [self.conversationListVM loadCategoriesWithCompletion:^{
+        if (weakSelf.conversationListVM.filterType == WKConversationFilterFollow) {
+            [weakSelf rebuildGroupDisplayAndReload];
+        }
+        [weakSelf refreshBadge];
+    }];
 }
 
 /// : 判断 channel 是否为系统 Bot（botfather / u_10000 / fileHelper 等）。

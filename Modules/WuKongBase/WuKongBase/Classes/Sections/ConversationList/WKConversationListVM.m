@@ -882,11 +882,13 @@ static WKConversationListVM *_instance;
     BOOL mutated = NO;
     for (WKConversation *c in threadConversations) {
         if (!c.channel.channelId) continue;
-        // 空间隔离：父群不在当前 Space 白名单的子区不收（同 loadConversationList 的 gate）
+        // 空间隔离：父群必须在当前 Space 白名单（fail-closed）—— syncedGroups 未初始化（reset 后
+        // sync 完成前的 race 窗口）一律拒绝，与 VC.filterConversationsBySpace 的 topic 分支同步,
+        // 避免跨 Space 子区在启动期被错误吸进 threadWrapModels（PR review #1C）。
         NSRange sep = [c.channel.channelId rangeOfString:@"____"];
         if (sep.location == NSNotFound) continue;
         NSString *parentGroupNo = [c.channel.channelId substringToIndex:sep.location];
-        if (syncedGroups && ![syncedGroups containsObject:parentGroupNo]) continue;
+        if (!syncedGroups || ![syncedGroups containsObject:parentGroupNo]) continue;
         WKConversationWrapModel *existing = byChannel[c.channel.channelId];
         if (existing) {
             // 关键：onConversationUpdate 给到的 WKConversation 已经带最新 lastMessage /
