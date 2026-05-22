@@ -85,6 +85,7 @@
 @property (nonatomic, strong) NSMutableArray<WKCategoryEntity *> *reorderList;
 @property (nonatomic, strong) UIView *snapshotView;
 @property (nonatomic, strong) NSIndexPath *dragIndexPath;
+@property (nonatomic, assign) BOOL didReorderInGesture; // 本次手势期间是否实际换过位
 @end
 
 @implementation WKCategoryReorderVC
@@ -94,18 +95,10 @@
     self.navigationBar.title = LLang(@"排序分组");
     self.view.backgroundColor = [WKApp shared].config.backgroundColor;
 
-    // 完成按钮
-    UIButton *doneBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [doneBtn setTitle:LLang(@"完成") forState:UIControlStateNormal];
-    [doneBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
-    doneBtn.titleLabel.font = [[WKApp shared].config appFontOfSizeMedium:16.0f];
-    [doneBtn sizeToFit];
-    [doneBtn addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
-    self.rightView = doneBtn;
-
     // 数据
     _reorderList = [NSMutableArray array];
     for (WKCategoryEntity *cat in self.categories) {
+        if (cat.is_default) continue; // 与关注 tab 一致：默认分组不参与排序
         if (cat.category_id && cat.category_id.length > 0) {
             [_reorderList addObject:cat];
         }
@@ -256,6 +249,7 @@ trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath API_
             NSIndexPath *indexPath = [_tableView indexPathForRowAtPoint:location];
             if (!indexPath) return;
             _dragIndexPath = indexPath;
+            _didReorderInGesture = NO;
 
             UITableViewCell *cell = [_tableView cellForRowAtIndexPath:indexPath];
             _snapshotView = [cell snapshotViewAfterScreenUpdates:YES];
@@ -286,6 +280,7 @@ trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath API_
                 [_reorderList insertObject:item atIndex:toIndexPath.row];
                 [_tableView moveRowAtIndexPath:_dragIndexPath toIndexPath:toIndexPath];
                 _dragIndexPath = toIndexPath;
+                _didReorderInGesture = YES;
             }
             break;
         }
@@ -293,6 +288,7 @@ trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath API_
         case UIGestureRecognizerStateCancelled: {
             if (!_dragIndexPath) return;
             UITableViewCell *cell = [_tableView cellForRowAtIndexPath:_dragIndexPath];
+            BOOL shouldCommit = _didReorderInGesture;
             [UIView animateWithDuration:0.2 animations:^{
                 self.snapshotView.transform = CGAffineTransformIdentity;
                 CGRect rect = [self.tableView rectForRowAtIndexPath:self.dragIndexPath];
@@ -302,7 +298,11 @@ trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath API_
                 [self.snapshotView removeFromSuperview];
                 self.snapshotView = nil;
                 self.dragIndexPath = nil;
+                self.didReorderInGesture = NO;
                 [self.tableView reloadData]; // 刷新序号
+                if (shouldCommit) {
+                    [self commitReorder];
+                }
             }];
             break;
         }
@@ -311,21 +311,30 @@ trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath API_
     }
 }
 
-#pragma mark - 完成
+#pragma mark - 保存排序
 
-- (void)onDone {
+/// 拖拽结束后立即调用 — 与关注 tab 长按拖动排序走同一个接口（WKCategoryService.sortCategories:）。
+/// 提交的 ID 列表必须包含所有分组（含默认分组），否则服务端会判定为不完整并拒绝。
+/// 默认分组不参与拖动排序，按 self.categories 中的原位置塞回；非默认分组按用户拖动的新顺序排。
+- (void)commitReorder {
     NSMutableArray *ids = [NSMutableArray array];
-    for (WKCategoryEntity *cat in _reorderList) {
-        [ids addObject:cat.category_id];
+    NSInteger reorderIdx = 0;
+    for (WKCategoryEntity *cat in self.categories) {
+        if (cat.category_id.length == 0) continue;
+        if (cat.is_default) {
+            [ids addObject:cat.category_id];
+        } else if (reorderIdx < _reorderList.count) {
+            [ids addObject:_reorderList[reorderIdx].category_id];
+            reorderIdx++;
+        }
     }
+    if (ids.count == 0) return;
     __weak typeof(self) weakSelf = self;
     [[WKCategoryService shared] sortCategories:self.spaceId categoryIds:ids].then(^(id r) {
-        if (weakSelf.onReorderComplete) {
-            weakSelf.onReorderComplete();
-        }
-        [[WKNavigationManager shared] popViewControllerAnimated:YES];
+        if (weakSelf.onReorderComplete) weakSelf.onReorderComplete();
     }).catch(^(NSError *e) {
         NSLog(@"排序失败: %@", e);
+        [weakSelf.view showMsg:LLang(@"排序失败")];
     });
 }
 
