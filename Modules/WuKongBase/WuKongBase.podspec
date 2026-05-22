@@ -42,35 +42,16 @@ TODO: Add long description of the pod here.
  
   s.private_header_files = 'WuKongBase/Classes/Vendor/**/*'
   s.source_files = 'WuKongBase/Classes/**/*'
-  # 排除许可证不兼容或已替换的代码：
-  # - SoundTouch (LGPL v2.1) — 已用 no-op stub 替换变声功能
-  # - TelegramUtils 中依赖 librlottie 的子目录（AnimatedStickerNode 等）—
-  #   外部消费方已删除
-  # TelegramUtils 其余文件保留在编译链内，因为 TapLongTapOrDoubleTapGestureRecognizer
-  # 还被 WKMessageCell / WKTextMessageCell / WKVoiceMessageCell 在用（长按手势）。
-  # 完整剥离 TelegramUtils 是 P5 长期工作。
-  s.exclude_files = [
-    'WuKongBase/Classes/Vendor/SoundTouch/**/*',
-    'WuKongBase/Classes/Vendor/LegacyComponents/**/*',
-    # TelegramUtils 排除：依赖已断链子目录（librlottie / ContextUI / POP / 其他）
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/AnimatedStickerNode/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/TelegramAnimatedStickerNode/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/AnimationCompression/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/LiMaoMock/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/ReactionSelectionNode/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/ContextUI/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/TextSelectionNode/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/LegacyComponents/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/RadialStatusNode/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/ShimmerEffect/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/GradientBackground/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/MetalImageView/**/*',
-    'WuKongBase/Classes/Sections/Common/TelegramUtils/MediaResources/**/*',
-    # 保留编译：Display (含 TapLongTapOrDoubleTapGestureRecognizer) + 它依赖的支撑模块
-    # SwiftSignalKit / AppBundle / Utils / ObjCRuntimeUtils / UIKitRuntimeUtils / Markdown
-    # / GZip / Svg / ManagedFile / AnimatedCountLabelNode / AnimatedNavigationStripeNode
-    # / TelegramUIPreferences / Others / YuvConversion
-  ]
+  # 排除许可证不兼容的代码：当前无遗留。
+  # 历史记录：
+  # - SoundTouch (LGPL v2.1) — 2026-05 物理移除，消费链已先 stub 为 no-op
+  #   (CWVoiceChangePlayCell.mm 等)，变声功能待用 AVAudioUnitTimePitch 重写。
+  # - TelegramUtils (GPL v2) — 2026-05 整体物理移除，cell 端长按出菜单由
+  #   Sections/Common/MessageGesture/ 下的 Octo 自实现接管，
+  #   StickerShimmerEffectNode 由 Sections/Common/Component/WKShimmerView 替代。
+  # - LegacyComponents (POP, Apache 2.0 实际许可) — 2026-05 物理移除，
+  #   0 消费方，是历史遗留死代码。
+  s.exclude_files = []
 #  s.preserve_paths = 'ios/arm/*.{a}'
 #   s.vendored_frameworks  = 'ios/WuKongIMSDK.framework'
   
@@ -89,11 +70,52 @@ TODO: Add long description of the pod here.
 #   s.xcconfig = { "OTHER_LDFLAGS" => "-ObjC" }
 #  s.vendored_libraries = 'WuKongBase/WuKongIMSDK-Framework/ios/*.{a}'
 #  s.resource  = 'WuKongBase/WuKongIMSDK-Framework/ios/WuKongIMSDK.framework/Versions/A/Resources/WuKongIMSDK.bundle'
-  # Bugly.framework 是腾讯闭源 SDK，开源版默认不附带（避免分发闭源二进制 + 减小仓库体积）。
-  # 仅当用户把 Bugly.framework 放回 WuKongBase/Bugly.framework/ 时，自动加入编译。
-  # Podfile 会检测同样条件并设置 OCTO_ENABLE_BUGLY=1 预处理宏。
-  if File.exist?(File.expand_path('WuKongBase/Bugly.framework', __dir__))
+  # Bugly 崩溃上报（腾讯闭源 SDK）—— 双路径自动启用：
+  #   1) 优先：本地 Bugly.framework（用户自己控制版本时）
+  #      仓库默认不附带（避免在公开 repo 分发闭源二进制）
+  #   2) 否则：若 OctoConfig.xcconfig 里填了 OCTO_BUGLY_APP_ID_MAIN，
+  #      自动从 CocoaPods 拉 Tencent 官方 pod 'Bugly' (~> 2.6)，
+  #      pod install 自动从 Tencent CDN 下载，无需手动放 .framework。
+  #   3) 都未满足：DISABLED，不增加 app 体积，不影响其他功能。
+  # Podfile post_install 同样的 AppId 判定来设置 OCTO_ENABLE_BUGLY=1 宏。
+  #
+  # 注意 WuKongBase 故意**不**用 static_framework — 否则 Bugly 符号解析压力
+  # 会下放给 WuKongDataSource / WuKongLogin / WuKongContacts 这些下游 pod，
+  # 它们都得加 -framework Bugly。dynamic + Podfile 的 monkey-patch 压住
+  # CocoaPods 的"transitive static"误报，是最简洁的方案。
+  local_bugly_path = File.expand_path('WuKongBase/Bugly.framework', __dir__)
+  bugly_will_be_used = false
+  if File.exist?(local_bugly_path)
     s.vendored_frameworks = 'WuKongBase/Bugly.framework'
+    bugly_will_be_used = true
+  else
+    # 从 podspec 所在目录向上找 OctoConfig.xcconfig — 比固定 '../../' 更健壮，
+    # 兼容非标准 :path => 用法 (PR #125 round 5 review 🟡)
+    octo_config_path = nil
+    dir = __dir__
+    loop do
+      candidate = File.join(dir, 'OctoConfig.xcconfig')
+      if File.exist?(candidate)
+        octo_config_path = candidate
+        break
+      end
+      parent = File.expand_path('..', dir)
+      break if parent == dir   # 到根了
+      dir = parent
+    end
+    if octo_config_path
+      bugly_app_id = ''
+      File.foreach(octo_config_path) do |line|
+        if line.strip =~ /^OCTO_BUGLY_APP_ID_MAIN\s*=\s*(.+)$/
+          bugly_app_id = $1.strip.sub(%r{\s*//.*$}, '').strip
+          break
+        end
+      end
+      if !bugly_app_id.empty? && bugly_app_id != 'YOUR_BUGLY_APP_ID'
+        s.dependency 'Bugly', '~> 2.6'
+        bugly_will_be_used = true
+      end
+    end
   end
 #  s.libraries = 'opencore-amrnb', 'opencore-amrwb','vo-amrwbenc', 'sqlite3', 'stdc++','xml2'
   s.libraries = 'c++','stdc++'
@@ -134,8 +156,17 @@ TODO: Add long description of the pod here.
   s.dependency 'libcmark_gfm'
   s.dependency 'iosMath', '~> 0.9'  # LaTeX 数学公式渲染（纯 OC + CoreText，无 WebView）
   s.dependency 'RiveRuntime', '~> 6.11'
+  # 🎉/🎊 表情礼花动画 — 仅 SwiftConfettiView 一项；保留它主要是为了复用
+  # pod 自带的 confetti.mp3 资产（爆裂声），粒子系统是 WKConfettiView 自写
+  # CAEmitterLayer，不走该库的粒子实现。
+  s.dependency 'SwiftConfettiView', '~> 2.0'      # MIT, ugurethemaydin
+  # Bugly 启用时（s.dependency 'Bugly' 或本地 vendored_frameworks），WuKongBase
+  # 自身也必须 link Bugly 才能解析 _OBJC_CLASS_$_Bugly 等符号；CocoaPods 对
+  # static_framework + 跨 pod 依赖的自动 link 不到位，这里显式加。
+  bugly_ldflag = bugly_will_be_used ? ' -framework "Bugly"' : ''
   s.pod_target_xcconfig = {
-    'SWIFT_INCLUDE_PATHS' => '$(inherited)'
+    'SWIFT_INCLUDE_PATHS' => '$(inherited)',
+    'OTHER_LDFLAGS' => '$(inherited)' + bugly_ldflag
   }
   
 #  s.dependency 'SVGKit'

@@ -16,8 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/Source-Apache_2.0-blue.svg" alt="Source License Apache 2.0"></a>
-  <a href="./NOTICE"><img src="https://img.shields.io/badge/Binary-GPL_v2-red.svg" alt="Binary effective license GPL v2"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License Apache 2.0"></a>
   <a href="https://developer.apple.com/ios/"><img src="https://img.shields.io/badge/Platform-iOS%2014.0%2B-lightgrey.svg" alt="Platform iOS 14.0+"></a>
   <a href="https://developer.apple.com/swift/"><img src="https://img.shields.io/badge/Lang-Objective--C%20%2F%20Swift-orange.svg" alt="Language Objective-C / Swift"></a>
   <a href="./README.zh.md"><img src="https://img.shields.io/badge/lang-简体中文-red.svg" alt="简体中文"></a>
@@ -28,8 +27,6 @@
 > 🌐 **Read in**: **English** · [简体中文](README.zh.md)
 
 # OCTO iOS
-
-> ⚠️ **License status**: our new source is Apache 2.0, but the **shipped binary is effectively GPL v2** because `Modules/WuKongBase/.../TelegramUtils/` still links GPL v2 code that the current message-cell gesture stack depends on. If you need a fully Apache-2.0 binary (commercial closed-source distribution), see [License](#-license) before you ship — you must replace the Telegram-derived gesture/context-menu stack first. Tracking work + a draft replacement plan live in [`TelegramUtils/README.md`](Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/README.md).
 
 > **Native iOS client** for the OCTO messaging platform — Objective-C + Swift, talks to `octo-server` over the WuKongIM TCP protocol.
 
@@ -210,19 +207,15 @@ For security issues please follow [SECURITY.md](SECURITY.md) instead of the publ
 
 ## 📄 License
 
-This repository ships **mixed licenses** — the simple "Apache 2.0" framing is incorrect for the **binary**:
+Released under **[Apache License 2.0](LICENSE)**. Our own source and the resulting binary contain **no statically-linked GPL or strong-copyleft code** — the historical `TelegramUtils/` (GPL v2) subtree and `SoundTouch` (LGPL v2.1) vendored code have been removed.
+
+One transitive dependency, **`librlottie` (LGPL v2.1)**, ships as a *dynamically linkable* component pulled in by `SDWebImageLottieCoder` for Lottie sticker decoding — that's compatible with our Apache 2.0 distribution under the LGPL dynamic-linking exception, but downstream redistributors still need to honor LGPL obligations for that one component (allow user replacement of `librlottie.dylib` / provide relinkable object files). See [NOTICE](NOTICE) for the full obligation surface.
 
 | Layer | License | Notes |
 |---|---|---|
 | Our new code (`Octo/`, extensions, new code in modules) | **Apache 2.0** | See [LICENSE](LICENSE) |
 | `WuKong*` modules | **MIT** | Upstream [WuKongIM iOS SDK](https://github.com/WuKongIM/WuKongIMiOSSDK) — preserved with original attributions |
-| `WuKongBase/.../TelegramUtils/` (active subset) | **GPL v2** | Derived from [Telegram iOS](https://github.com/TelegramMessenger/Telegram-iOS) — currently linked into the shipped binary by `WKMessageCell` and related cells (custom gesture state machine). Excluding it requires reimplementing `TapLongTapOrDoubleTapGestureRecognizer` + `ContextGesture` |
-
-**Practical effect on binary distribution:**
-
-- The shipped Octo iOS binary is **effectively under GPL v2** because GPL v2 code is statically linked in.
-- If you distribute Octo iOS binaries, you **must** comply with GPL v2 obligations for the linked portions (source availability, no additional restrictions, etc.).
-- If you need a **fully Apache-2.0 binary** (commercial closed-source distribution), you must first replace the active TelegramUtils symbols. See [`TelegramUtils/README.md`](Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/README.md) and [`TelegramUtils/LICENSE`](Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/LICENSE) for the current dependency surface and replacement plan.
+| `librlottie` (transitive, dynamic) | **LGPL v2.1** | Via `SDWebImageLottieCoder`; see [NOTICE](NOTICE) for redistribution obligations |
 
 Full third-party attribution lives in [NOTICE](NOTICE).
 
@@ -232,7 +225,6 @@ Full third-party attribution lives in [NOTICE](NOTICE).
 
 - **[WuKongIM iOS SDK](https://github.com/WuKongIM/WuKongIMiOSSDK)** — the real-time messaging protocol SDK that `octo-server` drives.
 - **[TangSengDaoDao iOS](https://github.com/TangSengDaoDao/TangSengDaoDaoiOS)** — the upstream IM client this app's chat UI scaffolds from.
-- **[Telegram iOS](https://github.com/TelegramMessenger/Telegram-iOS)** — display-layer components currently used by chat message cells.
 
 See [NOTICE](NOTICE) for the full attribution list and third-party component licenses.
 

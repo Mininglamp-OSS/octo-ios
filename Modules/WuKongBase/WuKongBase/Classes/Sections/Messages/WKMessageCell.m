@@ -20,11 +20,19 @@
 #import "WKExternalViewerResolver.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKTapLongTapOrDoubleTapGestureRecognizerEvent.h"
-// 用 Telegram 原版 ContextControllerSourceNode + ContextExtractedContentContainingNode
-// (在 TelegramUtils/Display/Source/ 中) 替代 P5 写的 WKGestureContainerNode /
-// WKContentContainerNode —— 因 P5 自写版用普通 UILongPressGestureRecognizer
-// 在聊天 tableview 上吃掉 navigation pop / scroll 手势。原版自带定制的
-// ContextGesture（beginDelay = 0.12 + 内部状态机），与 scrollview 协作良好。
+// 长按出菜单容器：OctoMessageGestureContainerNode + OctoMessageContentContainingNode
+// （Octo 自实现，源码在 Sections/Common/MessageGesture/），替代原 GPL v2 的
+// ContextControllerSourceNode / ContextExtractedContentContainingNode。
+//
+// 行为目标：
+//   1) beginDelay = 0.12s — 给 tableview 的 pan 抢占窗口，滚动不卡。
+//   2) 左缘 8pt 起手 → 失败 — 保留系统右滑 pop。
+//   3) shouldRecognizeSimultaneouslyWith UIPanGestureRecognizer = false — 不
+//      与 scroll 并行识别。
+//   4) 进度阶段 0.2s + 0.98 微缩放 — 视觉提示但不打断滚动。
+//
+// 回退开关：开发期可设 `[OctoContextGesture setDisableForSafeMode:YES]`
+// 关闭 Octo 状态机；fallback 到普通的 UILongPressGestureRecognizer 路径。
 
 
 // 整个消息距离顶部的距离
@@ -54,7 +62,7 @@ static NSMutableDictionary *flameNodeCacheDict;
 
 @property(nonatomic,strong) UIButton *navigateToMessageBtn; // 跳到消息的按钮
 
-@property(nonatomic,strong) ContextControllerSourceNode *mainContainerNode;
+@property(nonatomic,strong) OctoMessageGestureContainerNode *mainContainerNode;
 
 @property(nonatomic,strong) TapLongTapOrDoubleTapGestureRecognizerWrap *tapLongTapOrDoubleTapGestureRecognizerWrap;
 
@@ -128,9 +136,9 @@ static NSMutableDictionary *flameNodeCacheDict;
 
     
     // ---------- main容器 ----------
-    self.mainContextSourceNode = [[ContextExtractedContentContainingNode alloc] init];
+    self.mainContextSourceNode = [[OctoMessageContentContainingNode alloc] init];
 //    self.bubbleSourceNode.view.backgroundColor = [UIColor redColor];
-    self.mainContainerNode = [[ContextControllerSourceNode alloc] init];
+    self.mainContainerNode = [[OctoMessageGestureContainerNode alloc] init];
 //    self.mainContainerNode.isGestureEnabled = false;
     [self.contentView addSubnode:self.mainContainerNode];
     [self.mainContainerNode addSubnode:self.mainContextSourceNode];
@@ -142,7 +150,7 @@ static NSMutableDictionary *flameNodeCacheDict;
         }
         return [weakSelf shouldBeginContextGestureAtPoint:point];
     }];
-    [self.mainContainerNode setActivated:^(ContextGesture *gesture, CGPoint point) {
+    [self.mainContainerNode setActivated:^(OctoContextGesture *gesture, CGPoint point) {
         if(!weakSelf) {
             return;
         }

@@ -24,6 +24,11 @@
 
 @interface WKAPIClient()
 @property(nonatomic,strong) AFHTTPSessionManager *sessionManager;
+/// 专用于 COS / OSS 直传的 session manager。
+/// 与主 sessionManager 隔离，使用 AFHTTPResponseSerializer（不做 JSON 校验），
+/// 避免 COS PUT 成功但响应空 body / 非 JSON Content-Type 时被 AFJSONResponseSerializer
+/// 误报为失败（PR review #125 round 5 critical）。
+@property(nonatomic,strong) AFURLSessionManager *cosUploadSessionManager;
 @end
 @implementation WKAPIClient
 
@@ -281,22 +286,6 @@
     return task;
 }
 
--(void) uploadChatFile:(NSString*)serverPath localURL:(NSURL*)localURL progress:(void(^_Nullable)(NSProgress * _Nonnull progress)) progressCallback completeCallback:(void(^_Nullable)(id __nullable resposeObject,NSError * __nullable error)) completeCallback {
-    [self getChatUploadURL:serverPath].then(^(NSDictionary*result){
-        NSString *uploadUrl = result[@"url"];
-        [self fileUpload:uploadUrl fileURL:localURL.absoluteString progress:progressCallback completeCallback:completeCallback];
-    }).catch(^(NSError *error){
-        if(completeCallback) {
-            completeCallback(nil,error);
-        }
-    });
-}
-
-// 获取上传地址
--(AnyPromise*) getChatUploadURL:(NSString*)path{
-    return  [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"%@file/upload?path=%@&type=chat",[WKApp shared].config.fileBaseUrl,path] parameters:nil];
-}
-
 -(NSURLSessionDownloadTask*) createDownloadTask:(NSString*)path storePath:(NSString*_Nonnull)storePath progress:(void (^)(NSProgress *downloadProgress)) downloadProgressBlock completeCallback:(void(^)(NSError *error)) completeCallback{
     NSString *requestPath = path;
     if(_config.requestPathReplace) {
@@ -320,39 +309,94 @@
     return task;
 }
 
--(NSURLSessionDataTask*) createFileUploadTask:(NSString*)path fileURL:(NSString*)fileUrl  progress:(void (^)(NSProgress *uploadProgress)) uploadProgressBlock completeCallback:(void(^)(id responseObj,NSError *error)) completeCallback{
-
-    NSString *requestPath = path;
-    if(_config.requestPathReplace) {
-        requestPath = _config.requestPathReplace(path);
+-(NSURLSessionUploadTask*) createFileUploadPutTask:(NSString*)uploadUrl
+                                            fileURL:(NSString*)fileUrl
+                                        contentType:(NSString*)contentType
+                                 contentDisposition:(NSString*)contentDisposition
+                                           progress:(void (^)(NSProgress *uploadProgress))uploadProgressBlock
+                                   completeCallback:(void(^)(NSInteger statusCode, NSError *error))completeCallback {
+    NSURL *localFileURL;
+    if ([fileUrl hasPrefix:@"file://"]) {
+        localFileURL = [NSURL fileURLWithPath:[fileUrl substringFromIndex:[@"file://" length]]];
+    } else if ([fileUrl hasPrefix:@"/"]) {
+        localFileURL = [NSURL fileURLWithPath:fileUrl];
+    } else {
+        localFileURL = [NSURL URLWithString:fileUrl];
     }
-    [self resetPublicHeader];
-    return [_sessionManager POST:[self pathURLEncode:requestPath] parameters:nil headers:nil constructingBodyWithBlock:^(id<AFMultipartFormData>  _Nonnull formData) {
-        NSError *fileError;
-        NSURL *localFileURL;
-        if ([fileUrl hasPrefix:@"file://"]) {
-            NSString *filePath = [fileUrl substringFromIndex:[@"file://" length]];
-            localFileURL = [NSURL fileURLWithPath:filePath];
-        } else {
-            localFileURL = [NSURL URLWithString:[fileUrl stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding]];
+    NSURL *putURL = [NSURL URLWithString:uploadUrl];
+    if (!putURL || !localFileURL) {
+        if (completeCallback) {
+            completeCallback(0, [NSError errorWithDomain:@"WKAPIClient" code:-1 userInfo:@{NSLocalizedDescriptionKey: @"invalid uploadUrl or fileURL"}]);
         }
-        [formData appendPartWithFileURL:localFileURL name:@"file" error:&fileError];
-        if(fileError) {
-            WKLogError(@"file: %@ fileError-> %@",fileUrl,fileError);
-        }
-    } progress:^(NSProgress * _Nonnull uploadProgress) {
-        if(uploadProgressBlock) {
+        return nil;
+    }
+
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:putURL];
+    request.HTTPMethod = @"PUT";
+    [request setValue:contentType forHTTPHeaderField:@"Content-Type"];
+    if (contentDisposition.length > 0) {
+        [request setValue:contentDisposition forHTTPHeaderField:@"Content-Disposition"];
+    }
+    // COS 预签名 URL 不要 Authorization；AFJSONRequestSerializer 也不该参与直传。
+    // 这里走 self.cosUploadSessionManager（专用 AFURLSessionManager + raw
+    // AFHTTPResponseSerializer），避免主 sessionManager 的 JSON serializer 在
+    // COS 成功响应（空 body 或非 JSON Content-Type）上把 statusCode=200 也误报
+    // 为 NSError。
+
+    NSURLSessionUploadTask *task = [self.cosUploadSessionManager uploadTaskWithRequest:request
+                                                                              fromFile:localFileURL
+                                                                              progress:^(NSProgress * _Nonnull uploadProgress) {
+        if (uploadProgressBlock) {
             uploadProgressBlock(uploadProgress);
         }
-    } success:^(NSURLSessionDataTask * _Nonnull task, id  _Nullable responseObject) {
-        if(completeCallback) {
-            completeCallback(responseObject, nil);
+    } completionHandler:^(NSURLResponse * _Nonnull response, id  _Nullable responseObject, NSError * _Nullable error) {
+        NSInteger statusCode = 0;
+        if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+            statusCode = ((NSHTTPURLResponse *)response).statusCode;
         }
-    } failure:^(NSURLSessionDataTask * _Nullable task, NSError * _Nonnull error) {
-        if(completeCallback) {
-            completeCallback(nil, error);
+        // 显式 2xx 校验是 source of truth — serializer 只做解码不参与判定
+        if (!error && (statusCode < 200 || statusCode >= 300)) {
+            error = [NSError errorWithDomain:@"WKAPIClient" code:statusCode userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"PUT 上传返回非 2xx: %ld", (long)statusCode]}];
+        }
+        if (completeCallback) {
+            completeCallback(statusCode, error);
         }
     }];
+    return task;
+}
+
+- (AFURLSessionManager *)cosUploadSessionManager {
+    if (!_cosUploadSessionManager) {
+        _cosUploadSessionManager = [[AFURLSessionManager alloc]
+            initWithSessionConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]];
+        // raw HTTP serializer — 不做 JSON 解析 / 不校验 Content-Type
+        _cosUploadSessionManager.responseSerializer = [AFHTTPResponseSerializer serializer];
+    }
+    return _cosUploadSessionManager;
+}
+
+-(AnyPromise*) getUploadCredentialsForPath:(NSString*)path
+                                       type:(NSString*)type
+                                   filename:(NSString*)filename
+                                contentType:(NSString*)contentType
+                                   fileSize:(long long)fileSize {
+    // 用 NSURLComponents + NSURLQueryItem 来构造 query —— 它会对 value 里的
+    // & = ? + # 等特殊字符做正确的 percent-encode，避免类似
+    // "Q&A=final.pdf" 这种 filename 把后续参数顶掉造成签名失败。
+    NSString *base = [NSString stringWithFormat:@"%@file/upload/credentials", [WKApp shared].config.fileBaseUrl];
+    NSURLComponents *components = [NSURLComponents componentsWithString:base];
+    if (!components) {
+        return [AnyPromise promiseWithValue:[NSError errorWithDomain:@"WKAPIClient" code:-1 userInfo:@{NSLocalizedDescriptionKey: @"invalid fileBaseUrl"}]];
+    }
+    components.queryItems = @[
+        [NSURLQueryItem queryItemWithName:@"path"        value:path        ?: @""],
+        [NSURLQueryItem queryItemWithName:@"type"        value:type        ?: @""],
+        [NSURLQueryItem queryItemWithName:@"filename"    value:filename    ?: @""],
+        [NSURLQueryItem queryItemWithName:@"contentType" value:contentType ?: @""],
+        [NSURLQueryItem queryItemWithName:@"fileSize"    value:[NSString stringWithFormat:@"%lld", fileSize]],
+    ];
+    NSString *url = components.URL.absoluteString ?: base;
+    return [self GET:url parameters:nil];
 }
 
 -(AnyPromise*) POST:(NSString*)path parameters:(nullable id)parameters{

@@ -27,7 +27,7 @@ Thanks for your interest in contributing to OCTO iOS! 🐙 We welcome contributi
 - [ ] Dark **and** Light appearance both look right
 - [ ] No new `NSLog` of tokens, passwords, full HTTP headers, or full APNs `userInfo` (use `WKLog*` macros instead)
 - [ ] No local-only configuration accidentally committed (AppKeys, Team ID, server hosts — all of these belong in `OctoConfig.xcconfig`, which is gitignored)
-- [ ] No new `import` of GPL / LGPL code (see "License hygiene" below)
+- [ ] No new `import` of GPL / LGPL code (the repo has no GPL/LGPL static deps after 2026-05 cleanup — keep it that way; see [NOTICE](NOTICE))
 
 ## Commit Messages
 
@@ -59,11 +59,11 @@ Scope is optional but encouraged — common scopes: `chat`, `contacts`, `login`,
 
 ## License Hygiene
 
-The repository contains code under multiple licenses. Please respect the boundaries:
+The repository ships fully Apache 2.0 — both source and binary. Please keep it that way:
 
 - The **main app** (`Octo/`, extensions) and our own new code are **Apache 2.0**.
 - The **`WuKong*` modules** are **MIT** (upstream WuKongIM SDK). Do not relicense or strip original attributions.
-- A subset of **`WuKongBase/.../TelegramUtils/`** is **GPL v2**. New code **must not** `#import` anything from this directory. See [`TelegramUtils/README.md`](Modules/WuKongBase/WuKongBase/Classes/Sections/Common/TelegramUtils/README.md) for the rationale and what's already excluded.
+- **Do not add new GPL / LGPL / Affero dependencies** (CocoaPods or vendored source). The historical `TelegramUtils/` (GPL v2) and `SoundTouch` (LGPL v2.1) have been removed; adding new strong-copyleft code would reintroduce binary-distribution obligations.
 
 Look at [CLAUDE.md](CLAUDE.md) for additional engineering constraints (e.g. swizzle whitelist, debug-tool lifecycle).
 
@@ -89,7 +89,7 @@ can align on direction before you spend implementation time.
 
 By contributing, you agree that your contributions will be licensed under the
 project's [Apache License 2.0](LICENSE) for new code in the main app, or the
-matching upstream license for changes to MIT / GPL portions.
+matching upstream license for changes to MIT portions.
 
 ## Questions?
 
