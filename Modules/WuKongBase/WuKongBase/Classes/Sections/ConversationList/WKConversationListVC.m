@@ -114,6 +114,11 @@
 @property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeLeft;
 @property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeRight;
 @property(nonatomic,assign) BOOL pendingSpaceSwitchLoad;
+/// 切换 Space 期间的 fail-closed 闸门。从 performSwitchToSpaceId: 起到
+/// pendingSpaceSwitchLoad 处理完成为止；闸门期内 isConversationInCurrentSpace
+/// 的两条向前兼容 fail-open 改为 NO，applyThreadConversationUpdates 调用前
+/// 也整批丢弃，避免 A space 残留消息漏入 B。
+@property(nonatomic,assign) BOOL spaceSwitchInProgress;
 @property(nonatomic,assign) BOOL pendingRebuild;
 @property(nonatomic,assign) CGPoint recentTabScrollOffset;
 @property(nonatomic,assign) CGPoint followTabScrollOffset;
@@ -793,6 +798,19 @@
 
     self.currentSpaceName = spaceName ?: @"";
     self.currentSpaceId = spaceId;
+    // 开 fail-closed 闸门 —— B 的 sync 数据 + 白名单 snapshot 未就绪前,
+    // 把所有 fail-open / nil-fail-open 路径翻成 NO，避免 A space 残留消息漏入 B。
+    self.spaceSwitchInProgress = YES;
+    // 兜底：万一 sync 永不回包（断网等），8s 后自动落闸，恢复正常 fail-open 行为
+    __weak typeof(self) weakSelfSwitchGate = self;
+    NSString *gateSpaceId = spaceId;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (weakSelfSwitchGate.spaceSwitchInProgress
+            && [weakSelfSwitchGate.currentSpaceId isEqualToString:gateSpaceId]) {
+            NSLog(@"[SpaceGate] 8s 超时兜底落闸 spaceId=%@", gateSpaceId);
+            weakSelfSwitchGate.spaceSwitchInProgress = NO;
+        }
+    });
 
     // 清除分组缓存
     [[WKCategoryService shared] invalidateCache];
@@ -1213,14 +1231,21 @@
     // 最近 tab：子区是独立行，update 必须重建 filteredConversations 并刷新表格
     // 否则用户看到子区时间戳/preview 都停在旧值（反馈 #3 #4）。
     if (hasThreadUpdate && self.conversationListVM.filterType == WKConversationFilterRecent) {
-        NSMutableArray<WKConversation*> *threadUpdates = [NSMutableArray array];
-        for (WKConversation *c in conversations) {
-            if (c.channel.channelType == WK_COMMUNITY_TOPIC) [threadUpdates addObject:c];
-        }
-        if (threadUpdates.count > 0) {
-            [self.conversationListVM applyThreadConversationUpdates:threadUpdates];
-            [self refreshTable];
-            [self refreshBadge];
+        // 切换 Space 闸门期：syncedGroupChannelIds 还是 nil（reset 刚清空，B 的 snapshot
+        // 没回来）；applyThreadConversationUpdates 内部 nil-check 是 fail-open，会把 A
+        // 的子区漏入 B。这里整批丢弃。
+        if (self.spaceSwitchInProgress) {
+            NSLog(@"[SpaceGate] drop %d thread updates (switch in progress)", (int)refreshGroupNos.count);
+        } else {
+            NSMutableArray<WKConversation*> *threadUpdates = [NSMutableArray array];
+            for (WKConversation *c in conversations) {
+                if (c.channel.channelType == WK_COMMUNITY_TOPIC) [threadUpdates addObject:c];
+            }
+            if (threadUpdates.count > 0) {
+                [self.conversationListVM applyThreadConversationUpdates:threadUpdates];
+                [self refreshTable];
+                [self refreshBadge];
+            }
         }
     }
     filtered = nonThreadFiltered;
@@ -1272,6 +1297,9 @@
                 [weakSelf rebuildGroupDisplayAndReload];
                 [weakSelf refreshBadge];
                 [weakSelf loadCategories];
+                // VM 已被 B 的 sync 数据填好、白名单 snapshot 完成、bot registry
+                // 也已尝试加载 → 闸门可落，恢复正常 fail-open 行为
+                weakSelf.spaceSwitchInProgress = NO;
             }];
         }
 
@@ -1787,6 +1815,12 @@
         }
         // 消息没有 space_id 标记
         if(!msgSpaceId || [msgSpaceId isEqual:[NSNull null]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0)) {
+            // 切换 Space 闸门期：fail-closed —— 不允许"无 space_id"的 bot DM / 私聊
+            // 在 B 的 sync/registry 还没到位时混进来。落闸后这里恢复 YES。
+            if(self.spaceSwitchInProgress) {
+                if(isPerson) WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → NO (spaceSwitchInProgress, 无 space_id 兜底拒绝)", channelId);
+                return NO;
+            }
             if(isPerson) WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → YES (msg无 space_id，向前兼容)", channelId);
             return YES; // 消息无 space_id（含 Bot），视为当前空间
         }
@@ -1796,6 +1830,11 @@
     }
 
     // 无最后一条消息，允许显示（如空会话）
+    // 切换 Space 闸门期：fail-closed —— 任何无 lastMessage 的会话也不放行。
+    if(self.spaceSwitchInProgress) {
+        if(isPerson) WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → NO (spaceSwitchInProgress, 无 lastMessage 兜底拒绝)", channelId);
+        return NO;
+    }
     if(isPerson) WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → YES (无 lastMessage)", channelId);
     return YES;
 }
