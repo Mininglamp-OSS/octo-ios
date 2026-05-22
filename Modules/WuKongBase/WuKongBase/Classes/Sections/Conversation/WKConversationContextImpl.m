@@ -12,6 +12,7 @@
 #import "WKInputMentionCache.h"
 #import "WKReplyView.h"
 #import "WKMessageEditView.h"
+#import "WKMessageSendTracer.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 
 @interface WKConversationContextImpl ()
@@ -522,19 +523,21 @@
     }
     
     WKMessage *message = [[[WKSDK shared] chatManager] sendMessage:content channel:self.channel setting:setting topic:topic];
+    [[WKMessageSendTracer shared] traceSendBegin:message channel:self.channel extra:@"send"];
     if([[WKSDK shared].chatManager needStoreOfIntercept:message]) {
         [self.conversationView.messageListView sendMessage:[[WKMessageModel alloc] initWithMessage:message]];
     }
     return message;
-    
+
 }
 
 -(void) resendMessage:(WKMessage*)message {
-    
+
     WKMessageModel *messageModel = [[WKMessageModel alloc] initWithMessage:message];
     [self.conversationView.messageListView removeMessage:messageModel];
-    
+
     WKMessage *newMessage = [[[WKSDK shared] chatManager] resendMessage:message];
+    [[WKMessageSendTracer shared] traceSendBegin:newMessage channel:self.channel extra:@"resend"];
     WKMessageModel *newMessageModel = [[WKMessageModel alloc] initWithMessage:newMessage];
     if([[WKSDK shared].chatManager needStoreOfIntercept:newMessage]) {
         [self.conversationView.messageListView sendMessage:newMessageModel];
