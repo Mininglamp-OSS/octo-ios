@@ -627,16 +627,21 @@ static WKConversationListVM *_instance;
 /// 能渲染（标题 + 未读数；preview/time 暂空，等真实 conv 到来时由
 /// applyThreadConversationUpdates: setConversation: 替换）。
 - (void)syncThreadWrapModelsFromCachedTopics {
-    NSMutableDictionary<NSString *, WKConversationWrapModel *> *byChannel = [NSMutableDictionary dictionary];
+    // 把当前 wrap 拷一份当复用池，然后只从最新 listThreads 已发现的 thread 重建 byChannel。
+    // 不再用旧 threadWrapModels 做 seed —— 关闭 / 归档 / 服务端筛掉的子区必须立即从 Recent
+    // 消失，否则旧行会一直停留到 VM 全量 reset 才清。
+    NSMutableDictionary<NSString *, WKConversationWrapModel *> *oldByChannel = [NSMutableDictionary dictionary];
     for (WKConversationWrapModel *m in self.threadWrapModels) {
-        if (m.channel.channelId) byChannel[m.channel.channelId] = m;
+        if (m.channel.channelId) oldByChannel[m.channel.channelId] = m;
     }
+    NSMutableDictionary<NSString *, WKConversationWrapModel *> *byChannel = [NSMutableDictionary dictionary];
     NSSet<NSString *> *syncedGroups = self.syncedGroupChannelIds;
     BOOL changed = NO;
     NSInteger parentCount = 0;
     NSInteger threadsTotal = 0;
     NSInteger sdkHits = 0;
     NSInteger synthesized = 0;
+    NSInteger reused = 0;
     for (WKConversationWrapModel *parent in self.conversationWrapModels) {
         if (parent.channel.channelType != WK_GROUP) continue;
         // 父群不在当前 Space 白名单 → 整组子区都跳过（避免漏到最近 tab）
@@ -647,15 +652,16 @@ static WKConversationListVM *_instance;
             threadsTotal++;
             WKChannel *threadChannel = [WKChannel channelID:t.channelId channelType:WK_COMMUNITY_TOPIC];
             WKConversation *conv = [[WKSDK shared].conversationManager getConversation:threadChannel];
-            WKConversationWrapModel *existing = byChannel[t.channelId];
+            WKConversationWrapModel *existing = oldByChannel[t.channelId];
             if (existing) {
-                // 已有 wrap：若它是 placeholder（lastMessage 空）而 SDK 现在有真实 conv,
-                // 把 conv 绑进去刷新 preview/timestamp。否则保持原样（避免误覆盖 onConversationUpdate
-                // 已经写过的新值）。这样冷启 SDK 后到的 conv 能补上数据。
+                // 仍在 discovered 集合 → 复用旧 wrap，保住 onConversationUpdate 写入的 preview / lastMessage。
+                // 旧 wrap 是 placeholder（lastMessage 空）且 SDK 现在有真实 conv → 顺手刷一次。
                 if (conv && !existing.lastMessage) {
                     [existing setConversation:conv];
                     changed = YES;
                 }
+                byChannel[t.channelId] = existing;
+                reused++;
                 continue;
             }
             if (conv) {
@@ -675,8 +681,15 @@ static WKConversationListVM *_instance;
             }
         }
     }
-    NSLog(@"[ThreadSync] syncThreadWrapModels: parents=%ld threadsInPreviews=%ld sdkHits=%ld synthesized=%ld changed=%d total=%ld",
-          (long)parentCount, (long)threadsTotal, (long)sdkHits, (long)synthesized, changed, (long)byChannel.count);
+    // 检测 prune：oldByChannel 里有但 byChannel 没了的项 = 该子区已不在最新 discovered 集合，需要清掉。
+    if (!changed && byChannel.count != oldByChannel.count) changed = YES;
+    if (!changed) {
+        for (NSString *k in oldByChannel) {
+            if (!byChannel[k]) { changed = YES; break; }
+        }
+    }
+    NSLog(@"[ThreadSync] syncThreadWrapModels: parents=%ld threadsInPreviews=%ld sdkHits=%ld synthesized=%ld reused=%ld changed=%d total=%ld old=%ld",
+          (long)parentCount, (long)threadsTotal, (long)sdkHits, (long)synthesized, (long)reused, changed, (long)byChannel.count, (long)oldByChannel.count);
     if (changed) {
         self.threadWrapModels = [byChannel.allValues copy];
         // 总是 rebuildFilteredList — Follow tab 启动时也要让 filteredConversations
@@ -1462,6 +1475,28 @@ static WKConversationListVM *_instance;
     WKFollowedKeysStore *followStore = [WKFollowedKeysStore shared];
     NSDictionary<NSString *, NSArray<WKSidebarItemEntity *> *> *followItemsByCat = followStore.itemsByCategory;
 
+    // sidebar/sync 已确认 followed 但本地 IM cache miss 的项（冷启 / 缓存清过 / 新关注还没拉到 conv）
+    // 补 placeholder wrap，否则 Follow tab 会丢行 — 用户视角是「明明关注了却看不到」。
+    // 真实 conv 到达后由 onConversationUpdate 流程接管，placeholder 会自然被替换。
+    for (NSArray<WKSidebarItemEntity *> *bucket in followItemsByCat.allValues) {
+        for (WKSidebarItemEntity *it in bucket) {
+            if (it.target_id.length == 0) continue;
+            if (it.target_type == WKFollowTargetTypeDM && !dmChannelMap[it.target_id]) {
+                WKConversation *p = [[WKConversation alloc] init];
+                p.channel = [WKChannel channelID:it.target_id channelType:WK_PERSON];
+                p.unreadCount = (int)it.unread;
+                p.lastMsgTimestamp = it.timestamp;
+                dmChannelMap[it.target_id] = [[WKConversationWrapModel alloc] initWithConversation:p];
+            } else if (it.target_type == WKFollowTargetTypeChannel && !groupChannelMap[it.target_id]) {
+                WKConversation *p = [[WKConversation alloc] init];
+                p.channel = [WKChannel channelID:it.target_id channelType:WK_GROUP];
+                p.unreadCount = (int)it.unread;
+                p.lastMsgTimestamp = it.timestamp;
+                groupChannelMap[it.target_id] = [[WKConversationWrapModel alloc] initWithConversation:p];
+            }
+        }
+    }
+
     // 3. 非 default 分组（spec §0：关注 tab 隐藏默认分组）
     NSSet<NSString *> *followedGroupNos = followStore.followedGroupNos;
     // 用 store.loaded 而不是 count > 0 — 空 vs 未加载严格区分：sidebar/sync 成功
@@ -1500,7 +1535,9 @@ static WKConversationListVM *_instance;
             WKConversationWrapModel *m = groupChannelMap[cg.group_no];
             if (m) {
                 count++;
-                if (!m.mute) totalUnread += m.unreadCount;
+                // 静音判定走 channelInfo.mute（与 getFollowUnreadCount / tab badge 保持一致）—
+                // model.mute 是 DB 快照，冷启动可能滞后，会让 section header 和 tab badge 算不一样。
+                if (![self isChannelMuted:m]) totalUnread += m.unreadCount;
                 totalUnread += [self followedThreadUnreadForGroup:cg.group_no topicsByGroup:topicsByGroup];
                 if (!sectionHasMention) {
                     sectionHasMention = [self hasMentionForGroup:cg.group_no model:m topicsByGroup:topicsByGroup remindersByChannelId:remindersByChannelId];
@@ -1509,7 +1546,7 @@ static WKConversationListVM *_instance;
         }
         for (WKConversationWrapModel *dm in followedDMs) {
             count++;
-            if (!dm.mute) totalUnread += dm.unreadCount;
+            if (![self isChannelMuted:dm]) totalUnread += dm.unreadCount;
             if (!sectionHasMention && dm.simpleReminders.count > 0) {
                 for (WKReminder *r in dm.simpleReminders) {
                     if (r.type == WKReminderTypeMentionMe) { sectionHasMention = YES; break; }
