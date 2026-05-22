@@ -4245,7 +4245,7 @@
     } copy]}];
 
     [menuItems addObject:@{@"title": LLang(@"删除分组"), @"icon": [WKConversationListVC iconDelete], @"isDestructive": @YES, @"action": [^{
-        [WKAlertUtil alert:LLang(@"删除后该分组内的群聊将不再归属任何分组，确定要删除？") buttonsStatement:@[LLang(@"取消"), LLang(@"删除")] chooseBlock:^(NSInteger buttonIdx) {
+        [WKAlertUtil alert:LLang(@"删除后该分组内的会话将不再归属任何分组，确定要删除？") buttonsStatement:@[LLang(@"取消"), LLang(@"删除")] chooseBlock:^(NSInteger buttonIdx) {
             if(buttonIdx == 1) {
                 [[WKCategoryService shared] deleteCategory:spaceId categoryId:sectionId].then(^(id r) {
                     [weakSelf loadCategories];

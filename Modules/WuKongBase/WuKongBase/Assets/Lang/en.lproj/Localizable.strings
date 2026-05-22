@@ -613,3 +613,4 @@
 "获取实名认证地址失败"="Failed to get verification URL";
 "实名认证地址不合法"="Invalid verification URL";
 "实名认证需要 iOS 11 及以上版本"="Real-name verification requires iOS 11 or later";
+"删除后该分组内的会话将不再归属任何分组，确定要删除？"="After deletion, conversations in this category will no longer belong to any category. Delete?";
