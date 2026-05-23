@@ -1451,13 +1451,19 @@ static WKConversationListVM *_instance;
     WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
     if (!store.loaded) return 0;
     NSInteger total = 0;
-    for (WKConversation *conv in topicsByGroup[groupNo]) {
-        // 静音子区不计入 section unread —— 走 channelInfo.mute 与 tab badge / cell 红点统一口径，
-        // 之前直接读 conv.mute 是 DB 快照，冷启动期会让 section header 数字比 tab badge 多
-        if ([self isConversationMuted:conv]) continue;
-        if ([store isFollowedWithType:WKFollowTargetTypeThread targetId:conv.channel.channelId]) {
-            total += conv.unreadCount;
-        }
+    // 走 threadWrapModels（与 cell 渲染源 / getRecentUnreadCount 同口径，按 parent.threadPreviews
+    // 即 listThreads 真实活跃集合），不再走 topicsByGroup（SDK 全量 cache，含归档 / 不再返回的
+    // 幽灵 thread）。否则用户曾关注但已归档的 thread 仍会被 SDK cache 持有 → 这条路径
+    // 把它们算入 section unread，与 cell 实际显示的子区集合不一致（cell 按 threadWrapModels
+    // 渲染，看不到这些 thread）。topicsByGroup 参数保留兼容签名，仅供 cell 子区指示点等
+    // "群下面是否有任何子区动静"语义复用。
+    NSString *prefix = [NSString stringWithFormat:@"%@____", groupNo];
+    for (WKConversationWrapModel *thread in self.threadWrapModels) {
+        if (![thread.channel.channelId hasPrefix:prefix]) continue;
+        if (thread.lastMessage == nil) continue; // 跳过 placeholder（与 getRecentUnreadCount 同款）
+        if ([self isChannelMuted:thread]) continue;
+        if (![store isFollowedWithType:WKFollowTargetTypeThread targetId:thread.channel.channelId]) continue;
+        total += thread.unreadCount;
     }
     return total;
 }
