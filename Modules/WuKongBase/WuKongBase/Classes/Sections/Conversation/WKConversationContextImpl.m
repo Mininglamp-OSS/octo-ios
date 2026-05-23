@@ -316,6 +316,11 @@
     if(mentionItems && mentionItems.count>0) {
         
         for (WKInputMentionItem *mentionItem in mentionItems) {
+            // 三态 mention：sentinel uid（__ais__ / all）只是路由标记，不能落到 mention.entities，
+            // 否则 server / 对端会把 "__ais__" 当成真实用户 uid。
+            if([mentionItem.uid isEqualToString:@"__ais__"] || [mentionItem.uid isEqualToString:@"all"]) {
+                continue;
+            }
             NSString *mentionName = [NSString stringWithFormat:@"%@%@",WKInputAtStartChar,mentionItem.name];
             NSArray<NSTextCheckingResult*> *results = [self ranges:text pattern:mentionName];
             if(results && results.count>0) {
@@ -380,12 +385,26 @@
     WKMentionedInfo  *mentionedInfo;
     NSArray<NSString*> *mentionUids = [mentionCache allMentionUid:text];
     if(mentionUids && mentionUids.count>0) {
-        if([mentionUids containsObject:@"all"]) {
+        BOOL hasAll = [mentionUids containsObject:@"all"];
+        BOOL hasAis = [mentionUids containsObject:@"__ais__"];
+        // 过滤 sentinel uid，得到真正的用户 uid 列表
+        NSMutableArray<NSString*> *realUids = [NSMutableArray array];
+        for(NSString *uid in mentionUids) {
+            if([uid isEqualToString:@"all"] || [uid isEqualToString:@"__ais__"]) {
+                continue;
+            }
+            [realUids addObject:uid];
+        }
+        if(hasAll) {
+            // 走 legacy 路径，保持 mention.all=1 不变（uids 留空，对齐既有 iOS 行为）
             mentionedInfo = [[WKMentionedInfo alloc] initWithMentionedType:WK_Mentioned_All];
         }else{
-            mentionedInfo = [[WKMentionedInfo alloc] initWithMentionedType:WK_Mentioned_Users uids:mentionUids];
+            mentionedInfo = [[WKMentionedInfo alloc] initWithMentionedType:WK_Mentioned_Users uids:realUids];
         }
-        
+        if(hasAis) {
+            // 三态 mention：@所有AI 单独命中或与具体用户共存。bot uid 的展开在 sendTextMessage: 中完成。
+            mentionedInfo.ais = YES;
+        }
     }
     return mentionedInfo;
 }
@@ -428,10 +447,27 @@
         
     }else{
         content.mentionedInfo = [self mentionedInfo:text];
-       
+
     }
-    
-    
+
+    // 三态 mention：@所有AI 命中时，把当前会话内 robot 成员展开到 mention.uids，兼容旧 adapter
+    // （新 adapter 直接根据 mention.ais=1 路由，但 server 当前还需要 UID 列表来定向投递）。
+    // 对齐 Web 端 PR#101。
+    if(content.mentionedInfo && content.mentionedInfo.ais) {
+        NSArray<WKChannelMember*> *allMembers = [[WKSDK shared].channelManager getMembersWithChannel:self.channel];
+        NSArray<NSString*> *existingUids = content.mentionedInfo.uids ?: @[];
+        NSMutableArray<NSString*> *mergedUids = [NSMutableArray arrayWithArray:existingUids];
+        // O(1) 去重：避免 NSArray containsObject: 在大群里 O(n) 退化
+        NSMutableSet<NSString*> *seenUids = [NSMutableSet setWithArray:existingUids];
+        for(WKChannelMember *m in allMembers) {
+            if(m.robot && m.memberUid.length > 0 && ![seenUids containsObject:m.memberUid]) {
+                [mergedUids addObject:m.memberUid];
+                [seenUids addObject:m.memberUid];
+            }
+        }
+        content.mentionedInfo.uids = mergedUids;
+    }
+
     [newEntities addObjectsFromArray:[self entities:text]];
      
    
@@ -896,6 +932,17 @@
     if(!keyword || [keyword isEqualToString:@""] || [allStr containsString:keyword]) {
         [users addObject:[WKMentionUserCellModel uid:@"all" name:allStr]];
     }
+    // @所有AI：三态 mention 的 UI 入口（sentinel uid = __ais__），对齐 Web 端 PR#101
+    // 始终暴露入口，不依赖本地 robot 成员缓存：
+    //   - 群成员列表可能尚未同步到本地（首次进入会话 / 成员量大分页），按 hasRobot
+    //     gate 会把入口"看似消失"，用户没法在新群里 @所有AI。
+    //   - 后期机器人加群时，发送侧服务（octo-server PR#145）会按 mention.ais=1
+    //     展开 bot uid 列表；新版 adapter 直接读 mention.ais 标志位。
+    //   - 即使 mention.uids 为空，只要 mention.ais=1 就是一次合法的 @所有AI 广播。
+    NSString *aisStr = LLang(@"所有AI");
+    if (!keyword || [keyword isEqualToString:@""] || [aisStr containsString:keyword]) {
+        [users addObject:[WKMentionUserCellModel uid:@"__ais__" name:aisStr avatarURL:nil robot:NO extras:nil]];
+    }
     if(members && members.count>0) {
         for (WKChannelMember *member in members) {
             if([member.memberUid isEqualToString:[WKApp shared].loginInfo.uid]) {
@@ -993,7 +1040,9 @@
         return @"";
     }
 
-    NSArray<WKChannelMember*> *mentionMembers = [[WKChannelMemberDB shared] getMembersWithChannel:self.channel uids:[uids filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"NOT (SELF in %@)",@[@"all"]]]];
+    // sentinel uid（"all" / "__ais__"）不查 DB，避免 NSPredicate 过滤掉但又被当成真实成员
+    NSArray<NSString*> *realLookupUids = [uids filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"NOT (SELF in %@)",@[@"all", @"__ais__"]]];
+    NSArray<WKChannelMember*> *mentionMembers = [[WKChannelMemberDB shared] getMembersWithChannel:self.channel uids:realLookupUids];
     NSMutableString *str = [[NSMutableString alloc] initWithString:@""];
 
     NSMutableDictionary *memberDict = [NSMutableDictionary dictionary];
@@ -1017,6 +1066,9 @@
             }
         }else if([uid isEqualToString:@"all"]) {
             item.name = LLang(@"所有人");
+        }else if([uid isEqualToString:@"__ais__"]) {
+            // 三态 mention：@所有AI sentinel，无需查 DB
+            item.name = LLang(@"所有AI");
         }else  {
            WKChannelInfo *memberUserInfo =  [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:uid]];
             if(memberUserInfo) {

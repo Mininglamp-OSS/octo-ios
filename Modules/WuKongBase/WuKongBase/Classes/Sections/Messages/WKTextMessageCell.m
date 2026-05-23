@@ -790,6 +790,67 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                     NSLog(@"[Mention]   无entities");
                 }
 
+                // 三态 mention：广播 token（@所有人 / @所有AI / @all）在 markdown 渲染后的文本中高亮
+                // 这些 token 不在 entities 中，需要按文本扫描补齐 pill 样式
+                // Locale-independent 标签集 — 必须覆盖任意 sender locale 渲染出的 wire text
+                // （Chinese "所有AI" / English "All AIs" 都可能到达任意 receiver），
+                // 不能只用 receiver 的当前 locale。
+                {
+                    NSString *renderedText = mdMutable.string;
+                    NSMutableArray<NSString*> *broadcastTokens = [NSMutableArray array];
+                    NSMutableSet<NSString*> *seenTokens = [NSMutableSet set];
+                    NSArray<NSString*> *labelCandidates = @[
+                        @"所有人",           // Chinese canonical
+                        @"所有AI",           // Chinese canonical
+                        @"all",              // legacy English
+                        @"All People",       // en.lproj 所有人
+                        @"All AIs",          // en.lproj 所有AI
+                        LLang(@"所有人"),     // current locale (may add future translations)
+                        LLang(@"所有AI"),     // current locale
+                    ];
+                    for (NSString *label in labelCandidates) {
+                        if (label.length == 0) continue;
+                        NSString *tok = [NSString stringWithFormat:@"@%@", label];
+                        NSString *key = tok.lowercaseString;
+                        if ([seenTokens containsObject:key]) continue;
+                        [seenTokens addObject:key];
+                        [broadcastTokens addObject:tok];
+                    }
+                    // 长度降序：保证 "@All AIs" 优先于 "@all" 命中
+                    [broadcastTokens sortUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+                        if (a.length > b.length) return NSOrderedAscending;
+                        if (a.length < b.length) return NSOrderedDescending;
+                        return NSOrderedSame;
+                    }];
+                    UIColor *mentionColor = message.isSend ? [UIColor whiteColor] : [WKApp shared].config.themeColor;
+                    for (NSString *bt in broadcastTokens) {
+                        if (bt.length <= 1) continue;
+                        NSRange searchRange = NSMakeRange(0, renderedText.length);
+                        while (searchRange.location < renderedText.length) {
+                            NSRange found = [renderedText rangeOfString:bt options:0 range:searchRange];
+                            if (found.location == NSNotFound) break;
+                            searchRange.location = found.location + found.length;
+                            searchRange.length = renderedText.length - searchRange.location;
+                            // 跳过与已有 token 重叠的位置
+                            BOOL overlaps = NO;
+                            for (id<WKMatchToken> existing in clickableTokens) {
+                                NSRange er = existing.range;
+                                if (found.location < er.location + er.length && er.location < found.location + found.length) {
+                                    overlaps = YES; break;
+                                }
+                            }
+                            if (overlaps) continue;
+                            WKMetionToken *token = [WKMetionToken new];
+                            token.range = found;
+                            token.uid = @"all"; // broadcast sentinel
+                            token.text = bt;
+                            [clickableTokens addObject:token];
+                            [mdMutable addAttribute:NSForegroundColorAttributeName value:mentionColor range:found];
+                            [mdMutable addAttribute:NSUnderlineStyleAttributeName value:@1 range:found];
+                        }
+                    }
+                }
+
                 // 3. Auto-detect pure URLs not covered by markdown [text](url) links
                 NSArray<id<WKMatchToken>> *autoLinkTokens = [[WKRichTextParseService shared] parseLink:mdMutable.string];
                 for (id<WKMatchToken> autoToken in autoLinkTokens) {
@@ -887,6 +948,28 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
 
     // 收集所有候选名字 -> uid 的映射（名字按长度降序，优先匹配长名字）
     NSMutableArray<NSDictionary*> *candidates = [NSMutableArray array];
+
+    // 三态 mention：广播 token（@所有人 / @所有AI / @all）始终参与高亮，与 @所有人 同色 pill
+    // uid 统一用 "all" sentinel — 点击不跳人卡片，仅作渲染标记
+    // Locale-independent：必须覆盖所有可能的 wire text（任意 sender locale 渲染结果），
+    // 不能只用 receiver 的 LLang 当前 locale。
+    NSArray<NSString*> *broadcastNames = @[
+        @"所有人",           // Chinese canonical
+        @"所有AI",           // Chinese canonical
+        @"all",              // legacy English
+        @"All People",       // en.lproj 所有人
+        @"All AIs",          // en.lproj 所有AI
+        LLang(@"所有人"),     // current locale (may add future translations)
+        LLang(@"所有AI"),     // current locale
+    ];
+    NSMutableSet *broadcastSeen = [NSMutableSet set];
+    for (NSString *bname in broadcastNames) {
+        if (bname.length == 0) continue;
+        NSString *seenKey = bname.lowercaseString;
+        if ([broadcastSeen containsObject:seenKey]) continue;
+        [broadcastSeen addObject:seenKey];
+        [candidates addObject:@{@"name": bname, @"uid": @"all"}];
+    }
 
     NSArray<WKChannelMember*> *members = nil;
     if (channel.channelType == WK_GROUP) {
@@ -2122,6 +2205,10 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
 -(void) didMetionClick:(WKMetionToken*)token {
     NSString *atUID = token.uid;
     if(!atUID || [atUID isEqualToString:@""]) {
+        return;
+    }
+    // Skip broadcast sentinel UIDs — these are not real users
+    if ([atUID isEqualToString:@"all"] || [atUID isEqualToString:@"__ais__"]) {
         return;
     }
     WKChannelMember *member = [[WKSDK shared].channelManager getMember:self.messageModel.channel uid:atUID];

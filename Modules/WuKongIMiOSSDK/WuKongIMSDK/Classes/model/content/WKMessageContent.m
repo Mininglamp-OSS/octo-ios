@@ -35,7 +35,7 @@ NSString * const WKEntityTypeRobotCommand = @"bot_command";
 @implementation WKMentionedInfo
 
 - (instancetype)initWithMentionedType:(WKMentionedType)type {
-    return [self initWithMentionedType:WK_Mentioned_All uids:nil];
+    return [self initWithMentionedType:type uids:nil];
 }
 
 - (instancetype)initWithMentionedType:(WKMentionedType)type
@@ -44,13 +44,24 @@ NSString * const WKEntityTypeRobotCommand = @"bot_command";
     if(self) {
         self.type = type;
         self.uids = uids;
+        // Sync BOOL flags with enum so encodeMentionInfo: emits humans=1 / ais=1
+        // for callers that only set the type. Single source of truth: the enum.
+        if (type == WK_Mentioned_Humans) {
+            self.humans = YES;
+        } else if (type == WK_Mentioned_AIs) {
+            self.ais = YES;
+        }
     }
     return self;
 }
 
 
 - (BOOL)isMentionedMe {
-    if([self.uids containsObject:[WKSDK shared].options.connectInfo.uid]||self.type == WK_Mentioned_All) {
+    // ais=1 alone：人类客户端不算被@到。bot 客户端走另一套判定，本 SDK 默认按人类处理。
+    if([self.uids containsObject:[WKSDK shared].options.connectInfo.uid]) {
+        return true;
+    }
+    if(self.type == WK_Mentioned_All || self.type == WK_Mentioned_Humans || self.humans) {
         return true;
     }
     return false;
@@ -220,14 +231,22 @@ NSString * const WKEntityTypeRobotCommand = @"bot_command";
     NSDictionary *mentionDict = dict[@"mention"];
     if(mentionDict && [mentionDict isKindOfClass:[NSDictionary class]]) {
         WKMentionedType type = WK_Mentioned_Users;
+        BOOL hasHumans = [mentionDict[@"humans"] integerValue] == 1;
+        BOOL hasAis = [mentionDict[@"ais"] integerValue] == 1;
         if(mentionDict[@"all"] && [mentionDict[@"all"] integerValue]==1) {
             type = WK_Mentioned_All;
+        } else if(hasHumans) {
+            type = WK_Mentioned_Humans;
+        } else if(hasAis) {
+            type = WK_Mentioned_AIs;
         }
         NSArray<NSString*> *uids;
         if([mentionDict[@"uids"] isKindOfClass:[NSArray class]]) {
              uids =mentionDict[@"uids"];
         }
          self.mentionedInfo = [[WKMentionedInfo alloc] initWithMentionedType:type uids:uids];
+         self.mentionedInfo.humans = hasHumans;
+         self.mentionedInfo.ais = hasAis;
 
         // 从 mention.entities 提取精确定位的 mention entity 合并到顶层 self.entities
         NSArray *mentionEntities = mentionDict[@"entities"];
@@ -289,6 +308,13 @@ NSString * const WKEntityTypeRobotCommand = @"bot_command";
     if(self.mentionedInfo) {
         NSMutableDictionary *mentionDic = [NSMutableDictionary dictionary];
         mentionDic[@"all"] = self.mentionedInfo.type == WK_Mentioned_All?@(1):@(0);
+        // 三态 mention：humans=1 / ais=1 与 legacy all 字段并存，新 adapter 优先识别这两个字段。
+        if(self.mentionedInfo.humans) {
+            mentionDic[@"humans"] = @(1);
+        }
+        if(self.mentionedInfo.ais) {
+            mentionDic[@"ais"] = @(1);
+        }
         if(self.mentionedInfo.uids && self.mentionedInfo.uids.count>0) {
             mentionDic[@"uids"] = self.mentionedInfo.uids;
         }
@@ -297,6 +323,10 @@ NSString * const WKEntityTypeRobotCommand = @"bot_command";
             NSMutableArray *mentionEntitiesArr = [NSMutableArray array];
             for(WKMessageEntity *entity in self.entities) {
                 if([entity.type isEqualToString:@"mention"] && entity.value) {
+                    // 三态 mention：sentinel uid（__ais__ / all）不是真实用户 uid，不能写入 mention.entities。
+                    if([entity.value isEqualToString:@"__ais__"] || [entity.value isEqualToString:@"all"]) {
+                        continue;
+                    }
                     [mentionEntitiesArr addObject:@{
                         @"uid": entity.value,
                         @"offset": @(entity.range.location),

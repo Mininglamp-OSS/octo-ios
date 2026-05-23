@@ -770,7 +770,17 @@
         }
     }
     // 客户端检测@所有人，创建本地reminder（服务端只为@具体用户创建reminder，@所有人需要客户端补偿）
-    if(![message isSend] && message.header.showUnread && message.content.mentionedInfo && message.content.mentionedInfo.type == WK_Mentioned_All) {
+    // 三态 mention：
+    //   - WK_Mentioned_All / mention.humans=1 → 创建 [有人@我] reminder
+    //   - mention.ais=1 单独命中 → 不创建 reminder（bot 广播，人类不应被打扰）
+    BOOL shouldCreateReminder = NO;
+    if(message.content.mentionedInfo) {
+        WKMentionedInfo *mi = message.content.mentionedInfo;
+        if(mi.type == WK_Mentioned_All || mi.type == WK_Mentioned_Humans || mi.humans) {
+            shouldCreateReminder = YES;
+        }
+    }
+    if(![message isSend] && message.header.showUnread && shouldCreateReminder) {
         WKReminder *reminder = [[WKReminder alloc] init];
         reminder.reminderID = (int64_t)message.messageId; // 用messageId作为reminderID避免重复
         reminder.messageId = message.messageId;

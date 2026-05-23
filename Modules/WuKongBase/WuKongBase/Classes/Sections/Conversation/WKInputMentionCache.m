@@ -39,6 +39,15 @@
                 [uids addObject:@"all"];
                 continue;
             }
+            // 三态 mention：__ais__ sentinel 仍需校验可见 mention 文本是否还在 sendText 中，
+            // 否则用户删除 @所有AI 后缓存里的 sentinel 会泄漏成"幽灵 mention"。
+            if([item.uid isEqualToString:@"__ais__"]) {
+                NSString *aisLabel = [NSString stringWithFormat:@"%@%@", WKInputAtStartChar, item.name];
+                if([sendText containsString:aisLabel]) {
+                    [uids addObject:@"__ais__"];
+                }
+                continue;
+            }
             NSString *mentionName = [NSString stringWithFormat:@"%@%@",WKInputAtStartChar,item.name];
             if([sendText containsString:mentionName]) {
                 [uids addObject:item.uid];

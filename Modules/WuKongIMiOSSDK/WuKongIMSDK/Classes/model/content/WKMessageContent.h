@@ -20,14 +20,24 @@ NS_ASSUME_NONNULL_BEGIN
  */
 typedef NS_ENUM(NSUInteger, WKMentionedType) {
     /*!
-     @所有人
+     @所有人 (legacy, mention.all=1)
      */
     WK_Mentioned_All = 1,
-    
+
     /*!
      @部分指定用户
      */
     WK_Mentioned_Users = 2,
+
+    /*!
+     @所有人 (新三态, mention.humans=1)
+     */
+    WK_Mentioned_Humans = 3,
+
+    /*!
+     @所有AI (mention.ais=1)
+     */
+    WK_Mentioned_AIs = 4,
 };
 
 @interface WKMessageEntity : NSObject
@@ -76,6 +86,18 @@ typedef NS_ENUM(NSUInteger, WKMentionedType) {
  是否@了我
  */
 @property (nonatomic, readonly) BOOL isMentionedMe;
+
+/*!
+ 三态 mention：@所有人（mention.humans=1）。
+ 与 legacy WK_Mentioned_All 并存，但不再触发 mention.all=1 写入。
+ */
+@property (nonatomic, assign) BOOL humans;
+
+/*!
+ 三态 mention：@所有AI（mention.ais=1）。
+ ais=1 单独命中时人类用户不算被@到（isMentionedMe=NO，且不创建本地 reminder）。
+ */
+@property (nonatomic, assign) BOOL ais;
 
 
 @end
