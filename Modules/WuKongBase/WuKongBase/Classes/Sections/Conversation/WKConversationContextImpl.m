@@ -396,8 +396,10 @@
             [realUids addObject:uid];
         }
         if(hasAll) {
-            // 走 legacy 路径，保持 mention.all=1 不变（uids 留空，对齐既有 iOS 行为）
-            mentionedInfo = [[WKMentionedInfo alloc] initWithMentionedType:WK_Mentioned_All];
+            // 三态 mention：@所有人 走 humans=1 路径（不再写入 legacy mention.all=1，避免唤醒旧 adapter bot）。
+            // 对齐 Web 端 dmwork-web#101 / Android 端实现。
+            mentionedInfo = [[WKMentionedInfo alloc] initWithMentionedType:WK_Mentioned_Humans uids:realUids];
+            mentionedInfo.humans = YES;
         }else{
             mentionedInfo = [[WKMentionedInfo alloc] initWithMentionedType:WK_Mentioned_Users uids:realUids];
         }

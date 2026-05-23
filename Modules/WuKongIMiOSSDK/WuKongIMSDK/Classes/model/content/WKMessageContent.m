@@ -307,7 +307,11 @@ NSString * const WKEntityTypeRobotCommand = @"bot_command";
 -(void) encodeMentionInfo:(NSMutableDictionary*) dict {
     if(self.mentionedInfo) {
         NSMutableDictionary *mentionDic = [NSMutableDictionary dictionary];
-        mentionDic[@"all"] = self.mentionedInfo.type == WK_Mentioned_All?@(1):@(0);
+        // 仅在 legacy WK_Mentioned_All 时写入 mention.all=1；新三态（humans/ais）下不写 all 字段，
+        // 避免 all=0 这种噪声，也避免老 adapter bot 误把 humans=1 + all=1 当成全员广播再次唤醒。
+        if(self.mentionedInfo.type == WK_Mentioned_All) {
+            mentionDic[@"all"] = @(1);
+        }
         // 三态 mention：humans=1 / ais=1 与 legacy all 字段并存，新 adapter 优先识别这两个字段。
         if(self.mentionedInfo.humans) {
             mentionDic[@"humans"] = @(1);
