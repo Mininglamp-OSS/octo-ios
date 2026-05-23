@@ -151,6 +151,19 @@
             }
             WKChannelInfo *channelInfo  = [WKChannelUtil toChannelInfo2:resultDict];
 
+            // mute 三态保护：server channels/{id}/{type} 接口不一定带 mute（mute 在 setting 表，
+            // 不在 channel 表）。toChannelInfo2: 走 `resultDict[@"mute"] ? ... : false` 三元式,
+            // 字段缺失时把 channelInfo.mute 直接置 false，addOrUpdateChannelInfo: 会把 SDK 缓存
+            // 里正确的 mute 覆盖掉 — 用户报告的「进会话页返回后关注 badge 闪 99+」就是这条路径。
+            // 子区分支已经做过同款保护（见本文件子区 callback），普通群/DM 这里补齐：
+            //   - resultDict 显式给了 NSNumber → toChannelInfo2: 已经取到，无需调整
+            //   - 缺失 / NSNull → 沿用 SDK 缓存里的旧 mute（fail-safe），避免擦写
+            id muteVal = resultDict[@"mute"];
+            if (![muteVal isKindOfClass:[NSNumber class]]) {
+                WKChannelInfo *existing = [[WKSDK shared].channelManager getChannelInfo:channel];
+                if (existing) channelInfo.mute = existing.mute;
+            }
+
             [[WKSDK shared].channelManager addOrUpdateChannelInfo:channelInfo];
             if(callback) {
                 callback(nil,false);

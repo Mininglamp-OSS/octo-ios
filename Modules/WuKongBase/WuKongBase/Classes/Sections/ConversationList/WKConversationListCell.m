@@ -15,6 +15,7 @@
 #import <SDWebImage/UIImageView+WebCache.h>
 #import "WKAvatarUtil.h"
 #import <DGActivityIndicatorView/DGActivityIndicatorView.h>
+#import <WuKongIMSDK/WuKongIMSDK.h>
 #import "WKOnlineBadgeView.h"
 #import "WKOfficialTag.h"
 #import "WKConstant.h"
@@ -71,6 +72,17 @@
 @property(nonatomic,copy) NSString *lastAvatarChannelId; // 上一次 refreshAvatar 对应的 channelId，用于判断 cell 是否被复用到不同会话
 
 @end
+
+/// 静音判定与 WKConversationListVM.isChannelMuted: 同款：channelInfo.mute（SDK 权威源）优先,
+/// 缺失时回退 WKConversationWrapModel.mute（即 self.c.mute，DB 快照）。
+/// 之前 cell 直接读 model.mute 会被 setConversation: 覆盖成新 conv 默认 NO，导致冷启 / 收新消息时
+/// 偶发"已静音会话不显示静音样式"，且与 follow / recent badge 不同源（badge 走 isChannelMuted）。
+static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
+    if (!model || !model.channel) return NO;
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:model.channel];
+    if (info) return info.mute;
+    return model.mute;
+}
 
 @implementation WKConversationListCell
 
@@ -300,7 +312,7 @@
                 indicatorColor = [UIColor orangeColor];
             } else if (threadUnread > 0) {
                 indicatorType = 1;
-                indicatorColor = model.mute
+                indicatorColor = WKCellIsMuted(model)
                     ? [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f]
                     : [UIColor redColor];
             }
@@ -643,13 +655,14 @@
 
 -(void) refreshSetting:(WKConversationWrapModel*)model {
     // 免打扰
-    if(model.mute) { // 免打扰
+    BOOL muted = WKCellIsMuted(model);
+    if(muted) { // 免打扰
         if(model.unreadCount<=0) {
             self.muteIcon.hidden = NO;
         }else {
             self.muteIcon.hidden = YES;
         }
-       
+
         [self.badgeView setBadgeBackgroundColor:[UIColor colorWithRed:163.0f/255.0f green:214.0/255.0f blue:237.0f/255.0f alpha:1.0]];
     }else {
         self.muteIcon.hidden = YES;
