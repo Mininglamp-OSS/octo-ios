@@ -13,6 +13,7 @@
 #import "WKApp.h"
 #import "WKResource.h"
 #import <SDWebImage/UIImageView+WebCache.h>
+#import <SDWebImage/SDImageCache.h>
 #import "WKAvatarUtil.h"
 #import <DGActivityIndicatorView/DGActivityIndicatorView.h>
 #import <WuKongIMSDK/WuKongIMSDK.h>
@@ -494,22 +495,10 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     BOOL hasChannelInfo  = model.channelInfo?true:false;
     UIImage *placeholder = [self imageName:@"Common/Index/DefaultAvatar"];
     NSString *channelId = model.channel.channelId;
-    // Cell 第一次 setup（lastAvatarChannelId 为空）→ image 还是 nil，必须 set placeholder
-    // 兜底，否则头像区域会空白到异步加载完成。
-    //
-    // Cell 复用到不同 channel（lastAvatarChannelId 有值但不匹配）→ 不主动 reset placeholder,
-    // 让 SDWebImageDelayPlaceholder 处理：
-    //   - cache 命中（私聊 / 大多数群头像）→ lim_setImageWithURL 同步替换，用户无感知
-    //   - cache miss（子区头像走父群 URL，memory cache 驱逐快）→ 保留上一个 cell 残留头像
-    //     等异步加载完替换，避免暴露默认头像
-    //
-    // 之前一律 reset placeholder 会让子区 cache miss 时长时间显示默认头像（用户反馈"返回
-    // 会话列表后子区头像先变默认再加载"）。私聊不出现是 cache 命中率高。
-    BOOL channelChanged = (channelId.length == 0) || ![channelId isEqualToString:self.lastAvatarChannelId];
-    BOOL isFirstSetup = (self.lastAvatarChannelId.length == 0);
-    if (channelChanged && isFirstSetup) {
-        self.avatarImgView.avatarImgView.image = placeholder;
-    }
+    // lastAvatarChannelId 已不再用于 placeholder 决策（之前会触发"返回会话列表时子区
+    // 头像闪默认占位"），avatar 的"placeholder 兜底 vs 真实图替换" 已下沉到
+    // applyAvatarURL:placeholder: helper：优先同步 memory cache 真实头像 → image=nil
+    // 兜底 placeholder → 复用残留时保留旧 image。这里保留 channelId 跟踪供其他业务用。
     self.lastAvatarChannelId = channelId;
 
     // 最近 tab 的子区行：右下角 hash 角标（参考 web）。头像本身不再 override —
@@ -569,10 +558,10 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
                 avatarURL = [WKAvatarUtil getAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
             }
         }
-        // SDWebImageDelayPlaceholder：加载过程中不覆盖当前已显示的头像，只在最终加载失败时才落到占位图，避免返回会话列表刷新时的占位图闪烁
-        [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL] placeholderImage:placeholder options:SDWebImageDelayPlaceholder context:@{
-            SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll),
-        }];
+        // 用 helper 替换原 lim_setImageWithURL：先同步查 SDImageCache memory cache,
+        // 命中直接 set 真实头像（"动态 placeholder"），miss 时根据 image 是否为 nil 决定
+        // 兜底 placeholder 还是保留 cell 复用残留。彻底消除子区返回会话列表时的默认头像闪。
+        [self applyAvatarURL:avatarURL placeholder:placeholder];
     } else {
         if (self.recentTabContext && model.channel.channelType == WK_COMMUNITY_TOPIC) {
             // 子区 channelInfo 还没加载到时，仍然用父群 URL 拼一发 — getGroupAvatar
@@ -589,9 +578,7 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
                 NSLog(@"[ThreadAvatar][noChannelInfo] thread=%@ parent=%@ parentInfoCached=%d avatarURL=%@",
                       model.channel.channelId, groupNo, parentInfo != nil, avatarURL);
 #endif
-                [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL] placeholderImage:placeholder options:SDWebImageDelayPlaceholder context:@{
-                    SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll),
-                }];
+                [self applyAvatarURL:avatarURL placeholder:placeholder];
             } else {
                 self.avatarImgView.avatarImgView.image = placeholder;
             }
@@ -599,6 +586,34 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
             self.avatarImgView.avatarImgView.image = placeholder;
         }
     }
+}
+
+/// avatar 加载统一入口：先同步查 SDImageCache memory cache，命中直接用真实头像作为
+/// "动态 placeholder"，避免子区头像在 cell 复用 / 返回会话列表时短暂显示默认占位图。
+///
+/// 私聊 / 群头像之前不闪是因为 memory cache 命中率高（DM 总数少，群 cache 常驻），
+/// SDWebImage 异步加载前就同步 set 真实图。子区头像走父群 URL，memory cache 驱逐快、
+/// cell pool 重组后 fresh instance image=nil → SDWebImage 默认行为先显示 placeholder
+/// 再异步加载，用户看到默认头像闪一下。
+///
+/// 这里手动同步查 memory cache 复制 SDWebImage 内部行为：命中就用 cached 真实图替代
+/// 默认 placeholder。lim_setImageWithURL 的 SDWebImageDelayPlaceholder 配合：cache miss
+/// 不立即覆盖现有 image (保留复用残留 / 兜底 placeholder)，等异步加载完替换。
+- (void)applyAvatarURL:(NSString *)avatarURL placeholder:(UIImage *)placeholder {
+    UIImage *cached = avatarURL.length > 0 ? [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:avatarURL] : nil;
+    if (cached) {
+        // memory cache 命中：直接显示真实头像 → SDWebImage 异步加载是 noop / 同款图，无视觉变化
+        self.avatarImgView.avatarImgView.image = cached;
+    } else if (self.avatarImgView.avatarImgView.image == nil) {
+        // memory cache miss + cell 第一次 dequeue（fresh instance, image 为 nil） → 兜底 placeholder
+        // 避免头像区域空白
+        self.avatarImgView.avatarImgView.image = placeholder;
+    }
+    // memory cache miss + image 已有（cell 复用） → 保留旧图，等异步加载完替换
+    [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL ?: @""]
+                                         placeholderImage:placeholder
+                                                  options:SDWebImageDelayPlaceholder
+                                                  context:@{SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll)}];
 }
 
 -(void) refreshOnlineStatus:(WKConversationWrapModel*)model {
