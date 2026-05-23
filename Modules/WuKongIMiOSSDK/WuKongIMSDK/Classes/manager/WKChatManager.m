@@ -780,7 +780,9 @@
             shouldCreateReminder = YES;
         }
     }
-    if(![message isSend] && message.header.showUnread && shouldCreateReminder) {
+    // COMMUNITY_TOPIC 子区跳过 showUnread 检查（服务端 red_dot 策略不同，对齐 Android）
+    BOOL unreadGate = (message.channel.channelType != WK_COMMUNITY_TOPIC) ? message.header.showUnread : YES;
+    if(![message isSend] && unreadGate && shouldCreateReminder) {
         WKReminder *reminder = [[WKReminder alloc] init];
         reminder.reminderID = (int64_t)message.messageId; // 用messageId作为reminderID避免重复
         reminder.messageId = message.messageId;
