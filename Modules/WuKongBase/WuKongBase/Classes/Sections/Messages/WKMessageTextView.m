@@ -10,7 +10,12 @@ static void *kWKMTVTokens = &kWKMTVTokens;
 
 @implementation WKMessageTextView
 
+// iOS 16+ 显式声明使用 TextKit 1（不通过 NSTextLayoutManager），避免运行时
+// 从 TextKit 2 热切换到 TextKit 1 — 该热切换会在快速滑动 + 大量新建 cell 时
+// 造成首帧 glyph 漏画，表现为「气泡正常占高、内容一片空白」。
 - (instancetype)initWithFrame:(CGRect)frame textContainer:(nullable NSTextContainer *)textContainer {
+    // 显式传入 textContainer 即走 TextKit 1（NSTextContainer 是 TextKit 1 类型），
+    // 直接走父类指定初始化器即可。
     self = [super initWithFrame:frame textContainer:textContainer];
     if (self) {
         [self wk_configureDisplayOnly];
@@ -19,6 +24,14 @@ static void *kWKMTVTokens = &kWKMTVTokens;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
+    if (@available(iOS 16.0, *)) {
+        self = [super initUsingTextLayoutManager:NO];
+        if (self) {
+            self.frame = frame;
+            [self wk_configureDisplayOnly];
+        }
+        return self;
+    }
     self = [super initWithFrame:frame];
     if (self) {
         [self wk_configureDisplayOnly];
@@ -27,7 +40,11 @@ static void *kWKMTVTokens = &kWKMTVTokens;
 }
 
 - (instancetype)init {
-    self = [super init];
+    if (@available(iOS 16.0, *)) {
+        self = [super initUsingTextLayoutManager:NO];
+    } else {
+        self = [super init];
+    }
     if (self) {
         [self wk_configureDisplayOnly];
     }
@@ -79,9 +96,10 @@ static void *kWKMTVTokens = &kWKMTVTokens;
     self.scrollEnabled    = NO;
     self.backgroundColor  = [UIColor clearColor];
     self.textContainerInset = UIEdgeInsetsZero;
-    // 强制切换到 TextKit 1：iOS 16+ 默认 TextKit 2，访问 layoutManager 触发切换。
-    // 必须在所有实例上统一，否则测量（TextKit 1）和显示（TextKit 2）高度不一致。
-    (void)self.layoutManager;
+    // iOS 16+ 由 initUsingTextLayoutManager:NO 在创建时确定走 TextKit 1，
+    // 不再通过访问 layoutManager 触发运行时热切换（旧实现会在快速滑动 +
+    // 大量新建 cell 时造成首帧 glyph 漏画导致气泡空白）。
+    // iOS 15- 默认就是 TextKit 1，无需额外动作。
     self.textContainer.lineFragmentPadding    = 0;
     self.textContainer.maximumNumberOfLines   = 0;  // 对应 UILabel.numberOfLines = 0
     self.textContainer.lineBreakMode          = NSLineBreakByWordWrapping;
