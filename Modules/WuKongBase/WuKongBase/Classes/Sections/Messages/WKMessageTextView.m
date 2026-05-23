@@ -10,51 +10,46 @@ static void *kWKMTVTokens = &kWKMTVTokens;
 
 @implementation WKMessageTextView
 
-// iOS 16+ 显式声明使用 TextKit 1（不通过 NSTextLayoutManager），避免运行时
-// 从 TextKit 2 热切换到 TextKit 1 — 该热切换会在快速滑动 + 大量新建 cell 时
-// 造成首帧 glyph 漏画，表现为「气泡正常占高、内容一片空白」。
+// iOS 16+ UITextView 默认 TextKit 2，但本类的高度测量、点击命中、段落样式
+// 归一化都假定 TextKit 1（NSLayoutManager / NSTextContainer 路径）。需要让
+// 实例稳定回落到 TK1。
 //
-// 实现方式：构造一个由 NSLayoutManager 拥有的 NSTextContainer（即 TextKit 1
-// stack），通过 -initWithFrame:textContainer: 注入。UITextView 看到 textContainer
-// 的 layoutManager 是 NSLayoutManager（而不是 NSTextLayoutManager），就一定走
-// TextKit 1，不会再走默认的 TextKit 2。
+// 历史尝试（都失败）:
+//   1) 旧实现：访问 self.layoutManager 触发 TK2→TK1 热切换 → 工作但偶发首
+//      帧空白（快速滑动 + 大量新建 cell 时 glyph 漏画）。
+//   2) 自建 TextStorage/LayoutManager/TextContainer 通过
+//      -initWithFrame:textContainer: 注入 → iOS 26.4.2 上 super init 内部
+//      _UITextKit1LayoutController 仍断言 "text container must already
+//      have a layout manager"，无论 ts/lm 是否还活着。Apple 头文件唯一
+//      官方 TK1 入口是类工厂 +textViewUsingTextLayoutManager:，无法被
+//      子类化继承到 -initWithFrame:textContainer: 路径。
 //
-// 不能用 +textViewUsingTextLayoutManager: — 那是工厂类方法返回裸 UITextView，
-// 无法被子类化；也不能用 -initUsingTextLayoutManager:（UITextView 上不存在该
-// 实例方法）。
-//
-// 注意：不能把构造拆到独立 helper 方法里返回 NSTextContainer —
-// NSTextContainer.layoutManager 与 NSLayoutManager.textStorage 都是 weak，
-// helper 返回后局部 ts/lm 被释放，tc.layoutManager 变 nil，UITextView 的
-// super init 会触发 _UITextKit1LayoutController 断言
-// "text container must already have a layout manager"。
-// 必须在本方法作用域内持有 ts/lm 跨越 [super init...] 调用，让 UITextView 在
-// init 期间完成对整条 TextKit 1 stack 的接管。
+// 取舍：方案 1 的"首帧空白"是渲染瑕疵，方案 2 是硬崩。回到方案 1，并把
+// 热切换的触发集中在构造完成后的 wk_configureDisplayOnly 里 — 不在 super
+// init 期间 fiddle with textContainer。首帧空白若真复发，单独通过
+// setAttributedText: 后强制 ensureLayoutForTextContainer: 修复。
 - (instancetype)initWithFrame:(CGRect)frame textContainer:(nullable NSTextContainer *)textContainer {
-    NSTextStorage *ts = nil;
-    NSLayoutManager *lm = nil;
-    if (!textContainer) {
-        ts = [[NSTextStorage alloc] init];
-        lm = [[NSLayoutManager alloc] init];
-        [ts addLayoutManager:lm];
-        textContainer = [[NSTextContainer alloc] initWithSize:CGSizeZero];
-        [lm addTextContainer:textContainer];
-    }
     self = [super initWithFrame:frame textContainer:textContainer];
     if (self) {
         [self wk_configureDisplayOnly];
     }
-    // 防止编译器在 [super init...] 之前优化掉 ts/lm（它们仅作为强引用持有者存在）。
-    (void)ts; (void)lm;
     return self;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
-    return [self initWithFrame:frame textContainer:nil];
+    self = [super initWithFrame:frame];
+    if (self) {
+        [self wk_configureDisplayOnly];
+    }
+    return self;
 }
 
 - (instancetype)init {
-    return [self initWithFrame:CGRectZero textContainer:nil];
+    self = [super init];
+    if (self) {
+        [self wk_configureDisplayOnly];
+    }
+    return self;
 }
 
 /// display-only 配置：外观与 UILabel 一致，默认不可选/不可编辑
@@ -102,10 +97,15 @@ static void *kWKMTVTokens = &kWKMTVTokens;
     self.scrollEnabled    = NO;
     self.backgroundColor  = [UIColor clearColor];
     self.textContainerInset = UIEdgeInsetsZero;
-    // iOS 16+ 由 initUsingTextLayoutManager:NO 在创建时确定走 TextKit 1，
-    // 不再通过访问 layoutManager 触发运行时热切换（旧实现会在快速滑动 +
-    // 大量新建 cell 时造成首帧 glyph 漏画导致气泡空白）。
-    // iOS 15- 默认就是 TextKit 1，无需额外动作。
+    // 强制让 TK2 fallback 到 TK1：iOS 16+ 默认 TK2，读取 layoutManager 会触发
+    // UIKit 内部用新 NSLayoutManager 替换 NSTextLayoutManager（Apple UITextView.h
+    // 第 273 行明确文档此行为）。本类的高度测量 / 命中检测 / 段落样式归一化
+    // 都基于 TK1 的 NSLayoutManager + NSTextContainer 路径，必须在所有实例上
+    // 统一切到 TK1，否则测量（TK1）和显示（TK2）会不一致。
+    //
+    // 不在 super init 期间通过传 textContainer 强制 TK1 — 那条路径在 iOS 26.4.2
+    // 上必崩 _UITextKit1LayoutController（详见类顶部注释）。
+    (void)self.layoutManager;
     self.textContainer.lineFragmentPadding    = 0;
     self.textContainer.maximumNumberOfLines   = 0;  // 对应 UILabel.numberOfLines = 0
     self.textContainer.lineBreakMode          = NSLineBreakByWordWrapping;
