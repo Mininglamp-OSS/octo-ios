@@ -141,6 +141,7 @@
 @property(nonatomic,strong,nullable) CADisplayLink *cellDragAutoScrollLink;
 @property(nonatomic,assign) CGFloat cellDragAutoScrollVelocity; // pts/frame, 0 = 不滚
 @property(nonatomic,assign) BOOL pendingRebuildAfterDrag; // 拖动期间收到的刷新请求暂存，结束时回放
+@property(nonatomic,assign) BOOL refreshBadgePending; // refreshBadge coalesce：批量事件合并到一次重算
 
 // 关注 tab 空状态引导视图：当前 tab 是 Follow + groupDisplayList 为空时显示
 @property(nonatomic,strong,nullable) UIView *followEmptyView;
@@ -2068,9 +2069,30 @@
     [self.conversationTabView setRecentUnreadCount:[self.conversationListVM getRecentUnreadCount]];
 }
 
+/// refreshBadge 是高频调用 — viewWillAppear / viewDidAppear / loadConversationList completion /
+/// loadCategoriesWithCompletion / channelInfoUpdate（每条）/ onConversationUpdate（每条）/
+/// onMessageUpdate 等多个路径都直接调它。每次都同步写 badge 数字会把中间瞬态暴露给用户：
+/// 切回 tab 时 loadConversationList 刚 replace conversationWrapModels（数组对象身份变了，
+/// 部分 wrap 的 channelInfo cache 还没 ready）的那一刻就算，会算出超过真实值的 99+，等
+/// channelInfo 陆续到达 + 多次重算才收敛到 9。
+///
+/// cell 上看不到这个闪烁是因为 reloadData 是 setNeedsLayout，cell 真正渲染发生在
+/// runloop 末尾 —— 那时 channelInfo cache 已经稳定 / model 状态收敛了。
+///
+/// 把 badge 也对齐到同款节奏：所有调用合并到 150ms 后一次实算，保证算出来的就是稳定值，
+/// 不再把 race 中间态 leak 到 UI。150ms 延迟人眼无感知，但足够吸收一连串密集事件。
 -(void) refreshBadge {
-    self.tabBarItem.badgeValue = nil;
-    [self updateTabUnreadCounts];
+    if (self.refreshBadgePending) return;
+    self.refreshBadgePending = YES;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.refreshBadgePending = NO;
+        strongSelf.tabBarItem.badgeValue = nil;
+        [strongSelf updateTabUnreadCounts];
+    });
 }
 
 #pragma mark - WKNetworkListenerDelegate
