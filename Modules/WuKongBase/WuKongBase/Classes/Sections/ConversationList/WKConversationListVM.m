@@ -85,6 +85,9 @@ static WKConversationListVM *_instance;
     [self.conversationWrapModels removeAllObjects];
     [self.channelIndex removeAllObjects];
     self.filteredConversations = @[];
+    self.threadWrapModels = @[]; // 之前漏清 → space 切换 / 启动清理后旧子区行残留在 recent tab,
+                                  // badge 也算它们；rebuildFilteredList 会把它们 append 进 filteredConversations。
+                                  // 必须和 conversationWrapModels 一起清，等下次 loadConversationList 重建。
     self.syncedGroupChannelIds = nil;
     self.categoryList = @[];
     self.cachedAllConversations = nil;
@@ -1197,6 +1200,9 @@ static WKConversationListVM *_instance;
 -(void) removeAll {
     [self.conversationWrapModels removeAllObjects];
     [self.channelIndex removeAllObjects];
+    // 子区独立 wrap 也一并清 —— 之前漏清，"删除所有会话"后 recent tab 还能看到旧子区行,
+    // badge 也算它们的 unread。与 reset 路径同款处理。
+    self.threadWrapModels = @[];
     [self rebuildFilteredList];
 }
 
@@ -1426,10 +1432,16 @@ static WKConversationListVM *_instance;
                   threadHasMention:(BOOL *)outHasMention {
     NSInteger unread = 0;
     BOOL hasMention = NO;
+    // 与 cell 的 WKConversationGroupThreadCell.visibleThreadPreviewsFor: 同源，按 followedKeys
+    // 过滤 —— 否则 cell 上 preview 行只显示已关注子区、但 indicator 数字 / @ 提醒 / "+N
+    // 子区" 把未关注子区也算进去，违反 spec §0 "Follow tab 严格按 followedKeys 过滤"。
+    // store 未加载时 fail-open（与 visibleThreadPreviewsFor 同款），避免冷启动期一律 0。
+    WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
     NSArray<WKConversation*> *topics = self.cachedTopicsByGroup[groupNo];
     if (topics) {
         for (WKConversation *conv in topics) {
             if (excluded.count > 0 && [excluded containsObject:conv.channel.channelId]) continue;
+            if (store.loaded && ![store isFollowedWithType:WKFollowTargetTypeThread targetId:conv.channel.channelId]) continue;
             // cell 上显示的子区合计 unread 必须过滤静音子区，与 follow / recent tab badge 同款口径,
             // 否则用户给某个子区设静音后，群聊 cell 上的红点数字仍包含该子区的未读
             if ([self isConversationMuted:conv]) continue;

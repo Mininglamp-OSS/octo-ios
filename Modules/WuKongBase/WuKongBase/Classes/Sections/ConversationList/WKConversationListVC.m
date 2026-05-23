@@ -3007,6 +3007,17 @@
     NSInteger sourceRow = self.cellDragSourceIndexPath.row;
     NSInteger destRow = self.cellDragLastInsertBelow ? targetPath.row + 1 : targetPath.row;
     BOOL insertBelow = self.cellDragLastInsertBelow;
+    // 拖到 section header 时矫正落点 —— 不矫正会把 conv 插到 header 之前（即上一个 section
+    // 末尾），随后 reorderInCategory 的 payload 收集从 header 之后开始 → moving item 被漏掉,
+    // PUT /follow/sort 提交不完整顺序。statement: 拖到 header 一律语义为"放到该 section 的
+    // 第一行"（顶部），把 destRow 矫正到 header + 1。
+    if (targetPath.row >= 0 && targetPath.row < (NSInteger)self.groupDisplayList.count) {
+        WKConversationDisplayItem *targetItem = self.groupDisplayList[targetPath.row];
+        if (targetItem.isSectionHeader) {
+            destRow = targetPath.row + 1;
+            insertBelow = YES;
+        }
+    }
 
     [self cleanupCellDragSnapshot];
 

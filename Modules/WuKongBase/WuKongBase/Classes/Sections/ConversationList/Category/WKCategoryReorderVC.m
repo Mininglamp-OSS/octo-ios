@@ -183,6 +183,10 @@
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [self.tableView reloadData];
     });
+    // tap 触发的"移到最前 / 上移 / 下移 / 移到最后"也要走持久化 —— 之前只在 long-press
+    // 拖完才 commitReorder，"完成"按钮也已经被移除，导致用户用 row action 改顺序后退出
+    // 页面就丢。这里同步触发一次保存，commit 异步走 API 不阻塞 UI。
+    [self commitReorder];
 }
 
 #pragma mark - 左滑删除（iOS 11+）
