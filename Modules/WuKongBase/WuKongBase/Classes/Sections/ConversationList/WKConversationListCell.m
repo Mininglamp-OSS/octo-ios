@@ -519,7 +519,9 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
 
     if([model.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
         NSString *avatarURL = hasChannelInfo ? [WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo] : nil;
+#if DEBUG
         NSLog(@"[DEBUG] 系统通知(u_10000) logo: %@, avatarURL: %@, hasChannelInfo: %d", model.channelInfo.logo, avatarURL, hasChannelInfo);
+#endif
     }
     if(hasChannelInfo) {
         NSString *avatarURL;
@@ -540,8 +542,10 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
             NSString *groupNo = parent.channelId ?: @"";
             WKChannelInfo *parentInfo = [self lookupParentChannelInfo:parent];
             avatarURL = [WKAvatarUtil getGroupAvatar:groupNo cacheKey:parentInfo.avatarCacheKey];
+#if DEBUG
             NSLog(@"[ThreadAvatar] thread=%@ parent=%@ parentInfoCached=%d avatarURL=%@",
                   model.channel.channelId, groupNo, parentInfo != nil, avatarURL);
+#endif
         } else {
             // 个人频道：和群频道一样，始终拼接 ?v=cacheKey
             NSString *key = (model.channelInfo.avatarCacheKey.length > 0) ? model.channelInfo.avatarCacheKey : @"0";
@@ -567,8 +571,10 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
             NSString *groupNo = parent.channelId ?: @"";
             if (groupNo.length > 0) {
                 NSString *avatarURL = [WKAvatarUtil getGroupAvatar:groupNo cacheKey:nil];
+#if DEBUG
                 NSLog(@"[ThreadAvatar][noChannelInfo] thread=%@ parent=%@ avatarURL=%@",
                       model.channel.channelId, groupNo, avatarURL);
+#endif
                 [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL] placeholderImage:placeholder options:SDWebImageDelayPlaceholder context:@{
                     SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll),
                 }];

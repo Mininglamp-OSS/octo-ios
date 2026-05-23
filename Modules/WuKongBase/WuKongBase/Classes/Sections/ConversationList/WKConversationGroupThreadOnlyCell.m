@@ -49,7 +49,11 @@
         }
     }
     CGFloat topH = hasMention ? (TOP_HEIGHT + 10) : TOP_HEIGHT;
-    if (model.threadCount > 0) {
+    // 走已关注子区数（与 WKConversationGroupThreadCell 同源），不能直接用 model.threadCount
+    // 那是父群的 raw 总数，包括未关注子区 —— follow tab 已关注 = 0 但 raw > 0 时高度会
+    // 多出 +N 子区那一行的占位（实际不显示），与 updateMoreLabel 的过滤口径不一致。
+    NSInteger visibleThreadCount = [WKConversationGroupThreadCell visibleThreadCountFor:model];
+    if (visibleThreadCount > 0) {
         return topH + MORE_HEIGHT + 6.0f;
     }
     return topH;
@@ -184,7 +188,11 @@
 
 -(void) updateMoreLabel {
     NSInteger previewCount = self.model.threadPreviews ? self.model.threadPreviews.count : 0;
-    NSInteger moreCount = self.model.threadCount - previewCount;
+    // moreCount = 已关注子区数 - 当前展示的 preview 数。之前用 self.model.threadCount
+    // 是父群 raw 总数，含未关注子区 —— follow tab 边界场景下（已关注子区不在 threadPreviews 里）
+    // "+N 子区" 会把未关注的算进去。改成与 WKConversationGroupThreadCell 同源。
+    NSInteger followedThreadCount = [WKConversationGroupThreadCell visibleThreadCountFor:self.model];
+    NSInteger moreCount = followedThreadCount - previewCount;
     if (moreCount <= 0) {
         self.moreLbl.hidden = YES;
         self.moreBadgeLbl.hidden = YES;

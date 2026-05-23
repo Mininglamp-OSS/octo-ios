@@ -3364,8 +3364,10 @@
         if (stick) info.stick = [stick boolValue];
         [[WKSDK shared].channelManager addOrUpdateChannelInfoIfNeed:info];
     }
+#if DEBUG
     NSLog(@"[StickDebug] optimistic ch=%@ mute=%@ stick=%@ infoCached=%d",
           channel.channelId, mute, stick, info != nil);
+#endif
     // 关注 tab 走分组展示，需要 rebuildGroupDisplayAndReload；最近 tab 走
     // filteredConversations。stick 变化两种 tab 都可能改顺序，所以 reloadData。
     if (self.conversationListVM.filterType == WKConversationFilterFollow) {
