@@ -456,7 +456,27 @@
     // （新 adapter 直接根据 mention.ais=1 路由，但 server 当前还需要 UID 列表来定向投递）。
     // 对齐 Web 端 PR#101。
     if(content.mentionedInfo && content.mentionedInfo.ais) {
-        NSArray<WKChannelMember*> *allMembers = [[WKSDK shared].channelManager getMembersWithChannel:self.channel];
+        // 子区（COMMUNITY_TOPIC）的成员缓存挂在父群上，子区 channel 直接查 SDK 会拿到空数组，
+        // 导致 bot UID 无法展开、@所有AI 不到达任何机器人。回退到父群再查成员，对齐：
+        //   - Android：ChatPanelManager.expandRobotMembersIntoUids() 用 parentGroupNo
+        //   - iOS：WKConversationInputPanel.holdToTalkManagerChannelMembers: / WKVoicePanel
+        //          已用 "____" 分隔符抽出 parentGroupNo 的同款规则
+        WKChannel *lookupChannel = self.channel;
+        if(self.channel.channelType == WK_COMMUNITY_TOPIC) {
+            WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:self.channel];
+            if(info.parentChannel) {
+                lookupChannel = info.parentChannel;
+            } else {
+                NSRange sep = [self.channel.channelId rangeOfString:@"____"];
+                if(sep.location != NSNotFound) {
+                    NSString *parentGroupNo = [self.channel.channelId substringToIndex:sep.location];
+                    if(parentGroupNo.length > 0) {
+                        lookupChannel = [WKChannel groupWithChannelID:parentGroupNo];
+                    }
+                }
+            }
+        }
+        NSArray<WKChannelMember*> *allMembers = [[WKSDK shared].channelManager getMembersWithChannel:lookupChannel];
         NSArray<NSString*> *existingUids = content.mentionedInfo.uids ?: @[];
         NSMutableArray<NSString*> *mergedUids = [NSMutableArray arrayWithArray:existingUids];
         // O(1) 去重：避免 NSArray containsObject: 在大群里 O(n) 退化
