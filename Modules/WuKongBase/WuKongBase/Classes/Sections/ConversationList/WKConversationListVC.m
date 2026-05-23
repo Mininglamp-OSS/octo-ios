@@ -135,9 +135,18 @@
 @property(nonatomic,assign) BOOL cellDragInProgress;
 @property(nonatomic,copy,nullable) NSString *cellDragSourceConvName;
 @property(nonatomic,copy,nullable) NSString *cellDragSourceChannelId; // 用于识别源 cell 离场触发清理
+/// 拖拽源会话 model — 强引用，保证拖动期间源 cell 被回收/上滚出可视区时
+/// endCellDragAtLocation:model: 仍能拿到完整 model 完成 followDM / moveGroup 提交。
+@property(nonatomic,strong,nullable) WKConversationWrapModel *cellDragSourceModel;
 /// 分组 section header 拖动：拖整段分组重排时记录源 sectionId。非空 → 当前拖动是 section reorder（不是 cell 重排）。
 @property(nonatomic,copy,nullable) NSString *cellDragSourceSectionId;
 @property(nonatomic,weak,nullable) UITableViewCell *cellDragSourceCell; // 直接 weak 持有源 cell，didEndDisplayingCell 用 == 比较更稳
+/// section header 长按时被高亮的 cell（弱引用）— 拖动真正开始 / 手势结束时需要还原视觉。
+@property(nonatomic,weak,nullable) WKCategorySectionCell *cellDragHighlightedSectionCell;
+/// 表格级统一长按手势 — 装在 self.view 上，生命周期与 VC 同步，不受 cell 复用影响。
+/// 取代之前每个 cell 单独装一份的方式：cell 被回收时手势随之销毁会导致 Ended/Cancelled
+/// 不触发、snapshot 卡死，并让"拖出界面再回来 snapshot 不见"的 bug 1 也消失。
+@property(nonatomic,strong,nullable) UILongPressGestureRecognizer *unifiedLongPress;
 @property(nonatomic,strong,nullable) CADisplayLink *cellDragAutoScrollLink;
 @property(nonatomic,assign) CGFloat cellDragAutoScrollVelocity; // pts/frame, 0 = 不滚
 @property(nonatomic,assign) BOOL pendingRebuildAfterDrag; // 拖动期间收到的刷新请求暂存，结束时回放
@@ -234,6 +243,14 @@
         [weakSelf refreshBadge];
         // 异步加载分组数据，完成后再次刷新
         [weakSelf loadCategories];
+        // : 冷启动 Follow tab 数据源兜底 —— 不等 viewDidAppear 的
+        // reloadFollowedKeysIfNeeded（受 30s debounce 影响、且与 viewDidLoad
+        // 时序不确定），在 loadCategories 之后并发触发 followStore reload。
+        // 标记 lastFollowedKeysReloadAt 让 viewDidAppear 的兜底被 debounce 吞掉，
+        // 避免重复打 sidebar/sync。reload 完成后 onFollowedKeysStoreDidUpdate
+        // 触发 rebuild，新关注数据就能在第一次可见时尽快到位。
+        weakSelf.lastFollowedKeysReloadAt = [NSDate date].timeIntervalSince1970;
+        [[WKFollowedKeysStore shared] reload];
     }];
 
 //    self.refreshTimer = [NSTimer scheduledTimerWithTimeInterval:30 target:self selector:@selector(timerRefreshTable) userInfo:nil repeats:YES];
@@ -246,6 +263,13 @@
 
     // 初始化标题（即使异步加载未完成也先显示默认标题）
     [self refreshTitle];
+
+    // 表格级统一长按手势 — 取代每个 cell 各自装一份的旧方式。
+    // 装在 self.view 上，由 onUnifiedLongPress: 在 Began 反查 indexPath 分发到
+    // section header（高亮 + 弹分组管理菜单 + 进入 section 拖拽）或 conversation row
+    // （弹会话长按菜单 + Follow tab 进入 cell 拖拽）。生命周期与 VC 同步，cell 复用
+    // 不会销毁手势，根治"snapshot 卡死"与"拖出再回来 snapshot 消失"两个 bug。
+    [self setupUnifiedLongPressGesture];
 
     // ⚠️ 临时调试按钮（已隐藏）
     // [self setupStressTestButton];
@@ -472,6 +496,18 @@
     }];
 }
 
+-(void) viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    // 在 dismiss / push 真正发生前提前结束拖拽 —— 半屏 sheet、push 别的 VC 等场景下
+    // viewDidDisappear 触发可能滞后，提前清理避免 snapshot 在过渡动画里残留。
+    if (self.cellDragInProgress
+        || self.cellDragSourceChannelId.length > 0
+        || self.cellDragSourceSectionId.length > 0
+        || self.cellDragHighlightedSectionCell != nil) {
+        [self resetCellDragState];
+    }
+}
+
 -(void) viewDidDisappear:(BOOL)animated {
     [super viewDidDisappear:animated];
     // 防 drag snapshot 卡在屏上：界面消失时强制清理
@@ -516,6 +552,9 @@
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onSpaceBotRegistryDidLoad:) name:WKSpaceBotRegistryDidLoadNotification object:nil];
     // 关注 tab 兜底刷新：app 切回前台时拉一次 sidebar/sync 同步 followedKeys + follow_version
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppDidBecomeActive:) name:UIApplicationDidBecomeActiveNotification object:nil];
+    // app 退到后台 / 被来电等系统事件打断时，强制结束拖拽 —— 否则恢复后 snapshot
+    // 可能还挂在 window 上，配合手势状态已 reset，会出现"卡死的悬浮 cell"。
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppWillResignActive:) name:UIApplicationWillResignActiveNotification object:nil];
     // followedKeys 更新（reload 后 / 写操作后）→ 关注 tab 重建展示列表，让新加/取消的 DM 在分组里立即生效
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onFollowedKeysStoreDidUpdate:) name:kWKFollowedKeysStoreDidUpdateNotification object:nil];
 }
@@ -526,6 +565,7 @@
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKThreadCountBatchUpdated" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WKSpaceBotRegistryDidLoadNotification object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidBecomeActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationWillResignActiveNotification object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:kWKFollowedKeysStoreDidUpdateNotification object:nil];
     // 移除连接监听
     [[[WKSDK shared] connectionManager] removeDelegate:self];
@@ -839,6 +879,16 @@
     // 1. 清空 VM 数据和本地会话数据库
     [self.conversationListVM reset];
     [[WKConversationDB shared] deleteAllConversation];
+
+    // : 关注 tab 跨空间残留修复 —— FollowedKeysStore 是单例，
+    // followedGroupNos / itemsByCategory 都是 A space 的数据；新空间的 categoryList
+    // 拉回来后，buildGroupDisplayList 会用旧 followedGroupNos 去过滤新 cat.groups，
+    // 命中 0 条 → 用户视角是"切完空间分组下面没有任何会话"。这里 fail-closed
+    // 把 store 状态打回未加载，紧跟下面 pendingSpaceSwitchLoad 完成块里的 reload
+    // 拉新空间数据；中间的渲染窗口里 buildGroupDisplayList 走 followLoaded=NO
+    // 分支，section 内只出 header（与切换瞬间的"空列表"语义一致）。
+    [[WKFollowedKeysStore shared] reset];
+    self.lastFollowedKeysReloadAt = 0; // 解除 30s debounce，避免下面 reload 被吞
 
     // 2. 先刷新 UI 显示空列表
     [self rebuildGroupDisplayAndReload];
@@ -1305,6 +1355,14 @@
                 [weakSelf rebuildGroupDisplayAndReload];
                 [weakSelf refreshBadge];
                 [weakSelf loadCategories];
+                // : 切空间后 followStore 已被 reset，必须显式 reload 拉新空间
+                // 的 followed 数据，否则 Follow tab 永远只有 header 没有会话。
+                // 走原始 reload 而不是 reloadFollowedKeysIfNeeded，前面已经把
+                // lastFollowedKeysReloadAt 清零，这里再标记一次（让后续 30s 内
+                // 的兜底刷新被 debounce 吞掉，避免重复打）。reload 完成后
+                // onFollowedKeysStoreDidUpdate 会触发 rebuild。
+                weakSelf.lastFollowedKeysReloadAt = [NSDate date].timeIntervalSince1970;
+                [[WKFollowedKeysStore shared] reload];
                 // VM 已被 B 的 sync 数据填好、白名单 snapshot 完成、bot registry
                 // 也已尝试加载 → 闸门可落，恢复正常 fail-open 行为
                 weakSelf.spaceSwitchInProgress = NO;
@@ -1619,6 +1677,18 @@
 
 -(void) onAppDidBecomeActive:(NSNotification*)notification {
     [self reloadFollowedKeysIfNeeded:@"appDidBecomeActive"];
+}
+
+-(void) onAppWillResignActive:(NSNotification*)notification {
+    // 拖拽中突然进后台 / 来电 → 系统会取消触摸，但 UILongPressGestureRecognizer
+    // 在 app 立即被挂起的场景下不一定能在合适的时机 fire Cancelled。这里主动收尾,
+    // 防止恢复时 snapshot 残留在 window 上。
+    if (self.cellDragInProgress
+        || self.cellDragSourceChannelId.length > 0
+        || self.cellDragSourceSectionId.length > 0
+        || self.cellDragHighlightedSectionCell != nil) {
+        [self resetCellDragState];
+    }
 }
 
 -(void) onFollowedKeysStoreDidUpdate:(NSNotification*)notification {
@@ -2451,12 +2521,7 @@
                 [weakSelf.conversationListVM saveCollapsedSections];
                 [weakSelf rebuildGroupDisplayAndReload];
             };
-            sectionCell.onLongPress = ^(NSString *sectionId, NSString *title, CGPoint pointInWindow) {
-                [weakSelf showSectionManagePopup:sectionId title:title atPoint:pointInWindow];
-            };
-            sectionCell.onLongPressProgress = ^(UILongPressGestureRecognizer *gesture, NSString *sectionId) {
-                [weakSelf onSectionHeaderLongPress:gesture sectionId:sectionId fromCell:sectionCell];
-            };
+            // 长按弹菜单 + 拖拽分发由 VC 的 unifiedLongPress 统一驱动，cell 不再装手势。
             return;
         }
         WKConversationWrapModel *conversationModel = item.conversation;
@@ -2502,8 +2567,8 @@
                 [weakSelf rebuildGroupDisplayAndReload];
             }];
         }
-        // 群聊 tab 会话 cell 添加长按手势
-        [self addLongPressGestureToCell:cell forConversation:conversationModel];
+        // cell 维度的长按手势已下线 — 长按弹菜单 / Follow tab 拖拽由 VC 上的
+        // unifiedLongPress 统一驱动（详见 setupUnifiedLongPressGesture / onUnifiedLongPress:）
         CFAbsoluteTime _wdElapsed = (CFAbsoluteTimeGetCurrent() - _wdStart) * 1000;
         if (_wdElapsed > 8) NSLog(@"[TabPerf] willDisplayCell(group) row=%ld %.1fms %@", (long)indexPath.row, _wdElapsed, NSStringFromClass([cell class]));
         return;
@@ -2514,8 +2579,7 @@
     WKConversationListCell *conversationListCell = (WKConversationListCell *)cell;
     conversationListCell.recentTabContext = (_conversationListVM.filterType == WKConversationFilterRecent);
     [conversationListCell refreshWithModel:conversationModel];
-    // 私聊 tab 添加长按手势
-    [self addLongPressGestureToCell:cell forConversation:conversationModel];
+    // 长按弹菜单同样走 unifiedLongPress（按 Began 时 indexPath 反查模型）。
     CFAbsoluteTime _wdElapsed2 = (CFAbsoluteTimeGetCurrent() - _wdStart) * 1000;
     if (_wdElapsed2 > 8) NSLog(@"[TabPerf] willDisplayCell(private) row=%ld %.1fms", (long)indexPath.row, _wdElapsed2);
 }
@@ -2525,13 +2589,11 @@
     if(conversationModel) {
         [conversationModel cancelChannelRequest];
     }
-    // 拖动期间源 cell 离场 → 长按手势会随 cell 回收销毁,Ended/Cancelled 不会触发,
-    // snapshot 卡死。这里兜底：把 cell 的 alpha 还原 + 强制清理 drag 状态。
-    // 用直接引用比较（cell == cellDragSourceCell）比 channelId 查表更可靠 — 后者
-    // 在表格重排后 conversationAtIndex 可能返回 nil 或别的会话。
+    // 仅还原 alpha，不再主动 resetCellDragState：长按手势已上移到 self.view，不会
+    // 随源 cell 回收一起销毁，所以源 cell 离场不会导致 Ended/Cancelled 漏触发。
+    // 拖动期间用户拖出 tableView 边缘再拖回来时，snapshot/手势保持完整，bug 1 消除。
     if (self.cellDragInProgress && cell == self.cellDragSourceCell) {
         cell.alpha = 1.0;
-        [self resetCellDragState];
     }
 }
 
@@ -2626,59 +2688,121 @@
     return nil;
 }
 
-#pragma mark - 会话长按弹窗菜单
+#pragma mark - 会话长按弹窗菜单 + 关注 tab 拖拽
 
--(void) addLongPressGestureToCell:(UITableViewCell *)cell forConversation:(WKConversationWrapModel *)model {
-    // 移除旧的长按手势，避免重用导致重复添加
-    for (UIGestureRecognizer *g in cell.gestureRecognizers.copy) {
-        if ([g isKindOfClass:[UILongPressGestureRecognizer class]] && g.view == cell) {
-            [cell removeGestureRecognizer:g];
-        }
-    }
-    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(onConversationCellLongPress:)];
-    longPress.minimumPressDuration = 0.5;
-    [cell addGestureRecognizer:longPress];
-    objc_setAssociatedObject(cell, "conversationModel", model, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+/// 装一个 table-level 的长按手势，所有"长按弹菜单 + 拖动重排"逻辑都从这里分发。
+/// 装在 self.view 上而不是 cell 上 —— 手势生命周期与 VC 同步，不会随 cell 回收
+/// 一起被销毁。这样 ① 拖动期间源 cell 被回收时 Ended/Cancelled 仍能正常触发，
+/// snapshot 不会卡死；② 拖出 tableView 边缘后再拖回不会因 didEndDisplayingCell
+/// 主动清理而丢失 snapshot。
+- (void)setupUnifiedLongPressGesture {
+    if (self.unifiedLongPress) return;
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc]
+                                        initWithTarget:self action:@selector(onUnifiedLongPress:)];
+    lp.minimumPressDuration = 0.5; // 与旧 cell-level 长按对齐，保证短点击不被吃掉
+    // 不设 delegate / cancelsTouchesInView，让 tableView pan / cell tap 该工作还能工作 —
+    // UILongPressGestureRecognizer 默认 allowableMovement=10 满足"拖动时长按失败、长按时
+    // 不触发滚动"的常规交互；真正进入拖动后 beginCellDragForCell 会关 tableView.scrollEnabled
+    // 防止表格继续被手指 pan。
+    [self.view addGestureRecognizer:lp];
+    self.unifiedLongPress = lp;
 }
 
--(void) onConversationCellLongPress:(UILongPressGestureRecognizer *)gesture {
-    UITableViewCell *cell = (UITableViewCell *)gesture.view;
-    WKConversationWrapModel *model = objc_getAssociatedObject(cell, "conversationModel");
-    if (!model) return;
-    BOOL isFollowTab = (self.conversationListVM.filterType == WKConversationFilterFollow);
-
+- (void)onUnifiedLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
-        // 触觉反馈 + 弹菜单（保留原行为）
+        CGPoint locInView = [gesture locationInView:self.view];
+        CGPoint locInTable = [self.view convertPoint:locInView toView:self.tableView];
+        NSIndexPath *path = [self.tableView indexPathForRowAtPoint:locInTable];
+        if (!path) return; // 长按落在表格之外（如 tabBar 区）→ 当作误触
+        UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:path];
+        if (!cell) return;
+
+        BOOL isFollowTab = (self.conversationListVM.filterType == WKConversationFilterFollow);
+
+        // Follow tab section header
+        if (isFollowTab && self.groupDisplayList && path.row < (NSInteger)self.groupDisplayList.count) {
+            WKConversationDisplayItem *item = self.groupDisplayList[path.row];
+            if (item.isSectionHeader) {
+                if (item.isDefaultSection) {
+                    // 默认分组不允许长按管理 / 拖拽
+                    return;
+                }
+                UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+                [feedback impactOccurred];
+                if ([cell isKindOfClass:[WKCategorySectionCell class]]) {
+                    WKCategorySectionCell *sectionCell = (WKCategorySectionCell *)cell;
+                    [sectionCell setLongPressHighlighted:YES];
+                    self.cellDragHighlightedSectionCell = sectionCell;
+                }
+                CGPoint ptInWindow = [gesture locationInView:nil];
+                [self showSectionManagePopup:item.sectionId title:item.sectionTitle atPoint:ptInWindow];
+
+                self.cellDragInProgress = NO;
+                self.cellDragStartLocation = locInView;
+                self.cellDragSourceIndexPath = path;
+                self.cellDragSourceSectionId = item.sectionId;
+                self.cellDragSourceConvName = nil;
+                self.cellDragSourceChannelId = nil;
+                self.cellDragSourceModel = nil;
+                self.cellDragSourceCell = cell;
+                return;
+            }
+        }
+
+        // 会话 row（Follow tab 或 Recent tab 都走这里弹菜单；只有 Follow tab 才进入拖拽）
+        WKConversationWrapModel *model = nil;
+        if (isFollowTab && self.groupDisplayList && path.row < (NSInteger)self.groupDisplayList.count) {
+            model = self.groupDisplayList[path.row].conversation;
+        } else {
+            model = [self.conversationListVM conversationAtIndex:path.row];
+        }
+        if (!model) return;
+
         UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [feedback impactOccurred];
         CGPoint ptInWindow = [gesture locationInView:nil];
         [self showConversationMenuForModel:model atPoint:ptInWindow];
 
-        // 关注 tab 才支持拖拽：记录起点 + indexPath + channelId（拖动期间用于辨认源 cell 是否离场）
         if (isFollowTab) {
             self.cellDragInProgress = NO;
-            self.cellDragStartLocation = [gesture locationInView:self.view];
-            self.cellDragSourceIndexPath = [self.tableView indexPathForCell:cell];
+            self.cellDragStartLocation = locInView;
+            self.cellDragSourceIndexPath = path;
             self.cellDragSourceConvName = model.channelInfo.displayName ?: model.channel.channelId;
             self.cellDragSourceChannelId = model.channel.channelId;
+            self.cellDragSourceSectionId = nil;
+            self.cellDragSourceModel = model;
+            self.cellDragSourceCell = cell;
         }
         return;
     }
 
-    if (!isFollowTab) return; // 最近 tab 不进入 drag 流程
-
     if (gesture.state == UIGestureRecognizerStateChanged) {
-        CGPoint loc = [gesture locationInView:self.view];
-        CGFloat dx = loc.x - self.cellDragStartLocation.x;
-        CGFloat dy = loc.y - self.cellDragStartLocation.y;
-        CGFloat dist = hypot(dx, dy);
+        if (self.conversationListVM.filterType != WKConversationFilterFollow) return;
+        BOOL hasSource = (self.cellDragSourceChannelId.length > 0) || (self.cellDragSourceSectionId.length > 0);
+        if (!hasSource) return;
+        CGPoint locInView = [gesture locationInView:self.view];
         if (!self.cellDragInProgress) {
-            // 阈值 12pt — 防止用户长按时手抖触发 drag
-            if (dist > 12.0) {
-                [self beginCellDragForCell:cell atLocation:loc];
+            CGFloat dx = locInView.x - self.cellDragStartLocation.x;
+            CGFloat dy = locInView.y - self.cellDragStartLocation.y;
+            if (hypot(dx, dy) > 12.0) {
+                UITableViewCell *src = self.cellDragSourceCell;
+                if (!src && self.cellDragSourceIndexPath) {
+                    src = [self.tableView cellForRowAtIndexPath:self.cellDragSourceIndexPath];
+                }
+                if (!src) return; // 源 cell 已离屏且无法重取，放弃这次拖动尝试
+                // section header 拖拽真正开始时把高亮还原（避免 snapshot 抓到高亮态）
+                if (self.cellDragHighlightedSectionCell) {
+                    [self.cellDragHighlightedSectionCell setLongPressHighlighted:NO];
+                    self.cellDragHighlightedSectionCell = nil;
+                }
+                if (self.cellDragSourceSectionId.length > 0) {
+                    [self beginSectionDragForCell:src atLocation:locInView];
+                } else {
+                    [self beginCellDragForCell:src atLocation:locInView];
+                }
             }
         } else {
-            [self updateCellDragAtLocation:loc];
+            [self updateCellDragAtLocation:locInView];
         }
         return;
     }
@@ -2686,9 +2810,20 @@
     if (gesture.state == UIGestureRecognizerStateEnded
         || gesture.state == UIGestureRecognizerStateCancelled
         || gesture.state == UIGestureRecognizerStateFailed) {
+        // section header 长按未进入拖拽就抬手 → 还原高亮
+        if (self.cellDragHighlightedSectionCell) {
+            [self.cellDragHighlightedSectionCell setLongPressHighlighted:NO];
+            self.cellDragHighlightedSectionCell = nil;
+        }
         if (self.cellDragInProgress) {
-            CGPoint loc = [gesture locationInView:self.view];
-            [self endCellDragAtLocation:loc model:model];
+            CGPoint locInView = [gesture locationInView:self.view];
+            if (self.cellDragSourceSectionId.length > 0) {
+                [self endSectionDragAtLocation:locInView];
+            } else if (self.cellDragSourceModel) {
+                [self endCellDragAtLocation:locInView model:self.cellDragSourceModel];
+            } else {
+                [self resetCellDragState];
+            }
         } else {
             [self resetCellDragState];
         }
@@ -2697,53 +2832,7 @@
 
 #pragma mark - 关注 tab 拖拽排序（方案 A）
 
-#pragma mark - 分组 section 长按拖拽重排（关注 tab）
-
-/// 长按分组 header → 弹菜单的同时记录源 section；继续移动手指 > 12pt 后切到拖拽,
-/// 把整段分组拖到目标位置并发起 sortCategories: 提交。
-- (void)onSectionHeaderLongPress:(UILongPressGestureRecognizer *)gesture
-                       sectionId:(NSString *)sectionId
-                        fromCell:(UITableViewCell *)cell {
-    if (sectionId.length == 0) return;
-    if (gesture.state == UIGestureRecognizerStateBegan) {
-        // 与 conv cell 拖拽对称：Begin 只记录 source + start location，不立即开拖；
-        // 等手指移过阈值再切到 drag。这样保留菜单点击行为。
-        self.cellDragInProgress = NO;
-        self.cellDragStartLocation = [gesture locationInView:self.view];
-        self.cellDragSourceIndexPath = [self.tableView indexPathForCell:cell];
-        self.cellDragSourceSectionId = sectionId;
-        // 清掉 conv 拖拽用字段，避免分支误判
-        self.cellDragSourceConvName = nil;
-        self.cellDragSourceChannelId = nil;
-        return;
-    }
-
-    if (gesture.state == UIGestureRecognizerStateChanged) {
-        if (self.cellDragSourceSectionId.length == 0) return;
-        CGPoint loc = [gesture locationInView:self.view];
-        CGFloat dx = loc.x - self.cellDragStartLocation.x;
-        CGFloat dy = loc.y - self.cellDragStartLocation.y;
-        if (!self.cellDragInProgress) {
-            if (hypot(dx, dy) > 12.0) {
-                [self beginSectionDragForCell:cell atLocation:loc];
-            }
-        } else {
-            [self updateCellDragAtLocation:loc];
-        }
-        return;
-    }
-
-    if (gesture.state == UIGestureRecognizerStateEnded
-        || gesture.state == UIGestureRecognizerStateCancelled
-        || gesture.state == UIGestureRecognizerStateFailed) {
-        if (self.cellDragInProgress && self.cellDragSourceSectionId.length > 0) {
-            CGPoint loc = [gesture locationInView:self.view];
-            [self endSectionDragAtLocation:loc];
-        } else {
-            [self resetCellDragState];
-        }
-    }
-}
+#pragma mark - 分组 section header 拖拽 begin/end
 
 - (void)beginSectionDragForCell:(UITableViewCell *)cell atLocation:(CGPoint)loc {
     self.cellDragInProgress = YES;
@@ -2757,15 +2846,17 @@
     cell.transform = CGAffineTransformIdentity;
     cell.contentView.backgroundColor = [UIColor clearColor];
 
+    UIWindow *win = self.view.window;
+    UIView *snapHost = win ?: self.view; // 没 window 时回退到 self.view，保证不崩
     UIView *snap = [cell snapshotViewAfterScreenUpdates:YES];
     snap.layer.shadowColor = [UIColor blackColor].CGColor;
     snap.layer.shadowOpacity = 0.18;
     snap.layer.shadowOffset = CGSizeMake(0, 4);
     snap.layer.shadowRadius = 8;
     snap.alpha = 0.95;
-    CGRect cellFrameInView = [self.tableView convertRect:cell.frame toView:self.view];
-    snap.frame = cellFrameInView;
-    [self.view addSubview:snap];
+    CGRect cellFrameInHost = [self.tableView convertRect:cell.frame toView:snapHost];
+    snap.frame = cellFrameInHost;
+    [snapHost addSubview:snap];
     self.cellDragSnapshot = snap;
 
     UIView *line = [[UIView alloc] init];
@@ -2778,8 +2869,12 @@
     line.layer.shadowOffset = CGSizeZero;
     line.layer.shadowRadius = 6;
     line.hidden = YES;
-    [self.view addSubview:line];
+    [snapHost addSubview:line]; // 同 host，保证 bringSubviewToFront 能把线压在 snapshot 之上
     self.cellDragInsertionLine = line;
+
+    // 关闭表格滚动 — 拖动期间统一由 auto-scroll displayLink 驱动 contentOffset，
+    // 避免用户手指被同时识别为表格 pan 而出现 snapshot 跟 cell 各走各的。
+    self.tableView.scrollEnabled = NO;
 
     cell.alpha = 0.3;
     self.cellDragSourceCell = cell;
@@ -2870,6 +2965,8 @@
     UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [feedback impactOccurred];
 
+    UIWindow *win = self.view.window;
+    UIView *snapHost = win ?: self.view;
     // 取 cell 截图作为拖动跟随的 snapshot
     UIView *snap = [cell snapshotViewAfterScreenUpdates:YES];
     snap.layer.shadowColor = [UIColor blackColor].CGColor;
@@ -2877,14 +2974,15 @@
     snap.layer.shadowOffset = CGSizeMake(0, 4);
     snap.layer.shadowRadius = 8;
     snap.alpha = 0.95;
-    CGRect cellFrameInView = [self.tableView convertRect:cell.frame toView:self.view];
-    snap.frame = cellFrameInView;
-    [self.view addSubview:snap];
+    CGRect cellFrameInHost = [self.tableView convertRect:cell.frame toView:snapHost];
+    snap.frame = cellFrameInHost;
+    [snapHost addSubview:snap];
     self.cellDragSnapshot = snap;
 
-    // 插入指示线：移到 self.view 顶层（snapshot 同层但后加，更高 z-order）。
-    // 比挂到 tableView 上有两个好处：① 不会被 snapshot 盖住 ② 不会被 tableView
-    // 自身的 scroll/reload 影响。每次 updateInsertionLineAtLocation: 重算 view 坐标。
+    // 插入指示线：与 snapshot 同 host（snapHost）。挂到 window 而非 self.view 的好处：
+    // ① 拖到导航栏 / tabBar 区域不会被父视图裁切；② 跟 snapshot 在同一坐标系，
+    // bringSubviewToFront 能稳定保证线压在 snapshot 之上。每次 updateInsertionLineAtLocation:
+    // 重算 host 坐标。
     UIView *line = [[UIView alloc] init];
     UIColor *baseTheme = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
     // 比 theme 紫深 ~15%：让线在白底 / 群头像 / 各种内容上都醒目
@@ -2896,8 +2994,11 @@
     line.layer.shadowOffset = CGSizeZero;
     line.layer.shadowRadius = 6; // 发光晕 — 被 snapshot 盖到边缘时也能看出位置
     line.hidden = YES;
-    [self.view addSubview:line];
+    [snapHost addSubview:line];
     self.cellDragInsertionLine = line;
+
+    // 关闭表格滚动 — 详见 beginSectionDragForCell 同处注释。
+    self.tableView.scrollEnabled = NO;
 
     cell.alpha = 0.3; // 原 cell 半透明提示"正在被拖动"
     self.cellDragSourceCell = cell; // weak ref，didEndDisplayingCell 时按引用比较
@@ -2907,8 +3008,12 @@
 
 - (void)updateCellDragAtLocation:(CGPoint)loc {
     self.cellDragLastLocation = loc;
+    // snapshot 在 snapHost（window 优先，回退 self.view）坐标系下；loc 是 self.view 坐标，
+    // 需要换到 snapshot 所在的 superview 坐标再设置 frame，否则跨 host 时 y 偏移会错。
+    UIView *snapHost = self.cellDragSnapshot.superview ?: self.view;
+    CGPoint locInHost = [self.view convertPoint:loc toView:snapHost];
     CGRect f = self.cellDragSnapshot.frame;
-    f.origin.y = loc.y - f.size.height / 2.0f;
+    f.origin.y = locInHost.y - f.size.height / 2.0f;
     self.cellDragSnapshot.frame = f;
     // 接近表格上下边缘时设置 auto-scroll 速度，由 CADisplayLink 平滑驱动；
     // 之前在 gesture update 里直接 setContentOffset 会让带子区预览的高 cell 卡死
@@ -2955,9 +3060,10 @@
 
 /// 把插入线放到目标行的上 / 下边缘。section header 一律落在 header 下方（即该分组开头）。
 /// 普通行按手指 Y 跟行中线的关系决定插入到上 / 下。
-/// 线挂在 self.view 上（坐标系也用 self.view），所以每次都做一遍 convertRect:。
+/// 线与 snapshot 同 host（snapHost：window 优先，回退 self.view）；每次都做一次 convertRect:。
 - (void)updateInsertionLineAtLocation:(CGPoint)loc {
     if (!self.cellDragInsertionLine) return;
+    UIView *lineHost = self.cellDragInsertionLine.superview ?: self.view;
     CGPoint locInTable = [self.view convertPoint:loc toView:self.tableView];
     NSIndexPath *path = [self.tableView indexPathForRowAtPoint:locInTable];
     if (!path) {
@@ -2976,15 +3082,15 @@
     } else {
         insertBelow = (locInTable.y - rectInTable.origin.y) > rectInTable.size.height / 2.0;
     }
-    // 换到 self.view 坐标系，再算线的 frame
-    CGRect rectInView = [self.view convertRect:rectInTable fromView:self.tableView];
-    CGFloat lineY = insertBelow ? CGRectGetMaxY(rectInView) : CGRectGetMinY(rectInView);
+    // 换到 lineHost 坐标系再算线的 frame（同时支持 window / self.view 两种 host）
+    CGRect rectInHost = [self.tableView convertRect:rectInTable toView:lineHost];
+    CGFloat lineY = insertBelow ? CGRectGetMaxY(rectInHost) : CGRectGetMinY(rectInHost);
     CGFloat lineThickness = 4.0;
-    CGFloat lineLeft = CGRectGetMinX(rectInView) + 12;
-    CGFloat lineRight = CGRectGetMaxX(rectInView) - 12;
+    CGFloat lineLeft = CGRectGetMinX(rectInHost) + 12;
+    CGFloat lineRight = CGRectGetMaxX(rectInHost) - 12;
     self.cellDragInsertionLine.frame = CGRectMake(lineLeft, lineY - lineThickness / 2.0, lineRight - lineLeft, lineThickness);
     self.cellDragInsertionLine.hidden = NO;
-    [self.view bringSubviewToFront:self.cellDragInsertionLine]; // 始终在 snapshot 之上
+    [lineHost bringSubviewToFront:self.cellDragInsertionLine]; // 始终在 snapshot 之上
     self.cellDragLastTargetPath = path;
     self.cellDragLastInsertBelow = insertBelow;
 }
@@ -3152,6 +3258,8 @@
     [self.cellDragAutoScrollLink invalidate];
     self.cellDragAutoScrollLink = nil;
     self.cellDragAutoScrollVelocity = 0;
+    // 恢复表格滚动（beginCellDragForCell / beginSectionDragForCell 中关闭过）
+    self.tableView.scrollEnabled = YES;
     // 还原所有 cell 的 alpha（被拖的 cell 改成 0.3）
     for (UITableViewCell *c in self.tableView.visibleCells) {
         if (c.alpha < 1.0) c.alpha = 1.0;
@@ -3164,9 +3272,15 @@
     self.cellDragSourceIndexPath = nil;
     self.cellDragSourceConvName = nil;
     self.cellDragSourceChannelId = nil;
+    self.cellDragSourceModel = nil;
     self.cellDragSourceSectionId = nil;
     self.cellDragSourceCell = nil;
     self.cellDragLastTargetPath = nil;
+    // section header 长按未进入拖拽就被中断时，确保高亮也被还原
+    if (self.cellDragHighlightedSectionCell) {
+        [self.cellDragHighlightedSectionCell setLongPressHighlighted:NO];
+        self.cellDragHighlightedSectionCell = nil;
+    }
     // 拖动期间累积的刷新一次性回放
     if (self.pendingRebuildAfterDrag) {
         self.pendingRebuildAfterDrag = NO;

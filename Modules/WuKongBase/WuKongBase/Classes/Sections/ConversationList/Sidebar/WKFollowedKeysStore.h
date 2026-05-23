@@ -47,6 +47,12 @@ extern NSNotificationName const kWKFollowedKeysStoreDidUpdateNotification;
 /// resolve 值：成功为 nil，失败为 NSError
 - (AnyPromise *)reload;
 
+/// 切空间等场景下把状态打回"未加载"——清空 followedKeys / followedGroupNos /
+/// itemsByCategory / followVersion，loaded = NO，并 post 一次更新通知。
+/// fail-closed：避免上一个 Space 的 followed 数据在新 Space 的 categoryList 下
+/// 形成错位/残留。调用后必须紧跟一次 reload，否则 Follow tab 会持续空白。
+- (void)reset;
+
 /// 本地写成功后调用 — followVersion += 1。
 /// 用于乐观更新场景；下一次 reload 会被服务器返回的值覆盖。
 - (void)bumpVersion;

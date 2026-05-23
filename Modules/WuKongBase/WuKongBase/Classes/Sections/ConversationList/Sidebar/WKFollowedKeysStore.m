@@ -17,6 +17,7 @@ NSNotificationName const kWKFollowedKeysStoreDidUpdateNotification = @"kWKFollow
 @property (atomic, strong, readwrite) NSSet<NSString *> *followedKeys;
 @property (atomic, strong, readwrite) NSDictionary<NSString *, NSArray<WKSidebarItemEntity *> *> *itemsByCategory;
 @property (atomic, strong, readwrite) NSSet<NSString *> *followedGroupNos;
+@property (atomic, assign) BOOL retryScheduled;
 @end
 
 @implementation WKFollowedKeysStore
@@ -68,7 +69,31 @@ NSNotificationName const kWKFollowedKeysStoreDidUpdateNotification = @"kWKFollow
         [[NSNotificationCenter defaultCenter] postNotificationName:kWKFollowedKeysStoreDidUpdateNotification
                                                             object:self
                                                           userInfo:@{ @"error": error ?: [NSNull null] }];
+        // 单次 5s 延迟兜底重试（不做无限循环）：避免单次网络抖动把用户卡到下次
+        // viewDidAppear 的 30s debounce 才能恢复 — 这种情况下用户视角是"分组下面
+        // 一直没有会话"。重试只跑一次，再失败就交给上层定时刷新链路。
+        if (!self.retryScheduled) {
+            self.retryScheduled = YES;
+            __weak typeof(self) weakSelf = self;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                weakSelf.retryScheduled = NO;
+                if (weakSelf.loaded) return; // 期间被别的路径成功 reload 过了，不再重试
+                [weakSelf reload];
+            });
+        }
     });
+}
+
+- (void)reset {
+    self.followedKeys = [NSSet set];
+    self.followedGroupNos = [NSSet set];
+    self.itemsByCategory = @{};
+    self.followVersion = 0;
+    self.loaded = NO;
+    [[NSNotificationCenter defaultCenter] postNotificationName:kWKFollowedKeysStoreDidUpdateNotification
+                                                        object:self
+                                                      userInfo:@{ @"reset": @YES }];
 }
 
 - (void)applyItems:(NSArray<WKSidebarItemEntity *> *)items followVersion:(NSInteger)version {
