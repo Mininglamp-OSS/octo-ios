@@ -288,9 +288,7 @@ static WKConversationListVM *_instance;
             }
         }
         if(removedThread > 0) {
-            NSUInteger _oldN = self.threadWrapModels.count;
             self.threadWrapModels = [kept copy];
-            NSLog(@"[ThreadWrapTrace] writer=spacePrune count %lu -> %lu (removed=%d)", (unsigned long)_oldN, (unsigned long)self.threadWrapModels.count, removedThread);
         }
     }
 
@@ -490,9 +488,7 @@ static WKConversationListVM *_instance;
 
             mainSelf.cachedAllConversations = conversations;
             mainSelf.conversationWrapModels = conversationWrapModels;
-            NSUInteger _oldN = mainSelf.threadWrapModels.count;
             mainSelf.threadWrapModels = threadWrapModels;
-            NSLog(@"[ThreadWrapTrace] writer=loadConversationList count %lu -> %lu", (unsigned long)_oldN, (unsigned long)mainSelf.threadWrapModels.count);
             [mainSelf rebuildChannelIndex];
             mainSelf.cachedTopicsByGroup = topicsByGroup;
             mainSelf.cachedRemindersByChannelId = remindersByChannelId;
@@ -723,11 +719,7 @@ static WKConversationListVM *_instance;
     NSLog(@"[ThreadSync] syncThreadWrapModels: parents=%ld threadsInPreviews=%ld sdkHits=%ld synthesized=%ld reused=%ld changed=%d total=%ld old=%ld",
           (long)parentCount, (long)threadsTotal, (long)sdkHits, (long)synthesized, (long)reused, changed, (long)byChannel.count, (long)oldByChannel.count);
     if (changed) {
-        NSUInteger _oldN = self.threadWrapModels.count;
         self.threadWrapModels = [byChannel.allValues copy];
-        NSLog(@"[ThreadWrapTrace] writer=syncThreadWrapModelsFromCachedTopics count %lu -> %lu (parents=%ld threadsInPreviews=%ld synthesized=%ld reused=%ld sdkHits=%ld)",
-              (unsigned long)_oldN, (unsigned long)self.threadWrapModels.count,
-              (long)parentCount, (long)threadsTotal, (long)synthesized, (long)reused, (long)sdkHits);
         // 总是 rebuildFilteredList — Follow tab 启动时也要让 filteredConversations
         // 准备好，避免切到 Recent 才发现里面没子区
         [self rebuildFilteredList];
@@ -916,7 +908,6 @@ static WKConversationListVM *_instance;
     }
     NSSet<NSString *> *syncedGroups = self.syncedGroupChannelIds;
     BOOL mutated = NO;
-    NSInteger updated = 0, skippedUnknown = 0;
     for (WKConversation *c in threadConversations) {
         if (!c.channel.channelId) continue;
         // 空间隔离：父群必须在当前 Space 白名单（fail-closed）—— syncedGroups 未初始化（reset 后
@@ -932,31 +923,20 @@ static WKConversationListVM *_instance;
             // onlyAddOrUpdateConversation: 里 setConversation: 的处理）。
             [existing setConversation:c];
             mutated = YES;
-            updated++;
-        } else {
-            // 未知子区：不再凭空 add 进 threadWrapModels。
-            // 实测从 20 涨到 185 / badge 闪 872 的根因就是这条路径：用户进 group 详情时,
-            // SDK 会回放/同步一批"幽灵"子区 conversation（早就不活跃但 SDK cache 还在）,
-            // 之前 applyThreadConversationUpdates 来者不拒全部 alloc 新 wrap，threadWrapModels
-            // 瞬间从 20 涨到 185，badge 算上这 165 个的 unread 跳到 872；随后
-            // syncThreadWrapModelsFromCachedTopics 按 parent.threadPreviews（listThreads 的
-            // 真实结果）prune 回 20，但 badge 中间态已经 leak 给用户。
-            //
-            // 子区进入 threadWrapModels 的唯一通道交给 syncThreadWrapModelsFromCachedTopics
-            // 单点驱动（走 parent.threadPreviews / listThreads 真实结果）。这条路径只负责
-            // 给已知子区更新 preview / timestamp。
-            skippedUnknown++;
         }
+        // 未知子区：不再凭空 add 进 threadWrapModels。
+        // 用户进 group 详情时，SDK 会回放/同步一批"幽灵"子区 conversation（早就不活跃但
+        // SDK cache 还在），之前 applyThreadConversationUpdates 来者不拒全部 alloc 新 wrap，
+        // threadWrapModels 瞬间从 20 涨到 185，badge 算上这 165 个的 unread 跳到 872；随后
+        // syncThreadWrapModelsFromCachedTopics 按 parent.threadPreviews（listThreads 真实结果）
+        // prune 回 20，但 badge 中间态已经 leak 给用户。
+        //
+        // 子区进入 threadWrapModels 的唯一通道交给 syncThreadWrapModelsFromCachedTopics
+        // 单点驱动（走 parent.threadPreviews / listThreads 真实结果）+ loadConversationList
+        // 同款口径。这条路径只负责给已知子区更新 preview / timestamp。
     }
     if (mutated) {
-        NSUInteger _oldN = self.threadWrapModels.count;
         self.threadWrapModels = [byChannel.allValues copy];
-        NSLog(@"[ThreadWrapTrace] writer=applyThreadConversationUpdates count %lu -> %lu (updated=%ld skippedUnknown=%ld incoming=%lu)",
-              (unsigned long)_oldN, (unsigned long)self.threadWrapModels.count,
-              (long)updated, (long)skippedUnknown, (unsigned long)threadConversations.count);
-    } else if (skippedUnknown > 0) {
-        NSLog(@"[ThreadWrapTrace] applyThreadConversationUpdates skipped all unknown (skippedUnknown=%ld incoming=%lu)",
-              (long)skippedUnknown, (unsigned long)threadConversations.count);
     }
     [self rebuildFilteredList];
 }
@@ -1042,56 +1022,29 @@ static WKConversationListVM *_instance;
 -(NSInteger) getFollowUnreadCount {
     // 关注 tab 未读 = 关注集合（DM / 群 / 子区，!mute）的未读总和。
     WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
-    if (!store.loaded) {
-        NSLog(@"[BadgeTrace] follow=0 (store NOT loaded)");
-        return 0;
-    }
+    if (!store.loaded) return 0;
     NSInteger count = 0;
-    NSInteger missCount = 0, muteTrueCount = 0, muteFalseCount = 0;
-    NSInteger personUnread = 0, groupUnread = 0, threadUnread = 0;
-    NSInteger threadPlaceholderUnread = 0, threadRealUnread = 0;
-    NSInteger threadPlaceholderRows = 0, threadRealRows = 0;
-    NSInteger countedRows = 0;
     for (WKConversationWrapModel *m in self.conversationWrapModels) {
-        WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:m.channel];
-        BOOL muted;
-        if (info) { muted = info.mute; if (muted) muteTrueCount++; else muteFalseCount++; }
-        else { muted = m.mute; missCount++; }
-        if (muted) continue;
+        if ([self isChannelMuted:m]) continue;
         if (m.channel.channelType == WK_PERSON) {
             if ([store isFollowedWithType:WKFollowTargetTypeDM targetId:m.channel.channelId]) {
                 count += m.unreadCount;
-                personUnread += m.unreadCount;
-                if (m.unreadCount > 0) countedRows++;
             }
         } else if (m.channel.channelType == WK_GROUP) {
             if ([store isFollowedWithType:WKFollowTargetTypeChannel targetId:m.channel.channelId]) {
                 count += m.unreadCount;
-                groupUnread += m.unreadCount;
-                if (m.unreadCount > 0) countedRows++;
             }
         }
     }
     for (WKConversationWrapModel *t in self.threadWrapModels) {
         if ([self isChannelMuted:t]) continue;
         if (![store isFollowedWithType:WKFollowTargetTypeThread targetId:t.channel.channelId]) continue;
-        BOOL isPlaceholder = (t.lastMessage == nil);
-        if (isPlaceholder) {
-            threadPlaceholderUnread += t.unreadCount;
-            if (t.unreadCount > 0) threadPlaceholderRows++;
-            continue; // 跳过 placeholder（修法）
-        }
+        // 跳过 placeholder（与 getRecentUnreadCount 同款 — syncThreadWrapModelsFromCachedTopics
+        // 为 listThreads 拉到但 SDK 还没同步真实 conv 的子区合成占位 wrap，placeholder.unreadCount
+        // 来自接口字段，不一定是当前用户的未读，cell 端稳态也不渲染）
+        if (t.lastMessage == nil) continue;
         count += t.unreadCount;
-        threadUnread += t.unreadCount;
-        threadRealUnread += t.unreadCount;
-        if (t.unreadCount > 0) { threadRealRows++; countedRows++; }
     }
-    NSLog(@"[BadgeTrace] follow=%ld convs=%lu/threads=%lu muteCache[hit:mute=%ld,unmute=%ld miss=%ld] unread[p=%ld g=%ld t=%ld(real=%ld+placeholderSkipped=%ld)] rows=%ld(placeholderSkipped=%ld)",
-          (long)count, (unsigned long)self.conversationWrapModels.count, (unsigned long)self.threadWrapModels.count,
-          (long)muteTrueCount, (long)muteFalseCount, (long)missCount,
-          (long)personUnread, (long)groupUnread, (long)threadUnread,
-          (long)threadRealUnread, (long)threadPlaceholderUnread,
-          (long)countedRows, (long)threadPlaceholderRows);
     return count;
 }
 
@@ -1114,50 +1067,29 @@ static WKConversationListVM *_instance;
 
 -(NSInteger) getRecentUnreadCount {
     NSInteger count = 0;
-    NSInteger missCount = 0, muteTrueCount = 0, muteFalseCount = 0;
-    NSInteger personUnread = 0, groupUnread = 0, threadRealUnread = 0;
-    NSInteger threadPlaceholderUnread = 0;
-    NSInteger personRows = 0, groupRows = 0, threadRealRows = 0, threadPlaceholderRows = 0;
-    NSInteger groupInactiveSkip = 0;
+    // DM + 3 天内活跃的群（与 modelMatchesFilter: 的最近 tab 谓词保持一致）。
+    // 静音同样走 channelInfo.mute（见 getFollowUnreadCount 注释）。
     for (WKConversationWrapModel *model in self.conversationWrapModels) {
-        WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:model.channel];
-        BOOL muted;
-        if (info) { muted = info.mute; if (muted) muteTrueCount++; else muteFalseCount++; }
-        else { muted = model.mute; missCount++; }
-        if (muted) continue;
+        if ([self isChannelMuted:model]) continue;
         uint8_t type = model.channel.channelType;
         if (type == WK_PERSON) {
             count += model.unreadCount;
-            personUnread += model.unreadCount;
-            if (model.unreadCount > 0) personRows++;
         } else if (type == WK_GROUP) {
-            if ([WKConversationListVM isInactiveGroup:model]) {
-                if (model.unreadCount > 0) groupInactiveSkip++;
-                continue;
+            if (![WKConversationListVM isInactiveGroup:model]) {
+                count += model.unreadCount;
             }
-            count += model.unreadCount;
-            groupUnread += model.unreadCount;
-            if (model.unreadCount > 0) groupRows++;
         }
     }
     for (WKConversationWrapModel *thread in self.threadWrapModels) {
         if ([self isChannelMuted:thread]) continue;
-        BOOL isPlaceholder = (thread.lastMessage == nil);
-        if (isPlaceholder) {
-            threadPlaceholderUnread += thread.unreadCount;
-            if (thread.unreadCount > 0) threadPlaceholderRows++;
-            continue; // 跳过 placeholder（之前 fix 已上线）
-        }
+        // 跳过 placeholder thread —— syncThreadWrapModelsFromCachedTopics 在 listThreads 拉回大量
+        // 子区时会合成占位 wrap（无 lastMessage，unreadCount 来自接口的 t.unreadCount）。这个
+        // unread 不一定是当前用户的未读（可能是后端总未读），cell 端 stable 状态也不渲染这些
+        // 占位行，badge 不能把它们算进去。等真实 WKConversation 通过 onConversationUpdate →
+        // setConversation: 到达后 lastMessage 不再 nil，自动开始计入。
+        if (thread.lastMessage == nil) continue;
         count += thread.unreadCount;
-        threadRealUnread += thread.unreadCount;
-        if (thread.unreadCount > 0) threadRealRows++;
     }
-    NSLog(@"[BadgeTrace] recent=%ld convs=%lu/threads=%lu muteCache[hit:mute=%ld,unmute=%ld miss=%ld] unread[p=%ld g=%ld(inactiveSkip=%ld) t=real:%ld+placeholderSkipped:%ld] rows[p=%ld g=%ld tReal=%ld tPlaceholderSkipped=%ld]",
-          (long)count, (unsigned long)self.conversationWrapModels.count, (unsigned long)self.threadWrapModels.count,
-          (long)muteTrueCount, (long)muteFalseCount, (long)missCount,
-          (long)personUnread, (long)groupUnread, (long)groupInactiveSkip,
-          (long)threadRealUnread, (long)threadPlaceholderUnread,
-          (long)personRows, (long)groupRows, (long)threadRealRows, (long)threadPlaceholderRows);
     return count;
 }
 

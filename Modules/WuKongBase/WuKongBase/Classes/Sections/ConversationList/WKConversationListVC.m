@@ -2082,19 +2082,14 @@
 /// 把 badge 也对齐到同款节奏：所有调用合并到 150ms 后一次实算，保证算出来的就是稳定值，
 /// 不再把 race 中间态 leak 到 UI。150ms 延迟人眼无感知，但足够吸收一连串密集事件。
 -(void) refreshBadge {
-    if (self.refreshBadgePending) {
-        NSLog(@"[BadgeTrace] refreshBadge SKIP (coalesce pending)");
-        return;
-    }
+    if (self.refreshBadgePending) return;
     self.refreshBadgePending = YES;
-    NSLog(@"[BadgeTrace] refreshBadge SCHEDULE (+150ms)");
     __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         strongSelf.refreshBadgePending = NO;
-        NSLog(@"[BadgeTrace] refreshBadge TICK (running updateTabUnreadCounts)");
         strongSelf.tabBarItem.badgeValue = nil;
         [strongSelf updateTabUnreadCounts];
     });
