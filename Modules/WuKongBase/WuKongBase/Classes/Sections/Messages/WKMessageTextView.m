@@ -13,9 +13,30 @@ static void *kWKMTVTokens = &kWKMTVTokens;
 // iOS 16+ 显式声明使用 TextKit 1（不通过 NSTextLayoutManager），避免运行时
 // 从 TextKit 2 热切换到 TextKit 1 — 该热切换会在快速滑动 + 大量新建 cell 时
 // 造成首帧 glyph 漏画，表现为「气泡正常占高、内容一片空白」。
+//
+// 实现方式：构造一个由 NSLayoutManager 拥有的 NSTextContainer（即 TextKit 1
+// stack），通过 -initWithFrame:textContainer: 注入。UITextView 看到 textContainer
+// 的 layoutManager 是 NSLayoutManager（而不是 NSTextLayoutManager），就一定走
+// TextKit 1，不会再走默认的 TextKit 2。
+//
+// 不能用 +textViewUsingTextLayoutManager: — 那是工厂类方法返回裸 UITextView，
+// 无法被子类化；也不能用 -initUsingTextLayoutManager:（UITextView 上不存在该
+// 实例方法）。
++ (NSTextContainer *)wk_makeTextKit1Container {
+    NSTextStorage *ts = [[NSTextStorage alloc] init];
+    NSLayoutManager *lm = [[NSLayoutManager alloc] init];
+    [ts addLayoutManager:lm];
+    NSTextContainer *tc = [[NSTextContainer alloc] initWithSize:CGSizeZero];
+    [lm addTextContainer:tc];
+    return tc;
+}
+
 - (instancetype)initWithFrame:(CGRect)frame textContainer:(nullable NSTextContainer *)textContainer {
-    // 显式传入 textContainer 即走 TextKit 1（NSTextContainer 是 TextKit 1 类型），
-    // 直接走父类指定初始化器即可。
+    // caller 没给 textContainer 时，自己造一个 TextKit 1 container 注入，
+    // 否则父类会在 iOS 16+ 默认构造 TextKit 2 stack（NSTextLayoutManager）。
+    if (!textContainer) {
+        textContainer = [WKMessageTextView wk_makeTextKit1Container];
+    }
     self = [super initWithFrame:frame textContainer:textContainer];
     if (self) {
         [self wk_configureDisplayOnly];
@@ -24,31 +45,11 @@ static void *kWKMTVTokens = &kWKMTVTokens;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
-    if (@available(iOS 16.0, *)) {
-        self = [super initUsingTextLayoutManager:NO];
-        if (self) {
-            self.frame = frame;
-            [self wk_configureDisplayOnly];
-        }
-        return self;
-    }
-    self = [super initWithFrame:frame];
-    if (self) {
-        [self wk_configureDisplayOnly];
-    }
-    return self;
+    return [self initWithFrame:frame textContainer:nil];
 }
 
 - (instancetype)init {
-    if (@available(iOS 16.0, *)) {
-        self = [super initUsingTextLayoutManager:NO];
-    } else {
-        self = [super init];
-    }
-    if (self) {
-        [self wk_configureDisplayOnly];
-    }
-    return self;
+    return [self initWithFrame:CGRectZero textContainer:nil];
 }
 
 /// display-only 配置：外观与 UILabel 一致，默认不可选/不可编辑
