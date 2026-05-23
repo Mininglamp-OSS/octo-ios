@@ -494,10 +494,20 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     BOOL hasChannelInfo  = model.channelInfo?true:false;
     UIImage *placeholder = [self imageName:@"Common/Index/DefaultAvatar"];
     NSString *channelId = model.channel.channelId;
-    // 只有 cell 被复用到不同会话时才把头像清回占位图，避免复用瞬间残留上一个会话的人脸；
-    // 同会话刷新（常见于从详情页返回列表）保留当前已显示的头像，SDWebImage 会在新头像就绪后原地替换。
+    // Cell 第一次 setup（lastAvatarChannelId 为空）→ image 还是 nil，必须 set placeholder
+    // 兜底，否则头像区域会空白到异步加载完成。
+    //
+    // Cell 复用到不同 channel（lastAvatarChannelId 有值但不匹配）→ 不主动 reset placeholder,
+    // 让 SDWebImageDelayPlaceholder 处理：
+    //   - cache 命中（私聊 / 大多数群头像）→ lim_setImageWithURL 同步替换，用户无感知
+    //   - cache miss（子区头像走父群 URL，memory cache 驱逐快）→ 保留上一个 cell 残留头像
+    //     等异步加载完替换，避免暴露默认头像
+    //
+    // 之前一律 reset placeholder 会让子区 cache miss 时长时间显示默认头像（用户反馈"返回
+    // 会话列表后子区头像先变默认再加载"）。私聊不出现是 cache 命中率高。
     BOOL channelChanged = (channelId.length == 0) || ![channelId isEqualToString:self.lastAvatarChannelId];
-    if (channelChanged) {
+    BOOL isFirstSetup = (self.lastAvatarChannelId.length == 0);
+    if (channelChanged && isFirstSetup) {
         self.avatarImgView.avatarImgView.image = placeholder;
     }
     self.lastAvatarChannelId = channelId;
@@ -566,14 +576,18 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     } else {
         if (self.recentTabContext && model.channel.channelType == WK_COMMUNITY_TOPIC) {
             // 子区 channelInfo 还没加载到时，仍然用父群 URL 拼一发 — getGroupAvatar
-            // 不依赖 channelInfo，cacheKey 用 "0" 兜底也能命中已缓存的群头像。
+            // 不依赖 channelInfo，能命中父群头像缓存。
             WKChannel *parent = [self resolveParentGroupChannelForThread:model];
             NSString *groupNo = parent.channelId ?: @"";
             if (groupNo.length > 0) {
-                NSString *avatarURL = [WKAvatarUtil getGroupAvatar:groupNo cacheKey:nil];
+                // 与 hasChannelInfo=YES 分支同款用 parentInfo.avatarCacheKey 拼 URL，让两条路径
+                // 生成的 URL 完全一致 → SDWebImage memory cache 命中率最大化，避免子区 cell 复用时
+                // 因 URL 不同 (cacheKey=nil vs cacheKey=hash) 触发重新下载。
+                WKChannelInfo *parentInfo = [self lookupParentChannelInfo:parent];
+                NSString *avatarURL = [WKAvatarUtil getGroupAvatar:groupNo cacheKey:parentInfo.avatarCacheKey];
 #if DEBUG
-                NSLog(@"[ThreadAvatar][noChannelInfo] thread=%@ parent=%@ avatarURL=%@",
-                      model.channel.channelId, groupNo, avatarURL);
+                NSLog(@"[ThreadAvatar][noChannelInfo] thread=%@ parent=%@ parentInfoCached=%d avatarURL=%@",
+                      model.channel.channelId, groupNo, parentInfo != nil, avatarURL);
 #endif
                 [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL] placeholderImage:placeholder options:SDWebImageDelayPlaceholder context:@{
                     SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll),
