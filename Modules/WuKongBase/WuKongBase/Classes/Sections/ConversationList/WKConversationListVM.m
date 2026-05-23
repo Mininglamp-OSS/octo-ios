@@ -1053,6 +1053,14 @@ static WKConversationListVM *_instance;
     }
     for (WKConversationWrapModel *thread in self.threadWrapModels) {
         if ([self isChannelMuted:thread]) continue;
+        // 跳过 placeholder thread —— syncThreadWrapModelsFromCachedTopics 在 listThreads 拉回大量
+        // 子区时会合成占位 wrap（无 lastMessage，unreadCount 来自接口的 t.unreadCount）。这个
+        // unread 不一定是当前用户的未读（可能是后端总未读），cell 端 stable 状态也不渲染这些
+        // 占位行，badge 不能把它们算进去 —— 否则会出现「打开会话详情返回后 badge 闪 99+
+        // 5-6 秒才收敛」的现象（实测 [BadgeTrace] 看到 threads 从 20 涨到 185 / t 从 8 涨到 866）。
+        // 等真实 WKConversation 通过 onConversationUpdate → setConversation: 到达后 lastMessage
+        // 不再 nil，自动开始计入。
+        if (!thread.lastMessage) continue;
         count += thread.unreadCount;
     }
     return count;
