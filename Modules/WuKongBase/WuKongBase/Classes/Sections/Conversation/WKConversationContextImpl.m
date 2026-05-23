@@ -12,6 +12,9 @@
 #import "WKInputMentionCache.h"
 #import "WKReplyView.h"
 #import "WKMessageEditView.h"
+#import "WKMessageSendTracer.h"  // DEBUG-only：以下两处 traceSendBegin: 调用用 #if DEBUG 包起来，
+                                  // 发布版本不会触发单例创建，也就不会注册 SDK delegate 或输出
+                                  // 包含 channelId / clientMsgNo 等会话元数据的 NSLog。
 #import <WuKongBase/WuKongBase-Swift.h>
 
 @interface WKConversationContextImpl ()
@@ -522,19 +525,25 @@
     }
     
     WKMessage *message = [[[WKSDK shared] chatManager] sendMessage:content channel:self.channel setting:setting topic:topic];
+#if DEBUG
+    [[WKMessageSendTracer shared] traceSendBegin:message channel:self.channel extra:@"send"];
+#endif
     if([[WKSDK shared].chatManager needStoreOfIntercept:message]) {
         [self.conversationView.messageListView sendMessage:[[WKMessageModel alloc] initWithMessage:message]];
     }
     return message;
-    
+
 }
 
 -(void) resendMessage:(WKMessage*)message {
-    
+
     WKMessageModel *messageModel = [[WKMessageModel alloc] initWithMessage:message];
     [self.conversationView.messageListView removeMessage:messageModel];
-    
+
     WKMessage *newMessage = [[[WKSDK shared] chatManager] resendMessage:message];
+#if DEBUG
+    [[WKMessageSendTracer shared] traceSendBegin:newMessage channel:self.channel extra:@"resend"];
+#endif
     WKMessageModel *newMessageModel = [[WKMessageModel alloc] initWithMessage:newMessage];
     if([[WKSDK shared].chatManager needStoreOfIntercept:newMessage]) {
         [self.conversationView.messageListView sendMessage:newMessageModel];

@@ -17,6 +17,10 @@
 #import "WKCategoryService.h"
 #import "WKCategorySectionCell.h"
 #import "WKCategoryReorderVC.h"
+#import "WKFollowedKeysStore.h"
+#import "WKFollowService.h"
+#import "WKThreadService.h"
+#import "WKThreadModel.h"
 #import <objc/runtime.h>
 #import <WuKongBase/WuKongBase.h>
 #import "WKResource.h"
@@ -110,9 +114,37 @@
 @property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeLeft;
 @property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeRight;
 @property(nonatomic,assign) BOOL pendingSpaceSwitchLoad;
+/// 切换 Space 期间的 fail-closed 闸门。从 performSwitchToSpaceId: 起到
+/// pendingSpaceSwitchLoad 处理完成为止；闸门期内 isConversationInCurrentSpace
+/// 的两条向前兼容 fail-open 改为 NO，applyThreadConversationUpdates 调用前
+/// 也整批丢弃，避免 A space 残留消息漏入 B。
+@property(nonatomic,assign) BOOL spaceSwitchInProgress;
 @property(nonatomic,assign) BOOL pendingRebuild;
-@property(nonatomic,assign) CGPoint privateTabScrollOffset;
-@property(nonatomic,assign) CGPoint groupTabScrollOffset;
+@property(nonatomic,assign) CGPoint recentTabScrollOffset;
+@property(nonatomic,assign) CGPoint followTabScrollOffset;
+@property(nonatomic,assign) NSTimeInterval lastFollowedKeysReloadAt; // debounce 用，单位秒
+
+// 关注 tab 拖拽排序（方案 A）— 长按弹菜单后继续按住可拖动到其他分组
+@property(nonatomic,strong,nullable) UIView *cellDragSnapshot;
+@property(nonatomic,strong,nullable) UIView *cellDragInsertionLine; // 当前手指落点对应的"将插入到这里"指示
+@property(nonatomic,strong,nullable) NSIndexPath *cellDragSourceIndexPath;
+@property(nonatomic,strong,nullable) NSIndexPath *cellDragLastTargetPath; // 上次更新时落在的 target row
+@property(nonatomic,assign) BOOL cellDragLastInsertBelow;
+@property(nonatomic,assign) CGPoint cellDragStartLocation; // 在 self.view 坐标系
+@property(nonatomic,assign) CGPoint cellDragLastLocation; // 最近一次 update 的位置，autoscroll tick 时复用
+@property(nonatomic,assign) BOOL cellDragInProgress;
+@property(nonatomic,copy,nullable) NSString *cellDragSourceConvName;
+@property(nonatomic,copy,nullable) NSString *cellDragSourceChannelId; // 用于识别源 cell 离场触发清理
+/// 分组 section header 拖动：拖整段分组重排时记录源 sectionId。非空 → 当前拖动是 section reorder（不是 cell 重排）。
+@property(nonatomic,copy,nullable) NSString *cellDragSourceSectionId;
+@property(nonatomic,weak,nullable) UITableViewCell *cellDragSourceCell; // 直接 weak 持有源 cell，didEndDisplayingCell 用 == 比较更稳
+@property(nonatomic,strong,nullable) CADisplayLink *cellDragAutoScrollLink;
+@property(nonatomic,assign) CGFloat cellDragAutoScrollVelocity; // pts/frame, 0 = 不滚
+@property(nonatomic,assign) BOOL pendingRebuildAfterDrag; // 拖动期间收到的刷新请求暂存，结束时回放
+@property(nonatomic,assign) BOOL refreshBadgePending; // refreshBadge coalesce：批量事件合并到一次重算
+
+// 关注 tab 空状态引导视图：当前 tab 是 Follow + groupDisplayList 为空时显示
+@property(nonatomic,strong,nullable) UIView *followEmptyView;
 
 @end
 
@@ -412,6 +444,10 @@
     // 放在 viewDidAppear 而非 viewWillAppear — WKGroupScanJoinVC pop 的动画
     // 完成后主列表才真正回到前台，这时候 window 才有资格承载 Dialog。
     [self consumeJoinGroupSuccessNoticeIfAny];
+
+    // 关注 tab 兜底刷新：app 切回前台/列表回到前台时同步一次 sidebar。
+    // debounce ≥30s 在 reloadFollowedKeysIfNeeded 内部判断。
+    [self reloadFollowedKeysIfNeeded:@"viewDidAppear"];
 }
 
 /// : 消费一次性「跨 Space 加群成功」通知 — 弹双行 dialog + 紫色切换按钮。
@@ -438,6 +474,8 @@
 
 -(void) viewDidDisappear:(BOOL)animated {
     [super viewDidDisappear:animated];
+    // 防 drag snapshot 卡在屏上：界面消失时强制清理
+    [self resetCellDragState];
     if(self.refreshTimer) {
         [self.refreshTimer invalidate];
         self.refreshTimer = nil;
@@ -476,6 +514,10 @@
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(showCreateCategoryDialog) name:@"WKShowCreateCategoryDialog" object:nil];
     // YUJ-bot-isolation: 当前 Space 的 Bot 列表加载完成 → prune 切换瞬间 race 浮上来的旧 Space Bot
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onSpaceBotRegistryDidLoad:) name:WKSpaceBotRegistryDidLoadNotification object:nil];
+    // 关注 tab 兜底刷新：app 切回前台时拉一次 sidebar/sync 同步 followedKeys + follow_version
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppDidBecomeActive:) name:UIApplicationDidBecomeActiveNotification object:nil];
+    // followedKeys 更新（reload 后 / 写操作后）→ 关注 tab 重建展示列表，让新加/取消的 DM 在分组里立即生效
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onFollowedKeysStoreDidUpdate:) name:kWKFollowedKeysStoreDidUpdateNotification object:nil];
 }
 
 -(void) removeDelegates {
@@ -483,6 +525,8 @@
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKShowCreateCategoryDialog" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKThreadCountBatchUpdated" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WKSpaceBotRegistryDidLoadNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidBecomeActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:kWKFollowedKeysStoreDidUpdateNotification object:nil];
     // 移除连接监听
     [[[WKSDK shared] connectionManager] removeDelegate:self];
     // 移除频道监听
@@ -757,6 +801,19 @@
 
     self.currentSpaceName = spaceName ?: @"";
     self.currentSpaceId = spaceId;
+    // 开 fail-closed 闸门 —— B 的 sync 数据 + 白名单 snapshot 未就绪前,
+    // 把所有 fail-open / nil-fail-open 路径翻成 NO，避免 A space 残留消息漏入 B。
+    self.spaceSwitchInProgress = YES;
+    // 兜底：万一 sync 永不回包（断网等），8s 后自动落闸，恢复正常 fail-open 行为
+    __weak typeof(self) weakSelfSwitchGate = self;
+    NSString *gateSpaceId = spaceId;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (weakSelfSwitchGate.spaceSwitchInProgress
+            && [weakSelfSwitchGate.currentSpaceId isEqualToString:gateSpaceId]) {
+            NSLog(@"[SpaceGate] 8s 超时兜底落闸 spaceId=%@", gateSpaceId);
+            weakSelfSwitchGate.spaceSwitchInProgress = NO;
+        }
+    });
 
     // 清除分组缓存
     [[WKCategoryService shared] invalidateCache];
@@ -990,7 +1047,7 @@
             WKTypingContent *content = (WKTypingContent*)message.content;
             model.typing = YES;
             model.typer = content.typingName;
-            [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:index inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+            [self safeReloadRows:@[[NSIndexPath indexPathForRow:index inSection:0]] animation:UITableViewRowAnimationNone];
         }
     }
     
@@ -1005,7 +1062,7 @@
     if(index!=-1) {
         WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
         model.typing = NO;
-        [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:index inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+        [self safeReloadRows:@[[NSIndexPath indexPathForRow:index inSection:0]] animation:UITableViewRowAnimationNone];
         
 //        [self refreshTable];
     }
@@ -1028,7 +1085,7 @@
         }
 //
         // 群聊 tab 使用分组展示列表，index 不匹配，直接全量刷新
-        if (_conversationListVM.filterType == WKConversationFilterGroup) {
+        if (_conversationListVM.filterType == WKConversationFilterFollow) {
             if (left == 0) [self rebuildGroupDisplayAndReload];
         } else {
             UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]];
@@ -1149,11 +1206,16 @@
 
     // 空间隔离：过滤掉不属于当前空间的会话更新
     NSArray<WKConversation*> *filtered = [self filterConversationsBySpace:conversations];
-    // 过滤子区：子区不独立显示在会话列表，但触发父群子区数量刷新 + 消息计数更新
+    // 过滤子区：子区不独立显示在 关注 tab；但 最近 tab 子区是独立行，update 必须能驱动 refresh。
     NSMutableArray<WKConversation*> *nonThreadFiltered = [NSMutableArray array];
+    NSMutableArray<WKConversation*> *threadUpdates = [NSMutableArray array];
     NSMutableSet<NSString*> *refreshGroupNos = [NSMutableSet set];
     for (WKConversation *conv in filtered) {
         if (conv.channel.channelType == WK_COMMUNITY_TOPIC) {
+            // 关键：thread updates 必须取自 filtered（已经过 filterConversationsBySpace 的 Space 校验），
+            // 不能再从原始 conversations 里捞 —— 否则跨 Space 子区会污染 threadWrapModels 进而
+            // 出现在 Recent tab 并累计到 badge（PR review #1）。
+            [threadUpdates addObject:conv];
             NSString *threadChannelId = conv.channel.channelId;
             NSRange range = [threadChannelId rangeOfString:@"____"];
             if (range.location != NSNotFound) {
@@ -1171,6 +1233,20 @@
     // 刷新受影响的父群子区数量
     if (refreshGroupNos.count > 0) {
         [self.conversationListVM refreshThreadCountForGroups:refreshGroupNos];
+    }
+    // 子区 update 必须不论当前 tab 都 apply 进 threadWrapModels —— 否则用户在
+    // Follow tab 收到子区消息，切到 Recent 看到的还是旧 preview/时间戳/排序。
+    // UI refresh 仍仅在 Recent tab 触发，避免无谓 reload。
+    if (threadUpdates.count > 0) {
+        if (self.spaceSwitchInProgress) {
+            NSLog(@"[SpaceGate] drop %d thread updates (switch in progress)", (int)threadUpdates.count);
+        } else {
+            [self.conversationListVM applyThreadConversationUpdates:threadUpdates];
+            if (self.conversationListVM.filterType == WKConversationFilterRecent) {
+                [self refreshTable];
+                [self refreshBadge];
+            }
+        }
     }
     filtered = nonThreadFiltered;
     if(filtered.count <= 0) {
@@ -1218,9 +1294,20 @@
                 // : 切 Space 后若 backend sync 在新 Space 未返回 botfather，
                 // 本地兜底合成占位 entry，保证用户立即看到系统 bot 入口。
                 [weakSelf.conversationListVM ensureSystemBotsVisible];
+                // : 切换瞬间漏入的跨 Space 会话兜底总清扫 —— 即便闸门
+                // 在某些路径上没拦住（debug 兜底），也能在用户看到列表前最后一次
+                // 把不属于当前 Space 的会话从 VM 中清掉。
+                NSString *sweepSpace = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+                if(sweepSpace.length > 0) {
+                    NSInteger sweptConv = 0, sweptThread = 0;
+                    [weakSelf.conversationListVM sweepForeignToSpace:sweepSpace removedCount:&sweptConv removedThreadCount:&sweptThread];
+                }
                 [weakSelf rebuildGroupDisplayAndReload];
                 [weakSelf refreshBadge];
                 [weakSelf loadCategories];
+                // VM 已被 B 的 sync 数据填好、白名单 snapshot 完成、bot registry
+                // 也已尝试加载 → 闸门可落，恢复正常 fail-open 行为
+                weakSelf.spaceSwitchInProgress = NO;
             }];
         }
 
@@ -1256,6 +1343,22 @@
             [filtered addObject:conversation];
             continue;
         }
+        // 子区(topic) 严格按父群空间校验，不走 existsInList / 白名单 fail-open 路径（PR review #1B）：
+        //   - 解析 channelId 「{groupNo}____{shortId}」拿父群 groupNo
+        //   - 父群必须在当前 Space 群白名单内才放行
+        //   - 白名单未初始化（reset 后 sync 完成前的 race 窗口）一律拒绝（fail-closed），
+        //     避免跨 Space 子区污染 threadWrapModels 进而出现在 Recent / 计入 badge
+        if(conversation.channel.channelType == WK_COMMUNITY_TOPIC) {
+            NSRange sep = [channelId rangeOfString:@"____"];
+            if(sep.location == NSNotFound) continue;
+            NSString *parentGroupNo = [channelId substringToIndex:sep.location];
+            if(![self.conversationListVM isGroupWhitelistInitialized] ||
+               ![self.conversationListVM isGroupInWhitelist:parentGroupNo]) {
+                continue;
+            }
+            [filtered addObject:conversation];
+            continue;
+        }
         // BotFather空间隔离：新消息到达时自动取消隐藏
         if(botfatherUID && [channelId isEqualToString:botfatherUID]) {
             if(conversation.lastMessage) {
@@ -1272,7 +1375,7 @@
                     if(existingModel) {
                         [existingModel reloadLastMessage];
                         // 刷新对应Cell的预览显示
-                        if (_conversationListVM.filterType == WKConversationFilterGroup) {
+                        if (_conversationListVM.filterType == WKConversationFilterFollow) {
                             [self rebuildGroupDisplayAndReload];
                         } else {
                             NSInteger idx = [self.conversationListVM indexAtChannel:conversation.channel];
@@ -1351,7 +1454,7 @@
                     WKConversationWrapModel *existingModel = [self.conversationListVM modelAtChannel:conversation.channel];
                     if(existingModel) {
                         [existingModel reloadLastMessage];
-                        if (_conversationListVM.filterType == WKConversationFilterGroup) {
+                        if (_conversationListVM.filterType == WKConversationFilterFollow) {
                             [self rebuildGroupDisplayAndReload];
                         } else {
                             NSInteger idx = [self.conversationListVM indexAtChannel:conversation.channel];
@@ -1512,6 +1615,48 @@
     }
 }
 
+#pragma mark - 关注 tab sidebar 自动刷新
+
+-(void) onAppDidBecomeActive:(NSNotification*)notification {
+    [self reloadFollowedKeysIfNeeded:@"appDidBecomeActive"];
+}
+
+-(void) onFollowedKeysStoreDidUpdate:(NSNotification*)notification {
+    // 任意 follow/unfollow 写操作完成 + reload 完成都会 post 这个通知。
+    // 关注 tab 需要把新加的 DM/取消的会话在分组里更新；最近 tab 不需要重建（数据源是 IM cache），
+    // 但长按菜单下次弹出时已经能拿到最新 followedKeys。
+    if (self.conversationListVM.filterType == WKConversationFilterFollow) {
+        [self rebuildGroupDisplayAndReload];
+    }
+    // 关注集合变了，两个 tab 的 badge 都要重新算（被关注的群/DM 进出会同时影响两边）
+    [self refreshBadge];
+}
+
+/// 触发一次 sidebar/sync，debounce ≥30s 避免与 viewDidAppear 在快速切回前后台时重复打。
+/// 详见 spec §4.6 "自动 reload sidebar"。
+-(void) reloadFollowedKeysIfNeeded:(NSString*)reason {
+    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    NSTimeInterval delta = now - self.lastFollowedKeysReloadAt;
+    if (self.lastFollowedKeysReloadAt > 0 && delta < 30.0) {
+        return; // debounce
+    }
+    self.lastFollowedKeysReloadAt = now;
+    NSLog(@"[FollowedKeys] reload triggered by %@", reason);
+    [[WKFollowedKeysStore shared] reload];
+    // 同时刷一次 categoryList —— 跨设备新建分类 / 把已关注项移入新分类时，sidebar/sync 会带新
+    // category_id，但本地 categoryList 没有对应 header，buildGroupDisplayList 在 `for (cat in
+    // self.categoryList)` 循环里就跳过这些 sidebar-only 项，导致用户 follow 了却看不到（PR review #2）。
+    // store reload 完成会通过 didUpdateNotification 触发一次 rebuild，但 categories 接口可能更慢回来，
+    // 那次 rebuild 拿到的是旧 categoryList；这里 completion 再补一次 rebuild 兜底。
+    __weak typeof(self) weakSelf = self;
+    [self.conversationListVM loadCategoriesWithCompletion:^{
+        if (weakSelf.conversationListVM.filterType == WKConversationFilterFollow) {
+            [weakSelf rebuildGroupDisplayAndReload];
+        }
+        [weakSelf refreshBadge];
+    }];
+}
+
 /// : 判断 channel 是否为系统 Bot（botfather / u_10000 / fileHelper 等）。
 /// SYSTEM_BOTS 集合在本单先取 WKAppConfig 已有的三个 UID，口径与
 /// `isConversationInCurrentSpace` 放行"全局可见"的那三项保持一致。
@@ -1597,7 +1742,7 @@
         [self.conversationListVM sortConversationList];
 
         // 群聊 tab 使用分组展示，index 不匹配 tableView，直接全量刷新
-        if (_conversationListVM.filterType == WKConversationFilterGroup) {
+        if (_conversationListVM.filterType == WKConversationFilterFollow) {
             [self rebuildGroupDisplayAndReload];
         } else {
             NSInteger newIndex = [self.conversationListVM indexAtChannel:newModel.channel];
@@ -1708,6 +1853,12 @@
         }
         // 消息没有 space_id 标记
         if(!msgSpaceId || [msgSpaceId isEqual:[NSNull null]] || ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length == 0)) {
+            // 切换 Space 闸门期：fail-closed —— 不允许"无 space_id"的 bot DM / 私聊
+            // 在 B 的 sync/registry 还没到位时混进来。落闸后这里恢复 YES。
+            if(self.spaceSwitchInProgress) {
+                if(isPerson) WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → NO (spaceSwitchInProgress, 无 space_id 兜底拒绝)", channelId);
+                return NO;
+            }
             if(isPerson) WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → YES (msg无 space_id，向前兼容)", channelId);
             return YES; // 消息无 space_id（含 Bot），视为当前空间
         }
@@ -1717,6 +1868,11 @@
     }
 
     // 无最后一条消息，允许显示（如空会话）
+    // 切换 Space 闸门期：fail-closed —— 任何无 lastMessage 的会话也不放行。
+    if(self.spaceSwitchInProgress) {
+        if(isPerson) WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → NO (spaceSwitchInProgress, 无 lastMessage 兜底拒绝)", channelId);
+        return NO;
+    }
     if(isPerson) WK_BOT_TRACE(@"[BotSpaceTrace] isConversationInCurrentSpace channelId=%@ → YES (无 lastMessage)", channelId);
     return YES;
 }
@@ -1744,7 +1900,7 @@
     NSInteger countAfter = [self.conversationListVM conversationCount];
     // 只有过滤后的列表确实多了一行，才做 insertRowsAtIndexPaths
     // 否则直接 reloadData（防止 tab 过滤导致 count 不变触发 Invalid batch updates）
-    if (countAfter == countBefore + 1 && _conversationListVM.filterType != WKConversationFilterGroup) {
+    if (countAfter == countBefore + 1 && _conversationListVM.filterType != WKConversationFilterFollow) {
         [self.tableView insertRowsAtIndexPaths:@[ [NSIndexPath indexPathForRow:insertPlace inSection:0] ] withRowAnimation:UITableViewRowAnimationFade];
     } else {
         [self rebuildGroupDisplayAndReload];
@@ -1804,8 +1960,11 @@
 }
 // 更新最近会话未读数
 - (void)onConversationUnreadCountUpdate:(WKChannel*)channel unreadCount:(NSInteger)unreadCount {
-    NSInteger index = [self.conversationListVM indexAtChannel:channel];
-    if(index == -1) {
+    // 关键：用 anyModelAtChannel: 查（含 threadWrapModels），不能用 indexAtChannel: ——
+    // 后者走 filteredConversations，Follow tab 只含 WK_GROUP，DM/子区直接 -1 漏掉,
+    // 已关注的 DM 和嵌套子区的未读永远停在旧值。
+    WKConversationWrapModel *model = [self.conversationListVM anyModelAtChannel:channel];
+    if(!model) {
         return;
     }
 
@@ -1823,16 +1982,20 @@
         }
     }
 
-    WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
     model.unreadCount = unreadCount;
-    // 群聊 tab 使用分组展示，index 不匹配 tableView 行号，直接全量刷新
-    if (_conversationListVM.filterType == WKConversationFilterGroup) {
+    // 关注 tab 用分组展示，cell 行号 ≠ index，全量 rebuild
+    if (_conversationListVM.filterType == WKConversationFilterFollow) {
         [self rebuildGroupDisplayAndReload];
     } else {
-        UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:index inSection:0]];
-        if ([cell isKindOfClass:[WKConversationListCell class]]) {
-            [(WKConversationListCell *)cell refreshWithModel:model];
-            [cell layoutSubviews];
+        // 最近 tab：尝试找到行号刷 cell；如果不可见（子区在父群下、或被过滤）也无所谓,
+        // 下次滚动到 cell 重用时会从 model 读到新值。
+        NSInteger row = [self.conversationListVM indexAtChannel:channel];
+        if (row >= 0) {
+            UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
+            if ([cell isKindOfClass:[WKConversationListCell class]]) {
+                [(WKConversationListCell *)cell refreshWithModel:model];
+                [cell layoutSubviews];
+            }
         }
     }
     [self refreshBadge];
@@ -1852,18 +2015,34 @@
 
     __weak typeof(self) weakSelf = self;
     _conversationTabView.onTabChanged = ^(NSInteger index) {
+        // 切 tab 前若正在拖动，强制清理 — 否则 snapshot 会卡在屏上
+        [weakSelf resetCellDragState];
         NSInteger oldIndex = weakSelf.conversationListVM.filterType;
         // 保存当前 tab 滚动位置
-        if (oldIndex == WKConversationFilterGroup) {
-            weakSelf.groupTabScrollOffset = weakSelf.tableView.contentOffset;
+        if (oldIndex == WKConversationFilterFollow) {
+            weakSelf.followTabScrollOffset = weakSelf.tableView.contentOffset;
         } else {
-            weakSelf.privateTabScrollOffset = weakSelf.tableView.contentOffset;
+            weakSelf.recentTabScrollOffset = weakSelf.tableView.contentOffset;
         }
         weakSelf.conversationListVM.filterType = index;
         [weakSelf.conversationListVM rebuildFilteredList];
         [weakSelf rebuildGroupDisplayAndReload];
+        NSLog(@"[ThreadSync] onTabChanged → %@ filteredConversations=%ld threadWrapModels=%ld groupDisplayList=%ld",
+              index == WKConversationFilterFollow ? @"Follow" : @"Recent",
+              (long)[weakSelf.conversationListVM conversationCount],
+              (long)weakSelf.conversationListVM.threadWrapModels.count,
+              (long)weakSelf.groupDisplayList.count);
+        // 切到最近 tab 时主动再拉一次 thread 数据 — 解决冷启在关注 tab 时
+        // SDK 还没把所有 thread 加载到本地 cache，导致 threadWrapModels 是空,
+        // 切过来一片空白。fetchThreadCountsForGroups 完成后会回调
+        // syncThreadWrapModelsFromCachedTopics + rebuildFilteredList。
+        if (index == WKConversationFilterRecent) {
+            [weakSelf.conversationListVM fetchThreadCountsForGroups];
+        }
+        // 切到关注 tab 也刷新一下空状态显示
+        [weakSelf refreshFollowEmptyVisibility];
         // 恢复目标 tab 的滚动位置
-        CGPoint savedOffset = (index == WKConversationFilterGroup) ? weakSelf.groupTabScrollOffset : weakSelf.privateTabScrollOffset;
+        CGPoint savedOffset = (index == WKConversationFilterFollow) ? weakSelf.followTabScrollOffset : weakSelf.recentTabScrollOffset;
         [weakSelf.tableView setContentOffset:savedOffset animated:NO];
         [weakSelf updateTabUnreadCounts];
         [[NSUserDefaults standardUserDefaults] setInteger:index forKey:@"WKConversationTabIndex"];
@@ -1886,13 +2065,34 @@
 }
 
 -(void) updateTabUnreadCounts {
-    [self.conversationTabView setGroupUnreadCount:[self.conversationListVM getGroupUnreadCount]];
-    [self.conversationTabView setPrivateUnreadCount:[self.conversationListVM getPrivateUnreadCount]];
+    [self.conversationTabView setFollowUnreadCount:[self.conversationListVM getFollowUnreadCount]];
+    [self.conversationTabView setRecentUnreadCount:[self.conversationListVM getRecentUnreadCount]];
 }
 
+/// refreshBadge 是高频调用 — viewWillAppear / viewDidAppear / loadConversationList completion /
+/// loadCategoriesWithCompletion / channelInfoUpdate（每条）/ onConversationUpdate（每条）/
+/// onMessageUpdate 等多个路径都直接调它。每次都同步写 badge 数字会把中间瞬态暴露给用户：
+/// 切回 tab 时 loadConversationList 刚 replace conversationWrapModels（数组对象身份变了，
+/// 部分 wrap 的 channelInfo cache 还没 ready）的那一刻就算，会算出超过真实值的 99+，等
+/// channelInfo 陆续到达 + 多次重算才收敛到 9。
+///
+/// cell 上看不到这个闪烁是因为 reloadData 是 setNeedsLayout，cell 真正渲染发生在
+/// runloop 末尾 —— 那时 channelInfo cache 已经稳定 / model 状态收敛了。
+///
+/// 把 badge 也对齐到同款节奏：所有调用合并到 150ms 后一次实算，保证算出来的就是稳定值，
+/// 不再把 race 中间态 leak 到 UI。150ms 延迟人眼无感知，但足够吸收一连串密集事件。
 -(void) refreshBadge {
-    self.tabBarItem.badgeValue = nil;
-    [self updateTabUnreadCounts];
+    if (self.refreshBadgePending) return;
+    self.refreshBadgePending = YES;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.refreshBadgePending = NO;
+        strongSelf.tabBarItem.badgeValue = nil;
+        [strongSelf updateTabUnreadCounts];
+    });
 }
 
 #pragma mark - WKNetworkListenerDelegate
@@ -1916,14 +2116,20 @@
                 // filteredConversations 下标和 row 不可直接等同。走 rebuild 路径即可。
                 // 私聊 tab 下 indexAtChannel: 返回的就是 row, 但还是做 bounds 校验防御。
                 // (Jerry-Xin R2 blocking fix, )
-                if (_conversationListVM.filterType == WKConversationFilterGroup) {
+                if (_conversationListVM.filterType == WKConversationFilterFollow) {
                     [self rebuildGroupDisplayAndReload];
                 } else {
                     WKChannel *parentChannel = [WKChannel channelID:parentGroupNo channelType:WK_GROUP];
                     NSInteger parentIndex = [self.conversationListVM indexAtChannel:parentChannel];
                     NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
                     if (parentIndex >= 0 && parentIndex < rowCount) {
-                        [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:parentIndex inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+                        [self safeReloadRows:@[[NSIndexPath indexPathForRow:parentIndex inSection:0]] animation:UITableViewRowAnimationNone];
+                    }
+                    // 最近 tab：子区是独立行，父群刷新涵盖不到自身静音/改名等 channelInfo 变化,
+                    // 还要单独定位子区自身行刷一次。
+                    NSInteger threadIndex = [self.conversationListVM indexAtChannel:channelInfo.channel];
+                    if (threadIndex >= 0 && threadIndex < rowCount) {
+                        [self safeReloadRows:@[[NSIndexPath indexPathForRow:threadIndex inSection:0]] animation:UITableViewRowAnimationNone];
                     }
                 }
             }
@@ -1936,6 +2142,11 @@
         // 更新 model 中缓存的 channelInfo，避免使用过期数据
         oldModel.channelInfo = channelInfo;
         WKConversation *conversation = [[oldModel getConversation] copy];
+        NSLog(@"[StickDebug] channelInfoUpdate ch=%@ type=%d old(mute=%d stick=%d) new(mute=%d stick=%d) conv.before(mute=%d stick=%d)",
+              channelInfo.channel.channelId, channelInfo.channel.channelType,
+              oldChannelInfo.mute, oldChannelInfo.stick,
+              channelInfo.mute, channelInfo.stick,
+              conversation.mute, conversation.stick);
         conversation.mute = channelInfo.mute;
         conversation.stick = channelInfo.stick;
         if([self hasChange:channelInfo oldChannelInfo:oldChannelInfo]) {
@@ -1943,12 +2154,18 @@
         }else{
             // Bounds-check: 群聊 tab 下 filteredConversations 下标和真实 row 不一致,
             // 直接 reload 可能越界。(Jerry-Xin R2 fix, )
-            if (_conversationListVM.filterType == WKConversationFilterGroup) {
+            if (_conversationListVM.filterType == WKConversationFilterFollow) {
                 [self rebuildGroupDisplayAndReload];
             } else {
+                // 最近 tab：群行用 shadow wrap，其 .c 指向旧 WKConversation 单例。
+                // 上面 channelInfoUpdate 路径已经把 mute/stick 同步到原始 wrap.c 的 copy，
+                // 但 shadow wrap.c 还指向老的实例 → 直接 reloadRows 渲染不出新的免打扰/置顶。
+                // 触发 rebuildFilteredList 让 shadow 从 conversationWrapModels[i].c 取最新值。
+                [self.conversationListVM rebuildFilteredList];
+                NSInteger newIndex = [self.conversationListVM indexAtChannel:channelInfo.channel];
                 NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
-                if (index < rowCount) {
-                    [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:index inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+                if (newIndex >= 0 && newIndex < rowCount) {
+                    [self safeReloadRows:@[[NSIndexPath indexPathForRow:newIndex inSection:0]] animation:UITableViewRowAnimationNone];
                 }
             }
             
@@ -1959,6 +2176,140 @@
 //            }
         }
         [self resetHeaderBottomEmptyBackgroundColor];
+    }
+    // 最近 tab：父群 channelInfo 到达时，把它名下的所有子区行刷新（拿父群头像 + 来源名）。
+    // 子区行的复合头像和"来源:xxx" 第一次渲染时父群 info 可能还没缓存，渲染走兜底回退；
+    // channelInfoUpdate 触发后必须主动 reload 这些行让 cell 重新走 refreshAvatar/Source 路径。
+    if (_conversationListVM.filterType == WKConversationFilterRecent
+        && channelInfo.channel.channelType == WK_GROUP
+        && channelInfo.channel.channelId.length > 0) {
+        [self reloadThreadRowsForParentGroup:channelInfo.channel.channelId];
+    }
+    // 静音切换会让 getFollow/RecentUnreadCount 把这条会话计入或排除，必须刷新 tab 红点。
+    [self refreshBadge];
+}
+
+#pragma mark - 关注 tab 空状态引导
+
+/// 关注 tab 没分组 / 没关注内容时显示的引导视图：折叠图标 + "整理你的群聊" 标题
+/// + 一段说明 + 主题色"+ 新建分组"按钮。参考 web 端同款界面。
+- (UIView *)followEmptyView {
+    if (_followEmptyView) return _followEmptyView;
+    UIView *bg = [[UIView alloc] init];
+    bg.backgroundColor = [WKApp shared].config.backgroundColor;
+    bg.hidden = YES;
+    [self.view addSubview:bg];
+
+    UIView *iconBg = [[UIView alloc] init];
+    iconBg.tag = 9001;
+    iconBg.backgroundColor = [UIColor colorWithRed:235.0/255 green:228.0/255 blue:255.0/255 alpha:1];
+    iconBg.layer.cornerRadius = 22;
+    [bg addSubview:iconBg];
+    UIImageView *icon = [[UIImageView alloc] init];
+    icon.tag = 9002;
+    if (@available(iOS 13.0, *)) {
+        icon.image = [[UIImage systemImageNamed:@"folder"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    } else {
+        icon.image = [WKConversationListVC iconMoveCategory];
+    }
+    icon.tintColor = [UIColor colorWithRed:51.0/255 green:34.0/255 blue:78.0/255 alpha:1];
+    icon.contentMode = UIViewContentModeScaleAspectFit;
+    [iconBg addSubview:icon];
+
+    UILabel *title = [[UILabel alloc] init];
+    title.tag = 9003;
+    title.text = LLang(@"关注你最在意的会话");
+    title.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
+    title.textColor = [WKApp shared].config.defaultTextColor;
+    title.textAlignment = NSTextAlignmentCenter;
+    [bg addSubview:title];
+
+    UILabel *desc = [[UILabel alloc] init];
+    desc.tag = 9004;
+    desc.text = LLang(@"把重要的群聊、私聊、子区集中在这里，沉浸在你真正关心的消息里。\n在「最近」长按任意会话，选择「添加到关注」。");
+    desc.font = [UIFont systemFontOfSize:14];
+    desc.textColor = [UIColor colorWithWhite:0.5 alpha:1.0];
+    desc.numberOfLines = 0;
+    desc.textAlignment = NSTextAlignmentCenter;
+    [bg addSubview:desc];
+
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeCustom];
+    btn.tag = 9005;
+    [btn setTitle:LLang(@"+ 新建分组") forState:UIControlStateNormal];
+    [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    btn.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    btn.backgroundColor = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:88.0/255 green:48.0/255 blue:220.0/255 alpha:1];
+    btn.layer.cornerRadius = 22;
+    btn.layer.masksToBounds = YES;
+    btn.contentEdgeInsets = UIEdgeInsetsMake(0, 24, 0, 24);
+    [btn addTarget:self action:@selector(onFollowEmptyCreateTap) forControlEvents:UIControlEventTouchUpInside];
+    [bg addSubview:btn];
+
+    _followEmptyView = bg;
+    return _followEmptyView;
+}
+
+- (void)layoutFollowEmptyViewIfNeeded {
+    if (!_followEmptyView || _followEmptyView.hidden) return;
+    CGFloat top = self.fixedHeaderContainer.lim_bottom;
+    CGFloat bottom = self.tabBarController.tabBar.frame.size.height;
+    _followEmptyView.frame = CGRectMake(0, top, self.view.lim_width, self.view.lim_height - top - bottom);
+    CGFloat verticalCenter = _followEmptyView.lim_height / 2.0 - 40; // 略上偏一点
+
+    UIView *iconBg = [_followEmptyView viewWithTag:9001];
+    UIImageView *icon = (UIImageView *)[_followEmptyView viewWithTag:9002];
+    UILabel *title = (UILabel *)[_followEmptyView viewWithTag:9003];
+    UILabel *desc = (UILabel *)[_followEmptyView viewWithTag:9004];
+    UIButton *btn = (UIButton *)[_followEmptyView viewWithTag:9005];
+
+    iconBg.frame = CGRectMake((_followEmptyView.lim_width - 80) / 2.0, verticalCenter - 130, 80, 80);
+    icon.frame = CGRectMake(20, 20, 40, 40);
+    title.frame = CGRectMake(0, CGRectGetMaxY(iconBg.frame) + 18, _followEmptyView.lim_width, 26);
+    CGFloat descMaxW = _followEmptyView.lim_width - 80;
+    CGSize descSize = [desc sizeThatFits:CGSizeMake(descMaxW, CGFLOAT_MAX)];
+    desc.frame = CGRectMake((_followEmptyView.lim_width - descMaxW) / 2.0, CGRectGetMaxY(title.frame) + 8, descMaxW, descSize.height);
+    CGFloat btnW = 160;
+    btn.frame = CGRectMake((_followEmptyView.lim_width - btnW) / 2.0, CGRectGetMaxY(desc.frame) + 24, btnW, 44);
+}
+
+- (void)refreshFollowEmptyVisibility {
+    BOOL shouldShow = (self.conversationListVM.filterType == WKConversationFilterFollow)
+                   && self.groupDisplayList.count == 0;
+    if (!shouldShow && !_followEmptyView) return;
+    UIView *v = shouldShow ? self.followEmptyView : _followEmptyView;
+    v.hidden = !shouldShow;
+    if (shouldShow) {
+        [self.view bringSubviewToFront:v];
+        [self layoutFollowEmptyViewIfNeeded];
+    }
+}
+
+- (void)onFollowEmptyCreateTap {
+    [self showCreateCategoryDialog];
+}
+
+/// 最近 tab：找出所有 parent_channel == groupNo 的子区行 indexPath，触发 reload。
+- (void)reloadThreadRowsForParentGroup:(NSString *)groupNo {
+    if (groupNo.length == 0) return;
+    NSMutableArray<NSIndexPath *> *paths = [NSMutableArray array];
+    NSArray<WKConversationWrapModel *> *threads = self.conversationListVM.threadWrapModels;
+    NSString *prefix = [groupNo stringByAppendingString:@"____"];
+    for (WKConversationWrapModel *t in threads) {
+        if ([t.channel.channelId hasPrefix:prefix]) {
+            NSInteger idx = [self.conversationListVM indexAtChannel:t.channel];
+            if (idx >= 0) {
+                [paths addObject:[NSIndexPath indexPathForRow:idx inSection:0]];
+            }
+        }
+    }
+    if (paths.count == 0) return;
+    NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
+    NSMutableArray<NSIndexPath *> *valid = [NSMutableArray arrayWithCapacity:paths.count];
+    for (NSIndexPath *p in paths) {
+        if (p.row < rowCount) [valid addObject:p];
+    }
+    if (valid.count > 0) {
+        [self safeReloadRows:valid animation:UITableViewRowAnimationNone];
     }
 }
 
@@ -1982,13 +2333,18 @@
 
 -(CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath{
     // 群聊 tab：使用分组展示列表
-    if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
+    if (_conversationListVM.filterType == WKConversationFilterFollow && self.groupDisplayList) {
         if (indexPath.row >= (NSInteger)self.groupDisplayList.count) return 64.0f;
         WKConversationDisplayItem *item = self.groupDisplayList[indexPath.row];
         if (item.isSectionHeader) return 36.0f;
         WKConversationWrapModel *model = item.conversation;
-        if (model && model.threadCount > 0 && [WKApp shared].remoteConfig.threadOn && [_conversationListVM isThreadExpanded:model.channel.channelId]) {
-            if (model.threadPreviews.count > 0) {
+        // 关注 tab 下，群下面只显示已关注的子区；用 helper 取过滤后的列表来决定 cell 类型
+        NSArray<WKThreadModel *> *visiblePreviews = (model && model.channel.channelType == WK_GROUP)
+            ? [WKConversationGroupThreadCell visibleThreadPreviewsFor:model] : nil;
+        NSInteger visibleCount = (model && model.channel.channelType == WK_GROUP)
+            ? [WKConversationGroupThreadCell visibleThreadCountFor:model] : 0;
+        if (model && visibleCount > 0 && [WKApp shared].remoteConfig.threadOn && [_conversationListVM isThreadExpanded:model.channel.channelId]) {
+            if (visiblePreviews.count > 0) {
                 return [WKConversationGroupThreadCell heightForModel:model];
             } else {
                 return [WKConversationGroupThreadOnlyCell heightForModel:model];
@@ -2008,7 +2364,7 @@
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section{
-    if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
+    if (_conversationListVM.filterType == WKConversationFilterFollow && self.groupDisplayList) {
         return self.groupDisplayList.count;
     }
     return [_conversationListVM conversationCount];
@@ -2016,7 +2372,7 @@
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath{
     // 群聊 tab：使用分组展示列表
-    if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
+    if (_conversationListVM.filterType == WKConversationFilterFollow && self.groupDisplayList) {
         if (indexPath.row >= (NSInteger)self.groupDisplayList.count) {
             return [tableView dequeueReusableCellWithIdentifier:@"WKConversationListCell" forIndexPath:indexPath];
         }
@@ -2026,8 +2382,13 @@
             return cell;
         }
         WKConversationWrapModel *model = item.conversation;
-        if (model && model.threadCount > 0 && [WKApp shared].remoteConfig.threadOn && [_conversationListVM isThreadExpanded:model.channel.channelId]) {
-            if (model.threadPreviews.count > 0) {
+        // 关注 tab：按 followedKeys 过滤后的子区数量决定 cell 类型
+        NSInteger visibleCount = (model && model.channel.channelType == WK_GROUP)
+            ? [WKConversationGroupThreadCell visibleThreadCountFor:model] : 0;
+        NSArray<WKThreadModel *> *visiblePreviews = (model && model.channel.channelType == WK_GROUP)
+            ? [WKConversationGroupThreadCell visibleThreadPreviewsFor:model] : nil;
+        if (model && visibleCount > 0 && [WKApp shared].remoteConfig.threadOn && [_conversationListVM isThreadExpanded:model.channel.channelId]) {
+            if (visiblePreviews.count > 0) {
                 WKConversationGroupThreadCell *cell = [tableView dequeueReusableCellWithIdentifier:@"WKConversationGroupThreadCell" forIndexPath:indexPath];
                 cell.swipeDelegate = self;
                 return cell;
@@ -2049,6 +2410,14 @@
 
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
     CFAbsoluteTime _wdStart = CFAbsoluteTimeGetCurrent();
+    // cell 复用时 alpha 兜底：拖动期间源 cell 被设为 0.3，可能被回收给新行用,
+    // 不重置会让别的行显示成半透明。如果当前行就是 drag 源（channelId 同），保持 0.3。
+    if (self.cellDragInProgress && self.cellDragSourceChannelId.length > 0) {
+        WKConversationWrapModel *m = [_conversationListVM conversationAtIndex:indexPath.row];
+        cell.alpha = [m.channel.channelId isEqualToString:self.cellDragSourceChannelId] ? 0.3 : 1.0;
+    } else {
+        cell.alpha = 1.0;
+    }
     // 让 cell 内部的 pan 手势等 tab swipe 手势失败后再识别
     if (self.tabSwipeLeft || self.tabSwipeRight) {
         for (UIGestureRecognizer *gr in cell.gestureRecognizers) {
@@ -2059,7 +2428,7 @@
         }
     }
     // 群聊 tab
-    if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
+    if (_conversationListVM.filterType == WKConversationFilterFollow && self.groupDisplayList) {
         if (indexPath.row >= (NSInteger)self.groupDisplayList.count) return;
         WKConversationDisplayItem *item = self.groupDisplayList[indexPath.row];
         if (item.isSectionHeader) {
@@ -2084,6 +2453,9 @@
             };
             sectionCell.onLongPress = ^(NSString *sectionId, NSString *title, CGPoint pointInWindow) {
                 [weakSelf showSectionManagePopup:sectionId title:title atPoint:pointInWindow];
+            };
+            sectionCell.onLongPressProgress = ^(UILongPressGestureRecognizer *gesture, NSString *sectionId) {
+                [weakSelf onSectionHeaderLongPress:gesture sectionId:sectionId fromCell:sectionCell];
             };
             return;
         }
@@ -2123,6 +2495,7 @@
             }];
         } else if ([cell isKindOfClass:[WKConversationListCell class]]) {
             WKConversationListCell *listCell = (WKConversationListCell *)cell;
+            listCell.recentTabContext = NO; // 关注 tab 用 group-summary 风格
             [listCell refreshWithModel:conversationModel];
             [listCell setOnToggleThreadPreview:^(NSString *channelId) {
                 [weakSelf.conversationListVM toggleThreadExpanded:channelId];
@@ -2139,6 +2512,7 @@
     WKConversationWrapModel *conversationModel = [_conversationListVM conversationAtIndex:indexPath.row];
     if (!conversationModel) return;
     WKConversationListCell *conversationListCell = (WKConversationListCell *)cell;
+    conversationListCell.recentTabContext = (_conversationListVM.filterType == WKConversationFilterRecent);
     [conversationListCell refreshWithModel:conversationModel];
     // 私聊 tab 添加长按手势
     [self addLongPressGestureToCell:cell forConversation:conversationModel];
@@ -2151,20 +2525,28 @@
     if(conversationModel) {
         [conversationModel cancelChannelRequest];
     }
+    // 拖动期间源 cell 离场 → 长按手势会随 cell 回收销毁,Ended/Cancelled 不会触发,
+    // snapshot 卡死。这里兜底：把 cell 的 alpha 还原 + 强制清理 drag 状态。
+    // 用直接引用比较（cell == cellDragSourceCell）比 channelId 查表更可靠 — 后者
+    // 在表格重排后 conversationAtIndex 可能返回 nil 或别的会话。
+    if (self.cellDragInProgress && cell == self.cellDragSourceCell) {
+        cell.alpha = 1.0;
+        [self resetCellDragState];
+    }
 }
 
 -(void) tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
 
     // 群聊 tab: section header 不进入聊天
-    if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
+    if (_conversationListVM.filterType == WKConversationFilterFollow && self.groupDisplayList) {
         if (indexPath.row >= (NSInteger)self.groupDisplayList.count) return;
         WKConversationDisplayItem *item = self.groupDisplayList[indexPath.row];
         if (item.isSectionHeader) return;
     }
 
      WKConversationWrapModel *conversationModel;
-    if (_conversationListVM.filterType == WKConversationFilterGroup && self.groupDisplayList) {
+    if (_conversationListVM.filterType == WKConversationFilterFollow && self.groupDisplayList) {
         conversationModel = self.groupDisplayList[indexPath.row].conversation;
     } else {
         conversationModel = [_conversationListVM conversationAtIndex:indexPath.row];
@@ -2260,23 +2642,581 @@
 }
 
 -(void) onConversationCellLongPress:(UILongPressGestureRecognizer *)gesture {
-    if (gesture.state != UIGestureRecognizerStateBegan) return;
     UITableViewCell *cell = (UITableViewCell *)gesture.view;
     WKConversationWrapModel *model = objc_getAssociatedObject(cell, "conversationModel");
     if (!model) return;
+    BOOL isFollowTab = (self.conversationListVM.filterType == WKConversationFilterFollow);
 
-    // 触觉反馈
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        // 触觉反馈 + 弹菜单（保留原行为）
+        UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        [feedback impactOccurred];
+        CGPoint ptInWindow = [gesture locationInView:nil];
+        [self showConversationMenuForModel:model atPoint:ptInWindow];
+
+        // 关注 tab 才支持拖拽：记录起点 + indexPath + channelId（拖动期间用于辨认源 cell 是否离场）
+        if (isFollowTab) {
+            self.cellDragInProgress = NO;
+            self.cellDragStartLocation = [gesture locationInView:self.view];
+            self.cellDragSourceIndexPath = [self.tableView indexPathForCell:cell];
+            self.cellDragSourceConvName = model.channelInfo.displayName ?: model.channel.channelId;
+            self.cellDragSourceChannelId = model.channel.channelId;
+        }
+        return;
+    }
+
+    if (!isFollowTab) return; // 最近 tab 不进入 drag 流程
+
+    if (gesture.state == UIGestureRecognizerStateChanged) {
+        CGPoint loc = [gesture locationInView:self.view];
+        CGFloat dx = loc.x - self.cellDragStartLocation.x;
+        CGFloat dy = loc.y - self.cellDragStartLocation.y;
+        CGFloat dist = hypot(dx, dy);
+        if (!self.cellDragInProgress) {
+            // 阈值 12pt — 防止用户长按时手抖触发 drag
+            if (dist > 12.0) {
+                [self beginCellDragForCell:cell atLocation:loc];
+            }
+        } else {
+            [self updateCellDragAtLocation:loc];
+        }
+        return;
+    }
+
+    if (gesture.state == UIGestureRecognizerStateEnded
+        || gesture.state == UIGestureRecognizerStateCancelled
+        || gesture.state == UIGestureRecognizerStateFailed) {
+        if (self.cellDragInProgress) {
+            CGPoint loc = [gesture locationInView:self.view];
+            [self endCellDragAtLocation:loc model:model];
+        } else {
+            [self resetCellDragState];
+        }
+    }
+}
+
+#pragma mark - 关注 tab 拖拽排序（方案 A）
+
+#pragma mark - 分组 section 长按拖拽重排（关注 tab）
+
+/// 长按分组 header → 弹菜单的同时记录源 section；继续移动手指 > 12pt 后切到拖拽,
+/// 把整段分组拖到目标位置并发起 sortCategories: 提交。
+- (void)onSectionHeaderLongPress:(UILongPressGestureRecognizer *)gesture
+                       sectionId:(NSString *)sectionId
+                        fromCell:(UITableViewCell *)cell {
+    if (sectionId.length == 0) return;
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        // 与 conv cell 拖拽对称：Begin 只记录 source + start location，不立即开拖；
+        // 等手指移过阈值再切到 drag。这样保留菜单点击行为。
+        self.cellDragInProgress = NO;
+        self.cellDragStartLocation = [gesture locationInView:self.view];
+        self.cellDragSourceIndexPath = [self.tableView indexPathForCell:cell];
+        self.cellDragSourceSectionId = sectionId;
+        // 清掉 conv 拖拽用字段，避免分支误判
+        self.cellDragSourceConvName = nil;
+        self.cellDragSourceChannelId = nil;
+        return;
+    }
+
+    if (gesture.state == UIGestureRecognizerStateChanged) {
+        if (self.cellDragSourceSectionId.length == 0) return;
+        CGPoint loc = [gesture locationInView:self.view];
+        CGFloat dx = loc.x - self.cellDragStartLocation.x;
+        CGFloat dy = loc.y - self.cellDragStartLocation.y;
+        if (!self.cellDragInProgress) {
+            if (hypot(dx, dy) > 12.0) {
+                [self beginSectionDragForCell:cell atLocation:loc];
+            }
+        } else {
+            [self updateCellDragAtLocation:loc];
+        }
+        return;
+    }
+
+    if (gesture.state == UIGestureRecognizerStateEnded
+        || gesture.state == UIGestureRecognizerStateCancelled
+        || gesture.state == UIGestureRecognizerStateFailed) {
+        if (self.cellDragInProgress && self.cellDragSourceSectionId.length > 0) {
+            CGPoint loc = [gesture locationInView:self.view];
+            [self endSectionDragAtLocation:loc];
+        } else {
+            [self resetCellDragState];
+        }
+    }
+}
+
+- (void)beginSectionDragForCell:(UITableViewCell *)cell atLocation:(CGPoint)loc {
+    self.cellDragInProgress = YES;
+    self.pendingRebuildAfterDrag = NO;
+    [self dismissFloatingMenu];
     UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [feedback impactOccurred];
 
-    CGPoint ptInCell = [gesture locationInView:cell];
-    CGPoint ptInWindow = [cell convertPoint:ptInCell toView:nil];
-    [self showConversationMenuForModel:model atPoint:ptInWindow];
+    // 还原 cell 视觉变换（cell 的 longPress 在 Began 时把 transform 设到 0.98 + bg 高亮,
+    // 不同步还原会让 snapshot 抓到错误形状）
+    cell.transform = CGAffineTransformIdentity;
+    cell.contentView.backgroundColor = [UIColor clearColor];
+
+    UIView *snap = [cell snapshotViewAfterScreenUpdates:YES];
+    snap.layer.shadowColor = [UIColor blackColor].CGColor;
+    snap.layer.shadowOpacity = 0.18;
+    snap.layer.shadowOffset = CGSizeMake(0, 4);
+    snap.layer.shadowRadius = 8;
+    snap.alpha = 0.95;
+    CGRect cellFrameInView = [self.tableView convertRect:cell.frame toView:self.view];
+    snap.frame = cellFrameInView;
+    [self.view addSubview:snap];
+    self.cellDragSnapshot = snap;
+
+    UIView *line = [[UIView alloc] init];
+    UIColor *baseTheme = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+    UIColor *deepTheme = [UIColor colorWithRed:88.0/255 green:48.0/255 blue:220.0/255 alpha:1];
+    line.backgroundColor = deepTheme;
+    line.layer.cornerRadius = 2;
+    line.layer.shadowColor = baseTheme.CGColor;
+    line.layer.shadowOpacity = 0.7;
+    line.layer.shadowOffset = CGSizeZero;
+    line.layer.shadowRadius = 6;
+    line.hidden = YES;
+    [self.view addSubview:line];
+    self.cellDragInsertionLine = line;
+
+    cell.alpha = 0.3;
+    self.cellDragSourceCell = cell;
+
+    [self updateCellDragAtLocation:loc];
+}
+
+- (void)endSectionDragAtLocation:(CGPoint)loc {
+    NSString *sourceSectionId = self.cellDragSourceSectionId;
+    NSIndexPath *targetPath = self.cellDragLastTargetPath;
+    if (!targetPath) {
+        CGPoint locInTable = [self.view convertPoint:loc toView:self.tableView];
+        targetPath = [self.tableView indexPathForRowAtPoint:locInTable];
+    }
+    BOOL insertBelow = self.cellDragLastInsertBelow;
+
+    [self cleanupCellDragSnapshot];
+
+    if (sourceSectionId.length == 0 || !targetPath) {
+        [self resetCellDragState];
+        return;
+    }
+
+    // 解析目标 section: 沿 groupDisplayList 向上找最近 header；insertBelow 决定落在
+    // 该 section 之前还是之后。
+    NSString *targetSectionId = [self resolveTargetCategoryIdForRow:targetPath.row];
+    if (targetSectionId.length == 0 || [targetSectionId isEqualToString:sourceSectionId]) {
+        [self resetCellDragState];
+        return;
+    }
+
+    // 计算 categoryList 中 source / target 的位置 + 决定最终插入索引
+    NSArray<WKCategoryEntity *> *all = self.conversationListVM.categoryList;
+    NSInteger srcIdx = -1, tgtIdx = -1;
+    for (NSInteger i = 0; i < (NSInteger)all.count; i++) {
+        WKCategoryEntity *cat = all[i];
+        if (cat.is_default) continue;
+        if ([cat.category_id isEqualToString:sourceSectionId]) srcIdx = i;
+        else if ([cat.category_id isEqualToString:targetSectionId]) tgtIdx = i;
+    }
+    if (srcIdx < 0 || tgtIdx < 0) {
+        [self resetCellDragState];
+        return;
+    }
+
+    NSInteger insertIdx = insertBelow ? tgtIdx + 1 : tgtIdx;
+    // 移除 src 之后，src 之前的索引不变；src 之后的索引整体 -1
+    if (srcIdx < insertIdx) insertIdx--;
+    if (insertIdx == srcIdx) {
+        // 没动 — 落到自己原位
+        [self resetCellDragState];
+        return;
+    }
+
+    // 1) 本地乐观重排 categoryList
+    NSMutableArray<WKCategoryEntity *> *next = [all mutableCopy];
+    WKCategoryEntity *moving = next[srcIdx];
+    [next removeObjectAtIndex:srcIdx];
+    if (insertIdx > (NSInteger)next.count) insertIdx = next.count;
+    [next insertObject:moving atIndex:insertIdx];
+    self.conversationListVM.categoryList = next;
+    [self resetCellDragState]; // 清拖拽状态（含 sectionId），rebuild 后才能生效
+    [self rebuildGroupDisplayAndReload];
+
+    // 2) 提交完整顺序 — sortCategories 接收所有 category_id 的有序数组
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if (spaceId.length == 0) return;
+    NSMutableArray<NSString *> *ids = [NSMutableArray array];
+    for (WKCategoryEntity *cat in next) {
+        if (cat.category_id.length > 0) [ids addObject:cat.category_id];
+    }
+    __weak typeof(self) weakSelf = self;
+    [[WKCategoryService shared] sortCategories:spaceId categoryIds:ids].then(^(id _) {
+        // server 已采纳新顺序 — 拉一次最新 categories（顺便兜住跨设备同时改的 race）
+        [weakSelf loadCategories];
+    }).catch(^(NSError *err) {
+        NSLog(@"[CategorySort] failed: %@", err);
+        [weakSelf loadCategories]; // 回退到 server 真值
+    });
+}
+
+#pragma mark -
+
+- (void)beginCellDragForCell:(UITableViewCell *)cell atLocation:(CGPoint)loc {
+    self.cellDragInProgress = YES;
+    self.pendingRebuildAfterDrag = NO;
+    [self dismissFloatingMenu]; // 关掉菜单
+    UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    [feedback impactOccurred];
+
+    // 取 cell 截图作为拖动跟随的 snapshot
+    UIView *snap = [cell snapshotViewAfterScreenUpdates:YES];
+    snap.layer.shadowColor = [UIColor blackColor].CGColor;
+    snap.layer.shadowOpacity = 0.18;
+    snap.layer.shadowOffset = CGSizeMake(0, 4);
+    snap.layer.shadowRadius = 8;
+    snap.alpha = 0.95;
+    CGRect cellFrameInView = [self.tableView convertRect:cell.frame toView:self.view];
+    snap.frame = cellFrameInView;
+    [self.view addSubview:snap];
+    self.cellDragSnapshot = snap;
+
+    // 插入指示线：移到 self.view 顶层（snapshot 同层但后加，更高 z-order）。
+    // 比挂到 tableView 上有两个好处：① 不会被 snapshot 盖住 ② 不会被 tableView
+    // 自身的 scroll/reload 影响。每次 updateInsertionLineAtLocation: 重算 view 坐标。
+    UIView *line = [[UIView alloc] init];
+    UIColor *baseTheme = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+    // 比 theme 紫深 ~15%：让线在白底 / 群头像 / 各种内容上都醒目
+    UIColor *deepTheme = [UIColor colorWithRed:88.0/255 green:48.0/255 blue:220.0/255 alpha:1];
+    line.backgroundColor = deepTheme;
+    line.layer.cornerRadius = 2;
+    line.layer.shadowColor = baseTheme.CGColor;
+    line.layer.shadowOpacity = 0.7;
+    line.layer.shadowOffset = CGSizeZero;
+    line.layer.shadowRadius = 6; // 发光晕 — 被 snapshot 盖到边缘时也能看出位置
+    line.hidden = YES;
+    [self.view addSubview:line];
+    self.cellDragInsertionLine = line;
+
+    cell.alpha = 0.3; // 原 cell 半透明提示"正在被拖动"
+    self.cellDragSourceCell = cell; // weak ref，didEndDisplayingCell 时按引用比较
+
+    [self updateCellDragAtLocation:loc];
+}
+
+- (void)updateCellDragAtLocation:(CGPoint)loc {
+    self.cellDragLastLocation = loc;
+    CGRect f = self.cellDragSnapshot.frame;
+    f.origin.y = loc.y - f.size.height / 2.0f;
+    self.cellDragSnapshot.frame = f;
+    // 接近表格上下边缘时设置 auto-scroll 速度，由 CADisplayLink 平滑驱动；
+    // 之前在 gesture update 里直接 setContentOffset 会让带子区预览的高 cell 卡死
+    // —— 高 cell 重新布局时 heightForRow / cellForRow 同步阻塞主线程，gesture update
+    // 又快速堆积 setContentOffset 调用，主线程过载就卡。改 displayLink 每帧只算
+    // 一次稳定多了。
+    CGRect tableInView = [self.view convertRect:self.tableView.bounds fromView:self.tableView];
+    CGFloat edgeZone = 60;
+    CGFloat maxStep = 12;
+    CGFloat velocity = 0;
+    if (loc.y < CGRectGetMinY(tableInView) + edgeZone) {
+        CGFloat depth = (CGRectGetMinY(tableInView) + edgeZone) - loc.y;
+        velocity = -MIN(maxStep, MAX(2, depth / 5.0));
+    } else if (loc.y > CGRectGetMaxY(tableInView) - edgeZone) {
+        CGFloat depth = loc.y - (CGRectGetMaxY(tableInView) - edgeZone);
+        velocity = MIN(maxStep, MAX(2, depth / 5.0));
+    }
+    self.cellDragAutoScrollVelocity = velocity;
+    if (velocity != 0 && !self.cellDragAutoScrollLink) {
+        self.cellDragAutoScrollLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(onCellDragAutoScrollTick:)];
+        [self.cellDragAutoScrollLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    } else if (velocity == 0 && self.cellDragAutoScrollLink) {
+        [self.cellDragAutoScrollLink invalidate];
+        self.cellDragAutoScrollLink = nil;
+    }
+    // 更新插入位置指示线
+    [self updateInsertionLineAtLocation:loc];
+}
+
+- (void)onCellDragAutoScrollTick:(CADisplayLink *)link {
+    CGFloat v = self.cellDragAutoScrollVelocity;
+    if (v == 0 || !self.cellDragInProgress) {
+        [self.cellDragAutoScrollLink invalidate];
+        self.cellDragAutoScrollLink = nil;
+        return;
+    }
+    CGFloat newY = self.tableView.contentOffset.y + v;
+    CGFloat maxY = MAX(0, self.tableView.contentSize.height - self.tableView.bounds.size.height);
+    newY = MAX(0, MIN(maxY, newY));
+    [self.tableView setContentOffset:CGPointMake(0, newY) animated:NO];
+    // 滚屏时手指虽然没动，但相对内容的位置变了 — 重算插入线
+    [self updateInsertionLineAtLocation:self.cellDragLastLocation];
+}
+
+/// 把插入线放到目标行的上 / 下边缘。section header 一律落在 header 下方（即该分组开头）。
+/// 普通行按手指 Y 跟行中线的关系决定插入到上 / 下。
+/// 线挂在 self.view 上（坐标系也用 self.view），所以每次都做一遍 convertRect:。
+- (void)updateInsertionLineAtLocation:(CGPoint)loc {
+    if (!self.cellDragInsertionLine) return;
+    CGPoint locInTable = [self.view convertPoint:loc toView:self.tableView];
+    NSIndexPath *path = [self.tableView indexPathForRowAtPoint:locInTable];
+    if (!path) {
+        self.cellDragInsertionLine.hidden = YES;
+        self.cellDragLastTargetPath = nil;
+        return;
+    }
+    CGRect rectInTable = [self.tableView rectForRowAtIndexPath:path];
+    BOOL insertBelow;
+    WKConversationDisplayItem *it = (path.row < (NSInteger)self.groupDisplayList.count) ? self.groupDisplayList[path.row] : nil;
+    BOOL isSectionDrag = self.cellDragSourceSectionId.length > 0;
+    if (it.isSectionHeader) {
+        // 拖会话到 header → 进入该 section 顶部（insertBelow=YES）
+        // 拖 section 到另一个 header → 落到该 section 之前（insertBelow=NO，更直观）
+        insertBelow = !isSectionDrag;
+    } else {
+        insertBelow = (locInTable.y - rectInTable.origin.y) > rectInTable.size.height / 2.0;
+    }
+    // 换到 self.view 坐标系，再算线的 frame
+    CGRect rectInView = [self.view convertRect:rectInTable fromView:self.tableView];
+    CGFloat lineY = insertBelow ? CGRectGetMaxY(rectInView) : CGRectGetMinY(rectInView);
+    CGFloat lineThickness = 4.0;
+    CGFloat lineLeft = CGRectGetMinX(rectInView) + 12;
+    CGFloat lineRight = CGRectGetMaxX(rectInView) - 12;
+    self.cellDragInsertionLine.frame = CGRectMake(lineLeft, lineY - lineThickness / 2.0, lineRight - lineLeft, lineThickness);
+    self.cellDragInsertionLine.hidden = NO;
+    [self.view bringSubviewToFront:self.cellDragInsertionLine]; // 始终在 snapshot 之上
+    self.cellDragLastTargetPath = path;
+    self.cellDragLastInsertBelow = insertBelow;
+}
+
+- (void)endCellDragAtLocation:(CGPoint)loc model:(WKConversationWrapModel *)model {
+    NSIndexPath *targetPath = self.cellDragLastTargetPath;
+    if (!targetPath) {
+        CGPoint locInTable = [self.view convertPoint:loc toView:self.tableView];
+        targetPath = [self.tableView indexPathForRowAtPoint:locInTable];
+    }
+    if (!targetPath) {
+        // 落到了空白处：找最接近的 row
+        NSInteger lastRow = [self.tableView numberOfRowsInSection:0] - 1;
+        if (lastRow >= 0) targetPath = [NSIndexPath indexPathForRow:lastRow inSection:0];
+    }
+
+    NSString *targetCategoryId = [self resolveTargetCategoryIdForRow:targetPath.row];
+    NSString *targetCategoryName = [self categoryNameById:targetCategoryId];
+    NSString *sourceCategoryId = [self resolveTargetCategoryIdForRow:self.cellDragSourceIndexPath.row];
+    NSInteger sourceRow = self.cellDragSourceIndexPath.row;
+    NSInteger destRow = self.cellDragLastInsertBelow ? targetPath.row + 1 : targetPath.row;
+    BOOL insertBelow = self.cellDragLastInsertBelow;
+    // 拖到 section header 时矫正落点 —— 不矫正会把 conv 插到 header 之前（即上一个 section
+    // 末尾），随后 reorderInCategory 的 payload 收集从 header 之后开始 → moving item 被漏掉,
+    // PUT /follow/sort 提交不完整顺序。statement: 拖到 header 一律语义为"放到该 section 的
+    // 第一行"（顶部），把 destRow 矫正到 header + 1。
+    if (targetPath.row >= 0 && targetPath.row < (NSInteger)self.groupDisplayList.count) {
+        WKConversationDisplayItem *targetItem = self.groupDisplayList[targetPath.row];
+        if (targetItem.isSectionHeader) {
+            destRow = targetPath.row + 1;
+            insertBelow = YES;
+        }
+    }
+
+    [self cleanupCellDragSnapshot];
+
+    // 同分组拖动 → 分组内重排（参考 web ChatConversationList.handleSortFollowItems:
+    // 本地乐观重排 + PUT /v1/follow/sort 提交完整 bucket 顺序，CAS 失败时 reload）
+    if (targetCategoryId.length > 0 && [targetCategoryId isEqualToString:sourceCategoryId]) {
+        [self resetCellDragState];
+        if (sourceRow != destRow && sourceRow + 1 != destRow) {
+            // 不是"自己拖到自己原位"才做实际重排
+            [self reorderInCategory:targetCategoryId fromGlobalRow:sourceRow toGlobalRow:destRow];
+        }
+        return;
+    }
+    // 拖到默认分组 / 不可识别区域：忽略
+    if (targetCategoryId.length == 0) {
+        [self resetCellDragState];
+        return;
+    }
+
+    NSString *convName = self.cellDragSourceConvName ?: @"";
+    [self resetCellDragState];
+
+    // 跨分组移动：DM 用 followDM(peer_uid, category_id) 覆盖；群用 moveGroup
+    __weak typeof(self) weakSelf = self;
+    if (model.channel.channelType == WK_PERSON) {
+        [[WKFollowService shared] followDM:model.channel.channelId categoryId:targetCategoryId].then(^(id _) {
+            [[WKFollowedKeysStore shared] reload];
+            [weakSelf showMovedToast:convName toCategory:targetCategoryName];
+        }).catch(^(NSError *err) {
+            [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"移动失败")];
+        });
+    } else if (model.channel.channelType == WK_GROUP) {
+        [[WKCategoryService shared] moveGroup:model.channel.channelId toCategoryId:targetCategoryId].then(^(id _) {
+            [[WKFollowedKeysStore shared] reload];
+            [weakSelf loadCategories];
+            [weakSelf showMovedToast:convName toCategory:targetCategoryName];
+        }).catch(^(NSError *err) {
+            [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"移动失败")];
+        });
+    }
+}
+
+#pragma mark - 关注 tab 分组内重排（PUT /v1/follow/sort）
+
+/// 在某分组内把 fromGlobalRow 拖到 toGlobalRow（global = groupDisplayList 行号）。
+/// 1) 本地乐观更新 displayList 顺序 + reloadData 让用户立刻看到
+/// 2) 计算该分组当前完整顺序 → 调 sortItems:version: 提交
+/// 3) 成功 → reload sidebar 让 store 同步新 follow_sort
+///    版本冲突 → reload + 提示用户
+///    其它错误 → log + 用 server 真值重建（rebuildGroupDisplayAndReload）
+- (void)reorderInCategory:(NSString *)catId fromGlobalRow:(NSInteger)fromIdx toGlobalRow:(NSInteger)toIdx {
+    NSArray<WKConversationDisplayItem *> *list = self.groupDisplayList;
+    if (fromIdx < 0 || fromIdx >= (NSInteger)list.count) return;
+    if (toIdx < 0 || toIdx > (NSInteger)list.count) return;
+    WKConversationDisplayItem *moving = list[fromIdx];
+    if (moving.isSectionHeader || moving.conversation == nil) return;
+
+    // 1) 本地乐观重排 displayList — 用户立即看到新顺序
+    NSMutableArray<WKConversationDisplayItem *> *next = [list mutableCopy];
+    [next removeObjectAtIndex:fromIdx];
+    NSInteger insertAt = toIdx;
+    if (toIdx > fromIdx) insertAt--;
+    if (insertAt > (NSInteger)next.count) insertAt = next.count;
+    [next insertObject:moving atIndex:insertAt];
+    self.groupDisplayList = [next copy];
+    [self.tableView reloadData];
+
+    // 2) 收集该分组内的所有 wrap，按当前顺序生成 sortItems
+    NSInteger sectionStart = -1, sectionEnd = -1;
+    for (NSInteger i = 0; i < (NSInteger)self.groupDisplayList.count; i++) {
+        WKConversationDisplayItem *it = self.groupDisplayList[i];
+        if (it.isSectionHeader && [it.sectionId isEqualToString:catId]) {
+            sectionStart = i + 1;
+            for (NSInteger j = sectionStart; j < (NSInteger)self.groupDisplayList.count; j++) {
+                if (self.groupDisplayList[j].isSectionHeader) { sectionEnd = j; break; }
+            }
+            if (sectionEnd == -1) sectionEnd = self.groupDisplayList.count;
+            break;
+        }
+    }
+    if (sectionStart < 0) return;
+
+    NSMutableArray<WKFollowSortItem *> *sortItems = [NSMutableArray array];
+    NSInteger sortIdx = 0;
+    for (NSInteger i = sectionStart; i < sectionEnd; i++) {
+        WKConversationDisplayItem *it = self.groupDisplayList[i];
+        WKConversationWrapModel *wrap = it.conversation;
+        if (!wrap) continue;
+        WKFollowSortItem *si = [[WKFollowSortItem alloc] init];
+        if (wrap.channel.channelType == WK_PERSON) si.target_type = WKFollowTargetTypeDM;
+        else if (wrap.channel.channelType == WK_GROUP) si.target_type = WKFollowTargetTypeChannel;
+        else continue;
+        si.target_id = wrap.channel.channelId;
+        si.sort = sortIdx++;
+        [sortItems addObject:si];
+    }
+    if (sortItems.count == 0) return;
+
+    NSInteger version = [WKFollowedKeysStore shared].followVersion;
+    __weak typeof(self) weakSelf = self;
+    [[WKFollowService shared] sortItems:sortItems version:version].then(^(id _) {
+        [[WKFollowedKeysStore shared] reload]; // 刷 store 拿到新 follow_sort
+    }).catch(^(NSError *err) {
+        if ([WKFollowService isVersionConflictError:err]) {
+            // 跨设备已改过 — 拉一次最新 + 重建 + 提示
+            [[WKFollowedKeysStore shared] reload];
+            [weakSelf rebuildGroupDisplayAndReload];
+            [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"顺序已被其它设备更新")];
+        } else {
+            NSLog(@"[Sort] failed: %@", err);
+            [weakSelf rebuildGroupDisplayAndReload]; // 回退到 server 真值
+        }
+    });
+}
+
+/// 给定关注 tab 的 row index，返回它属于哪个分类（沿 groupDisplayList 向上找最近的
+/// section header）
+- (NSString *)resolveTargetCategoryIdForRow:(NSInteger)row {
+    if (row < 0 || row >= (NSInteger)self.groupDisplayList.count) return @"";
+    for (NSInteger i = row; i >= 0; i--) {
+        WKConversationDisplayItem *it = self.groupDisplayList[i];
+        if (it.isSectionHeader) return it.sectionId ?: @"";
+    }
+    return @"";
+}
+
+- (void)cleanupCellDragSnapshot {
+    [self.cellDragSnapshot removeFromSuperview];
+    self.cellDragSnapshot = nil;
+    [self.cellDragInsertionLine removeFromSuperview];
+    self.cellDragInsertionLine = nil;
+    [self.cellDragAutoScrollLink invalidate];
+    self.cellDragAutoScrollLink = nil;
+    self.cellDragAutoScrollVelocity = 0;
+    // 还原所有 cell 的 alpha（被拖的 cell 改成 0.3）
+    for (UITableViewCell *c in self.tableView.visibleCells) {
+        if (c.alpha < 1.0) c.alpha = 1.0;
+    }
+}
+
+- (void)resetCellDragState {
+    [self cleanupCellDragSnapshot];
+    self.cellDragInProgress = NO;
+    self.cellDragSourceIndexPath = nil;
+    self.cellDragSourceConvName = nil;
+    self.cellDragSourceChannelId = nil;
+    self.cellDragSourceSectionId = nil;
+    self.cellDragSourceCell = nil;
+    self.cellDragLastTargetPath = nil;
+    // 拖动期间累积的刷新一次性回放
+    if (self.pendingRebuildAfterDrag) {
+        self.pendingRebuildAfterDrag = NO;
+        [self rebuildGroupDisplayAndReload];
+    }
+}
+
+#pragma mark - 拖动期间 reload 安全包装
+
+/// 拖动期间所有 reloadData / reloadRows 都走这里 — 检查 cellDragInProgress,
+/// 是就标记 pending 等结束时统一回放；否则正常 reload。
+/// 这样新消息进来 / 通知刷新 / typing 状态变化都不会把源 cell 抢走导致 snapshot 卡死。
+- (void)safeReloadTable {
+    if (self.cellDragInProgress) { self.pendingRebuildAfterDrag = YES; return; }
+    [self.tableView reloadData];
+}
+
+- (void)safeReloadRows:(NSArray<NSIndexPath *> *)paths animation:(UITableViewRowAnimation)anim {
+    if (self.cellDragInProgress) { self.pendingRebuildAfterDrag = YES; return; }
+    [self.tableView reloadRowsAtIndexPaths:paths withRowAnimation:anim];
 }
 
 -(void) showConversationMenuForModel:(WKConversationWrapModel *)model atPoint:(CGPoint)point {
     __weak typeof(self) weakSelf = self;
     NSMutableArray<NSDictionary *> *menuItems = [NSMutableArray array];
+
+    BOOL isFollowTab = (_conversationListVM.filterType == WKConversationFilterFollow);
+
+    // 0. 关注 / 取消关注（参考 web PR #27 §4.1/§4.2）
+    //    最近 tab：基于 followedKeys 决定显示 "添加到关注" 还是 "取消关注"
+    //    关注 tab：默认 isFollowed=YES（这里就是它的产生路径），永远显示 "取消关注"
+    WKFollowTargetType targetType = [self followTargetTypeForChannel:model.channel];
+    if (targetType > 0) {
+        WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
+        BOOL isFollowed = isFollowTab
+                       || [store isFollowedWithType:targetType targetId:model.channel.channelId];
+        if (isFollowed) {
+            [menuItems addObject:@{
+                @"title": LLang(@"取消关注"),
+                @"icon": [WKConversationListVC iconUnfollow],
+                @"action": ^{ [weakSelf unfollowConversationModel:model]; }
+            }];
+        } else {
+            [menuItems addObject:@{
+                @"title": LLang(@"添加到关注"),
+                @"icon": [WKConversationListVC iconFollow],
+                @"action": ^{ [weakSelf showAddToFollowDialogForModel:model]; }
+            }];
+        }
+    }
 
     // 1. 关闭/打开通知
     NSString *muteTitle = model.mute ? LLang(@"打开通知") : LLang(@"关闭通知");
@@ -2284,22 +3224,35 @@
         @"title": muteTitle,
         @"icon": [WKConversationListVC iconMute:model.mute],
         @"action": ^{
-            [[WKChannelSettingManager shared] channel:model.channel mute:!model.mute];
+            BOOL newMute = !model.mute;
+            [[WKChannelSettingManager shared] channel:model.channel mute:newMute];
+            // 最近 tab 用 shadow wrap，服务端 channelInfoUpdate 之前 muteIcon
+            // 没法立即反映；这里主动把状态同步到原始 wrap 的 c 上 + 触发 rebuild，
+            // 让用户拿到即时反馈（与 web 的 optimistic update 同节奏）。
+            [weakSelf applyOptimisticConversationUpdateForChannel:model.channel mute:@(newMute) stick:nil];
         }
     }];
 
     // 2. 置顶/取消置顶
-    NSString *stickTitle = model.stick ? LLang(@"取消置顶") : LLang(@"置顶");
-    [menuItems addObject:@{
-        @"title": stickTitle,
-        @"icon": [WKConversationListVC iconStick],
-        @"action": ^{
-            [[WKChannelSettingManager shared] channel:model.channel stick:!model.stick];
-        }
-    }];
+    //  - 关注 tab 隐藏（spec §0：手工排序替代置顶）
+    //  - 子区也隐藏（server thread_setting 无 top 字段，UpdateSetting 忽略未知字段，
+    //    点了也不持久化，重启即弹回。详见 octo-server modules/thread/service.go:1010）
+    if (!isFollowTab && model.channel.channelType != WK_COMMUNITY_TOPIC) {
+        NSString *stickTitle = model.stick ? LLang(@"取消置顶") : LLang(@"置顶");
+        [menuItems addObject:@{
+            @"title": stickTitle,
+            @"icon": [WKConversationListVC iconStick],
+            @"action": ^{
+                BOOL newStick = !model.stick;
+                [[WKChannelSettingManager shared] channel:model.channel stick:newStick];
+                [weakSelf applyOptimisticConversationUpdateForChannel:model.channel mute:nil stick:@(newStick)];
+                [weakSelf showStickToast:model.channelInfo.displayName ?: model.channel.channelId stuck:newStick];
+            }
+        }];
+    }
 
-    // 3. 移动分组（仅群聊）
-    if (model.channel.channelType == WK_GROUP) {
+    // 3. 移动分组（仅关注 tab 下的群聊；最近 tab 用"添加到关注 → 选分组"二级 sheet）
+    if (isFollowTab && model.channel.channelType == WK_GROUP) {
         [menuItems addObject:@{
             @"title": LLang(@"移动分组"),
             @"icon": [WKConversationListVC iconMoveCategory],
@@ -2342,9 +3295,30 @@
 -(void) showThreadMuteMenuForChannelId:(NSString *)threadChannelId threadName:(NSString *)threadName atPoint:(CGPoint)point {
     WKChannel *threadChannel = [WKChannel channelID:threadChannelId channelType:WK_COMMUNITY_TOPIC];
     BOOL isMuted = [[WKChannelSettingManager shared] mute:threadChannel];
+    BOOL isFollowed = [[WKFollowedKeysStore shared] isFollowedWithType:WKFollowTargetTypeThread targetId:threadChannelId];
 
     NSString *muteTitle = isMuted ? LLang(@"打开通知") : LLang(@"关闭通知");
     NSMutableArray<NSDictionary *> *menuItems = [NSMutableArray array];
+    __weak typeof(self) weakSelf = self;
+
+    // 取消关注 — 关注 tab 嵌套子区是已关注子区集合，第一项就放它，符合 spec 子区单独取关
+    if (isFollowed) {
+        [menuItems addObject:@{
+            @"title": LLang(@"取消关注"),
+            @"icon": [WKConversationListVC iconUnfollow],
+            @"action": ^{
+                [[WKFollowService shared] unfollowThread:threadChannelId].then(^(id _) {
+                    [[WKFollowedKeysStore shared] reload];
+                    [weakSelf showUnfollowedToast:threadName];
+                    // 关注 tab：reload 完后 onFollowedKeysStoreDidUpdate: 会
+                    // rebuildGroupDisplayAndReload，子区行自然消失
+                }).catch(^(NSError *err) {
+                    [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"取消关注失败")];
+                });
+            }
+        }];
+    }
+
     [menuItems addObject:@{
         @"title": muteTitle,
         @"icon": [WKConversationListVC iconMute:isMuted],
@@ -2353,9 +3327,572 @@
             // 依赖服务端 PUT groups/{groupNo}/threads/{shortID}/setting 成功后,
             // 通过 SendChannelUpdate 推送 channel update CMD,客户端拉取最新 channelInfo 并刷新 UI。
             [[WKChannelSettingManager shared] channel:threadChannel mute:newMute];
+            // 最近 tab 同样需要即时反馈；子区 wrap 在 threadWrapModels 里。
+            [weakSelf applyOptimisticConversationUpdateForChannel:threadChannel mute:@(newMute) stick:nil];
         }
     }];
     [self showFloatingMenu:menuItems atPoint:point];
+}
+
+/// 长按菜单点击 mute/stick 后的即时反馈：直接同步本地 wrap.c 状态 + 触发刷新。
+/// 关注 / 最近 两 tab 都需要 — 关注 tab 早先 gate 在 Recent，DM 切换通知后没刷新。
+/// mute / stick 传 nil 表示该字段不变。
+- (void)applyOptimisticConversationUpdateForChannel:(WKChannel *)channel
+                                                mute:(nullable NSNumber *)mute
+                                               stick:(nullable NSNumber *)stick {
+    if (!channel || channel.channelId.length == 0) return;
+    WKConversation *conv = nil;
+    if (channel.channelType == WK_COMMUNITY_TOPIC) {
+        // 子区不在 conversationWrapModels，从 threadWrapModels 找
+        for (WKConversationWrapModel *m in self.conversationListVM.threadWrapModels) {
+            if ([m.channel isEqual:channel]) { conv = [m getConversation]; break; }
+        }
+    } else {
+        WKConversationWrapModel *orig = [self.conversationListVM modelAtChannel:channel];
+        conv = [orig getConversation];
+    }
+    if (!conv) return;
+    if (mute) conv.mute = [mute boolValue];
+    if (stick) conv.stick = [stick boolValue];
+    // 同时把本地 channelInfo 的 mute/stick 也写过去 — SDK 收到服务端 channelUpdate
+    // 后会 fetch channelInfo 并自动同步到 conversation 上。如果本地 channelInfo 还
+    // 是旧值（stick=NO），SDK sync 会把刚写好的 stick=YES 反向覆盖回 NO,
+    // 造成"置顶 1 秒后弹回"的现象。先把 channelInfo 也置成新值阻断这条路径。
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:channel];
+    if (info) {
+        if (mute) info.mute = [mute boolValue];
+        if (stick) info.stick = [stick boolValue];
+        [[WKSDK shared].channelManager addOrUpdateChannelInfoIfNeed:info];
+    }
+#if DEBUG
+    NSLog(@"[StickDebug] optimistic ch=%@ mute=%@ stick=%@ infoCached=%d",
+          channel.channelId, mute, stick, info != nil);
+#endif
+    // 关注 tab 走分组展示，需要 rebuildGroupDisplayAndReload；最近 tab 走
+    // filteredConversations。stick 变化两种 tab 都可能改顺序，所以 reloadData。
+    if (self.conversationListVM.filterType == WKConversationFilterFollow) {
+        [self rebuildGroupDisplayAndReload];
+    } else {
+        [self.conversationListVM rebuildFilteredList];
+        if (stick) {
+            // 置顶/取消置顶让该行重新排序；reloadRows 只刷一行不够
+            [self.tableView reloadData];
+        } else {
+            NSInteger idx = [self.conversationListVM indexAtChannel:channel];
+            NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
+            if (idx >= 0 && idx < rowCount) {
+                [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:idx inSection:0]]
+                                      withRowAnimation:UITableViewRowAnimationNone];
+            }
+        }
+    }
+    // mute optimistic 路径自己刷 badge — 不能依赖 SDK 的 channelInfoUpdate 委托：
+    // 本方法已把 channelInfo.mute 写成新值，下面 addOrUpdateChannelInfoIfNeed 进去后
+    // SDK 看到 info 未变会 dedupe → 委托不 fire → channelInfoUpdate: 里挂的 refreshBadge
+    // 在第二次起都不会执行，表现为「第一次能刷新，后续 toggle 失效」。
+    if (mute) {
+        [self refreshBadge];
+    }
+}
+
+#pragma mark - 关注 / 取消关注
+
+/// 把 iOS 的 channelType 映射到 web FollowService 的 target_type。
+/// 0 表示该 channelType 不参与 follow（系统通知/文件助手/社区等）。
+- (WKFollowTargetType)followTargetTypeForChannel:(WKChannel *)channel {
+    if (!channel || channel.channelId.length == 0) return 0;
+    switch (channel.channelType) {
+        case WK_PERSON: {
+            // 系统 bot / 文件助手 不允许加关注
+            NSString *cid = channel.channelId;
+            NSString *botFather = [WKApp shared].config.botfatherUID;
+            NSString *systemUID = [WKApp shared].config.systemUID;
+            NSString *fileHelperUID = [WKApp shared].config.fileHelperUID;
+            if ((botFather.length > 0 && [cid isEqualToString:botFather])
+                || (systemUID.length > 0 && [cid isEqualToString:systemUID])
+                || (fileHelperUID.length > 0 && [cid isEqualToString:fileHelperUID])) {
+                return 0;
+            }
+            return WKFollowTargetTypeDM;
+        }
+        case WK_GROUP: return WKFollowTargetTypeChannel;
+        case WK_COMMUNITY_TOPIC: return WKFollowTargetTypeThread;
+        default: return 0;
+    }
+}
+
+/// 取消关注。按 channelType 路由到对应 unfollow* API；成功后 reload sidebar
+/// 让 followedKeys / 关注 tab 数据收敛。
+- (void)unfollowConversationModel:(WKConversationWrapModel *)model {
+    WKFollowService *service = [WKFollowService shared];
+    AnyPromise *p = nil;
+    switch (model.channel.channelType) {
+        case WK_PERSON:           p = [service unfollowDM:model.channel.channelId];           break;
+        case WK_GROUP:            p = [service unfollowChannel:model.channel.channelId];      break;
+        case WK_COMMUNITY_TOPIC:  p = [service unfollowThread:model.channel.channelId];       break;
+        default: return;
+    }
+    __weak typeof(self) weakSelf = self;
+    NSString *name = model.channelInfo.displayName ?: @"";
+    p.then(^(id _) {
+        [[WKFollowedKeysStore shared] reload].then(^(id __) {
+            // 关注 tab 需要把行从分组里抹掉；最近 tab 行还在但 followedKeys 已更新。
+            if (weakSelf.conversationListVM.filterType == WKConversationFilterFollow) {
+                [weakSelf rebuildGroupDisplayAndReload];
+            } else {
+                [weakSelf.conversationListVM rebuildFilteredList];
+                [weakSelf.tableView reloadData];
+            }
+            [weakSelf showUnfollowedToast:name];
+            return (id)nil;
+        });
+    }).catch(^(NSError *err) {
+        [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"取消关注失败")];
+    });
+}
+
+/// "添加到关注" — 对齐 web PR #27 §4.2 的子区特殊规则：
+///  - DM / Group: 弹分组选择 sheet（默认目的地记忆 → 下次直奔上次选的）
+///  - Thread + 父群已关注: 直接 followThread（后端 cascade）
+///  - Thread + 父群未关注: 选分组 → refollow 父群 + moveGroup + followThread 链式
+- (void)showAddToFollowDialogForModel:(WKConversationWrapModel *)model {
+    if (model.channel.channelType == WK_COMMUNITY_TOPIC) {
+        // 子区路径
+        NSString *cid = model.channel.channelId;
+        NSRange sep = [cid rangeOfString:@"____"];
+        if (sep.location == NSNotFound) return;
+        NSString *parentGroupNo = [cid substringToIndex:sep.location];
+        if (parentGroupNo.length == 0) return;
+        BOOL parentFollowed = [[WKFollowedKeysStore shared]
+                                isFollowedWithType:WKFollowTargetTypeChannel
+                                          targetId:parentGroupNo];
+        if (parentFollowed) {
+            // 直接 followThread；后端会把父群的关注状态 cascade 透传
+            [self performFollowThread:cid parentGroupNo:parentGroupNo categoryId:nil categoryName:nil];
+        } else {
+            // 父群也未关注，先选分组（用于父群落分组）
+            __weak typeof(self) weakSelf = self;
+            [self pickFollowCategoryWithTitle:LLang(@"添加到关注") onPick:^(NSString * _Nullable categoryId, NSString * _Nullable categoryName) {
+                [weakSelf performFollowThread:cid parentGroupNo:parentGroupNo categoryId:categoryId categoryName:categoryName];
+            }];
+        }
+        return;
+    }
+    // DM / Group：选分组
+    __weak typeof(self) weakSelf = self;
+    [self pickFollowCategoryWithTitle:LLang(@"添加到关注") onPick:^(NSString * _Nullable categoryId, NSString * _Nullable categoryName) {
+        if (model.channel.channelType == WK_PERSON) {
+            [weakSelf performFollowDM:model.channel.channelId categoryId:categoryId categoryName:categoryName];
+        } else if (model.channel.channelType == WK_GROUP) {
+            [weakSelf performFollowGroup:model.channel.channelId categoryId:categoryId categoryName:categoryName];
+        }
+    }];
+}
+
+#pragma mark - 关注分组选择 sheet
+
+/// 弹自定义底部分组选择 sheet。设计要点：
+/// 1) 不用 UIAlertController —— 系统 sheet 与项目其他自定义弹窗（showFloatingMenu）
+///    视觉风格不一致；自绘可控背景 / 圆角 / 字体，跟 cellBackgroundColor 联动深色模式。
+/// 2) 分组超过 6 行自动滚动（中间表格部分），头部和底部"+ 新建分组"按钮固定。
+/// 3) 不再显示 ✓ 历史记忆 —— 用户反馈"添加→取消→再添加"会看到上次的勾选状态，
+///    具有误导性。Add-to-follow sheet 的语义是选目的地，不存在"当前归属"。
+/// 4) onPick 同时回传 categoryId + categoryName，下游 toast 不再依赖 categoryList 异步刷新。
+- (void)pickFollowCategoryWithTitle:(NSString *)title
+                             onPick:(void(^)(NSString * _Nullable categoryId, NSString * _Nullable categoryName))onPick {
+    NSArray<WKCategoryEntity *> *all = self.conversationListVM.categoryList;
+    NSMutableArray<WKCategoryEntity *> *cats = [NSMutableArray array];
+    for (WKCategoryEntity *cat in all) {
+        if (cat.is_default) continue;
+        if (cat.category_id.length == 0) continue;
+        [cats addObject:cat];
+    }
+
+    // 空：直接走新建（与原逻辑一致）
+    if (cats.count == 0) {
+        [self showCreateCategoryDialogWithCompletion:^(WKCategoryEntity *cat) {
+            if (cat.category_id.length == 0) return;
+            if (onPick) onPick(cat.category_id, cat.name);
+        }];
+        return;
+    }
+
+    [self presentFollowCategorySheetWithTitle:title categories:cats selectedCategoryId:nil showCreateRow:YES onPick:onPick];
+}
+
+/// 自定义底部 sheet 主体。表格 maxVisibleRows=6，超出滚动。
+/// selectedCategoryId 非空时该行前缀 ✓ 表示当前归属（移动分组时用，添加关注时传 nil）。
+- (void)presentFollowCategorySheetWithTitle:(NSString *)title
+                                  categories:(NSArray<WKCategoryEntity *> *)categories
+                          selectedCategoryId:(nullable NSString *)selectedCategoryId
+                                showCreateRow:(BOOL)showCreateRow
+                                      onPick:(void(^)(NSString * _Nullable categoryId, NSString * _Nullable categoryName))onPick {
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    if (!window) window = [UIApplication sharedApplication].windows.firstObject;
+
+    // 已有同款 sheet 时直接复用 dismiss 流程，避免叠层
+    UIView *existing = [window viewWithTag:77800];
+    if (existing) [existing removeFromSuperview];
+
+    UIView *overlay = [[UIView alloc] initWithFrame:window.bounds];
+    overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
+    overlay.alpha = 0;
+    overlay.tag = 77800;
+    [window addSubview:overlay];
+
+    // 尺寸常量
+    CGFloat headerH = 48;
+    CGFloat rowH = 52;
+    CGFloat createBtnH = 52;
+    CGFloat maxVisibleRows = 6;
+    CGFloat tableMaxH = rowH * maxVisibleRows;
+    CGFloat tableH = MIN(rowH * categories.count, tableMaxH);
+    CGFloat bottomSafe = 0;
+    if (@available(iOS 11.0, *)) {
+        bottomSafe = window.safeAreaInsets.bottom;
+    }
+    CGFloat sheetH = headerH + tableH + 0.5 + (showCreateRow ? createBtnH : 0) + bottomSafe;
+    CGFloat sheetW = window.lim_width;
+
+    UIView *sheet = [[UIView alloc] initWithFrame:CGRectMake(0, window.lim_height, sheetW, sheetH)];
+    sheet.backgroundColor = [WKApp shared].config.cellBackgroundColor;
+    // 顶部圆角
+    if ([sheet respondsToSelector:@selector(setMaskedCorners:)]) {
+        sheet.layer.cornerRadius = 14;
+        sheet.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner;
+        sheet.layer.masksToBounds = YES;
+    } else {
+        sheet.layer.cornerRadius = 14;
+        sheet.layer.masksToBounds = YES;
+    }
+    [overlay addSubview:sheet];
+
+    // 头部
+    UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, sheetW, headerH)];
+    header.backgroundColor = [UIColor clearColor];
+    [sheet addSubview:header];
+
+    UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(50, 0, sheetW - 100, headerH)];
+    titleLbl.text = title;
+    titleLbl.textAlignment = NSTextAlignmentCenter;
+    titleLbl.font = [[WKApp shared].config appFontOfSizeSemibold:16];
+    titleLbl.textColor = [WKApp shared].config.defaultTextColor;
+    [header addSubview:titleLbl];
+
+    UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    closeBtn.frame = CGRectMake(sheetW - 44, 0, 44, headerH);
+    [closeBtn setTitle:@"✕" forState:UIControlStateNormal];
+    closeBtn.titleLabel.font = [UIFont systemFontOfSize:18];
+    closeBtn.tintColor = [[WKApp shared].config.defaultTextColor colorWithAlphaComponent:0.6];
+    [closeBtn setTitleColor:closeBtn.tintColor forState:UIControlStateNormal];
+    closeBtn.tag = 77810;
+    [closeBtn addTarget:self action:@selector(dismissFollowCategorySheet) forControlEvents:UIControlEventTouchUpInside];
+    [header addSubview:closeBtn];
+
+    UIView *headerSep = [[UIView alloc] initWithFrame:CGRectMake(0, headerH - 0.5, sheetW, 0.5)];
+    headerSep.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.15];
+    [sheet addSubview:headerSep];
+
+    // 中间可滚动的分组列表 — 用 UIScrollView 装 N 个按钮（不复用 UITableView,
+    // 因为 VC 本身是会话列表的 dataSource，叠层 dataSource 会 collide）
+    UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, headerH, sheetW, tableH)];
+    scroll.backgroundColor = [UIColor clearColor];
+    scroll.showsVerticalScrollIndicator = YES;
+    scroll.alwaysBounceVertical = (categories.count > maxVisibleRows);
+    scroll.contentSize = CGSizeMake(sheetW, rowH * categories.count);
+    [sheet addSubview:scroll];
+
+    UIColor *cellTextColor = [WKApp shared].config.defaultTextColor;
+    UIColor *sepColor = [[UIColor grayColor] colorWithAlphaComponent:0.15];
+    for (NSInteger i = 0; i < (NSInteger)categories.count; i++) {
+        WKCategoryEntity *cat = categories[i];
+        UIButton *row = [UIButton buttonWithType:UIButtonTypeCustom];
+        row.frame = CGRectMake(0, i * rowH, sheetW, rowH);
+        row.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+        row.contentEdgeInsets = UIEdgeInsetsMake(0, 20, 0, 20);
+        BOOL isSelected = selectedCategoryId.length > 0 && [cat.category_id isEqualToString:selectedCategoryId];
+        NSString *displayTitle = isSelected ? [NSString stringWithFormat:@"✓ %@", cat.name ?: @""] : (cat.name ?: @"");
+        [row setTitle:displayTitle forState:UIControlStateNormal];
+        [row setTitleColor:cellTextColor forState:UIControlStateNormal];
+        [row setTitleColor:[cellTextColor colorWithAlphaComponent:0.5] forState:UIControlStateHighlighted];
+        row.titleLabel.font = [[WKApp shared].config appFontOfSize:16];
+        row.tag = 78000 + i;
+        [row addTarget:self action:@selector(onFollowCategorySheetRowTap:) forControlEvents:UIControlEventTouchUpInside];
+        [scroll addSubview:row];
+
+        if (i < (NSInteger)categories.count - 1) {
+            UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(20, (i + 1) * rowH - 0.5, sheetW - 20, 0.5)];
+            sep.backgroundColor = sepColor;
+            [scroll addSubview:sep];
+        }
+    }
+
+    // 表格下方分隔（仅在有底部按钮时画）
+    if (showCreateRow) {
+        UIView *bottomSep = [[UIView alloc] initWithFrame:CGRectMake(0, headerH + tableH, sheetW, 0.5)];
+        bottomSep.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.15];
+        [sheet addSubview:bottomSep];
+
+        // 底部"+ 新建分组"按钮固定
+        UIButton *createBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        createBtn.frame = CGRectMake(0, headerH + tableH + 0.5, sheetW, createBtnH);
+        [createBtn setTitle:LLang(@"+ 新建分组") forState:UIControlStateNormal];
+        createBtn.titleLabel.font = [[WKApp shared].config appFontOfSizeMedium:16];
+        UIColor *accent = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+        createBtn.tintColor = accent;
+        [createBtn setTitleColor:accent forState:UIControlStateNormal];
+        createBtn.tag = 77811;
+        [createBtn addTarget:self action:@selector(onFollowCategorySheetCreateTap) forControlEvents:UIControlEventTouchUpInside];
+        [sheet addSubview:createBtn];
+    }
+
+    // 关联回调 + 数据源
+    objc_setAssociatedObject(overlay, "sheetOnPick", [onPick copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(overlay, "sheetCategories", categories, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // 点 overlay 关闭
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissFollowCategorySheet)];
+    [overlay addGestureRecognizer:tap];
+    // 点 sheet 内部不要冒泡触发 dismiss
+    UITapGestureRecognizer *eat = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(noop)];
+    [sheet addGestureRecognizer:eat];
+
+    // 弹出动画
+    [UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        overlay.alpha = 1;
+        sheet.frame = CGRectMake(0, window.lim_height - sheetH, sheetW, sheetH);
+    } completion:nil];
+}
+
+- (void)noop {}
+
+- (void)dismissFollowCategorySheet {
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    UIView *overlay = [window viewWithTag:77800];
+    if (!overlay) return;
+    UIView *sheet = nil;
+    for (UIView *sub in overlay.subviews) {
+        if ([sub isKindOfClass:[UIView class]]) { sheet = sub; break; }
+    }
+    CGRect end = sheet.frame; end.origin.y = window.lim_height;
+    [UIView animateWithDuration:0.2 animations:^{
+        overlay.alpha = 0;
+        if (sheet) sheet.frame = end;
+    } completion:^(BOOL finished) {
+        [overlay removeFromSuperview];
+    }];
+}
+
+- (void)onFollowCategorySheetCreateTap {
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    UIView *overlay = [window viewWithTag:77800];
+    if (!overlay) return;
+    void(^onPick)(NSString *, NSString *) = objc_getAssociatedObject(overlay, "sheetOnPick");
+    [self dismissFollowCategorySheet];
+    __weak typeof(self) weakSelf = self;
+    [self showCreateCategoryDialogWithCompletion:^(WKCategoryEntity *cat) {
+        if (cat.category_id.length == 0) return;
+        // 把新建分组同步追加到 VM.categoryList，避免 loadCategories 异步未完成
+        // 时下游 categoryNameById: 查不到导致 toast 缺失。
+        NSMutableArray *m = [weakSelf.conversationListVM.categoryList mutableCopy] ?: [NSMutableArray array];
+        BOOL exists = NO;
+        for (WKCategoryEntity *c in m) {
+            if ([c.category_id isEqualToString:cat.category_id]) { exists = YES; break; }
+        }
+        if (!exists) [m addObject:cat];
+        weakSelf.conversationListVM.categoryList = m;
+        if (onPick) onPick(cat.category_id, cat.name);
+    }];
+}
+
+- (void)onFollowCategorySheetRowTap:(UIButton *)btn {
+    NSInteger idx = btn.tag - 78000;
+    UIWindow *window = [UIApplication sharedApplication].keyWindow;
+    UIView *overlay = [window viewWithTag:77800];
+    if (!overlay) return;
+    NSArray<WKCategoryEntity *> *categories = objc_getAssociatedObject(overlay, "sheetCategories");
+    void(^onPick)(NSString *, NSString *) = objc_getAssociatedObject(overlay, "sheetOnPick");
+    [self dismissFollowCategorySheet];
+    if (idx < 0 || idx >= (NSInteger)categories.count) return;
+    WKCategoryEntity *cat = categories[idx];
+    if (onPick) onPick(cat.category_id, cat.name);
+}
+
+#pragma mark - 关注实际写操作
+
+/// 通过 categoryId 反查分组名（找不到时回退 ""）
+- (NSString *)categoryNameById:(NSString *)categoryId {
+    if (categoryId.length == 0) return @"";
+    for (WKCategoryEntity *cat in self.conversationListVM.categoryList) {
+        if ([cat.category_id isEqualToString:categoryId]) return cat.name ?: @"";
+    }
+    return @"";
+}
+
+/// 「<会话名> 已添加到 <分组名> 分组」会话名白 bold，分组名主题紫 bold，
+/// 形成对比 — 会话名是"主语"用白色稳重，分组名是"目标"用强调色突出。
+- (void)showFollowedToast:(NSString *)conversationName toCategory:(NSString *)categoryName {
+    [self showFollowOrMoveToast:conversationName verb:LLang(@" 已添加到 ") toCategory:categoryName];
+}
+
+/// 「<会话名> 已移动到 <分组名> 分组」拖拽跨分组完成时用，比"已添加到"更准确
+- (void)showMovedToast:(NSString *)conversationName toCategory:(NSString *)categoryName {
+    [self showFollowOrMoveToast:conversationName verb:LLang(@" 已移动到 ") toCategory:categoryName];
+}
+
+- (void)showFollowOrMoveToast:(NSString *)conversationName verb:(NSString *)verb toCategory:(NSString *)categoryName {
+    if (categoryName.length == 0) return;
+    if (conversationName.length == 0) conversationName = LLang(@"该会话");
+    UIColor *accent = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+    NSAttributedString *attr = [self attrTextWithSegments:@[
+        @{ @"text": conversationName,             @"color": [UIColor whiteColor], @"bold": @YES },
+        @{ @"text": verb,                          @"color": [UIColor whiteColor], @"bold": @NO  },
+        @{ @"text": categoryName,                 @"color": accent,               @"bold": @YES },
+        @{ @"text": LLang(@" 分组"),                @"color": [UIColor whiteColor], @"bold": @NO  },
+    ]];
+    [self showAttributedToast:attr];
+}
+
+/// 「<会话名> 已取消关注」会话名主题紫 bold
+- (void)showUnfollowedToast:(NSString *)conversationName {
+    if (conversationName.length == 0) conversationName = LLang(@"该会话");
+    UIColor *accent = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+    NSAttributedString *attr = [self attrTextWithSegments:@[
+        @{ @"text": conversationName,           @"color": accent,                @"bold": @YES },
+        @{ @"text": LLang(@" 已取消关注"),        @"color": [UIColor whiteColor],  @"bold": @NO  },
+    ]];
+    [self showAttributedToast:attr];
+}
+
+/// 「<会话名> 已置顶」/「<会话名> 已取消置顶」会话名主题紫 bold
+- (void)showStickToast:(NSString *)conversationName stuck:(BOOL)stuck {
+    if (conversationName.length == 0) conversationName = LLang(@"该会话");
+    UIColor *accent = [WKApp shared].config.themeColor ?: [UIColor colorWithRed:138.0/255 green:91.0/255 blue:255.0/255 alpha:1];
+    NSString *verb = stuck ? LLang(@" 已置顶") : LLang(@" 已取消置顶");
+    NSAttributedString *attr = [self attrTextWithSegments:@[
+        @{ @"text": conversationName,           @"color": accent,                @"bold": @YES },
+        @{ @"text": verb,                        @"color": [UIColor whiteColor],  @"bold": @NO  },
+    ]];
+    [self showAttributedToast:attr];
+}
+
+/// 通用 attr 拼接：[{text, color, bold}, ...]
+- (NSAttributedString *)attrTextWithSegments:(NSArray<NSDictionary *> *)segments {
+    NSMutableAttributedString *s = [[NSMutableAttributedString alloc] init];
+    for (NSDictionary *seg in segments) {
+        NSString *t = seg[@"text"];
+        if (t.length == 0) continue;
+        UIColor *c = seg[@"color"] ?: [UIColor whiteColor];
+        BOOL bold = [seg[@"bold"] boolValue];
+        UIFont *f = bold ? [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold]
+                         : [UIFont systemFontOfSize:14];
+        [s appendAttributedString:[[NSAttributedString alloc] initWithString:t attributes:@{NSFontAttributeName: f, NSForegroundColorAttributeName: c}]];
+    }
+    return s;
+}
+
+/// 自定义 toast view（CSToast 默认只接受 NSString，要用 attributedText 必须自己拼一个 UIView 走
+/// showToast:duration:position:completion:）。深色半透明背景 + 圆角，与系统 toast 视觉一致。
+- (void)showAttributedToast:(NSAttributedString *)attrText {
+    if (attrText.length == 0) return;
+    UILabel *lbl = [[UILabel alloc] init];
+    lbl.attributedText = attrText;
+    lbl.numberOfLines = 0;
+    lbl.textAlignment = NSTextAlignmentCenter;
+    UIView *bg = [[UIView alloc] init];
+    bg.backgroundColor = [UIColor colorWithWhite:0 alpha:0.78];
+    bg.layer.cornerRadius = 10;
+    bg.layer.masksToBounds = YES;
+    [bg addSubview:lbl];
+    CGFloat maxLblWidth = MAX(160, self.view.bounds.size.width - 80 - 32);
+    CGSize size = [lbl sizeThatFits:CGSizeMake(maxLblWidth, CGFLOAT_MAX)];
+    CGFloat w = MIN(maxLblWidth, ceil(size.width)) + 32;
+    CGFloat h = ceil(size.height) + 20;
+    bg.frame = CGRectMake(0, 0, w, h);
+    lbl.frame = CGRectMake(16, 10, w - 32, h - 20);
+    [self.view showToast:bg duration:1.6 position:CSToastPositionCenter completion:nil];
+}
+
+- (void)performFollowDM:(NSString *)peerUid categoryId:(NSString *)categoryId categoryName:(nullable NSString *)categoryName {
+    __weak typeof(self) weakSelf = self;
+    NSString *catName = categoryName.length > 0 ? categoryName : [self categoryNameById:categoryId];
+    NSString *convName = [self displayNameForChannel:[WKChannel personWithChannelID:peerUid]];
+    [[WKFollowService shared] followDM:peerUid categoryId:categoryId].then(^(id _) {
+        [[WKFollowedKeysStore shared] reload];
+        [weakSelf.tableView reloadData];
+        [weakSelf showFollowedToast:convName toCategory:catName];
+    }).catch(^(NSError *err) {
+        [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
+    });
+}
+
+- (void)performFollowGroup:(NSString *)groupNo categoryId:(NSString *)categoryId categoryName:(nullable NSString *)categoryName {
+    __weak typeof(self) weakSelf = self;
+    NSString *catName = categoryName.length > 0 ? categoryName : [self categoryNameById:categoryId];
+    NSString *convName = [self displayNameForChannel:[WKChannel groupWithChannelID:groupNo]];
+    // 只关注群本身。P3-1.4 的"加群即加全部子区"按用户要求撤回 —— 子区需要单独
+    // 长按走 thread 关注流程（避免一次性把不感兴趣的子区全塞进关注 tab）。
+    [[WKFollowService shared] refollowChannel:groupNo].then(^(id _) {
+        return [[WKCategoryService shared] moveGroup:groupNo toCategoryId:categoryId];
+    }).then(^(id _) {
+        [[WKFollowedKeysStore shared] reload];
+        [weakSelf loadCategories];
+        [weakSelf showFollowedToast:convName toCategory:catName];
+    }).catch(^(NSError *err) {
+        [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
+    });
+}
+
+- (void)performFollowThread:(NSString *)threadChannelId
+              parentGroupNo:(NSString *)parentGroupNo
+                 categoryId:(nullable NSString *)categoryId
+               categoryName:(nullable NSString *)categoryName {
+    __weak typeof(self) weakSelf = self;
+    NSString *catName = categoryName.length > 0 ? categoryName : [self categoryNameById:categoryId];
+    NSString *convName = [self displayNameForChannel:[WKChannel channelID:threadChannelId channelType:WK_COMMUNITY_TOPIC]];
+    AnyPromise *chain;
+    if (categoryId.length > 0) {
+        // 父群也未关注：先 refollow 父群 → moveGroup 到选定分组 → followThread
+        chain = [[WKFollowService shared] refollowChannel:parentGroupNo].then(^id(id _) {
+            return [[WKCategoryService shared] moveGroup:parentGroupNo toCategoryId:categoryId];
+        }).then(^id(id _) {
+            return [[WKFollowService shared] followThread:threadChannelId];
+        });
+    } else {
+        // 父群已关注：直接 followThread，后端 cascade
+        chain = [[WKFollowService shared] followThread:threadChannelId];
+    }
+    chain.then(^(id _) {
+        [[WKFollowedKeysStore shared] reload];
+        [weakSelf loadCategories];
+        if (catName.length > 0) {
+            [weakSelf showFollowedToast:convName toCategory:catName];
+        } else {
+            // 父群已关注的子区是 cascade 路径，没选分组；用父群当前所在分组名提示
+            for (WKCategoryEntity *cat in weakSelf.conversationListVM.categoryList) {
+                for (WKCategoryGroup *cg in cat.groups) {
+                    if ([cg.group_no isEqualToString:parentGroupNo]) {
+                        [weakSelf showFollowedToast:convName toCategory:cat.name];
+                        return;
+                    }
+                }
+            }
+        }
+    }).catch(^(NSError *err) {
+        [[WKNavigationManager shared].topViewController.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
+    });
+}
+
+/// 兜底取 channel 的 displayName（cache hit / wrap hit / fallback channelId）
+- (NSString *)displayNameForChannel:(WKChannel *)channel {
+    if (!channel || channel.channelId.length == 0) return @"";
+    WKConversationWrapModel *wrap = [self.conversationListVM modelAtChannel:channel];
+    NSString *name = wrap.channelInfo.displayName;
+    if (name.length > 0) return name;
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:channel];
+    name = info.displayName;
+    if (name.length > 0) return name;
+    return channel.channelId;
 }
 
 #pragma mark - 会话菜单图标
@@ -2413,6 +3950,57 @@
     CGContextAddLineToPoint(ctx, 7, 3);
     CGContextMoveToPoint(ctx, 10, 10);
     CGContextAddLineToPoint(ctx, 10, 17);
+    CGContextStrokePath(ctx);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
++ (UIImage *)iconFollow {
+    CGSize s = CGSizeMake(20, 20);
+    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    [[UIColor colorWithWhite:0.3 alpha:1] setStroke];
+    CGContextSetLineWidth(ctx, 1.5);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+    // 五角星轮廓（添加到关注）
+    CGFloat cx = 10, cy = 10, r = 7;
+    for (int i = 0; i < 5; i++) {
+        CGFloat a = -M_PI/2 + i * 2*M_PI/5;
+        CGFloat x = cx + r * cos(a);
+        CGFloat y = cy + r * sin(a);
+        if (i == 0) CGContextMoveToPoint(ctx, x, y);
+        else CGContextAddLineToPoint(ctx, x, y);
+    }
+    CGContextClosePath(ctx);
+    CGContextStrokePath(ctx);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
++ (UIImage *)iconUnfollow {
+    CGSize s = CGSizeMake(20, 20);
+    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    [[UIColor colorWithWhite:0.3 alpha:1] setStroke];
+    CGContextSetLineWidth(ctx, 1.5);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+    // 五角星 + 斜杠（取消关注）
+    CGFloat cx = 10, cy = 10, r = 6;
+    for (int i = 0; i < 5; i++) {
+        CGFloat a = -M_PI/2 + i * 2*M_PI/5;
+        CGFloat x = cx + r * cos(a);
+        CGFloat y = cy + r * sin(a);
+        if (i == 0) CGContextMoveToPoint(ctx, x, y);
+        else CGContextAddLineToPoint(ctx, x, y);
+    }
+    CGContextClosePath(ctx);
+    CGContextStrokePath(ctx);
+    CGContextMoveToPoint(ctx, 3, 17);
+    CGContextAddLineToPoint(ctx, 17, 3);
     CGContextStrokePath(ctx);
     UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
@@ -2930,12 +4518,19 @@
 }
 
 -(void) rebuildGroupDisplayAndReload {
+    // 拖动期间冻结表格刷新 — 否则源 cell 可能被回收，长按手势随之销毁，
+    // Ended/Cancelled 永不触发，snapshot 就卡在屏上。结束拖动时统一回放一次。
+    if (self.cellDragInProgress) {
+        self.pendingRebuildAfterDrag = YES;
+        return;
+    }
     CFAbsoluteTime _t0 = CFAbsoluteTimeGetCurrent();
     self.groupDisplayList = [_conversationListVM buildGroupDisplayList];
     CFAbsoluteTime _t1 = CFAbsoluteTimeGetCurrent();
     [self.tableView reloadData];
     CFAbsoluteTime _t2 = CFAbsoluteTimeGetCurrent();
     [self updateGroupMentionBadge];
+    [self refreshFollowEmptyVisibility];
     CFAbsoluteTime _t3 = CFAbsoluteTimeGetCurrent();
     NSLog(@"[TabPerf] rebuildGroupDisplayAndReload: buildList=%.1fms reloadData=%.1fms mentionBadge=%.1fms total=%.1fms rows=%lu",
           (_t1-_t0)*1000, (_t2-_t1)*1000, (_t3-_t2)*1000, (_t3-_t0)*1000,
@@ -2945,10 +4540,17 @@
 /// 检查群聊和子区中是否有未处理的@提醒，更新 tab 标识
 /// 直接使用 buildGroupDisplayList 中已计算好的结果，避免重复遍历和 DB 查询
 -(void) updateGroupMentionBadge {
-    [_conversationTabView setGroupHasMention:_conversationListVM.lastBuildHasMention];
+    [_conversationTabView setFollowHasMention:_conversationListVM.lastBuildHasMention];
 }
 
 -(void) showCreateCategoryDialog {
+    [self showCreateCategoryDialogWithCompletion:nil];
+}
+
+/// 创建分组，完成后回调新建的 WKCategoryEntity。如 completion 为 nil，只创建不联动。
+/// 用于"添加到关注/移动到分组 → 新建分组"流程：用户期望新建后会话自动落入新分组，
+/// 不联动会很割裂。
+-(void) showCreateCategoryDialogWithCompletion:(void(^)(WKCategoryEntity *category))completion {
     NSString *spaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
     if(!spaceId || spaceId.length == 0) return;
 
@@ -2963,6 +4565,7 @@
         if(!name || name.length == 0) return;
         [[WKCategoryService shared] createCategory:spaceId name:name].then(^(WKCategoryEntity *cat) {
             [weakSelf loadCategories];
+            if (completion) completion(cat);
         }).catch(^(NSError *error) {
             NSLog(@"创建分组失败: %@", error);
         });
@@ -2971,55 +4574,68 @@
 }
 
 -(void) showMoveToCategoryDialog:(NSString *)groupNo {
-    NSArray<WKCategoryEntity *> *categories = _conversationListVM.categoryList;
+    // 先刷一次 categoryList，避免显示过期分组（用户在 web/另一设备建/删的分类）
+    __weak typeof(self) weakSelf = self;
+    [_conversationListVM loadCategoriesWithCompletion:^{
+        [weakSelf presentMoveToCategorySheet:groupNo];
+    }];
+}
+
+-(void) presentMoveToCategorySheet:(NSString *)groupNo {
+    NSArray<WKCategoryEntity *> *all = _conversationListVM.categoryList;
 
     // 获取群组名称
     WKChannelInfo *groupInfo = [[WKSDK shared].channelManager getChannelInfo:[WKChannel groupWithChannelID:groupNo]];
     NSString *groupName = groupInfo ? groupInfo.displayName : groupNo;
     NSString *titleText = [NSString stringWithFormat:@"%@ \"%@\"", LLang(@"移动"), groupName];
 
-    // 找到当前群聊所在分组
+    // 找到当前群所在分组（用于 ✓ 标记）
     NSString *currentCategoryId = nil;
-    for (WKCategoryEntity *cat in categories) {
+    NSMutableArray<WKCategoryEntity *> *cats = [NSMutableArray array];
+    for (WKCategoryEntity *cat in all) {
+        if (cat.is_default) continue;
         if(!cat.category_id || cat.category_id.length == 0) continue;
+        [cats addObject:cat];
         for (WKCategoryGroup *cg in cat.groups) {
             if([groupNo isEqualToString:cg.group_no]) {
                 currentCategoryId = cat.category_id;
                 break;
             }
         }
-        if(currentCategoryId) break;
     }
 
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:titleText message:nil preferredStyle:UIAlertControllerStyleActionSheet];
     __weak typeof(self) weakSelf = self;
-
-    // 默认分组选项
-    BOOL isInDefault = (currentCategoryId == nil);
-    NSString *defaultTitle = isInDefault ? [NSString stringWithFormat:@"✓ %@", LLang(@"不分组")] : LLang(@"不分组");
-    [alert addAction:[UIAlertAction actionWithTitle:defaultTitle style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-        if(isInDefault) return;
-        [[WKCategoryService shared] moveGroup:groupNo toCategoryId:nil].then(^(id r) {
+    void(^performMove)(NSString *) = ^(NSString *catId) {
+        if(catId.length == 0) return;
+        [[WKCategoryService shared] moveGroup:groupNo toCategoryId:catId].then(^(id r) {
+            // 移动改变了分组归属 → server 上 follow 关系跟着变,
+            // 本地 followedKeys 必须同步刷新，否则长按菜单 / unread 计数会滞后。
+            [[WKFollowedKeysStore shared] reload];
             [weakSelf loadCategories];
         }).catch(^(NSError *e) { NSLog(@"移动分组失败: %@", e); });
-    }]];
+    };
 
-    // 各用户自建分组
-    for (WKCategoryEntity *cat in categories) {
-        if(!cat.category_id || cat.category_id.length == 0) continue;
-        BOOL isCurrent = [cat.category_id isEqualToString:currentCategoryId];
-        NSString *title = isCurrent ? [NSString stringWithFormat:@"✓ %@", cat.name] : cat.name;
-        NSString *catId = cat.category_id;
-        [alert addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-            if(isCurrent) return;
-            [[WKCategoryService shared] moveGroup:groupNo toCategoryId:catId].then(^(id r) {
-                [weakSelf loadCategories];
-            }).catch(^(NSError *e) { NSLog(@"移动分组失败: %@", e); });
-        }]];
+    // 没有自建分组：直接走新建（新建成功后自动 move）
+    if (cats.count == 0) {
+        [self showCreateCategoryDialogWithCompletion:^(WKCategoryEntity *cat) {
+            if (cat.category_id.length == 0) return;
+            performMove(cat.category_id);
+        }];
+        return;
     }
 
-    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
+    // 复用 Add-to-follow 的自定义底部 sheet —— iPad-safe（之前用 ActionSheet 没配
+    // popoverPresentationController，iPad 上会崩）。带 ✓ 标记当前归属的分组。
+    NSString *currentIdCapture = currentCategoryId;
+    [self presentFollowCategorySheetWithTitle:titleText
+                                   categories:cats
+                           selectedCategoryId:currentIdCapture
+                                showCreateRow:YES
+                                       onPick:^(NSString * _Nullable categoryId, NSString * _Nullable categoryName) {
+        if (categoryId.length == 0) return;
+        if ([categoryId isEqualToString:currentIdCapture]) return; // 同分组不动作
+        performMove(categoryId);
+    }];
 }
 
 -(void) showSectionManagePopup:(NSString *)sectionId title:(NSString *)title atPoint:(CGPoint)point {
@@ -3100,10 +4716,13 @@
     } copy]}];
 
     [menuItems addObject:@{@"title": LLang(@"删除分组"), @"icon": [WKConversationListVC iconDelete], @"isDestructive": @YES, @"action": [^{
-        [WKAlertUtil alert:LLang(@"删除后该分组内的群聊将不再归属任何分组，确定要删除？") buttonsStatement:@[LLang(@"取消"), LLang(@"删除")] chooseBlock:^(NSInteger buttonIdx) {
+        [WKAlertUtil alert:LLang(@"删除后该分组内的会话将不再归属任何分组，确定要删除？") buttonsStatement:@[LLang(@"取消"), LLang(@"删除")] chooseBlock:^(NSInteger buttonIdx) {
             if(buttonIdx == 1) {
                 [[WKCategoryService shared] deleteCategory:spaceId categoryId:sectionId].then(^(id r) {
                     [weakSelf loadCategories];
+                    // 服务端会把该分组下的全部 follow 一并取消，本地 followedKeys 必须同步刷新,
+                    // 否则最近 tab 长按这些会话还会显示"取消关注"，要等下次 30s debounce 兜底才正确。
+                    [[WKFollowedKeysStore shared] reload];
                 }).catch(^(NSError *e) { NSLog(@"删除分组失败: %@", e); });
             }
         }];
@@ -3373,6 +4992,8 @@
 #pragma mark - Pixel Particle Hint
 
 -(void) tryShowPixelHintForMessage:(WKMessage *)message {
+    // 拖动期间不弹像素通知 — 通知 view 抢手势会让长按 Ended 永不触发，snapshot 卡屏
+    if (self.cellDragInProgress) return;
     NSLog(@"[HintDebug] >>> onMessage channel=%@/%d contentType=%ld fromUid=%@ msgSeq=%u",
           message.channel.channelId, message.channel.channelType,
           (long)message.contentType, message.fromUid ?: @"(nil)", message.messageSeq);
@@ -3385,6 +5006,16 @@
 
     NSString *loginUid = [WKApp shared].loginInfo.uid;
     if (loginUid.length > 0 && [message.fromUid isEqualToString:loginUid]) return;
+
+    // AI / 机器人的消息不弹像素提醒 — AI 回复频繁会刷屏，只保留人类发的消息
+    if (message.fromUid.length > 0) {
+        WKChannel *senderChannel = [WKChannel channelID:message.fromUid channelType:WK_PERSON];
+        WKChannelInfo *senderInfo = [[WKSDK shared].channelManager getChannelInfo:senderChannel];
+        if (senderInfo && senderInfo.robot) {
+            NSLog(@"[HintDebug] SKIP: sender is robot uid=%@", message.fromUid);
+            return;
+        }
+    }
 
     // 消息ID去重：无论是否可见，都先记录，防止返回页面时重复弹出
     NSNumber *msgIdNum = @(message.messageId);

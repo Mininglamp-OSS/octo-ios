@@ -13,14 +13,14 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) void(^onTabChanged)(NSInteger index);
 
 /// 设置各 tab 的未读数
-- (void)setGroupUnreadCount:(NSInteger)count;
-- (void)setPrivateUnreadCount:(NSInteger)count;
+- (void)setFollowUnreadCount:(NSInteger)count;
+- (void)setRecentUnreadCount:(NSInteger)count;
 
 /// 外部切换（带动画）
 - (void)setSelectedIndex:(NSInteger)index animated:(BOOL)animated;
 
-/// 设置群聊 tab 的 @提醒标识
-- (void)setGroupHasMention:(BOOL)hasMention;
+/// 设置关注 tab 的 @提醒标识
+- (void)setFollowHasMention:(BOOL)hasMention;
 
 @end
 

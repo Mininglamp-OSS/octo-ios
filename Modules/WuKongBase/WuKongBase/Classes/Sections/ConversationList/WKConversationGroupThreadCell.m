@@ -8,6 +8,8 @@
 #import "WKTimeTool.h"
 #import "WKBadgeView.h"
 #import "WKUserAvatar.h"
+#import "WKFollowedKeysStore.h"
+#import "WKSidebarItemEntity.h"
 #import "WKAvatarUtil.h"
 #import "UIView+WK.h"
 #import "WKApp.h"
@@ -96,6 +98,36 @@
 #define CONTENT_LEFT 77.0f
 #define RIGHT_PADDING 15.0f
 
+#pragma mark - 关注 tab 子区可见性过滤
+
++ (NSArray<WKThreadModel *> *)visibleThreadPreviewsFor:(WKConversationWrapModel *)model {
+    NSArray<WKThreadModel *> *raw = model.threadPreviews;
+    if (raw.count == 0) return raw;
+    WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
+    if (!store.loaded) return raw; // store 还没成功加载过，先按原样（避免冷启瞬间全部清空）
+    NSSet<NSString *> *keys = store.followedKeys;
+    NSMutableArray<WKThreadModel *> *kept = [NSMutableArray array];
+    for (WKThreadModel *t in raw) {
+        NSString *key = [NSString stringWithFormat:@"%ld::%@", (long)WKFollowTargetTypeThread, t.channelId ?: @""];
+        if ([keys containsObject:key]) [kept addObject:t];
+    }
+    return kept;
+}
+
++ (NSInteger)visibleThreadCountFor:(WKConversationWrapModel *)model {
+    // 关注 tab 上"该群下已关注的子区数"。
+    WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
+    if (!store.loaded) return model.threadCount; // 未加载先按全量（避免冷启误清）
+    NSString *groupNo = model.channel.channelId;
+    if (groupNo.length == 0) return 0;
+    NSString *prefix = [NSString stringWithFormat:@"%ld::%@____", (long)WKFollowTargetTypeThread, groupNo];
+    NSInteger n = 0;
+    for (NSString *k in store.followedKeys) {
+        if ([k hasPrefix:prefix]) n++;
+    }
+    return n;
+}
+
 +(CGFloat) heightForModel:(WKConversationWrapModel *)model {
     // 检查是否有 @我 提醒
     BOOL hasMention = NO;
@@ -105,19 +137,21 @@
         }
     }
     CGFloat topH = hasMention ? (TOP_HEIGHT + 10) : TOP_HEIGHT;
-    if (!model.threadPreviews || model.threadPreviews.count == 0) {
+    NSArray<WKThreadModel *> *visiblePreviews = [self visibleThreadPreviewsFor:model];
+    if (visiblePreviews.count == 0) {
         return topH;
     }
     CGFloat h = topH;
     // 子区行高：有@提醒的行更高
-    for (WKThreadModel *t in model.threadPreviews) {
+    for (WKThreadModel *t in visiblePreviews) {
         WKChannel *tc = [WKChannel channelID:t.channelId channelType:WK_COMMUNITY_TOPIC];
         NSArray<WKReminder *> *rems = [[WKReminderDB shared] getWaitDoneReminder:tc];
         BOOL tMention = NO;
         for (WKReminder *r in rems) { if (r.type == WKReminderTypeMentionMe) { tMention = YES; break; } }
         h += tMention ? 44.0f : THREAD_ROW_HEIGHT;
     }
-    if (model.threadCount > (NSInteger)model.threadPreviews.count) {
+    NSInteger totalFollowed = [self visibleThreadCountFor:model];
+    if (totalFollowed > (NSInteger)visiblePreviews.count) {
         h += MORE_HEIGHT;
     }
     return h + 6.0f;
@@ -369,7 +403,7 @@
 
 /// 动态更新预览行（按需增减行视图）
 -(void) updateThreadPreviews {
-    NSArray<WKThreadModel *> *previews = self.model.threadPreviews;
+    NSArray<WKThreadModel *> *previews = [WKConversationGroupThreadCell visibleThreadPreviewsFor:self.model];
     NSInteger count = previews ? previews.count : 0;
     BOOL hasPreview = (count > 0);
 
@@ -440,7 +474,8 @@
     self.separatorLine.hidden = (count < 2);
 
     // 更多
-    if (self.model.threadCount > count) {
+    NSInteger totalFollowedThreads = [WKConversationGroupThreadCell visibleThreadCountFor:self.model];
+    if (totalFollowedThreads > count) {
         self.moreLbl.hidden = NO;
         self.moreLbl.userInteractionEnabled = YES;
         if (self.moreLbl.gestureRecognizers.count == 0) {
@@ -464,7 +499,7 @@
                                                  threadHasMention:&moreMention];
 
         // 构建文本：+N个子区 [有人@我]
-        NSString *moreText = [NSString stringWithFormat:@"+%ld %@", (long)(self.model.threadCount - count), LLang(@"个子区")];
+        NSString *moreText = [NSString stringWithFormat:@"+%ld %@", (long)(totalFollowedThreads - count), LLang(@"个子区")];
         if (moreMention) {
             NSMutableAttributedString *attrText = [[NSMutableAttributedString alloc] initWithString:moreText attributes:@{NSForegroundColorAttributeName: [WKApp shared].config.themeColor}];
             [attrText appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@" %@", LLang(@"[有人@我]")] attributes:@{NSForegroundColorAttributeName: [UIColor orangeColor]}]];
@@ -496,7 +531,7 @@
 
 -(void) threadRowTapped:(UITapGestureRecognizer *)tap {
     NSInteger index = tap.view.tag - 2000;
-    NSArray *previews = self.model.threadPreviews;
+    NSArray *previews = [WKConversationGroupThreadCell visibleThreadPreviewsFor:self.model];
     if (previews && index >= 0 && index < (NSInteger)previews.count) {
         WKThreadModel *t = previews[index];
         if (self.onThreadPreviewTap && t.channelId.length > 0) {
@@ -513,7 +548,7 @@
         [feedback impactOccurred];
 
         NSInteger index = row.tag - 2000;
-        NSArray *previews = self.model.threadPreviews;
+        NSArray *previews = [WKConversationGroupThreadCell visibleThreadPreviewsFor:self.model];
         if (previews && index >= 0 && index < (NSInteger)previews.count) {
             WKThreadModel *t = previews[index];
             if (self.onThreadPreviewLongPress && t.channelId.length > 0) {
@@ -600,7 +635,7 @@
     self.muteIcon.lim_top = (topH - self.muteIcon.lim_height) / 2.0f;
 
     // 子区预览区域
-    NSArray *previews = self.model.threadPreviews;
+    NSArray *previews = [WKConversationGroupThreadCell visibleThreadPreviewsFor:self.model];
     NSInteger previewCount = previews ? previews.count : 0;
     if (previewCount > 0) {
         CGFloat containerTop = topH;

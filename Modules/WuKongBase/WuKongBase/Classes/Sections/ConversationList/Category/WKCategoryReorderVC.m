@@ -6,6 +6,7 @@
 #import "WKCategoryReorderVC.h"
 #import "WKCategoryEntity.h"
 #import "WKCategoryService.h"
+#import "WKFollowedKeysStore.h"
 #import "WKApp.h"
 #import "UIView+WK.h"
 #import "WuKongBase.h"
@@ -84,6 +85,7 @@
 @property (nonatomic, strong) NSMutableArray<WKCategoryEntity *> *reorderList;
 @property (nonatomic, strong) UIView *snapshotView;
 @property (nonatomic, strong) NSIndexPath *dragIndexPath;
+@property (nonatomic, assign) BOOL didReorderInGesture; // 本次手势期间是否实际换过位
 @end
 
 @implementation WKCategoryReorderVC
@@ -93,18 +95,10 @@
     self.navigationBar.title = LLang(@"排序分组");
     self.view.backgroundColor = [WKApp shared].config.backgroundColor;
 
-    // 完成按钮
-    UIButton *doneBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [doneBtn setTitle:LLang(@"完成") forState:UIControlStateNormal];
-    [doneBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
-    doneBtn.titleLabel.font = [[WKApp shared].config appFontOfSizeMedium:16.0f];
-    [doneBtn sizeToFit];
-    [doneBtn addTarget:self action:@selector(onDone) forControlEvents:UIControlEventTouchUpInside];
-    self.rightView = doneBtn;
-
     // 数据
     _reorderList = [NSMutableArray array];
     for (WKCategoryEntity *cat in self.categories) {
+        if (cat.is_default) continue; // 与关注 tab 一致：默认分组不参与排序
         if (cat.category_id && cat.category_id.length > 0) {
             [_reorderList addObject:cat];
         }
@@ -189,6 +183,64 @@
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         [self.tableView reloadData];
     });
+    // tap 触发的"移到最前 / 上移 / 下移 / 移到最后"也要走持久化 —— 之前只在 long-press
+    // 拖完才 commitReorder，"完成"按钮也已经被移除，导致用户用 row action 改顺序后退出
+    // 页面就丢。这里同步触发一次保存，commit 异步走 API 不阻塞 UI。
+    [self commitReorder];
+}
+
+#pragma mark - 左滑删除（iOS 11+）
+
+- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView
+trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath API_AVAILABLE(ios(11.0)) {
+    if (indexPath.row >= (NSInteger)_reorderList.count) return nil;
+    WKCategoryEntity *cat = _reorderList[indexPath.row];
+    if (cat.is_default || cat.category_id.length == 0) return nil; // 默认分组不允许删
+    __weak typeof(self) weakSelf = self;
+    UIContextualAction *del = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive
+                                                                      title:LLang(@"删除")
+                                                                    handler:^(UIContextualAction *action, UIView *src, void (^completion)(BOOL)) {
+        [weakSelf confirmDeleteCategoryAtIndexPath:indexPath completion:completion];
+    }];
+    UISwipeActionsConfiguration *cfg = [UISwipeActionsConfiguration configurationWithActions:@[del]];
+    cfg.performsFirstActionWithFullSwipe = NO; // 防止误触：必须点击红色按钮才删
+    return cfg;
+}
+
+- (void)confirmDeleteCategoryAtIndexPath:(NSIndexPath *)indexPath completion:(void(^)(BOOL))completion {
+    if (indexPath.row >= (NSInteger)_reorderList.count) { if (completion) completion(NO); return; }
+    WKCategoryEntity *cat = _reorderList[indexPath.row];
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if (spaceId.length == 0 || cat.category_id.length == 0) { if (completion) completion(NO); return; }
+
+    NSString *msg = [NSString stringWithFormat:LLang(@"确认删除分组「%@」？该分组下所有关注会被取消。"), cat.name];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil message:msg preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:^(UIAlertAction *_) {
+        if (completion) completion(NO);
+    }]];
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"删除") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *_) {
+        [[WKCategoryService shared] deleteCategory:spaceId categoryId:cat.category_id].then(^(id r) {
+            // 服务端会把该分组下的全部 follow 一并取消，本地 followedKeys 必须同步刷新,
+            // 否则返回列表页长按这些会话还会显示"取消关注"，要等下次 30s debounce 兜底才正确。
+            [[WKFollowedKeysStore shared] reload];
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) { if (completion) completion(YES); return; }
+            NSInteger idx = [strongSelf->_reorderList indexOfObject:cat];
+            if (idx != NSNotFound) {
+                [strongSelf->_reorderList removeObjectAtIndex:idx];
+                [strongSelf->_tableView deleteRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:idx inSection:0]] withRowAnimation:UITableViewRowAnimationAutomatic];
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    [strongSelf.tableView reloadData];
+                });
+            }
+            if (completion) completion(YES);
+        }).catch(^(NSError *err) {
+            [self.view showMsg:err.domain ?: LLang(@"删除分组失败")];
+            if (completion) completion(NO);
+        });
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 #pragma mark - 长按拖拽排序
@@ -201,6 +253,7 @@
             NSIndexPath *indexPath = [_tableView indexPathForRowAtPoint:location];
             if (!indexPath) return;
             _dragIndexPath = indexPath;
+            _didReorderInGesture = NO;
 
             UITableViewCell *cell = [_tableView cellForRowAtIndexPath:indexPath];
             _snapshotView = [cell snapshotViewAfterScreenUpdates:YES];
@@ -231,6 +284,7 @@
                 [_reorderList insertObject:item atIndex:toIndexPath.row];
                 [_tableView moveRowAtIndexPath:_dragIndexPath toIndexPath:toIndexPath];
                 _dragIndexPath = toIndexPath;
+                _didReorderInGesture = YES;
             }
             break;
         }
@@ -238,6 +292,7 @@
         case UIGestureRecognizerStateCancelled: {
             if (!_dragIndexPath) return;
             UITableViewCell *cell = [_tableView cellForRowAtIndexPath:_dragIndexPath];
+            BOOL shouldCommit = _didReorderInGesture;
             [UIView animateWithDuration:0.2 animations:^{
                 self.snapshotView.transform = CGAffineTransformIdentity;
                 CGRect rect = [self.tableView rectForRowAtIndexPath:self.dragIndexPath];
@@ -247,7 +302,11 @@
                 [self.snapshotView removeFromSuperview];
                 self.snapshotView = nil;
                 self.dragIndexPath = nil;
+                self.didReorderInGesture = NO;
                 [self.tableView reloadData]; // 刷新序号
+                if (shouldCommit) {
+                    [self commitReorder];
+                }
             }];
             break;
         }
@@ -256,21 +315,30 @@
     }
 }
 
-#pragma mark - 完成
+#pragma mark - 保存排序
 
-- (void)onDone {
+/// 拖拽结束后立即调用 — 与关注 tab 长按拖动排序走同一个接口（WKCategoryService.sortCategories:）。
+/// 提交的 ID 列表必须包含所有分组（含默认分组），否则服务端会判定为不完整并拒绝。
+/// 默认分组不参与拖动排序，按 self.categories 中的原位置塞回；非默认分组按用户拖动的新顺序排。
+- (void)commitReorder {
     NSMutableArray *ids = [NSMutableArray array];
-    for (WKCategoryEntity *cat in _reorderList) {
-        [ids addObject:cat.category_id];
+    NSInteger reorderIdx = 0;
+    for (WKCategoryEntity *cat in self.categories) {
+        if (cat.category_id.length == 0) continue;
+        if (cat.is_default) {
+            [ids addObject:cat.category_id];
+        } else if (reorderIdx < _reorderList.count) {
+            [ids addObject:_reorderList[reorderIdx].category_id];
+            reorderIdx++;
+        }
     }
+    if (ids.count == 0) return;
     __weak typeof(self) weakSelf = self;
     [[WKCategoryService shared] sortCategories:self.spaceId categoryIds:ids].then(^(id r) {
-        if (weakSelf.onReorderComplete) {
-            weakSelf.onReorderComplete();
-        }
-        [[WKNavigationManager shared] popViewControllerAnimated:YES];
+        if (weakSelf.onReorderComplete) weakSelf.onReorderComplete();
     }).catch(^(NSError *e) {
         NSLog(@"排序失败: %@", e);
+        [weakSelf.view showMsg:LLang(@"排序失败")];
     });
 }
 

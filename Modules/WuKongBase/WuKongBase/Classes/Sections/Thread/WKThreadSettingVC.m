@@ -18,8 +18,9 @@
 #import "WKGroupMdVC.h"
 #import "WKChannelUtil.h"
 #import "WKRealnamePrefetcher.h"
+#import "WKInputVC.h"
 
-@interface WKThreadSettingVC () <WKSettingMemberGridViewDelegate, UITableViewDataSource, UITableViewDelegate>
+@interface WKThreadSettingVC () <WKSettingMemberGridViewDelegate, UITableViewDataSource, UITableViewDelegate, WKChannelManagerDelegate>
 
 @property (nonatomic, strong) UITableView *tableView;
 @property (nonatomic, strong) UIView *headerView;
@@ -65,10 +66,15 @@
                                              selector:@selector(realnameVerifiedUpdated:)
                                                  name:WKRealnameVerifiedUpdatedNotification
                                                object:nil];
+
+    // 监听 channelInfo 变化，web 端改名后服务端会推 channelUpdate CMD，SDK 更新本地
+    // channelInfo 触发该回调，让本页停留期间也能同步刷新「子区名称」cell。
+    [[WKSDK shared].channelManager addDelegate:self];
 }
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WKRealnameVerifiedUpdatedNotification object:nil];
+    [[WKSDK shared].channelManager removeDelegate:self];
 }
 
 - (void)realnameVerifiedUpdated:(NSNotification *)noti {
@@ -109,9 +115,14 @@
         weakSelf.threadName = thread.name;
         NSString *myUid = [WKSDK shared].options.connectInfo.uid;
         weakSelf.isCreator = (myUid.length > 0 && [thread.creatorUid isEqualToString:myUid]);
-        // 同步 thread md 状态到 channelInfo.extra
+        // 同步 thread md 状态 + 最新 name 到 channelInfo，让会话页头部 / 会话列表 cell 跟着 channelInfoUpdate 自动刷新。
+        // 注意：必须先把 name 也写进去再 updateChannelInfo，否则 SDK 同步触发的 channelInfoUpdate 会
+        // 拿到 channelInfo.name 旧值，把 self.threadName 倒灌回旧名 (delegate 见本文件 channelInfoUpdate:)。
         WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:weakSelf.channel];
         if (info) {
+            if (thread.name.length > 0) {
+                info.name = thread.name;
+            }
             info.extra[@"has_thread_md"] = @(thread.hasThreadMd);
             info.extra[@"thread_md_version"] = @(thread.threadMdVersion);
             [[WKSDK shared].channelManager updateChannelInfo:info];
@@ -305,6 +316,9 @@
         cell.detailTextLabel.font = [[WKApp shared].config appFontOfSize:15.0f];
         cell.detailTextLabel.textColor = [UIColor grayColor];
         cell.backgroundColor = [WKApp shared].config.cellBackgroundColor;
+        BOOL canRename = self.isCreator || self.isGroupAdmin;
+        cell.accessoryType = canRename ? UITableViewCellAccessoryDisclosureIndicator : UITableViewCellAccessoryNone;
+        cell.selectionStyle = canRename ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
         return cell;
     } else if (indexPath.section == 0 && indexPath.row == 1) {
         UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"MdCell"];
@@ -355,7 +369,10 @@
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.section == 0 && indexPath.row == 1) {
+    if (indexPath.section == 0 && indexPath.row == 0) {
+        if (!self.isCreator && !self.isGroupAdmin) return;
+        [self showRenameInput];
+    } else if (indexPath.section == 0 && indexPath.row == 1) {
         WKGroupMdVC *vc = [WKGroupMdVC new];
         vc.channel = self.channel;
         vc.canEdit = self.isCreator || self.isGroupAdmin;
@@ -414,6 +431,54 @@
         });
     }]];
     [self presentViewController:alert animated:YES completion:nil];
+}
+
+#pragma mark - Rename
+
+- (void)showRenameInput {
+    __weak typeof(self) weakSelf = self;
+    WKInputVC *inputVC = [WKInputVC new];
+    inputVC.title = LLang(@"修改子区名称");
+    inputVC.maxLength = 50; // 与 createThread 注释一致
+    inputVC.defaultValue = self.threadName ?: @"";
+    [inputVC setOnFinish:^(NSString * _Nonnull value) {
+        [weakSelf updateThreadName:value];
+    }];
+    [[WKNavigationManager shared] pushViewController:inputVC animated:YES];
+}
+
+- (void)updateThreadName:(NSString *)name {
+    NSString *trimmed = [name stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed.length == 0) {
+        [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"子区名称不能为空")];
+        return;
+    }
+    if ([trimmed isEqualToString:self.threadName]) {
+        [[WKNavigationManager shared] popViewControllerAnimated:YES];
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    [[WKThreadService shared] updateThread:self.groupNo shortId:self.shortId name:trimmed].then(^(id result) {
+        weakSelf.threadName = trimmed;
+        weakSelf.thread.name = trimmed;
+        [weakSelf.tableView reloadData];
+        [[WKNavigationManager shared] popViewControllerAnimated:YES];
+        // 强制刷新 channelInfo，让会话页头部 / 会话列表 cell 同步刷新（与 WKMeInfoVC.m updateName: 同款节奏）
+        [[WKChannelManager shared] fetchChannelInfo:weakSelf.channel];
+    }).catch(^(NSError *error) {
+        [[WKNavigationManager shared].topViewController.view showMsg:error.domain];
+    });
+}
+
+#pragma mark - WKChannelManagerDelegate
+
+- (void)channelInfoUpdate:(WKChannelInfo *)channelInfo {
+    if (channelInfo.channel.channelType != WK_COMMUNITY_TOPIC) return;
+    if (![channelInfo.channel.channelId isEqualToString:self.channel.channelId]) return;
+    if (channelInfo.name.length == 0) return;
+    if ([channelInfo.name isEqualToString:self.threadName]) return;
+    self.threadName = channelInfo.name;
+    [self.tableView reloadData];
 }
 
 #pragma mark - Lazy Init

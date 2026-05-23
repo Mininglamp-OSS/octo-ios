@@ -22,6 +22,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (nonatomic, copy, nullable) void(^onToggle)(NSString *sectionId, BOOL collapsed);
 @property (nonatomic, copy, nullable) void(^onLongPress)(NSString *sectionId, NSString *title, CGPoint pointInWindow);
+/// 把整个长按 gesture 的所有 state 都转发出来，供 VC 实现"长按 → 拖动重排"。
+/// 与 onLongPress 互不冲突：onLongPress 还是仅在 Began 触发（弹菜单），
+/// 这个 progress 用于驱动后续 Changed/Ended 的拖拽机制。
+@property (nonatomic, copy, nullable) void(^onLongPressProgress)(UILongPressGestureRecognizer *gesture, NSString *sectionId);
 
 @end
 

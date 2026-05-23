@@ -278,11 +278,35 @@
 // WKConversationListCell
 
 "群聊"="Group Chat";
+"关注"="Follow";
+"最近"="Recent";
+"来源:%@"="From: %@";
+"添加到关注"="Follow";
+"取消关注"="Unfollow";
+"+ 新建分组"="+ New Category";
+"添加到关注失败"="Failed to follow";
+"取消关注失败"="Failed to unfollow";
+"已添加到 "="Added to ";
+" 分组"=" category";
+"已取消关注 "="Unfollowed ";
+" 已添加到 "=" added to ";
+" 已移动到 "=" moved to ";
+" 已取消关注"=" unfollowed";
+" 已置顶"=" pinned";
+" 已取消置顶"=" unpinned";
+"移动失败"="Failed to move";
+"关注你最在意的会话"="Follow what matters most";
+"把重要的群聊、私聊、子区集中在这里，沉浸在你真正关心的消息里。\n在「最近」长按任意会话，选择「添加到关注」。"="Group chats, DMs, threads — keep what matters here, and stay immersed in the messages you truly care about.\nLong-press any conversation in Recent and tap Follow.";
+"该会话"="this conversation";
 "无"="Nothing";
 "刚刚"="Just";
 "%0.0f分钟"="%0.0f min";
 "正在输入"="Typing";
 "%@ 正在输入"="%@ Typing";
+
+// WKThreadSettingVC - rename
+"修改子区名称"="Rename thread";
+"子区名称不能为空"="Thread name cannot be empty";
 
 
 // WKConversationListSelectVM
@@ -593,3 +617,14 @@
 "获取实名认证地址失败"="Failed to get verification URL";
 "实名认证地址不合法"="Invalid verification URL";
 "实名认证需要 iOS 11 及以上版本"="Real-name verification requires iOS 11 or later";
+"删除后该分组内的会话将不再归属任何分组，确定要删除？"="After deletion, conversations in this category will no longer belong to any category. Delete?";
+"移动"="Move";
+"移动分组"="Move category";
+"移动分组失败"="Failed to move category";
+"顺序已被其它设备更新"="Order updated by another device";
+"确认删除分组「%@」？该分组下所有关注会被取消。"="Delete category “%@”? All follows in this category will be canceled.";
+"删除分组失败"="Failed to delete category";
+"创建分组"="Create category";
+"请输入分组名称"="Enter a category name";
+"创建"="Create";
+"创建分组失败"="Failed to create category";

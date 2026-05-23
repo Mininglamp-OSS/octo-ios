@@ -33,6 +33,19 @@
     if(self) {
         self.c = conversation;
 //        self.unreadCt = conversation.unreadCount;
+        // 第一次创建 wrap 时，如果 SDK channelInfo cache 已经有这个频道（启动时
+        // WKChannelManager.setup 同步从 DB 全量加载，绝大多数会话能命中），立即把
+        // mute/stick 从权威源同步到 self.c。后续 setChannelInfo: 也会维护这个 mirror,
+        // 加上 setConversation: 守卫不擦写，保证 self.c.mute 永远是 channelInfo.mute 的
+        // 可靠 mirror，避免冷启 / sync 期 fallback model.mute 拿到 SDK 推 conv update
+        // 时的默认 NO 把静音群算成不静音 → badge 闪 99+。
+        if (conversation.channel) {
+            WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:conversation.channel];
+            if (info) {
+                self.c.mute = info.mute;
+                self.c.stick = info.stick;
+            }
+        }
     }
     return self;
 }
@@ -369,7 +382,17 @@
 }
 
 -(void) setConversation:(WKConversation*) conversation {
+    // mute / stick 由 setChannelInfo:（channelInfo 是 SDK 权威源）独家管理。SDK 后续
+    // 推送的 WKConversation update 在不少路径里 mute / stick 默认 NO（字段不在 conv 表
+    // / payload 缺失），直接 self.c = conversation 会把已从 channelInfo 同步的真值擦写,
+    // 引发：cell 静音样式偶发偏移 + getRecentUnreadCount / getFollowUnreadCount fallback
+    // 到 model.mute=NO 把静音群算入 → badge 在 sync 期闪到 99+。这里把先前的 mute/stick
+    // 保留，让 setChannelInfo: 单独驱动状态变更（取消静音 / 切换置顶都走 channelInfoUpdate）。
+    BOOL prevMute = self.c ? self.c.mute : conversation.mute;
+    BOOL prevStick = self.c ? self.c.stick : conversation.stick;
     self.c = conversation;
+    self.c.mute = prevMute;
+    self.c.stick = prevStick;
     // 清除空间过滤缓存，确保预览消息根据新会话数据重新计算
     self.cachedSpaceLastMessage = nil;
     self.cachedSpaceId = nil;

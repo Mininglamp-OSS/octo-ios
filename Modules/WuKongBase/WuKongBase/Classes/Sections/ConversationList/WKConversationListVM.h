@@ -13,8 +13,8 @@
 NS_ASSUME_NONNULL_BEGIN
 
 typedef NS_ENUM(NSInteger, WKConversationFilterType) {
-    WKConversationFilterGroup = 0,   // 群组
-    WKConversationFilterPrivate = 1, // 私聊
+    WKConversationFilterFollow = 0, // 关注（含分组的群 + DM + 子区）
+    WKConversationFilterRecent = 1, // 最近（全平铺时间序）
 };
 
 /// 会话列表展示项（可以是普通会话 或 分组 section header）
@@ -71,6 +71,19 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// WKSpaceBotRegistry 的服务端权威列表兜底。在 WKSpaceBotRegistryDidLoadNotification
 /// 触发时调用。返回被移除的 channelId 列表。
 -(NSArray<NSString*>*) pruneNonCurrentSpaceBotsForSpace:(NSString*)spaceId;
+
+/// Space 切换/sync 完成后的兜底总清扫 —— 把 conversationWrapModels +
+/// threadWrapModels 里凡是不属于指定 Space 的条目全部移除。覆盖 4 类:
+///   - WK_GROUP：WKSpaceFilter.Skip → 移除
+///   - WK_PERSON Bot：WKSpaceBotRegistry.NotMember → 移除
+///   - WK_PERSON 非 Bot：lastMessage.space_id 明确不匹配 → 移除（保守，缺 space_id 保留）
+///   - WK_COMMUNITY_TOPIC：parentGroupNo 不在 syncedGroupChannelIds → 移除
+/// 调用时机：Space 切换 sync 完成 callback 末尾（snapshot/prune 之后），
+/// 兜住"切换瞬间通过 fail-open 漏入的会话"。
+/// outRemovedCount / outRemovedThreadCount 可传 NULL。
+-(void) sweepForeignToSpace:(NSString*)spaceId
+                removedCount:(nullable NSInteger*)outRemovedCount
+         removedThreadCount:(nullable NSInteger*)outRemovedThreadCount;
 
 /// : 后端 sync 在当前 Space 不返回 botfather 时本地兜底合成占位 conversation，
 /// 保证用户能看到系统 bot 入口（对齐 Android Round-3 Fix C）。
@@ -194,11 +207,27 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 全量会话列表（不受 tab 过滤影响，用于跨 tab 检测@提醒等）
 -(NSArray<WKConversationWrapModel*> *) allConversations;
 
-/// 获取群组类未读数
--(NSInteger) getGroupUnreadCount;
+/// 关注 tab 未读数
+-(NSInteger) getFollowUnreadCount;
 
-/// 获取私聊类未读数
--(NSInteger) getPrivateUnreadCount;
+/// 最近 tab 未读数（DM + 3 天内活跃的群 + 子区，全部 !mute）
+-(NSInteger) getRecentUnreadCount;
+
+/// 子区独立 wrap models — 用于"最近 tab 平铺、子区独立成行"。
+/// 与 conversationWrapModels 互不重叠：后者只有 PERSON+GROUP，前者只有 COMMUNITY_TOPIC。
+@property(nonatomic,copy,readonly,nullable) NSArray<WKConversationWrapModel*> *threadWrapModels;
+
+/// 同 modelAtChannel: 但子区也会被找到（先查 channelIndex，再扫 threadWrapModels）。
+/// 用于 unread / channelInfo 这类更新场景。
+-(nullable WKConversationWrapModel*) anyModelAtChannel:(WKChannel*) channel;
+
+/// 3 天内无活动的群判定。最近 tab 用：列表过滤 + 未读统计都用同一谓词避免不一致。
+/// DM/子区 不参与该过滤。
++ (BOOL)isInactiveGroup:(WKConversationWrapModel*)model;
+
+/// 子区会话增量更新（来自 onConversationUpdate）。最近 tab 调，用于刷新
+/// threadWrapModels 集合并触发 rebuildFilteredList。不动 conversationWrapModels。
+- (void)applyThreadConversationUpdates:(NSArray<WKConversation*>*)threadConversations;
 
 /// 刷新指定群组的子区数量
 -(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos;

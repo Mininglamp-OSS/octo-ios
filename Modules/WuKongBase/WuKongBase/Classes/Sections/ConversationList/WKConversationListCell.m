@@ -13,8 +13,10 @@
 #import "WKApp.h"
 #import "WKResource.h"
 #import <SDWebImage/UIImageView+WebCache.h>
+#import <SDWebImage/SDImageCache.h>
 #import "WKAvatarUtil.h"
 #import <DGActivityIndicatorView/DGActivityIndicatorView.h>
+#import <WuKongIMSDK/WuKongIMSDK.h>
 #import "WKOnlineBadgeView.h"
 #import "WKOfficialTag.h"
 #import "WKConstant.h"
@@ -65,9 +67,23 @@
 
 @property(nonatomic,strong) UILabel *externalGroupTagLbl; // 外部群 Tag（仅 WK_GROUP 的 is_external_group==1 会话）
 
+@property(nonatomic,strong) UIImageView *threadAvatarOverlay; // 子区头像右下角的 hash 角标（仅 recentTabContext + 子区行）
+@property(nonatomic,strong) UILabel *threadSourceLbl; // 子区行 title 上方的"来源:父群名"，仅最近 tab + 子区显示
+
 @property(nonatomic,copy) NSString *lastAvatarChannelId; // 上一次 refreshAvatar 对应的 channelId，用于判断 cell 是否被复用到不同会话
 
 @end
+
+/// 静音判定与 WKConversationListVM.isChannelMuted: 同款：channelInfo.mute（SDK 权威源）优先,
+/// 缺失时回退 WKConversationWrapModel.mute（即 self.c.mute，DB 快照）。
+/// 之前 cell 直接读 model.mute 会被 setConversation: 覆盖成新 conv 默认 NO，导致冷启 / 收新消息时
+/// 偶发"已静音会话不显示静音样式"，且与 follow / recent badge 不同源（badge 走 isChannelMuted）。
+static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
+    if (!model || !model.channel) return NO;
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:model.channel];
+    if (info) return info.mute;
+    return model.mute;
+}
 
 @implementation WKConversationListCell
 
@@ -121,6 +137,31 @@
         [self.contextContainerView addSubview:self.threadToggleBtn];
         // 外部群 Tag
         [self.contextContainerView addSubview:self.externalGroupTagLbl];
+
+        // 子区头像右下角 hash 角标（最近 tab 子区行专用，默认隐藏）
+        self.threadAvatarOverlay = [[UIImageView alloc] init];
+        self.threadAvatarOverlay.contentMode = UIViewContentModeScaleAspectFit;
+        self.threadAvatarOverlay.hidden = YES;
+        self.threadAvatarOverlay.layer.cornerRadius = 11.0f; // size 22 时刚好圆
+        self.threadAvatarOverlay.layer.masksToBounds = NO;
+        self.threadAvatarOverlay.layer.borderWidth = 1.5f;
+        if (@available(iOS 13.0, *)) {
+            self.threadAvatarOverlay.backgroundColor = [UIColor systemBackgroundColor];
+            self.threadAvatarOverlay.layer.borderColor = [UIColor systemBackgroundColor].CGColor;
+        } else {
+            self.threadAvatarOverlay.backgroundColor = [UIColor whiteColor];
+            self.threadAvatarOverlay.layer.borderColor = [UIColor whiteColor].CGColor;
+        }
+        [self.contextContainerView addSubview:self.threadAvatarOverlay];
+
+        // 子区行的"来源:父群名"小标题（最近 tab 专用，关注 tab 隐藏）
+        self.threadSourceLbl = [[UILabel alloc] init];
+        self.threadSourceLbl.font = [[WKApp shared].config appFontOfSize:11.0f];
+        self.threadSourceLbl.textColor = [UIColor colorWithRed:148.0f/255.0f green:152.0f/255.0f blue:168.0f/255.0f alpha:1.0f];
+        self.threadSourceLbl.lineBreakMode = NSLineBreakByTruncatingTail;
+        self.threadSourceLbl.numberOfLines = 1;
+        self.threadSourceLbl.hidden = YES;
+        [self.contextContainerView addSubview:self.threadSourceLbl];
 
     }
     return self;
@@ -237,13 +278,16 @@
     self.model = model;
 
     BOOL isGroup = (model.channel.channelType == WK_GROUP);
+    // 最近 tab 上下文下群聊也按 DM 风格展示（显示时间/preview/不显示子区角标）。
+    // 关注 tab 仍走原 group-summary 风格。
+    BOOL renderAsGroupSummary = isGroup && !self.recentTabContext;
 
     BOOL hasChannelInfo  = model.channelInfo?true:false;
     if(!hasChannelInfo) {
         [model startChannelRequest];
     }
 
-    if(isGroup) {
+    if(renderAsGroupSummary) {
         // 群聊：显示头像，隐藏预览/时间
         self.hashTagLbl.hidden = YES;
         self.avatarImgView.hidden = NO;
@@ -254,7 +298,9 @@
         [self.typingIndicatorView stopAnimating];
         self.onlineBadgeView.hidden = YES;
         self.autoDeleteView.hidden = YES;
-        BOOL showToggle = (model.threadCount > 0 && [WKApp shared].remoteConfig.threadOn);
+        // 关注 tab 群行的子区 # 标识：基于关注的子区数，不是全部子区数
+        NSInteger followedThreadCount = [WKConversationGroupThreadCell visibleThreadCountFor:model];
+        BOOL showToggle = (followedThreadCount > 0 && [WKApp shared].remoteConfig.threadOn);
         self.threadToggleBtn.hidden = !showToggle;
         if (showToggle) {
             NSInteger threadUnread = 0;
@@ -267,7 +313,7 @@
                 indicatorColor = [UIColor orangeColor];
             } else if (threadUnread > 0) {
                 indicatorType = 1;
-                indicatorColor = model.mute
+                indicatorColor = WKCellIsMuted(model)
                     ? [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f]
                     : [UIColor redColor];
             }
@@ -321,6 +367,9 @@
 
     // 刷新标题
     [self refreshTitle:model];
+
+    // 子区行的"来源:父群名"小标题（仅最近 tab 显示）
+    [self refreshThreadSource:model];
 
     // 刷新未读数
     [self refreshUnread:model];
@@ -446,16 +495,32 @@
     BOOL hasChannelInfo  = model.channelInfo?true:false;
     UIImage *placeholder = [self imageName:@"Common/Index/DefaultAvatar"];
     NSString *channelId = model.channel.channelId;
-    // 只有 cell 被复用到不同会话时才把头像清回占位图，避免复用瞬间残留上一个会话的人脸；
-    // 同会话刷新（常见于从详情页返回列表）保留当前已显示的头像，SDWebImage 会在新头像就绪后原地替换。
-    BOOL channelChanged = (channelId.length == 0) || ![channelId isEqualToString:self.lastAvatarChannelId];
-    if (channelChanged) {
-        self.avatarImgView.avatarImgView.image = placeholder;
-    }
+    // lastAvatarChannelId 已不再用于 placeholder 决策（之前会触发"返回会话列表时子区
+    // 头像闪默认占位"），avatar 的"placeholder 兜底 vs 真实图替换" 已下沉到
+    // applyAvatarURL:placeholder: helper：优先同步 memory cache 真实头像 → image=nil
+    // 兜底 placeholder → 复用残留时保留旧 image。这里保留 channelId 跟踪供其他业务用。
     self.lastAvatarChannelId = channelId;
+
+    // 最近 tab 的子区行：右下角 hash 角标（参考 web）。头像本身不再 override —
+    // 服务端在子区 channelInfo.logo 里通常已经填了父群头像 URL，原有 hasChannelInfo
+    // 分支能正确加载；之前手动查父群结果父群没缓存就回退占位图，反而把原本能显示
+    // 的群头像盖掉。这里只负责显示 overlay，URL 加载交给下面的通用逻辑。
+    BOOL isThreadInRecent = self.recentTabContext
+                          && model.channel.channelType == WK_COMMUNITY_TOPIC;
+    if (isThreadInRecent) {
+        UIImage *hashIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(18, 18)
+                                                                              color:[WKApp shared].config.themeColor];
+        self.threadAvatarOverlay.image = hashIcon;
+        self.threadAvatarOverlay.hidden = NO;
+    } else {
+        self.threadAvatarOverlay.hidden = YES;
+    }
+
     if([model.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
         NSString *avatarURL = hasChannelInfo ? [WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo] : nil;
+#if DEBUG
         NSLog(@"[DEBUG] 系统通知(u_10000) logo: %@, avatarURL: %@, hasChannelInfo: %d", model.channelInfo.logo, avatarURL, hasChannelInfo);
+#endif
     }
     if(hasChannelInfo) {
         NSString *avatarURL;
@@ -468,6 +533,18 @@
             } else {
                 avatarURL = [WKAvatarUtil getGroupAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
             }
+        } else if (self.recentTabContext && model.channel.channelType == WK_COMMUNITY_TOPIC) {
+            // 最近 tab 的子区：直接用父群的头像 URL（getGroupAvatar 不要求 channelInfo
+            // 在手，仅 groupNo 就能拼）。比依赖 thread.channelInfo.logo 的服务端填充
+            // 更稳；overlay 单独叠在右下角即可。
+            WKChannel *parent = [self resolveParentGroupChannelForThread:model];
+            NSString *groupNo = parent.channelId ?: @"";
+            WKChannelInfo *parentInfo = [self lookupParentChannelInfo:parent];
+            avatarURL = [WKAvatarUtil getGroupAvatar:groupNo cacheKey:parentInfo.avatarCacheKey];
+#if DEBUG
+            NSLog(@"[ThreadAvatar] thread=%@ parent=%@ parentInfoCached=%d avatarURL=%@",
+                  model.channel.channelId, groupNo, parentInfo != nil, avatarURL);
+#endif
         } else {
             // 个人频道：和群频道一样，始终拼接 ?v=cacheKey
             NSString *key = (model.channelInfo.avatarCacheKey.length > 0) ? model.channelInfo.avatarCacheKey : @"0";
@@ -481,13 +558,62 @@
                 avatarURL = [WKAvatarUtil getAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
             }
         }
-        // SDWebImageDelayPlaceholder：加载过程中不覆盖当前已显示的头像，只在最终加载失败时才落到占位图，避免返回会话列表刷新时的占位图闪烁
-        [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL] placeholderImage:placeholder options:SDWebImageDelayPlaceholder context:@{
-            SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll),
-        }];
+        // 用 helper 替换原 lim_setImageWithURL：先同步查 SDImageCache memory cache,
+        // 命中直接 set 真实头像（"动态 placeholder"），miss 时根据 image 是否为 nil 决定
+        // 兜底 placeholder 还是保留 cell 复用残留。彻底消除子区返回会话列表时的默认头像闪。
+        [self applyAvatarURL:avatarURL placeholder:placeholder];
     } else {
+        if (self.recentTabContext && model.channel.channelType == WK_COMMUNITY_TOPIC) {
+            // 子区 channelInfo 还没加载到时，仍然用父群 URL 拼一发 — getGroupAvatar
+            // 不依赖 channelInfo，能命中父群头像缓存。
+            WKChannel *parent = [self resolveParentGroupChannelForThread:model];
+            NSString *groupNo = parent.channelId ?: @"";
+            if (groupNo.length > 0) {
+                // 与 hasChannelInfo=YES 分支同款用 parentInfo.avatarCacheKey 拼 URL，让两条路径
+                // 生成的 URL 完全一致 → SDWebImage memory cache 命中率最大化，避免子区 cell 复用时
+                // 因 URL 不同 (cacheKey=nil vs cacheKey=hash) 触发重新下载。
+                WKChannelInfo *parentInfo = [self lookupParentChannelInfo:parent];
+                NSString *avatarURL = [WKAvatarUtil getGroupAvatar:groupNo cacheKey:parentInfo.avatarCacheKey];
+#if DEBUG
+                NSLog(@"[ThreadAvatar][noChannelInfo] thread=%@ parent=%@ parentInfoCached=%d avatarURL=%@",
+                      model.channel.channelId, groupNo, parentInfo != nil, avatarURL);
+#endif
+                [self applyAvatarURL:avatarURL placeholder:placeholder];
+            } else {
+                self.avatarImgView.avatarImgView.image = placeholder;
+            }
+        } else {
+            self.avatarImgView.avatarImgView.image = placeholder;
+        }
+    }
+}
+
+/// avatar 加载统一入口：先同步查 SDImageCache memory cache，命中直接用真实头像作为
+/// "动态 placeholder"，避免子区头像在 cell 复用 / 返回会话列表时短暂显示默认占位图。
+///
+/// 私聊 / 群头像之前不闪是因为 memory cache 命中率高（DM 总数少，群 cache 常驻），
+/// SDWebImage 异步加载前就同步 set 真实图。子区头像走父群 URL，memory cache 驱逐快、
+/// cell pool 重组后 fresh instance image=nil → SDWebImage 默认行为先显示 placeholder
+/// 再异步加载，用户看到默认头像闪一下。
+///
+/// 这里手动同步查 memory cache 复制 SDWebImage 内部行为：命中就用 cached 真实图替代
+/// 默认 placeholder。lim_setImageWithURL 的 SDWebImageDelayPlaceholder 配合：cache miss
+/// 不立即覆盖现有 image (保留复用残留 / 兜底 placeholder)，等异步加载完替换。
+- (void)applyAvatarURL:(NSString *)avatarURL placeholder:(UIImage *)placeholder {
+    UIImage *cached = avatarURL.length > 0 ? [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:avatarURL] : nil;
+    if (cached) {
+        // memory cache 命中：直接显示真实头像 → SDWebImage 异步加载是 noop / 同款图，无视觉变化
+        self.avatarImgView.avatarImgView.image = cached;
+    } else if (self.avatarImgView.avatarImgView.image == nil) {
+        // memory cache miss + cell 第一次 dequeue（fresh instance, image 为 nil） → 兜底 placeholder
+        // 避免头像区域空白
         self.avatarImgView.avatarImgView.image = placeholder;
     }
+    // memory cache miss + image 已有（cell 复用） → 保留旧图，等异步加载完替换
+    [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL ?: @""]
+                                         placeholderImage:placeholder
+                                                  options:SDWebImageDelayPlaceholder
+                                                  context:@{SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll)}];
 }
 
 -(void) refreshOnlineStatus:(WKConversationWrapModel*)model {
@@ -564,21 +690,23 @@
 
 -(void) refreshSetting:(WKConversationWrapModel*)model {
     // 免打扰
-    if(model.mute) { // 免打扰
+    BOOL muted = WKCellIsMuted(model);
+    if(muted) { // 免打扰
         if(model.unreadCount<=0) {
             self.muteIcon.hidden = NO;
         }else {
             self.muteIcon.hidden = YES;
         }
-       
+
         [self.badgeView setBadgeBackgroundColor:[UIColor colorWithRed:163.0f/255.0f green:214.0/255.0f blue:237.0f/255.0f alpha:1.0]];
     }else {
         self.muteIcon.hidden = YES;
         [self.badgeView setBadgeBackgroundColor:[UIColor redColor]];
     }
     
-    // 置顶
-    if(model.stick) { // 置顶
+    // 置顶 — 跨 tab 独立：仅最近 tab 显示置顶背景色。关注 tab 即便 model.stick=YES
+    // 也保持普通背景（spec §0：关注 tab 不显示置顶概念）
+    if(model.stick && self.recentTabContext) {
         [self setBackgroundColor:[WKApp shared].config.backgroundColor];
     }else {
         [self setBackgroundColor:[WKApp shared].config.cellBackgroundColor];
@@ -726,7 +854,7 @@
         }else {
             fullContentStr = [NSString stringWithFormat:@"%@%@",reminderStr,content];
         }
-        
+
     }else { // 单聊
         fullContentStr = [NSString stringWithFormat:@"%@%@",reminderStr,content];
     }
@@ -738,6 +866,62 @@
         [contentAttrStr addAttribute:NSForegroundColorAttributeName value:[UIColor orangeColor] range:[fullContentStr rangeOfString:reminderStr]];
     }
     return contentAttrStr;
+}
+
+#pragma mark - Thread (recent tab) helpers
+
+/// 解析子区的父群 channel。**始终用 channelId 的 "____" 切分**，不信
+/// model.parentChannel —— iOS SDK 实测会把 parentChannel 填成 thread 自己
+/// （日志里 parent == thread）。groupNo 取自 channelId 是 iOS 整个代码库的通行做法
+/// （见 WKConversationListVC.m:1965、WKLocalNotificationManager.m 等多处）。
+- (WKChannel *)resolveParentGroupChannelForThread:(WKConversationWrapModel *)model {
+    if (model.channel.channelType != WK_COMMUNITY_TOPIC) return nil;
+    NSString *cid = model.channel.channelId;
+    NSRange sep = [cid rangeOfString:@"____"];
+    if (sep.location == NSNotFound) return nil;
+    NSString *groupNo = [cid substringToIndex:sep.location];
+    if (groupNo.length == 0) return nil;
+    return [WKChannel channelID:groupNo channelType:WK_GROUP];
+}
+
+/// 子区行 title 上方的"来源:父群名"小标题；仅 recentTabContext + 子区 显示。
+/// 没缓存到父群 channelInfo 时触发 fetch，本帧暂回退到 channelId 的 groupNo 文本兜底。
+- (void)refreshThreadSource:(WKConversationWrapModel *)model {
+    BOOL shouldShow = self.recentTabContext && model.channel.channelType == WK_COMMUNITY_TOPIC;
+    if (!shouldShow) {
+        self.threadSourceLbl.hidden = YES;
+        self.threadSourceLbl.text = nil;
+        return;
+    }
+    WKChannel *parent = [self resolveParentGroupChannelForThread:model];
+    NSString *parentName = nil;
+    if (parent) {
+        WKChannelInfo *parentInfo = [self lookupParentChannelInfo:parent];
+        parentName = parentInfo.displayName;
+    }
+    if (parentName.length == 0) {
+        // 名称暂不可用：本帧不显示 source 行（避免出现"来源:groupNo乱码"）。
+        // 等 channelInfoUpdate 回调时 VC 会 reload 该行，下次 refresh 取得 displayName。
+        self.threadSourceLbl.hidden = YES;
+        self.threadSourceLbl.text = nil;
+        return;
+    }
+    self.threadSourceLbl.text = [NSString stringWithFormat:LLang(@"来源:%@"), parentName];
+    self.threadSourceLbl.hidden = NO;
+}
+
+/// 父群 channelInfo 三级查找：VM wrap.channelInfo（走 c.channelInfo 反向引用 + lazy load）
+/// → channelManager 内存缓存 → 都没有就触发 fetchChannelInfo，等 channelInfoUpdate 回调
+/// 由 VC 把这一行 reload，下次 refresh 走 wrap 路径已是缓存命中。
+- (WKChannelInfo *)lookupParentChannelInfo:(WKChannel *)parent {
+    if (!parent || parent.channelId.length == 0) return nil;
+    WKConversationWrapModel *parentWrap = [[WKConversationListVM shared] modelAtChannel:parent];
+    WKChannelInfo *info = parentWrap.channelInfo;
+    if (info) return info;
+    info = [[WKSDK shared].channelManager getChannelInfo:parent];
+    if (info) return info;
+    [[WKSDK shared].channelManager fetchChannelInfo:parent completion:nil];
+    return nil;
 }
 
 
@@ -790,9 +974,10 @@
     self.contextContainerView.frame = self.contentView.bounds;
 
     BOOL isGroup = (self.model.channel.channelType == WK_GROUP);
+    // 最近 tab 群聊走 DM 布局（避免 group-summary 把头像放大、preview 区被压缩）
+    BOOL useGroupSummaryLayout = isGroup && !self.recentTabContext;
 
-    if(isGroup) {
-        // ========== 群聊布局 ==========
+    if(useGroupSummaryLayout) {
         BOOL showMention = !self.lastContentLbl.hidden;
         CGFloat avatarSize = 52.0f;
         CGFloat rightPadding = 15.0f;
@@ -891,6 +1076,14 @@
         CGFloat avatarSize = 52.0f;
         self.avatarImgView.frame = CGRectMake(15.0f, 0, avatarSize, avatarSize);
         self.avatarImgView.lim_top = self.lim_height/2.0f - self.avatarImgView.lim_height/2.0f;
+        // 子区头像右下角 hash 角标（仅最近 tab + 子区行显示）
+        if (!self.threadAvatarOverlay.hidden) {
+            CGFloat overlaySize = 22.0f;
+            self.threadAvatarOverlay.frame = CGRectMake(
+                self.avatarImgView.lim_right - overlaySize + 2.0f,
+                self.avatarImgView.lim_bottom - overlaySize + 2.0f,
+                overlaySize, overlaySize);
+        }
         // 在线标记
         if(self.model.channelInfo && self.model.channelInfo.online) {
             self.onlineBadgeView.lim_left = self.avatarImgView.lim_right - self.onlineBadgeView.lim_width;
@@ -906,9 +1099,18 @@
 
         CGFloat titleLeftToAvatarSpace = 10.0f;
         self.titleLbl.lim_left = self.avatarImgView.lim_right + titleLeftToAvatarSpace;
-        CGFloat textBlockH = 20.0f + 3.0f + 24.0f; // title + gap + content
+        // 子区行多一行"来源:父群名"，textBlock 高度要相应增加
+        CGFloat sourceH = !self.threadSourceLbl.hidden ? 14.0f : 0.0f;
+        CGFloat sourceGap = sourceH > 0 ? 1.0f : 0.0f;
+        CGFloat textBlockH = sourceH + sourceGap + 20.0f + 3.0f + 24.0f; // (source + gap) + title + gap + content
         CGFloat textBlockTop = (self.lim_height - textBlockH) / 2.0f;
-        self.titleLbl.lim_top = textBlockTop;
+        if (!self.threadSourceLbl.hidden) {
+            self.threadSourceLbl.lim_left = self.titleLbl.lim_left;
+            self.threadSourceLbl.lim_top = textBlockTop;
+            self.threadSourceLbl.lim_height = sourceH;
+            self.threadSourceLbl.lim_width = self.lim_width - self.threadSourceLbl.lim_left - 15.0f;
+        }
+        self.titleLbl.lim_top = textBlockTop + sourceH + sourceGap;
 
         [self.lastMsgTimeLbl sizeToFit];
         CGFloat titleMaxWidth = self.lim_width - (self.avatarImgView.lim_right + 5.0f) - (self.lastMsgTimeLbl.lim_width+5.0f + 20.0f)  - 20.0f;
