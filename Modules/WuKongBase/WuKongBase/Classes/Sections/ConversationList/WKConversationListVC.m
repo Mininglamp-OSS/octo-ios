@@ -1645,6 +1645,11 @@
         WKConversation *conv = [model getConversation];
         conv.reminders = reminders;
     }
+    // 子区不在 conversationWrapModels 里，modelAtChannel: 取不到 — 顶层路径的
+    // conv.reminders = reminders 不会发生。tab 上 [有人@我] 走的是
+    // VM.cachedRemindersByChannelId（仅 loadConversationList 时建好的子区索引），
+    // 不主动回写就读不到新到的子区 @，关注/最近 tab 标签永远不亮。
+    [self.conversationListVM applySubzoneRemindersUpdate:channel reminders:reminders];
     // 子区：reminder 变化也需要刷新（子区的@提醒显示在父群组的预览行上）
     [self rebuildGroupDisplayAndReload];
 }

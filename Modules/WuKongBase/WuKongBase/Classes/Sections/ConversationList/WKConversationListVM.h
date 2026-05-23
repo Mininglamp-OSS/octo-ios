@@ -261,6 +261,13 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 构建群聊 tab 的展示列表（含 section header），同时计算全局 hasMention 状态
 -(NSArray<WKConversationDisplayItem *> *) buildGroupDisplayList;
 
+/// 将一次子区 reminder 推送结果合并进 cachedRemindersByChannelId。
+/// 子区不在 conversationWrapModels / channelIndex 内，buildGroupDisplayList 的
+/// follow/recent tab mention 计算只能从这份缓存读 — 缓存是 loadConversationList
+/// 一次性建好的，若新到的子区 reminder 不回写，[有人@我] 标签永远不会在 tab 上亮。
+/// channel 非 WK_COMMUNITY_TOPIC 时该方法 no-op（顶层群/DM 走 model.simpleReminders 路径）。
+-(void) applySubzoneRemindersUpdate:(WKChannel *)channel reminders:(NSArray<WKReminder *> *)reminders;
+
 /// buildGroupDisplayList 计算出的 tab 级 @提醒状态，分关注 / 最近两个集合：
 ///   - Follow:  与 getFollowUnreadCount 同口径（DM/Channel/Thread 走 WKFollowedKeysStore）
 ///   - Recent:  与 getRecentUnreadCount 同口径（DM 全部；Group 非 3 天 stale；Thread 走

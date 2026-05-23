@@ -1514,6 +1514,21 @@ static WKConversationListVM *_instance;
     self.cachedRemindersByChannelId = remindersByChannelId;
 }
 
+-(void) applySubzoneRemindersUpdate:(WKChannel *)channel reminders:(NSArray<WKReminder *> *)reminders {
+    if (!channel || channel.channelType != WK_COMMUNITY_TOPIC) return;
+    NSString *channelId = channel.channelId;
+    if (channelId.length == 0) return;
+    NSMutableDictionary<NSString*, NSArray<WKReminder*>*> *mut =
+        self.cachedRemindersByChannelId ? [self.cachedRemindersByChannelId mutableCopy]
+                                        : [NSMutableDictionary dictionary];
+    if (reminders.count > 0) {
+        mut[channelId] = reminders;
+    } else {
+        [mut removeObjectForKey:channelId];
+    }
+    self.cachedRemindersByChannelId = mut;
+}
+
 -(NSArray<WKConversationDisplayItem *> *) buildGroupDisplayList {
     CFAbsoluteTime _bgStart = CFAbsoluteTimeGetCurrent();
     // 1. 建立 channelId → WKConversationWrapModel 映射（群 + DM 都加入，关注 tab 需要 DM）
