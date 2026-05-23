@@ -22,25 +22,30 @@ static void *kWKMTVTokens = &kWKMTVTokens;
 // 不能用 +textViewUsingTextLayoutManager: — 那是工厂类方法返回裸 UITextView，
 // 无法被子类化；也不能用 -initUsingTextLayoutManager:（UITextView 上不存在该
 // 实例方法）。
-+ (NSTextContainer *)wk_makeTextKit1Container {
-    NSTextStorage *ts = [[NSTextStorage alloc] init];
-    NSLayoutManager *lm = [[NSLayoutManager alloc] init];
-    [ts addLayoutManager:lm];
-    NSTextContainer *tc = [[NSTextContainer alloc] initWithSize:CGSizeZero];
-    [lm addTextContainer:tc];
-    return tc;
-}
-
+//
+// 注意：不能把构造拆到独立 helper 方法里返回 NSTextContainer —
+// NSTextContainer.layoutManager 与 NSLayoutManager.textStorage 都是 weak，
+// helper 返回后局部 ts/lm 被释放，tc.layoutManager 变 nil，UITextView 的
+// super init 会触发 _UITextKit1LayoutController 断言
+// "text container must already have a layout manager"。
+// 必须在本方法作用域内持有 ts/lm 跨越 [super init...] 调用，让 UITextView 在
+// init 期间完成对整条 TextKit 1 stack 的接管。
 - (instancetype)initWithFrame:(CGRect)frame textContainer:(nullable NSTextContainer *)textContainer {
-    // caller 没给 textContainer 时，自己造一个 TextKit 1 container 注入，
-    // 否则父类会在 iOS 16+ 默认构造 TextKit 2 stack（NSTextLayoutManager）。
+    NSTextStorage *ts = nil;
+    NSLayoutManager *lm = nil;
     if (!textContainer) {
-        textContainer = [WKMessageTextView wk_makeTextKit1Container];
+        ts = [[NSTextStorage alloc] init];
+        lm = [[NSLayoutManager alloc] init];
+        [ts addLayoutManager:lm];
+        textContainer = [[NSTextContainer alloc] initWithSize:CGSizeZero];
+        [lm addTextContainer:textContainer];
     }
     self = [super initWithFrame:frame textContainer:textContainer];
     if (self) {
         [self wk_configureDisplayOnly];
     }
+    // 防止编译器在 [super init...] 之前优化掉 ts/lm（它们仅作为强引用持有者存在）。
+    (void)ts; (void)lm;
     return self;
 }
 
