@@ -20,7 +20,8 @@ static CGFloat const kBadgeSize = 16.0f;
 @property (nonatomic, strong) UIButton *recentBtn;
 @property (nonatomic, strong) UILabel *followBadge;
 @property (nonatomic, strong) UILabel *recentBadge;
-@property (nonatomic, strong) UILabel *mentionLbl;
+@property (nonatomic, strong) UILabel *followMentionLbl;
+@property (nonatomic, strong) UILabel *recentMentionLbl;
 
 @end
 
@@ -85,13 +86,21 @@ static CGFloat const kBadgeSize = 16.0f;
     _recentBadge = [self createBadgeLabel];
     [_capsuleContainer addSubview:_recentBadge];
 
-    _mentionLbl = [[UILabel alloc] init];
-    _mentionLbl.text = @"[有人@我]";
-    _mentionLbl.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
-    _mentionLbl.textColor = [UIColor orangeColor];
-    _mentionLbl.textAlignment = NSTextAlignmentCenter;
-    _mentionLbl.hidden = YES;
-    [_capsuleContainer addSubview:_mentionLbl];
+    _followMentionLbl = [self createMentionLabel];
+    [_capsuleContainer addSubview:_followMentionLbl];
+
+    _recentMentionLbl = [self createMentionLabel];
+    [_capsuleContainer addSubview:_recentMentionLbl];
+}
+
+- (UILabel *)createMentionLabel {
+    UILabel *lbl = [[UILabel alloc] init];
+    lbl.text = @"[有人@我]";
+    lbl.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
+    lbl.textColor = [UIColor orangeColor];
+    lbl.textAlignment = NSTextAlignmentCenter;
+    lbl.hidden = YES;
+    return lbl;
 }
 
 - (UILabel *)createBadgeLabel {
@@ -164,65 +173,61 @@ static CGFloat const kBadgeSize = 16.0f;
 }
 
 - (CGFloat)extraWidthForFollow {
+    return [self extraWidthForMention:_followMentionLbl badge:_followBadge];
+}
+
+- (CGFloat)extraWidthForRecent {
+    return [self extraWidthForMention:_recentMentionLbl badge:_recentBadge];
+}
+
+/// 计算 button title 右侧附加内容（mention 标签 + 未读 badge）所需宽度,
+/// 用于 titleEdgeInsets 把整体居中。
+- (CGFloat)extraWidthForMention:(UILabel *)mention badge:(UILabel *)badge {
     CGFloat extra = 0;
-    if (!_mentionLbl.hidden) {
-        [_mentionLbl sizeToFit];
-        extra += 2 + _mentionLbl.bounds.size.width + 2;
+    if (!mention.hidden) {
+        [mention sizeToFit];
+        extra += 2 + mention.bounds.size.width + 2;
     }
-    if (!_followBadge.hidden) {
-        [_followBadge sizeToFit];
-        extra += 2 + MAX(_followBadge.bounds.size.width + 6, kBadgeSize);
+    if (!badge.hidden) {
+        [badge sizeToFit];
+        extra += 2 + MAX(badge.bounds.size.width + 6, kBadgeSize);
     }
     return extra;
 }
 
-- (CGFloat)extraWidthForRecent {
-    if (_recentBadge.hidden) return 0;
-    [_recentBadge sizeToFit];
-    return 2 + MAX(_recentBadge.bounds.size.width + 6, kBadgeSize);
-}
-
 - (void)layoutFollowContent {
-    CGFloat extra = [self extraWidthForFollow];
-    CGFloat offset = -extra / 2.0f;
-    _followBtn.titleEdgeInsets = UIEdgeInsetsMake(0, offset, 0, -offset);
-    [_followBtn layoutIfNeeded];
-
-    NSString *title = _followBtn.titleLabel.text ?: @"";
-    UIFont *font = _followBtn.titleLabel.font;
-    CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-    CGFloat titleRight = CGRectGetMidX(_followBtn.frame) + offset + textW / 2.0f;
-    CGFloat btnCenterY = CGRectGetMidY(_followBtn.frame);
-
-    CGFloat x = titleRight;
-    if (!_mentionLbl.hidden) {
-        CGFloat lblW = _mentionLbl.bounds.size.width + 2;
-        CGFloat lblH = _mentionLbl.bounds.size.height;
-        _mentionLbl.frame = CGRectMake(x + 2, btnCenterY - lblH / 2.0f + 1, lblW, lblH);
-        x += 2 + lblW;
-    }
-    if (!_followBadge.hidden) {
-        CGFloat badgeW = MAX(_followBadge.bounds.size.width + 6, kBadgeSize);
-        _followBadge.frame = CGRectMake(x + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
-    }
+    [self layoutTabButton:_followBtn mention:_followMentionLbl badge:_followBadge extra:[self extraWidthForFollow]];
 }
 
 - (void)layoutRecentContent {
-    CGFloat extra = [self extraWidthForRecent];
+    [self layoutTabButton:_recentBtn mention:_recentMentionLbl badge:_recentBadge extra:[self extraWidthForRecent]];
+}
+
+- (void)layoutTabButton:(UIButton *)btn
+                mention:(UILabel *)mention
+                  badge:(UILabel *)badge
+                  extra:(CGFloat)extra {
     CGFloat offset = -extra / 2.0f;
-    _recentBtn.titleEdgeInsets = UIEdgeInsetsMake(0, offset, 0, -offset);
-    [_recentBtn layoutIfNeeded];
+    btn.titleEdgeInsets = UIEdgeInsetsMake(0, offset, 0, -offset);
+    [btn layoutIfNeeded];
 
-    if (_recentBadge.hidden) return;
-
-    NSString *title = _recentBtn.titleLabel.text ?: @"";
-    UIFont *font = _recentBtn.titleLabel.font;
+    NSString *title = btn.titleLabel.text ?: @"";
+    UIFont *font = btn.titleLabel.font;
     CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-    CGFloat titleRight = CGRectGetMidX(_recentBtn.frame) + offset + textW / 2.0f;
-    CGFloat btnCenterY = CGRectGetMidY(_recentBtn.frame);
+    CGFloat titleRight = CGRectGetMidX(btn.frame) + offset + textW / 2.0f;
+    CGFloat btnCenterY = CGRectGetMidY(btn.frame);
 
-    CGFloat badgeW = MAX(_recentBadge.bounds.size.width + 6, kBadgeSize);
-    _recentBadge.frame = CGRectMake(titleRight + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
+    CGFloat x = titleRight;
+    if (!mention.hidden) {
+        CGFloat lblW = mention.bounds.size.width + 2;
+        CGFloat lblH = mention.bounds.size.height;
+        mention.frame = CGRectMake(x + 2, btnCenterY - lblH / 2.0f + 1, lblW, lblH);
+        x += 2 + lblW;
+    }
+    if (!badge.hidden) {
+        CGFloat badgeW = MAX(badge.bounds.size.width + 6, kBadgeSize);
+        badge.frame = CGRectMake(x + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
+    }
 }
 
 #pragma mark - Actions
@@ -272,11 +277,18 @@ static CGFloat const kBadgeSize = 16.0f;
 #pragma mark - Badge
 
 - (void)layoutMentionLabel {
-    [self layoutFollowContent];
+    // mention 与 badge 共享同一份布局函数（layoutFollowContent / layoutRecentContent），
+    // 这里直接整体重排两边即可。
+    [self layoutBadges];
 }
 
 - (void)setFollowHasMention:(BOOL)hasMention {
-    _mentionLbl.hidden = !hasMention;
+    _followMentionLbl.hidden = !hasMention;
+    [self layoutMentionLabel];
+}
+
+- (void)setRecentHasMention:(BOOL)hasMention {
+    _recentMentionLbl.hidden = !hasMention;
     [self layoutMentionLabel];
 }
 

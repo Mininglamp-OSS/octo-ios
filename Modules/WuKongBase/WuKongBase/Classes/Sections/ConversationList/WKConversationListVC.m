@@ -4537,10 +4537,11 @@
           (unsigned long)self.groupDisplayList.count);
 }
 
-/// 检查群聊和子区中是否有未处理的@提醒，更新 tab 标识
-/// 直接使用 buildGroupDisplayList 中已计算好的结果，避免重复遍历和 DB 查询
+/// 检查群聊和子区中是否有未处理的@提醒，分别更新关注/最近 tab 上的 [有人@我] 标识。
+/// 直接使用 buildGroupDisplayList 中已计算好的结果，避免重复遍历和 DB 查询。
 -(void) updateGroupMentionBadge {
-    [_conversationTabView setFollowHasMention:_conversationListVM.lastBuildHasMention];
+    [_conversationTabView setFollowHasMention:_conversationListVM.lastBuildFollowHasMention];
+    [_conversationTabView setRecentHasMention:_conversationListVM.lastBuildRecentHasMention];
 }
 
 -(void) showCreateCategoryDialog {

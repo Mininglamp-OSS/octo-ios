@@ -31,7 +31,8 @@
 @property(nonatomic,strong) NSDictionary<NSString*, NSArray<WKConversation*>*> *cachedTopicsByGroup; // groupId → 子区会话列表
 @property(nonatomic,strong) NSDictionary<NSString*, NSArray<WKReminder*>*> *cachedRemindersByChannelId; // 子区 channelId → reminder 列表
 @property(nonatomic,strong) NSDictionary *cachedThreadData; // channelId → {previews, count}，跨 reset 保留
-@property(nonatomic,assign,readwrite) BOOL lastBuildHasMention;
+@property(nonatomic,assign,readwrite) BOOL lastBuildFollowHasMention;
+@property(nonatomic,assign,readwrite) BOOL lastBuildRecentHasMention;
 
 @end
 
@@ -1675,28 +1676,76 @@ static WKConversationListVM *_instance;
     // is_default 分组的逻辑（保持向后兼容用），关注 tab 改版后**不再展示**任何属于
     // 默认分组的会话（这是产品规则，对齐 web）。若用户有未关注的群想看，最近 tab 仍有。
 
-    // 顺便计算全局 hasMention（复用已有的 remindersByChannelId，避免 updateGroupMentionBadge 重复查 DB）
-    BOOL globalHasMention = NO;
-    for (WKConversationWrapModel *model in self.conversationWrapModels) {
-        if (model.channel.channelType != WK_GROUP) continue;
-        if (model.simpleReminders.count > 0) {
-            for (WKReminder *r in model.simpleReminders) {
-                if (r.type == WKReminderTypeMentionMe) { globalHasMention = YES; break; }
-            }
-        }
-        if (globalHasMention) break;
-    }
-    if (!globalHasMention) {
-        for (NSArray<WKReminder*> *reminders in remindersByChannelId.allValues) {
-            for (WKReminder *r in reminders) {
-                if (r.type == WKReminderTypeMentionMe) { globalHasMention = YES; break; }
-            }
-            if (globalHasMention) break;
-        }
-    }
-    self.lastBuildHasMention = globalHasMention;
+    // 顺便计算 Follow / Recent 两个 tab 各自的 hasMention（复用已有的 remindersByChannelId,
+    // 避免 updateGroupMentionBadge 重复查 DB）。
+    // 归属口径严格对齐 getFollowUnreadCount / getRecentUnreadCount：
+    //   - Follow: WKFollowedKeysStore（DM/Channel/Thread）；store 未加载时一律不算（保守，
+    //     与 getFollowUnreadCount 同口径，避免冷启动期把全量 mention 都挂到关注 tab）。
+    //   - Recent: DM 全部；Group 非 3 天 stale；Thread 走 threadWrapModels 排除 placeholder。
+    // 一个会话可能同时落在两个集合（例：关注的 3 天活跃群），两端都会亮。
+    // mention 本身不做静音过滤 —— 与 section header sectionHasMention 行为一致（静音群被
+    // @ 还是要让用户感知）。
+    BOOL followHasMention = NO;
+    BOOL recentHasMention = NO;
 
-    NSLog(@"[TabPerf] buildGroupDisplayList: %.1fms items=%lu hasMention=%d", (CFAbsoluteTimeGetCurrent()-_bgStart)*1000, (unsigned long)displayList.count, globalHasMention);
+    NSMutableSet<NSString*> *recentThreadIds = [NSMutableSet set];
+    for (WKConversationWrapModel *t in self.threadWrapModels) {
+        if (t.lastMessage == nil) continue; // placeholder
+        if (t.channel.channelId.length > 0) [recentThreadIds addObject:t.channel.channelId];
+    }
+
+    for (WKConversationWrapModel *model in self.conversationWrapModels) {
+        if (followHasMention && recentHasMention) break;
+        if (model.simpleReminders.count == 0) continue;
+        BOOL hasMention = NO;
+        for (WKReminder *r in model.simpleReminders) {
+            if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
+        }
+        if (!hasMention) continue;
+        uint8_t type = model.channel.channelType;
+        if (type == WK_PERSON) {
+            if (!recentHasMention) recentHasMention = YES;
+            if (!followHasMention && followLoaded &&
+                [followStore isFollowedWithType:WKFollowTargetTypeDM targetId:model.channel.channelId]) {
+                followHasMention = YES;
+            }
+        } else if (type == WK_GROUP) {
+            if (!recentHasMention && ![WKConversationListVM isInactiveGroup:model]) {
+                recentHasMention = YES;
+            }
+            if (!followHasMention && followLoaded &&
+                [followStore isFollowedWithType:WKFollowTargetTypeChannel targetId:model.channel.channelId]) {
+                followHasMention = YES;
+            }
+        }
+    }
+
+    if (!followHasMention || !recentHasMention) {
+        for (NSString *channelId in remindersByChannelId) {
+            if (followHasMention && recentHasMention) break;
+            // 顶层 channel（群/DM）已在上面通过 simpleReminders 走过；这里只补子区路径,
+            // 子区 channelId 形如 "<groupNo>____<threadId>"。
+            if ([channelId rangeOfString:@"____"].location == NSNotFound) continue;
+            NSArray<WKReminder*> *rems = remindersByChannelId[channelId];
+            BOOL hasMention = NO;
+            for (WKReminder *r in rems) {
+                if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
+            }
+            if (!hasMention) continue;
+            if (!recentHasMention && [recentThreadIds containsObject:channelId]) {
+                recentHasMention = YES;
+            }
+            if (!followHasMention && followLoaded &&
+                [followStore isFollowedWithType:WKFollowTargetTypeThread targetId:channelId]) {
+                followHasMention = YES;
+            }
+        }
+    }
+
+    self.lastBuildFollowHasMention = followHasMention;
+    self.lastBuildRecentHasMention = recentHasMention;
+
+    NSLog(@"[TabPerf] buildGroupDisplayList: %.1fms items=%lu followHasMention=%d recentHasMention=%d", (CFAbsoluteTimeGetCurrent()-_bgStart)*1000, (unsigned long)displayList.count, followHasMention, recentHasMention);
     return displayList;
 }
 

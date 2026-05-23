@@ -261,8 +261,13 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 构建群聊 tab 的展示列表（含 section header），同时计算全局 hasMention 状态
 -(NSArray<WKConversationDisplayItem *> *) buildGroupDisplayList;
 
-/// buildGroupDisplayList 计算出的全局 @提醒状态（群聊 + 子区）
-@property (nonatomic, assign, readonly) BOOL lastBuildHasMention;
+/// buildGroupDisplayList 计算出的 tab 级 @提醒状态，分关注 / 最近两个集合：
+///   - Follow:  与 getFollowUnreadCount 同口径（DM/Channel/Thread 走 WKFollowedKeysStore）
+///   - Recent:  与 getRecentUnreadCount 同口径（DM 全部；Group 非 3 天 stale；Thread 走
+///              threadWrapModels 排除 placeholder）
+/// 同一会话可能同时落在两个集合（例如关注的 3 天活跃群），这种情况下两个字段都会为 YES。
+@property (nonatomic, assign, readonly) BOOL lastBuildFollowHasMention;
+@property (nonatomic, assign, readonly) BOOL lastBuildRecentHasMention;
 
 /// 从缓存获取指定群聊下子区的未读数和 @提醒状态（供 cell 渲染用，无 DB 查询）
 -(void) getThreadIndicatorForGroup:(NSString *)groupNo threadUnread:(NSInteger *)outUnread threadHasMention:(BOOL *)outHasMention;
