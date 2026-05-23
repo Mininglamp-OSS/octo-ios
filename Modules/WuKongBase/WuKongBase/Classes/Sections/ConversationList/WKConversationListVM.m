@@ -1028,6 +1028,14 @@ static WKConversationListVM *_instance;
     return model.mute;
 }
 
+/// 同上，但接收 WKConversation —— 给 thread cell / cachedTopicsByGroup 这些拿不到 wrap 的路径用。
+-(BOOL) isConversationMuted:(WKConversation *)conv {
+    if (!conv || !conv.channel) return NO;
+    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:conv.channel];
+    if (info) return info.mute;
+    return conv.mute;
+}
+
 -(NSInteger) getRecentUnreadCount {
     NSInteger count = 0;
     // DM + 3 天内活跃的群（与 modelMatchesFilter: 的最近 tab 谓词保持一致）。
@@ -1297,7 +1305,8 @@ static WKConversationListVM *_instance;
     [_conversationsLock lock];
     NSInteger unreadCount = 0;
     for (WKConversationWrapModel *model in self.conversationWrapModels) {
-        if(!model.mute) {
+        // 与 follow / recent badge 一致走 channelInfo.mute 权威源；DB 快照可能滞后
+        if(![self isChannelMuted:model]) {
             unreadCount +=model.unreadCount;
         }
     }
@@ -1340,7 +1349,9 @@ static WKConversationListVM *_instance;
     if (!store.loaded) return 0;
     NSInteger total = 0;
     for (WKConversation *conv in topicsByGroup[groupNo]) {
-        if (conv.mute) continue;
+        // 静音子区不计入 section unread —— 走 channelInfo.mute 与 tab badge / cell 红点统一口径，
+        // 之前直接读 conv.mute 是 DB 快照，冷启动期会让 section header 数字比 tab badge 多
+        if ([self isConversationMuted:conv]) continue;
         if ([store isFollowedWithType:WKFollowTargetTypeThread targetId:conv.channel.channelId]) {
             total += conv.unreadCount;
         }
@@ -1378,6 +1389,9 @@ static WKConversationListVM *_instance;
     if (topics) {
         for (WKConversation *conv in topics) {
             if (excluded.count > 0 && [excluded containsObject:conv.channel.channelId]) continue;
+            // cell 上显示的子区合计 unread 必须过滤静音子区，与 follow / recent tab badge 同款口径,
+            // 否则用户给某个子区设静音后，群聊 cell 上的红点数字仍包含该子区的未读
+            if ([self isConversationMuted:conv]) continue;
             unread += conv.unreadCount;
             if (!hasMention) {
                 NSArray<WKReminder*> *rems = self.cachedRemindersByChannelId[conv.channel.channelId];
