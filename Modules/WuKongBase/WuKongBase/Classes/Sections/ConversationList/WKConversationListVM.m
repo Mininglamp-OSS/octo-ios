@@ -424,7 +424,6 @@ static WKConversationListVM *_instance;
         NSSet<NSString *> *syncedGroupsSnapshot = strongSelf.syncedGroupChannelIds;
         NSMutableDictionary<NSString*, NSMutableArray<WKConversation*>*> *topicsByGroup = [NSMutableDictionary dictionary];
         NSMutableDictionary<NSString*, NSArray<WKReminder*>*> *remindersByChannelId = [NSMutableDictionary dictionary];
-        NSMutableArray<WKConversationWrapModel*> *threadWrapModels = [NSMutableArray array];
         for (WKConversation *conv in conversations) {
             if (conv.channel.channelType != WK_COMMUNITY_TOPIC) continue;
             NSString *channelId = conv.channel.channelId;
@@ -439,8 +438,37 @@ static WKConversationListVM *_instance;
             [topics addObject:conv];
             NSArray<WKReminder*> *reminders = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
             if (reminders.count > 0) remindersByChannelId[channelId] = reminders;
-            // 顺便把子区单独 wrap 出来 — 最近 tab 平铺渲染要用
-            [threadWrapModels addObject:[[WKConversationWrapModel alloc] initWithConversation:conv]];
+        }
+        // 最近 tab 子区独立行渲染源 threadWrapModels：严格按 parent.threadPreviews
+        // （listThreads 拉回的真实结果）收集，与 syncThreadWrapModelsFromCachedTopics
+        // 同款口径，确保 cell / badge 看到的子区集合一致。
+        //
+        // 之前是直接 wrap 所有 SDK cache 持有的 thread conversation（topicsByGroup 的副产品）,
+        // 把 SDK cache 里早不活跃 / 跨 group / 归档 / 用户没 join 的 thread 全部塞进 threadWrapModels,
+        // 实测 loadConversationList 把 threadWrapModels 从 20 涨到 185，后续
+        // syncThreadWrapModelsFromCachedTopics 又按 parent.threadPreviews prune 回 20,
+        // 中间这一波 badge 算上 165 个幽灵 thread 的 unread (94 条 = 866) → 闪到 872。
+        // 现在 loadConversationList 一开始就用同款口径，根除 spike 来源。
+        NSMutableArray<WKConversationWrapModel*> *threadWrapModels = [NSMutableArray array];
+        for (WKConversationWrapModel *parent in conversationWrapModels) {
+            if (parent.channel.channelType != WK_GROUP) continue;
+            if (syncedGroupsSnapshot && ![syncedGroupsSnapshot containsObject:parent.channel.channelId]) continue;
+            for (WKThreadModel *t in parent.threadPreviews) {
+                if (t.channelId.length == 0) continue;
+                WKChannel *threadChannel = [WKChannel channelID:t.channelId channelType:WK_COMMUNITY_TOPIC];
+                WKConversation *conv = [[WKSDK shared].conversationManager getConversation:threadChannel];
+                if (conv) {
+                    [threadWrapModels addObject:[[WKConversationWrapModel alloc] initWithConversation:conv]];
+                } else {
+                    // SDK 没有 → 合成占位（与 syncThreadWrapModelsFromCachedTopics 同款），
+                    // 等真实 conv 通过 onConversationUpdate 到达后 lastMessage 不再 nil,
+                    // getRecentUnreadCount 才会算入（placeholder 已经 skip）。
+                    WKConversation *placeholder = [[WKConversation alloc] init];
+                    placeholder.channel = threadChannel;
+                    placeholder.unreadCount = t.unreadCount;
+                    [threadWrapModels addObject:[[WKConversationWrapModel alloc] initWithConversation:placeholder]];
+                }
+            }
         }
 
         // 排序（纯内存）
