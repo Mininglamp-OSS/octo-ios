@@ -13,7 +13,38 @@ static const NSInteger kMenuContainerTag = 77701;
 static const NSInteger kMenuItemTagBase = 77710;
 static const void *kMenuItemsKey = &kMenuItemsKey;
 
+/// 浮层上的 dismiss-tap 用一个 static 共享 delegate，把 menuContainer 子树里的
+/// touch 全部拒掉 —— 否则 UITapGestureRecognizer 的默认行为
+/// （cancelsTouchesInView=YES + delaysTouchesEnded=YES）在某些时序下会把按钮的
+/// TouchUpInside 改成 touchesCancelled，导致点关注/取消/重命名/删除菜单项时只关菜单
+/// 不触发 action（PR review #2 critical）。
+@interface WKFloatingMenuTapFilter : NSObject <UIGestureRecognizerDelegate>
+@end
+@implementation WKFloatingMenuTapFilter
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+       shouldReceiveTouch:(UITouch *)touch {
+    // 只关心 overlay 上挂的 dismiss-tap：若 touch 落在 menuContainer 子树内，
+    // 直接放行让按钮自己处理 TouchUpInside，gesture 完全不参与本次 touch
+    UIView *menuContainer = [gestureRecognizer.view viewWithTag:kMenuContainerTag];
+    if (menuContainer) {
+        UIView *hit = touch.view;
+        while (hit) {
+            if (hit == menuContainer) return NO;
+            hit = hit.superview;
+        }
+    }
+    return YES;
+}
+@end
+
 @implementation WKFloatingMenu
+
++ (WKFloatingMenuTapFilter *)sharedTapFilter {
+    static WKFloatingMenuTapFilter *f;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ f = [WKFloatingMenuTapFilter new]; });
+    return f;
+}
 
 + (UIWindow *)hostWindow {
     UIWindow *window = [UIApplication sharedApplication].keyWindow;
@@ -36,6 +67,7 @@ static const void *kMenuItemsKey = &kMenuItemsKey;
     [window addSubview:overlay];
 
     UITapGestureRecognizer *dismissTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismiss)];
+    dismissTap.delegate = [self sharedTapFilter]; // 拦截 menuContainer 子树里的 touch，让按钮 TouchUpInside 正常派发
     [overlay addGestureRecognizer:dismissTap];
 
     CGFloat menuWidth = 160;

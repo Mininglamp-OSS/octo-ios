@@ -229,6 +229,16 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// threadWrapModels 集合并触发 rebuildFilteredList。不动 conversationWrapModels。
 - (void)applyThreadConversationUpdates:(NSArray<WKConversation*>*)threadConversations;
 
+/// 把 SDK 单独投递的子区 unreadCount 增量更新到 cachedTopicsByGroup 里现有条目上。
+/// 解决 PR review #1 critical：anyModelAtChannel 只看 conversationWrapModels +
+/// threadWrapModels，但 threadWrapModels 严格按 parent.threadPreviews 收，
+/// 是 cachedTopicsByGroup 的真子集。Follow tab badge / 群行「+N 子区」角标都直接
+/// 读 cachedTopicsByGroup[..].unreadCount —— "已关注但不在 preview 行"的子区
+/// 收到 unread callback 时若不写回这份缓存，badge 永远停在旧值。
+/// 只更新已存在条目，不 create 占位（避免越过 syncedGroups 闸门把跨 Space /
+/// 未 sync 的子区凭空塞进缓存）。返回 YES 表示找到并更新了至少一条。
+- (BOOL)updateCachedSubzoneUnread:(WKChannel*)channel unreadCount:(NSInteger)unreadCount;
+
 /// 刷新指定群组的子区数量
 -(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos;
 

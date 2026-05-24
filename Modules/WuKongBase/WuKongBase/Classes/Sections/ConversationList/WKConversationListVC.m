@@ -2053,8 +2053,29 @@
     WKConversationWrapModel *model = [self.conversationListVM anyModelAtChannel:channel];
     if(!model) {
         if (channel.channelType == WK_COMMUNITY_TOPIC) {
-            NSLog(@"[ThreadBadgeDbg] onConvUnreadUpdate EARLY-RETURN subzone=%@ unread=%ld (not in threadWrapModels — +N badge 不会刷)",
-                  channel.channelId, (long)unreadCount);
+            // PR review #1 critical：子区不在 threadWrapModels 不代表不存在 —— 它通常
+            // 还在 cachedTopicsByGroup 里（threadWrapModels 严格按 parent.threadPreviews
+            // 收，是 cachedTopicsByGroup 的真子集）。Follow tab 的「+N 子区」badge /
+            // getFollowUnreadCount / getThreadIndicatorForGroup 都直接读这份缓存的
+            // unreadCount，必须把 SDK 投来的最新值写回，否则用户在另一端读完已读
+            // 后 badge 不收敛。create 占位由 applyThreadConversationUpdates /
+            // syncThreadWrapModelsFromCachedTopics 路径负责（带 syncedGroups 闸门），
+            // 这里只做 update，不凭空 alloc。
+            BOOL updated = [self.conversationListVM updateCachedSubzoneUnread:channel unreadCount:unreadCount];
+            if (updated) {
+                if (_conversationListVM.filterType == WKConversationFilterFollow) {
+                    // Follow tab 上的 +N 子区角标 / section header unread 都从
+                    // cachedTopicsByGroup 算出来，rebuild 一次让 cell 重渲染
+                    [self rebuildGroupDisplayAndReload];
+                }
+                // Recent tab 不展示非 preview 子区，没有具体 cell 需要刷；refreshBadge
+                // 已 coalesce 到 150ms 一次（refreshBadge 方法注释），多设备 sync 时
+                // 批量回调安全
+                [self refreshBadge];
+            } else {
+                NSLog(@"[ThreadBadgeDbg] onConvUnreadUpdate EARLY-RETURN subzone=%@ unread=%ld (not in threadWrapModels nor cachedTopicsByGroup)",
+                      channel.channelId, (long)unreadCount);
+            }
         }
         return;
     }

@@ -1026,6 +1026,33 @@ static WKConversationListVM *_instance;
     [self rebuildFilteredList];
 }
 
+- (BOOL)updateCachedSubzoneUnread:(WKChannel*)channel unreadCount:(NSInteger)unreadCount {
+    if (!channel || channel.channelType != WK_COMMUNITY_TOPIC) return NO;
+    NSString *channelId = channel.channelId;
+    if (channelId.length == 0) return NO;
+    NSRange sep = [channelId rangeOfString:@"____"];
+    if (sep.location == NSNotFound) return NO;
+    NSString *parentGroupNo = [channelId substringToIndex:sep.location];
+
+    NSArray<WKConversation*> *topics = self.cachedTopicsByGroup[parentGroupNo];
+    if (topics.count == 0) return NO;
+
+    BOOL updated = NO;
+    for (WKConversation *conv in topics) {
+        if ([conv.channel.channelId isEqualToString:channelId]) {
+            if (conv.unreadCount != unreadCount) {
+                conv.unreadCount = (int)unreadCount;
+                updated = YES;
+            }
+            break;
+        }
+    }
+    if (updated) {
+        NSLog(@"[ThreadBadgeDbg] updateCachedSubzoneUnread channelId=%@ unread=%ld", channelId, (long)unreadCount);
+    }
+    return updated;
+}
+
 -(BOOL) modelMatchesFilter:(WKConversationWrapModel *)model {
     uint8_t type = model.channel.channelType;
     if (self.filterType == WKConversationFilterFollow) {
