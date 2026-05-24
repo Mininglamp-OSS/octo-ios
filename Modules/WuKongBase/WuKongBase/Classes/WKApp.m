@@ -42,6 +42,7 @@
 #import "WKForwardSelectVC.h"
 #import "WKSyncService.h"
 #import "WKSpaceModel.h"
+#import "WKSpaceConvSyncCache.h"
 #import "WKNavigationManager.h"
 #import "WKPanelDefaultFuncItem.h"
 #import "WKScanVC.h"
@@ -412,6 +413,11 @@ static WKApp *_instance;
         // 切换数据库
         [[WKKitDB shared] switchDB:[WKApp shared].loginInfo.uid];
 
+        // Defense-in-depth: 清掉上一次登录可能残留的 conv-sync space 内存缓存。
+        // 主清理路径在 logout，这里再清一次防止异常退出 / kill app 后切账号读到旧用户数据。
+        // key 是 channelId-channelType 不含 UID，必须在新账号 sync 前归零。
+        [[WKSpaceConvSyncCache shared] clearAll];
+
         // 重新加载最近会话保持的位置
         [[WKConversationPositionManager shared] reload];
 
@@ -453,6 +459,11 @@ static WKApp *_instance;
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"WKSpaceGateCompleted"];
         [[NSUserDefaults standardUserDefaults] synchronize];
         [[WKSpaceModel shared] invalidateCache];
+
+        // 清掉 conv-sync 内存里的 space_id / my_source_space_id 缓存。
+        // 该 cache 是 singleton, key 不含 UID, 不清的话下个账号登录后
+        // 同 channelId-channelType 会读到上一个用户的 Space 数据 (跨登录泄漏)。
+        [[WKSpaceConvSyncCache shared] clearAll];
 
         // 显示登录页面
         [[WKApp shared] invoke:WKPOINT_LOGIN_SHOW param:nil];
