@@ -496,6 +496,8 @@ static WKConversationListVM *_instance;
             [mainSelf rebuildChannelIndex];
             mainSelf.cachedTopicsByGroup = topicsByGroup;
             mainSelf.cachedRemindersByChannelId = remindersByChannelId;
+            NSLog(@"[ThreadBadgeDbg] loadConversationList snapshot: topicsByGroup=%lu (groups), reminders=%lu (channels)",
+                  (unsigned long)topicsByGroup.count, (unsigned long)remindersByChannelId.count);
             [mainSelf rebuildFilteredList];
 
             // 更新 threadData 缓存（跨 reset 保留，防止切空间时 threadPreviews 丢失）
@@ -986,6 +988,8 @@ static WKConversationListVM *_instance;
         }];
         self.cachedTopicsByGroup = frozen;
     }
+    NSLog(@"[ThreadBadgeDbg] applyThreadConvUpdates incoming=%lu wrapMutated=%d cacheMutated=%d cacheGroups=%lu",
+          (unsigned long)threadConversations.count, mutated, cacheMutated, (unsigned long)self.cachedTopicsByGroup.count);
     [self rebuildFilteredList];
 }
 
@@ -1486,14 +1490,16 @@ static WKConversationListVM *_instance;
     // store 未加载时 fail-open（与 visibleThreadPreviewsFor 同款），避免冷启动期一律 0。
     WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
     NSArray<WKConversation*> *topics = self.cachedTopicsByGroup[groupNo];
+    NSInteger nMatched = 0, nExcluded = 0, nUnfollowed = 0, nMuted = 0;
     if (topics) {
         for (WKConversation *conv in topics) {
-            if (excluded.count > 0 && [excluded containsObject:conv.channel.channelId]) continue;
-            if (store.loaded && ![store isFollowedWithType:WKFollowTargetTypeThread targetId:conv.channel.channelId]) continue;
+            if (excluded.count > 0 && [excluded containsObject:conv.channel.channelId]) { nExcluded++; continue; }
+            if (store.loaded && ![store isFollowedWithType:WKFollowTargetTypeThread targetId:conv.channel.channelId]) { nUnfollowed++; continue; }
             // cell 上显示的子区合计 unread 必须过滤静音子区，与 follow / recent tab badge 同款口径,
             // 否则用户给某个子区设静音后，群聊 cell 上的红点数字仍包含该子区的未读
-            if ([self isConversationMuted:conv]) continue;
+            if ([self isConversationMuted:conv]) { nMuted++; continue; }
             unread += conv.unreadCount;
+            nMatched++;
             if (!hasMention) {
                 NSArray<WKReminder*> *rems = self.cachedRemindersByChannelId[conv.channel.channelId];
                 for (WKReminder *r in rems) {
@@ -1502,6 +1508,9 @@ static WKConversationListVM *_instance;
             }
         }
     }
+    NSLog(@"[ThreadBadgeDbg] indicator group=%@ topics=%lu excluded=%lu storeLoaded=%d → unread=%ld mention=%d (matched=%ld excl=%ld unfollowed=%ld muted=%ld)",
+          groupNo, (unsigned long)topics.count, (unsigned long)excluded.count, store.loaded,
+          (long)unread, hasMention, (long)nMatched, (long)nExcluded, (long)nUnfollowed, (long)nMuted);
     if (outUnread) *outUnread = unread;
     if (outHasMention) *outHasMention = hasMention;
 }

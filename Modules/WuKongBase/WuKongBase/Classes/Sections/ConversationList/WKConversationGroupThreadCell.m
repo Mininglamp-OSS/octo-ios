@@ -516,6 +516,9 @@
         } else {
             self.moreBadgeLbl.hidden = YES;
         }
+        NSLog(@"[ThreadBadgeDbg] GroupThreadCell group=%@ totalFollowed=%ld preview=%ld → +N=%ld moreUnread=%ld moreMention=%d",
+              self.model.channel.channelId, (long)totalFollowedThreads, (long)count,
+              (long)(totalFollowedThreads - count), (long)moreUnread, moreMention);
     } else {
         self.moreLbl.hidden = YES;
         self.moreBadgeLbl.hidden = YES;

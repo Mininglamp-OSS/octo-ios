@@ -2048,6 +2048,10 @@
     // 已关注的 DM 和嵌套子区的未读永远停在旧值。
     WKConversationWrapModel *model = [self.conversationListVM anyModelAtChannel:channel];
     if(!model) {
+        if (channel.channelType == WK_COMMUNITY_TOPIC) {
+            NSLog(@"[ThreadBadgeDbg] onConvUnreadUpdate EARLY-RETURN subzone=%@ unread=%ld (not in threadWrapModels — +N badge 不会刷)",
+                  channel.channelId, (long)unreadCount);
+        }
         return;
     }
 

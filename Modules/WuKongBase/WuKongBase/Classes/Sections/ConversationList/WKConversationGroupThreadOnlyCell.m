@@ -224,6 +224,8 @@
     } else {
         self.moreBadgeLbl.hidden = YES;
     }
+    NSLog(@"[ThreadBadgeDbg] GroupThreadOnlyCell group=%@ followed=%ld preview=%ld → +N=%ld moreUnread=%ld moreMention=%d",
+          groupNo, (long)followedThreadCount, (long)previewCount, (long)moreCount, (long)moreUnread, moreMention);
 }
 
 -(void) refreshAvatar:(WKConversationWrapModel*)model {
