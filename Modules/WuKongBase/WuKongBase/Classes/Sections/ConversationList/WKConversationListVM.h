@@ -268,6 +268,13 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// channel 非 WK_COMMUNITY_TOPIC 时该方法 no-op（顶层群/DM 走 model.simpleReminders 路径）。
 -(void) applySubzoneRemindersUpdate:(WKChannel *)channel reminders:(NSArray<WKReminder *> *)reminders;
 
+/// 按 WKFollowedKeysStore 把已关注子区从 SDK DB batch-fetch 进 cachedTopicsByGroup。
+/// SDK 的 getConversationList 不返回 WK_COMMUNITY_TOPIC（设计如此），冷启动 +
+/// followedKeys 后加载 race 下这份 cache 会持续是空 → "+N子区" cell 上的 unread
+/// 数字永远 0。在 loadConversationList 末尾 + onFollowedKeysStoreDidUpdate 各调一次
+/// 保证最终一致。返回新加入的条目数（便于决策是否触发 UI reload）。
+-(NSInteger) seedFollowedThreadsIntoTopicsCache;
+
 /// buildGroupDisplayList 计算出的 tab 级 @提醒状态，分关注 / 最近两个集合：
 ///   - Follow:  与 getFollowUnreadCount 同口径（DM/Channel/Thread 走 WKFollowedKeysStore）
 ///   - Recent:  与 getRecentUnreadCount 同口径（DM 全部；Group 非 3 天 stale；Thread 走

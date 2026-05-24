@@ -441,6 +441,10 @@ static WKConversationListVM *_instance;
             NSArray<WKReminder*> *reminders = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
             if (reminders.count > 0) remindersByChannelId[channelId] = reminders;
         }
+        // 注：getConversationList 不返回 WK_COMMUNITY_TOPIC（SDK 设计如此），上面循环
+        // 在冷启动时一条子区也拿不到。改由主线程在 cache 写回后调
+        // seedFollowedThreadsIntoTopicsCache 按 followedKeys 显式 batch-fetch 一遍兜底，
+        // 避免"+N子区" cell badge unread 永远是 0 的偶发崩在冷启动场景。
         // 最近 tab 子区独立行渲染源 threadWrapModels：严格按 parent.threadPreviews
         // （listThreads 拉回的真实结果）收集，与 syncThreadWrapModelsFromCachedTopics
         // 同款口径，确保 cell / badge 看到的子区集合一致。
@@ -498,6 +502,9 @@ static WKConversationListVM *_instance;
             mainSelf.cachedRemindersByChannelId = remindersByChannelId;
             NSLog(@"[ThreadBadgeDbg] loadConversationList snapshot: topicsByGroup=%lu (groups), reminders=%lu (channels)",
                   (unsigned long)topicsByGroup.count, (unsigned long)remindersByChannelId.count);
+            // 兜底用 followedKeys 把已关注子区从 SDK DB 抓回来 — getConversationList 不返
+            // 回 WK_COMMUNITY_TOPIC，上面 bg 循环冷启动期一条都收不到。
+            [mainSelf seedFollowedThreadsIntoTopicsCache];
             [mainSelf rebuildFilteredList];
 
             // 更新 threadData 缓存（跨 reset 保留，防止切空间时 threadPreviews 丢失）
@@ -1583,6 +1590,64 @@ static WKConversationListVM *_instance;
         [mut removeObjectForKey:channelId];
     }
     self.cachedRemindersByChannelId = mut;
+}
+
+-(NSInteger) seedFollowedThreadsIntoTopicsCache {
+    WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
+    if (!store.loaded) {
+        NSLog(@"[ThreadBadgeDbg] seedFollowedThreads skipped: store not loaded");
+        return 0;
+    }
+    NSSet<NSString*> *syncedGroups = self.syncedGroupChannelIds;
+    NSString *threadPrefix = [NSString stringWithFormat:@"%ld::", (long)WKFollowTargetTypeThread];
+    NSMutableArray<WKChannel*> *threadChannels = [NSMutableArray array];
+    for (NSString *k in store.followedKeys) {
+        if (![k hasPrefix:threadPrefix]) continue;
+        NSString *cid = [k substringFromIndex:threadPrefix.length];
+        NSRange sep = [cid rangeOfString:@"____"];
+        if (sep.location == NSNotFound) continue;
+        NSString *parentGroup = [cid substringToIndex:sep.location];
+        if (syncedGroups && ![syncedGroups containsObject:parentGroup]) continue;
+        [threadChannels addObject:[WKChannel channelID:cid channelType:WK_COMMUNITY_TOPIC]];
+    }
+    if (threadChannels.count == 0) {
+        NSLog(@"[ThreadBadgeDbg] seedFollowedThreads: no followed threads to fetch");
+        return 0;
+    }
+    NSArray<WKConversation*> *fetched = [[WKSDK shared].conversationManager getConversations:threadChannels];
+
+    NSMutableDictionary<NSString*, NSMutableArray<WKConversation*>*> *topicsMut = [NSMutableDictionary dictionary];
+    [self.cachedTopicsByGroup enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSArray<WKConversation*> *v, BOOL *stop) {
+        topicsMut[k] = [v mutableCopy];
+    }];
+    NSInteger added = 0;
+    for (WKConversation *conv in fetched) {
+        NSString *cid = conv.channel.channelId;
+        if (cid.length == 0) continue;
+        NSRange sep = [cid rangeOfString:@"____"];
+        if (sep.location == NSNotFound) continue;
+        NSString *parentGroup = [cid substringToIndex:sep.location];
+        NSMutableArray<WKConversation*> *topics = topicsMut[parentGroup];
+        if (!topics) { topics = [NSMutableArray array]; topicsMut[parentGroup] = topics; }
+        BOOL dup = NO;
+        for (WKConversation *existing in topics) {
+            if ([existing.channel.channelId isEqualToString:cid]) { dup = YES; break; }
+        }
+        if (!dup) {
+            [topics addObject:conv];
+            added++;
+        }
+    }
+    if (added > 0) {
+        NSMutableDictionary<NSString*, NSArray<WKConversation*>*> *frozen = [NSMutableDictionary dictionaryWithCapacity:topicsMut.count];
+        [topicsMut enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSMutableArray<WKConversation*> *v, BOOL *stop) {
+            frozen[k] = [v copy];
+        }];
+        self.cachedTopicsByGroup = frozen;
+    }
+    NSLog(@"[ThreadBadgeDbg] seedFollowedThreads: queriedChannels=%ld fetched=%ld added=%ld cacheGroups=%lu",
+          (long)threadChannels.count, (long)fetched.count, (long)added, (unsigned long)self.cachedTopicsByGroup.count);
+    return added;
 }
 
 -(NSArray<WKConversationDisplayItem *> *) buildGroupDisplayList {

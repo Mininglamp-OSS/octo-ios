@@ -1708,6 +1708,9 @@
     // 任意 follow/unfollow 写操作完成 + reload 完成都会 post 这个通知。
     // 关注 tab 需要把新加的 DM/取消的会话在分组里更新；最近 tab 不需要重建（数据源是 IM cache），
     // 但长按菜单下次弹出时已经能拿到最新 followedKeys。
+    // followedKeys 也是 seedFollowedThreadsIntoTopicsCache 的输入 — 这里补拉一次，
+    // 覆盖"loadConversationList 跑完后 store 才 loaded"的冷启动 race。
+    [self.conversationListVM seedFollowedThreadsIntoTopicsCache];
     if (self.conversationListVM.filterType == WKConversationFilterFollow) {
         [self rebuildGroupDisplayAndReload];
     }
