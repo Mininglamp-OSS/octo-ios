@@ -1289,7 +1289,9 @@
     }
     // 子区 update 必须不论当前 tab 都 apply 进 threadWrapModels —— 否则用户在
     // Follow tab 收到子区消息，切到 Recent 看到的还是旧 preview/时间戳/排序。
-    // UI refresh 仍仅在 Recent tab 触发，避免无谓 reload。
+    // Follow tab 也要刷一次：cell 上的"+N个子区"badge 数字读 cachedTopicsByGroup,
+    // 这次 update 已经被 applyThreadConversationUpdates 并进 cache，但 cell 不重渲染
+    // 数字就停在 0；冷启动后第一次收到子区推送即命中此分支。
     if (threadUpdates.count > 0) {
         if (self.spaceSwitchInProgress) {
             NSLog(@"[SpaceGate] drop %d thread updates (switch in progress)", (int)threadUpdates.count);
@@ -1297,6 +1299,9 @@
             [self.conversationListVM applyThreadConversationUpdates:threadUpdates];
             if (self.conversationListVM.filterType == WKConversationFilterRecent) {
                 [self refreshTable];
+                [self refreshBadge];
+            } else if (self.conversationListVM.filterType == WKConversationFilterFollow) {
+                [self rebuildGroupDisplayAndReload];
                 [self refreshBadge];
             }
         }

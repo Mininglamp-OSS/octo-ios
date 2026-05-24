@@ -912,6 +912,20 @@ static WKConversationListVM *_instance;
     }
     NSSet<NSString *> *syncedGroups = self.syncedGroupChannelIds;
     BOOL mutated = NO;
+    // cachedTopicsByGroup mutable 副本，把本批 subzone 也并进去 —— 这份 cache 是
+    // "+N个子区" badge / getFollowUnreadCount 的唯一数据源，loadConversationList
+    // 之后再不主动 merge 就永远漏算冷启动后才到达的子区，"+N" 后面的数字一直不亮
+    // 直到下次 loadConversationList（如切空间）触发 rebuild。
+    NSMutableDictionary<NSString*, NSMutableArray<WKConversation*>*> *topicsMut = nil;
+    if (self.cachedTopicsByGroup) {
+        topicsMut = [NSMutableDictionary dictionaryWithCapacity:self.cachedTopicsByGroup.count];
+        [self.cachedTopicsByGroup enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSArray<WKConversation*> *v, BOOL *stop) {
+            topicsMut[k] = [v mutableCopy];
+        }];
+    } else {
+        topicsMut = [NSMutableDictionary dictionary];
+    }
+    BOOL cacheMutated = NO;
     for (WKConversation *c in threadConversations) {
         if (!c.channel.channelId) continue;
         // 空间隔离：父群必须在当前 Space 白名单（fail-closed）—— syncedGroups 未初始化（reset 后
@@ -938,9 +952,39 @@ static WKConversationListVM *_instance;
         // 子区进入 threadWrapModels 的唯一通道交给 syncThreadWrapModelsFromCachedTopics
         // 单点驱动（走 parent.threadPreviews / listThreads 真实结果）+ loadConversationList
         // 同款口径。这条路径只负责给已知子区更新 preview / timestamp。
+
+        // 但 cachedTopicsByGroup 必须收，否则"+N子区"的 unread 数字永远漏算这次推送 —
+        // 它只是按 parent groupNo 聚合的快照，不影响 Recent tab 独立行的渲染口径
+        // （那是 threadWrapModels 的领地）。已存在则替换为最新引用（SDK 通常同实例，
+        // 但保险起见做去重）。
+        NSMutableArray<WKConversation*> *topics = topicsMut[parentGroupNo];
+        if (!topics) {
+            topics = [NSMutableArray array];
+            topicsMut[parentGroupNo] = topics;
+        }
+        NSInteger foundIdx = NSNotFound;
+        for (NSInteger i = 0; i < (NSInteger)topics.count; i++) {
+            if ([topics[i].channel.channelId isEqualToString:c.channel.channelId]) {
+                foundIdx = i; break;
+            }
+        }
+        if (foundIdx == NSNotFound) {
+            [topics addObject:c];
+            cacheMutated = YES;
+        } else if (topics[foundIdx] != c) {
+            topics[foundIdx] = c;
+            cacheMutated = YES;
+        }
     }
     if (mutated) {
         self.threadWrapModels = [byChannel.allValues copy];
+    }
+    if (cacheMutated) {
+        NSMutableDictionary<NSString*, NSArray<WKConversation*>*> *frozen = [NSMutableDictionary dictionaryWithCapacity:topicsMut.count];
+        [topicsMut enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSMutableArray<WKConversation*> *v, BOOL *stop) {
+            frozen[k] = [v copy];
+        }];
+        self.cachedTopicsByGroup = frozen;
     }
     [self rebuildFilteredList];
 }
