@@ -70,7 +70,20 @@ static const NSInteger kPageSize = 15;
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-    [self loadThreads];
+    // 不再在 viewWillAppear 里重跑 loadThreads —— 那条路径会 reset
+    // currentPage=1 + 清 allLoadedThreads + 只拉首页 (pageSize=15)，用户从子区
+    // 详情页返回时之前已加载的 2+ 页全部丢失，contentSize 缩到 15 行高度，
+    // contentOffset 被 clamp 到 maxY → 列表跳回顶部。
+    //
+    // 数据新鲜度的来源继续靠：
+    //  - WKConversationManagerDelegate / WKReminderManagerDelegate（在
+    //    viewDidLoad 注册、dealloc 移除）— 进详情页期间收到的 unread / 提醒
+    //    变化都会触发 [tableView reloadData]，contentOffset 自然保留
+    //  - 用户主动下拉刷新 → onRefresh → loadThreads（这条会 reset 是预期的）
+    //
+    // 远端新建子区（其他端 / 其他人）的发现交给下拉刷新 — 大多用户从详情返回时
+    // 不希望"列表跳走"，这是更高优先级的 UX。
+    [self.tableView reloadData];
 }
 
 - (void)viewDidLayoutSubviews {
