@@ -12,6 +12,9 @@
 #import "UIView+WKCommon.h"
 #import "WuKongBase.h"
 #import "WKApp.h"
+#import "WKFollowService.h"
+#import "WKFollowedKeysStore.h"
+#import "WKFloatingMenu.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 
 static NSString *const kCellIdentifier = @"WKThreadListCell";
@@ -55,6 +58,11 @@ static const NSInteger kPageSize = 15;
     self.threads = @[];
     self.allLoadedThreads = [NSMutableArray array];
     [self loadThreads];
+
+    // 长按子区行 → 复用会话列表风格的浮层菜单（关注 / 取消关注）
+    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(onThreadLongPress:)];
+    longPress.minimumPressDuration = 0.4;
+    [self.tableView addGestureRecognizer:longPress];
 
     [[WKSDK shared].conversationManager addDelegate:self];
     [[WKReminderManager shared] addDelegate:self];
@@ -445,6 +453,73 @@ static const NSInteger kPageSize = 15;
 - (void)dealloc {
     [[WKSDK shared].conversationManager removeDelegate:self];
     [[WKReminderManager shared] removeDelegate:self];
+}
+
+#pragma mark - 长按菜单：关注 / 取消关注（与会话列表菜单同款风格）
+
+- (void)onThreadLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan) return;
+    CGPoint pInTable = [gesture locationInView:self.tableView];
+    NSIndexPath *ip = [self.tableView indexPathForRowAtPoint:pInTable];
+    if (!ip || ip.row >= (NSInteger)self.threads.count) return;
+    WKThreadModel *thread = self.threads[ip.row];
+
+    UIWindow *window = [UIApplication sharedApplication].keyWindow ?: [UIApplication sharedApplication].windows.firstObject;
+    CGPoint pInWindow = [self.tableView convertPoint:pInTable toView:window];
+
+    [self showFollowMenuForThread:thread atPointInWindow:pInWindow];
+
+    UIImpactFeedbackGenerator *fb = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    [fb impactOccurred];
+}
+
+- (void)showFollowMenuForThread:(WKThreadModel *)thread atPointInWindow:(CGPoint)pointInWindow {
+    if (thread.channelId.length == 0) return;
+    WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
+    BOOL isFollowed = [store isFollowedWithType:WKFollowTargetTypeThread targetId:thread.channelId];
+    NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
+    __weak typeof(self) weakSelf = self;
+
+    if (isFollowed) {
+        [items addObject:@{
+            @"title": LLang(@"取消关注"),
+            @"icon": [WKFloatingMenu iconUnfollow],
+            @"action": ^{ [weakSelf doUnfollowThread:thread]; }
+        }];
+    } else {
+        [items addObject:@{
+            @"title": LLang(@"添加到关注"),
+            @"icon": [WKFloatingMenu iconFollow],
+            @"action": ^{ [weakSelf doFollowThread:thread]; }
+        }];
+    }
+    [WKFloatingMenu showItems:items atPoint:pointInWindow];
+}
+
+/// 关注子区。后端 cascade 处理父群关注状态：父群未关注时由服务端 refollow 父群（沿用
+/// 会话列表 performFollowThread: 父群已关注路径的同款语义）。这里 VC 上下文必然在父群里
+/// 浏览子区，意图明确，不再弹分组选择 sheet — 与会话列表里"父群已关注 → 直接 follow"
+/// 一致；父群未关注的边界由后端处理。
+- (void)doFollowThread:(WKThreadModel *)thread {
+    __weak typeof(self) weakSelf = self;
+    [[WKFollowService shared] followThread:thread.channelId].then(^(id _) {
+        [[WKFollowedKeysStore shared] reload];
+        [weakSelf.view showMsg:LLang(@"已添加到关注")];
+        [weakSelf.tableView reloadData];
+    }).catch(^(NSError *err) {
+        [weakSelf.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
+    });
+}
+
+- (void)doUnfollowThread:(WKThreadModel *)thread {
+    __weak typeof(self) weakSelf = self;
+    [[WKFollowService shared] unfollowThread:thread.channelId].then(^(id _) {
+        [[WKFollowedKeysStore shared] reload];
+        [weakSelf.view showMsg:LLang(@"已取消关注")];
+        [weakSelf.tableView reloadData];
+    }).catch(^(NSError *err) {
+        [weakSelf.view showMsg:err.domain ?: LLang(@"取消关注失败")];
+    });
 }
 
 #pragma mark - WKConversationManagerDelegate

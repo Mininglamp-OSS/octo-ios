@@ -15,6 +15,7 @@
 #import "WKThreadListVC.h"
 #import "WKCategoryEntity.h"
 #import "WKCategoryService.h"
+#import "WKFloatingMenu.h"
 #import "WKCategorySectionCell.h"
 #import "WKCategoryReorderVC.h"
 #import "WKFollowedKeysStore.h"
@@ -4105,54 +4106,11 @@
 }
 
 + (UIImage *)iconFollow {
-    CGSize s = CGSizeMake(20, 20);
-    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
-    CGContextRef ctx = UIGraphicsGetCurrentContext();
-    [[UIColor colorWithWhite:0.3 alpha:1] setStroke];
-    CGContextSetLineWidth(ctx, 1.5);
-    CGContextSetLineCap(ctx, kCGLineCapRound);
-    CGContextSetLineJoin(ctx, kCGLineJoinRound);
-    // 五角星轮廓（添加到关注）
-    CGFloat cx = 10, cy = 10, r = 7;
-    for (int i = 0; i < 5; i++) {
-        CGFloat a = -M_PI/2 + i * 2*M_PI/5;
-        CGFloat x = cx + r * cos(a);
-        CGFloat y = cy + r * sin(a);
-        if (i == 0) CGContextMoveToPoint(ctx, x, y);
-        else CGContextAddLineToPoint(ctx, x, y);
-    }
-    CGContextClosePath(ctx);
-    CGContextStrokePath(ctx);
-    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return img;
+    return [WKFloatingMenu iconFollow];
 }
 
 + (UIImage *)iconUnfollow {
-    CGSize s = CGSizeMake(20, 20);
-    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
-    CGContextRef ctx = UIGraphicsGetCurrentContext();
-    [[UIColor colorWithWhite:0.3 alpha:1] setStroke];
-    CGContextSetLineWidth(ctx, 1.5);
-    CGContextSetLineCap(ctx, kCGLineCapRound);
-    CGContextSetLineJoin(ctx, kCGLineJoinRound);
-    // 五角星 + 斜杠（取消关注）
-    CGFloat cx = 10, cy = 10, r = 6;
-    for (int i = 0; i < 5; i++) {
-        CGFloat a = -M_PI/2 + i * 2*M_PI/5;
-        CGFloat x = cx + r * cos(a);
-        CGFloat y = cy + r * sin(a);
-        if (i == 0) CGContextMoveToPoint(ctx, x, y);
-        else CGContextAddLineToPoint(ctx, x, y);
-    }
-    CGContextClosePath(ctx);
-    CGContextStrokePath(ctx);
-    CGContextMoveToPoint(ctx, 3, 17);
-    CGContextAddLineToPoint(ctx, 17, 3);
-    CGContextStrokePath(ctx);
-    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return img;
+    return [WKFloatingMenu iconUnfollow];
 }
 
 + (UIImage *)iconMoveCategory {
@@ -4883,112 +4841,12 @@
 
 /// 在指定位置显示悬浮菜单（带阴影、圆角、三角箭头）
 -(void) showFloatingMenu:(NSArray<NSDictionary *> *)menuItems atPoint:(CGPoint)point {
-    UIWindow *window = [UIApplication sharedApplication].keyWindow;
-    if(!window) window = [UIApplication sharedApplication].windows.firstObject;
-
-    // 半透明遮罩
-    UIView *overlay = [[UIView alloc] initWithFrame:window.bounds];
-    overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.15];
-    overlay.alpha = 0;
-    overlay.tag = 77700;
-    [window addSubview:overlay];
-
-    UITapGestureRecognizer *dismissTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissFloatingMenu)];
-    [overlay addGestureRecognizer:dismissTap];
-
-    // 菜单容器
-    CGFloat menuWidth = 160;
-    CGFloat rowHeight = 44;
-    CGFloat menuHeight = menuItems.count * rowHeight;
-    CGFloat cornerRadius = 12;
-
-    UIView *menuContainer = [[UIView alloc] init];
-    menuContainer.backgroundColor = [WKApp shared].config.cellBackgroundColor;
-    menuContainer.layer.cornerRadius = cornerRadius;
-    menuContainer.layer.shadowColor = [UIColor blackColor].CGColor;
-    menuContainer.layer.shadowOpacity = 0.15;
-    menuContainer.layer.shadowOffset = CGSizeMake(0, 4);
-    menuContainer.layer.shadowRadius = 12;
-    menuContainer.tag = 77701;
-
-    // 计算位置：在手指上方显示，如果空间不够则显示在下方
-    BOOL showAbove = (point.y - menuHeight - 12 > 60);
-    CGFloat menuX = point.x - menuWidth / 2.0;
-    if (menuX < 10) menuX = 10;
-    if (menuX + menuWidth > window.lim_width - 10) menuX = window.lim_width - menuWidth - 10;
-    CGFloat menuY = showAbove ? (point.y - menuHeight - 10) : (point.y + 10);
-
-    menuContainer.frame = CGRectMake(menuX, menuY, menuWidth, menuHeight);
-
-    // 菜单行
-    for (NSInteger i = 0; i < (NSInteger)menuItems.count; i++) {
-        NSDictionary *item = menuItems[i];
-        UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
-        btn.frame = CGRectMake(0, i * rowHeight, menuWidth, rowHeight);
-        btn.tag = 77710 + i;
-        btn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
-        btn.contentEdgeInsets = UIEdgeInsetsMake(0, 16, 0, 16);
-        btn.titleEdgeInsets = UIEdgeInsetsMake(0, 10, 0, 0);
-
-        [btn setTitle:item[@"title"] forState:UIControlStateNormal];
-        UIImage *icon = item[@"icon"];
-        if (icon) {
-            [btn setImage:[icon imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate] forState:UIControlStateNormal];
-        }
-
-        BOOL isDestructive = [item[@"isDestructive"] boolValue];
-        btn.tintColor = isDestructive ? [UIColor redColor] : [WKApp shared].config.defaultTextColor;
-        [btn setTitleColor:btn.tintColor forState:UIControlStateNormal];
-        btn.titleLabel.font = [[WKApp shared].config appFontOfSize:15.0f];
-
-        [btn addTarget:self action:@selector(floatingMenuItemTapped:) forControlEvents:UIControlEventTouchUpInside];
-        [menuContainer addSubview:btn];
-
-        // 分隔线（非最后一行）
-        if (i < (NSInteger)menuItems.count - 1) {
-            UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(16, (i + 1) * rowHeight - 0.5, menuWidth - 32, 0.5)];
-            sep.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.15];
-            [menuContainer addSubview:sep];
-        }
-    }
-
-    // 保存 actions
-    objc_setAssociatedObject(overlay, "menuActions", menuItems, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [overlay addSubview:menuContainer];
-
-    // 弹出动画
-    menuContainer.transform = CGAffineTransformMakeScale(0.8, 0.8);
-    menuContainer.alpha = 0;
-    [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
-        overlay.alpha = 1;
-        menuContainer.transform = CGAffineTransformIdentity;
-        menuContainer.alpha = 1;
-    } completion:nil];
-}
-
--(void) floatingMenuItemTapped:(UIButton *)btn {
-    NSInteger index = btn.tag - 77710;
-    UIWindow *window = [UIApplication sharedApplication].keyWindow;
-    UIView *overlay = [window viewWithTag:77700];
-    NSArray *menuItems = objc_getAssociatedObject(overlay, "menuActions");
-
-    [self dismissFloatingMenu];
-
-    if (index >= 0 && index < (NSInteger)menuItems.count) {
-        void(^action)(void) = menuItems[index][@"action"];
-        if (action) action();
-    }
+    // 浮层菜单实现挪到 WKFloatingMenu — 让 WKThreadListVC 等也能复用同样的视觉。
+    [WKFloatingMenu showItems:menuItems atPoint:point];
 }
 
 -(void) dismissFloatingMenu {
-    UIWindow *window = [UIApplication sharedApplication].keyWindow;
-    UIView *overlay = [window viewWithTag:77700];
-    if (!overlay) return;
-    [UIView animateWithDuration:0.15 animations:^{
-        overlay.alpha = 0;
-    } completion:^(BOOL finished) {
-        [overlay removeFromSuperview];
-    }];
+    [WKFloatingMenu dismiss];
 }
 
 #pragma mark - Menu Icons (程序化绘制)
