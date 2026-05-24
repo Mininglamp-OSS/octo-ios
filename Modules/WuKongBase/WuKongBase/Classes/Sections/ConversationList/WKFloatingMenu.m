@@ -5,7 +5,7 @@
 
 #import "WKFloatingMenu.h"
 #import "WKApp.h"
-#import "UIView+WKCommon.h"
+#import "UIView+WK.h"
 #import <objc/runtime.h>
 
 static const NSInteger kOverlayTag = 77700;
