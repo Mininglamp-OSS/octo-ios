@@ -39,6 +39,15 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,strong) WKConversationExtra *remoteExtra;
 
+// 群归属 Space ID（来自 server `conversation.space_id`，octo-server PR#154）。
+// 仅 GROUP 类型有效；upstream 未部署 / 字段缺失时为 nil → 不写入 channelInfo.extra，
+// WKSpaceFilter 走 fail-open + 白名单兜底（向后兼容）。
+@property(nonatomic,copy,nullable) NSString *spaceId;
+
+// 我在该群的 subscriber.source_space_id（来自 server `conversation.my_source_space_id`，
+// octo-server PR#154）。仅 GROUP 类型有效；nil 时不写入 member.extra。
+@property(nonatomic,copy,nullable) NSString *mySourceSpaceId;
+
 @property(nonatomic,strong,readonly) WKConversation *conversation;
 
 @end

@@ -14,6 +14,8 @@
 #import <WuKongIMSDK/WKReminderDB.h>
 #import "WKChannelDataManagerDelegateImp.h"
 #import "WKSpaceConversationCache.h"
+#import "WKSpaceConvSyncCache.h"
+#import "WKApp.h"
 
 @WKModule(WKDataSourceModule)
 
@@ -258,6 +260,9 @@
             
             WKSyncConversationWrapModel *wrapModel = [[WKSyncConversationWrapModel alloc] init];
             wrapModel.conversations = syncConversationModels;
+            // 预填 channelInfo.extra[@"space_id"] / channelMember.extra[@"source_space_id"]
+            // 让 WKSpaceFilter 在 conv sync 落地前即可作 Keep/Skip 判定，消除 fail-open。
+            [self prefillSpaceFieldsFromSyncModels:syncConversationModels];
             callback(wrapModel,nil);
         }).catch(^(NSError *err){
             callback(nil,err);
@@ -457,6 +462,117 @@
     return robot;
 }
 
+#pragma mark - octo-server PR#154：conv sync space_id 预填
+
+// 把 conv sync 解析出的 `space_id` 写入对应群的 channelInfo.extra；
+// 把 `my_source_space_id` 写入对应群我自己的 channelMember.extra。
+//
+// 写法分两路（PR #136 round-2 review 修复，重要）：
+//   ✅ 真实记录已在缓存：read-modify-write，保留其它字段；
+//   ✅ 真实记录尚未缓存：写入 WKSpaceConvSyncCache 内存表，**不**建 DB stub。
+//
+// 为什么不再建 DB stub？
+//   - channelInfo stub：会让 `getChannelInfo` 命中非 nil，调用方
+//     （WKConversationListCell / WKConversationVC 等）判 `info != nil` 就停止
+//     fetchChannelInfo，导致群名/头像永远拉不到（真实 channelInfo 不会被请求）。
+//   - channelMember stub：默认 status=inactive，而 `WKChannelMemberDB.get:memberUID:`
+//     的 SQL 强制 `status=1`，stub 写了也读不回；在已存在的 inactive row 上 upsert
+//     还会错把已离群的人 mark 回 active。
+//
+//   WKSpaceFilter 改为 DB → 内存缓存 二级查找；channelInfo / member 真正同步落地
+//   后 DB 路径自然命中并覆盖内存值。
+//
+// 处理 GROUP 与 PERSON / Bot（PR #136 round-4 review 修复）：
+//   - GROUP：channelInfo.extra[space_id] + 自己 channelMember.extra[source_space_id]
+//   - PERSON / Bot：仅 channelInfo.extra[space_id]
+//     WKSpaceFilter `decideWithChannelId:` 对 WK_PERSON 也读 channelSpaceId
+//     做"跨 Space Bot/私聊"判定（WKSpaceFilter.m:158-165），且
+//     WKConversationListVM 会对 WK_PERSON 调 decideChannel
+//     （WKConversationListVM.m:802-809）—— 不预填会让裸 UID 的 Bot 在
+//     channelInfo 真正落地前漏过过滤，造成跨 Space 漏判。
+//   - COMMUNITY_TOPIC：归属由 parent group 的 space_id 决定，不在此预填。
+//   - 服务端未部署 PR#154（spaceId/mySourceSpaceId 均为 nil）→ 自然跳过。
+-(void) prefillSpaceFieldsFromSyncModels:(NSArray<WKSyncConversationModel*>*)models {
+    if(!models || models.count == 0) return;
+    NSString *myUID = [WKApp shared].loginInfo.uid;
+    BOOL hasMyUID = ([myUID isKindOfClass:[NSString class]] && myUID.length > 0);
+
+    for (WKSyncConversationModel *m in models) {
+        if(!m.channel) continue;
+        uint8_t cType = m.channel.channelType;
+        if(cType != WK_GROUP && cType != WK_PERSON) continue;
+        NSString *channelId = m.channel.channelId;
+        if(channelId.length == 0) continue;
+
+        // 1) channelInfo.extra[@"space_id"] —— GROUP 与 PERSON 都需要。
+        if(m.spaceId.length > 0) {
+            WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:m.channel];
+            if(info) {
+                if(!info.extra) {
+                    info.extra = [NSMutableDictionary dictionary];
+                }
+                NSString *existing = nil;
+                id existingRaw = info.extra[@"space_id"];
+                if([existingRaw isKindOfClass:[NSString class]]) existing = (NSString*)existingRaw;
+                if(![existing isEqualToString:m.spaceId]) {
+                    info.extra[@"space_id"] = m.spaceId;
+                    [[WKSDK shared].channelManager addOrUpdateChannelInfo:info];
+                }
+            } else {
+                // 未缓存：写内存缓存而非 DB stub（见函数 doc）
+                [[WKSpaceConvSyncCache shared] setSpaceId:m.spaceId
+                                              forChannelId:channelId
+                                               channelType:cType];
+            }
+        } else {
+            // PR #136 round-5 review 修复（Jerry-Xin，对齐 Android Round-3）：
+            // 后续 conv sync 不再带 space_id 时，必须 per-key 清掉旧缓存，
+            // 否则 WKSpaceFilter 会一直按过期值决策。DB 路径上若真有 channelInfo，
+            // 等后续 channelInfo 同步覆盖；这里只负责清 cache 兜底值。
+            [[WKSpaceConvSyncCache shared] removeSpaceIdForChannelId:channelId
+                                                         channelType:cType];
+        }
+
+        // 2) channelMember.extra[@"source_space_id"]（自己在群内的成员记录）
+        //    仅 GROUP 有成员概念，PERSON 跳过。
+        if(cType == WK_GROUP && hasMyUID && m.mySourceSpaceId.length > 0) {
+            WKChannelMember *me = [[WKChannelMemberDB shared] get:m.channel memberUID:myUID];
+            if(me) {
+                if(!me.extra) {
+                    me.extra = [NSMutableDictionary dictionary];
+                }
+                NSString *existing = nil;
+                id existingRaw = me.extra[@"source_space_id"];
+                if([existingRaw isKindOfClass:[NSString class]]) existing = (NSString*)existingRaw;
+                if(![existing isEqualToString:m.mySourceSpaceId]) {
+                    me.extra[@"source_space_id"] = m.mySourceSpaceId;
+                    [[WKChannelMemberDB shared] addOrUpdateMembers:@[me]];
+                }
+                // PR #136 round-4 review 修复（lml2468）：
+                // 已存在 member row 时也写一份 cache 兜底。后续不带 source_space_id
+                // 的 member 全量同步会覆盖 DB extra（WKGroupMemberModel.toChannelMember
+                // 在缺字段时不会保留旧值），此时 WKSpaceFilter 走 DB→cache 二级查找
+                // 仍能从 cache 拿到 conv sync 下发的值，避免外部群被误判为非成员。
+                [[WKSpaceConvSyncCache shared] setMySourceSpaceId:m.mySourceSpaceId
+                                                     forChannelId:channelId
+                                                      channelType:WK_GROUP];
+            } else {
+                // 未缓存：写内存缓存而非 DB stub（见函数 doc）
+                [[WKSpaceConvSyncCache shared] setMySourceSpaceId:m.mySourceSpaceId
+                                                     forChannelId:channelId
+                                                      channelType:WK_GROUP];
+            }
+        } else if(cType == WK_GROUP && m.mySourceSpaceId.length == 0) {
+            // PR #136 round-5 review 修复（Jerry-Xin，对齐 Android Round-3）：
+            // 后续 conv sync 不再带 my_source_space_id 时（例如成员被踢、
+            // 服务端不再下发跨 Space 标），清掉旧缓存避免 WKSpaceFilter 继续把
+            // 已不属于来源 Space 的群当外部群放行。
+            [[WKSpaceConvSyncCache shared] removeMySourceSpaceIdForChannelId:channelId
+                                                                 channelType:WK_GROUP];
+        }
+    }
+}
+
 -(WKSyncConversationModel*) toSyncConversationModel:(NSDictionary*)dataDict {
     WKSyncConversationModel *model = [WKSyncConversationModel new];
     NSInteger  channelType = [dataDict[@"channel_type"] integerValue];
@@ -483,7 +599,20 @@
     if(dataDict[@"extra"]) {
         model.remoteExtra = [self toConversationExtra:dataDict[@"extra"]];
     }
-    
+
+    // ---------- octo-server PR#154：会话级 Space 隔离字段 ----------
+    // server 在 conversation/sync 响应里直接下发已解析的 `space_id` 和 `my_source_space_id`，
+    // 让客户端无需再等 group 详情 / member 全量同步即可作 Keep/Skip 判定。
+    // NSNull 防御：仅接受非空 NSString，避免污染缓存。
+    id spaceIdRaw = dataDict[@"space_id"];
+    if([spaceIdRaw isKindOfClass:[NSString class]] && [(NSString*)spaceIdRaw length] > 0) {
+        model.spaceId = (NSString*)spaceIdRaw;
+    }
+    id mySourceSpaceIdRaw = dataDict[@"my_source_space_id"];
+    if([mySourceSpaceIdRaw isKindOfClass:[NSString class]] && [(NSString*)mySourceSpaceIdRaw length] > 0) {
+        model.mySourceSpaceId = (NSString*)mySourceSpaceIdRaw;
+    }
+
     NSArray<NSDictionary*> *messageDicts = dataDict[@"recents"];
     if(messageDicts && messageDicts.count>0) {
         NSMutableArray *messages = [NSMutableArray array];

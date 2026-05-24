@@ -8,6 +8,7 @@
 #import "WKSpaceFilter.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 #import "WKApp.h"
+#import "WKSpaceConvSyncCache.h"
 
 static NSString *const kSpaceIdUserDefaultsKey = @"currentSpaceId";
 static NSString *const kChannelSpaceIdExtraKey = @"space_id";
@@ -25,12 +26,21 @@ static NSString *const kMemberSourceSpaceIdExtraKey = @"source_space_id";
     if (channelId.length == 0) return nil;
     WKChannel *channel = [WKChannel channelID:channelId channelType:channelType];
     WKChannelInfo *info = [[WKChannelInfoDB shared] queryChannelInfo:channel];
-    if (!info || !info.extra) return nil;
-    // 依赖 EP1（）在 channelInfo.extra 中持久化 `space_id` 字段。
-    // EP1 合并前此处恒为 nil，SpaceFilter 会 fail-open 降级到白名单。
-    id value = info.extra[kChannelSpaceIdExtraKey];
-    if ([value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0) {
-        return (NSString *)value;
+    // 1) DB（权威源）：依赖 `WKChannelUtil.toChannelInfo2:` / `WKGroupManagerDelegateImp`
+    //    把 group 详情同步下来的 `space_id` 写入 `channelInfo.extra`。
+    if (info && info.extra) {
+        id value = info.extra[kChannelSpaceIdExtraKey];
+        if ([value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0) {
+            return (NSString *)value;
+        }
+    }
+    // 2) 内存缓存兜底：conv sync（octo-server PR#154）已经下发 `space_id`，
+    //    但群详情/channelInfo 还没到。PR #136 round-2 改用内存缓存而非 DB stub，
+    //    以避免 stub channelInfo 阻塞 UI 的 `fetchChannelInfo` 真实加载（群名/头像）。
+    NSString *cached = [[WKSpaceConvSyncCache shared] spaceIdForChannelId:channelId
+                                                              channelType:channelType];
+    if (cached.length > 0) {
+        return cached;
     }
     return nil;
 }
@@ -42,15 +52,25 @@ static NSString *const kMemberSourceSpaceIdExtraKey = @"source_space_id";
     NSString *myUID = [WKApp shared].loginInfo.uid;
     if (![myUID isKindOfClass:[NSString class]] || myUID.length == 0) return nil;
     WKChannel *channel = [WKChannel channelID:channelId channelType:channelType];
+    // 1) DB（权威源）：依赖 `WKGroupMemberModel.toChannelMember` 把
+    //    `source_space_id` 写入 member.extra。注意 `get:memberUID:` 内部
+    //    会过滤 `status=1`（active）+ `is_deleted=0`。
     WKChannelMember *member = [[WKChannelMemberDB shared] get:channel memberUID:myUID];
-    if (!member || !member.extra) return nil;
-    // 依赖 EP1（）在 WKGroupMemberModel.toChannelMember 中把
-    // `source_space_id` 写入 member.extra。EP1 合并前此处恒为 nil，
-    // WKSpaceFilter 会 fail-open 降级到 WKConversationListVM 的
-    // syncedGroupChannelIds 白名单兜底，行为等价当前 develop。
-    id value = member.extra[kMemberSourceSpaceIdExtraKey];
-    if ([value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0) {
-        return (NSString *)value;
+    if (member && member.extra) {
+        id value = member.extra[kMemberSourceSpaceIdExtraKey];
+        if ([value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0) {
+            return (NSString *)value;
+        }
+    }
+    // 2) 内存缓存兜底：conv sync 已下发 `my_source_space_id`，但 member 全量
+    //    同步还没完成。PR #136 round-2 改用内存缓存而非 DB stub，原因：
+    //    - `addOrUpdateMembers:` 写入的 row 默认 status=inactive，被
+    //      `get:memberUID:` 的 `status=1` 过滤掉，stub 写了也读不回来；
+    //    - 在已存在的 inactive row 上 upsert 还会错把已离群的人 mark 回 active。
+    NSString *cached = [[WKSpaceConvSyncCache shared] mySourceSpaceIdForChannelId:channelId
+                                                                      channelType:channelType];
+    if (cached.length > 0) {
+        return cached;
     }
     return nil;
 }

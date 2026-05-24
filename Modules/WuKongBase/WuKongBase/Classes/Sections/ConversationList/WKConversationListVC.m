@@ -56,6 +56,7 @@
 #import "WKJoinGroupSuccessDialog.h"
 #import "WKConversationVC.h"
 #import "WKSpaceConversationCache.h"
+#import "WKSpaceConvSyncCache.h"
 #import "WKSpaceBotRegistry.h"
 #import "WKPCOnlineVC.h"
 #import "WKPixelParticleHint.h"
@@ -825,6 +826,8 @@
 
     // 清空 space_unread / space_last_message 缓存（新空间会重新同步）
     [[WKSpaceConversationCache shared] clearAll];
+    // 清空 conv sync 预填的 space_id 内存缓存（新空间下 sync 会再次填充）
+    [[WKSpaceConvSyncCache shared] clearAll];
 
     // YUJ-bot-isolation: 切 Space → 重新拉取该 Space 的 Bot 列表。
     // 加载完成会广播 WKSpaceBotRegistryDidLoadNotification，由 viewDidLoad 注册的

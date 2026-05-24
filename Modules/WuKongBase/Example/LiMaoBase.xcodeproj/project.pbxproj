@@ -30,6 +30,7 @@
 		A35414ED98745ED690EC26AF /* Pods_LiMaoBase_Example.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F569B6CE3F4D594F10B3833 /* Pods_LiMaoBase_Example.framework */; };
 		A97C0DE197001001E7B8C3A1 /* WKGroupQRCodeInfoModelTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A97C0DE197001001E7B8C3A2 /* WKGroupQRCodeInfoModelTests.m */; };
 		B2180000000000000000F001 /* WKConversationListVMSystemBotsTests.m in Sources */ = {isa = PBXBuildFile; fileRef = B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */; };
+		B2360000000000000000F001 /* WKSpaceConvSyncCacheRemovalTests.m in Sources */ = {isa = PBXBuildFile; fileRef = B2360000000000000000F002 /* WKSpaceConvSyncCacheRemovalTests.m */; };
 		B49640EA6FC4C273CD92871A /* WKMentionUserCellTests.m in Sources */ = {isa = PBXBuildFile; fileRef = B2CA62921B187BCA0DFC746C /* WKMentionUserCellTests.m */; };
 		C129ABC0AF00000000000001 /* WKMessageCellAttributedNameTests.m in Sources */ = {isa = PBXBuildFile; fileRef = C129ABC0AF00000000000002 /* WKMessageCellAttributedNameTests.m */; };
 		C210ABC0AF00000000000001 /* WKMessageCellNicknameTruncationTests.m in Sources */ = {isa = PBXBuildFile; fileRef = C210ABC0AF00000000000002 /* WKMessageCellNicknameTruncationTests.m */; };
@@ -89,6 +90,7 @@
 		A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKGroupScanJoinResponseParsingTests.m; sourceTree = "<group>"; };
 		A97C0DE197001001E7B8C3A2 /* WKGroupQRCodeInfoModelTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKGroupQRCodeInfoModelTests.m; sourceTree = "<group>"; };
 		B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKConversationListVMSystemBotsTests.m; sourceTree = "<group>"; };
+		B2360000000000000000F002 /* WKSpaceConvSyncCacheRemovalTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKSpaceConvSyncCacheRemovalTests.m; sourceTree = "<group>"; };
 		B2CA62921B187BCA0DFC746C /* WKMentionUserCellTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMentionUserCellTests.m; sourceTree = "<group>"; };
 		B2F58DC0A88459C00B4A8A5C /* Pods-LiMaoBase_Tests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-LiMaoBase_Tests.release.xcconfig"; path = "Target Support Files/Pods-LiMaoBase_Tests/Pods-LiMaoBase_Tests.release.xcconfig"; sourceTree = "<group>"; };
 		C129ABC0AF00000000000002 /* WKMessageCellAttributedNameTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKMessageCellAttributedNameTests.m; sourceTree = "<group>"; };
@@ -209,6 +211,7 @@
 				A1410000000000000000F002 /* WKJoinGroupSuccessHelperTests.m */,
 				A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */,
 				B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */,
+				B2360000000000000000F002 /* WKSpaceConvSyncCacheRemovalTests.m */,
 				D5810000000000000000F002 /* WKRealnameVerifiedBadgeTests.m */,
 				E3960000000000000000F002 /* WKRealnameVerifyURLBuilderTests.m */,
 				E3960000000000000001F002 /* WKOidcProviderConfigParseTests.m */,
@@ -552,6 +555,7 @@
 				A1410000000000000000F001 /* WKJoinGroupSuccessHelperTests.m in Sources */,
 				A2130000000000000000F001 /* WKGroupScanJoinResponseParsingTests.m in Sources */,
 				B2180000000000000000F001 /* WKConversationListVMSystemBotsTests.m in Sources */,
+				B2360000000000000000F001 /* WKSpaceConvSyncCacheRemovalTests.m in Sources */,
 				D5810000000000000000F001 /* WKRealnameVerifiedBadgeTests.m in Sources */,
 				E3960000000000000000F001 /* WKRealnameVerifyURLBuilderTests.m in Sources */,
 				E3960000000000000001F001 /* WKOidcProviderConfigParseTests.m in Sources */,
