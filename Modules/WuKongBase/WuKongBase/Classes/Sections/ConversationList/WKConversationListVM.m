@@ -19,6 +19,7 @@
 #import "WKSpaceFilter.h"
 #import "WKSpaceBotRegistry.h"
 #import "WKApp.h"
+#import "WKTimeTool.h"
 @interface WKConversationListVM ()
 @property(nonatomic,strong) NSMutableArray<WKConversationWrapModel*> *conversationWrapModels;
 @property(nonatomic,copy,readwrite,nullable) NSArray<WKConversationWrapModel*> *threadWrapModels; // 子区独立 wrap，最近 tab 用
@@ -567,15 +568,13 @@ static WKConversationListVM *_instance;
             for (WKThreadModel *t in sorted) {
                 if (t.status != WKThreadStatusActive) continue;
                 WKConversation *conv = [[WKSDK shared].conversationManager getConversation:[t toChannel]];
-                NSTimeInterval ts = conv ? conv.lastMsgTimestamp : 0;
-                if (!conv) {
-                    // SDK 没缓存（冷启子区 lazy load）—— 必须放进 previews,
-                    // 不然 syncThreadWrapModelsFromCachedTopics 那条"SDK miss → 合成
-                    // placeholder"的代码路径根本走不到（它只遍历 parent.threadPreviews）,
-                    // 子区在最近 tab 永远不出现。等真实 conv 到达 applyThreadConversationUpdates
-                    // 会用 setConversation: 替换占位 wrap。
-                    [recentPreviews addObject:t];
-                } else if (ts > threeDaysAgo) {
+                // SDK miss 时用 API 字段 updatedAt 当 fallback 活跃判定 —— 不能再无脑
+                // 塞进 previews。开了分页之后大群一次回 176 条，里面有六七十条 dormant
+                // 子区 SDK 没 cache，旧逻辑会把它们全当 active 跳到 preview 行，与
+                // "3 天没消息折叠"的产品契约不符。
+                NSTimeInterval ts = conv ? conv.lastMsgTimestamp
+                                         : [WKConversationListVM apiTimestampFromUpdatedAt:t.updatedAt];
+                if (ts > threeDaysAgo) {
                     [recentPreviews addObject:t];
                 } else {
                     inactiveCount++;
@@ -642,12 +641,9 @@ static WKConversationListVM *_instance;
             for (WKThreadModel *t in sorted) {
                 if (t.status != WKThreadStatusActive) continue;
                 WKConversation *conv = [[WKSDK shared].conversationManager getConversation:[t toChannel]];
-                NSTimeInterval ts = conv ? conv.lastMsgTimestamp : 0;
-                if (!conv) {
-                    // 同 fetchThreadCountsForGroupsWithCompletion: SDK miss 必须收进 previews,
-                    // 否则下游合成 placeholder 路径走不到。
-                    [recentPreviews addObject:t];
-                } else if (ts > threeDaysAgo) {
+                NSTimeInterval ts = conv ? conv.lastMsgTimestamp
+                                         : [WKConversationListVM apiTimestampFromUpdatedAt:t.updatedAt];
+                if (ts > threeDaysAgo) {
                     [recentPreviews addObject:t];
                 } else {
                     inactiveCount++;
@@ -759,6 +755,16 @@ static WKConversationListVM *_instance;
         NSLog(@"[ThreadSync] threadWrapModels=%ld filteredConversations=%ld filterType=%ld",
               (long)self.threadWrapModels.count, (long)self.filteredConversations.count, (long)self.filterType);
     }
+}
+
+/// 把 WKThreadModel.updatedAt（API 给的 "yyyy-MM-dd HH:mm:ss" 字符串，Asia/Shanghai 时区）
+/// 转成 timeIntervalSince1970，给 SDK 没缓存到 conv 的子区做"3 天活跃"判定 fallback。
+/// 解析失败返回 0（threeDaysAgo 比较时永远落入 inactive 桶）—— 服务端偶发返回空字符串
+/// 时不至于把整页 dormant 子区炸到 preview 行。
++(NSTimeInterval) apiTimestampFromUpdatedAt:(NSString *)updatedAt {
+    if (updatedAt.length == 0) return 0;
+    NSDate *d = [WKTimeTool dateFromString:updatedAt];
+    return d ? d.timeIntervalSince1970 : 0;
 }
 
 /// 用本地会话时间戳排序子区（解决服务端 updated_at 延迟导致首条消息排序不更新）
