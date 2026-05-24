@@ -9,6 +9,7 @@
 #import "WKApp.h"
 #import "UIView+WKCommon.h"
 #import "WuKongBase.h"
+#import "WKFollowedKeysStore.h"
 
 @interface WKThreadListCell ()
 
@@ -17,6 +18,7 @@
 @property (nonatomic, strong) UILabel *statsLbl;
 @property (nonatomic, strong) UILabel *previewLbl;
 @property (nonatomic, strong) UILabel *badgeLbl;
+@property (nonatomic, strong) UIImageView *followIcon;
 @property (nonatomic, strong) WKThreadModel *model;
 
 @end
@@ -39,6 +41,7 @@
     [self.contentView addSubview:self.statsLbl];
     [self.contentView addSubview:self.previewLbl];
     [self.contentView addSubview:self.badgeLbl];
+    [self.contentView addSubview:self.followIcon];
 }
 
 - (void)refreshWithModel:(WKThreadModel *)model {
@@ -113,6 +116,18 @@
         self.badgeLbl.hidden = YES;
     }
 
+    // 已关注 / 未关注 视觉标识：右上角小五角星
+    //  - followed: 实心金色（与 iOS 邮件 / 文件 app 的「收藏」语义一致，扫一眼即可识别）
+    //  - 未 followed: 描边浅灰（保持存在感、提示用户可关注，但不喧宾夺主）
+    // 不可点击 — 状态切换走 cell 的长按菜单（与会话列表对齐），避免误触。
+    BOOL isFollowed = [[WKFollowedKeysStore shared] isFollowedWithType:WKFollowTargetTypeThread
+                                                              targetId:model.channelId ?: @""];
+    UIColor *followedColor = [UIColor colorWithRed:1.0 green:0.72 blue:0.0 alpha:1.0]; // #FFB800 金色
+    UIColor *unfollowedColor = [UIColor colorWithWhite:0.7 alpha:1.0];
+    self.followIcon.image = isFollowed
+        ? [WKThreadListCell starFilledIcon:CGSizeMake(14, 14) color:followedColor]
+        : [WKThreadListCell starOutlineIcon:CGSizeMake(14, 14) color:unfollowedColor];
+
     [self setNeedsLayout];
 }
 
@@ -135,9 +150,16 @@
         badgeRight = badgeW + 8;
     }
 
+    // 关注 / 未关注 标识：紧贴红点左侧（无红点时直接靠右），与 nameLbl 同基线
+    CGFloat followIconW = 14;
+    CGFloat followIconH = 14;
+    CGFloat followIconX = self.contentView.lim_width - padding - badgeRight - followIconW;
+    self.followIcon.frame = CGRectMake(followIconX, 16 + (20 - followIconH) / 2.0, followIconW, followIconH);
+    CGFloat followReserve = followIconW + 6;
+
     // 名称
     CGFloat textLeft = self.iconLbl.lim_right + 10;
-    CGFloat textWidth = contentWidth - (textLeft - padding) - badgeRight;
+    CGFloat textWidth = contentWidth - (textLeft - padding) - badgeRight - followReserve;
     [self.nameLbl sizeToFit];
     self.nameLbl.frame = CGRectMake(textLeft, 12, textWidth, 20);
 
@@ -210,6 +232,64 @@
         _previewLbl.lineBreakMode = NSLineBreakByTruncatingTail;
     }
     return _previewLbl;
+}
+
+- (UIImageView *)followIcon {
+    if (!_followIcon) {
+        _followIcon = [[UIImageView alloc] init];
+        _followIcon.contentMode = UIViewContentModeScaleAspectFit;
+    }
+    return _followIcon;
+}
+
+#pragma mark - 关注状态图标（cell 级别，14pt 小图标，与 WKFloatingMenu 菜单图标分离）
+
+/// 实心五角星 — 已关注状态。整星填色，无描边，14pt 时清晰可辨。
++ (UIImage *)starFilledIcon:(CGSize)s color:(UIColor *)color {
+    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    [color setFill];
+    CGFloat cx = s.width / 2.0, cy = s.height / 2.0;
+    CGFloat outerR = MIN(s.width, s.height) / 2.0 - 0.5;
+    CGFloat innerR = outerR * 0.42;
+    for (int i = 0; i < 10; i++) {
+        CGFloat r = (i % 2 == 0) ? outerR : innerR;
+        CGFloat a = -M_PI / 2 + i * M_PI / 5;
+        CGFloat x = cx + r * cos(a);
+        CGFloat y = cy + r * sin(a);
+        if (i == 0) CGContextMoveToPoint(ctx, x, y);
+        else CGContextAddLineToPoint(ctx, x, y);
+    }
+    CGContextClosePath(ctx);
+    CGContextFillPath(ctx);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
+/// 描边五角星 — 未关注状态。1pt 描边、不填色，存在感低、提示用户"可关注"。
++ (UIImage *)starOutlineIcon:(CGSize)s color:(UIColor *)color {
+    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    [color setStroke];
+    CGContextSetLineWidth(ctx, 1.0);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+    CGFloat cx = s.width / 2.0, cy = s.height / 2.0;
+    CGFloat outerR = MIN(s.width, s.height) / 2.0 - 1.0;
+    CGFloat innerR = outerR * 0.42;
+    for (int i = 0; i < 10; i++) {
+        CGFloat r = (i % 2 == 0) ? outerR : innerR;
+        CGFloat a = -M_PI / 2 + i * M_PI / 5;
+        CGFloat x = cx + r * cos(a);
+        CGFloat y = cy + r * sin(a);
+        if (i == 0) CGContextMoveToPoint(ctx, x, y);
+        else CGContextAddLineToPoint(ctx, x, y);
+    }
+    CGContextClosePath(ctx);
+    CGContextStrokePath(ctx);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
 }
 
 @end

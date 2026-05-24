@@ -503,9 +503,13 @@ static const NSInteger kPageSize = 15;
 - (void)doFollowThread:(WKThreadModel *)thread {
     __weak typeof(self) weakSelf = self;
     [[WKFollowService shared] followThread:thread.channelId].then(^(id _) {
-        [[WKFollowedKeysStore shared] reload];
+        // followedKeys 是异步 reload，必须等回包才 reloadData，否则 cell 上的星标
+        // 还是旧状态（与 unfollowConversationModel: 同款 chain）
+        return [[WKFollowedKeysStore shared] reload];
+    }).then(^(id _) {
         [weakSelf.view showMsg:LLang(@"已添加到关注")];
         [weakSelf.tableView reloadData];
+        return (id)nil;
     }).catch(^(NSError *err) {
         [weakSelf.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
     });
@@ -514,9 +518,11 @@ static const NSInteger kPageSize = 15;
 - (void)doUnfollowThread:(WKThreadModel *)thread {
     __weak typeof(self) weakSelf = self;
     [[WKFollowService shared] unfollowThread:thread.channelId].then(^(id _) {
-        [[WKFollowedKeysStore shared] reload];
+        return [[WKFollowedKeysStore shared] reload];
+    }).then(^(id _) {
         [weakSelf.view showMsg:LLang(@"已取消关注")];
         [weakSelf.tableView reloadData];
+        return (id)nil;
     }).catch(^(NSError *err) {
         [weakSelf.view showMsg:err.domain ?: LLang(@"取消关注失败")];
     });
