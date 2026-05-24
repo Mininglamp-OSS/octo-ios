@@ -546,6 +546,12 @@ static WKConversationListVM *_instance;
     }
 
     dispatch_group_t group = dispatch_group_create();
+    // 累积 listThreads 回的每个群下 thread → WKConversation 映射，统一在 notify
+    // 那一次主线程 merge 进 cachedTopicsByGroup（避免 N 个 .then 各自异步 merge 引入
+    // 写后写竞态）。SDK getConversationList 不返回 WK_COMMUNITY_TOPIC，
+    // getConversations: 在冷启 DB 也是空，唯一的子区 unread 真值就在 listThreads 回的
+    // WKThreadModel.unreadCount 里。
+    NSMutableDictionary<NSString*, NSArray<WKConversation*>*> *threadConvsAccum = [NSMutableDictionary dictionary];
 
     for (WKConversationWrapModel *model in groupModels) {
         NSString *groupNo = model.channel.channelId;
@@ -574,12 +580,17 @@ static WKConversationListVM *_instance;
             }
             model.threadPreviews = [recentPreviews copy];
             model.threadCount = (NSInteger)recentPreviews.count + inactiveCount;
+            NSArray<WKConversation*> *convs = [self materializeThreadConvs:sorted];
+            @synchronized (threadConvsAccum) {
+                threadConvsAccum[groupNo] = convs;
+            }
             dispatch_group_leave(group);
         }).catch(^(NSError *error) {
             dispatch_group_leave(group);
         });
     }
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        [self mergeThreadConvs:threadConvsAccum];
         // 全量 fetch 完成后也同步 threadWrapModels — 否则 cold boot 走的是这条路径
         // （loadConversationList → fetchThreadCountsForGroups → 这里），子区永远进不
         // 了 threadWrapModels，最近 tab 一片空白
@@ -615,6 +626,7 @@ static WKConversationListVM *_instance;
     if (models.count == 0) return;
 
     dispatch_group_t batchGroup = dispatch_group_create();
+    NSMutableDictionary<NSString*, NSArray<WKConversation*>*> *threadConvsAccum = [NSMutableDictionary dictionary];
 
     for (WKConversationWrapModel *model in models) {
         NSString *groupNo = model.channel.channelId;
@@ -647,12 +659,17 @@ static WKConversationListVM *_instance;
                     [WKThreadCreatedContent messageCountCache][t.channelId] = @(t.messageCount);
                 }
             }
+            NSArray<WKConversation*> *convs = [self materializeThreadConvs:sorted];
+            @synchronized (threadConvsAccum) {
+                threadConvsAccum[groupNo] = convs;
+            }
             dispatch_group_leave(batchGroup);
         }).catch(^(NSError *error) {
             dispatch_group_leave(batchGroup);
         });
     }
     dispatch_group_notify(batchGroup, dispatch_get_main_queue(), ^{
+        [self mergeThreadConvs:threadConvsAccum];
         // listThreads 拿到的子区也同步进 threadWrapModels —— 不然最近 tab 冷启动时
         // SDK getConversationList 没返回子区，threadWrapModels 是空的，列表里看不到
         // 任何子区行；用户必须发条子区消息触发 onConversationUpdate 才出来。
@@ -1648,6 +1665,74 @@ static WKConversationListVM *_instance;
     NSLog(@"[ThreadBadgeDbg] seedFollowedThreads: queriedChannels=%ld fetched=%ld added=%ld cacheGroups=%lu",
           (long)threadChannels.count, (long)fetched.count, (long)added, (unsigned long)self.cachedTopicsByGroup.count);
     return added;
+}
+
+/// 把 listThreads 回的 WKThreadModel 列表物化成 WKConversation 列表。
+/// SDK 缓存有就用真实 conv（unread + lastMessage 都准），SDK miss 时合成一个
+/// 最小 conv（channel + unreadCount 来自 WKThreadModel）—— 让 cachedTopicsByGroup
+/// 至少能给"+N子区" cell badge 用上 API 回的子区未读真值。
+/// 不再过滤 active 时间戳：dormant 子区也可能有未读（用户暂离后服务端推过来的）。
+- (NSArray<WKConversation*> *)materializeThreadConvs:(NSArray<WKThreadModel*> *)threads {
+    if (threads.count == 0) return @[];
+    NSMutableArray<WKConversation*> *out = [NSMutableArray arrayWithCapacity:threads.count];
+    for (WKThreadModel *t in threads) {
+        if (t.status != WKThreadStatusActive) continue;
+        if (t.channelId.length == 0) continue;
+        WKChannel *threadChannel = [WKChannel channelID:t.channelId channelType:WK_COMMUNITY_TOPIC];
+        WKConversation *conv = [[WKSDK shared].conversationManager getConversation:threadChannel];
+        if (!conv) {
+            conv = [[WKConversation alloc] init];
+            conv.channel = threadChannel;
+            conv.unreadCount = t.unreadCount;
+        }
+        [out addObject:conv];
+    }
+    return out;
+}
+
+/// 主线程合并入参 group → [WKConversation] 字典到 cachedTopicsByGroup。
+/// 去重按 channelId：已有的若有 lastMessage（真实 conv）就不被合成 conv 覆盖；
+/// 双方都是合成 conv 时刷新 unreadCount。
+- (void)mergeThreadConvs:(NSDictionary<NSString*, NSArray<WKConversation*>*> *)convsByGroup {
+    if (convsByGroup.count == 0) return;
+    NSMutableDictionary<NSString*, NSMutableArray<WKConversation*>*> *topicsMut = [NSMutableDictionary dictionary];
+    [self.cachedTopicsByGroup enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSArray<WKConversation*> *v, BOOL *stop) {
+        topicsMut[k] = [v mutableCopy];
+    }];
+    NSInteger addedTotal = 0;
+    for (NSString *groupNo in convsByGroup) {
+        NSArray<WKConversation*> *convs = convsByGroup[groupNo];
+        if (convs.count == 0) continue;
+        NSMutableArray<WKConversation*> *arr = topicsMut[groupNo];
+        if (!arr) { arr = [NSMutableArray array]; topicsMut[groupNo] = arr; }
+        for (WKConversation *newConv in convs) {
+            NSString *cid = newConv.channel.channelId;
+            if (cid.length == 0) continue;
+            BOOL found = NO;
+            for (NSInteger i = 0; i < (NSInteger)arr.count; i++) {
+                if ([arr[i].channel.channelId isEqualToString:cid]) {
+                    if (newConv.lastMessage && !arr[i].lastMessage) {
+                        arr[i] = newConv;  // 真实 conv 替换合成 placeholder
+                    } else if (!arr[i].lastMessage) {
+                        arr[i].unreadCount = newConv.unreadCount;  // 都是合成 conv，刷 unread
+                    }
+                    found = YES;
+                    break;
+                }
+            }
+            if (!found) {
+                [arr addObject:newConv];
+                addedTotal++;
+            }
+        }
+    }
+    NSMutableDictionary<NSString*, NSArray<WKConversation*>*> *frozen = [NSMutableDictionary dictionary];
+    [topicsMut enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSMutableArray<WKConversation*> *v, BOOL *stop) {
+        frozen[k] = [v copy];
+    }];
+    self.cachedTopicsByGroup = frozen;
+    NSLog(@"[ThreadBadgeDbg] mergeThreadConvs: groupsTouched=%lu addedTotal=%ld cacheGroups=%lu",
+          (unsigned long)convsByGroup.count, (long)addedTotal, (unsigned long)self.cachedTopicsByGroup.count);
 }
 
 -(NSArray<WKConversationDisplayItem *> *) buildGroupDisplayList {
