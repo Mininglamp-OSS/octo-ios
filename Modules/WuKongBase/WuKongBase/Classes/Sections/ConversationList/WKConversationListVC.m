@@ -3028,15 +3028,22 @@
     // —— 高 cell 重新布局时 heightForRow / cellForRow 同步阻塞主线程，gesture update
     // 又快速堆积 setContentOffset 调用，主线程过载就卡。改 displayLink 每帧只算
     // 一次稳定多了。
+    //
+    // 触发区按"可视内容区"算（扣掉 adjustedContentInset 上下） — tableView.frame 底部
+    // 常被 tab bar / safe area 覆盖，按 frame 边缘判定的话用户手指物理够不到那里 (touch
+    // 走不到 tab bar 上)，autoscroll 永远不触发，最后一行被遮住看不到。
     CGRect tableInView = [self.view convertRect:self.tableView.bounds fromView:self.tableView];
+    UIEdgeInsets ins = self.tableView.adjustedContentInset;
+    CGFloat visibleTop = CGRectGetMinY(tableInView) + ins.top;
+    CGFloat visibleBottom = CGRectGetMaxY(tableInView) - ins.bottom;
     CGFloat edgeZone = 60;
     CGFloat maxStep = 12;
     CGFloat velocity = 0;
-    if (loc.y < CGRectGetMinY(tableInView) + edgeZone) {
-        CGFloat depth = (CGRectGetMinY(tableInView) + edgeZone) - loc.y;
+    if (loc.y < visibleTop + edgeZone) {
+        CGFloat depth = (visibleTop + edgeZone) - loc.y;
         velocity = -MIN(maxStep, MAX(2, depth / 5.0));
-    } else if (loc.y > CGRectGetMaxY(tableInView) - edgeZone) {
-        CGFloat depth = loc.y - (CGRectGetMaxY(tableInView) - edgeZone);
+    } else if (loc.y > visibleBottom - edgeZone) {
+        CGFloat depth = loc.y - (visibleBottom - edgeZone);
         velocity = MIN(maxStep, MAX(2, depth / 5.0));
     }
     self.cellDragAutoScrollVelocity = velocity;
@@ -3059,8 +3066,15 @@
         return;
     }
     CGFloat newY = self.tableView.contentOffset.y + v;
-    CGFloat maxY = MAX(0, self.tableView.contentSize.height - self.tableView.bounds.size.height);
-    newY = MAX(0, MIN(maxY, newY));
+    // contentOffset.y 的合法范围是 [-adjustedContentInset.top,
+    //  contentSize.height + adjustedContentInset.bottom - bounds.height]，旧实现 clamp
+    // 到 [0, contentSize-bounds]，少算了 bottom inset，autoscroll 滚不到能完整露出最后
+    // 一行的位置（最后一行被 tab bar 遮住）。
+    UIEdgeInsets ins = self.tableView.adjustedContentInset;
+    CGFloat minY = -ins.top;
+    CGFloat maxY = self.tableView.contentSize.height + ins.bottom - self.tableView.bounds.size.height;
+    if (maxY < minY) maxY = minY;
+    newY = MAX(minY, MIN(maxY, newY));
     [self.tableView setContentOffset:CGPointMake(0, newY) animated:NO];
     // 滚屏时手指虽然没动，但相对内容的位置变了 — 重算插入线
     [self updateInsertionLineAtLocation:self.cellDragLastLocation];

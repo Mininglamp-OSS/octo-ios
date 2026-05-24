@@ -1040,14 +1040,17 @@ static WKConversationListVM *_instance;
             }
         }
     }
-    for (WKConversationWrapModel *t in self.threadWrapModels) {
-        if ([self isChannelMuted:t]) continue;
-        if (![store isFollowedWithType:WKFollowTargetTypeThread targetId:t.channel.channelId]) continue;
-        // 跳过 placeholder（与 getRecentUnreadCount 同款 — syncThreadWrapModelsFromCachedTopics
-        // 为 listThreads 拉到但 SDK 还没同步真实 conv 的子区合成占位 wrap，placeholder.unreadCount
-        // 来自接口字段，不一定是当前用户的未读，cell 端稳态也不渲染）
-        if (t.lastMessage == nil) continue;
-        count += t.unreadCount;
+    // 子区：与 cell 端 "+N个子区" badge 同源，走 cachedTopicsByGroup（cachedAllConversations
+    // 里所有 WK_COMMUNITY_TOPIC 的快照），口径与 getThreadIndicatorForGroup: 一致。
+    // 之前只迭代 threadWrapModels（仅 parent.threadPreviews 那几条预览行），导致已关注
+    // 但不在 preview 行的子区 unread 出现在 +N 行的 badge 里、却没有进 tab 总数 — 用户
+    // 看到的关注 tab 数字比 cell 端总和少。
+    for (NSArray<WKConversation *> *topics in self.cachedTopicsByGroup.allValues) {
+        for (WKConversation *conv in topics) {
+            if ([self isConversationMuted:conv]) continue;
+            if (![store isFollowedWithType:WKFollowTargetTypeThread targetId:conv.channel.channelId]) continue;
+            count += conv.unreadCount;
+        }
     }
     return count;
 }
