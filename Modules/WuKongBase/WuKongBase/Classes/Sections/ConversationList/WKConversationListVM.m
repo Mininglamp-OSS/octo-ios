@@ -20,6 +20,16 @@
 #import "WKSpaceBotRegistry.h"
 #import "WKApp.h"
 #import "WKTimeTool.h"
+
+// [ThreadBadgeDbg] / [ThreadSync] 子区 unread / 关注 badge 链路调试日志
+// （PR #137 review 反馈）：仅 DEBUG 构建打印，Release 编译为空 ——
+// 防止 channelId / groupNo / unread 数字这类 metadata 进入生产日志。
+#if DEBUG
+#define WK_THREAD_BADGE_DBG(...) NSLog(__VA_ARGS__)
+#else
+#define WK_THREAD_BADGE_DBG(...) do {} while(0)
+#endif
+
 @interface WKConversationListVM ()
 @property(nonatomic,strong) NSMutableArray<WKConversationWrapModel*> *conversationWrapModels;
 @property(nonatomic,copy,readwrite,nullable) NSArray<WKConversationWrapModel*> *threadWrapModels; // 子区独立 wrap，最近 tab 用
@@ -501,7 +511,7 @@ static WKConversationListVM *_instance;
             [mainSelf rebuildChannelIndex];
             mainSelf.cachedTopicsByGroup = topicsByGroup;
             mainSelf.cachedRemindersByChannelId = remindersByChannelId;
-            NSLog(@"[ThreadBadgeDbg] loadConversationList snapshot: topicsByGroup=%lu (groups), reminders=%lu (channels)",
+            WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] loadConversationList snapshot: topicsByGroup=%lu (groups), reminders=%lu (channels)",
                   (unsigned long)topicsByGroup.count, (unsigned long)remindersByChannelId.count);
             // 兜底用 followedKeys 把已关注子区从 SDK DB 抓回来 — getConversationList 不返
             // 回 WK_COMMUNITY_TOPIC，上面 bg 循环冷启动期一条都收不到。
@@ -522,7 +532,7 @@ static WKConversationListVM *_instance;
 
             NSLog(@"[TabPerf] loadConversationList: mainThread assign+callback, totalFromStart=%.1fms",
                   (CFAbsoluteTimeGetCurrent()-_lcStart)*1000);
-            NSLog(@"[ThreadSync] loadConversationList done: groups+DMs=%ld threadWrapModels=%ld (来源 getConversationList)",
+            WK_THREAD_BADGE_DBG(@"[ThreadSync] loadConversationList done: groups+DMs=%ld threadWrapModels=%ld (来源 getConversationList)",
                   (long)conversationWrapModels.count, (long)threadWrapModels.count);
 
             if(finished) {
@@ -745,14 +755,14 @@ static WKConversationListVM *_instance;
             if (!byChannel[k]) { changed = YES; break; }
         }
     }
-    NSLog(@"[ThreadSync] syncThreadWrapModels: parents=%ld threadsInPreviews=%ld sdkHits=%ld synthesized=%ld reused=%ld changed=%d total=%ld old=%ld",
+    WK_THREAD_BADGE_DBG(@"[ThreadSync] syncThreadWrapModels: parents=%ld threadsInPreviews=%ld sdkHits=%ld synthesized=%ld reused=%ld changed=%d total=%ld old=%ld",
           (long)parentCount, (long)threadsTotal, (long)sdkHits, (long)synthesized, (long)reused, changed, (long)byChannel.count, (long)oldByChannel.count);
     if (changed) {
         self.threadWrapModels = [byChannel.allValues copy];
         // 总是 rebuildFilteredList — Follow tab 启动时也要让 filteredConversations
         // 准备好，避免切到 Recent 才发现里面没子区
         [self rebuildFilteredList];
-        NSLog(@"[ThreadSync] threadWrapModels=%ld filteredConversations=%ld filterType=%ld",
+        WK_THREAD_BADGE_DBG(@"[ThreadSync] threadWrapModels=%ld filteredConversations=%ld filterType=%ld",
               (long)self.threadWrapModels.count, (long)self.filteredConversations.count, (long)self.filterType);
     }
 }
@@ -1021,7 +1031,7 @@ static WKConversationListVM *_instance;
         }];
         self.cachedTopicsByGroup = frozen;
     }
-    NSLog(@"[ThreadBadgeDbg] applyThreadConvUpdates incoming=%lu wrapMutated=%d cacheMutated=%d cacheGroups=%lu",
+    WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] applyThreadConvUpdates incoming=%lu wrapMutated=%d cacheMutated=%d cacheGroups=%lu",
           (unsigned long)threadConversations.count, mutated, cacheMutated, (unsigned long)self.cachedTopicsByGroup.count);
     [self rebuildFilteredList];
 }
@@ -1048,7 +1058,7 @@ static WKConversationListVM *_instance;
         }
     }
     if (updated) {
-        NSLog(@"[ThreadBadgeDbg] updateCachedSubzoneUnread channelId=%@ unread=%ld", channelId, (long)unreadCount);
+        WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] updateCachedSubzoneUnread channelId=%@ unread=%ld", channelId, (long)unreadCount);
     }
     return updated;
 }
@@ -1126,7 +1136,7 @@ static WKConversationListVM *_instance;
         }
     }
     self.filteredConversations = [filtered copy];
-    NSLog(@"[ThreadSync] rebuildFilteredList done: filterType=%ld convWraps=%ld threadWraps=%ld filtered=%ld",
+    WK_THREAD_BADGE_DBG(@"[ThreadSync] rebuildFilteredList done: filterType=%ld convWraps=%ld threadWraps=%ld filtered=%ld",
           (long)self.filterType, (long)self.conversationWrapModels.count,
           (long)self.threadWrapModels.count, (long)self.filteredConversations.count);
 }
@@ -1568,7 +1578,7 @@ static WKConversationListVM *_instance;
             }
         }
     }
-    NSLog(@"[ThreadBadgeDbg] indicator group=%@ topics=%lu excluded=%lu storeLoaded=%d → unread=%ld mention=%d (matched=%ld excl=%ld unfollowed=%ld muted=%ld)",
+    WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] indicator group=%@ topics=%lu excluded=%lu storeLoaded=%d → unread=%ld mention=%d (matched=%ld excl=%ld unfollowed=%ld muted=%ld)",
           groupNo, (unsigned long)topics.count, (unsigned long)excluded.count, store.loaded,
           (long)unread, hasMention, (long)nMatched, (long)nExcluded, (long)nUnfollowed, (long)nMuted);
     if (outUnread) *outUnread = unread;
@@ -1648,7 +1658,7 @@ static WKConversationListVM *_instance;
 -(NSInteger) seedFollowedThreadsIntoTopicsCache {
     WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
     if (!store.loaded) {
-        NSLog(@"[ThreadBadgeDbg] seedFollowedThreads skipped: store not loaded");
+        WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] seedFollowedThreads skipped: store not loaded");
         return 0;
     }
     NSSet<NSString*> *syncedGroups = self.syncedGroupChannelIds;
@@ -1664,7 +1674,7 @@ static WKConversationListVM *_instance;
         [threadChannels addObject:[WKChannel channelID:cid channelType:WK_COMMUNITY_TOPIC]];
     }
     if (threadChannels.count == 0) {
-        NSLog(@"[ThreadBadgeDbg] seedFollowedThreads: no followed threads to fetch");
+        WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] seedFollowedThreads: no followed threads to fetch");
         return 0;
     }
     NSArray<WKConversation*> *fetched = [[WKSDK shared].conversationManager getConversations:threadChannels];
@@ -1698,7 +1708,7 @@ static WKConversationListVM *_instance;
         }];
         self.cachedTopicsByGroup = frozen;
     }
-    NSLog(@"[ThreadBadgeDbg] seedFollowedThreads: queriedChannels=%ld fetched=%ld added=%ld cacheGroups=%lu",
+    WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] seedFollowedThreads: queriedChannels=%ld fetched=%ld added=%ld cacheGroups=%lu",
           (long)threadChannels.count, (long)fetched.count, (long)added, (unsigned long)self.cachedTopicsByGroup.count);
     return added;
 }
@@ -1728,7 +1738,7 @@ static WKConversationListVM *_instance;
         }
         [out addObject:conv];
     }
-    NSLog(@"[ThreadBadgeDbg] materializeThreadConvs: threadsIn=%lu active=%ld → out=%lu (sdkHit=%ld synth=%ld)",
+    WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] materializeThreadConvs: threadsIn=%lu active=%ld → out=%lu (sdkHit=%ld synth=%ld)",
           (unsigned long)threads.count, (long)nActive, (unsigned long)out.count, (long)nSdkHit, (long)nSynth);
     return out;
 }
@@ -1774,7 +1784,7 @@ static WKConversationListVM *_instance;
         frozen[k] = [v copy];
     }];
     self.cachedTopicsByGroup = frozen;
-    NSLog(@"[ThreadBadgeDbg] mergeThreadConvs: groupsTouched=%lu addedTotal=%ld cacheGroups=%lu",
+    WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] mergeThreadConvs: groupsTouched=%lu addedTotal=%ld cacheGroups=%lu",
           (unsigned long)convsByGroup.count, (long)addedTotal, (unsigned long)self.cachedTopicsByGroup.count);
 }
 

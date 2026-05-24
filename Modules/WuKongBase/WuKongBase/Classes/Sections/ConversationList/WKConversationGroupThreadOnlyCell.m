@@ -14,6 +14,14 @@
 #import <SDWebImage/UIImageView+WebCache.h>
 #import "WKConversationListVM.h"
 
+// [ThreadBadgeDbg] 子区 unread / +N 角标调试日志（PR #137 review 反馈）：
+// 仅 DEBUG 构建打印，Release 编译为空。
+#if DEBUG
+#define WK_THREAD_BADGE_DBG(...) NSLog(__VA_ARGS__)
+#else
+#define WK_THREAD_BADGE_DBG(...) do {} while(0)
+#endif
+
 @interface WKConversationGroupThreadOnlyCell ()
 
 @property (nonatomic, strong) WKUserAvatar *avatarView;
@@ -224,7 +232,7 @@
     } else {
         self.moreBadgeLbl.hidden = YES;
     }
-    NSLog(@"[ThreadBadgeDbg] GroupThreadOnlyCell group=%@ followed=%ld preview=%ld → +N=%ld moreUnread=%ld moreMention=%d",
+    WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] GroupThreadOnlyCell group=%@ followed=%ld preview=%ld → +N=%ld moreUnread=%ld moreMention=%d",
           groupNo, (long)followedThreadCount, (long)previewCount, (long)moreCount, (long)moreUnread, moreMention);
 }
 

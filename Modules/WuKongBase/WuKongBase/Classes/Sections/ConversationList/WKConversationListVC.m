@@ -42,6 +42,14 @@
 #else
 #define WK_BOT_TRACE(...) do {} while(0)
 #endif
+
+// [ThreadBadgeDbg] / [ThreadSync] 子区 unread / 关注 badge 链路调试日志
+// （PR #137 review 反馈）：仅 DEBUG 构建打印，Release 编译为空。
+#if DEBUG
+#define WK_THREAD_BADGE_DBG(...) NSLog(__VA_ARGS__)
+#else
+#define WK_THREAD_BADGE_DBG(...) do {} while(0)
+#endif
 #import "WKConversationAddItem.h"
 #import "WKConversationPasswordVC.h"
 #import "WKConversationListTableView.h"
@@ -2073,7 +2081,7 @@
                 // 批量回调安全
                 [self refreshBadge];
             } else {
-                NSLog(@"[ThreadBadgeDbg] onConvUnreadUpdate EARLY-RETURN subzone=%@ unread=%ld (not in threadWrapModels nor cachedTopicsByGroup)",
+                WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] onConvUnreadUpdate EARLY-RETURN subzone=%@ unread=%ld (not in threadWrapModels nor cachedTopicsByGroup)",
                       channel.channelId, (long)unreadCount);
             }
         }
@@ -2139,7 +2147,7 @@
         weakSelf.conversationListVM.filterType = index;
         [weakSelf.conversationListVM rebuildFilteredList];
         [weakSelf rebuildGroupDisplayAndReload];
-        NSLog(@"[ThreadSync] onTabChanged → %@ filteredConversations=%ld threadWrapModels=%ld groupDisplayList=%ld",
+        WK_THREAD_BADGE_DBG(@"[ThreadSync] onTabChanged → %@ filteredConversations=%ld threadWrapModels=%ld groupDisplayList=%ld",
               index == WKConversationFilterFollow ? @"Follow" : @"Recent",
               (long)[weakSelf.conversationListVM conversationCount],
               (long)weakSelf.conversationListVM.threadWrapModels.count,
