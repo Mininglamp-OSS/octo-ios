@@ -556,7 +556,10 @@ static WKConversationListVM *_instance;
     for (WKConversationWrapModel *model in groupModels) {
         NSString *groupNo = model.channel.channelId;
         dispatch_group_enter(group);
-        [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
+        // listAllThreads: 内部按 pageSize=100 分页直到拿全（最多 10 页 = 1000 条）。
+        // 大群 followed=176 时 listThreads 单页只回 100，moreUnread 计算会偏小（实测
+        // 92 vs 实际 832）。
+        [[WKThreadService shared] listAllThreads:groupNo maxPages:10].then(^(NSArray<WKThreadModel*> *threads) {
             NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
             NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
             NSMutableArray *recentPreviews = [NSMutableArray array];
@@ -631,7 +634,7 @@ static WKConversationListVM *_instance;
     for (WKConversationWrapModel *model in models) {
         NSString *groupNo = model.channel.channelId;
         dispatch_group_enter(batchGroup);
-        [[WKThreadService shared] listThreads:groupNo].then(^(NSArray<WKThreadModel*> *threads) {
+        [[WKThreadService shared] listAllThreads:groupNo maxPages:10].then(^(NSArray<WKThreadModel*> *threads) {
             NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
             NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
             NSMutableArray *recentPreviews = [NSMutableArray array];
@@ -1675,8 +1678,10 @@ static WKConversationListVM *_instance;
 - (NSArray<WKConversation*> *)materializeThreadConvs:(NSArray<WKThreadModel*> *)threads {
     if (threads.count == 0) return @[];
     NSMutableArray<WKConversation*> *out = [NSMutableArray arrayWithCapacity:threads.count];
+    NSInteger nActive = 0, nSynth = 0, nSdkHit = 0;
     for (WKThreadModel *t in threads) {
         if (t.status != WKThreadStatusActive) continue;
+        nActive++;
         if (t.channelId.length == 0) continue;
         WKChannel *threadChannel = [WKChannel channelID:t.channelId channelType:WK_COMMUNITY_TOPIC];
         WKConversation *conv = [[WKSDK shared].conversationManager getConversation:threadChannel];
@@ -1684,9 +1689,14 @@ static WKConversationListVM *_instance;
             conv = [[WKConversation alloc] init];
             conv.channel = threadChannel;
             conv.unreadCount = t.unreadCount;
+            nSynth++;
+        } else {
+            nSdkHit++;
         }
         [out addObject:conv];
     }
+    NSLog(@"[ThreadBadgeDbg] materializeThreadConvs: threadsIn=%lu active=%ld → out=%lu (sdkHit=%ld synth=%ld)",
+          (unsigned long)threads.count, (long)nActive, (unsigned long)out.count, (long)nSdkHit, (long)nSynth);
     return out;
 }
 
