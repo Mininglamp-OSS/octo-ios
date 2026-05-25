@@ -121,17 +121,20 @@
         self.badgeLbl.hidden = YES;
     }
 
-    // 已关注 / 未关注 视觉标识：右上角小五角星
-    //  - followed: 实心金色（与 iOS 邮件 / 文件 app 的「收藏」语义一致，扫一眼即可识别）
-    //  - 未 followed: 描边浅灰（保持存在感、提示用户可关注，但不喧宾夺主）
-    // 不可点击 — 状态切换走 cell 的长按菜单（与会话列表对齐），避免误触。
+    // 已关注：实心金色五角星，与 iOS 邮件/文件 app 的「收藏」语义一致。
+    // 未关注：直接隐藏图标，避免给每一行都挂个灰描边干扰扫读
+    // —— cell 的关注状态切换仍走长按菜单，不依赖 cell 上的视觉提示。
     // 图像形状/颜色/尺寸固定，cache 一次，避免每次 refresh + 滚动时反复跑 Core
     // Graphics 描点（PR review #15 warning）。
     BOOL isFollowed = [[WKFollowedKeysStore shared] isFollowedWithType:WKFollowTargetTypeThread
                                                               targetId:model.channelId ?: @""];
-    self.followIcon.image = isFollowed
-        ? [WKThreadListCell cachedStarFilledIcon]
-        : [WKThreadListCell cachedStarOutlineIcon];
+    if (isFollowed) {
+        self.followIcon.image = [WKThreadListCell cachedStarFilledIcon];
+        self.followIcon.hidden = NO;
+    } else {
+        self.followIcon.image = nil;
+        self.followIcon.hidden = YES;
+    }
 
     // 角色标识：仅创建者显示「管理员」头像。默认情况下用户都是已加入状态，
     // 「已加入」无新信息量，不再单独画图标避免视觉噪音。
@@ -154,16 +157,6 @@
     dispatch_once(&once, ^{
         UIColor *followedColor = [UIColor colorWithRed:1.0 green:0.72 blue:0.0 alpha:1.0]; // #FFB800 金色
         img = [WKThreadListCell starFilledIcon:CGSizeMake(14, 14) color:followedColor];
-    });
-    return img;
-}
-
-+ (UIImage *)cachedStarOutlineIcon {
-    static UIImage *img;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        UIColor *unfollowedColor = [UIColor colorWithWhite:0.7 alpha:1.0];
-        img = [WKThreadListCell starOutlineIcon:CGSizeMake(14, 14) color:unfollowedColor];
     });
     return img;
 }
@@ -199,17 +192,25 @@
         badgeRight = badgeW + 8;
     }
 
-    // 关注 / 未关注 标识：紧贴红点左侧（无红点时直接靠右），与 nameLbl 同基线
+    // 关注图标：仅已关注时显示，紧贴红点左侧（无红点时直接靠右）。
+    // 未关注时 followIcon 隐藏 + 不占宽度，让 roleIcon / 名称往右扩展。
     CGFloat iconW = 14;
     CGFloat iconH = 14;
     CGFloat iconY = 16 + (20 - iconH) / 2.0;
-    CGFloat followIconX = self.contentView.lim_width - padding - badgeRight - iconW;
-    self.followIcon.frame = CGRectMake(followIconX, iconY, iconW, iconH);
-    CGFloat rightReserve = iconW + 6;
+    CGFloat rightCursor = self.contentView.lim_width - padding - badgeRight; // 当前右锚点
+    CGFloat rightReserve = 0;
+    if (!self.followIcon.hidden) {
+        CGFloat followIconX = rightCursor - iconW;
+        self.followIcon.frame = CGRectMake(followIconX, iconY, iconW, iconH);
+        rightCursor = followIconX - 4;
+        rightReserve += iconW + 6;
+    } else {
+        self.followIcon.frame = CGRectZero;
+    }
 
-    // 角色图标（管理员 / 已加入）：紧贴 followIcon 左侧。隐藏时不占位。
+    // 角色图标（管理员）：紧贴 followIcon 左侧（若 followIcon 隐藏则直接靠最右）。
     if (!self.roleIcon.hidden) {
-        CGFloat roleIconX = followIconX - 4 - iconW;
+        CGFloat roleIconX = rightCursor - iconW;
         self.roleIcon.frame = CGRectMake(roleIconX, iconY, iconW, iconH);
         rightReserve += iconW + 4;
     } else {
@@ -331,31 +332,6 @@
     }
     CGContextClosePath(ctx);
     CGContextFillPath(ctx);
-    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return img;
-}
-
-/// 描边五角星 — 未关注状态。1pt 描边、不填色，存在感低、提示用户"可关注"。
-+ (UIImage *)starOutlineIcon:(CGSize)s color:(UIColor *)color {
-    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
-    CGContextRef ctx = UIGraphicsGetCurrentContext();
-    [color setStroke];
-    CGContextSetLineWidth(ctx, 1.0);
-    CGContextSetLineJoin(ctx, kCGLineJoinRound);
-    CGFloat cx = s.width / 2.0, cy = s.height / 2.0;
-    CGFloat outerR = MIN(s.width, s.height) / 2.0 - 1.0;
-    CGFloat innerR = outerR * 0.42;
-    for (int i = 0; i < 10; i++) {
-        CGFloat r = (i % 2 == 0) ? outerR : innerR;
-        CGFloat a = -M_PI / 2 + i * M_PI / 5;
-        CGFloat x = cx + r * cos(a);
-        CGFloat y = cy + r * sin(a);
-        if (i == 0) CGContextMoveToPoint(ctx, x, y);
-        else CGContextAddLineToPoint(ctx, x, y);
-    }
-    CGContextClosePath(ctx);
-    CGContextStrokePath(ctx);
     UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
     return img;
