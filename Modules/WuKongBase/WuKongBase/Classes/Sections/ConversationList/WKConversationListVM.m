@@ -49,6 +49,12 @@
 /// 仅在 fetchThreadCountsForGroupsWithCompletion 走 storeLoaded 分支时翻 YES;
 /// reset 时清零，保证切账号 / 切 Space 后冷启逻辑重新生效。
 @property(nonatomic,assign) BOOL didColdStartFullPaging;
+/// 与 WKFollowedKeysStore.generation 同款拦截 (PR review #13 critical)：reset 时 +1,
+/// 任何在飞的 fetchThreadCountsForGroupsWithCompletion / refreshThreadCountForGroups
+/// 在发起时捕获 myGen，回包时校验 myGen == self.vmGeneration，mismatch 就丢弃
+/// per-callback 累积 + 最终 mergeThreadConvs / 通知，避免旧 Space 的 thread 数据
+/// 在切到新 Space 后回到 cachedTopicsByGroup 污染 badge / Recent tab。
+@property(nonatomic,assign) NSInteger vmGeneration;
 @property(nonatomic,strong) NSDictionary *cachedThreadData; // channelId → {previews, count}，跨 reset 保留
 @property(nonatomic,assign,readwrite) BOOL lastBuildFollowHasMention;
 @property(nonatomic,assign,readwrite) BOOL lastBuildRecentHasMention;
@@ -102,6 +108,9 @@ static WKConversationListVM *_instance;
 
 - (void)reset {
     NSLog(@"[ConvDebug] VM reset called! clearing %lu models, callStack=%@", (unsigned long)self.conversationWrapModels.count, [[NSThread callStackSymbols] subarrayWithRange:NSMakeRange(1, MIN(5, [NSThread callStackSymbols].count - 1))]);
+    // 先 +1 vmGeneration：所有在飞的 thread count 请求（属于上一个 Space）
+    // 回包时 myGen 已 mismatch，按 generation 闸门丢弃，不会再 merge 进 cache
+    self.vmGeneration = self.vmGeneration + 1;
     [self.conversationWrapModels removeAllObjects];
     [self.channelIndex removeAllObjects];
     self.filteredConversations = @[];
@@ -592,6 +601,9 @@ static WKConversationListVM *_instance;
     if (storeLoaded) {
         self.didColdStartFullPaging = YES; // 标记本次 fetch 已经拿到 followed 信息
     }
+    // PR review #13 critical：捕获 generation，回包时校验，避免 reset(切 Space)
+    // 之后旧 Space 的 listThreads 响应 merge 进 cache
+    NSInteger startGen = self.vmGeneration;
 
     for (WKConversationWrapModel *model in groupModels) {
         NSString *groupNo = model.channel.channelId;
@@ -607,6 +619,12 @@ static WKConversationListVM *_instance;
             maxPages = 1;
         }
         [[WKThreadService shared] listAllThreadsWithCompleteness:groupNo maxPages:maxPages].then(^(NSDictionary *result) {
+            // generation 闸门 + syncedGroups 二重保险：reset 之后丢弃整批，单条响应
+            // 父群不在当前 Space 白名单也丢弃（防御 syncedGroups 已重建但本群非属）
+            if (startGen != self.vmGeneration) { dispatch_group_leave(group); return; }
+            if (self.syncedGroupChannelIds && ![self.syncedGroupChannelIds containsObject:groupNo]) {
+                dispatch_group_leave(group); return;
+            }
             NSArray<WKThreadModel*> *threads = result[@"threads"] ?: @[];
             BOOL complete = [result[@"complete"] boolValue];
             NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
@@ -641,6 +659,13 @@ static WKConversationListVM *_instance;
         });
     }
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        // PR review #13 critical：完成时再校验一次 generation —— 全部 leg 都
+        // dispatch_group_leave 后才会跑这个 block，期间可能已经 reset；
+        // 此时 mergeThreadConvs 把累积下来的旧 Space 数据进 cache 就把空间隔离破了
+        if (startGen != self.vmGeneration) {
+            if (completion) completion();
+            return;
+        }
         [self mergeThreadConvs:threadConvsAccum prunableGroups:completeGroups];
         // 全量 fetch 完成后也同步 threadWrapModels — 否则 cold boot 走的是这条路径
         // （loadConversationList → fetchThreadCountsForGroups → 这里），子区永远进不
@@ -718,12 +743,19 @@ static WKConversationListVM *_instance;
     // 的群单页够用（PR review #4 warning）。
     NSSet<NSString*> *groupsWithFollowedThreads = [self groupNosWithFollowedThreads];
     BOOL storeLoaded = [WKFollowedKeysStore shared].loaded;
+    // PR review #13 critical：捕获 generation，回包/最终 merge 时校验，避免 reset
+    // (切 Space) 之后旧 Space 的响应 merge 进 cache
+    NSInteger startGen = self.vmGeneration;
 
     for (WKConversationWrapModel *model in models) {
         NSString *groupNo = model.channel.channelId;
         dispatch_group_enter(batchGroup);
         NSInteger maxPages = (storeLoaded && ![groupsWithFollowedThreads containsObject:groupNo]) ? 1 : 10;
         [[WKThreadService shared] listAllThreadsWithCompleteness:groupNo maxPages:maxPages].then(^(NSDictionary *result) {
+            if (startGen != self.vmGeneration) { dispatch_group_leave(batchGroup); return; }
+            if (self.syncedGroupChannelIds && ![self.syncedGroupChannelIds containsObject:groupNo]) {
+                dispatch_group_leave(batchGroup); return;
+            }
             NSArray<WKThreadModel*> *threads = result[@"threads"] ?: @[];
             BOOL complete = [result[@"complete"] boolValue];
             NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
@@ -761,6 +793,8 @@ static WKConversationListVM *_instance;
         });
     }
     dispatch_group_notify(batchGroup, dispatch_get_main_queue(), ^{
+        // PR review #13 critical：reset 后丢弃 merge + 通知，保持空间隔离
+        if (startGen != self.vmGeneration) return;
         [self mergeThreadConvs:threadConvsAccum prunableGroups:completeGroups];
         // listThreads 拿到的子区也同步进 threadWrapModels —— 不然最近 tab 冷启动时
         // SDK getConversationList 没返回子区，threadWrapModels 是空的，列表里看不到

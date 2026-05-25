@@ -47,6 +47,28 @@ static const void *kMenuItemsKey = &kMenuItemsKey;
 }
 
 + (UIWindow *)hostWindow {
+    // 优先取当前 foregroundActive 的 UIWindowScene（多窗口 / iPad 拆分屏下不会
+    // 把菜单挂到不可见 / 错的 scene 上）。退回 UIApplication.keyWindow / windows
+    // 兜底（单窗口或拿不到 scene 信息时与原行为一致）—— PR review #14 warning。
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (scene.activationState != UISceneActivationStateForegroundActive) continue;
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            UIWindowScene *ws = (UIWindowScene *)scene;
+            // iOS 15+ 直接拿 .keyWindow；否则在 windows 里找 isKeyWindow 的
+            UIWindow *key = nil;
+            if (@available(iOS 15.0, *)) {
+                key = ws.keyWindow;
+            }
+            if (!key) {
+                for (UIWindow *w in ws.windows) {
+                    if (w.isKeyWindow) { key = w; break; }
+                }
+            }
+            if (!key) key = ws.windows.firstObject;
+            if (key) return key;
+        }
+    }
     UIWindow *window = [UIApplication sharedApplication].keyWindow;
     if (!window) window = [UIApplication sharedApplication].windows.firstObject;
     return window;

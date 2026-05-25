@@ -120,15 +120,35 @@
     //  - followed: 实心金色（与 iOS 邮件 / 文件 app 的「收藏」语义一致，扫一眼即可识别）
     //  - 未 followed: 描边浅灰（保持存在感、提示用户可关注，但不喧宾夺主）
     // 不可点击 — 状态切换走 cell 的长按菜单（与会话列表对齐），避免误触。
+    // 图像形状/颜色/尺寸固定，cache 一次，避免每次 refresh + 滚动时反复跑 Core
+    // Graphics 描点（PR review #15 warning）。
     BOOL isFollowed = [[WKFollowedKeysStore shared] isFollowedWithType:WKFollowTargetTypeThread
                                                               targetId:model.channelId ?: @""];
-    UIColor *followedColor = [UIColor colorWithRed:1.0 green:0.72 blue:0.0 alpha:1.0]; // #FFB800 金色
-    UIColor *unfollowedColor = [UIColor colorWithWhite:0.7 alpha:1.0];
     self.followIcon.image = isFollowed
-        ? [WKThreadListCell starFilledIcon:CGSizeMake(14, 14) color:followedColor]
-        : [WKThreadListCell starOutlineIcon:CGSizeMake(14, 14) color:unfollowedColor];
+        ? [WKThreadListCell cachedStarFilledIcon]
+        : [WKThreadListCell cachedStarOutlineIcon];
 
     [self setNeedsLayout];
+}
+
++ (UIImage *)cachedStarFilledIcon {
+    static UIImage *img;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        UIColor *followedColor = [UIColor colorWithRed:1.0 green:0.72 blue:0.0 alpha:1.0]; // #FFB800 金色
+        img = [WKThreadListCell starFilledIcon:CGSizeMake(14, 14) color:followedColor];
+    });
+    return img;
+}
+
++ (UIImage *)cachedStarOutlineIcon {
+    static UIImage *img;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        UIColor *unfollowedColor = [UIColor colorWithWhite:0.7 alpha:1.0];
+        img = [WKThreadListCell starOutlineIcon:CGSizeMake(14, 14) color:unfollowedColor];
+    });
+    return img;
 }
 
 - (void)layoutSubviews {
