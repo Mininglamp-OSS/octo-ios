@@ -229,6 +229,16 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// threadWrapModels 集合并触发 rebuildFilteredList。不动 conversationWrapModels。
 - (void)applyThreadConversationUpdates:(NSArray<WKConversation*>*)threadConversations;
 
+/// 把 SDK 单独投递的子区 unreadCount 增量更新到 cachedTopicsByGroup 里现有条目上。
+/// 解决 PR review #1 critical：anyModelAtChannel 只看 conversationWrapModels +
+/// threadWrapModels，但 threadWrapModels 严格按 parent.threadPreviews 收，
+/// 是 cachedTopicsByGroup 的真子集。Follow tab badge / 群行「+N 子区」角标都直接
+/// 读 cachedTopicsByGroup[..].unreadCount —— "已关注但不在 preview 行"的子区
+/// 收到 unread callback 时若不写回这份缓存，badge 永远停在旧值。
+/// 只更新已存在条目，不 create 占位（避免越过 syncedGroups 闸门把跨 Space /
+/// 未 sync 的子区凭空塞进缓存）。返回 YES 表示找到并更新了至少一条。
+- (BOOL)updateCachedSubzoneUnread:(WKChannel*)channel unreadCount:(NSInteger)unreadCount;
+
 /// 刷新指定群组的子区数量
 -(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos;
 
@@ -261,8 +271,35 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 构建群聊 tab 的展示列表（含 section header），同时计算全局 hasMention 状态
 -(NSArray<WKConversationDisplayItem *> *) buildGroupDisplayList;
 
-/// buildGroupDisplayList 计算出的全局 @提醒状态（群聊 + 子区）
-@property (nonatomic, assign, readonly) BOOL lastBuildHasMention;
+/// 将一次子区 reminder 推送结果合并进 cachedRemindersByChannelId。
+/// 子区不在 conversationWrapModels / channelIndex 内，buildGroupDisplayList 的
+/// follow/recent tab mention 计算只能从这份缓存读 — 缓存是 loadConversationList
+/// 一次性建好的，若新到的子区 reminder 不回写，[有人@我] 标签永远不会在 tab 上亮。
+/// channel 非 WK_COMMUNITY_TOPIC 时该方法 no-op（顶层群/DM 走 model.simpleReminders 路径）。
+-(void) applySubzoneRemindersUpdate:(WKChannel *)channel reminders:(NSArray<WKReminder *> *)reminders;
+
+/// 按 WKFollowedKeysStore 把已关注子区从 SDK DB batch-fetch 进 cachedTopicsByGroup。
+/// SDK 的 getConversationList 不返回 WK_COMMUNITY_TOPIC（设计如此），冷启动 +
+/// followedKeys 后加载 race 下这份 cache 会持续是空 → "+N子区" cell 上的 unread
+/// 数字永远 0。在 loadConversationList 末尾 + onFollowedKeysStoreDidUpdate 各调一次
+/// 保证最终一致。返回新加入的条目数（便于决策是否触发 UI reload）。
+-(NSInteger) seedFollowedThreadsIntoTopicsCache;
+
+/// 冷启动两阶段分页 catchup（PR review #7 warning）：当 fetchThreadCountsForGroups
+/// 第一次跑时若 store 还没加载，所有群都按 maxPages=1 拉（避免 N×10 网络放大）；
+/// 等 store 加载完成后 VC 在 onFollowedKeysStoreDidUpdate 调本方法，对「现已知
+/// 有已关注子区」的群发 maxPages=10 完整分页 listAllThreads 补 unread。
+/// 内部带 didColdStartFullPaging 闸门，保证整个 VM 生命周期内只跑一次（subsequent
+/// follow 切换不会再次触发，避免在 toggle 高频通知里重复拉网络）。
+- (void)coldStartCatchupIfNeeded;
+
+/// buildGroupDisplayList 计算出的 tab 级 @提醒状态，分关注 / 最近两个集合：
+///   - Follow:  与 getFollowUnreadCount 同口径（DM/Channel/Thread 走 WKFollowedKeysStore）
+///   - Recent:  与 getRecentUnreadCount 同口径（DM 全部；Group 非 3 天 stale；Thread 走
+///              threadWrapModels 排除 placeholder）
+/// 同一会话可能同时落在两个集合（例如关注的 3 天活跃群），这种情况下两个字段都会为 YES。
+@property (nonatomic, assign, readonly) BOOL lastBuildFollowHasMention;
+@property (nonatomic, assign, readonly) BOOL lastBuildRecentHasMention;
 
 /// 从缓存获取指定群聊下子区的未读数和 @提醒状态（供 cell 渲染用，无 DB 查询）
 -(void) getThreadIndicatorForGroup:(NSString *)groupNo threadUnread:(NSInteger *)outUnread threadHasMention:(BOOL *)outHasMention;

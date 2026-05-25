@@ -10,6 +10,24 @@ static void *kWKMTVTokens = &kWKMTVTokens;
 
 @implementation WKMessageTextView
 
+// iOS 16+ UITextView 默认 TextKit 2，但本类的高度测量、点击命中、段落样式
+// 归一化都假定 TextKit 1（NSLayoutManager / NSTextContainer 路径）。需要让
+// 实例稳定回落到 TK1。
+//
+// 历史尝试（都失败）:
+//   1) 旧实现：访问 self.layoutManager 触发 TK2→TK1 热切换 → 工作但偶发首
+//      帧空白（快速滑动 + 大量新建 cell 时 glyph 漏画）。
+//   2) 自建 TextStorage/LayoutManager/TextContainer 通过
+//      -initWithFrame:textContainer: 注入 → iOS 26.4.2 上 super init 内部
+//      _UITextKit1LayoutController 仍断言 "text container must already
+//      have a layout manager"，无论 ts/lm 是否还活着。Apple 头文件唯一
+//      官方 TK1 入口是类工厂 +textViewUsingTextLayoutManager:，无法被
+//      子类化继承到 -initWithFrame:textContainer: 路径。
+//
+// 取舍：方案 1 的"首帧空白"是渲染瑕疵，方案 2 是硬崩。回到方案 1，并把
+// 热切换的触发集中在构造完成后的 wk_configureDisplayOnly 里 — 不在 super
+// init 期间 fiddle with textContainer。首帧空白若真复发，单独通过
+// setAttributedText: 后强制 ensureLayoutForTextContainer: 修复。
 - (instancetype)initWithFrame:(CGRect)frame textContainer:(nullable NSTextContainer *)textContainer {
     self = [super initWithFrame:frame textContainer:textContainer];
     if (self) {
@@ -79,8 +97,14 @@ static void *kWKMTVTokens = &kWKMTVTokens;
     self.scrollEnabled    = NO;
     self.backgroundColor  = [UIColor clearColor];
     self.textContainerInset = UIEdgeInsetsZero;
-    // 强制切换到 TextKit 1：iOS 16+ 默认 TextKit 2，访问 layoutManager 触发切换。
-    // 必须在所有实例上统一，否则测量（TextKit 1）和显示（TextKit 2）高度不一致。
+    // 强制让 TK2 fallback 到 TK1：iOS 16+ 默认 TK2，读取 layoutManager 会触发
+    // UIKit 内部用新 NSLayoutManager 替换 NSTextLayoutManager（Apple UITextView.h
+    // 第 273 行明确文档此行为）。本类的高度测量 / 命中检测 / 段落样式归一化
+    // 都基于 TK1 的 NSLayoutManager + NSTextContainer 路径，必须在所有实例上
+    // 统一切到 TK1，否则测量（TK1）和显示（TK2）会不一致。
+    //
+    // 不在 super init 期间通过传 textContainer 强制 TK1 — 那条路径在 iOS 26.4.2
+    // 上必崩 _UITextKit1LayoutController（详见类顶部注释）。
     (void)self.layoutManager;
     self.textContainer.lineFragmentPadding    = 0;
     self.textContainer.maximumNumberOfLines   = 0;  // 对应 UILabel.numberOfLines = 0

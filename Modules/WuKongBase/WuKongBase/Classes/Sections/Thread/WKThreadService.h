@@ -35,6 +35,20 @@ NS_ASSUME_NONNULL_BEGIN
 /// Promise resolves with NSDictionary: {@"count": NSNumber, @"list": NSArray<WKThreadModel *>}
 - (AnyPromise *)listThreads:(NSString *)groupNo pageIndex:(NSInteger)pageIndex pageSize:(NSInteger)pageSize;
 
+/// 获取群下全部子区（内部自动分页）。
+/// 用于会话列表 cachedTopicsByGroup 兜底——大群子区数 >100 时 listThreads 单页拿不全，
+/// "+N子区" badge 的 unread 聚合就会偏小（实测群有 176 关注子区时只算到 100 个的未读）。
+/// 单次最多翻 maxPages 页（默认 10 = 1000 条上限），避免极端大群拖死冷启动。
+/// Promise resolves with NSArray<WKThreadModel *>（合并所有页）。
+- (AnyPromise *)listAllThreads:(NSString *)groupNo maxPages:(NSInteger)maxPages;
+
+/// 同 listAllThreads:maxPages: 但返回 (threads, isComplete) 让调用方判断响应是否
+/// 被 maxPages 截断。groupNo 上有 >maxPages*100 条子区时 isComplete=NO，调用方
+/// 不应基于响应剪枝缓存（否则误删 page maxPages+ 上的真实数据）。
+/// Promise resolves with NSDictionary:
+///   @{@"threads": NSArray<WKThreadModel *>, @"complete": @YES/@NO}
+- (AnyPromise *)listAllThreadsWithCompleteness:(NSString *)groupNo maxPages:(NSInteger)maxPages;
+
 /// 获取子区详情
 /// @param groupNo 父群编号
 /// @param shortId 子区 shortId

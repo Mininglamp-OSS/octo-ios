@@ -62,6 +62,47 @@
     });
 }
 
+- (AnyPromise *)listAllThreads:(NSString *)groupNo maxPages:(NSInteger)maxPages {
+    if (maxPages <= 0) maxPages = 10;
+    return [self listAllThreads:groupNo pageIndex:1 maxPages:maxPages accumulated:@[]];
+}
+
+- (AnyPromise *)listAllThreadsWithCompleteness:(NSString *)groupNo maxPages:(NSInteger)maxPages {
+    if (maxPages <= 0) maxPages = 10;
+    return [self listAllThreadsRich:groupNo pageIndex:1 maxPages:maxPages accumulated:@[]];
+}
+
+// 递归翻页：拿到 page 后若 accumulated.count < server count 且未到 maxPages，继续下一页。
+// 用 accumulated 串起来，避免在外层维护可变状态。
+- (AnyPromise *)listAllThreads:(NSString *)groupNo pageIndex:(NSInteger)pageIndex maxPages:(NSInteger)maxPages accumulated:(NSArray<WKThreadModel *> *)accumulated {
+    return [self listThreads:groupNo pageIndex:pageIndex pageSize:100].then(^(NSDictionary *result) {
+        NSInteger totalCount = [result[@"count"] integerValue];
+        NSArray<WKThreadModel *> *page = result[@"list"] ?: @[];
+        NSArray<WKThreadModel *> *combined = [accumulated arrayByAddingObjectsFromArray:page];
+        BOOL done = (combined.count >= totalCount) || (page.count == 0) || (pageIndex >= maxPages);
+        if (done) return (id)combined;
+        return (id)[self listAllThreads:groupNo pageIndex:pageIndex + 1 maxPages:maxPages accumulated:combined];
+    });
+}
+
+// 带 completeness 信号的递归翻页：only `complete=NO` when 因 maxPages 截断
+// （combined.count < totalCount 且 pageIndex 已到顶）。其它两个 done 分支
+// （combined ≥ total / 空页）都意味着拿全了 → complete=YES。
+- (AnyPromise *)listAllThreadsRich:(NSString *)groupNo pageIndex:(NSInteger)pageIndex maxPages:(NSInteger)maxPages accumulated:(NSArray<WKThreadModel *> *)accumulated {
+    return [self listThreads:groupNo pageIndex:pageIndex pageSize:100].then(^(NSDictionary *result) {
+        NSInteger totalCount = [result[@"count"] integerValue];
+        NSArray<WKThreadModel *> *page = result[@"list"] ?: @[];
+        NSArray<WKThreadModel *> *combined = [accumulated arrayByAddingObjectsFromArray:page];
+        BOOL exhaustedServer = (combined.count >= totalCount) || (page.count == 0);
+        BOOL hitMaxPages = (pageIndex >= maxPages);
+        if (exhaustedServer || hitMaxPages) {
+            BOOL complete = exhaustedServer; // 走到上限但还没拿全 → 截断
+            return (id)@{@"threads": combined, @"complete": @(complete)};
+        }
+        return (id)[self listAllThreadsRich:groupNo pageIndex:pageIndex + 1 maxPages:maxPages accumulated:combined];
+    });
+}
+
 - (AnyPromise *)getThread:(NSString *)groupNo shortId:(NSString *)shortId {
     NSString *path = [NSString stringWithFormat:@"groups/%@/threads/%@", groupNo, shortId];
     return [[WKAPIClient sharedClient] GET:path parameters:@{}].then(^(NSDictionary *result) {

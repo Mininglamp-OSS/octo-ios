@@ -68,7 +68,8 @@
 @property(nonatomic,strong) UILabel *externalGroupTagLbl; // 外部群 Tag（仅 WK_GROUP 的 is_external_group==1 会话）
 
 @property(nonatomic,strong) UIImageView *threadAvatarOverlay; // 子区头像右下角的 hash 角标（仅 recentTabContext + 子区行）
-@property(nonatomic,strong) UILabel *threadSourceLbl; // 子区行 title 上方的"来源:父群名"，仅最近 tab + 子区显示
+@property(nonatomic,strong) UIImageView *threadTitleIcon; // 子区名前的 hash 小图标（仅 recentTabContext + 子区行）
+@property(nonatomic,strong) UILabel *threadSourceLbl; // 子区行 title 上方的父群名，仅最近 tab + 子区显示
 
 @property(nonatomic,copy) NSString *lastAvatarChannelId; // 上一次 refreshAvatar 对应的 channelId，用于判断 cell 是否被复用到不同会话
 
@@ -154,7 +155,13 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         }
         [self.contextContainerView addSubview:self.threadAvatarOverlay];
 
-        // 子区行的"来源:父群名"小标题（最近 tab 专用，关注 tab 隐藏）
+        // 子区名前的 hash 小图标（最近 tab 子区行专用，默认隐藏）
+        self.threadTitleIcon = [[UIImageView alloc] init];
+        self.threadTitleIcon.contentMode = UIViewContentModeScaleAspectFit;
+        self.threadTitleIcon.hidden = YES;
+        [self.contextContainerView addSubview:self.threadTitleIcon];
+
+        // 子区行的父群名小标题（最近 tab 专用，关注 tab 隐藏）
         self.threadSourceLbl = [[UILabel alloc] init];
         self.threadSourceLbl.font = [[WKApp shared].config appFontOfSize:11.0f];
         self.threadSourceLbl.textColor = [UIColor colorWithRed:148.0f/255.0f green:152.0f/255.0f blue:168.0f/255.0f alpha:1.0f];
@@ -512,8 +519,14 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
                                                                               color:[WKApp shared].config.themeColor];
         self.threadAvatarOverlay.image = hashIcon;
         self.threadAvatarOverlay.hidden = NO;
+
+        UIImage *titleHashIcon = [WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(14, 14)
+                                                                                  color:[UIColor colorWithRed:148.0f/255.0f green:152.0f/255.0f blue:168.0f/255.0f alpha:1.0f]];
+        self.threadTitleIcon.image = titleHashIcon;
+        self.threadTitleIcon.hidden = NO;
     } else {
         self.threadAvatarOverlay.hidden = YES;
+        self.threadTitleIcon.hidden = YES;
     }
 
     if([model.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
@@ -906,7 +919,7 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         self.threadSourceLbl.text = nil;
         return;
     }
-    self.threadSourceLbl.text = [NSString stringWithFormat:LLang(@"来源:%@"), parentName];
+    self.threadSourceLbl.text = parentName;
     self.threadSourceLbl.hidden = NO;
 }
 
@@ -1099,7 +1112,7 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
 
         CGFloat titleLeftToAvatarSpace = 10.0f;
         self.titleLbl.lim_left = self.avatarImgView.lim_right + titleLeftToAvatarSpace;
-        // 子区行多一行"来源:父群名"，textBlock 高度要相应增加
+        // 子区行多一行父群名，textBlock 高度要相应增加
         CGFloat sourceH = !self.threadSourceLbl.hidden ? 14.0f : 0.0f;
         CGFloat sourceGap = sourceH > 0 ? 1.0f : 0.0f;
         CGFloat textBlockH = sourceH + sourceGap + 20.0f + 3.0f + 24.0f; // (source + gap) + title + gap + content
@@ -1112,8 +1125,15 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         }
         self.titleLbl.lim_top = textBlockTop + sourceH + sourceGap;
 
+        // 子区名前的 hash 小图标（最近 tab 子区行专用）
+        CGFloat titleIconReserve = 0.0f;
+        if (!self.threadTitleIcon.hidden) {
+            titleIconReserve = 14.0f + 4.0f; // icon width + gap
+            self.titleLbl.lim_left += titleIconReserve;
+        }
+
         [self.lastMsgTimeLbl sizeToFit];
-        CGFloat titleMaxWidth = self.lim_width - (self.avatarImgView.lim_right + 5.0f) - (self.lastMsgTimeLbl.lim_width+5.0f + 20.0f)  - 20.0f;
+        CGFloat titleMaxWidth = self.lim_width - (self.avatarImgView.lim_right + 5.0f) - (self.lastMsgTimeLbl.lim_width+5.0f + 20.0f)  - 20.0f - titleIconReserve;
         if(!self.statusImgView.hidden) {
             titleMaxWidth = titleMaxWidth - (self.statusImgView.lim_width + statusRightSpace);
         }
@@ -1122,8 +1142,16 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
             self.titleLbl.lim_width = titleMaxWidth;
         }
 
+        // 子区名前的 hash 小图标定位（最近 tab 子区行专用）
+        if (!self.threadTitleIcon.hidden) {
+            CGFloat iconSize = 14.0f;
+            self.threadTitleIcon.frame = CGRectMake(self.titleLbl.lim_left - titleIconReserve,
+                                                     self.titleLbl.lim_top + (self.titleLbl.lim_height - iconSize) / 2.0f,
+                                                     iconSize, iconSize);
+        }
+
         // 最后一条消息
-        self.lastContentLbl.lim_left = self.titleLbl.lim_left;
+        self.lastContentLbl.lim_left = self.titleLbl.lim_left - titleIconReserve;
         self.lastContentLbl.lim_width = self.lim_width - self.lastContentLbl.lim_left - 10.0f;
 
         if(self.model.unreadCount>0 || self.model.mute) {

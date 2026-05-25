@@ -71,9 +71,9 @@
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTap)];
         [self.contentView addGestureRecognizer:tap];
 
-        // 长按
-        UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(onLongPressGesture:)];
-        [self.contentView addGestureRecognizer:longPress];
+        // 长按手势已上移到 VC（统一 table-level UILongPressGestureRecognizer）— 这里
+        // 不再单独装一份，避免 cell 复用时手势随 cell 一起销毁，导致 VC 拖拽
+        // snapshot 卡死的问题（详见 WKConversationListVC.m onUnifiedLongPress:）。
     }
     return self;
 }
@@ -149,41 +149,27 @@
     }
 }
 
-- (void)onLongPressGesture:(UILongPressGestureRecognizer *)gesture {
-    if (self.isDefault) {
-        // 默认分组不参与管理菜单 / 拖拽
-        return;
-    }
-    if (gesture.state == UIGestureRecognizerStateBegan) {
-        // 高亮反馈
-        [UIView animateWithDuration:0.15 animations:^{
+- (void)setLongPressHighlighted:(BOOL)highlighted {
+    if (self.isDefault) return; // 默认分组无长按交互
+    [UIView animateWithDuration:highlighted ? 0.15 : 0.2 animations:^{
+        if (highlighted) {
             self.contentView.backgroundColor = [[WKApp shared].config.themeColor colorWithAlphaComponent:0.08];
             self.transform = CGAffineTransformMakeScale(0.98, 0.98);
-        }];
-        if (self.onLongPress) {
-            CGPoint ptInCell = [gesture locationInView:self];
-            CGPoint ptInWindow = [self convertPoint:ptInCell toView:nil];
-            self.onLongPress(self.sectionId, self.sectionTitle, ptInWindow);
-        }
-    } else if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled) {
-        [UIView animateWithDuration:0.2 animations:^{
+        } else {
             self.contentView.backgroundColor = [UIColor clearColor];
             self.transform = CGAffineTransformIdentity;
-        }];
-    }
-    // 总是把 gesture 转发给 VC，让 VC 驱动 Changed/Ended 阶段的拖拽机制。
-    if (self.onLongPressProgress) {
-        self.onLongPressProgress(gesture, self.sectionId);
-    }
+        }
+    }];
 }
 
 - (void)prepareForReuse {
     [super prepareForReuse];
     self.onToggle = nil;
-    self.onLongPress = nil;
-    self.onLongPressProgress = nil;
     self.isDefault = NO;
     self.showTopDivider = NO;
+    // 复用时强制还原视觉，避免被复用时残留长按高亮
+    self.contentView.backgroundColor = [UIColor clearColor];
+    self.transform = CGAffineTransformIdentity;
 }
 
 /// 程序化生成向下箭头图标

@@ -14,6 +14,14 @@
 #import <SDWebImage/UIImageView+WebCache.h>
 #import "WKConversationListVM.h"
 
+// [ThreadBadgeDbg] 子区 unread / +N 角标调试日志（PR #137 review 反馈）：
+// 仅 DEBUG 构建打印，Release 编译为空。
+#if DEBUG
+#define WK_THREAD_BADGE_DBG(...) NSLog(__VA_ARGS__)
+#else
+#define WK_THREAD_BADGE_DBG(...) do {} while(0)
+#endif
+
 @interface WKConversationGroupThreadOnlyCell ()
 
 @property (nonatomic, strong) WKUserAvatar *avatarView;
@@ -187,10 +195,13 @@
 }
 
 -(void) updateMoreLabel {
-    NSInteger previewCount = self.model.threadPreviews ? self.model.threadPreviews.count : 0;
-    // moreCount = 已关注子区数 - 当前展示的 preview 数。之前用 self.model.threadCount
-    // 是父群 raw 总数，含未关注子区 —— follow tab 边界场景下（已关注子区不在 threadPreviews 里）
-    // "+N 子区" 会把未关注的算进去。改成与 WKConversationGroupThreadCell 同源。
+    // OnlyCell 由 VC 在 visiblePreviews.count == 0 时才选用（见 WKConversationListVC.m
+    // cellForRowAt 分派），物理上不渲染任何 preview 行 —— previewCount 必须按 0 算，
+    // 而不是 raw self.model.threadPreviews.count（PR review #3 critical）。
+    // 旧实现 raw count > 0 时（活跃 preview 全部未关注 + 已关注子区在 dormant 区的场景）
+    // moreCount = followedThreadCount - raw 会 ≤ 0 把整行 + 红点错误隐藏。
+    NSInteger previewCount = 0;
+    // moreCount = 已关注子区数 - 当前展示的 preview 数（OnlyCell 始终为 0）
     NSInteger followedThreadCount = [WKConversationGroupThreadCell visibleThreadCountFor:self.model];
     NSInteger moreCount = followedThreadCount - previewCount;
     if (moreCount <= 0) {
@@ -224,6 +235,8 @@
     } else {
         self.moreBadgeLbl.hidden = YES;
     }
+    WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] GroupThreadOnlyCell group=%@ followed=%ld preview=%ld → +N=%ld moreUnread=%ld moreMention=%d",
+          groupNo, (long)followedThreadCount, (long)previewCount, (long)moreCount, (long)moreUnread, moreMention);
 }
 
 -(void) refreshAvatar:(WKConversationWrapModel*)model {

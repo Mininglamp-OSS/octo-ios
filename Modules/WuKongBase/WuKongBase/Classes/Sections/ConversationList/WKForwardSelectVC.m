@@ -653,7 +653,8 @@ typedef NS_ENUM(NSInteger, FWItemType) {
                 else [ws.collapsedSections removeObject:sid];
                 [ws filterAndDisplay];
             };
-            sc.onLongPress = nil;
+            // onLongPress 属性已移除：WKCategorySectionCell 不再持有长按手势，
+            // 长按交互由消费方 VC 上的统一手势驱动；转发选择页本就不需要长按。
             break;
         }
         case FWItemThread: {
