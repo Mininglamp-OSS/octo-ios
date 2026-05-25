@@ -477,8 +477,18 @@ static const NSInteger kPageSize = 15;
     if (thread.channelId.length == 0) return;
     WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
     BOOL isFollowed = [store isFollowedWithType:WKFollowTargetTypeThread targetId:thread.channelId];
-    NSString *currentUid = [WKSDK shared].options.connectInfo.uid;
-    BOOL isCreator = [thread.creatorUid isEqualToString:currentUid];
+    NSString *currentUid = [WKSDK shared].options.connectInfo.uid ?: @"";
+    BOOL isCreator = (currentUid.length > 0 && [thread.creatorUid isEqualToString:currentUid]);
+    // 服务端 service.go canOperate: 子区创建者 OR 群主/管理员都能 archive/delete
+    // 任何子区。iOS 也对齐这条权限规则 —— 群主/管理员长按非自己创建的子区也能
+    // 看到归档/删除选项。WKChannelManager.isManager:memberUID: 已经覆盖
+    // creator+manager 两种 role（WKChannelManager.m:348）。
+    BOOL isGroupAdmin = NO;
+    if (currentUid.length > 0 && self.groupNo.length > 0) {
+        WKChannel *parentChannel = [WKChannel channelID:self.groupNo channelType:WK_GROUP];
+        isGroupAdmin = [[WKSDK shared].channelManager isManager:parentChannel memberUID:currentUid];
+    }
+    BOOL canManageThread = isCreator || isGroupAdmin;
     NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
     __weak typeof(self) weakSelf = self;
 
@@ -497,11 +507,10 @@ static const NSInteger kPageSize = 15;
         }];
     }
 
-    // 归档 / 取消归档 / 删除（仅创建者）：以前在左滑菜单，现在统一到长按菜单避免
-    // 跟列表上下滚动 + cell tap 抢手势。破坏性操作（归档/删除）必须先二次确认。
-    // 普通成员的「退出子区」入口已下线 —— 产品语义上用户在子区列表里默认是
-    // 加入态，没有显式退出操作的需求。
-    if (isCreator) {
+    // 归档 / 取消归档 / 删除 —— 子区创建者 OR 群主/管理员都能用，与服务端
+    // canOperate (service.go:674) 完全对齐。普通成员的「退出子区」入口已下线 ——
+    // 产品语义上用户在子区列表里默认是加入态，没有显式退出操作的需求。
+    if (canManageThread) {
         if (thread.status == WKThreadStatusActive) {
             [items addObject:@{
                 @"title": LLang(@"归档"),
