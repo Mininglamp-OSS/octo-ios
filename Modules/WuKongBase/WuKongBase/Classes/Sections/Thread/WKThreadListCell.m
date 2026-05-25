@@ -10,6 +10,7 @@
 #import "UIView+WKCommon.h"
 #import "WuKongBase.h"
 #import "WKFollowedKeysStore.h"
+#import <WuKongIMSDK/WuKongIMSDK.h>
 
 @interface WKThreadListCell ()
 
@@ -19,6 +20,9 @@
 @property (nonatomic, strong) UILabel *previewLbl;
 @property (nonatomic, strong) UILabel *badgeLbl;
 @property (nonatomic, strong) UIImageView *followIcon;
+/// 角色标识（管理员 / 已加入），与 followIcon 同尺寸并排显示。同一时刻最多展示一个：
+/// creator → 管理员，非 creator 但 isMember → 已加入；都不是则隐藏。
+@property (nonatomic, strong) UIImageView *roleIcon;
 @property (nonatomic, strong) WKThreadModel *model;
 
 @end
@@ -42,6 +46,7 @@
     [self.contentView addSubview:self.previewLbl];
     [self.contentView addSubview:self.badgeLbl];
     [self.contentView addSubview:self.followIcon];
+    [self.contentView addSubview:self.roleIcon];
 }
 
 - (void)refreshWithModel:(WKThreadModel *)model {
@@ -128,6 +133,22 @@
         ? [WKThreadListCell cachedStarFilledIcon]
         : [WKThreadListCell cachedStarOutlineIcon];
 
+    // 角色标识：管理员（creator）/ 已加入（非 creator 的成员）。和长按菜单里那一组
+    // 「归档/删除/退出」的可见性条件完全对齐 —— 用户一眼就知道这条子区能做什么操作。
+    // 同 followIcon 套路 cache，不在 refresh 路径上跑 Core Graphics。
+    NSString *loginUid = [WKSDK shared].options.connectInfo.uid ?: @"";
+    BOOL isCreator = (loginUid.length > 0 && [model.creatorUid isEqualToString:loginUid]);
+    if (isCreator) {
+        self.roleIcon.image = [WKThreadListCell cachedAdminIcon];
+        self.roleIcon.hidden = NO;
+    } else if (model.isMember) {
+        self.roleIcon.image = [WKThreadListCell cachedJoinedIcon];
+        self.roleIcon.hidden = NO;
+    } else {
+        self.roleIcon.image = nil;
+        self.roleIcon.hidden = YES;
+    }
+
     [self setNeedsLayout];
 }
 
@@ -147,6 +168,28 @@
     dispatch_once(&once, ^{
         UIColor *unfollowedColor = [UIColor colorWithWhite:0.7 alpha:1.0];
         img = [WKThreadListCell starOutlineIcon:CGSizeMake(14, 14) color:unfollowedColor];
+    });
+    return img;
+}
+
++ (UIImage *)cachedAdminIcon {
+    static UIImage *img;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        // 主题色填充的盾形 + 内嵌「✓」线条 —— 与平台「管理员/创建者」语义一致
+        UIColor *adminColor = [WKApp shared].config.themeColor ?: [UIColor systemBlueColor];
+        img = [WKThreadListCell shieldIcon:CGSizeMake(14, 14) color:adminColor];
+    });
+    return img;
+}
+
++ (UIImage *)cachedJoinedIcon {
+    static UIImage *img;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        // 绿色描边圆里 ✓ —— iOS 系统/微信通讯录都是用类似形状表达「已加入/已添加」
+        UIColor *joinedColor = [UIColor colorWithRed:0.30 green:0.69 blue:0.31 alpha:1.0]; // #4CAF50
+        img = [WKThreadListCell checkmarkCircleIcon:CGSizeMake(14, 14) color:joinedColor];
     });
     return img;
 }
@@ -171,15 +214,26 @@
     }
 
     // 关注 / 未关注 标识：紧贴红点左侧（无红点时直接靠右），与 nameLbl 同基线
-    CGFloat followIconW = 14;
-    CGFloat followIconH = 14;
-    CGFloat followIconX = self.contentView.lim_width - padding - badgeRight - followIconW;
-    self.followIcon.frame = CGRectMake(followIconX, 16 + (20 - followIconH) / 2.0, followIconW, followIconH);
-    CGFloat followReserve = followIconW + 6;
+    CGFloat iconW = 14;
+    CGFloat iconH = 14;
+    CGFloat iconY = 16 + (20 - iconH) / 2.0;
+    CGFloat followIconX = self.contentView.lim_width - padding - badgeRight - iconW;
+    self.followIcon.frame = CGRectMake(followIconX, iconY, iconW, iconH);
+    CGFloat rightReserve = iconW + 6;
+
+    // 角色图标（管理员 / 已加入）：紧贴 followIcon 左侧。隐藏时不占位。
+    if (!self.roleIcon.hidden) {
+        CGFloat roleIconX = followIconX - 4 - iconW;
+        self.roleIcon.frame = CGRectMake(roleIconX, iconY, iconW, iconH);
+        rightReserve += iconW + 4;
+    } else {
+        // 仍然给一个合法 frame，避免 reused cell 残影
+        self.roleIcon.frame = CGRectZero;
+    }
 
     // 名称
     CGFloat textLeft = self.iconLbl.lim_right + 10;
-    CGFloat textWidth = contentWidth - (textLeft - padding) - badgeRight - followReserve;
+    CGFloat textWidth = contentWidth - (textLeft - padding) - badgeRight - rightReserve;
     [self.nameLbl sizeToFit];
     self.nameLbl.frame = CGRectMake(textLeft, 12, textWidth, 20);
 
@@ -262,6 +316,15 @@
     return _followIcon;
 }
 
+- (UIImageView *)roleIcon {
+    if (!_roleIcon) {
+        _roleIcon = [[UIImageView alloc] init];
+        _roleIcon.contentMode = UIViewContentModeScaleAspectFit;
+        _roleIcon.hidden = YES;
+    }
+    return _roleIcon;
+}
+
 #pragma mark - 关注状态图标（cell 级别，14pt 小图标，与 WKFloatingMenu 菜单图标分离）
 
 /// 实心五角星 — 已关注状态。整星填色，无描边，14pt 时清晰可辨。
@@ -306,6 +369,65 @@
         else CGContextAddLineToPoint(ctx, x, y);
     }
     CGContextClosePath(ctx);
+    CGContextStrokePath(ctx);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
+/// 盾形 + 中心 ✓ — 管理员/创建者标识。整体填充主题色，内嵌白色 ✓ 提示「掌控
+/// 权」语义。视觉上比五角星更厚重，避免跟收藏星抢眼。
++ (UIImage *)shieldIcon:(CGSize)s color:(UIColor *)color {
+    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    CGFloat w = s.width, h = s.height;
+    // 盾形：顶部平、底部尖；用贝塞尔近似
+    UIBezierPath *shield = [UIBezierPath bezierPath];
+    [shield moveToPoint:CGPointMake(w * 0.5, h * 0.06)];
+    [shield addLineToPoint:CGPointMake(w * 0.92, h * 0.22)];
+    [shield addLineToPoint:CGPointMake(w * 0.92, h * 0.56)];
+    [shield addCurveToPoint:CGPointMake(w * 0.5, h * 0.94)
+              controlPoint1:CGPointMake(w * 0.92, h * 0.78)
+              controlPoint2:CGPointMake(w * 0.72, h * 0.92)];
+    [shield addCurveToPoint:CGPointMake(w * 0.08, h * 0.56)
+              controlPoint1:CGPointMake(w * 0.28, h * 0.92)
+              controlPoint2:CGPointMake(w * 0.08, h * 0.78)];
+    [shield addLineToPoint:CGPointMake(w * 0.08, h * 0.22)];
+    [shield closePath];
+    [color setFill];
+    [shield fill];
+    // 中间白色 ✓
+    [[UIColor whiteColor] setStroke];
+    CGContextSetLineWidth(ctx, 1.4);
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+    CGContextMoveToPoint(ctx, w * 0.30, h * 0.50);
+    CGContextAddLineToPoint(ctx, w * 0.46, h * 0.66);
+    CGContextAddLineToPoint(ctx, w * 0.72, h * 0.38);
+    CGContextStrokePath(ctx);
+    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return img;
+}
+
+/// 描边圆 + 中心 ✓ — 「已加入」标识。绿色描边、白底，与微信通讯录「已添加」
+/// 等场景的常用视觉一致。
++ (UIImage *)checkmarkCircleIcon:(CGSize)s color:(UIColor *)color {
+    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    CGFloat w = s.width, h = s.height;
+    // 圆环描边
+    [color setStroke];
+    CGContextSetLineWidth(ctx, 1.2);
+    CGRect circleRect = CGRectInset(CGRectMake(0, 0, w, h), 1.0, 1.0);
+    CGContextStrokeEllipseInRect(ctx, circleRect);
+    // 中心 ✓
+    CGContextSetLineCap(ctx, kCGLineCapRound);
+    CGContextSetLineJoin(ctx, kCGLineJoinRound);
+    CGContextSetLineWidth(ctx, 1.4);
+    CGContextMoveToPoint(ctx, w * 0.28, h * 0.52);
+    CGContextAddLineToPoint(ctx, w * 0.44, h * 0.68);
+    CGContextAddLineToPoint(ctx, w * 0.74, h * 0.36);
     CGContextStrokePath(ctx);
     UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();

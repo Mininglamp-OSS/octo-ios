@@ -112,6 +112,12 @@ static const NSInteger kPageSize = 15;
 
 #pragma mark - Data
 
+/// 当前 segment 对应的 server status query：active / archived。
+/// 同 server 端 api.go:300 parseListThreadStatuses 接受的字面量。
+- (NSString *)currentStatusParam {
+    return (self.segmentControl.selectedSegmentIndex == 0) ? @"active" : @"archived";
+}
+
 - (void)loadThreads {
     if (self.loading) return;
     self.loading = YES;
@@ -119,7 +125,8 @@ static const NSInteger kPageSize = 15;
     [self.allLoadedThreads removeAllObjects];
 
     __weak typeof(self) weakSelf = self;
-    [[WKThreadService shared] listThreads:self.groupNo pageIndex:1 pageSize:kPageSize].then(^(NSDictionary *result) {
+    NSString *status = [self currentStatusParam];
+    [[WKThreadService shared] listThreads:self.groupNo status:status pageIndex:1 pageSize:kPageSize].then(^(NSDictionary *result) {
         weakSelf.loading = NO;
         [weakSelf.refreshControl endRefreshing];
         weakSelf.totalCount = [result[@"count"] integerValue];
@@ -136,17 +143,17 @@ static const NSInteger kPageSize = 15;
 
 - (void)loadMoreThreads {
     if (self.isLoadingMore || self.loading) return;
-    // 只对活跃 tab 分页（服务端只返回活跃子区）
-    if (self.segmentControl.selectedSegmentIndex != 0) return;
-    // 已加载全部
+    // 已加载全部（两个 tab 都支持分页 —— server #1378 后 ?status=archived 同样
+    // 走 count + list 分页协议）
     if (self.allLoadedThreads.count >= (NSUInteger)self.totalCount) return;
 
     self.isLoadingMore = YES;
     [self.footerSpinner startAnimating];
     NSInteger nextPage = self.currentPage + 1;
+    NSString *status = [self currentStatusParam];
 
     __weak typeof(self) weakSelf = self;
-    [[WKThreadService shared] listThreads:self.groupNo pageIndex:nextPage pageSize:kPageSize].then(^(NSDictionary *result) {
+    [[WKThreadService shared] listThreads:self.groupNo status:status pageIndex:nextPage pageSize:kPageSize].then(^(NSDictionary *result) {
         weakSelf.isLoadingMore = NO;
         [weakSelf.footerSpinner stopAnimating];
         weakSelf.totalCount = [result[@"count"] integerValue];
@@ -163,24 +170,14 @@ static const NSInteger kPageSize = 15;
 }
 
 - (void)filterAndReload {
-    NSInteger selectedStatus = (self.segmentControl.selectedSegmentIndex == 0)
-        ? WKThreadStatusActive
-        : WKThreadStatusArchived;
-
-    NSMutableArray *filtered = [NSMutableArray array];
-    for (WKThreadModel *t in self.allLoadedThreads) {
-        if (t.status == selectedStatus) {
-            [filtered addObject:t];
-        }
-    }
-    self.threads = [filtered copy];
+    // server 已按 ?status=active/archived 过滤好，不再做客户端二次过滤
+    self.threads = [self.allLoadedThreads copy];
     [self.tableView reloadData];
     self.emptyLbl.hidden = (self.threads.count > 0);
 }
 
 - (void)updateFooterVisibility {
-    BOOL hasMore = (self.allLoadedThreads.count < (NSUInteger)self.totalCount)
-                   && (self.segmentControl.selectedSegmentIndex == 0);
+    BOOL hasMore = (self.allLoadedThreads.count < (NSUInteger)self.totalCount);
     self.tableView.tableFooterView = hasMore ? self.tableFooterView : [[UIView alloc] init];
 }
 
@@ -198,9 +195,9 @@ static const NSInteger kPageSize = 15;
 #pragma mark - Actions
 
 - (void)onSegmentChanged:(UISegmentedControl *)sender {
-    // 切换 tab 时先用已加载数据过滤展示，不重新请求
-    [self filterAndReload];
-    [self updateFooterVisibility];
+    // 切 tab 改成重新拉数据：server 自 #1378 起按 ?status=active/archived 各自分页,
+    // 客户端不再用一份 cache 跨 tab 过滤（之前 client filter 会让已归档 tab 永远空）
+    [self loadThreads];
 }
 
 - (void)onRefresh {
