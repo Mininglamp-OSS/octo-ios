@@ -328,55 +328,12 @@ static const NSInteger kPageSize = 15;
     }
 }
 
-- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView
-    trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath {
-    WKThreadModel *thread = self.threads[indexPath.row];
-    NSString *currentUid = [WKSDK shared].options.connectInfo.uid;
-    BOOL isCreator = [thread.creatorUid isEqualToString:currentUid];
-
-    NSMutableArray *actions = [NSMutableArray array];
-
-    if (isCreator) {
-        UIContextualAction *deleteAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive
-                                                                                  title:LLang(@"删除")
-                                                                                handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
-            [self confirmDeleteThread:thread];
-            completionHandler(YES);
-        }];
-        [actions addObject:deleteAction];
-
-        if (thread.status == WKThreadStatusActive) {
-            UIContextualAction *archiveAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal
-                                                                                       title:LLang(@"归档")
-                                                                                     handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
-                [self archiveThread:thread];
-                completionHandler(YES);
-            }];
-            archiveAction.backgroundColor = [UIColor orangeColor];
-            [actions addObject:archiveAction];
-        } else if (thread.status == WKThreadStatusArchived) {
-            UIContextualAction *unarchiveAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal
-                                                                                         title:LLang(@"取消归档")
-                                                                                       handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
-                [self unarchiveThread:thread];
-                completionHandler(YES);
-            }];
-            unarchiveAction.backgroundColor = [UIColor systemGreenColor];
-            [actions addObject:unarchiveAction];
-        }
-    } else if (thread.isMember) {
-        UIContextualAction *leaveAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal
-                                                                                  title:LLang(@"退出")
-                                                                                handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
-            [self leaveThread:thread];
-            completionHandler(YES);
-        }];
-        leaveAction.backgroundColor = [UIColor grayColor];
-        [actions addObject:leaveAction];
-    }
-
-    return [UISwipeActionsConfiguration configurationWithActions:actions];
-}
+// 移除 trailingSwipeActionsConfigurationForRowAtIndexPath: —— 左滑 swipe pan 在
+// 这个 cell 高度（80pt 含 preview）下跟 tableView 的竖滚 pan / cell tap 抢手势：
+// 用户轻微横向位移会被识别成 tap 误打开详情，偏竖直的滑动又被列表 scroll 抢走。
+// 归档 / 取消归档 / 删除 / 退出全部移到长按菜单 (showFollowMenuForThread:) 里,
+// 长按本身跟 tap/pan 互不干扰，识别可靠；破坏性操作 (归档/删除/退出) 全部走
+// confirmXxxThread: 二次确认。
 
 #pragma mark - Thread Operations
 
@@ -392,6 +349,30 @@ static const NSInteger kPageSize = 15;
         }).catch(^(NSError *error) {
             [weakSelf.view showMsg:error.domain];
         });
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)confirmArchiveThread:(WKThreadModel *)thread {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"归档子区")
+                                                                  message:[NSString stringWithFormat:@"%@「%@」?", LLang(@"确定归档子区"), thread.name]
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"归档") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [weakSelf archiveThread:thread];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)confirmLeaveThread:(WKThreadModel *)thread {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"退出子区")
+                                                                  message:[NSString stringWithFormat:@"%@「%@」?", LLang(@"确定退出子区"), thread.name]
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"退出") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [weakSelf leaveThread:thread];
     }]];
     [self presentViewController:alert animated:YES completion:nil];
 }
@@ -520,9 +501,12 @@ static const NSInteger kPageSize = 15;
     if (thread.channelId.length == 0) return;
     WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
     BOOL isFollowed = [store isFollowedWithType:WKFollowTargetTypeThread targetId:thread.channelId];
+    NSString *currentUid = [WKSDK shared].options.connectInfo.uid;
+    BOOL isCreator = [thread.creatorUid isEqualToString:currentUid];
     NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
     __weak typeof(self) weakSelf = self;
 
+    // 关注 / 取消关注
     if (isFollowed) {
         [items addObject:@{
             @"title": LLang(@"取消关注"),
@@ -534,6 +518,33 @@ static const NSInteger kPageSize = 15;
             @"title": LLang(@"添加到关注"),
             @"icon": [WKFloatingMenu iconFollow],
             @"action": ^{ [weakSelf doFollowThread:thread]; }
+        }];
+    }
+
+    // 归档 / 取消归档 / 删除（仅创建者）：以前在左滑菜单，现在统一到长按菜单避免
+    // 跟列表上下滚动 + cell tap 抢手势。破坏性操作（归档/删除）必须先二次确认。
+    if (isCreator) {
+        if (thread.status == WKThreadStatusActive) {
+            [items addObject:@{
+                @"title": LLang(@"归档"),
+                @"action": ^{ [weakSelf confirmArchiveThread:thread]; }
+            }];
+        } else if (thread.status == WKThreadStatusArchived) {
+            [items addObject:@{
+                @"title": LLang(@"取消归档"),
+                @"action": ^{ [weakSelf unarchiveThread:thread]; }
+            }];
+        }
+        [items addObject:@{
+            @"title": LLang(@"删除子区"),
+            @"isDestructive": @YES,
+            @"action": ^{ [weakSelf confirmDeleteThread:thread]; }
+        }];
+    } else if (thread.isMember) {
+        // 普通成员：退出子区
+        [items addObject:@{
+            @"title": LLang(@"退出子区"),
+            @"action": ^{ [weakSelf confirmLeaveThread:thread]; }
         }];
     }
     [WKFloatingMenu showItems:items atPoint:pointInWindow];
