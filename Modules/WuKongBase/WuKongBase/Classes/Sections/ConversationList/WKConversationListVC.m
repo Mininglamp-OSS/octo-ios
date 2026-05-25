@@ -1720,6 +1720,12 @@
     // followedKeys 也是 seedFollowedThreadsIntoTopicsCache 的输入 — 这里补拉一次，
     // 覆盖"loadConversationList 跑完后 store 才 loaded"的冷启动 race。
     [self.conversationListVM seedFollowedThreadsIntoTopicsCache];
+    // 冷启动两阶段分页：若 fetchThreadCountsForGroups 当时 store 未加载，所有群只
+    // 拉了 1 页；现在 store 已 ready，对「有已关注子区」的群补一次全分页 listAllThreads,
+    // 把大群（>100 子区）漏算的 followed 子区 unread 补全（PR review #7 warning）。
+    // 内部 didColdStartFullPaging 闸门确保整个 VM 生命周期只触发一次，
+    // toggle follow 不会重复打网络。
+    [self.conversationListVM coldStartCatchupIfNeeded];
     if (self.conversationListVM.filterType == WKConversationFilterFollow) {
         [self rebuildGroupDisplayAndReload];
     }

@@ -14,6 +14,9 @@
 #import "WKApp.h"
 #import "WKFollowService.h"
 #import "WKFollowedKeysStore.h"
+#import "WKConversationListVM.h"
+#import "WKCategoryService.h"
+#import "WKCategoryEntity.h"
 #import "WKFloatingMenu.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 
@@ -536,11 +539,27 @@ static const NSInteger kPageSize = 15;
     [WKFloatingMenu showItems:items atPoint:pointInWindow];
 }
 
-/// 关注子区。后端 cascade 处理父群关注状态：父群未关注时由服务端 refollow 父群（沿用
-/// 会话列表 performFollowThread: 父群已关注路径的同款语义）。这里 VC 上下文必然在父群里
-/// 浏览子区，意图明确，不再弹分组选择 sheet — 与会话列表里"父群已关注 → 直接 follow"
-/// 一致；父群未关注的边界由后端处理。
+/// 关注子区。两条路径，与会话列表 showAddToFollowDialogForModel: 的子区分支同款语义
+/// （PR review #5 critical）：
+///  - 父群已关注：直接 followThread，后端 cascade 处理父群关注关系
+///  - 父群未关注：弹分组选择 → refollowChannel(父群) → moveGroup(父群到分组) → followThread
+///    必须把父群移进非默认分组才能让 Follow tab 看见 —— buildGroupDisplayList 严格
+///    跳过 default 分组（is_default == YES，VM:1877）。直接 followThread 不带这一步,
+///    后端虽然能落数，UI 上是隐藏的。
 - (void)doFollowThread:(WKThreadModel *)thread {
+    if (thread.channelId.length == 0) return;
+    BOOL parentFollowed = [[WKFollowedKeysStore shared]
+                            isFollowedWithType:WKFollowTargetTypeChannel
+                                      targetId:self.groupNo];
+    if (parentFollowed) {
+        [self performFollowThreadDirect:thread];
+    } else {
+        [self pickCategoryAndPerformFollowThread:thread];
+    }
+}
+
+/// 父群已关注 — 直接关注子区，与原实现一致。
+- (void)performFollowThreadDirect:(WKThreadModel *)thread {
     __weak typeof(self) weakSelf = self;
     [[WKFollowService shared] followThread:thread.channelId].then(^(id _) {
         // followedKeys 是异步 reload，必须等回包才 reloadData，否则 cell 上的星标
@@ -550,6 +569,78 @@ static const NSInteger kPageSize = 15;
         [weakSelf.view showMsg:LLang(@"已添加到关注")];
         [weakSelf.tableView reloadData];
         return (id)nil;
+    }).catch(^(NSError *err) {
+        [weakSelf.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
+    });
+}
+
+/// 父群未关注 — 弹简单 action sheet 让用户选目标分组（非默认分组），选完串
+/// refollowChannel(父群) → moveGroup(父群→分组) → followThread。空非默认分组的
+/// 边界给一条提示让用户去会话列表创建分组（这里不内联 create 弹窗，避免在子区
+/// 列表 VC 里塞 follow flow 的全部 UI 路径，会话列表那边已有完整的 sheet）。
+- (void)pickCategoryAndPerformFollowThread:(WKThreadModel *)thread {
+    NSArray<WKCategoryEntity *> *all = [WKConversationListVM shared].categoryList;
+    NSMutableArray<WKCategoryEntity *> *cats = [NSMutableArray array];
+    for (WKCategoryEntity *cat in all) {
+        if (cat.is_default) continue;
+        if (cat.category_id.length == 0) continue;
+        [cats addObject:cat];
+    }
+    if (cats.count == 0) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"添加到关注")
+                                                                        message:LLang(@"父群尚未关注。请先在会话列表创建分组并关注此群，然后再来此处关注子区。")
+                                                                 preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:LLang(@"我知道了") style:UIAlertActionStyleCancel handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:LLang(@"添加到关注")
+                                                                     message:LLang(@"父群尚未关注，请选择父群所在分组")
+                                                              preferredStyle:UIAlertControllerStyleActionSheet];
+    __weak typeof(self) weakSelf = self;
+    for (WKCategoryEntity *cat in cats) {
+        NSString *catId = cat.category_id;
+        NSString *catName = cat.name;
+        [sheet addAction:[UIAlertAction actionWithTitle:catName ?: @""
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction *action) {
+            [weakSelf performFollowThreadWithRefollowParent:thread categoryId:catId categoryName:catName];
+        }]];
+    }
+    [sheet addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
+    // iPad popover 锚点（避免崩）
+    if (sheet.popoverPresentationController) {
+        sheet.popoverPresentationController.sourceView = self.view;
+        sheet.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width / 2,
+                                                                     self.view.bounds.size.height - 100, 1, 1);
+        sheet.popoverPresentationController.permittedArrowDirections = 0;
+    }
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+/// 与 WKConversationListVC.performFollowThread:parentGroupNo:categoryId:categoryName: 的
+/// categoryId 非空分支同款链：refollowChannel(父群) → moveGroup → followThread。
+- (void)performFollowThreadWithRefollowParent:(WKThreadModel *)thread
+                                   categoryId:(NSString *)categoryId
+                                 categoryName:(NSString *)categoryName {
+    NSString *parentGroupNo = self.groupNo;
+    NSString *threadChannelId = thread.channelId;
+    __weak typeof(self) weakSelf = self;
+    AnyPromise *chain = [[WKFollowService shared] refollowChannel:parentGroupNo].then(^id(id _) {
+        return [[WKCategoryService shared] moveGroup:parentGroupNo toCategoryId:categoryId];
+    }).then(^id(id _) {
+        return [[WKFollowService shared] followThread:threadChannelId];
+    });
+    chain.then(^(id _) {
+        [[WKFollowedKeysStore shared] reload];
+        // 重新拉一次 categories，让 buildGroupDisplayList 立即看到父群在新分组下
+        [[WKConversationListVM shared] loadCategoriesWithCompletion:nil];
+        NSString *toast = categoryName.length > 0
+            ? [NSString stringWithFormat:LLang(@"已添加到「%@」"), categoryName]
+            : LLang(@"已添加到关注");
+        [weakSelf.view showMsg:toast];
+        [weakSelf.tableView reloadData];
     }).catch(^(NSError *err) {
         [weakSelf.view showMsg:err.domain ?: LLang(@"添加到关注失败")];
     });

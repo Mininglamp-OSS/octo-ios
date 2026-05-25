@@ -41,6 +41,14 @@
 @property(nonatomic,copy) NSArray<WKConversation*> *cachedAllConversations; // loadConversationList 缓存，供 buildGroupDisplayList 复用
 @property(nonatomic,strong) NSDictionary<NSString*, NSArray<WKConversation*>*> *cachedTopicsByGroup; // groupId → 子区会话列表
 @property(nonatomic,strong) NSDictionary<NSString*, NSArray<WKReminder*>*> *cachedRemindersByChannelId; // 子区 channelId → reminder 列表
+/// 冷启动两阶段子区分页标记（PR review #7 warning）：
+///   - YES：曾在 store.loaded 状态下跑过 fetchThreadCountsForGroupsWithCompletion,
+///     有已关注子区的群已经拿到 maxPages=10 全分页结果
+///   - NO：冷启全用 maxPages=1，等 store 加载好后由 coldStartCatchupIfNeeded
+///     对有已关注子区的群补一次完整分页
+/// 仅在 fetchThreadCountsForGroupsWithCompletion 走 storeLoaded 分支时翻 YES;
+/// reset 时清零，保证切账号 / 切 Space 后冷启逻辑重新生效。
+@property(nonatomic,assign) BOOL didColdStartFullPaging;
 @property(nonatomic,strong) NSDictionary *cachedThreadData; // channelId → {previews, count}，跨 reset 保留
 @property(nonatomic,assign,readwrite) BOOL lastBuildFollowHasMention;
 @property(nonatomic,assign,readwrite) BOOL lastBuildRecentHasMention;
@@ -105,6 +113,7 @@ static WKConversationListVM *_instance;
     self.cachedAllConversations = nil;
     self.cachedTopicsByGroup = nil;
     self.cachedRemindersByChannelId = nil;
+    self.didColdStartFullPaging = NO; // 切账号 / 切 Space 后冷启两阶段分页要重新生效
 }
 
 -(void) snapshotSyncedGroupIds {
@@ -564,22 +573,36 @@ static WKConversationListVM *_instance;
     // WKThreadModel.unreadCount 里。
     NSMutableDictionary<NSString*, NSArray<WKConversation*>*> *threadConvsAccum = [NSMutableDictionary dictionary];
 
-    // PR review #4 warning：listAllThreads(maxPages:10) 对 N 个群并发，冷启动可
-    // 多到 N*10 个 listThreads 请求。但 maxPages:10 只对「有已关注子区」的群有意义
-    // —— Follow tab 的「+N 子区」/ Follow tab badge 都按 followedKeys 过滤，无任何
-    // 已关注子区的群即便分页拉到 1000 条也没有 UI 消费方。先一次性算出哪些群有
-    // 已关注子区，剩下的降到 1 页（够算 threadCount/threadPreviews 估值即可），
-    // store 未加载时一律保守取 10 页（与之前行为完全一致，不冒新风险）。
+    // PR review #4/#7 warning：listAllThreads(maxPages:10) 对 N 个群并发，冷启动可
+    // 多到 N*10 个 listThreads 请求。maxPages:10 只对「有已关注子区」的群有意义 ——
+    // Follow tab 的「+N 子区」/ Follow tab badge 都按 followedKeys 过滤，无任何
+    // 已关注子区的群即便分页拉到 1000 条也没有 UI 消费方。
+    //
+    // 两阶段策略：
+    //   1) store 已加载：一次性算出有已关注子区的 group set，剩下的群 maxPages=1
+    //   2) store 未加载（冷启动 race）：所有群都先 maxPages=1（threadCount/preview
+    //      估值够用），等 onFollowedKeysStoreDidUpdate 触发时再走 coldStartCatchupIfNeeded
+    //      对那些有已关注子区的群补一次 maxPages=10 完整分页。
+    // 不再像之前那样在 store 未加载时给所有群无脑发 10 页 —— 大账户冷启 N×10 网络放大。
     NSSet<NSString*> *groupsWithFollowedThreads = [self groupNosWithFollowedThreads];
     BOOL storeLoaded = [WKFollowedKeysStore shared].loaded;
+    if (storeLoaded) {
+        self.didColdStartFullPaging = YES; // 标记本次 fetch 已经拿到 followed 信息
+    }
 
     for (WKConversationWrapModel *model in groupModels) {
         NSString *groupNo = model.channel.channelId;
         dispatch_group_enter(group);
-        // listAllThreads: 内部按 pageSize=100 分页直到拿全。
         // 大群 followed=176 时 listThreads 单页只回 100，moreUnread 计算会偏小（实测
         // 92 vs 实际 832），所以「有已关注子区」的群必须 maxPages=10。
-        NSInteger maxPages = (storeLoaded && ![groupsWithFollowedThreads containsObject:groupNo]) ? 1 : 10;
+        NSInteger maxPages;
+        if (!storeLoaded) {
+            maxPages = 1; // 冷启 race：先 1 页，等 store 加载好后 catchup 补全
+        } else if ([groupsWithFollowedThreads containsObject:groupNo]) {
+            maxPages = 10;
+        } else {
+            maxPages = 1;
+        }
         [[WKThreadService shared] listAllThreads:groupNo maxPages:maxPages].then(^(NSArray<WKThreadModel*> *threads) {
             NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
             NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
@@ -653,6 +676,23 @@ static WKConversationListVM *_instance;
         [result addObject:[channelId substringToIndex:sep.location]];
     }
     return result;
+}
+
+/// 冷启动两阶段分页 catchup（PR review #7 warning）：
+/// 当 fetchThreadCountsForGroupsWithCompletion 在 store 未加载时跑过一遍
+/// （所有群都是 maxPages=1），等 store 加载完成后 VC 调本方法补一次：
+/// 仅对「现已知有已关注子区」的群发 maxPages=10 完整分页 listAllThreads，
+/// 把单页截断的 followed 子区 unread 补全。已经跑过 storeLoaded 分支
+/// (didColdStartFullPaging=YES) 时直接 no-op，保证只跑一次。
+- (void)coldStartCatchupIfNeeded {
+    if (self.didColdStartFullPaging) return;
+    if (![WKFollowedKeysStore shared].loaded) return;
+    self.didColdStartFullPaging = YES;
+    NSSet<NSString*> *groupsWithFollowedThreads = [self groupNosWithFollowedThreads];
+    if (groupsWithFollowedThreads.count == 0) return;
+    WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] coldStartCatchup: %lu groups with followed threads need full paging",
+                        (unsigned long)groupsWithFollowedThreads.count);
+    [self refreshThreadCountForGroups:groupsWithFollowedThreads];
 }
 
 /// 刷新指定群组的子区数量（批量请求，统一刷新）
@@ -1537,26 +1577,27 @@ static WKConversationListVM *_instance;
     return total;
 }
 
-/// 关注 tab section unread 用：只算"已关注"的子区未读，避免父群已关注就把所有缓存
-/// 子区未读都算进去（spec 子区独立关注）。store 未加载时为 0，与渲染口径一致。
+/// 关注 tab section unread 用：只算"已关注 + 未静音"的子区未读，与 tab badge
+/// (getFollowUnreadCount) / +N 角标 (getThreadIndicatorForGroup) 同源 cachedTopicsByGroup,
+/// 让三个 badge 数字一致（PR review #6 warning）。
+///
+/// 之前走 threadWrapModels（parent.threadPreviews 派生，跳 placeholder）会把 dormant
+/// 但 API 端有 unread 的已关注子区漏算 —— 用户视角：tab badge 和 +N 显示 5，
+/// section header 折叠后却显示 2。
+///
+/// 「topicsByGroup 含归档幽灵」的隐患由 PR review #1 的 mergeThreadConvs 剪枝单独跟进，
+/// 与本对齐独立。
 -(NSInteger) followedThreadUnreadForGroup:(NSString *)groupNo
                             topicsByGroup:(NSDictionary<NSString*, NSArray<WKConversation*>*>*)topicsByGroup {
     WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
     if (!store.loaded) return 0;
+    NSArray<WKConversation*> *topics = topicsByGroup[groupNo];
+    if (topics.count == 0) return 0;
     NSInteger total = 0;
-    // 走 threadWrapModels（与 cell 渲染源 / getRecentUnreadCount 同口径，按 parent.threadPreviews
-    // 即 listThreads 真实活跃集合），不再走 topicsByGroup（SDK 全量 cache，含归档 / 不再返回的
-    // 幽灵 thread）。否则用户曾关注但已归档的 thread 仍会被 SDK cache 持有 → 这条路径
-    // 把它们算入 section unread，与 cell 实际显示的子区集合不一致（cell 按 threadWrapModels
-    // 渲染，看不到这些 thread）。topicsByGroup 参数保留兼容签名，仅供 cell 子区指示点等
-    // "群下面是否有任何子区动静"语义复用。
-    NSString *prefix = [NSString stringWithFormat:@"%@____", groupNo];
-    for (WKConversationWrapModel *thread in self.threadWrapModels) {
-        if (![thread.channel.channelId hasPrefix:prefix]) continue;
-        if (thread.lastMessage == nil) continue; // 跳过 placeholder（与 getRecentUnreadCount 同款）
-        if ([self isChannelMuted:thread]) continue;
-        if (![store isFollowedWithType:WKFollowTargetTypeThread targetId:thread.channel.channelId]) continue;
-        total += thread.unreadCount;
+    for (WKConversation *conv in topics) {
+        if ([self isConversationMuted:conv]) continue;
+        if (![store isFollowedWithType:WKFollowTargetTypeThread targetId:conv.channel.channelId]) continue;
+        total += conv.unreadCount;
     }
     return total;
 }

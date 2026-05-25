@@ -285,6 +285,14 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 保证最终一致。返回新加入的条目数（便于决策是否触发 UI reload）。
 -(NSInteger) seedFollowedThreadsIntoTopicsCache;
 
+/// 冷启动两阶段分页 catchup（PR review #7 warning）：当 fetchThreadCountsForGroups
+/// 第一次跑时若 store 还没加载，所有群都按 maxPages=1 拉（避免 N×10 网络放大）；
+/// 等 store 加载完成后 VC 在 onFollowedKeysStoreDidUpdate 调本方法，对「现已知
+/// 有已关注子区」的群发 maxPages=10 完整分页 listAllThreads 补 unread。
+/// 内部带 didColdStartFullPaging 闸门，保证整个 VM 生命周期内只跑一次（subsequent
+/// follow 切换不会再次触发，避免在 toggle 高频通知里重复拉网络）。
+- (void)coldStartCatchupIfNeeded;
+
 /// buildGroupDisplayList 计算出的 tab 级 @提醒状态，分关注 / 最近两个集合：
 ///   - Follow:  与 getFollowUnreadCount 同口径（DM/Channel/Thread 走 WKFollowedKeysStore）
 ///   - Recent:  与 getRecentUnreadCount 同口径（DM 全部；Group 非 3 天 stale；Thread 走
