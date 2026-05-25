@@ -57,8 +57,16 @@ static const void *kMenuItemsKey = &kMenuItemsKey;
     UIWindow *window = [self hostWindow];
     if (!window) return;
 
-    // 切到新菜单前先关掉旧的（避免叠层）
-    [self dismiss];
+    // 切到新菜单前先同步关掉所有旧的 overlay。不再用动画 dismiss —— 那 150ms 内
+    // viewWithTag:kOverlayTag 会查到旧 overlay（新 overlay 也已加进 window），
+    // onItemTapped: / dismiss 通过 tag 反查就可能命中旧那一层 → action 错位或
+    // dismiss 错层（PR review #11 warning）。这里直接 stop animations + remove,
+    // 保证 window 里至多只有一个 kOverlayTag 视图。
+    UIView *stale;
+    while ((stale = [window viewWithTag:kOverlayTag])) {
+        [stale.layer removeAllAnimations];
+        [stale removeFromSuperview];
+    }
 
     UIView *overlay = [[UIView alloc] initWithFrame:window.bounds];
     overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.15];
@@ -134,11 +142,21 @@ static const void *kMenuItemsKey = &kMenuItemsKey;
 
 + (void)onItemTapped:(UIButton *)btn {
     NSInteger index = btn.tag - kMenuItemTagBase;
-    UIWindow *window = [self hostWindow];
-    UIView *overlay = [window viewWithTag:kOverlayTag];
-    NSArray *items = objc_getAssociatedObject(overlay, kMenuItemsKey);
+    // 按钮在 menuContainer 里，menuContainer 在 overlay 里 —— 沿 superview 链
+    // 反查到 overlay，避免依赖 viewWithTag: 在多层 overlay race 下命中错误层
+    // （PR review #11 warning）。新 overlay 已强制把旧的同步移走，这里同样走
+    // scoped 查找作为第二道保险。
+    UIView *overlay = btn.superview;
+    while (overlay && overlay.tag != kOverlayTag) overlay = overlay.superview;
+    NSArray *items = overlay ? objc_getAssociatedObject(overlay, kMenuItemsKey) : nil;
 
-    [self dismiss];
+    // 移除自身这一层 overlay；不走 window viewWithTag 全局 dismiss，避免误关其他
+    [overlay.layer removeAllAnimations];
+    [UIView animateWithDuration:0.15 animations:^{
+        overlay.alpha = 0;
+    } completion:^(BOOL finished) {
+        [overlay removeFromSuperview];
+    }];
 
     if (index >= 0 && index < (NSInteger)items.count) {
         void(^action)(void) = items[index][@"action"];

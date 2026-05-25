@@ -572,6 +572,9 @@ static WKConversationListVM *_instance;
     // getConversations: 在冷启 DB 也是空，唯一的子区 unread 真值就在 listThreads 回的
     // WKThreadModel.unreadCount 里。
     NSMutableDictionary<NSString*, NSArray<WKConversation*>*> *threadConvsAccum = [NSMutableDictionary dictionary];
+    // 与 threadConvsAccum 同步的"该群响应是否完整（未被 maxPages 截断）"标记。
+    // mergeThreadConvs 据此决定要不要 prune cache 里 listAllThreads 没回的 channelId。
+    NSMutableSet<NSString*> *completeGroups = [NSMutableSet set];
 
     // PR review #4/#7 warning：listAllThreads(maxPages:10) 对 N 个群并发，冷启动可
     // 多到 N*10 个 listThreads 请求。maxPages:10 只对「有已关注子区」的群有意义 ——
@@ -603,7 +606,9 @@ static WKConversationListVM *_instance;
         } else {
             maxPages = 1;
         }
-        [[WKThreadService shared] listAllThreads:groupNo maxPages:maxPages].then(^(NSArray<WKThreadModel*> *threads) {
+        [[WKThreadService shared] listAllThreadsWithCompleteness:groupNo maxPages:maxPages].then(^(NSDictionary *result) {
+            NSArray<WKThreadModel*> *threads = result[@"threads"] ?: @[];
+            BOOL complete = [result[@"complete"] boolValue];
             NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
             NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
             NSMutableArray *recentPreviews = [NSMutableArray array];
@@ -628,6 +633,7 @@ static WKConversationListVM *_instance;
             NSArray<WKConversation*> *convs = [self materializeThreadConvs:sorted];
             @synchronized (threadConvsAccum) {
                 threadConvsAccum[groupNo] = convs;
+                if (complete) [completeGroups addObject:groupNo];
             }
             dispatch_group_leave(group);
         }).catch(^(NSError *error) {
@@ -635,7 +641,7 @@ static WKConversationListVM *_instance;
         });
     }
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-        [self mergeThreadConvs:threadConvsAccum];
+        [self mergeThreadConvs:threadConvsAccum prunableGroups:completeGroups];
         // 全量 fetch 完成后也同步 threadWrapModels — 否则 cold boot 走的是这条路径
         // （loadConversationList → fetchThreadCountsForGroups → 这里），子区永远进不
         // 了 threadWrapModels，最近 tab 一片空白
@@ -706,6 +712,7 @@ static WKConversationListVM *_instance;
 
     dispatch_group_t batchGroup = dispatch_group_create();
     NSMutableDictionary<NSString*, NSArray<WKConversation*>*> *threadConvsAccum = [NSMutableDictionary dictionary];
+    NSMutableSet<NSString*> *completeGroups = [NSMutableSet set];
 
     // 与 fetchThreadCountsForGroupsWithCompletion 同款 maxPages 收敛：无已关注子区
     // 的群单页够用（PR review #4 warning）。
@@ -716,7 +723,9 @@ static WKConversationListVM *_instance;
         NSString *groupNo = model.channel.channelId;
         dispatch_group_enter(batchGroup);
         NSInteger maxPages = (storeLoaded && ![groupsWithFollowedThreads containsObject:groupNo]) ? 1 : 10;
-        [[WKThreadService shared] listAllThreads:groupNo maxPages:maxPages].then(^(NSArray<WKThreadModel*> *threads) {
+        [[WKThreadService shared] listAllThreadsWithCompleteness:groupNo maxPages:maxPages].then(^(NSDictionary *result) {
+            NSArray<WKThreadModel*> *threads = result[@"threads"] ?: @[];
+            BOOL complete = [result[@"complete"] boolValue];
             NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
             NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
             NSMutableArray *recentPreviews = [NSMutableArray array];
@@ -744,6 +753,7 @@ static WKConversationListVM *_instance;
             NSArray<WKConversation*> *convs = [self materializeThreadConvs:sorted];
             @synchronized (threadConvsAccum) {
                 threadConvsAccum[groupNo] = convs;
+                if (complete) [completeGroups addObject:groupNo];
             }
             dispatch_group_leave(batchGroup);
         }).catch(^(NSError *error) {
@@ -751,7 +761,7 @@ static WKConversationListVM *_instance;
         });
     }
     dispatch_group_notify(batchGroup, dispatch_get_main_queue(), ^{
-        [self mergeThreadConvs:threadConvsAccum];
+        [self mergeThreadConvs:threadConvsAccum prunableGroups:completeGroups];
         // listThreads 拿到的子区也同步进 threadWrapModels —— 不然最近 tab 冷启动时
         // SDK getConversationList 没返回子区，threadWrapModels 是空的，列表里看不到
         // 任何子区行；用户必须发条子区消息触发 onConversationUpdate 才出来。
@@ -1820,17 +1830,52 @@ static WKConversationListVM *_instance;
 /// 主线程合并入参 group → [WKConversation] 字典到 cachedTopicsByGroup。
 /// 去重按 channelId：已有的若有 lastMessage（真实 conv）就不被合成 conv 覆盖；
 /// 双方都是合成 conv 时刷新 unreadCount。
+///
+/// PR review #10 critical：原版只 add/replace，不 prune —— 服务端归档/删除的子区
+/// 永远留在 cache 里继续给 Follow tab badge / +N 角标算未读。本版加 prunableGroups
+/// 参数：仅对那些 listAllThreads 响应**完整未截断**的 group，按响应里的 channelId set
+/// reconcile cache（cache 里有但响应没回的 → 移除）。响应被 maxPages 截断时（>1000
+/// 子区大群）这个群不在 prunableGroups，保持原 add/replace 语义，避免误删
+/// page maxPages+ 上的真实数据。
 - (void)mergeThreadConvs:(NSDictionary<NSString*, NSArray<WKConversation*>*> *)convsByGroup {
+    [self mergeThreadConvs:convsByGroup prunableGroups:nil];
+}
+
+- (void)mergeThreadConvs:(NSDictionary<NSString*, NSArray<WKConversation*>*> *)convsByGroup
+          prunableGroups:(nullable NSSet<NSString*> *)prunableGroups {
     if (convsByGroup.count == 0) return;
     NSMutableDictionary<NSString*, NSMutableArray<WKConversation*>*> *topicsMut = [NSMutableDictionary dictionary];
     [self.cachedTopicsByGroup enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSArray<WKConversation*> *v, BOOL *stop) {
         topicsMut[k] = [v mutableCopy];
     }];
     NSInteger addedTotal = 0;
+    NSInteger prunedTotal = 0;
     for (NSString *groupNo in convsByGroup) {
         NSArray<WKConversation*> *convs = convsByGroup[groupNo];
-        if (convs.count == 0) continue;
         NSMutableArray<WKConversation*> *arr = topicsMut[groupNo];
+        BOOL canPrune = [prunableGroups containsObject:groupNo];
+
+        // 完整响应：prune cache 里没在新响应里的 channelId（归档/删除的子区）。
+        // 按 channelId set 做 reconcile，仍存在的旧条目（含真实 lastMessage）保持引用,
+        // 防止丢掉运行时 onConversationUpdate 累积的状态。
+        if (canPrune && arr.count > 0) {
+            NSMutableSet<NSString*> *liveIds = [NSMutableSet setWithCapacity:convs.count];
+            for (WKConversation *c in convs) {
+                if (c.channel.channelId.length > 0) [liveIds addObject:c.channel.channelId];
+            }
+            NSMutableArray<WKConversation*> *kept = [NSMutableArray arrayWithCapacity:arr.count];
+            for (WKConversation *c in arr) {
+                if ([liveIds containsObject:c.channel.channelId]) {
+                    [kept addObject:c];
+                } else {
+                    prunedTotal++;
+                }
+            }
+            arr = kept;
+            topicsMut[groupNo] = arr;
+        }
+
+        if (convs.count == 0) continue; // 空响应（无活跃子区）：上面已 prune 完，不再 add
         if (!arr) { arr = [NSMutableArray array]; topicsMut[groupNo] = arr; }
         for (WKConversation *newConv in convs) {
             NSString *cid = newConv.channel.channelId;
@@ -1858,8 +1903,9 @@ static WKConversationListVM *_instance;
         frozen[k] = [v copy];
     }];
     self.cachedTopicsByGroup = frozen;
-    WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] mergeThreadConvs: groupsTouched=%lu addedTotal=%ld cacheGroups=%lu",
-          (unsigned long)convsByGroup.count, (long)addedTotal, (unsigned long)self.cachedTopicsByGroup.count);
+    WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] mergeThreadConvs: groupsTouched=%lu prunable=%lu added=%ld pruned=%ld cacheGroups=%lu",
+          (unsigned long)convsByGroup.count, (unsigned long)prunableGroups.count,
+          (long)addedTotal, (long)prunedTotal, (unsigned long)self.cachedTopicsByGroup.count);
 }
 
 -(NSArray<WKConversationDisplayItem *> *) buildGroupDisplayList {

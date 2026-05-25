@@ -42,6 +42,13 @@ NS_ASSUME_NONNULL_BEGIN
 /// Promise resolves with NSArray<WKThreadModel *>（合并所有页）。
 - (AnyPromise *)listAllThreads:(NSString *)groupNo maxPages:(NSInteger)maxPages;
 
+/// 同 listAllThreads:maxPages: 但返回 (threads, isComplete) 让调用方判断响应是否
+/// 被 maxPages 截断。groupNo 上有 >maxPages*100 条子区时 isComplete=NO，调用方
+/// 不应基于响应剪枝缓存（否则误删 page maxPages+ 上的真实数据）。
+/// Promise resolves with NSDictionary:
+///   @{@"threads": NSArray<WKThreadModel *>, @"complete": @YES/@NO}
+- (AnyPromise *)listAllThreadsWithCompleteness:(NSString *)groupNo maxPages:(NSInteger)maxPages;
+
 /// 获取子区详情
 /// @param groupNo 父群编号
 /// @param shortId 子区 shortId
