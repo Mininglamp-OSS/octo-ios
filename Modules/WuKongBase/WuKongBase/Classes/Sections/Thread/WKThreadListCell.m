@@ -133,16 +133,12 @@
         ? [WKThreadListCell cachedStarFilledIcon]
         : [WKThreadListCell cachedStarOutlineIcon];
 
-    // 角色标识：管理员（creator）/ 已加入（非 creator 的成员）。和长按菜单里那一组
-    // 「归档/删除/退出」的可见性条件完全对齐 —— 用户一眼就知道这条子区能做什么操作。
-    // 同 followIcon 套路 cache，不在 refresh 路径上跑 Core Graphics。
+    // 角色标识：仅创建者显示「管理员」头像。默认情况下用户都是已加入状态，
+    // 「已加入」无新信息量，不再单独画图标避免视觉噪音。
     NSString *loginUid = [WKSDK shared].options.connectInfo.uid ?: @"";
     BOOL isCreator = (loginUid.length > 0 && [model.creatorUid isEqualToString:loginUid]);
     if (isCreator) {
         self.roleIcon.image = [WKThreadListCell cachedAdminIcon];
-        self.roleIcon.hidden = NO;
-    } else if (model.isMember) {
-        self.roleIcon.image = [WKThreadListCell cachedJoinedIcon];
         self.roleIcon.hidden = NO;
     } else {
         self.roleIcon.image = nil;
@@ -176,20 +172,10 @@
     static UIImage *img;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        // 主题色填充的盾形 + 内嵌「✓」线条 —— 与平台「管理员/创建者」语义一致
+        // 头肩人像剪影 —— 跟群主/管理员标识的常用形式一致，比之前的盾形更直观。
+        // 用主题色填充。
         UIColor *adminColor = [WKApp shared].config.themeColor ?: [UIColor systemBlueColor];
-        img = [WKThreadListCell shieldIcon:CGSizeMake(14, 14) color:adminColor];
-    });
-    return img;
-}
-
-+ (UIImage *)cachedJoinedIcon {
-    static UIImage *img;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        // 绿色描边圆里 ✓ —— iOS 系统/微信通讯录都是用类似形状表达「已加入/已添加」
-        UIColor *joinedColor = [UIColor colorWithRed:0.30 green:0.69 blue:0.31 alpha:1.0]; // #4CAF50
-        img = [WKThreadListCell checkmarkCircleIcon:CGSizeMake(14, 14) color:joinedColor];
+        img = [WKThreadListCell personIcon:CGSizeMake(14, 14) color:adminColor];
     });
     return img;
 }
@@ -375,60 +361,34 @@
     return img;
 }
 
-/// 盾形 + 中心 ✓ — 管理员/创建者标识。整体填充主题色，内嵌白色 ✓ 提示「掌控
-/// 权」语义。视觉上比五角星更厚重，避免跟收藏星抢眼。
-+ (UIImage *)shieldIcon:(CGSize)s color:(UIColor *)color {
+/// 头肩人像剪影 — 管理员/群主标识的常用视觉。整体主题色填充：上方圆头、下方
+/// 半圆肩膀，14pt 小尺寸下足够辨识。
++ (UIImage *)personIcon:(CGSize)s color:(UIColor *)color {
     UIGraphicsBeginImageContextWithOptions(s, NO, 0);
     CGContextRef ctx = UIGraphicsGetCurrentContext();
     CGFloat w = s.width, h = s.height;
-    // 盾形：顶部平、底部尖；用贝塞尔近似
-    UIBezierPath *shield = [UIBezierPath bezierPath];
-    [shield moveToPoint:CGPointMake(w * 0.5, h * 0.06)];
-    [shield addLineToPoint:CGPointMake(w * 0.92, h * 0.22)];
-    [shield addLineToPoint:CGPointMake(w * 0.92, h * 0.56)];
-    [shield addCurveToPoint:CGPointMake(w * 0.5, h * 0.94)
-              controlPoint1:CGPointMake(w * 0.92, h * 0.78)
-              controlPoint2:CGPointMake(w * 0.72, h * 0.92)];
-    [shield addCurveToPoint:CGPointMake(w * 0.08, h * 0.56)
-              controlPoint1:CGPointMake(w * 0.28, h * 0.92)
-              controlPoint2:CGPointMake(w * 0.08, h * 0.78)];
-    [shield addLineToPoint:CGPointMake(w * 0.08, h * 0.22)];
-    [shield closePath];
     [color setFill];
-    [shield fill];
-    // 中间白色 ✓
-    [[UIColor whiteColor] setStroke];
-    CGContextSetLineWidth(ctx, 1.4);
-    CGContextSetLineCap(ctx, kCGLineCapRound);
-    CGContextSetLineJoin(ctx, kCGLineJoinRound);
-    CGContextMoveToPoint(ctx, w * 0.30, h * 0.50);
-    CGContextAddLineToPoint(ctx, w * 0.46, h * 0.66);
-    CGContextAddLineToPoint(ctx, w * 0.72, h * 0.38);
-    CGContextStrokePath(ctx);
-    UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return img;
-}
-
-/// 描边圆 + 中心 ✓ — 「已加入」标识。绿色描边、白底，与微信通讯录「已添加」
-/// 等场景的常用视觉一致。
-+ (UIImage *)checkmarkCircleIcon:(CGSize)s color:(UIColor *)color {
-    UIGraphicsBeginImageContextWithOptions(s, NO, 0);
-    CGContextRef ctx = UIGraphicsGetCurrentContext();
-    CGFloat w = s.width, h = s.height;
-    // 圆环描边
-    [color setStroke];
-    CGContextSetLineWidth(ctx, 1.2);
-    CGRect circleRect = CGRectInset(CGRectMake(0, 0, w, h), 1.0, 1.0);
-    CGContextStrokeEllipseInRect(ctx, circleRect);
-    // 中心 ✓
-    CGContextSetLineCap(ctx, kCGLineCapRound);
-    CGContextSetLineJoin(ctx, kCGLineJoinRound);
-    CGContextSetLineWidth(ctx, 1.4);
-    CGContextMoveToPoint(ctx, w * 0.28, h * 0.52);
-    CGContextAddLineToPoint(ctx, w * 0.44, h * 0.68);
-    CGContextAddLineToPoint(ctx, w * 0.74, h * 0.36);
-    CGContextStrokePath(ctx);
+    // 头：上方圆
+    CGFloat headD = w * 0.46;
+    CGRect headRect = CGRectMake((w - headD) / 2.0, h * 0.08, headD, headD);
+    CGContextFillEllipseInRect(ctx, headRect);
+    // 肩膀：底部半圆 / 钟形 —— 用贝塞尔近似
+    UIBezierPath *body = [UIBezierPath bezierPath];
+    CGFloat bodyTop = h * 0.62;
+    CGFloat bodyBottom = h * 0.96;
+    CGFloat bodyHalfW = w * 0.42;
+    CGFloat cx = w / 2.0;
+    [body moveToPoint:CGPointMake(cx - bodyHalfW, bodyBottom)];
+    // 左侧上扬到肩颈
+    [body addCurveToPoint:CGPointMake(cx, bodyTop)
+            controlPoint1:CGPointMake(cx - bodyHalfW, bodyTop + (bodyBottom - bodyTop) * 0.2)
+            controlPoint2:CGPointMake(cx - bodyHalfW * 0.55, bodyTop)];
+    // 右侧对称下落
+    [body addCurveToPoint:CGPointMake(cx + bodyHalfW, bodyBottom)
+            controlPoint1:CGPointMake(cx + bodyHalfW * 0.55, bodyTop)
+            controlPoint2:CGPointMake(cx + bodyHalfW, bodyTop + (bodyBottom - bodyTop) * 0.2)];
+    [body closePath];
+    [body fill];
     UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
     return img;

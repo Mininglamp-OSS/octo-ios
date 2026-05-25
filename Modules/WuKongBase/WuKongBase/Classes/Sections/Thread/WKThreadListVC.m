@@ -362,27 +362,6 @@ static const NSInteger kPageSize = 15;
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-- (void)confirmLeaveThread:(WKThreadModel *)thread {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"退出子区")
-                                                                  message:[NSString stringWithFormat:@"%@「%@」?", LLang(@"确定退出子区"), thread.name]
-                                                           preferredStyle:UIAlertControllerStyleAlert];
-    __weak typeof(self) weakSelf = self;
-    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"退出") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        [weakSelf leaveThread:thread];
-    }]];
-    [self presentViewController:alert animated:YES completion:nil];
-}
-
-- (void)leaveThread:(WKThreadModel *)thread {
-    __weak typeof(self) weakSelf = self;
-    [[WKThreadService shared] leaveThread:thread.shortId].then(^(id result) {
-        [weakSelf loadThreads];
-    }).catch(^(NSError *error) {
-        [weakSelf.view showMsg:error.domain];
-    });
-}
-
 - (void)archiveThread:(WKThreadModel *)thread {
     __weak typeof(self) weakSelf = self;
     [[WKThreadService shared] archiveThread:self.groupNo shortId:thread.shortId].then(^(id result) {
@@ -520,6 +499,8 @@ static const NSInteger kPageSize = 15;
 
     // 归档 / 取消归档 / 删除（仅创建者）：以前在左滑菜单，现在统一到长按菜单避免
     // 跟列表上下滚动 + cell tap 抢手势。破坏性操作（归档/删除）必须先二次确认。
+    // 普通成员的「退出子区」入口已下线 —— 产品语义上用户在子区列表里默认是
+    // 加入态，没有显式退出操作的需求。
     if (isCreator) {
         if (thread.status == WKThreadStatusActive) {
             [items addObject:@{
@@ -536,12 +517,6 @@ static const NSInteger kPageSize = 15;
             @"title": LLang(@"删除子区"),
             @"isDestructive": @YES,
             @"action": ^{ [weakSelf confirmDeleteThread:thread]; }
-        }];
-    } else if (thread.isMember) {
-        // 普通成员：退出子区
-        [items addObject:@{
-            @"title": LLang(@"退出子区"),
-            @"action": ^{ [weakSelf confirmLeaveThread:thread]; }
         }];
     }
     [WKFloatingMenu showItems:items atPoint:pointInWindow];
