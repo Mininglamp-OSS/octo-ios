@@ -564,13 +564,23 @@ static WKConversationListVM *_instance;
     // WKThreadModel.unreadCount 里。
     NSMutableDictionary<NSString*, NSArray<WKConversation*>*> *threadConvsAccum = [NSMutableDictionary dictionary];
 
+    // PR review #4 warning：listAllThreads(maxPages:10) 对 N 个群并发，冷启动可
+    // 多到 N*10 个 listThreads 请求。但 maxPages:10 只对「有已关注子区」的群有意义
+    // —— Follow tab 的「+N 子区」/ Follow tab badge 都按 followedKeys 过滤，无任何
+    // 已关注子区的群即便分页拉到 1000 条也没有 UI 消费方。先一次性算出哪些群有
+    // 已关注子区，剩下的降到 1 页（够算 threadCount/threadPreviews 估值即可），
+    // store 未加载时一律保守取 10 页（与之前行为完全一致，不冒新风险）。
+    NSSet<NSString*> *groupsWithFollowedThreads = [self groupNosWithFollowedThreads];
+    BOOL storeLoaded = [WKFollowedKeysStore shared].loaded;
+
     for (WKConversationWrapModel *model in groupModels) {
         NSString *groupNo = model.channel.channelId;
         dispatch_group_enter(group);
-        // listAllThreads: 内部按 pageSize=100 分页直到拿全（最多 10 页 = 1000 条）。
+        // listAllThreads: 内部按 pageSize=100 分页直到拿全。
         // 大群 followed=176 时 listThreads 单页只回 100，moreUnread 计算会偏小（实测
-        // 92 vs 实际 832）。
-        [[WKThreadService shared] listAllThreads:groupNo maxPages:10].then(^(NSArray<WKThreadModel*> *threads) {
+        // 92 vs 实际 832），所以「有已关注子区」的群必须 maxPages=10。
+        NSInteger maxPages = (storeLoaded && ![groupsWithFollowedThreads containsObject:groupNo]) ? 1 : 10;
+        [[WKThreadService shared] listAllThreads:groupNo maxPages:maxPages].then(^(NSArray<WKThreadModel*> *threads) {
             NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
             NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
             NSMutableArray *recentPreviews = [NSMutableArray array];
@@ -628,6 +638,23 @@ static WKConversationListVM *_instance;
     return count;
 }
 
+/// 把 followedKeys 中所有 thread 类型的 key 解析出来，按 groupNo 聚合成 set。
+/// 给 fetchThreadCountsForGroupsWithCompletion / refreshThreadCountForGroups 决定
+/// 每个群的 maxPages：有已关注子区的群 → 全分页（10），无的 → 1 页就够。
+/// store 未加载（key 列表空集）时返回空集合，caller 负责按"未知"保守取 10 页。
+- (NSSet<NSString*>*)groupNosWithFollowedThreads {
+    NSMutableSet<NSString*> *result = [NSMutableSet set];
+    NSString *threadPrefix = [NSString stringWithFormat:@"%ld::", (long)WKFollowTargetTypeThread];
+    for (NSString *k in [WKFollowedKeysStore shared].followedKeys) {
+        if (![k hasPrefix:threadPrefix]) continue;
+        NSString *channelId = [k substringFromIndex:threadPrefix.length]; // groupNo____shortId
+        NSRange sep = [channelId rangeOfString:@"____"];
+        if (sep.location == NSNotFound) continue;
+        [result addObject:[channelId substringToIndex:sep.location]];
+    }
+    return result;
+}
+
 /// 刷新指定群组的子区数量（批量请求，统一刷新）
 -(void) refreshThreadCountForGroups:(NSSet<NSString*>*)groupNos {
     NSMutableArray<WKConversationWrapModel *> *models = [NSMutableArray array];
@@ -640,10 +667,16 @@ static WKConversationListVM *_instance;
     dispatch_group_t batchGroup = dispatch_group_create();
     NSMutableDictionary<NSString*, NSArray<WKConversation*>*> *threadConvsAccum = [NSMutableDictionary dictionary];
 
+    // 与 fetchThreadCountsForGroupsWithCompletion 同款 maxPages 收敛：无已关注子区
+    // 的群单页够用（PR review #4 warning）。
+    NSSet<NSString*> *groupsWithFollowedThreads = [self groupNosWithFollowedThreads];
+    BOOL storeLoaded = [WKFollowedKeysStore shared].loaded;
+
     for (WKConversationWrapModel *model in models) {
         NSString *groupNo = model.channel.channelId;
         dispatch_group_enter(batchGroup);
-        [[WKThreadService shared] listAllThreads:groupNo maxPages:10].then(^(NSArray<WKThreadModel*> *threads) {
+        NSInteger maxPages = (storeLoaded && ![groupsWithFollowedThreads containsObject:groupNo]) ? 1 : 10;
+        [[WKThreadService shared] listAllThreads:groupNo maxPages:maxPages].then(^(NSArray<WKThreadModel*> *threads) {
             NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
             NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
             NSMutableArray *recentPreviews = [NSMutableArray array];

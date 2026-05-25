@@ -232,13 +232,35 @@ static const NSInteger kPageSize = 15;
     __weak typeof(self) weakSelf = self;
     [[WKThreadService shared] createThread:self.groupNo name:name sourceMessageId:sourceMessageId sourceMessagePayload:nil].then(^(WKThreadModel *thread) {
         [[WKThreadService shared] joinThread:thread.shortId].then(^(id result) {
+            // 写回本地 model：viewWillAppear 不再 loadThreads（避免列表跳回顶部 +
+            // 丢分页），从详情返回时只 reloadData，必须在跳详情前把新建的 thread
+            // append 到 allLoadedThreads，否则用户回到这一页看不到刚创建的子区
+            // （PR review #4 critical）。
+            thread.isMember = YES;
+            [weakSelf appendCreatedThreadIfAbsent:thread];
             [weakSelf openThread:thread];
         }).catch(^(NSError *error) {
+            // join 失败也插入：thread 创建已成功，列表里得有它；isMember 保持 NO
+            // 让用户从详情回来时还能再点一次加入
+            [weakSelf appendCreatedThreadIfAbsent:thread];
             [weakSelf openThread:thread];
         });
     }).catch(^(NSError *error) {
         [weakSelf.view showMsg:error.domain];
     });
+}
+
+/// 把新建的 thread 插入 allLoadedThreads 顶部并触发刷新；shortId 已存在则跳过
+/// （下拉刷新已经把它拉回来的罕见 race 下避免重复行）。
+- (void)appendCreatedThreadIfAbsent:(WKThreadModel *)thread {
+    if (!thread || thread.shortId.length == 0) return;
+    for (WKThreadModel *t in self.allLoadedThreads) {
+        if ([t.shortId isEqualToString:thread.shortId]) return;
+    }
+    [self.allLoadedThreads insertObject:thread atIndex:0];
+    self.totalCount += 1;
+    [self filterAndReload];
+    [self updateFooterVisibility];
 }
 
 - (void)openThread:(WKThreadModel *)thread {
@@ -289,6 +311,11 @@ static const NSInteger kPageSize = 15;
     __weak typeof(self) weakSelf = self;
     if (!thread.isMember) {
         [[WKThreadService shared] joinThread:thread.shortId].then(^(id result) {
+            // 写回本地 model：viewWillAppear 不再 loadThreads（避免列表跳走），
+            // 从详情返回时只 reloadData，必须在跳详情前把 isMember 翻成 YES，
+            // 否则用户回到这一页 cell 仍显示"加入"状态直到下拉刷新
+            // （PR review #4 critical）。
+            thread.isMember = YES;
             [weakSelf openThread:thread];
         }).catch(^(NSError *error) {
             [weakSelf openThread:thread];
