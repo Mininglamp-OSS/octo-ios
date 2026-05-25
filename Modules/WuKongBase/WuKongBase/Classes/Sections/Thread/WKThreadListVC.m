@@ -560,12 +560,18 @@ static const NSInteger kPageSize = 15;
 
 /// 父群已关注 — 直接关注子区，与原实现一致。
 - (void)performFollowThreadDirect:(WKThreadModel *)thread {
+    NSString *parentGroupNo = self.groupNo;
     __weak typeof(self) weakSelf = self;
     [[WKFollowService shared] followThread:thread.channelId].then(^(id _) {
         // followedKeys 是异步 reload，必须等回包才 reloadData，否则 cell 上的星标
         // 还是旧状态（与 unfollowConversationModel: 同款 chain）
         return [[WKFollowedKeysStore shared] reload];
     }).then(^(id _) {
+        // PR review #8 critical：父群之前可能没有任何已关注子区，cachedTopicsByGroup
+        // 在冷启时只跑了 maxPages=1，新关注的子区若落在 page 2+ 上 cache 漏掉它,
+        // Follow tab badge / +N 角标会算不到这一条 unread。store 已 reload，闸门自动
+        // 翻 maxPages=10，refreshThreadCountForGroups 重新拉父群补全 cache。
+        [[WKConversationListVM shared] refreshThreadCountForGroups:[NSSet setWithObject:parentGroupNo]];
         [weakSelf.view showMsg:LLang(@"已添加到关注")];
         [weakSelf.tableView reloadData];
         return (id)nil;
@@ -631,9 +637,16 @@ static const NSInteger kPageSize = 15;
         return [[WKCategoryService shared] moveGroup:parentGroupNo toCategoryId:categoryId];
     }).then(^id(id _) {
         return [[WKFollowService shared] followThread:threadChannelId];
+    }).then(^id(id _) {
+        // PR review #8 critical：必须等 store.reload 回包再 reloadData，否则 cell 上
+        // 的星标还是旧 unfollowed 状态（与 performFollowThreadDirect 同款 chain）。
+        return [[WKFollowedKeysStore shared] reload];
     });
     chain.then(^(id _) {
-        [[WKFollowedKeysStore shared] reload];
+        // PR review #8 critical：父群之前没关注，cachedTopicsByGroup 里也没有它的
+        // 任何条目；刚刚 follow 的子区必须主动 fetch 进 cache，否则 Follow tab
+        // badge / +N 角标都看不到这条 unread。store 已 loaded → 闸门 maxPages=10。
+        [[WKConversationListVM shared] refreshThreadCountForGroups:[NSSet setWithObject:parentGroupNo]];
         // 重新拉一次 categories，让 buildGroupDisplayList 立即看到父群在新分组下
         [[WKConversationListVM shared] loadCategoriesWithCompletion:nil];
         NSString *toast = categoryName.length > 0

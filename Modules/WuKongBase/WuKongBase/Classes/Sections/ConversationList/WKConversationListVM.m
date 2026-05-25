@@ -646,9 +646,9 @@ static WKConversationListVM *_instance;
 
 /// 拉取所有群组的子区数量，完成后统一通知 VC 刷新（不再逐个发通知）
 -(void) fetchThreadCountsForGroups {
-    NSLog(@"[ThreadDebug] fetchThreadCountsForGroups START, groupCount=%ld", (long)[self groupModelCount]);
+    WK_THREAD_BADGE_DBG(@"[ThreadDebug] fetchThreadCountsForGroups START, groupCount=%ld", (long)[self groupModelCount]);
     [self fetchThreadCountsForGroupsWithCompletion:^{
-        NSLog(@"[ThreadDebug] fetchThreadCountsForGroups DONE, posting WKThreadCountBatchUpdated");
+        WK_THREAD_BADGE_DBG(@"[ThreadDebug] fetchThreadCountsForGroups DONE, posting WKThreadCountBatchUpdated");
         [[NSNotificationCenter defaultCenter] postNotificationName:@"WKThreadCountBatchUpdated" object:nil];
     }];
 }
