@@ -26,6 +26,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)lim_setImageWithURL:(NSURL *)url placeholderImage:(nullable UIImage*)placeholderImage options:(SDWebImageOptions)options context:(nullable SDWebImageContext*)context;
 
+- (void)lim_setImageWithURL:(NSURL *)url placeholderImage:(nullable UIImage*)placeholderImage options:(SDWebImageOptions)options context:(nullable SDWebImageContext*)context completed:(nullable SDExternalCompletionBlock)completed;
+
 @end
 
 NS_ASSUME_NONNULL_END

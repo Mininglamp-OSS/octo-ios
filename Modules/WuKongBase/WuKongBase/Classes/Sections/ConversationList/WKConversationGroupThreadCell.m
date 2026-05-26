@@ -15,6 +15,7 @@
 #import "WKApp.h"
 #import "WuKongBase.h"
 #import <SDWebImage/UIImageView+WebCache.h>
+#import <SDWebImage/SDImageCache.h>
 #import "WKConversationListVM.h"
 
 // [ThreadBadgeDbg] 子区 unread / +N 角标调试日志（PR #137 review 反馈）：
@@ -94,6 +95,7 @@
 @property (nonatomic, strong) UIButton *threadToggleBtn;
 
 @property (nonatomic, copy) NSString *lastAvatarChannelId; // 上一次 refreshAvatar 对应的 channelId，用于判断 cell 是否被复用到不同会话
+@property (nonatomic, copy) NSString *lastAppliedAvatarURL; // 上一次实际下发的 URL —— 复用判定用
 
 @end
 
@@ -586,14 +588,9 @@
 -(void) refreshAvatar:(WKConversationWrapModel*)model {
     UIImage *placeholder = [WKApp.shared loadImage:@"Common/Index/DefaultAvatar" moduleID:@"WuKongBase"];
     NSString *channelId = model.channel.channelId;
-    // 仅在 cell 被复用到不同会话时清回占位图，避免残留上一个会话的人脸；同会话刷新保留当前头像。
-    BOOL channelChanged = (channelId.length == 0) || ![channelId isEqualToString:self.lastAvatarChannelId];
-    if (channelChanged) {
-        self.avatarView.avatarImgView.image = placeholder;
-    }
-    self.lastAvatarChannelId = channelId;
+    // 先把本次要下发的 URL 算出来；下面的复用判定要拿它跟 lastAppliedAvatarURL 比对。
+    NSString *avatarURL = nil;
     if (model.channelInfo) {
-        NSString *avatarURL;
         if ([model.channelInfo.logo hasPrefix:@"http"]) {
             NSString *key = (model.channelInfo.avatarCacheKey.length > 0) ? model.channelInfo.avatarCacheKey : @"0";
             NSString *sep = [model.channelInfo.logo containsString:@"?"] ? @"&" : @"?";
@@ -601,11 +598,58 @@
         } else {
             avatarURL = [WKAvatarUtil getGroupAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
         }
-        // SDWebImageDelayPlaceholder：加载中不覆盖已有头像，仅在失败时落到占位图，避免返回会话列表刷新时的占位图闪烁
+    }
+    // 复用判定：sameURL || sameChannel → 保留旧 image 作占位；都不同 → 清回 placeholder
+    UIImage *cached = (avatarURL.length > 0)
+                        ? [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:avatarURL]
+                        : nil;
+    // 「去 cache-busting v= 参数后的 URL」当 stable key：SDK refreshAvatarCacheKey 让
+    // ?v= 每次抖动 → URL 抖动 → SDImageCache 按完整 URL key 必 miss。在每次成功 load
+    // 后用 stable key 多存一份，下次 miss 时拿来当**视觉占位**。只剥 v=，保留其它 query
+    // 避免不同身份头像被错误归一（见 WKAvatarUtil.stableCacheKeyFromAvatarURL）。
+    NSString *stableKey = [WKAvatarUtil stableCacheKeyFromAvatarURL:avatarURL];
+    UIImage *stableFallback = (cached == nil && stableKey.length > 0)
+                                ? [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:stableKey]
+                                : nil;
+    BOOL sameURL = (self.lastAppliedAvatarURL.length > 0
+                    && [self.lastAppliedAvatarURL isEqualToString:avatarURL ?: @""]);
+    BOOL sameChannel = (channelId.length > 0
+                        && [channelId isEqualToString:self.lastAvatarChannelId]);
+    BOOL safeToKeepImage = sameURL || sameChannel;
+#if DEBUG
+    BOOL hadImage = (self.avatarView.avatarImgView.image != nil);
+    NSLog(@"[AvatarDbg][ThreadCell] ch=%@ prevCh=%@ url=%@ prevUrl=%@ sameURL=%d sameChannel=%d cacheHit=%d stableHit=%d hadImage=%d → %@",
+          channelId, self.lastAvatarChannelId,
+          avatarURL ?: @"<nil>", self.lastAppliedAvatarURL ?: @"<nil>",
+          sameURL, sameChannel, cached != nil, stableFallback != nil, hadImage,
+          cached ? @"USE_CACHED" : (stableFallback ? @"USE_STABLE" : (safeToKeepImage ? @"KEEP_OLD" : @"CLEAR")));
+#endif
+    if (cached) {
+        // memory cache 命中：直接显示真实头像，无视觉变化
+        self.avatarView.avatarImgView.image = cached;
+    } else if (stableFallback) {
+        // base URL stable key 命中：用上次的同一张图当**视觉占位**。不要把 stable image
+        // 喂给 SDImageCache 的新 URL key —— 会让 SDWebImage 跳过下载，导致 avatarCacheKey
+        // 失效（群头像被上传后 path 不变只 bump cacheKey，永远不刷新）。
+        self.avatarView.avatarImgView.image = stableFallback;
+    } else if (!safeToKeepImage) {
+        // cell 复用到不同会话且不同 URL：清回默认 placeholder
+        self.avatarView.avatarImgView.image = placeholder;
+    }
+    self.lastAvatarChannelId = channelId;
+    self.lastAppliedAvatarURL = avatarURL ?: @"";
+    if (avatarURL.length > 0) {
+        // SDWebImageDelayPlaceholder：加载中不覆盖已有头像，仅在失败时落到占位图
+        NSString *stableKeyForCompletion = stableKey;
         [self.avatarView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL]
                                           placeholderImage:placeholder
                                                    options:SDWebImageDelayPlaceholder
-                                                   context:@{SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll)}];
+                                                   context:@{SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll)}
+                                                 completed:^(UIImage * _Nullable image, NSError * _Nullable error, SDImageCacheType cacheType, NSURL * _Nullable imageURL) {
+            if (image && stableKeyForCompletion.length > 0) {
+                [[SDImageCache sharedImageCache] storeImageToMemory:image forKey:stableKeyForCompletion];
+            }
+        }];
     } else {
         self.avatarView.avatarImgView.image = placeholder;
     }

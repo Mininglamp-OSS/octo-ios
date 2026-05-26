@@ -40,6 +40,10 @@
     [self sd_setImageWithURL:url placeholderImage:placeholderImage options:options | SDWebImageAllowInvalidSSLCertificates context:context];
 }
 
+- (void)lim_setImageWithURL:(NSURL *)url placeholderImage:(UIImage*)placeholderImage options:(SDWebImageOptions)options context:(SDWebImageContext*)context completed:(SDExternalCompletionBlock)completed{
+    [self sd_setImageWithURL:url placeholderImage:placeholderImage options:options | SDWebImageAllowInvalidSSLCertificates context:context progress:nil completed:completed];
+}
+
 
 
 @end

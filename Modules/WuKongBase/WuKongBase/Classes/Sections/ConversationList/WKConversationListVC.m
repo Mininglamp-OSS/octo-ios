@@ -2306,6 +2306,12 @@
     // 最近 tab：父群 channelInfo 到达时，把它名下的所有子区行刷新（拿父群头像 + 来源名）。
     // 子区行的复合头像和"来源:xxx" 第一次渲染时父群 info 可能还没缓存，渲染走兜底回退；
     // channelInfoUpdate 触发后必须主动 reload 这些行让 cell 重新走 refreshAvatar/Source 路径。
+    //
+    // 不要按 displayName/logo 指纹去重 reload —— 群头像上传走的是「logo 路径不变 + 仅
+    // refreshAvatarCacheKey: 翻 UUID」这条路，去重会让真头像变化吞掉。member sync 引起的
+    // 「假更新」会浪费一次 reload，但子区 cell 已经有 base-URL stable fallback 兜视觉占位
+    // （见 WKConversationGroupThreadCell.refreshAvatar / WKConversationListCell.applyAvatarURL），
+    // reload 视觉上不闪。
     if (_conversationListVM.filterType == WKConversationFilterRecent
         && channelInfo.channel.channelType == WK_GROUP
         && channelInfo.channel.channelId.length > 0) {
@@ -2435,6 +2441,9 @@
         if (p.row < rowCount) [valid addObject:p];
     }
     if (valid.count > 0) {
+#if DEBUG
+        NSLog(@"[AvatarDbg][reloadThreadRows] parentGroup=%@ reloading %lu thread rows", groupNo, (unsigned long)valid.count);
+#endif
         [self safeReloadRows:valid animation:UITableViewRowAnimationNone];
     }
 }
