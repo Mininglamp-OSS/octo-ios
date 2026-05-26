@@ -876,6 +876,33 @@ static WKApp *_instance;
    return  [[[WKSwiftModuleManager shared] getModuleWithId:moduleID] ImageForResource:name];
 }
 
+// 解析顺序与老 WKAboutVC 实现保持一致, 详见 WKApp.h 注释。
+// 实现链路敏感: Xcode 14+ 默认 CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName
+// 是 "AppIcon"（asset catalog 自动注入）, 但 [UIImage imageNamed:@"AppIcon"] 在运
+// 行时可能返回 nil（系统未把 launcher icon 导出到 main bundle）, 所以最后还要兜底
+// lanch_logo。
++ (nullable UIImage *)appLaunchIcon {
+    UIImage *appIcon = nil;
+    NSDictionary *infoDic = [[NSBundle mainBundle] infoDictionary];
+    NSString *iconName = infoDic[@"CFBundleIcons"][@"CFBundlePrimaryIcon"][@"CFBundleIconName"];
+    if (iconName) {
+        appIcon = [UIImage imageNamed:iconName];
+    }
+    if (!appIcon) {
+        NSArray *iconFiles = infoDic[@"CFBundleIcons"][@"CFBundlePrimaryIcon"][@"CFBundleIconFiles"];
+        if (iconFiles.count > 0) {
+            appIcon = [UIImage imageNamed:iconFiles.lastObject];
+        }
+    }
+    if (!appIcon) {
+        appIcon = [UIImage imageNamed:@"AppIcon"];
+    }
+    if (!appIcon) {
+        appIcon = [UIImage imageNamed:@"lanch_logo"];
+    }
+    return appIcon;
+}
+
 -(NSBundle*) resourceBundle:(NSString*)moduleID {
     return [[[WKSwiftModuleManager shared] getModuleWithId:moduleID] resourceBundle];
 }

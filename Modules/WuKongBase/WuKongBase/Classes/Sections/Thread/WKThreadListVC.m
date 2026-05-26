@@ -112,6 +112,12 @@ static const NSInteger kPageSize = 15;
 
 #pragma mark - Data
 
+/// 当前 segment 对应的 server status query：active / archived。
+/// 同 server 端 api.go:300 parseListThreadStatuses 接受的字面量。
+- (NSString *)currentStatusParam {
+    return (self.segmentControl.selectedSegmentIndex == 0) ? @"active" : @"archived";
+}
+
 - (void)loadThreads {
     if (self.loading) return;
     self.loading = YES;
@@ -119,7 +125,8 @@ static const NSInteger kPageSize = 15;
     [self.allLoadedThreads removeAllObjects];
 
     __weak typeof(self) weakSelf = self;
-    [[WKThreadService shared] listThreads:self.groupNo pageIndex:1 pageSize:kPageSize].then(^(NSDictionary *result) {
+    NSString *status = [self currentStatusParam];
+    [[WKThreadService shared] listThreads:self.groupNo status:status pageIndex:1 pageSize:kPageSize].then(^(NSDictionary *result) {
         weakSelf.loading = NO;
         [weakSelf.refreshControl endRefreshing];
         weakSelf.totalCount = [result[@"count"] integerValue];
@@ -136,17 +143,17 @@ static const NSInteger kPageSize = 15;
 
 - (void)loadMoreThreads {
     if (self.isLoadingMore || self.loading) return;
-    // 只对活跃 tab 分页（服务端只返回活跃子区）
-    if (self.segmentControl.selectedSegmentIndex != 0) return;
-    // 已加载全部
+    // 已加载全部（两个 tab 都支持分页 —— server #1378 后 ?status=archived 同样
+    // 走 count + list 分页协议）
     if (self.allLoadedThreads.count >= (NSUInteger)self.totalCount) return;
 
     self.isLoadingMore = YES;
     [self.footerSpinner startAnimating];
     NSInteger nextPage = self.currentPage + 1;
+    NSString *status = [self currentStatusParam];
 
     __weak typeof(self) weakSelf = self;
-    [[WKThreadService shared] listThreads:self.groupNo pageIndex:nextPage pageSize:kPageSize].then(^(NSDictionary *result) {
+    [[WKThreadService shared] listThreads:self.groupNo status:status pageIndex:nextPage pageSize:kPageSize].then(^(NSDictionary *result) {
         weakSelf.isLoadingMore = NO;
         [weakSelf.footerSpinner stopAnimating];
         weakSelf.totalCount = [result[@"count"] integerValue];
@@ -163,24 +170,14 @@ static const NSInteger kPageSize = 15;
 }
 
 - (void)filterAndReload {
-    NSInteger selectedStatus = (self.segmentControl.selectedSegmentIndex == 0)
-        ? WKThreadStatusActive
-        : WKThreadStatusArchived;
-
-    NSMutableArray *filtered = [NSMutableArray array];
-    for (WKThreadModel *t in self.allLoadedThreads) {
-        if (t.status == selectedStatus) {
-            [filtered addObject:t];
-        }
-    }
-    self.threads = [filtered copy];
+    // server 已按 ?status=active/archived 过滤好，不再做客户端二次过滤
+    self.threads = [self.allLoadedThreads copy];
     [self.tableView reloadData];
     self.emptyLbl.hidden = (self.threads.count > 0);
 }
 
 - (void)updateFooterVisibility {
-    BOOL hasMore = (self.allLoadedThreads.count < (NSUInteger)self.totalCount)
-                   && (self.segmentControl.selectedSegmentIndex == 0);
+    BOOL hasMore = (self.allLoadedThreads.count < (NSUInteger)self.totalCount);
     self.tableView.tableFooterView = hasMore ? self.tableFooterView : [[UIView alloc] init];
 }
 
@@ -198,9 +195,9 @@ static const NSInteger kPageSize = 15;
 #pragma mark - Actions
 
 - (void)onSegmentChanged:(UISegmentedControl *)sender {
-    // 切换 tab 时先用已加载数据过滤展示，不重新请求
-    [self filterAndReload];
-    [self updateFooterVisibility];
+    // 切 tab 改成重新拉数据：server 自 #1378 起按 ?status=active/archived 各自分页,
+    // 客户端不再用一份 cache 跨 tab 过滤（之前 client filter 会让已归档 tab 永远空）
+    [self loadThreads];
 }
 
 - (void)onRefresh {
@@ -328,55 +325,12 @@ static const NSInteger kPageSize = 15;
     }
 }
 
-- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView
-    trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath {
-    WKThreadModel *thread = self.threads[indexPath.row];
-    NSString *currentUid = [WKSDK shared].options.connectInfo.uid;
-    BOOL isCreator = [thread.creatorUid isEqualToString:currentUid];
-
-    NSMutableArray *actions = [NSMutableArray array];
-
-    if (isCreator) {
-        UIContextualAction *deleteAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive
-                                                                                  title:LLang(@"删除")
-                                                                                handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
-            [self confirmDeleteThread:thread];
-            completionHandler(YES);
-        }];
-        [actions addObject:deleteAction];
-
-        if (thread.status == WKThreadStatusActive) {
-            UIContextualAction *archiveAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal
-                                                                                       title:LLang(@"归档")
-                                                                                     handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
-                [self archiveThread:thread];
-                completionHandler(YES);
-            }];
-            archiveAction.backgroundColor = [UIColor orangeColor];
-            [actions addObject:archiveAction];
-        } else if (thread.status == WKThreadStatusArchived) {
-            UIContextualAction *unarchiveAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal
-                                                                                         title:LLang(@"取消归档")
-                                                                                       handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
-                [self unarchiveThread:thread];
-                completionHandler(YES);
-            }];
-            unarchiveAction.backgroundColor = [UIColor systemGreenColor];
-            [actions addObject:unarchiveAction];
-        }
-    } else if (thread.isMember) {
-        UIContextualAction *leaveAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal
-                                                                                  title:LLang(@"退出")
-                                                                                handler:^(UIContextualAction *action, UIView *sourceView, void (^completionHandler)(BOOL)) {
-            [self leaveThread:thread];
-            completionHandler(YES);
-        }];
-        leaveAction.backgroundColor = [UIColor grayColor];
-        [actions addObject:leaveAction];
-    }
-
-    return [UISwipeActionsConfiguration configurationWithActions:actions];
-}
+// 移除 trailingSwipeActionsConfigurationForRowAtIndexPath: —— 左滑 swipe pan 在
+// 这个 cell 高度（80pt 含 preview）下跟 tableView 的竖滚 pan / cell tap 抢手势：
+// 用户轻微横向位移会被识别成 tap 误打开详情，偏竖直的滑动又被列表 scroll 抢走。
+// 归档 / 取消归档 / 删除 / 退出全部移到长按菜单 (showFollowMenuForThread:) 里,
+// 长按本身跟 tap/pan 互不干扰，识别可靠；破坏性操作 (归档/删除/退出) 全部走
+// confirmXxxThread: 二次确认。
 
 #pragma mark - Thread Operations
 
@@ -396,13 +350,16 @@ static const NSInteger kPageSize = 15;
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-- (void)leaveThread:(WKThreadModel *)thread {
+- (void)confirmArchiveThread:(WKThreadModel *)thread {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"归档子区")
+                                                                  message:[NSString stringWithFormat:@"%@「%@」?", LLang(@"确定归档子区"), thread.name]
+                                                           preferredStyle:UIAlertControllerStyleAlert];
     __weak typeof(self) weakSelf = self;
-    [[WKThreadService shared] leaveThread:thread.shortId].then(^(id result) {
-        [weakSelf loadThreads];
-    }).catch(^(NSError *error) {
-        [weakSelf.view showMsg:error.domain];
-    });
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"归档") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [weakSelf archiveThread:thread];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)archiveThread:(WKThreadModel *)thread {
@@ -520,9 +477,22 @@ static const NSInteger kPageSize = 15;
     if (thread.channelId.length == 0) return;
     WKFollowedKeysStore *store = [WKFollowedKeysStore shared];
     BOOL isFollowed = [store isFollowedWithType:WKFollowTargetTypeThread targetId:thread.channelId];
+    NSString *currentUid = [WKSDK shared].options.connectInfo.uid ?: @"";
+    BOOL isCreator = (currentUid.length > 0 && [thread.creatorUid isEqualToString:currentUid]);
+    // 服务端 service.go canOperate: 子区创建者 OR 群主/管理员都能 archive/delete
+    // 任何子区。iOS 也对齐这条权限规则 —— 群主/管理员长按非自己创建的子区也能
+    // 看到归档/删除选项。WKChannelManager.isManager:memberUID: 已经覆盖
+    // creator+manager 两种 role（WKChannelManager.m:348）。
+    BOOL isGroupAdmin = NO;
+    if (currentUid.length > 0 && self.groupNo.length > 0) {
+        WKChannel *parentChannel = [WKChannel channelID:self.groupNo channelType:WK_GROUP];
+        isGroupAdmin = [[WKSDK shared].channelManager isManager:parentChannel memberUID:currentUid];
+    }
+    BOOL canManageThread = isCreator || isGroupAdmin;
     NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
     __weak typeof(self) weakSelf = self;
 
+    // 关注 / 取消关注
     if (isFollowed) {
         [items addObject:@{
             @"title": LLang(@"取消关注"),
@@ -534,6 +504,28 @@ static const NSInteger kPageSize = 15;
             @"title": LLang(@"添加到关注"),
             @"icon": [WKFloatingMenu iconFollow],
             @"action": ^{ [weakSelf doFollowThread:thread]; }
+        }];
+    }
+
+    // 归档 / 取消归档 / 删除 —— 子区创建者 OR 群主/管理员都能用，与服务端
+    // canOperate (service.go:674) 完全对齐。普通成员的「退出子区」入口已下线 ——
+    // 产品语义上用户在子区列表里默认是加入态，没有显式退出操作的需求。
+    if (canManageThread) {
+        if (thread.status == WKThreadStatusActive) {
+            [items addObject:@{
+                @"title": LLang(@"归档"),
+                @"action": ^{ [weakSelf confirmArchiveThread:thread]; }
+            }];
+        } else if (thread.status == WKThreadStatusArchived) {
+            [items addObject:@{
+                @"title": LLang(@"取消归档"),
+                @"action": ^{ [weakSelf unarchiveThread:thread]; }
+            }];
+        }
+        [items addObject:@{
+            @"title": LLang(@"删除子区"),
+            @"isDestructive": @YES,
+            @"action": ^{ [weakSelf confirmDeleteThread:thread]; }
         }];
     }
     [WKFloatingMenu showItems:items atPoint:pointInWindow];

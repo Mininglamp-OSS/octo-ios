@@ -35,7 +35,7 @@
 }
 
 - (void)onRemoteConfigLoaded {
-    [self.loginView refreshOidcProviders];
+    [self.loginView refreshDynamicConfig];
 }
 
 - (NSString *)langTitle {
