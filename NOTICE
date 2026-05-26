@@ -60,17 +60,17 @@ Bundled Third-Party Components
                                        源代码副本保留在同目录 arm/opencore-amrnb/, arm/opencore-amrwb/,
                                        arm/vo-amrwbenc/ 子目录中，以满足许可证下游分发义务。
 
-  [x]   librlottie                    LGPL            **动态链接，可替换**。
-                                                  通过 SDWebImageLottieCoder（Apache 2.0）
-                                                  传入，rlottie 引擎本体为 LGPL。消费方：
-                                                  WKApp.m 注册 WKSDImageLottieCoder 用于
-                                                  消息列表 Lottie 贴图解码。
-                                                  Podfile 强制使用 SDWebImage 官方 fork
-                                                  librlottie (0.2.1, 源自 Samsung 官方 rlottie)
-                                                  以满足 LGPL 链接条款（动态可替换）。
-                                                  下游分发 Octo iOS 二进制需遵守 LGPL：
-                                                  允许用户替换 librlottie 部分（动态链接）
-                                                  或提供目标文件以便重新链接。
+  [x]   librlottie                    MIT             rlottie 引擎本体为 MIT
+                                                  (Samsung 官方 rlottie 自 2020 年改授权
+                                                  为 MIT, 见 Pods/librlottie/rlottie/COPYING).
+                                                  通过 SDWebImageLottieCoder (Apache 2.0)
+                                                  传入. 消费方: WKApp.m 注册
+                                                  WKSDImageLottieCoder 用于消息列表
+                                                  Lottie 贴图解码.
+                                                  内部子组件许可: SKIA (BSD-3-Clause),
+                                                  FreeType (FTL), Pixman (MIT), STB
+                                                  (Public Domain), RapidJSON (MIT).
+                                                  全部 Apache 2.0 兼容.
 
   [REMOVED 2026-05] SoundTouch        LGPL v2.1       已物理移除（git rm 67 个 .cpp/.h/.mm）。
                                                   消费链 (CWVoiceChangePlayCell.mm 等)

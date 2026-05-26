@@ -134,6 +134,9 @@ Universal Links 配置见 [docs/universal-link-setup.md](docs/universal-link-set
 ### 可选集成
 
 **Bugly 崩溃统计**（闭源 SDK，默认禁用）：
+
+> ⚠️ Bugly 是腾讯的商业 SDK，遵循腾讯自有 EULA，**不是** Apache 2.0。Octo iOS 开源仓库**默认不内置** Bugly framework —— 只有当你在 `OCTO_BUGLY_APP_ID_MAIN` 填入自己的 AppID 时 `pod install` 才会拉取。下游若启用 Bugly，需自行接受腾讯条款。
+
 1. 到 https://bugly.qq.com 注册并下载 iOS SDK
 2. 把 `Bugly.framework` 放到 `Modules/WuKongBase/WuKongBase/Bugly.framework/`
 3. 在 `OctoConfig.xcconfig` 填入 `OCTO_BUGLY_APP_ID_MAIN`
@@ -208,13 +211,11 @@ OCTO 遵循三条共用原则 —— 这套矩阵里的每个仓都一致：
 
 本仓库以 **[Apache License 2.0](LICENSE)** 发布。我们自己的源码与编出的二进制**不含静态链接的 GPL / 强 copyleft 代码** —— 历史上链接的 `TelegramUtils/`（GPL v2）子树与 `SoundTouch`（LGPL v2.1）已全部移除。
 
-唯一一个传递依赖 **`librlottie`（LGPL v2.1）** 是通过 `SDWebImageLottieCoder` 引入的 *动态链接* 组件（用于 Lottie 贴图解码）。LGPL 动态链接例外条款下与 Apache 2.0 分发兼容，但下游分发者仍需履行 LGPL 对该组件的义务（允许用户替换 `librlottie` 动态库 / 提供可重新链接的目标文件）。详见 [NOTICE](NOTICE)。
-
 | 层 | 许可证 | 说明 |
 |---|---|---|
 | 我们新写的代码（`Octo/`、扩展、各模块新代码） | **Apache 2.0** | 见 [LICENSE](LICENSE) |
 | `WuKong*` 模块 | **MIT** | 上游 [WuKongIM iOS SDK](https://github.com/WuKongIM/WuKongIMiOSSDK) —— 保留原署名 |
-| `librlottie`（传递依赖，动态链接） | **LGPL v2.1** | 通过 `SDWebImageLottieCoder` 引入；分发义务详见 [NOTICE](NOTICE) |
+| `librlottie`（传递依赖, 经 `SDWebImageLottieCoder`） | **MIT** | Samsung rlottie 自 2020 年起改为 MIT，详见 [NOTICE](NOTICE) |
 
 完整第三方致谢见 [NOTICE](NOTICE)。
 

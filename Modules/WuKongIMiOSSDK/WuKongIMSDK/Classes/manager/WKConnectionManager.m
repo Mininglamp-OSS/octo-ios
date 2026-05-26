@@ -726,9 +726,16 @@ static dispatch_queue_t _imsocketQueue;
 
 // 处理连接成功的逻辑
 -(void) handleConnected:(WKConnackPacket*)connackPacket{
-    
-    [[WKSecurityManager shared] generateAesKey:connackPacket.serverKey salt:connackPacket.salt];
-   
+
+    BOOL aesOK = [[WKSecurityManager shared] generateAesKey:connackPacket.serverKey salt:connackPacket.salt];
+    if (!aesOK) {
+        // server 公钥非法 / 本地 DH key 缺失 → 不能继续, 否则后续加密路径会崩.
+        // 断开走重连流程, 让握手重新协商.
+        NSLog(@"[Connection] handshake aborted: invalid DH material from server");
+        [self disconnect:YES];
+        return;
+    }
+
     // 重连次数归0
     self.reconnectCount = 0;
     

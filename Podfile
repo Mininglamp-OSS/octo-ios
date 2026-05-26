@@ -290,10 +290,10 @@ abstract_target 'OctoiOSBase' do
   pod 'YBImageBrowser/NOSD', :git => 'https://github.com/tangtaoit/YBImageBrowser.git', :commit => '9e888bf25f8774f9b084ba3d26d5794cb68aeb0c'
   pod 'YYImage/WebP',        :git => 'https://github.com/tangtaoit/YYImage.git',        :commit => 'be7dc29bbd79153ea03c5018ee2ab2512a16f3fd'
   pod 'AsyncDisplayKit',     :git => 'https://github.com/tangtaoit/AsyncDisplayKit.git', :commit => '3f2a0b8f5069ddefd53cf4796da22eec105c5c7c'
-  # librlottie (LGPL) — 透过 SDWebImageLottieCoder 间接依赖，rlottie 引擎是
+  # librlottie (MIT) — 透过 SDWebImageLottieCoder 间接依赖，rlottie 引擎是
   # WKLottieStickerCell / WKEmojiStickerCell 真正在用的 Lottie 渲染器。
-  # 使用 CocoaPods 官方仓库版本（SDWebImage 维护，源自 Samsung 官方 rlottie），
-  # 不再走 tangtaoit 个人 fork，规避供应链风险。
+  # 使用 CocoaPods 官方仓库版本（SDWebImage 维护，源自 Samsung 官方 rlottie，
+  # 自 2020 年起授权为 MIT），避免走 tangtaoit 个人 fork 的供应链风险。
   pod 'librlottie', '~> 0.2.1'
   
   pod 'WuKongIMSDK',  :path => './Modules/WuKongIMiOSSDK'   ## WuKongBase 基础工具包  源码地址 https://github.com/WuKongIM/WuKongIMiOSSDK

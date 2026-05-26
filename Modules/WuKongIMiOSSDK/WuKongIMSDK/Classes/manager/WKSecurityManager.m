@@ -6,12 +6,12 @@
 //
 
 #import "WKSecurityManager.h"
-#import "Curve25519.h"
+#import <WuKongIMSDK/WuKongIMSDK-Swift.h>
 #import<CommonCrypto/CommonDigest.h>
 #import "WKAESUtil.h"
 @interface WKSecurityManager ()
 
-@property(nonatomic,strong) ECKeyPair *curve25519Key;
+@property(nonatomic,strong) WKECKeyPair *curve25519Key;
 @property(nonatomic,copy) NSString *aesKey;
 @property(nonatomic,copy) NSString *aesIV;
 @end
@@ -37,27 +37,36 @@ static WKSecurityManager *_instance;
 }
 
 -(void) generateDHPair {
-    self.curve25519Key = [Curve25519 generateKeyPair];
+    self.curve25519Key = [WKCurve25519 generateKeyPair];
 }
 
 -(NSString*) getDHPubKey {
     return [self.curve25519Key.publicKey base64EncodedStringWithOptions:NSDataBase64Encoding64CharacterLineLength];
 }
 
--(void) generateAesKey:(NSString*)pubKey salt:(NSString*)salt {
+-(BOOL) generateAesKey:(NSString*)pubKey salt:(NSString*)salt {
+    // 防御: server 传的 pubkey 非法 / 本地 DH 未生成 → 提前失败,
+    // 不要让 nil sharedKey 流到 md5: 的 strlen(NULL) 崩溃.
+    if (pubKey.length == 0) return NO;
+    if (!self.curve25519Key) return NO;
+
     NSData *pubKeyData = [[NSData alloc] initWithBase64EncodedString:pubKey options:NSDataBase64DecodingIgnoreUnknownCharacters];
-   NSData *sharedKeyData = [Curve25519 generateSharedSecretFromPublicKey:pubKeyData andKeyPair:self.curve25519Key];
-    
+    if (pubKeyData.length != 32) return NO;
+
+    NSData *sharedKeyData = [WKCurve25519 sharedSecretFromPublicKey:pubKeyData keyPair:self.curve25519Key];
+    if (sharedKeyData.length == 0) return NO;
+
     self.sharedKey =  [sharedKeyData base64EncodedStringWithOptions:NSDataBase64Encoding64CharacterLineLength];
-    
+
     NSString *aesKeyFull = [self md5:self.sharedKey];
     self.aesKey = [aesKeyFull substringToIndex:16];
-    
+
     if(salt && salt.length>16) {
         self.aesIV = [salt substringToIndex:16];
     }else{
         self.aesIV = salt;
     }
+    return YES;
 }
 
 

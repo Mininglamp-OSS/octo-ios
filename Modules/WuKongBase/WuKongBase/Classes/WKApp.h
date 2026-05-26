@@ -185,6 +185,15 @@ NS_ASSUME_NONNULL_BEGIN
  */
 -(UIImage*) loadImage:(NSString*)name moduleID:(NSString*)moduleID;
 
+/// 读取宿主 app 的主图标（用于关于页 / 登录页等需要展示 app logo 的位置）。
+/// 解析顺序与 WKAboutVC 老实现一致, 抽公共方法避免重复:
+///   1. Info.plist 新格式 CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName
+///   2. 旧格式 CFBundleIconFiles 数组的最后一项（习惯放最大尺寸）
+///   3. 通用名称 "AppIcon"
+///   4. 兜底 launch screen 用的 "lanch_logo" imageset
+/// 任何一步取到非 nil 即返回。所有都失败时返回 nil, 调用侧自行决定是否展位图。
++ (nullable UIImage *)appLaunchIcon;
+
 /**  获取某个module的资源bundle*/
 -(NSBundle*) resourceBundle:(NSString*)moduleID;
 

@@ -45,8 +45,22 @@
 }
 
 - (AnyPromise *)listThreads:(NSString *)groupNo pageIndex:(NSInteger)pageIndex pageSize:(NSInteger)pageSize {
+    return [self listThreads:groupNo status:nil pageIndex:pageIndex pageSize:pageSize];
+}
+
+- (AnyPromise *)listThreads:(NSString *)groupNo
+                     status:(NSString *)status
+                  pageIndex:(NSInteger)pageIndex
+                   pageSize:(NSInteger)pageSize {
     NSString *path = [NSString stringWithFormat:@"groups/%@/threads", groupNo];
-    NSDictionary *params = @{@"page_index": @(pageIndex), @"page_size": @(pageSize)};
+    NSMutableDictionary *params = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"page_index": @(pageIndex),
+        @"page_size": @(pageSize),
+    }];
+    // 仅在显式传入 status 时才上 query，省略时让服务端走 active 默认
+    if (status.length > 0) {
+        params[@"status"] = status;
+    }
     return [[WKAPIClient sharedClient] GET:path parameters:params].then(^(id result) {
         NSArray *rawList = nil;
         NSInteger count = 0;

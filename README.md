@@ -135,6 +135,9 @@ template lists every supported field — main ones:
 ### Optional integrations
 
 **Bugly crash reporting** (closed-source SDK, disabled by default):
+
+> ⚠️ Bugly is a Tencent commercial SDK governed by Tencent's own EULA, **not** Apache 2.0. The OSS distribution of Octo iOS ships **without** the Bugly framework — `pod install` only pulls it in when you provide your own `OCTO_BUGLY_APP_ID_MAIN`. Downstream redistributors who enable Bugly are responsible for accepting Tencent's terms.
+
 1. Register at https://bugly.qq.com and download the iOS SDK
 2. Place `Bugly.framework` at `Modules/WuKongBase/WuKongBase/Bugly.framework/`
 3. Fill `OCTO_BUGLY_APP_ID_MAIN` in `OctoConfig.xcconfig`
@@ -209,13 +212,11 @@ For security issues please follow [SECURITY.md](SECURITY.md) instead of the publ
 
 Released under **[Apache License 2.0](LICENSE)**. Our own source and the resulting binary contain **no statically-linked GPL or strong-copyleft code** — the historical `TelegramUtils/` (GPL v2) subtree and `SoundTouch` (LGPL v2.1) vendored code have been removed.
 
-One transitive dependency, **`librlottie` (LGPL v2.1)**, ships as a *dynamically linkable* component pulled in by `SDWebImageLottieCoder` for Lottie sticker decoding — that's compatible with our Apache 2.0 distribution under the LGPL dynamic-linking exception, but downstream redistributors still need to honor LGPL obligations for that one component (allow user replacement of `librlottie.dylib` / provide relinkable object files). See [NOTICE](NOTICE) for the full obligation surface.
-
 | Layer | License | Notes |
 |---|---|---|
 | Our new code (`Octo/`, extensions, new code in modules) | **Apache 2.0** | See [LICENSE](LICENSE) |
 | `WuKong*` modules | **MIT** | Upstream [WuKongIM iOS SDK](https://github.com/WuKongIM/WuKongIMiOSSDK) — preserved with original attributions |
-| `librlottie` (transitive, dynamic) | **LGPL v2.1** | Via `SDWebImageLottieCoder`; see [NOTICE](NOTICE) for redistribution obligations |
+| `librlottie` (transitive, via `SDWebImageLottieCoder`) | **MIT** | Samsung rlottie has been MIT-licensed since 2020; see [NOTICE](NOTICE) |
 
 Full third-party attribution lives in [NOTICE](NOTICE).
 

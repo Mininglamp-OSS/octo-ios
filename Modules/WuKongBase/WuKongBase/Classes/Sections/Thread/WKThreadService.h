@@ -35,6 +35,16 @@ NS_ASSUME_NONNULL_BEGIN
 /// Promise resolves with NSDictionary: {@"count": NSNumber, @"list": NSArray<WKThreadModel *>}
 - (AnyPromise *)listThreads:(NSString *)groupNo pageIndex:(NSInteger)pageIndex pageSize:(NSInteger)pageSize;
 
+/// 获取子区列表（带 status 过滤，分页）。Server 自 #1378 起在
+/// `GET groups/{groupNo}/threads?status=` 上支持 active / archived / all 三档,
+/// 缺省等价于 active。已归档 tab 必须显式传 archived，否则永远拿到空列表。
+/// @param status 期望的子区状态：@"active" / @"archived" / @"all"。nil 等价于
+///        不传 → 服务端按 active 默认。
+- (AnyPromise *)listThreads:(NSString *)groupNo
+                     status:(nullable NSString *)status
+                  pageIndex:(NSInteger)pageIndex
+                   pageSize:(NSInteger)pageSize;
+
 /// 获取群下全部子区（内部自动分页）。
 /// 用于会话列表 cachedTopicsByGroup 兜底——大群子区数 >100 时 listThreads 单页拿不全，
 /// "+N子区" badge 的 unread 聚合就会偏小（实测群有 176 关注子区时只算到 100 个的未读）。
