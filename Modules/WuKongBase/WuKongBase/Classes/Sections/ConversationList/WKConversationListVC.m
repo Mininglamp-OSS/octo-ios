@@ -113,10 +113,6 @@
 @property(nonatomic,assign) NSInteger spaceCount; // Space总数
 @property(nonatomic,strong) UIImageView *spaceArrowView; // Space标题右侧折叠箭头
 @property(nonatomic,assign) BOOL hasCleanedConversationsOnStartup; // 本次启动是否已清理会话数据
-/// 父群已 reload 过的「显示指纹」（displayName | logo）— 不含 cacheKey。
-/// channelInfoUpdate 时只在指纹真变化才 reloadThreadRowsForParentGroup，避免
-/// SDK 端 cacheKey UUID 每次 fetch 都换（导致 URL 抖动）触发的无谓 reload → 子区头像闪。
-@property(nonatomic,strong) NSMutableDictionary<NSString*, NSString*> *parentGroupAvatarFingerprints;
 @property(nonatomic,strong) WKConversationTabView *conversationTabView; // 群组/私聊 tab
 @property(nonatomic,strong) UIView *navLeftView;
 @property(nonatomic,strong) UIView *avatarView;
@@ -737,13 +733,6 @@
             item.onClick();
         }
     }];
-}
-
-- (NSMutableDictionary<NSString *,NSString *> *)parentGroupAvatarFingerprints {
-    if (!_parentGroupAvatarFingerprints) {
-        _parentGroupAvatarFingerprints = [NSMutableDictionary dictionary];
-    }
-    return _parentGroupAvatarFingerprints;
 }
 
 -(void) refreshTitle{
@@ -2318,32 +2307,15 @@
     // 子区行的复合头像和"来源:xxx" 第一次渲染时父群 info 可能还没缓存，渲染走兜底回退；
     // channelInfoUpdate 触发后必须主动 reload 这些行让 cell 重新走 refreshAvatar/Source 路径。
     //
-    // : 用 VC 自己保留的"显示指纹"（displayName | logo 路径，不含 cacheKey）跟上次
-    // 比对 —— 只在真的变了才 reload。
-    // 背景：进子区聊天详情会触发父群 fetchChannelInfo；SDK 那条路径每次都通过 addChannelInfo
-    // 派发委托（oldChannelInfo 恒为 nil），且 avatarCacheKey 每次都重新 UUID（URL 抖动），
-    // 这里若直接信 oldChannelInfo / cacheKey 判定，每次返回都会把所有同父群头像的子区行
-    // 整片 reloadRows → fresh cell 实例 → safeToKeep=false → 默认 placeholder 闪一下。
+    // 不要按 displayName/logo 指纹去重 reload —— 群头像上传走的是「logo 路径不变 + 仅
+    // refreshAvatarCacheKey: 翻 UUID」这条路，去重会让真头像变化吞掉。member sync 引起的
+    // 「假更新」会浪费一次 reload，但子区 cell 已经有 base-URL stable fallback 兜视觉占位
+    // （见 WKConversationGroupThreadCell.refreshAvatar / WKConversationListCell.applyAvatarURL），
+    // reload 视觉上不闪。
     if (_conversationListVM.filterType == WKConversationFilterRecent
         && channelInfo.channel.channelType == WK_GROUP
         && channelInfo.channel.channelId.length > 0) {
-        NSString *fpName = channelInfo.displayName ?: @"";
-        NSString *fpLogo = channelInfo.logo ?: @"";
-        NSString *fingerprint = [NSString stringWithFormat:@"%@|%@", fpName, fpLogo];
-        NSString *prevFingerprint = self.parentGroupAvatarFingerprints[channelInfo.channel.channelId];
-        BOOL fingerprintChanged = ![fingerprint isEqualToString:prevFingerprint ?: @""];
-#if DEBUG
-        NSLog(@"[AvatarDbg][channelInfoUpdate] parentGroup=%@ oldNil=%d nameChg=%d cacheKeyChg=%d fpChg=%d (oldFp=%@ newFp=%@) → reloadThreads=%d",
-              channelInfo.channel.channelId, oldChannelInfo == nil,
-              ![channelInfo.displayName isEqualToString:oldChannelInfo.displayName],
-              ![channelInfo.avatarCacheKey isEqualToString:oldChannelInfo.avatarCacheKey],
-              fingerprintChanged, prevFingerprint ?: @"<nil>", fingerprint,
-              fingerprintChanged);
-#endif
-        if (fingerprintChanged) {
-            self.parentGroupAvatarFingerprints[channelInfo.channel.channelId] = fingerprint;
-            [self reloadThreadRowsForParentGroup:channelInfo.channel.channelId];
-        }
+        [self reloadThreadRowsForParentGroup:channelInfo.channel.channelId];
     }
     // 静音切换会让 getFollow/RecentUnreadCount 把这条会话计入或排除，必须刷新 tab 红点。
     [self refreshBadge];

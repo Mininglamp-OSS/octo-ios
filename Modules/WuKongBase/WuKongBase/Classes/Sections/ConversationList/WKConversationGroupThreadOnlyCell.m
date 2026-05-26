@@ -284,11 +284,9 @@
     if (cached) {
         self.avatarView.avatarImgView.image = cached;
     } else if (stableFallback) {
+        // base URL stable key 命中：用上次同一张图当**视觉占位**；不能反向喂 SDImageCache
+        // 新 URL key，否则 avatarCacheKey 失效，群头像上传后永远不刷新。
         self.avatarView.avatarImgView.image = stableFallback;
-        // 把 stable image 预灌到新 URL key 下，让下面 sd_setImage 直接 cache 命中跳过网络
-        if (avatarURL.length > 0) {
-            [[SDImageCache sharedImageCache] storeImageToMemory:stableFallback forKey:avatarURL];
-        }
     } else if (!safeToKeepImage) {
         self.avatarView.avatarImgView.image = placeholder;
     }

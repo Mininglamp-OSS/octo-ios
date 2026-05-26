@@ -651,18 +651,13 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         // memory cache 命中：直接显示真实头像
         self.avatarImgView.avatarImgView.image = cached;
     } else if (stableFallback) {
-        // 完整 URL miss 但 base URL stable key 命中（URL 抖动场景）：用上次的同一张
-        // 图当占位，等 SDWebImage 异步加载新 URL（极大概率拿到同款图）→ 无视觉变化
+        // 完整 URL miss 但 base URL stable key 命中：用上次的同一张图当**视觉占位**，
+        // 等 SDWebImage 异步加载新 URL（极大概率拿到同款图）→ 无视觉变化。
+        //
+        // 不要把 stableFallback 反向喂给 SDImageCache 的「新 URL key」—— 那会让 SDWebImage
+        // 把后续 sd_setImage 当 cache 命中直接 short-circuit，导致 avatarCacheKey 失效，
+        // 群头像 / 用户头像被上传后（path 不变，只 bump cacheKey）永远不会刷新。
         self.avatarImgView.avatarImgView.image = stableFallback;
-        // 关键：把 stable image 顺手以本次新 URL 为 key 预灌一份到 memory cache，
-        // 这样下面 sd_setImage 内部 cache 查询直接命中 → 跳过网络下载 → 没有
-        // "下载中 → 失败兜 placeholder" 的窗口，也没有 SDWebImage cancel/restart 抖动。
-        // 真避免：仅 cacheKey 抖动而 content 未变的"假更新"。content 真变（logo 路径
-        // 或 displayName 改）由 channelInfoUpdate 的 fingerprint guard 触发 reload 时
-        // 走完整新 URL 网络加载。
-        if (avatarURL.length > 0) {
-            [[SDImageCache sharedImageCache] storeImageToMemory:stableFallback forKey:avatarURL];
-        }
     } else if (!safeToKeepImage) {
         // cache 全 miss + cell 被复用到别的会话：清掉残留并立即 set 默认 placeholder。
         // 不能直接 image=nil —— SDWebImageDelayPlaceholder 下 SDWebImage 不会主动 set

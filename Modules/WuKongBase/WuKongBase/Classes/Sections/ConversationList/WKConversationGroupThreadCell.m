@@ -631,13 +631,10 @@
         // memory cache 命中：直接显示真实头像，无视觉变化
         self.avatarView.avatarImgView.image = cached;
     } else if (stableFallback) {
-        // base URL stable key 命中（URL 抖动场景）：用上次同一张图当占位
+        // base URL stable key 命中：用上次的同一张图当**视觉占位**。不要把 stable image
+        // 喂给 SDImageCache 的新 URL key —— 会让 SDWebImage 跳过下载，导致 avatarCacheKey
+        // 失效（群头像被上传后 path 不变只 bump cacheKey，永远不刷新）。
         self.avatarView.avatarImgView.image = stableFallback;
-        // 把 stable image 预灌到新 URL key 下，让下面 sd_setImage 在 memory cache 命中
-        // → 跳过网络下载 → 消除"下载窗口期"的潜在闪烁
-        if (avatarURL.length > 0) {
-            [[SDImageCache sharedImageCache] storeImageToMemory:stableFallback forKey:avatarURL];
-        }
     } else if (!safeToKeepImage) {
         // cell 复用到不同会话且不同 URL：清回默认 placeholder
         self.avatarView.avatarImgView.image = placeholder;
