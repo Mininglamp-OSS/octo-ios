@@ -142,6 +142,12 @@ template lists every supported field — main ones:
 2. Place `Bugly.framework` at `Modules/WuKongBase/WuKongBase/Bugly.framework/`
 3. Fill `OCTO_BUGLY_APP_ID_MAIN` in `OctoConfig.xcconfig`
 4. Re-run `pod install` — auto-enables (`Bugly: ENABLED` printed)
+5. **Stop Podfile.lock from leaking your Bugly setup into commits** (one-shot per clone):
+   ```bash
+   git update-index --skip-worktree Podfile.lock
+   git update-index --skip-worktree Modules/WuKongBase/Example/Podfile.lock
+   ```
+   Filling a real `OCTO_BUGLY_APP_ID_MAIN` makes `WuKongBase.podspec` declare `s.dependency 'Bugly'`, so `pod install` rewrites `Podfile.lock` to include Bugly. The OSS-default lockfile in this repo is intentionally Bugly-free; `--skip-worktree` lets you `pod install` freely without polluting `git status`. To genuinely modify `Podfile`, undo it with `git update-index --no-skip-worktree Podfile.lock`, edit, and (before committing) regenerate the clean lockfile with `OCTO_BUGLY_APP_ID_MAIN` set to the `YOUR_BUGLY_APP_ID` sentinel.
 
 ## 🔗 OCTO Ecosystem
 

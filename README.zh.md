@@ -141,6 +141,12 @@ Universal Links 配置见 [docs/universal-link-setup.md](docs/universal-link-set
 2. 把 `Bugly.framework` 放到 `Modules/WuKongBase/WuKongBase/Bugly.framework/`
 3. 在 `OctoConfig.xcconfig` 填入 `OCTO_BUGLY_APP_ID_MAIN`
 4. 重新 `pod install` —— 自动启用（输出 `Bugly: ENABLED`）
+5. **防止 Bugly 集成污染 Podfile.lock 的 commit**（每次 clone 后跑一次）：
+   ```bash
+   git update-index --skip-worktree Podfile.lock
+   git update-index --skip-worktree Modules/WuKongBase/Example/Podfile.lock
+   ```
+   填了真实 `OCTO_BUGLY_APP_ID_MAIN` 后，`WuKongBase.podspec` 会声明 `s.dependency 'Bugly'`，`pod install` 会把 Bugly 写回 `Podfile.lock`。但本仓库 committed 的 lockfile 故意不含 Bugly（OSS 默认）。`--skip-worktree` 让你随便 `pod install`，git 不再感知 lockfile 变化。真要改 `Podfile` 时用 `git update-index --no-skip-worktree Podfile.lock` 取消 skip，改完，再把 `OCTO_BUGLY_APP_ID_MAIN` 临时改成 `YOUR_BUGLY_APP_ID` sentinel 重跑 `pod install` 生成 clean 版再 commit。
 
 ## 🔗 OCTO 生态
 
