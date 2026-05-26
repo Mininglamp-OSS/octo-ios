@@ -969,6 +969,21 @@ static WKConversationListVM *_instance;
         if(decision == WKSpaceFilterDecisionSkip) {
             return NO;
         }
+        // 跨 Space 私聊 lastMessage.space_id 兜底：与实时路径
+        // (WKConversationListVC.filterConversationsBySpace → isConversationInCurrentSpace) 对齐。
+        // 场景：在 Space A 时收到 Space B 的人私聊，SDK 把该 WKConversation 写进 DB；
+        // 此时 channelId 是裸 UID（无 s{spaceB}_ 前缀），channelInfo.extra 也未必有 space_id，
+        // WKSpaceFilter 判 FailOpen → 这里默认 YES，pop 回会话列表时 loadConversationList
+        // 重新走 DB，会把 B 的私聊浮到 A 的列表里。必须看 lastMessage.space_id 显式排除。
+        if(conversation.lastMessage) {
+            id v = conversation.lastMessage.content.contentDict[@"space_id"];
+            if([v isKindOfClass:[NSString class]]) {
+                NSString *msgSpaceId = (NSString *)v;
+                if(msgSpaceId.length > 0 && ![msgSpaceId isEqualToString:currentSpaceId]) {
+                    return NO;
+                }
+            }
+        }
         return YES;
     }
     return YES;
