@@ -254,30 +254,18 @@ static WKApp *_instance;
 
 -(void) traceConfig {
 #ifdef OCTO_ENABLE_BUGLY
-    BuglyConfig *config = [[BuglyConfig alloc] init];
-#ifndef __OPTIMIZE__ // DEBUG模式
-    config.debugMode = false;
-    config.blockMonitorEnable = false;
-    config.reportLogLevel = BuglyLogLevelDebug;
-#else
-    config.reportLogLevel = BuglyLogLevelWarn;
-#endif
-
-    NSString *buglyAppIdSDK = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOBuglyAppIdSDK"];
-    // PR #121 round 3 review 🟡: 校验占位符 — 主开关 OCTO_ENABLE_BUGLY 由
-    // Podfile post_install 根据 OCTO_BUGLY_APP_ID_MAIN 决定，但 SDK 侧的
-    // OCTO_BUGLY_APP_ID_SDK 是独立字段，用户可能漏填。下列情形一律不启动:
-    //   - 空 / nil
-    //   - 模板占位符 YOUR_BUGLY_APP_ID
-    //   - 未替换的 $(OCTO_BUGLY_APP_ID_SDK) 字面量（OctoConfig 未注入时的产物）
-    BOOL buglySDKIdValid = buglyAppIdSDK.length > 0
-        && ![buglyAppIdSDK isEqualToString:@"YOUR_BUGLY_APP_ID"]
-        && ![buglyAppIdSDK hasPrefix:@"$("];
-    if (buglySDKIdValid) {
-        [Bugly startWithAppId:buglyAppIdSDK config:config];
-    }
-    if([WKApp shared].isLogined) {
-        [Bugly setUserIdentifier: [WKApp shared].loginInfo.uid];
+    // Bugly 是进程级单例: 主 App 在 didFinishLaunching 已经
+    // [Bugly startWithAppId:OCTOBuglyAppIdMain] 启动过, 这里**不要**
+    // 再 startWithAppId — 否则后调的会覆盖 AppID, 把崩溃从 Main 项目
+    // (OCTOBuglyAppIdMain) 改报到 SDK 项目 (OCTOBuglyAppIdSDK), 后台
+    // Main 看板就会从那一刻起看不到对应版本了 (build 59 → build 62
+    // 期间观察到这个症状).
+    //
+    // 历史上加 OCTOBuglyAppIdSDK 是想让 SDK 内部崩溃单独报到一个独立
+    // 看板, 但 Bugly 单例机制下"两 AppID 并存"做不到. 这里只同步用户
+    // 标识就够了, 让所有崩溃统一汇到 Main 看板.
+    if ([WKApp shared].isLogined) {
+        [Bugly setUserIdentifier:[WKApp shared].loginInfo.uid];
     }
 #endif
 }
