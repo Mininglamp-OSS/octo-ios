@@ -53,16 +53,20 @@
     }
     NSString *path = [avatarURL substringToIndex:queryStart.location];
     NSString *query = [avatarURL substringFromIndex:queryStart.location + 1];
+    if (query.length == 0) return path;
     NSArray<NSString *> *parts = [query componentsSeparatedByString:@"&"];
-    NSMutableArray<NSString *> *kept = [NSMutableArray arrayWithCapacity:parts.count];
-    for (NSString *part in parts) {
-        // 只剥 v=<cacheKey> 这一个 param，其它 query 全部保留 —— 否则把不同身份
-        // (如 ?id=a 与 ?id=b) 的头像错误映射到同一 key，cell 复用时闪错图。
-        if (![part hasPrefix:@"v="]) {
-            [kept addObject:part];
-        }
+    // 仅剥**末尾**的那一个 v=<cacheKey> ——
+    // 这里的 `v=` 是 WKAvatarUtil.getGroupAvatar:cacheKey: / getAvatar:cacheKey:
+    // 以及 cell 内联拼装时**始终追加在最后**的 cache-buster；上游 channelInfo.logo
+    // 自带的 v=（若把 v 当 variant 含义）应保留, 否则会让不同身份的头像错误归一。
+    NSString *last = parts.lastObject;
+    if (![last hasPrefix:@"v="]) {
+        return avatarURL; // 末尾不是我们追加的 cache-buster, 整 URL 当稳定 key
     }
-    if (kept.count == 0) return path;
+    if (parts.count == 1) {
+        return path; // 唯一 query 就是 cache-buster, 去掉后只剩 path
+    }
+    NSArray<NSString *> *kept = [parts subarrayWithRange:NSMakeRange(0, parts.count - 1)];
     return [NSString stringWithFormat:@"%@?%@", path, [kept componentsJoinedByString:@"&"]];
 }
 

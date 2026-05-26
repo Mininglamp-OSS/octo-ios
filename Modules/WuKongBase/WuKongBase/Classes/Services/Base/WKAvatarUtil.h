@@ -33,16 +33,27 @@ NS_ASSUME_NONNULL_BEGIN
 /// @param cacheKey 缓存key（群成员变化时生成的新UUID）
 +(NSString*) getGroupAvatar:(NSString*)groupNo cacheKey:(NSString*)cacheKey;
 
-/// 从带 `?v=cacheKey` 的头像 URL 推导一个**稳定缓存 key**，仅剥掉 cache-busting
-/// 的 `v=` 参数，保留其它 query（如 `?id=...`）以避免不同身份的头像被错误归到同一
-/// key 下。会话列表 cell 用此 key 在 SDImageCache 里多存一份头像，供 cacheKey 抖动
-/// 后的 cache-miss 兜底。
+/// 从带 `?v=cacheKey` 的头像 URL 推导一个**稳定缓存 key**。
+///
+/// 仅剥掉 URL 末尾的那个 `v=...`（即 `getAvatar:cacheKey:` /
+/// `getGroupAvatar:cacheKey:` / cell 内联拼装时**始终追加在最后**的 cache-buster），
+/// 其它 query（包括上游 `channelInfo.logo` 自带的中间位置 `v=`）一律保留。这样
+/// 避免不同身份的头像（如 `?id=a&v=A` 与 `?id=b&v=B`、或两条 logo 把 `v` 当 variant
+/// 含义的不同链接）被错误归到同一 key 下。
+///
+/// **约定**：本工程内 `v=` query 参数保留给 SDWebImage 缓存失效用，调用方追加 `v=`
+/// 时务必放在 query 末尾；上游 logo URL 若已有同名参数应视作不同语义（保留不剥）。
+///
+/// 会话列表 cell 用此 key 在 SDImageCache 里多存一份头像，供 cacheKey 抖动后的
+/// cache-miss 兜底（详见 WKConversationListCell.applyAvatarURL:）。
 ///
 /// 示例:
-///   `https://cdn/avatar?v=AAA`          → `https://cdn/avatar`
-///   `https://cdn/avatar?id=a&v=BBB`     → `https://cdn/avatar?id=a`
-///   `https://cdn/avatar?v=CCC&size=128` → `https://cdn/avatar?size=128`
-///   `https://cdn/avatar`                → `https://cdn/avatar`
+///   `https://cdn/avatar?v=AAA`              → `https://cdn/avatar`
+///   `https://cdn/avatar?id=a&v=BBB`         → `https://cdn/avatar?id=a`
+///   `https://cdn/avatar?v=variant&v=CCC`    → `https://cdn/avatar?v=variant`
+///   `https://cdn/avatar?size=128&v=DDD`     → `https://cdn/avatar?size=128`
+///   `https://cdn/avatar?size=128`           → `https://cdn/avatar?size=128` (末位非 v=, 整 URL 保留)
+///   `https://cdn/avatar`                    → `https://cdn/avatar`
 +(nullable NSString*) stableCacheKeyFromAvatarURL:(nullable NSString*)avatarURL;
 @end
 
