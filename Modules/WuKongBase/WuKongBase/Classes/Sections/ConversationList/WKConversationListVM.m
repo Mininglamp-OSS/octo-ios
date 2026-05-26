@@ -55,6 +55,14 @@
 /// per-callback 累积 + 最终 mergeThreadConvs / 通知，避免旧 Space 的 thread 数据
 /// 在切到新 Space 后回到 cachedTopicsByGroup 污染 badge / Recent tab。
 @property(nonatomic,assign) NSInteger vmGeneration;
+/// fetchThreadCountsForGroupsWithCompletion 防并发. 用户在 Follow ↔ Recent 之间
+/// 频繁切换时, onTabChanged 每次切 Recent 都会触发一波对 N 个群并发 listThreads,
+/// 多波在飞时各自 callback 写 model.threadPreviews, 第一波部分回包后
+/// dispatch_group_notify 已触发 syncThreadWrapModelsFromCachedTopics → reload,
+/// Follow tab 看到的是只算了部分群的中间态 (子区先少); 第二波又写一遍 → 再 reload
+/// → 子区回来. 这是用户感知的"页面疯狂变化". 加 in-flight guard 让重叠调用直接
+/// 短路, 同时段内只有最早一次真跑, 消除中间态抖动. 不影响冷启动单次 fetch.
+@property(nonatomic,assign) BOOL threadCountsFetchInFlight;
 @property(nonatomic,strong) NSDictionary *cachedThreadData; // channelId → {previews, count}，跨 reset 保留
 @property(nonatomic,assign,readwrite) BOOL lastBuildFollowHasMention;
 @property(nonatomic,assign,readwrite) BOOL lastBuildRecentHasMention;
@@ -123,6 +131,7 @@ static WKConversationListVM *_instance;
     self.cachedTopicsByGroup = nil;
     self.cachedRemindersByChannelId = nil;
     self.didColdStartFullPaging = NO; // 切账号 / 切 Space 后冷启两阶段分页要重新生效
+    self.threadCountsFetchInFlight = NO; // reset 后允许新 fetch 启动 (旧在飞那次会被 vmGeneration 拦下)
 }
 
 -(void) snapshotSyncedGroupIds {
@@ -563,6 +572,13 @@ static WKConversationListVM *_instance;
 
 /// 通过 API 获取每个群组的子区真实数量（带完成回调）
 -(void) fetchThreadCountsForGroupsWithCompletion:(void(^)(void))completion {
+    // 防并发: 见 self.threadCountsFetchInFlight 注释 (Follow ↔ Recent 频繁切换
+    // 时多波 fetch 在飞导致 sync 看到中间态, Follow tab 闪烁). 第二次进来直接
+    // 短路, 不调 completion (caller fetchThreadCountsForGroups 只 post 通知,
+    // 在飞那次完成时会 post, 不会丢事件).
+    if (self.threadCountsFetchInFlight) {
+        return;
+    }
     NSMutableArray<WKConversationWrapModel *> *groupModels = [NSMutableArray array];
     for (WKConversationWrapModel *model in self.conversationWrapModels) {
         if (model.channel.channelType == WK_GROUP) {
@@ -573,6 +589,7 @@ static WKConversationListVM *_instance;
         if (completion) completion();
         return;
     }
+    self.threadCountsFetchInFlight = YES;
 
     dispatch_group_t group = dispatch_group_create();
     // 累积 listThreads 回的每个群下 thread → WKConversation 映射，统一在 notify
@@ -662,6 +679,7 @@ static WKConversationListVM *_instance;
         // PR review #13 critical：完成时再校验一次 generation —— 全部 leg 都
         // dispatch_group_leave 后才会跑这个 block，期间可能已经 reset；
         // 此时 mergeThreadConvs 把累积下来的旧 Space 数据进 cache 就把空间隔离破了
+        self.threadCountsFetchInFlight = NO;
         if (startGen != self.vmGeneration) {
             if (completion) completion();
             return;
