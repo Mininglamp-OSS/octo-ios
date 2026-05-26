@@ -664,8 +664,11 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
             [[SDImageCache sharedImageCache] storeImageToMemory:stableFallback forKey:avatarURL];
         }
     } else if (!safeToKeepImage) {
-        // cache 全 miss + cell 被复用到别的会话：清掉残留，避免错图
-        self.avatarImgView.avatarImgView.image = nil;
+        // cache 全 miss + cell 被复用到别的会话：清掉残留并立即 set 默认 placeholder。
+        // 不能直接 image=nil —— SDWebImageDelayPlaceholder 下 SDWebImage 不会主动 set
+        // placeholder，会让 imageView 在 async load 完成前一直空白。与两个 ThreadCell
+        // 同款（GroupThreadCell.refreshAvatar / GroupThreadOnlyCell.refreshAvatar）。
+        self.avatarImgView.avatarImgView.image = placeholder;
     }
     // safeToKeepImage：保留旧 image，等异步加载完替换
     self.lastAppliedAvatarURL = avatarURL ?: @"";
