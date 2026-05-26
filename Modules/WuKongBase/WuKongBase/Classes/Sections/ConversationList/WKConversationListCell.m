@@ -621,11 +621,12 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
        prevChannelId:(NSString *)prevChannelId
         currChannelId:(NSString *)currChannelId {
     UIImage *cached = avatarURL.length > 0 ? [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:avatarURL] : nil;
-    // 「去 query 的 base URL」兜底：SDK addOrUpdateMembers 会调 refreshAvatarCacheKey
-    // 让 avatarCacheKey 每次 fetch 都换 UUID（URL 里 ?v= 抖动），SDImageCache 按完整 URL
-    // 做 key 必 miss。我们在每次成功 load 后用 base URL 当 stable key 多存一份，下次
-    // miss 时拿来当占位 → 同一张图，无视觉变化。
-    NSString *stableKey = [self.class _stableImageKeyForURL:avatarURL];
+    // 「去 cache-busting v= 参数后的 URL」当 stable key：SDK addOrUpdateMembers 会调
+    // refreshAvatarCacheKey 让 avatarCacheKey 每次 fetch 都换 UUID（URL 里 ?v= 抖动），
+    // SDImageCache 按完整 URL 做 key 必 miss。我们在每次成功 load 后用 stable key
+    // 多存一份，下次 miss 时拿来当**视觉占位**。注意只剥 `v=` 单个参数，保留其它 query
+    // —— 否则 ?id=a 与 ?id=b 这种不同身份会被映射到同一 key，cell 复用时闪错图。
+    NSString *stableKey = [WKAvatarUtil stableCacheKeyFromAvatarURL:avatarURL];
     UIImage *stableFallback = (cached == nil && stableKey.length > 0)
                                 ? [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:stableKey]
                                 : nil;
@@ -680,14 +681,7 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     }];
 }
 
-/// 把头像 URL 的 query string 去掉（`?v=xxx`），作为 SDImageCache 的稳定 key。
-/// 同一会话不同 cacheKey 抖动时映射到同一 key → 下次 miss 也能用同一张图兜底。
-+ (NSString *)_stableImageKeyForURL:(NSString *)url {
-    if (url.length == 0) return nil;
-    NSRange r = [url rangeOfString:@"?"];
-    if (r.location == NSNotFound) return url;
-    return [url substringToIndex:r.location];
-}
+
 
 -(void) refreshOnlineStatus:(WKConversationWrapModel*)model {
     BOOL hasChannelInfo  = model.channelInfo?true:false;

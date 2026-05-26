@@ -603,14 +603,11 @@
     UIImage *cached = (avatarURL.length > 0)
                         ? [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:avatarURL]
                         : nil;
-    // 「去 query 的 base URL」兜底：SDK refreshAvatarCacheKey 让 ?v= 每次抖动 → URL 抖动 →
-    // SDImageCache 按完整 URL key 必 miss。在每次成功 load 后用 base URL 当 stable key
-    // 多存一份，下次 miss 时拿来当占位。
-    NSString *stableKey = nil;
-    if (avatarURL.length > 0) {
-        NSRange q = [avatarURL rangeOfString:@"?"];
-        stableKey = (q.location == NSNotFound) ? avatarURL : [avatarURL substringToIndex:q.location];
-    }
+    // 「去 cache-busting v= 参数后的 URL」当 stable key：SDK refreshAvatarCacheKey 让
+    // ?v= 每次抖动 → URL 抖动 → SDImageCache 按完整 URL key 必 miss。在每次成功 load
+    // 后用 stable key 多存一份，下次 miss 时拿来当**视觉占位**。只剥 v=，保留其它 query
+    // 避免不同身份头像被错误归一（见 WKAvatarUtil.stableCacheKeyFromAvatarURL）。
+    NSString *stableKey = [WKAvatarUtil stableCacheKeyFromAvatarURL:avatarURL];
     UIImage *stableFallback = (cached == nil && stableKey.length > 0)
                                 ? [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:stableKey]
                                 : nil;

@@ -45,4 +45,25 @@
     return url;
 }
 
++(NSString*) stableCacheKeyFromAvatarURL:(NSString*)avatarURL {
+    if (avatarURL.length == 0) return nil;
+    NSRange queryStart = [avatarURL rangeOfString:@"?"];
+    if (queryStart.location == NSNotFound) {
+        return avatarURL; // 无 query，整 URL 就是稳定 key
+    }
+    NSString *path = [avatarURL substringToIndex:queryStart.location];
+    NSString *query = [avatarURL substringFromIndex:queryStart.location + 1];
+    NSArray<NSString *> *parts = [query componentsSeparatedByString:@"&"];
+    NSMutableArray<NSString *> *kept = [NSMutableArray arrayWithCapacity:parts.count];
+    for (NSString *part in parts) {
+        // 只剥 v=<cacheKey> 这一个 param，其它 query 全部保留 —— 否则把不同身份
+        // (如 ?id=a 与 ?id=b) 的头像错误映射到同一 key，cell 复用时闪错图。
+        if (![part hasPrefix:@"v="]) {
+            [kept addObject:part];
+        }
+    }
+    if (kept.count == 0) return path;
+    return [NSString stringWithFormat:@"%@?%@", path, [kept componentsJoinedByString:@"&"]];
+}
+
 @end

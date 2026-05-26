@@ -259,12 +259,9 @@
     UIImage *cached = (avatarURL.length > 0)
                         ? [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:avatarURL]
                         : nil;
-    // 「去 query 的 base URL」兜底（同 GroupThreadCell，应对 SDK cacheKey 抖动）
-    NSString *stableKey = nil;
-    if (avatarURL.length > 0) {
-        NSRange q = [avatarURL rangeOfString:@"?"];
-        stableKey = (q.location == NSNotFound) ? avatarURL : [avatarURL substringToIndex:q.location];
-    }
+    // 「去 cache-busting v= 参数后的 URL」当 stable key（同 GroupThreadCell，应对 SDK
+    // cacheKey 抖动）。只剥 v=，保留其它 query 避免不同身份头像被错误归一。
+    NSString *stableKey = [WKAvatarUtil stableCacheKeyFromAvatarURL:avatarURL];
     UIImage *stableFallback = (cached == nil && stableKey.length > 0)
                                 ? [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:stableKey]
                                 : nil;
