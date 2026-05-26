@@ -15,11 +15,33 @@
 #import "WKForgetPasswordVC.h"
 #import "WKAuthWebViewVC.h"
 #import <WuKongBase/WKServerSettingHelper.h>
+#import <WuKongBase/WKWebViewVC.h>
+
+// 登录页根据 appconfig 下发的 oidc_providers 在两种形态切换:
+//   Octo:    无 SSO provider → 现有 Octo 账号密码登录布局 (form + login + register)
+//   SsoOnly: 有 SSO provider → app logo + 居中欢迎标题 + 主 SSO 按钮 + helper 文案
+// 互斥, 由 -computeMode 控制。和 web dmworklogin 行为差异: web SSO 模式下保留 Octo
+// 表单作为「已有账号」备用入口; iOS 这里按产品要求彻底隐藏 Octo, 没有备用入口。
+typedef NS_ENUM(NSUInteger, WKLoginViewMode) {
+    WKLoginViewModeOcto = 0,
+    WKLoginViewModeSsoOnly,
+};
+
+// 服务条款 / 隐私协议 PDF 静态 CDN URL。WKWebView 原生支持 PDF 直显, 走 WKWebViewVC
+// 加载即可, 不需要独立 PDF 渲染器。如果将来要按环境切换可改成走 appconfig 下发。
+static NSString * const kOctoTermsURL = @"https://cdn.example.com/legal-agreement/octo-terms.pdf";
+static NSString * const kOctoPrivacyURL = @"https://cdn.example.com/legal-agreement/octo-privacy.pdf";
+
 @interface WKLoginView() <UITextFieldDelegate> {
 }
 
+@property(nonatomic,assign) WKLoginViewMode currentMode;
+
 @property(nonatomic,strong) UIImageView *bgImgView; // 背景图
 @property(nonatomic,strong) UILabel *welcomeTitleLbl; // 欢迎标题
+
+// SsoOnly 模式才用的 hero logo
+@property(nonatomic,strong) UIImageView *heroLogoView;
 
 // ---------- 手机号输入相关 ----------
 @property(nonatomic,strong) UIView *mobileBoxView; // 手机号输入的box view
@@ -41,11 +63,17 @@
 @property(nonatomic,strong) UILabel *registerTipLbl; // 注册提示
 @property(nonatomic,strong) UIButton *registerBtn; // 注册
 
-// Aegis OIDC SSO button. Lazily built and shown once appconfig.oidc_providers 下发.
+// ---------- SSO 区 ----------
+@property(nonatomic,strong) UILabel *ssoSubtitleLbl; // SsoOnly 形态欢迎标题下的双行说明
 @property(nonatomic,strong) UIButton *ssoBtn;
+@property(nonatomic,strong) UILabel *ssoHelperLbl; // 按钮下方的 "身份认证由 X 提供 · 企业级安全"
 @property(nonatomic,strong) WKOidcProviderConfig *currentProvider;
 @property(nonatomic,assign) BOOL ssoInFlight; // 防止连续点击重复 push 授权页
 
+// ---------- 协议入口 ----------
+@property(nonatomic,strong) UIButton *termsBtn;
+@property(nonatomic,strong) UILabel *legalDotLbl;
+@property(nonatomic,strong) UIButton *privacyBtn;
 
 @end
 
@@ -54,10 +82,12 @@
 - (id)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if (!self) return nil;
-    
+
     _country = @"86";
-    
+    _currentMode = WKLoginViewModeOcto;
+
     [self addSubview:self.bgImgView];
+    [self addSubview:self.heroLogoView];
     [self addSubview:self.welcomeTitleLbl];
     self.welcomeTitleLbl.userInteractionEnabled = YES;
     UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(serverSettingLongPressed:)];
@@ -75,24 +105,27 @@
     self.countrySpliteLineView.hidden = YES;
     [self.mobileBoxView addSubview:self.mobileTextField];
     [self.mobileBoxView addSubview:self.mobileBottomLineView];
-    
+
     [self addSubview:self.passwordBoxView];
     [self.passwordBoxView addSubview:self.passwordBottomLineView];
     [self.passwordBoxView addSubview:self.passwordTextField];
     [self.passwordBoxView addSubview:self.eyeBtn];
-    
+
     [self addSubview:self.forgetPwdBtn];
     [self addSubview:self.loginBtn];
     [self addSubview:self.registerTipLbl];
     [self addSubview:self.registerBtn];
 
-    // Aegis SSO entry — hidden until oidc_providers arrive from appconfig.
     [self addSubview:self.ssoBtn];
-    [self refreshOidcProviders];
-    
-    
-    
-    
+    [self addSubview:self.ssoSubtitleLbl];
+    [self addSubview:self.ssoHelperLbl];
+
+    [self addSubview:self.termsBtn];
+    [self addSubview:self.legalDotLbl];
+    [self addSubview:self.privacyBtn];
+
+    [self refreshDynamicConfig];
+
     return self;
 }
 
@@ -105,6 +138,20 @@
         _bgImgView.frame = self.bounds;
     }
     return _bgImgView;
+}
+
+// ---------- Hero Logo (SsoOnly) ----------
+- (UIImageView *)heroLogoView {
+    if(!_heroLogoView) {
+        _heroLogoView = [[UIImageView alloc] init];
+        _heroLogoView.contentMode = UIViewContentModeScaleAspectFit;
+        _heroLogoView.image = [WKApp appLaunchIcon];
+        // 圆角和 app 图标在 home screen 上的视觉一致 (iOS 默认 ~22.37% 圆角率, 80pt 取 18pt)
+        _heroLogoView.layer.masksToBounds = YES;
+        _heroLogoView.layer.cornerRadius = 18.0f;
+        _heroLogoView.hidden = YES; // 默认 Octo 模式隐藏
+    }
+    return _heroLogoView;
 }
 
 // ---------- 欢迎标题 ----------
@@ -131,7 +178,7 @@
 - (UIButton *)countryBtn {
     if(!_countryBtn) {
         _countryBtn = [[UIButton alloc] initWithFrame:CGRectMake(0.0f, self.mobileBoxView.lim_height/2.0f - 10.0f, 70.0f, 20.0f)];
-        
+
         [[_countryBtn titleLabel] setFont:WKApp.shared.config.defaultFont];
         [_countryBtn setTitleColor:WKApp.shared.config.defaultTextColor forState:UIControlStateNormal];
         [_countryBtn addTarget:self action:@selector(countryBtnPressed) forControlEvents:UIControlEventTouchUpInside];
@@ -152,7 +199,7 @@
     if(!_countrySpliteLineView) {
         _countrySpliteLineView = [[UIView alloc] initWithFrame:CGRectMake(self.countryBtn.lim_right+10.0f,self.mobileBoxView.lim_height/2.0f - 5.0f,1,10)];
         _countrySpliteLineView.layer.backgroundColor = [WKApp shared].config.lineColor.CGColor;
-       
+
     }
     return _countrySpliteLineView;
 }
@@ -205,7 +252,7 @@
         _passwordTextField.returnKeyType = UIReturnKeyDone;
         _passwordTextField.secureTextEntry = YES;
         _passwordTextField.delegate = self;
-        
+
     }
     return _passwordTextField;
 }
@@ -256,9 +303,9 @@
         _loginBtn.layer.masksToBounds = YES;
         _loginBtn.layer.cornerRadius = 4.0f;
         [_loginBtn addTarget:self action:@selector(loginBtnPressed) forControlEvents:UIControlEventTouchUpInside];
-        
+
         [WKApp.shared.config setThemeStyleButton:_loginBtn];
-        
+
     }
     return _loginBtn;
 }
@@ -288,15 +335,13 @@
     return _registerBtn;
 }
 
-// ---------- Aegis SSO ----------
+// ---------- SSO 区 ----------
 - (UIButton *)ssoBtn {
     if(!_ssoBtn) {
-        _ssoBtn = [[UIButton alloc] initWithFrame:CGRectMake(30.0f, self.registerTipLbl.lim_bottom + 20.0f, WKScreenWidth - 60.0f, 40.0f)];
+        // 仅在 SsoOnly 模式下展示, 实际样式 (实心 themeColor + 锁图标) 在 -layoutSsoOnly 里 apply。
+        _ssoBtn = [[UIButton alloc] init];
         _ssoBtn.layer.masksToBounds = YES;
         _ssoBtn.layer.cornerRadius = 4.0f;
-        _ssoBtn.layer.borderWidth = 1.0f;
-        _ssoBtn.layer.borderColor = [WKApp shared].config.themeColor.CGColor;
-        [_ssoBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
         [[_ssoBtn titleLabel] setFont:[UIFont systemFontOfSize:15.0f]];
         [_ssoBtn addTarget:self action:@selector(ssoBtnPressed) forControlEvents:UIControlEventTouchUpInside];
         _ssoBtn.hidden = YES;
@@ -304,21 +349,247 @@
     return _ssoBtn;
 }
 
-- (void)refreshOidcProviders {
-    NSArray<WKOidcProviderConfig*> *providers = [WKApp shared].remoteConfig.oidcProviders;
-    // Match web behavior: use the first provider; multi-provider support is
-    // out of scope (web dmworklogin also renders a single primary CTA).
-    WKOidcProviderConfig *provider = providers.count > 0 ? providers.firstObject : nil;
-    self.currentProvider = provider;
-    if(!provider) {
-        self.ssoBtn.hidden = YES;
-        return;
+- (UILabel *)ssoSubtitleLbl {
+    if(!_ssoSubtitleLbl) {
+        _ssoSubtitleLbl = [[UILabel alloc] init];
+        _ssoSubtitleLbl.numberOfLines = 2;
+        _ssoSubtitleLbl.font = [UIFont systemFontOfSize:14.0f];
+        _ssoSubtitleLbl.textColor = [UIColor colorWithRed:140.0f/255.0f green:140.0f/255.0f blue:148.0f/255.0f alpha:1.0];
+        _ssoSubtitleLbl.textAlignment = NSTextAlignmentLeft;
+        _ssoSubtitleLbl.hidden = YES;
     }
-    NSString *displayName = provider.name.length > 0 ? provider.name : provider.providerId;
-    NSString *title = [NSString stringWithFormat:LLang(@"使用 %@ 登录或注册"), displayName];
-    [self.ssoBtn setTitle:title forState:UIControlStateNormal];
-    self.ssoBtn.hidden = NO;
+    return _ssoSubtitleLbl;
 }
+
+- (UILabel *)ssoHelperLbl {
+    if(!_ssoHelperLbl) {
+        _ssoHelperLbl = [[UILabel alloc] init];
+        _ssoHelperLbl.font = [UIFont systemFontOfSize:12.0f];
+        _ssoHelperLbl.textColor = [UIColor colorWithRed:153.0f/255.0f green:153.0f/255.0f blue:153.0f/255.0f alpha:1.0];
+        _ssoHelperLbl.textAlignment = NSTextAlignmentCenter;
+        _ssoHelperLbl.hidden = YES;
+    }
+    return _ssoHelperLbl;
+}
+
+// ---------- 协议入口 ----------
+- (UIButton *)termsBtn {
+    if(!_termsBtn) {
+        _termsBtn = [[UIButton alloc] init];
+        [_termsBtn setTitle:LLang(@"《服务协议》") forState:UIControlStateNormal];
+        [_termsBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
+        [[_termsBtn titleLabel] setFont:[UIFont systemFontOfSize:12.0f]];
+        [_termsBtn addTarget:self action:@selector(termsPressed) forControlEvents:UIControlEventTouchUpInside];
+    }
+    return _termsBtn;
+}
+
+- (UILabel *)legalDotLbl {
+    if(!_legalDotLbl) {
+        _legalDotLbl = [[UILabel alloc] init];
+        _legalDotLbl.text = @"·";
+        _legalDotLbl.font = [UIFont systemFontOfSize:12.0f];
+        _legalDotLbl.textColor = [UIColor colorWithRed:153.0f/255.0f green:153.0f/255.0f blue:153.0f/255.0f alpha:1.0];
+        _legalDotLbl.textAlignment = NSTextAlignmentCenter;
+    }
+    return _legalDotLbl;
+}
+
+- (UIButton *)privacyBtn {
+    if(!_privacyBtn) {
+        _privacyBtn = [[UIButton alloc] init];
+        [_privacyBtn setTitle:LLang(@"《隐私政策》") forState:UIControlStateNormal];
+        [_privacyBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
+        [[_privacyBtn titleLabel] setFont:[UIFont systemFontOfSize:12.0f]];
+        [_privacyBtn addTarget:self action:@selector(privacyPressed) forControlEvents:UIControlEventTouchUpInside];
+    }
+    return _privacyBtn;
+}
+
+#pragma mark -- 动态配置
+
+// 形态选择: 客户端写死「有 SSO provider → 只显示 SSO」, 不依赖额外服务端开关。
+// (与 web dmworklogin 的行为差异: web 在 SSO 模式下仍保留 Octo 表单作为「已有账号」
+// 备选; iOS 这里按产品要求彻底隐藏 Octo 入口, 给老用户的备用登录路径走「长按欢迎标题
+// 切服务器」+ 切到非 SSO 部署的入口, 或后端去掉 oidc_providers 临时回退。)
+- (WKLoginViewMode)computeMode {
+    NSArray<WKOidcProviderConfig*> *providers = [WKApp shared].remoteConfig.oidcProviders;
+    return providers.count > 0 ? WKLoginViewModeSsoOnly : WKLoginViewModeOcto;
+}
+
+// SsoOnly 模式下, 取第一个 provider 作为主 CTA (web dmworklogin 也是单 provider 单 CTA)。
+- (WKOidcProviderConfig *)pickPrimaryProvider {
+    NSArray<WKOidcProviderConfig*> *providers = [WKApp shared].remoteConfig.oidcProviders;
+    return providers.count > 0 ? providers.firstObject : nil;
+}
+
+- (void)refreshDynamicConfig {
+    self.currentProvider = [self pickPrimaryProvider];
+    WKLoginViewMode mode = [self computeMode];
+    self.currentMode = mode;
+    [self applyLayoutForMode:mode];
+}
+
+- (void)applyLayoutForMode:(WKLoginViewMode)mode {
+    if(mode == WKLoginViewModeSsoOnly) {
+        [self layoutSsoOnly];
+    } else {
+        [self layoutOcto];
+    }
+
+    [self layoutLegalFooter];
+}
+
+// Octo 模式: 没有 SSO provider 时走原始布局 (form + login + register). SSO 区视图整组隐藏。
+// (computeMode 保证此分支下 oidcProviders 必为空, 所以不需要再 if hasSso, 也不需要 SSO 分割线 / helper。)
+- (void)layoutOcto {
+    self.heroLogoView.hidden = YES;
+
+    // 欢迎标题: 还原成 "欢迎登录Octo" (SsoOnly 模式可能改成过 "欢迎回来")
+    self.welcomeTitleLbl.textAlignment = NSTextAlignmentLeft;
+    NSMutableAttributedString *titleStr = [[NSMutableAttributedString alloc] initWithString:[NSString stringWithFormat:LLang(@"欢迎登录%@"), [WKApp shared].config.appName ?: @""] attributes:@{
+        NSFontAttributeName: [UIFont fontWithName:@"PingFangSC-Semibold" size:32.0f],
+        NSForegroundColorAttributeName: [UIColor colorWithRed:49/255.0 green:49/255.0 blue:49/255.0 alpha:1.0],
+    }];
+    self.welcomeTitleLbl.attributedText = titleStr;
+    self.welcomeTitleLbl.frame = CGRectMake(30, 93, WKScreenWidth-60, 50);
+
+    self.mobileBoxView.hidden = NO;
+    self.passwordBoxView.hidden = NO;
+    self.forgetPwdBtn.hidden = NO;
+    self.loginBtn.hidden = NO;
+    self.registerTipLbl.hidden = NO;
+    self.registerBtn.hidden = NO;
+
+    self.ssoBtn.hidden = YES;
+    self.ssoSubtitleLbl.hidden = YES;
+    self.ssoHelperLbl.hidden = YES;
+}
+
+// SsoOnly 模式: logo (居中) + 欢迎回来 (左对齐) + 双行副标题 (左对齐) + 主 SSO 按钮 + 信任标记。
+// 文案 / 图标参考 Aegis 登录设计稿: 盾牌+对勾 主图标, 「身份认证由 X 提供 · 企业级安全」信任标记。
+- (void)layoutSsoOnly {
+    WKOidcProviderConfig *provider = self.currentProvider;
+    NSString *displayName = provider.name.length > 0 ? provider.name : provider.providerId;
+    NSString *appName = [WKApp shared].config.appName ?: @"Octo";
+
+    // Octo 表单整组隐藏
+    self.mobileBoxView.hidden = YES;
+    self.passwordBoxView.hidden = YES;
+    self.forgetPwdBtn.hidden = YES;
+    self.loginBtn.hidden = YES;
+    self.registerTipLbl.hidden = YES;
+    self.registerBtn.hidden = YES;
+
+    // Hero logo (不变)
+    CGFloat logoSize = 80.0f;
+    CGFloat logoTop = 140.0f;
+    self.heroLogoView.hidden = NO;
+    self.heroLogoView.frame = CGRectMake((WKScreenWidth - logoSize)/2.0f, logoTop, logoSize, logoSize);
+
+    // 欢迎标题: 左对齐, "欢迎回来" (长按手势保留)
+    CGFloat sideMargin = 30.0f;
+    self.welcomeTitleLbl.textAlignment = NSTextAlignmentLeft;
+    NSMutableAttributedString *titleStr = [[NSMutableAttributedString alloc] initWithString:LLang(@"欢迎回来") attributes:@{
+        NSFontAttributeName: [UIFont fontWithName:@"PingFangSC-Semibold" size:32.0f],
+        NSForegroundColorAttributeName: [UIColor colorWithRed:49/255.0 green:49/255.0 blue:49/255.0 alpha:1.0],
+    }];
+    self.welcomeTitleLbl.attributedText = titleStr;
+    self.welcomeTitleLbl.frame = CGRectMake(sideMargin, self.heroLogoView.lim_bottom + 40.0f, WKScreenWidth - sideMargin*2, 44);
+
+    // 双行副标题: "使用 X 安全登录你的 Y 账号\n新用户首次登录将自动创建账号"
+    self.ssoSubtitleLbl.hidden = NO;
+    self.ssoSubtitleLbl.text = [NSString stringWithFormat:LLang(@"使用 %@ 安全登录你的 %@ 账号\n新用户首次登录将自动创建账号"), displayName, appName];
+    self.ssoSubtitleLbl.frame = CGRectMake(sideMargin, self.welcomeTitleLbl.lim_bottom + 12.0f, WKScreenWidth - sideMargin*2, 44);
+
+    // 主 SSO 按钮: 实心 themeColor, 56pt 高, 大圆角, 盾牌+对勾 图标
+    self.ssoBtn.hidden = NO;
+    self.ssoBtn.backgroundColor = [WKApp shared].config.themeColor;
+    self.ssoBtn.layer.borderWidth = 0.0f;
+    self.ssoBtn.layer.cornerRadius = 12.0f;
+    [self.ssoBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [[self.ssoBtn titleLabel] setFont:[UIFont fontWithName:@"PingFangSC-Semibold" size:17.0f]];
+    // SF Symbol checkmark.shield.fill (iOS 13+, 工程 deployment target iOS 14)
+    UIImage *shieldImg = nil;
+    if(@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *conf = [UIImageSymbolConfiguration configurationWithPointSize:20.0f weight:UIImageSymbolWeightSemibold];
+        shieldImg = [[UIImage systemImageNamed:@"checkmark.shield.fill" withConfiguration:conf] imageWithTintColor:[UIColor whiteColor] renderingMode:UIImageRenderingModeAlwaysOriginal];
+    }
+    [self.ssoBtn setImage:shieldImg forState:UIControlStateNormal];
+    self.ssoBtn.imageView.contentMode = UIViewContentModeScaleAspectFit;
+    [self.ssoBtn setImageEdgeInsets:UIEdgeInsetsMake(0, 0, 0, 10)];
+    [self.ssoBtn setTitleEdgeInsets:UIEdgeInsetsMake(0, 10, 0, 0)];
+    [self.ssoBtn setTitle:[NSString stringWithFormat:LLang(@"使用 %@ 登录"), displayName] forState:UIControlStateNormal];
+    CGFloat btnHeight = 56.0f;
+    CGFloat btnTop = self.ssoSubtitleLbl.lim_bottom + 40.0f;
+    CGFloat btnSide = 20.0f;
+    self.ssoBtn.frame = CGRectMake(btnSide, btnTop, WKScreenWidth - btnSide*2, btnHeight);
+
+    // 信任标记: 盾牌(描边) + "身份认证由 X 提供 · 企业级安全", 居中。
+    // NSTextAttachment 把图标内嵌到 attributed string 里, 保证 UILabel 整体居中对齐。
+    self.ssoHelperLbl.hidden = NO;
+    UIColor *helperColor = [UIColor colorWithRed:140.0f/255.0f green:140.0f/255.0f blue:148.0f/255.0f alpha:1.0];
+    UIFont *helperFont = [UIFont systemFontOfSize:12.0f];
+    NSMutableAttributedString *helperStr = [[NSMutableAttributedString alloc] init];
+    if(@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *shieldConf = [UIImageSymbolConfiguration configurationWithPointSize:11.0f weight:UIImageSymbolWeightRegular];
+        UIImage *helperShield = [[UIImage systemImageNamed:@"shield" withConfiguration:shieldConf] imageWithTintColor:helperColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+        NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
+        attachment.image = helperShield;
+        // 微调让图标基线和文字对齐 (盾牌图形偏上, -2 让它视觉居中)
+        attachment.bounds = CGRectMake(0, -2.0f, helperShield.size.width, helperShield.size.height);
+        [helperStr appendAttributedString:[NSAttributedString attributedStringWithAttachment:attachment]];
+        [helperStr appendAttributedString:[[NSAttributedString alloc] initWithString:@"  "]];
+    }
+    NSString *helperText = [NSString stringWithFormat:LLang(@"身份认证由 %@ 提供 · 企业级安全"), displayName];
+    [helperStr appendAttributedString:[[NSAttributedString alloc] initWithString:helperText attributes:@{
+        NSFontAttributeName: helperFont,
+        NSForegroundColorAttributeName: helperColor,
+    }]];
+    self.ssoHelperLbl.attributedText = helperStr;
+    self.ssoHelperLbl.frame = CGRectMake(20.0f, self.ssoBtn.lim_bottom + 16.0f, WKScreenWidth - 40.0f, 18.0f);
+}
+
+- (void)layoutLegalFooter {
+    // 安全区底 + 24pt 留白
+    CGFloat bottomSafe = 0.0f;
+    if(@available(iOS 11.0, *)) {
+        UIWindow *window = [UIApplication sharedApplication].keyWindow;
+        bottomSafe = window.safeAreaInsets.bottom;
+    }
+    CGFloat footerHeight = 16.0f;
+    CGFloat footerTop = WKScreenHeight - bottomSafe - 24.0f - footerHeight;
+
+    [self.termsBtn sizeToFit];
+    [self.privacyBtn sizeToFit];
+    CGFloat dotW = 8.0f;
+    CGFloat gap = 6.0f;
+    CGFloat totalW = self.termsBtn.lim_width + gap + dotW + gap + self.privacyBtn.lim_width;
+    CGFloat startX = (WKScreenWidth - totalW)/2.0f;
+
+    self.termsBtn.frame = CGRectMake(startX, footerTop, self.termsBtn.lim_width, footerHeight);
+    self.legalDotLbl.frame = CGRectMake(self.termsBtn.lim_right + gap, footerTop, dotW, footerHeight);
+    self.privacyBtn.frame = CGRectMake(self.legalDotLbl.lim_right + gap, footerTop, self.privacyBtn.lim_width, footerHeight);
+}
+
+#pragma mark -- 协议入口跳转
+- (void)termsPressed {
+    [self openWebURL:kOctoTermsURL];
+}
+
+- (void)privacyPressed {
+    [self openWebURL:kOctoPrivacyURL];
+}
+
+- (void)openWebURL:(NSString *)urlString {
+    NSURL *url = [NSURL URLWithString:urlString];
+    if(!url) return;
+    WKWebViewVC *vc = [[WKWebViewVC alloc] init];
+    vc.url = url;
+    [[WKNavigationManager shared] pushViewController:vc animated:YES];
+}
+
+#pragma mark -- SSO
 
 -(void) ssoBtnPressed {
     if(self.ssoInFlight) return;
@@ -413,7 +684,7 @@
         }
         [self updateCountryBtnTitle];
     };
-    
+
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
     nav.modalPresentationStyle = UIModalPresentationFullScreen;
     [[[WKNavigationManager shared] topViewController] presentViewController:nav animated:YES completion:nil];
@@ -472,7 +743,7 @@
     }).catch(^(NSError *error){
         [weakself showHUDWithHide:error.domain];
     });
-   
+
 }
 
 -(void) githubLoginPressed {
@@ -521,9 +792,9 @@
     self.passwordBottomLineView.layer.backgroundColor = [WKApp shared].config.lineColor.CGColor;
     self.countrySpliteLineView.layer.backgroundColor = [WKApp shared].config.lineColor.CGColor;
     self.mobileBottomLineView.layer.backgroundColor = [WKApp shared].config.lineColor.CGColor;
-    if(_ssoBtn) {
-        _ssoBtn.layer.borderColor = [WKApp shared].config.themeColor.CGColor;
-        [_ssoBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
+    // SsoOnly 模式下重新 apply themeColor 实心背景; Octo 模式 ssoBtn 隐藏, 不用管。
+    if(_ssoBtn && self.currentMode == WKLoginViewModeSsoOnly) {
+        _ssoBtn.backgroundColor = [WKApp shared].config.themeColor;
     }
 }
 
