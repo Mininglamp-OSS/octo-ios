@@ -72,6 +72,7 @@
 @property(nonatomic,strong) UILabel *threadSourceLbl; // 子区行 title 上方的父群名，仅最近 tab + 子区显示
 
 @property(nonatomic,copy) NSString *lastAvatarChannelId; // 上一次 refreshAvatar 对应的 channelId，用于判断 cell 是否被复用到不同会话
+@property(nonatomic,copy) NSString *lastAppliedAvatarURL; // 上一次 applyAvatarURL: 实际下发的 URL —— 复用判定用
 
 @end
 
@@ -502,11 +503,9 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     BOOL hasChannelInfo  = model.channelInfo?true:false;
     UIImage *placeholder = [self imageName:@"Common/Index/DefaultAvatar"];
     NSString *channelId = model.channel.channelId;
-    // lastAvatarChannelId 已不再用于 placeholder 决策（之前会触发"返回会话列表时子区
-    // 头像闪默认占位"），avatar 的"placeholder 兜底 vs 真实图替换" 已下沉到
-    // applyAvatarURL:placeholder: helper：优先同步 memory cache 真实头像 → image=nil
-    // 兜底 placeholder → 复用残留时保留旧 image。这里保留 channelId 跟踪供其他业务用。
-    self.lastAvatarChannelId = channelId;
+    // 复用判定：先记下上次的 channelId（applyAvatarURL: 需要靠它区分"同会话刷新（cacheKey
+    // 变了 / 进聊天页回来）" vs "cell 被复用到不同会话"。本方法尾部再覆盖。
+    NSString *prevChannelId = self.lastAvatarChannelId;
 
     // 最近 tab 的子区行：右下角 hash 角标（参考 web）。头像本身不再 override —
     // 服务端在子区 channelInfo.logo 里通常已经填了父群头像 URL，原有 hasChannelInfo
@@ -572,9 +571,11 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
             }
         }
         // 用 helper 替换原 lim_setImageWithURL：先同步查 SDImageCache memory cache,
-        // 命中直接 set 真实头像（"动态 placeholder"），miss 时根据 image 是否为 nil 决定
-        // 兜底 placeholder 还是保留 cell 复用残留。彻底消除子区返回会话列表时的默认头像闪。
-        [self applyAvatarURL:avatarURL placeholder:placeholder];
+        // 命中直接 set 真实头像（"动态 placeholder"），miss 时按"同 URL/同 channel 保留，
+        // 复用到异会话清掉"决策，彻底消除子区返回会话列表时的默认头像闪 / 进聊天详情
+        // 返回时本会话头像短暂空白。
+        [self applyAvatarURL:avatarURL placeholder:placeholder
+               prevChannelId:prevChannelId currChannelId:channelId];
     } else {
         if (self.recentTabContext && model.channel.channelType == WK_COMMUNITY_TOPIC) {
             // 子区 channelInfo 还没加载到时，仍然用父群 URL 拼一发 — getGroupAvatar
@@ -591,7 +592,8 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
                 NSLog(@"[ThreadAvatar][noChannelInfo] thread=%@ parent=%@ parentInfoCached=%d avatarURL=%@",
                       model.channel.channelId, groupNo, parentInfo != nil, avatarURL);
 #endif
-                [self applyAvatarURL:avatarURL placeholder:placeholder];
+                [self applyAvatarURL:avatarURL placeholder:placeholder
+                       prevChannelId:prevChannelId currChannelId:channelId];
             } else {
                 self.avatarImgView.avatarImgView.image = placeholder;
             }
@@ -599,6 +601,8 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
             self.avatarImgView.avatarImgView.image = placeholder;
         }
     }
+    // 在尾部统一更新，prevChannelId 已在方法开头取走 → 复用判定不会自比对
+    self.lastAvatarChannelId = channelId;
 }
 
 /// avatar 加载统一入口：先同步查 SDImageCache memory cache，命中直接用真实头像作为
@@ -612,21 +616,79 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
 /// 这里手动同步查 memory cache 复制 SDWebImage 内部行为：命中就用 cached 真实图替代
 /// 默认 placeholder。lim_setImageWithURL 的 SDWebImageDelayPlaceholder 配合：cache miss
 /// 不立即覆盖现有 image (保留复用残留 / 兜底 placeholder)，等异步加载完替换。
-- (void)applyAvatarURL:(NSString *)avatarURL placeholder:(UIImage *)placeholder {
+- (void)applyAvatarURL:(NSString *)avatarURL
+           placeholder:(UIImage *)placeholder
+       prevChannelId:(NSString *)prevChannelId
+        currChannelId:(NSString *)currChannelId {
     UIImage *cached = avatarURL.length > 0 ? [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:avatarURL] : nil;
+    // 「去 query 的 base URL」兜底：SDK addOrUpdateMembers 会调 refreshAvatarCacheKey
+    // 让 avatarCacheKey 每次 fetch 都换 UUID（URL 里 ?v= 抖动），SDImageCache 按完整 URL
+    // 做 key 必 miss。我们在每次成功 load 后用 base URL 当 stable key 多存一份，下次
+    // miss 时拿来当占位 → 同一张图，无视觉变化。
+    NSString *stableKey = [self.class _stableImageKeyForURL:avatarURL];
+    UIImage *stableFallback = (cached == nil && stableKey.length > 0)
+                                ? [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:stableKey]
+                                : nil;
+    // 复用判定：现有 image 是否能作为本次加载的"动态占位"
+    //   - 同 URL：肯定能（同一张图，加载完就是它本身）
+    //   - 同 channelId：同一会话，URL 变了只可能是 cacheKey bump，头像主体仍是本会话的
+    //   - 都不同：cell 被复用到别的会话，旧 image 是别群/别人的 → 必须清掉
+    BOOL sameURL = (self.lastAppliedAvatarURL.length > 0
+                    && [self.lastAppliedAvatarURL isEqualToString:avatarURL ?: @""]);
+    BOOL sameChannel = (prevChannelId.length > 0
+                        && currChannelId.length > 0
+                        && [prevChannelId isEqualToString:currChannelId]);
+    BOOL safeToKeepImage = sameURL || sameChannel;
+#if DEBUG
+    BOOL hadImage = (self.avatarImgView.avatarImgView.image != nil);
+    NSLog(@"[AvatarDbg][ListCell] ch=%@ prev=%@ url=%@ prevUrl=%@ sameURL=%d sameChannel=%d cacheHit=%d stableHit=%d hadImage=%d → %@",
+          currChannelId, prevChannelId,
+          avatarURL ?: @"<nil>", self.lastAppliedAvatarURL ?: @"<nil>",
+          sameURL, sameChannel, cached != nil, stableFallback != nil, hadImage,
+          cached ? @"USE_CACHED" : (stableFallback ? @"USE_STABLE" : (safeToKeepImage ? @"KEEP_OLD" : @"CLEAR")));
+#endif
     if (cached) {
-        // memory cache 命中：直接显示真实头像 → SDWebImage 异步加载是 noop / 同款图，无视觉变化
+        // memory cache 命中：直接显示真实头像
         self.avatarImgView.avatarImgView.image = cached;
-    } else if (self.avatarImgView.avatarImgView.image == nil) {
-        // memory cache miss + cell 第一次 dequeue（fresh instance, image 为 nil） → 兜底 placeholder
-        // 避免头像区域空白
-        self.avatarImgView.avatarImgView.image = placeholder;
+    } else if (stableFallback) {
+        // 完整 URL miss 但 base URL stable key 命中（URL 抖动场景）：用上次的同一张
+        // 图当占位，等 SDWebImage 异步加载新 URL（极大概率拿到同款图）→ 无视觉变化
+        self.avatarImgView.avatarImgView.image = stableFallback;
+        // 关键：把 stable image 顺手以本次新 URL 为 key 预灌一份到 memory cache，
+        // 这样下面 sd_setImage 内部 cache 查询直接命中 → 跳过网络下载 → 没有
+        // "下载中 → 失败兜 placeholder" 的窗口，也没有 SDWebImage cancel/restart 抖动。
+        // 真避免：仅 cacheKey 抖动而 content 未变的"假更新"。content 真变（logo 路径
+        // 或 displayName 改）由 channelInfoUpdate 的 fingerprint guard 触发 reload 时
+        // 走完整新 URL 网络加载。
+        if (avatarURL.length > 0) {
+            [[SDImageCache sharedImageCache] storeImageToMemory:stableFallback forKey:avatarURL];
+        }
+    } else if (!safeToKeepImage) {
+        // cache 全 miss + cell 被复用到别的会话：清掉残留，避免错图
+        self.avatarImgView.avatarImgView.image = nil;
     }
-    // memory cache miss + image 已有（cell 复用） → 保留旧图，等异步加载完替换
+    // safeToKeepImage：保留旧 image，等异步加载完替换
+    self.lastAppliedAvatarURL = avatarURL ?: @"";
+    NSString *stableKeyForCompletion = stableKey;
     [self.avatarImgView.avatarImgView lim_setImageWithURL:[NSURL URLWithString:avatarURL ?: @""]
                                          placeholderImage:placeholder
                                                   options:SDWebImageDelayPlaceholder
-                                                  context:@{SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll)}];
+                                                  context:@{SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll)}
+                                                completed:^(UIImage * _Nullable image, NSError * _Nullable error, SDImageCacheType cacheType, NSURL * _Nullable imageURL) {
+        if (image && stableKeyForCompletion.length > 0) {
+            // 复制一份到 stable key —— 下次 URL 抖动时兜底
+            [[SDImageCache sharedImageCache] storeImageToMemory:image forKey:stableKeyForCompletion];
+        }
+    }];
+}
+
+/// 把头像 URL 的 query string 去掉（`?v=xxx`），作为 SDImageCache 的稳定 key。
+/// 同一会话不同 cacheKey 抖动时映射到同一 key → 下次 miss 也能用同一张图兜底。
++ (NSString *)_stableImageKeyForURL:(NSString *)url {
+    if (url.length == 0) return nil;
+    NSRange r = [url rangeOfString:@"?"];
+    if (r.location == NSNotFound) return url;
+    return [url substringToIndex:r.location];
 }
 
 -(void) refreshOnlineStatus:(WKConversationWrapModel*)model {
