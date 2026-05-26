@@ -119,14 +119,18 @@ static const NSInteger kPageSize = 15;
 }
 
 - (void)loadThreads {
-    if (self.loading) return;
+    // 不再用 self.loading 早 return — 否则用户在飞行中切 tab,
+    // onSegmentChanged → loadThreads 会被吞掉, 旧 tab 的回包还
+    // 写进 UI, 选中的 tab 显示错状态. 改为 capture 本次请求的
+    // status, 回调时和当前 segment 比一致才写, 不一致丢弃.
     self.loading = YES;
     self.currentPage = 1;
     [self.allLoadedThreads removeAllObjects];
 
     __weak typeof(self) weakSelf = self;
-    NSString *status = [self currentStatusParam];
-    [[WKThreadService shared] listThreads:self.groupNo status:status pageIndex:1 pageSize:kPageSize].then(^(NSDictionary *result) {
+    NSString *requestedStatus = [self currentStatusParam];
+    [[WKThreadService shared] listThreads:self.groupNo status:requestedStatus pageIndex:1 pageSize:kPageSize].then(^(NSDictionary *result) {
+        if (![requestedStatus isEqualToString:[weakSelf currentStatusParam]]) return; // stale
         weakSelf.loading = NO;
         [weakSelf.refreshControl endRefreshing];
         weakSelf.totalCount = [result[@"count"] integerValue];
@@ -135,6 +139,7 @@ static const NSInteger kPageSize = 15;
         [weakSelf filterAndReload];
         [weakSelf updateFooterVisibility];
     }).catch(^(NSError *error) {
+        if (![requestedStatus isEqualToString:[weakSelf currentStatusParam]]) return; // stale
         weakSelf.loading = NO;
         [weakSelf.refreshControl endRefreshing];
         [weakSelf.view showMsg:error.domain];
@@ -150,10 +155,15 @@ static const NSInteger kPageSize = 15;
     self.isLoadingMore = YES;
     [self.footerSpinner startAnimating];
     NSInteger nextPage = self.currentPage + 1;
-    NSString *status = [self currentStatusParam];
+    NSString *requestedStatus = [self currentStatusParam];
 
     __weak typeof(self) weakSelf = self;
-    [[WKThreadService shared] listThreads:self.groupNo status:status pageIndex:nextPage pageSize:kPageSize].then(^(NSDictionary *result) {
+    [[WKThreadService shared] listThreads:self.groupNo status:requestedStatus pageIndex:nextPage pageSize:kPageSize].then(^(NSDictionary *result) {
+        if (![requestedStatus isEqualToString:[weakSelf currentStatusParam]]) { // stale
+            weakSelf.isLoadingMore = NO;
+            [weakSelf.footerSpinner stopAnimating];
+            return;
+        }
         weakSelf.isLoadingMore = NO;
         [weakSelf.footerSpinner stopAnimating];
         weakSelf.totalCount = [result[@"count"] integerValue];

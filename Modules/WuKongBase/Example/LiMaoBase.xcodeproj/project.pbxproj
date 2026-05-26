@@ -402,12 +402,10 @@
 			inputPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-LiMaoBase_Example/Pods-LiMaoBase_Example-resources.sh",
 				"${PODS_CONFIGURATION_BUILD_DIR}/RiveRuntime/runtime_ios_privacy.bundle",
-				"${PODS_ROOT}/WuKongIMSDK/ios/WuKongIMSDK.framework/WuKongIMSDK.bundle",
 			);
 			name = "[CP] Copy Pods Resources";
 			outputPaths = (
 				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/runtime_ios_privacy.bundle",
-				"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/WuKongIMSDK.bundle",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -443,7 +441,6 @@
 			);
 			inputPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-LiMaoBase_Example/Pods-LiMaoBase_Example-frameworks.sh",
-				"${BUILT_PRODUCTS_DIR}/25519/_25519.framework",
 				"${BUILT_PRODUCTS_DIR}/AFNetworking/AFNetworking.framework",
 				"${BUILT_PRODUCTS_DIR}/ActionSheetPicker-3.0/ActionSheetPicker_3_0.framework",
 				"${BUILT_PRODUCTS_DIR}/AsyncDisplayKit/AsyncDisplayKit.framework",
@@ -464,11 +461,12 @@
 				"${BUILT_PRODUCTS_DIR}/SDWebImageLottieCoder/SDWebImageLottieCoder.framework",
 				"${BUILT_PRODUCTS_DIR}/SDWebImageWebPCoder/SDWebImageWebPCoder.framework",
 				"${BUILT_PRODUCTS_DIR}/SQLCipher/SQLCipher.framework",
+				"${BUILT_PRODUCTS_DIR}/SwiftConfettiView/SwiftConfettiView.framework",
 				"${BUILT_PRODUCTS_DIR}/TOCropViewController/TOCropViewController.framework",
 				"${BUILT_PRODUCTS_DIR}/TZImagePickerController/TZImagePickerController.framework",
 				"${BUILT_PRODUCTS_DIR}/Toast/Toast.framework",
 				"${BUILT_PRODUCTS_DIR}/WuKongBase/WuKongBase.framework",
-				"${PODS_ROOT}/WuKongIMSDK/ios/WuKongIMSDK.framework",
+				"${BUILT_PRODUCTS_DIR}/WuKongIMSDK/WuKongIMSDK.framework",
 				"${BUILT_PRODUCTS_DIR}/YBImageBrowser/YBImageBrowser.framework",
 				"${BUILT_PRODUCTS_DIR}/YYImage/YYImage.framework",
 				"${BUILT_PRODUCTS_DIR}/ZLImageEditor/ZLImageEditor.framework",
@@ -482,7 +480,6 @@
 			);
 			name = "[CP] Embed Pods Frameworks";
 			outputPaths = (
-				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/_25519.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/AFNetworking.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/ActionSheetPicker_3_0.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/AsyncDisplayKit.framework",
@@ -503,6 +500,7 @@
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/SDWebImageLottieCoder.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/SDWebImageWebPCoder.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/SQLCipher.framework",
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/SwiftConfettiView.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/TOCropViewController.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/TZImagePickerController.framework",
 				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/Toast.framework",

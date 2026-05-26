@@ -20,12 +20,11 @@ typedef void(^onLogin)(NSString*mobile,NSString*password,NSString *country);
 - (void)viewConfigChange:(WKViewConfigChangeType)type;
 
 // Refresh the login page UI based on the current `WKAppRemoteConfig`:
-// - `loginEnable` / `registerEnable` (新): 是否展示 Octo 自有账号密码登录 / 注册入口
-// - `oidcProviders` (老): 是否展示 Aegis SSO 按钮
-// 三个开关组合出三种形态:
-//   A) loginEnable=YES         → 现状布局（含 SSO 按钮可选）, 表单 + 登录 + 可选注册 + 可选 SSO
-//   B) loginEnable=NO + 有 SSO → SSO-only 形态: app logo + 居中欢迎标题 + 主 SSO 按钮 + helper
-//   C) loginEnable=NO + 无 SSO → 兜底回到 A 避免登录页全空白
+// - 有 `oidcProviders` → SSO-only 形态: app logo + 居中欢迎标题 + 主 SSO 按钮 + helper
+// - 无 `oidcProviders` → 标准布局: 表单 + 登录 + 注册入口
+// (历史注释提到的 `loginEnable` / `registerEnable` 字段在 WKAppRemoteConfig 上并不存在,
+//  当前形态切换只看 oidcProviders 是否非空; 如未来要单独控制 Octo 自有账号入口,
+//  需先在 WKAppRemoteConfig 上加字段, 这里再扩展.)
 // Safe to call repeatedly; idempotent.
 - (void)refreshDynamicConfig;
 @end

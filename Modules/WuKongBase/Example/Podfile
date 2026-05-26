@@ -2,8 +2,19 @@ use_frameworks!
 
 platform :ios, '14.0'
 
+# 与主仓库 Podfile 同样的补丁: Bugly 是腾讯静态库, use_frameworks! +
+# 静态 SDK 组合下 CocoaPods 会硬阻断, monkey-patch 关掉这条检查 — 实际
+# 链接行为正确. 详见仓库根 Podfile 的同名注释.
+class Pod::Installer::Xcode::TargetValidator
+  def verify_no_static_framework_transitive_dependencies; end
+end
+
 target 'LiMaoBase_Example' do
   pod 'WuKongBase', :path => '../'
+  # 锁本地 WuKongIMSDK 路径, 避免 Example 走 CocoaPods CDN 的旧版本
+  # (旧版仍依赖 GPL v2 的 25519 pod, 本仓库已改用 CryptoKit, 见
+  # Modules/WuKongIMiOSSDK/WuKongIMSDK/Classes/manager/WKCurve25519.swift).
+  pod 'WuKongIMSDK', :path => '../../WuKongIMiOSSDK'
 
   target 'LiMaoBase_Tests' do
     inherit! :search_paths

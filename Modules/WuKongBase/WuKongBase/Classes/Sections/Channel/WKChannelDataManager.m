@@ -1,6 +1,6 @@
 //
 //  WKChannelDataManager.m
-//  25519
+//  WuKongBase
 //
 //  Created by tt on 2022/12/2.
 //
