@@ -85,30 +85,8 @@
     if (!_appIconView) {
         _appIconView = [[UIImageView alloc] init];
         _appIconView.contentMode = UIViewContentModeScaleAspectFit;
-        // 从 Info.plist 读取实际的 App Icon 文件名
-        UIImage *appIcon = nil;
-        NSDictionary *infoDic = [[NSBundle mainBundle] infoDictionary];
-        // 优先尝试新格式（Xcode 14+）
-        NSString *iconName = infoDic[@"CFBundleIcons"][@"CFBundlePrimaryIcon"][@"CFBundleIconName"];
-        if (iconName) {
-            appIcon = [UIImage imageNamed:iconName];
-        }
-        // 回退旧格式
-        if (!appIcon) {
-            NSArray *iconFiles = infoDic[@"CFBundleIcons"][@"CFBundlePrimaryIcon"][@"CFBundleIconFiles"];
-            if (iconFiles.count > 0) {
-                appIcon = [UIImage imageNamed:iconFiles.lastObject];
-            }
-        }
-        // 再回退：尝试常见名称
-        if (!appIcon) {
-            appIcon = [UIImage imageNamed:@"AppIcon"];
-        }
-        // 最终兜底：用 lanch_logo
-        if (!appIcon) {
-            appIcon = [UIImage imageNamed:@"lanch_logo"];
-        }
-        _appIconView.image = appIcon;
+        // 统一走 WKApp +appLaunchIcon (登录页也复用同一份解析逻辑)。
+        _appIconView.image = [WKApp appLaunchIcon];
     }
     return _appIconView;
 }
