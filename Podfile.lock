@@ -1,5 +1,4 @@
 PODS:
-  - 25519 (2.0.2)
   - ActionSheetPicker-3.0 (2.7.4)
   - AFNetworking (4.0.1):
     - AFNetworking/NSURLSession (= 4.0.1)
@@ -145,7 +144,6 @@ PODS:
     - WuKongBase
     - WuKongIMSDK
   - WuKongIMSDK (1.1.0):
-    - 25519 (~> 2.0.2)
     - CocoaAsyncSocket (~> 7.6.5)
     - FMDB/SQLCipher (~> 2.7.5)
   - WuKongLogin (0.1.0):
@@ -188,7 +186,6 @@ DEPENDENCIES:
 
 SPEC REPOS:
   trunk:
-    - '25519'
     - ActionSheetPicker-3.0
     - AFNetworking
     - Aspects
@@ -262,7 +259,6 @@ CHECKOUT OPTIONS:
     :git: https://github.com/tangtaoit/YYImage.git
 
 SPEC CHECKSUMS:
-  '25519': dc4bad7e2dbcbf1efa121068a705a44cd98c80fc
   ActionSheetPicker-3.0: a380d57270b6b2d321c4add024ba5c466a7f5cfd
   AFNetworking: 3bd23d814e976cd148d7d44c3ab78017b744cd58
   Aspects: 7595ba96a6727a58ebcbfc954497fc5d2fdde546
@@ -304,7 +300,7 @@ SPEC CHECKSUMS:
   WuKongBase: cb8e24dcf4a298604c389f81c07ba8a97998be66
   WuKongContacts: 8d67498a5c219c1f6520bd81224ef55d836f63a6
   WuKongDataSource: b9089cb962310af96af523032df4534e272cd932
-  WuKongIMSDK: b3905b92aa9eb313052c8b2d88271494ac7293a6
+  WuKongIMSDK: 5a09b65f7a67905ce3d572cd222f897beed81093
   WuKongLogin: 88bbcd7380c05ecef739715ce71b6319b8b95e84
   YBImageBrowser: 7ecc8bf33ffa5f3b94c397c29b4f3638dd37f527
   YYImage: 6db68da66f20d9f169ceb94dfb9947c3867b9665

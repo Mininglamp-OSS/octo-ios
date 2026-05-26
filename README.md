@@ -135,6 +135,9 @@ template lists every supported field — main ones:
 ### Optional integrations
 
 **Bugly crash reporting** (closed-source SDK, disabled by default):
+
+> ⚠️ Bugly is a Tencent commercial SDK governed by Tencent's own EULA, **not** Apache 2.0. The OSS distribution of Octo iOS ships **without** the Bugly framework — `pod install` only pulls it in when you provide your own `OCTO_BUGLY_APP_ID_MAIN`. Downstream redistributors who enable Bugly are responsible for accepting Tencent's terms.
+
 1. Register at https://bugly.qq.com and download the iOS SDK
 2. Place `Bugly.framework` at `Modules/WuKongBase/WuKongBase/Bugly.framework/`
 3. Fill `OCTO_BUGLY_APP_ID_MAIN` in `OctoConfig.xcconfig`

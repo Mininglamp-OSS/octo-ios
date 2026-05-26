@@ -29,18 +29,19 @@ Pod::Spec.new do |s|
   # s.social_media_url = 'https://twitter.com/<TWITTER_USERNAME>'
   s.platform     = :ios, '14.0'
   s.requires_arc = true
+  s.swift_versions = ['5.0']
 
   s.ios.deployment_target = '14.0'
-  
+
   s.vendored_libraries = 'WuKongIMSDK/Classes/private/arm/lib/*.a'
-  
+
   s.preserve_paths = 'WuKongIMSDK/Classes/private/arm/lib/*.a'
   s.libraries = 'opencore-amrnb', 'opencore-amrwb','vo-amrwbenc'
 
   s.source_files = 'WuKongIMSDK/Classes/**/*'
   s.public_header_files =  'WuKongIMSDK/Classes/**/*.h'
   s.private_header_files = 'WuKongIMSDK/Classes/private/**/*.h'
-  s.frameworks = 'UIKit', 'MapKit', 'Security'
+  s.frameworks = 'UIKit', 'MapKit', 'Security', 'CryptoKit'
 #  s.xcconfig = {
 #      'ENABLE_BITCODE' => 'NO',
 #      "OTHER_LDFLAGS" => "-ObjC"
@@ -58,5 +59,4 @@ Pod::Spec.new do |s|
 
   s.dependency 'CocoaAsyncSocket', '~> 7.6.5'
   s.dependency 'FMDB/SQLCipher', '~>2.7.5'
-  s.dependency '25519', '~>2.0.2'
 end

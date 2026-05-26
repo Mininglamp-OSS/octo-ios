@@ -6,12 +6,12 @@
 //
 
 #import "WKSecurityManager.h"
-#import "Curve25519.h"
+#import <WuKongIMSDK/WuKongIMSDK-Swift.h>
 #import<CommonCrypto/CommonDigest.h>
 #import "WKAESUtil.h"
 @interface WKSecurityManager ()
 
-@property(nonatomic,strong) ECKeyPair *curve25519Key;
+@property(nonatomic,strong) WKECKeyPair *curve25519Key;
 @property(nonatomic,copy) NSString *aesKey;
 @property(nonatomic,copy) NSString *aesIV;
 @end
@@ -37,7 +37,7 @@ static WKSecurityManager *_instance;
 }
 
 -(void) generateDHPair {
-    self.curve25519Key = [Curve25519 generateKeyPair];
+    self.curve25519Key = [WKCurve25519 generateKeyPair];
 }
 
 -(NSString*) getDHPubKey {
@@ -46,7 +46,7 @@ static WKSecurityManager *_instance;
 
 -(void) generateAesKey:(NSString*)pubKey salt:(NSString*)salt {
     NSData *pubKeyData = [[NSData alloc] initWithBase64EncodedString:pubKey options:NSDataBase64DecodingIgnoreUnknownCharacters];
-   NSData *sharedKeyData = [Curve25519 generateSharedSecretFromPublicKey:pubKeyData andKeyPair:self.curve25519Key];
+   NSData *sharedKeyData = [WKCurve25519 sharedSecretFromPublicKey:pubKeyData keyPair:self.curve25519Key];
     
     self.sharedKey =  [sharedKeyData base64EncodedStringWithOptions:NSDataBase64Encoding64CharacterLineLength];
     

@@ -134,6 +134,9 @@ Universal Links 配置见 [docs/universal-link-setup.md](docs/universal-link-set
 ### 可选集成
 
 **Bugly 崩溃统计**（闭源 SDK，默认禁用）：
+
+> ⚠️ Bugly 是腾讯的商业 SDK，遵循腾讯自有 EULA，**不是** Apache 2.0。Octo iOS 开源仓库**默认不内置** Bugly framework —— 只有当你在 `OCTO_BUGLY_APP_ID_MAIN` 填入自己的 AppID 时 `pod install` 才会拉取。下游若启用 Bugly，需自行接受腾讯条款。
+
 1. 到 https://bugly.qq.com 注册并下载 iOS SDK
 2. 把 `Bugly.framework` 放到 `Modules/WuKongBase/WuKongBase/Bugly.framework/`
 3. 在 `OctoConfig.xcconfig` 填入 `OCTO_BUGLY_APP_ID_MAIN`
