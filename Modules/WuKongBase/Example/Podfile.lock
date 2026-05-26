@@ -24,7 +24,6 @@ PODS:
     - AsyncDisplayKit/Core
     - PINCache (= 3.0.1-beta)
     - PINRemoteImage/iOS (= 3.0.0-beta.3)
-  - Bugly (2.6.1)
   - CocoaAsyncSocket (7.6.5)
   - CocoaLumberjack (3.9.1):
     - CocoaLumberjack/Core (= 3.9.1)
@@ -96,7 +95,6 @@ PODS:
     - ActionSheetPicker-3.0
     - AFNetworking (~> 4.0)
     - AsyncDisplayKit (~> 1.0)
-    - Bugly (~> 2.6)
     - CocoaAsyncSocket (~> 7.6.5)
     - CocoaLumberjack (~> 3.0)
     - DGActivityIndicatorView (~> 2.1.1)
@@ -155,7 +153,6 @@ SPEC REPOS:
     - ActionSheetPicker-3.0
     - AFNetworking
     - AsyncDisplayKit
-    - Bugly
     - CocoaAsyncSocket
     - CocoaLumberjack
     - DGActivityIndicatorView
@@ -198,7 +195,6 @@ SPEC CHECKSUMS:
   ActionSheetPicker-3.0: a380d57270b6b2d321c4add024ba5c466a7f5cfd
   AFNetworking: 3bd23d814e976cd148d7d44c3ab78017b744cd58
   AsyncDisplayKit: 49d94f5739669d666ff7cdc3430f43f0b2cfbeaf
-  Bugly: 217ac2ce5f0f2626d43dbaa4f70764c953a26a31
   CocoaAsyncSocket: 065fd1e645c7abab64f7a6a2007a48038fdc6a99
   CocoaLumberjack: e4ba3b414dfca8c1916c6303d37f63b3a95134c6
   DGActivityIndicatorView: ff2c76073d79692f724863c8dd38685866a03cb6
@@ -227,7 +223,7 @@ SPEC CHECKSUMS:
   Toast: 1f5ea13423a1e6674c4abdac5be53587ae481c4e
   TOCropViewController: da59f531f8ac8a94ef6d6c0fc34009350f9e8bfe
   TZImagePickerController: 2cad3db94ba70eb947d26c10ff5c66c9a93798c8
-  WuKongBase: cb8e24dcf4a298604c389f81c07ba8a97998be66
+  WuKongBase: 7816946025c82f1791c0e91a74fcae17e7fc721e
   WuKongIMSDK: 5a09b65f7a67905ce3d572cd222f897beed81093
   YBImageBrowser: 7ecc8bf33ffa5f3b94c397c29b4f3638dd37f527
   YYImage: 1e1b62a9997399593e4b9c4ecfbbabbf1d3f3b54

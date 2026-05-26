@@ -42,6 +42,10 @@ static const NSInteger kPageSize = 15;
 @property (nonatomic, assign) BOOL isLoadingMore;
 @property (nonatomic, assign) NSInteger currentPage;
 @property (nonatomic, assign) NSInteger totalCount;
+// 每次 loadThreads 启动 +1, callback 比对; 不一致就丢弃, 防止
+// 同 status 重复刷新 / active→archived→active 来回切时旧请求
+// 把 stale 数据 append/写入选中 tab.
+@property (nonatomic, assign) NSInteger loadGeneration;
 
 @end
 
@@ -119,10 +123,14 @@ static const NSInteger kPageSize = 15;
 }
 
 - (void)loadThreads {
-    // 不再用 self.loading 早 return — 否则用户在飞行中切 tab,
-    // onSegmentChanged → loadThreads 会被吞掉, 旧 tab 的回包还
-    // 写进 UI, 选中的 tab 显示错状态. 改为 capture 本次请求的
-    // status, 回调时和当前 segment 比一致才写, 不一致丢弃.
+    // 不再用 self.loading 早 return — 用户在飞行中切 tab 时
+    // onSegmentChanged → loadThreads 不能被吞掉. 改用 generation
+    // token: capture 本次 gen, 回调对比当前 gen 一致才写, 否则丢弃.
+    // 比单纯 capture status 更彻底 — 同 status 重复刷新 (e.g.
+    // active→archived→active) 时旧 active 请求也会作废, 不会 append
+    // stale rows.
+    self.loadGeneration += 1;
+    NSInteger gen = self.loadGeneration;
     self.loading = YES;
     self.currentPage = 1;
     [self.allLoadedThreads removeAllObjects];
@@ -130,7 +138,7 @@ static const NSInteger kPageSize = 15;
     __weak typeof(self) weakSelf = self;
     NSString *requestedStatus = [self currentStatusParam];
     [[WKThreadService shared] listThreads:self.groupNo status:requestedStatus pageIndex:1 pageSize:kPageSize].then(^(NSDictionary *result) {
-        if (![requestedStatus isEqualToString:[weakSelf currentStatusParam]]) return; // stale
+        if (gen != weakSelf.loadGeneration) return; // stale
         weakSelf.loading = NO;
         [weakSelf.refreshControl endRefreshing];
         weakSelf.totalCount = [result[@"count"] integerValue];
@@ -139,7 +147,7 @@ static const NSInteger kPageSize = 15;
         [weakSelf filterAndReload];
         [weakSelf updateFooterVisibility];
     }).catch(^(NSError *error) {
-        if (![requestedStatus isEqualToString:[weakSelf currentStatusParam]]) return; // stale
+        if (gen != weakSelf.loadGeneration) return; // stale
         weakSelf.loading = NO;
         [weakSelf.refreshControl endRefreshing];
         [weakSelf.view showMsg:error.domain];
@@ -155,11 +163,14 @@ static const NSInteger kPageSize = 15;
     self.isLoadingMore = YES;
     [self.footerSpinner startAnimating];
     NSInteger nextPage = self.currentPage + 1;
+    // capture 当前 gen, 若 loadThreads 在飞行中触发, 本次 loadMore 的
+    // 回包同样要被作废, 不要 append 到 reloaded 后的 list 上.
+    NSInteger gen = self.loadGeneration;
     NSString *requestedStatus = [self currentStatusParam];
 
     __weak typeof(self) weakSelf = self;
     [[WKThreadService shared] listThreads:self.groupNo status:requestedStatus pageIndex:nextPage pageSize:kPageSize].then(^(NSDictionary *result) {
-        if (![requestedStatus isEqualToString:[weakSelf currentStatusParam]]) { // stale
+        if (gen != weakSelf.loadGeneration) { // stale
             weakSelf.isLoadingMore = NO;
             [weakSelf.footerSpinner stopAnimating];
             return;
