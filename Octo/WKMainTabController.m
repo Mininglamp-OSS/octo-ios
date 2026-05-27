@@ -29,6 +29,8 @@
     self.tabBar.tintColor = [WKApp shared].config.themeColor;
     // 监听 viewConfigChange 通知（WKBaseVC 的 traitCollectionDidChange 会发这个）
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onStyleChange) name:@"WK_NOTIFY_STYLE_CHANGE" object:nil];
+    // 切语言时 tabbar item title 不会自动刷新, 必须监听 WKNOTIFY_LANG_CHANGE 重新走 LLang
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onLangChange) name:WKNOTIFY_LANG_CHANGE object:nil];
 
     UIColor *normalColor = [UIColor colorWithWhite:0.55 alpha:1.0];
     UIColor *selectedColor = [WKApp shared].config.themeColor;
@@ -45,6 +47,16 @@
                  image:[self drawMeIconWithColor:normalColor filled:NO]
          selectedImage:[self drawMeIconWithColor:selectedColor filled:YES]];
 
+}
+
+- (void)onLangChange {
+    // tab item 顺序 = setupChildVC 顺序: 消息 / 通讯录 / 我
+    NSArray<NSString *> *titleKeys = @[@"消息", @"通讯录", @"我"];
+    [self.viewControllers enumerateObjectsUsingBlock:^(UIViewController *vc, NSUInteger idx, BOOL *stop) {
+        if (idx < titleKeys.count) {
+            vc.tabBarItem.title = LLang(titleKeys[idx]);
+        }
+    }];
 }
 
 
@@ -183,3 +195,4 @@ static UIImpactFeedbackGenerator *impactFeedBack;
 }
 
 @end
+

@@ -28,7 +28,11 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = LLang(@"解锁密码");
+}
+
+- (NSString *)langTitle {
+    // 改用 langTitle hook —— base class 切语言时会自动刷 nav title
+    return LLang(@"解锁密码");
 }
 
 

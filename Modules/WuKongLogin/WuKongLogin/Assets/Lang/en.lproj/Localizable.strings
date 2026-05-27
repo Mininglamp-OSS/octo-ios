@@ -49,3 +49,84 @@
 "注册中"="Registering";
 "邀请码（选填）"="Invitation code (optional)";
 "邀请码（必填）"="Invitation code (required)";
+
+// ============================================================
+// MARK: - i18n batch 2026-05: WuKongLogin 收尾 (B 级)
+// ============================================================
+
+// 通用
+"提交"="Submit";
+"忘记密码"="Forgot password";
+"协议"="Terms";
+"用户协议"="User Agreement";
+"隐私政策"="Privacy Policy";
+"《服务协议》"="Terms of Service";
+"《隐私政策》"="Privacy Policy";
+"← 返回"="← Back";
+
+// 登录主页
+"邮箱 / 用户名"="Email / Username";
+"欢迎回来"="Welcome back";
+"使用 %@ 安全登录你的 %@ 账号\n新用户首次登录将自动创建账号"="Sign in to your %@ account securely with %@\nA new account will be created on first sign-in";
+"使用 %@ 登录"="Sign in with %@";
+"使用 %@ 登录或注册"="Sign in or sign up with %@";
+"身份认证由 %@ 提供 · 企业级安全"="Authentication powered by %@ · enterprise-grade security";
+
+// 注册
+"昵称"="Nickname";
+"昵称不能为空！"="Nickname is required";
+"账号不能为空！"="Account is required";
+"邮箱不能为空！"="Email is required";
+"邮箱格式不正确！"="Invalid email format";
+"邮箱已注册,去登录？"="This email is already registered. Sign in?";
+"请输入邮箱"="Enter email";
+"请输入账号（可以是任意字符）"="Enter account (any characters)";
+"验证码不能为空！"="Verification code is required";
+"邀请码不能为空！"="Invitation code is required";
+"已有账号？请"="Already have an account? ";
+"点击\"注册\"即表示已阅读并同意"="By tapping Sign Up, you accept ";
+"获取授权失败，请重试"="Failed to authenticate, try again";
+"授权地址无效"="Invalid auth URL";
+"发送中..."="Sending...";
+"发送失败"="Send failed";
+"重新发送(%ld)"="Resend (%ld)";
+"验证码已发送"="Verification code sent";
+"请输入验证码"="Enter verification code";
+
+// 忘记密码 / 重置
+"忘记密码"="Forgot password";
+"邮箱地址"="Email";
+"%@会发送验证码到您的邮箱，请输入您收到的验证码"="%@ will send a verification code to your email — please enter it";
+"验证您的邮箱"="Verify your email";
+"重置密码"="Reset password";
+"请输入新密码"="Enter new password";
+"确认新密码"="Confirm new password";
+"新密码不能为空！"="New password is required";
+"密码长度为6-16位！"="Password must be 6–16 characters";
+"两次密码输入不一致！"="The two passwords do not match";
+"密码重置成功，请登录"="Password reset, please sign in";
+
+// 登录设置 / 服务器配置
+"服务器配置"="Server settings";
+"服务器地址"="Server address";
+"端口"="Port";
+"重置配置"="Reset settings";
+"重置成功！，请重启APP。"="Reset complete. Please restart the app.";
+
+// Space 邀请码 / 加入空间
+"输入邀请码"="Enter invitation code";
+"输入邀请码加入团队"="Enter invitation code to join your team";
+"📩 输入邀请码加入团队"="📩 Enter invitation code to join your team";
+"请输入邀请码"="Enter invitation code";
+"邀请码无效或已过期"="Invitation code invalid or expired";
+"加入"="Join";
+"加入中..."="Joining…";
+"已加入 Space"="Joined Space";
+"已加入空间"="Joined";
+"已成功加入空间"="Joined successfully";
+"已在该空间中"="Already in this space";
+"空间已满，无法加入"="Space is full";
+"正在加入空间..."="Joining space…";
+"正在通过邀请码加入空间..."="Joining with invitation code…";
+"检查中..."="Checking…";
+"欢迎使用 %@！"="Welcome to %@!";

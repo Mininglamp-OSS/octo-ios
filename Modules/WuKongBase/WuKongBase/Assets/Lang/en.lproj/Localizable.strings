@@ -629,3 +629,338 @@
 "创建"="Create";
 "创建分组失败"="Failed to create category";
 "所有AI"="All AIs";
+
+// ============================================================
+// MARK: - i18n batch 2026-05: ConversationList
+// ============================================================
+
+// 会话/列表通用
+"[有人@我]"="[Mention]";
+"%@%@已经登录"="%@ %@ logged in";
+"外部"="External";
+"社区"="Community";
+"传文件"="Send File";
+"发送给"="Send to";
+"显示全部"="Show all";
+"加入"="Join";
+"加入成功"="Joined";
+"加入中..."="Joining...";
+"加载失败"="Load failed";
+"获取中..."="Loading...";
+"连接中..."="Connecting...";
+"连续错误次数太多，已删除该聊天记录！"="Too many incorrect attempts — chat history deleted!";
+
+// 分组（Category）
+"删除分组"="Delete Category";
+"重命名"="Rename";
+"重命名分组"="Rename Category";
+"排序分组"="Reorder Categories";
+"排序失败"="Reorder failed";
+"上移一位"="Move up";
+"下移一位"="Move down";
+"移到最后"="Move to bottom";
+
+// Space 邀请码
+"加入Space"="Join Space";
+"请输入邀请码"="Enter invitation code";
+"邀请码已复制"="Invitation code copied";
+"获取邀请码失败"="Failed to get invitation code";
+"该空间暂无邀请码"="No invitation code for this space";
+
+// PC / Web 在线
+"网页%@已登录"="%@ Web signed in";
+"退出网页%@"="Sign out %@ Web";
+"退出网页%@？"="Sign out %@ Web?";
+"退出"="Sign out";
+"手机静音"="Phone muted";
+"手机通知已关闭"="Phone notifications muted";
+"手机通知已开启"="Phone notifications on";
+
+// 连接状态
+"状态: 已连接"="Status: Connected";
+"已连接: %ld分钟"="Connected: %ld min";
+"已连接: %ld秒"="Connected: %ld s";
+"延迟: %ldms"="Latency: %ldms";
+
+// ============================================================
+// MARK: - i18n batch 2026-05: Thread (子区)
+// ============================================================
+
+// 列表 / 入口
+"子区列表"="Threads";
+"创建子区"="New Thread";
+"子区名称"="Thread name";
+"子区名称 (最多50字)"="Thread name (up to 50 chars)";
+"暂无子区\n创建一个来讨论特定话题"="No threads yet\nCreate one to discuss a specific topic";
+"个子区"=" threads";
+"条消息"=" messages";
+"位成员"=" members";
+
+// 详情 / 设置
+"子区详情"="Thread details";
+"子区成员"="Thread members";
+"查看更多子区成员"="View all thread members";
+"成员"="Members";
+"创建者"="Creator";
+"活跃"="Active";
+"已配置"="Configured";
+"未配置"="Not configured";
+
+// 操作
+"归档"="Archive";
+"归档子区"="Archive thread";
+"已归档"="Archived";
+"取消归档"="Unarchive";
+"关闭子区"="Close thread";
+"删除子区"="Delete thread";
+"退出子区"="Leave thread";
+"已添加到关注"="Added to Follow";
+"已添加到「%@」"="Added to “%@”";
+"已取消关注"="Unfollowed";
+"我知道了"="OK";
+
+// 确认弹窗
+"确定归档子区"="Archive this thread?";
+"确定关闭该子区？关闭后所有成员将无法再访问。"="Close this thread? Members will no longer be able to access it.";
+"确定删除子区"="Delete this thread?";
+"确定退出该子区？"="Leave this thread?";
+"父群尚未关注，请选择父群所在分组"="Parent group not followed — choose a category for it";
+"父群尚未关注。请先在会话列表创建分组并关注此群，然后再来此处关注子区。"="The parent group isn't followed yet. Create a category and follow the group from the conversation list first, then follow the thread here.";
+
+// 列表中的硬写文案 LLang 化后所需翻译
+"正在加载空间列表..."="Loading spaces...";
+"请等待连接成功后再切换空间"="Wait until connected before switching spaces";
+"%@/#子区"="%@/#thread";
+
+// ============================================================
+// MARK: - i18n batch 2026-05: Me (设置 / 个人中心)
+// ============================================================
+
+// 个人页 / Me
+"号"="ID";
+"已连接"="Connected";
+"离线"="Offline";
+
+// 解锁密码 / Screen lock
+"解锁密码"="Lock Screen Password";
+"自动锁定"="Auto-Lock";
+"立即"="Immediately";
+"离开1小时后"="After 1 hour";
+"离开%d分钟后"="After %d minutes";
+"更改解锁密码"="Change Password";
+"关闭解锁密码"="Turn Off Password";
+"两次密码输入不一致"="The two passwords do not match";
+"请输入锁屏密码"="Enter lock screen password";
+"密码错误，还可以再输入%ld次"="Wrong password, %ld attempts left";
+"确定后将会清除现有解锁密码，如需继续使用，请重新设置"="The current password will be cleared. To keep using it, set a new one.";
+"%@全力保护您的信息安全"="%@ keeps your data safe";
+
+// 注销账号 / Destroy account
+"申请注销账号"="Cancel Account";
+"申请注销"="Submit cancellation";
+"请仔细阅读以下注意事项"="Please read the following carefully";
+"账号注销后，将无法登录此账号"="Once cancelled, you can no longer sign in";
+"账号中的所有数据将被清除且无法恢复"="All account data will be erased and cannot be recovered";
+"注销申请提交后有 7 天冷静期，期间可随时取消"="After submission, there's a 7-day cooling-off period during which you can cancel anytime";
+"冷静期结束后账号将被永久注销"="After the cooling-off period, the account is permanently cancelled";
+"请输入登录密码以验证身份"="Enter your login password to verify";
+"账号注销中"="Cancelling…";
+"冷静期内登录或点击下方按钮可取消注销"="Sign in during the cooling-off period or tap below to cancel";
+"取消注销"="Cancel cancellation";
+"冷静期结束后，账号将被永久注销且无法恢复"="After the cooling-off period, the account is permanently cancelled and cannot be recovered.";
+"距离账号永久注销还剩 %ld 天"="%ld day(s) until permanent cancellation";
+"预计注销日期：%@"="Cancellation date: %@";
+"确定要申请注销账号吗？提交后将进入 7 天冷静期，届满后账号将被永久注销。"="Submit account cancellation? You will enter a 7-day cooling-off period, after which the account is permanently cancelled.";
+"确认注销"="Confirm";
+"注销申请已提交"="Cancellation submitted";
+"确定要取消注销吗？取消后账号将恢复正常使用。"="Cancel the cancellation? Your account will be restored to normal.";
+"确认取消注销"="Confirm";
+"已取消注销"="Cancellation revoked";
+
+// 模块开关重启提示 (WKModuleVC, 硬写 LLang 化)
+"开启或关闭模块需要重启，是否重启？"="Enabling or disabling a module requires restart. Restart now?";
+"是"="Yes";
+"否"="No";
+
+// WKMeVC nav title fallback / WKConversationListVC 重命名分组
+"我"="Me";
+"新建群聊"="New chat";
+
+// MARK: - 切换服务器 Action Sheet (WKServerSettingHelper, 长按 Me 头像 / 登录页"欢迎回来")
+"服务器设置"="Server settings";
+"选择历史服务器或输入新地址"="Pick a server or enter a new address";
+"输入新地址"="Enter new address";
+"清除历史记录"="Clear history";
+"清除"="Clear";
+"确定要清除所有历史服务器记录吗？当前服务器设置不受影响。"="Clear all server history? The current server is not affected.";
+"输入服务器地址，修改后需重启App生效"="Enter server address. App restart required.";
+"确认并重启"="Confirm & restart";
+"正在测试服务器连接..."="Testing server connection…";
+"地址格式不正确，请检查输入"="Address format invalid, please check";
+"服务器地址格式不正确"="Server address format invalid";
+"服务器返回错误(%ld)"="Server error (%ld)";
+"连接失败"="Connection failed";
+"无法连接到服务器：%@\n\n%@"="Cannot reach server: %@\n\n%@";
+"重新设置"="Try again";
+
+// ============================================================
+// MARK: - i18n batch 2026-05: Conversation + Messages + Common
+// ============================================================
+
+// 通用 / 时间 / 状态
+"返回"="Back";
+"允许"="Allow";
+"去设置"="Settings";
+"自定义"="Custom";
+"预览"="Preview";
+"原图"="Original";
+"未知"="Unknown";
+"未知用户"="Unknown user";
+"已复制"="Copied";
+"机器人头像"="Bot avatar";
+"暂无简介"="No description";
+"简介"="Description";
+"功能介绍"="Features";
+"%@在线"="%@ online";
+"刚刚%@在线"="%@ online just now";
+"%0.0f分钟前%@在线"="%@ online %0.0f min ago";
+"1分钟"="1 minute";
+"10分钟"="10 minutes";
+"1小时"="1 hour";
+"1天"="1 day";
+"7天"="7 days";
+"30天"="30 days";
+
+// 网页登录 / Web 入口
+"网页"="Web";
+"登录网页版本，向我发送消息，可以在手机与电脑间传输文字、图片、音频、视频等文件"="Sign in on web and send messages to yourself to transfer text, images, audio, video and files between phone and PC";
+
+// 错误 / 提示
+"app_id不能为空！"="app_id is required";
+"无效的URL"="Invalid URL";
+"图片压缩错误！"="Image compression failed";
+"保存视频成功"="Video saved";
+"保存视频失败"="Failed to save video";
+"获取你的昵称、头像"="Read your nickname and avatar";
+
+// 录音 / 语音
+"按住继续"="Hold to continue";
+"松手 发送原语音"="Release to send voice";
+"松手 取消"="Release to cancel";
+"松手 转文字"="Release to convert to text";
+"松手 转文字，上滑取消"="Release to convert; swipe up to cancel";
+"发送原语音"="Send voice";
+"录音初始化失败"="Failed to start recorder";
+"录音启动失败"="Failed to start recording";
+"录音数据异常"="Recording data error";
+"压缩中"="Compressing";
+"语音识别失败，请重试"="Speech recognition failed, try again";
+"选择语音识别引擎"="Choose speech recognizer";
+"Apple语音识别不可用"="Apple speech recognition unavailable";
+"需要麦克风权限"="Microphone permission required";
+"请在设置中允许访问麦克风"="Allow microphone access in Settings";
+"相机权限受限"="Camera permission restricted";
+
+// 选择 / 多选
+"全选"="Select all";
+"已选 %ld 条"="%ld selected";
+"%@ (%ld 条)"="%@ (%ld)";
+"选择聊天"="Choose a chat";
+"选到这里"="Up to here";
+"滑动到这里"="Slide to here";
+"所有表情"="All emoji";
+"最近使用"="Recently used";
+"所有人"="Everyone";
+"@"="@";
+
+// 转发 / 合并 / 文档
+"无可合并的消息（流式或发送中状态不支持合并）"="No mergeable messages (streaming or sending messages cannot be merged)";
+"发送成功（%ld 条流式/发送中消息未合并）"="Sent (%ld streaming/sending messages were not merged)";
+"字数超出限制无法发送，是否需将消息转为文档发出？"="Message exceeds the length limit. Send as a document instead?";
+"确认发送"="Send";
+
+// 引用 / 撤回 / 编辑
+"引用消息"="Reply";
+"消息已被撤回"="Message recalled";
+"%@撤回了一条成员消息"="%@ recalled a member's message";
+"%@撤回了成员\"%@\"的一条消息"="%@ recalled a message from \"%@\"";
+"原消息不存在"="Original message not found";
+"已编辑"="Edited";
+"重发"="Resend";
+"重发该消息"="Resend this message";
+"重新编辑"="Edit again";
+"查看全文"="View full text";
+"从个人收藏中移除"="Remove from favorites";
+
+// 消息体 / 通知 / 状态
+"[贴图]"="[Sticker]";
+"此对话中的消息使用端对端加密。点击了解更多。"="Messages in this chat are end-to-end encrypted. Tap to learn more.";
+"该子区已被关闭"="This thread has been closed";
+"已把对方拉黑。"="Blocked.";
+"已被踢出群聊或拉入黑名单，不能发送消息"="You've been removed from the group or blacklisted, can't send messages";
+"文件不存在或正在上传中"="File not found or uploading";
+
+// 群禁言
+"禁言中（%@）"="Muted (%@)";
+"禁言时长"="Mute duration";
+"解除禁言"="Unmute";
+
+// 朋友验证
+"开启了朋友验证，你还不是他（她）朋友。请先发送朋友验证请求，对方验证通过后，才能聊天。[发送朋友验证](%@://friend/apply?uid=%@)"="Friend verification is required. Send a friend request first; you can chat after it's approved. [Send friend request](%@://friend/apply?uid=%@)";
+
+// 子区 / 群专属
+"仅可在群内交流"="Group-only chat";
+"来自"="From";
+
+// 操作
+"通过"="Approve";
+"拒绝"="Decline";
+
+// ============================================================
+// MARK: - i18n batch 2026-05: 收尾 (Group / ConversationSetting / Scan / 杂项)
+// ============================================================
+
+// 通用 / 状态
+"加载中..."="Loading...";
+"保存"="Save";
+"保存失败"="Failed to save";
+"已保存"="Saved";
+"全部"="All";
+"其它"="Other";
+"切换过去"="Switch";
+"网络不稳定，请稍后再试"="Network unstable, try again later";
+"内容超出大小限制"="Content exceeds size limit";
+
+// 群 / Space
+"加入群聊"="Join group";
+"进入群聊"="Open group";
+"群聊信息"="Group info";
+"群头像"="Group avatar";
+"群公告（最长输入%ld个字符）"="Announcement (up to %ld characters)";
+"%ld位成员"="%ld members";
+"管理者"="Admin";
+"普通成员"="Member";
+"外部群"="External group";
+"此群位于 %@ Space"="In Space: %@";
+"已加入 '%@'"="Joined '%@'";
+"暂未配置 GROUP.md"="GROUP.md not configured";
+"子区"="Thread";
+
+// 邀请
+"复制邀请链接"="Copy invite link";
+"邀请链接不可用"="Invite link unavailable";
+"无法识别的二维码"="QR code not recognized";
+
+// AI / 人
+"已添加AI"="AI added";
+"人类"="Human";
+
+// 权限
+"没有获得相机权限"="Camera permission denied";
+"没有获得麦克风权限"="Microphone permission denied";
+"请在iPhone的”设置-隐私”选项中，允许访问你的相册"="Allow Photos access under Settings → Privacy on iPhone";
+"当前环境未配置实名认证入口，请联系管理员"="Real-name verification is not configured. Please contact your administrator.";
+
+// 录音 / 语音
+"松手结束，上移取消"="Release to send; swipe up to cancel";
+"语音输入"="Voice input";

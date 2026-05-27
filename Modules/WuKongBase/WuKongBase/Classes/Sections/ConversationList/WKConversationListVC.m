@@ -789,7 +789,7 @@
         NSLog(@"⚠️ Space列表未加载，禁止点击");
         UIWindow *window = [UIApplication sharedApplication].keyWindow;
         if (window) {
-            [window showMsg:@"正在加载空间列表..."];
+            [window showMsg:LLang(@"正在加载空间列表...")];
         }
         return;
     }
@@ -801,7 +801,7 @@
         // 显示提示
         UIWindow *window = [UIApplication sharedApplication].keyWindow;
         if (window) {
-            [window showMsg:@"请等待连接成功后再切换空间"];
+            [window showMsg:LLang(@"请等待连接成功后再切换空间")];
         }
         return;
     }
@@ -1065,6 +1065,25 @@
         self.navigationBar.style = WKNavigationBarStyleDefault;
     }
     [self.tableHeader viewConfigChange:type];
+    // 关注 tab 空态引导里的 label / button 是 followEmptyView 这个一次性 lazy view, lang
+    // 切换时不会经过 cell reload, 必须显式重置。否则按钮会停在 init 时的语言, 必须重启 app
+    // 才能切 (PR i18n review).
+    if (type == WKViewConfigChangeTypeLang && _followEmptyView) {
+        UILabel *title = (UILabel *)[_followEmptyView viewWithTag:9003];
+        UILabel *desc  = (UILabel *)[_followEmptyView viewWithTag:9004];
+        UIButton *btn  = (UIButton *)[_followEmptyView viewWithTag:9005];
+        title.text = LLang(@"关注你最在意的会话");
+        desc.text  = LLang(@"把重要的群聊、私聊、子区集中在这里，沉浸在你真正关心的消息里。\n在「最近」长按任意会话，选择「添加到关注」。");
+        [btn setTitle:LLang(@"+ 新建分组") forState:UIControlStateNormal];
+        [self layoutFollowEmptyViewIfNeeded];
+    }
+    // 顶部固定搜索栏 (setupFixedHeader 里建的, tag=9990) placeholder 也要重置
+    if (type == WKViewConfigChangeTypeLang && _fixedHeaderContainer) {
+        WKSearchbarView *sb = (WKSearchbarView *)[_fixedHeaderContainer viewWithTag:9990];
+        if ([sb respondsToSelector:@selector(setPlaceholder:)]) {
+            sb.placeholder = LLang(@"搜索");
+        }
+    }
     [self refreshTable];
 }
 
@@ -2400,7 +2419,12 @@
     CGFloat descMaxW = _followEmptyView.lim_width - 80;
     CGSize descSize = [desc sizeThatFits:CGSizeMake(descMaxW, CGFLOAT_MAX)];
     desc.frame = CGRectMake((_followEmptyView.lim_width - descMaxW) / 2.0, CGRectGetMaxY(title.frame) + 8, descMaxW, descSize.height);
-    CGFloat btnW = 160;
+    // 木桶效应：按钮宽度由 title 决定（中文"+ 新建分组"~96pt，英文"+ New Category"~118pt）。
+    // 上限不超过引导区可用宽（屏幕 - 80），下限保留 140 视觉一致。
+    CGSize btnFit = [btn sizeThatFits:CGSizeMake(_followEmptyView.lim_width - 80, 44)];
+    CGFloat btnW = ceil(btnFit.width);
+    btnW = MAX(btnW, 140);
+    btnW = MIN(btnW, _followEmptyView.lim_width - 80);
     btn.frame = CGRectMake((_followEmptyView.lim_width - btnW) / 2.0, CGRectGetMaxY(desc.frame) + 24, btnW, 44);
 }
 
@@ -5142,7 +5166,7 @@
                 if (name.length == 0) {
                     WKChannel *parentChannel = [WKChannel channelID:groupNo channelType:WK_GROUP];
                     WKChannelInfo *parentInfo = [[WKSDK shared].channelManager getChannelInfo:parentChannel];
-                    name = [NSString stringWithFormat:@"%@/#子区", parentInfo.displayName ?: groupNo];
+                    name = [NSString stringWithFormat:LLang(@"%@/#子区"), parentInfo.displayName ?: groupNo];
                     if (parentInfo) {
                         if ([parentInfo.logo hasPrefix:@"http"]) {
                             avatarURL = parentInfo.logo;

@@ -64,13 +64,27 @@
                               action:@selector(textFieldDidChange:)
                     forControlEvents:UIControlEventEditingChanged];
         }
-       
+
         [self addSubview:self.containerScollView];
         [self addSubview:self.searchFd];
-        
+
         [self refreshView];
+
+        // UIView 拿不到 viewConfigChange 链路, 自己监听语言切换刷 placeholder
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(onLangChange)
+                                                     name:WKNOTIFY_LANG_CHANGE
+                                                   object:nil];
     }
     return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)onLangChange {
+    _searchFd.placeholder = LLang(@"搜索");
 }
 
 //文本输入改变

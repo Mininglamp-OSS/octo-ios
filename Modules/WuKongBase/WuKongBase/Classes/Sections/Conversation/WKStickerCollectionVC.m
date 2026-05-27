@@ -33,10 +33,21 @@
 #pragma makr ->
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = LLang(@"添加单个表情");
     [self establishControlsInStickerCollectionVC];
-    
+
     [self.view addSubview:self.footerView];
+}
+
+- (NSString *)langTitle {
+    return LLang(@"添加单个表情");
+}
+
+- (void)viewConfigChange:(WKViewConfigChangeType)type {
+    [super viewConfigChange:type];
+    if (type != WKViewConfigChangeTypeLang) return;
+    if (_rightBtn) [_rightBtn setTitle:LLang(@"整理") forState:UIControlStateNormal];
+    if (_moveFontBtn) [_moveFontBtn setTitle:LLang(@"移到最前") forState:UIControlStateNormal];
+    if (_deleteBtn) [_deleteBtn setTitle:LLang(@"删除") forState:UIControlStateNormal];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {

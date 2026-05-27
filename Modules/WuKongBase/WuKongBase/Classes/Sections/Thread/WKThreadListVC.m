@@ -75,6 +75,24 @@ static const NSInteger kPageSize = 15;
     [[WKReminderManager shared] addDelegate:self];
 }
 
+// 切语言时所有静态文案 (nav title / segment / createBtn / emptyLbl) 都需重走 LLang
+- (void)viewConfigChange:(WKViewConfigChangeType)type {
+    [super viewConfigChange:type];
+    if (type != WKViewConfigChangeTypeLang) return;
+    self.title = LLang(@"子区列表");
+    if (_segmentControl) {
+        [_segmentControl setTitle:LLang(@"活跃") forSegmentAtIndex:0];
+        [_segmentControl setTitle:LLang(@"已归档") forSegmentAtIndex:1];
+    }
+    if (_createBtn) {
+        [_createBtn setTitle:[NSString stringWithFormat:@"+ %@", LLang(@"创建子区")] forState:UIControlStateNormal];
+    }
+    if (_emptyLbl) {
+        _emptyLbl.text = LLang(@"暂无子区\n创建一个来讨论特定话题");
+    }
+    [self.tableView reloadData];
+}
+
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     // 不再在 viewWillAppear 里重跑 loadThreads —— 那条路径会 reset

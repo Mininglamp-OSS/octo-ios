@@ -175,8 +175,18 @@
             self.navigationBar.style = WKNavigationBarStyleDefault;
         }
     }
+    if(type == WKViewConfigChangeTypeLang) {
+        // 走 langTitle hook 模式的 VC, base class 这里统一自动刷 nav title,
+        // 子类不需要重复在自己的 viewConfigChange 里写 self.title = LLang(...).
+        // 子类 override 了 langTitle 才有效; 没 override 的 VC nav title 走 self.title 直接赋值,
+        // 必须自己在 viewConfigChange 里刷。
+        NSString *t = [self langTitle];
+        if (t.length > 0) {
+            self.title = t;
+        }
+    }
     [WKApp.shared.config setThemeStyleNavigation:self.navigationBar];
-   
+
 }
 
 #pragma mark - UITraitEnvironment

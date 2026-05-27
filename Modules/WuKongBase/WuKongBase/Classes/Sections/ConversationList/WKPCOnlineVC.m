@@ -51,7 +51,25 @@
     [self.fileBoxView addSubview:self.fileIconImgView];
     [self.view addSubview:self.fileLbl];
     
-    
+
+    [self layout];
+}
+
+// 语言切换时所有静态文案 (titleLbl / quitPCBtn / muteLbl / fileLbl / subtitleLbl)
+// 都需要重新走一遍 LLang —— 不重置就会停在初始化时的语言, 必须重启 app 才能切。
+- (void)viewConfigChange:(WKViewConfigChangeType)type {
+    [super viewConfigChange:type];
+    if (type != WKViewConfigChangeTypeLang) return;
+    self.titleLbl.text = [NSString stringWithFormat:LLang(@"网页%@已登录"), [WKApp shared].config.appName];
+    [_quitPCBtn setTitle:[NSString stringWithFormat:LLang(@"退出网页%@"), [WKApp shared].config.appName] forState:UIControlStateNormal];
+    _muteLbl.text = LLang(@"手机静音");
+    _fileLbl.text = LLang(@"传文件");
+    self.subtitleLbl.text = LLang(self.mute ? @"手机通知已关闭" : @"手机通知已开启");
+    [self.titleLbl sizeToFit];
+    [self.quitPCBtn sizeToFit];
+    [self.muteLbl sizeToFit];
+    [self.fileLbl sizeToFit];
+    [self.subtitleLbl sizeToFit];
     [self layout];
 }
 
@@ -59,13 +77,13 @@
     _mute = mute;
     
     if(mute) {
-        self.subtitleLbl.text = @"手机通知已关闭";
+        self.subtitleLbl.text = LLang(@"手机通知已关闭");
         self.muteBoxView.backgroundColor = [WKApp shared].config.themeColor;
         self.muteIconImgView.tintColor = [UIColor whiteColor];
         
         self.pcIconImgView.image = [self imageName:@"ConversationList/Device/PCSilence"];
     }else {
-        self.subtitleLbl.text = @"手机通知已开启";
+        self.subtitleLbl.text = LLang(@"手机通知已开启");
         self.muteBoxView.backgroundColor = [WKApp shared].config.cellBackgroundColor;
         self.muteIconImgView.tintColor = [UIColor grayColor];
         self.pcIconImgView.image = [self imageName:@"ConversationList/Device/PCNormal"];

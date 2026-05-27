@@ -55,10 +55,34 @@
     [self.item2BoxView addSubview:self.arrowImgView];
     
     [self layout];
-    
+
 //    self.animationView.loopAnimation = true;
     [self.animationView play];
-    
+
+}
+
+// 切语言时静态文案 (nav title / titleLbl / webLbl / tipLbl / scanLoginLbl) 重走 LLang
+- (void)viewConfigChange:(WKViewConfigChangeType)type {
+    [super viewConfigChange:type];
+    if (type != WKViewConfigChangeTypeLang) return;
+    self.title = LLang(@"网页端");
+    if (_titleLbl) {
+        _titleLbl.text = [NSString stringWithFormat:LLang(@"%@网页端"), [WKApp shared].config.appName];
+        [_titleLbl sizeToFit];
+    }
+    if (_webLbl) {
+        _webLbl.text = LLang(@"web端网址");
+        [_webLbl sizeToFit];
+    }
+    if (_tipLbl) {
+        _tipLbl.text = [NSString stringWithFormat:LLang(@"请使用浏览器访问%@,然后扫描二维码登录。为了您更好的体验，建议使用谷歌，火狐浏览器。"), [WKApp shared].config.appName];
+        [_tipLbl sizeToFit];
+    }
+    if (_scanLoginLbl) {
+        _scanLoginLbl.text = LLang(@"二维码扫描登录");
+        [_scanLoginLbl sizeToFit];
+    }
+    [self layout];
 }
 
 -(void) layout {

@@ -65,6 +65,10 @@
         self.networkErroView.backgroundColor = [UIColor colorWithRed:251.0f/255.0f green:234.0f/255.0f blue:231.0f/255.0f alpha:1.0f];
     }
     [self.pcOnlineBarView setBackgroundColor:[WKApp shared].config.backgroundColor];
+    if (type == WKViewConfigChangeTypeLang && _searchbarView) {
+        // 切语言时刷搜索框 placeholder —— 它在 lazy getter 里设了一次, 不重置就停在初始语言
+        _searchbarView.placeholder = LLang(@"搜索");
+    }
 }
 
 - (void)setShowEmpty:(BOOL)showEmpty {

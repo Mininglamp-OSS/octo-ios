@@ -44,6 +44,15 @@ static NSString * const kPlaceholderText = @"# 群组说明\n\n## 简介\n描述
     return @"GROUP.md";
 }
 
+// langTitle 是固定字符串"GROUP.md", base class 不会用 LLang 替换它,
+// 这里只刷 saveBtn / placeholderLbl 的 LLang 文案
+- (void)viewConfigChange:(WKViewConfigChangeType)type {
+    [super viewConfigChange:type];
+    if (type != WKViewConfigChangeTypeLang) return;
+    if (_saveBtn) [_saveBtn setTitle:LLang(@"保存") forState:UIControlStateNormal];
+    if (_placeholderLbl) _placeholderLbl.text = LLang(@"暂未配置 GROUP.md");
+}
+
 #pragma mark - Subviews
 
 - (UIButton *)saveBtn {

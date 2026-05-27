@@ -33,8 +33,26 @@ static CGFloat const kBadgeSize = 16.0f;
         self.backgroundColor = [WKApp shared].config.backgroundColor;
         _selectedIndex = 0;
         [self setupUI];
+        // 这是 UIView 不是 VC, 拿不到 viewConfigChange 链路, 必须自己监听 lang 通知
+        // 否则 Follow / Recent 标题会停在 init 时的语言。
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(onLangChange)
+                                                     name:WKNOTIFY_LANG_CHANGE
+                                                   object:nil];
     }
     return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)onLangChange {
+    [_followBtn setTitle:LLang(@"关注") forState:UIControlStateNormal];
+    [_recentBtn setTitle:LLang(@"最近") forState:UIControlStateNormal];
+    _followMentionLbl.text = LLang(@"[有人@我]");
+    _recentMentionLbl.text = LLang(@"[有人@我]");
+    [self layoutBadges];
 }
 
 - (void)setupUI {

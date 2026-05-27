@@ -9,6 +9,7 @@
 #import "WKServerConfig.h"
 #import "WKLoginInfo.h"
 #import "WKSpaceModel.h"
+#import "WuKongBase.h"  // LLang 宏
 #import <MBProgressHUD/MBProgressHUD.h>
 
 @implementation WKServerSettingHelper
@@ -29,8 +30,8 @@
 + (void)showHistorySheetInViewController:(UIViewController *)vc history:(NSArray<NSDictionary *> *)history {
     NSString *currentIP = [WKServerConfig serverIP];
 
-    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"服务器设置"
-                                                                  message:@"选择历史服务器或输入新地址"
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:LLang(@"服务器设置")
+                                                                  message:LLang(@"选择历史服务器或输入新地址")
                                                            preferredStyle:UIAlertControllerStyleActionSheet];
 
     for (NSDictionary *entry in history) {
@@ -62,7 +63,7 @@
     }
 
     // 输入新地址
-    UIAlertAction *newAction = [UIAlertAction actionWithTitle:@"输入新地址"
+    UIAlertAction *newAction = [UIAlertAction actionWithTitle:LLang(@"输入新地址")
                                                        style:UIAlertActionStyleDefault
                                                      handler:^(UIAlertAction *action) {
         [self showInputAlertInViewController:vc];
@@ -79,7 +80,7 @@
         }
     }
     if (hasUserAdded) {
-        UIAlertAction *manageAction = [UIAlertAction actionWithTitle:@"清除历史记录"
+        UIAlertAction *manageAction = [UIAlertAction actionWithTitle:LLang(@"清除历史记录")
                                                               style:UIAlertActionStyleDestructive
                                                             handler:^(UIAlertAction *action) {
             [self showClearHistoryConfirmInViewController:vc];
@@ -87,7 +88,7 @@
         [sheet addAction:manageAction];
     }
 
-    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"取消"
+    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:LLang(@"取消")
                                                           style:UIAlertActionStyleCancel
                                                         handler:nil];
     [sheet addAction:cancelAction];
@@ -102,16 +103,16 @@
 }
 
 + (void)showClearHistoryConfirmInViewController:(UIViewController *)vc {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"清除历史记录"
-                                                                  message:@"确定要清除所有历史服务器记录吗？当前服务器设置不受影响。"
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"清除历史记录")
+                                                                  message:LLang(@"确定要清除所有历史服务器记录吗？当前服务器设置不受影响。")
                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"清除"
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"清除")
                                               style:UIAlertActionStyleDestructive
                                             handler:^(UIAlertAction *action) {
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"WKServerHistory"];
         [[NSUserDefaults standardUserDefaults] synchronize];
     }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"取消"
+    [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消")
                                               style:UIAlertActionStyleCancel
                                             handler:nil]];
     [vc presentViewController:alert animated:YES completion:nil];
@@ -126,8 +127,8 @@
 #pragma mark - 手动输入新地址
 
 + (void)showInputAlertInViewController:(UIViewController *)vc {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"服务器设置"
-                                                                  message:@"输入服务器地址，修改后需重启App生效"
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"服务器设置")
+                                                                  message:LLang(@"输入服务器地址，修改后需重启App生效")
                                                            preferredStyle:UIAlertControllerStyleAlert];
 
     [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
@@ -139,7 +140,7 @@
         textField.keyboardType = UIKeyboardTypeURL;
     }];
 
-    UIAlertAction *confirmAction = [UIAlertAction actionWithTitle:@"确认并重启"
+    UIAlertAction *confirmAction = [UIAlertAction actionWithTitle:LLang(@"确认并重启")
                                                             style:UIAlertActionStyleDestructive
                                                           handler:^(UIAlertAction *action) {
         NSString *input = [alert.textFields[0].text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -148,7 +149,7 @@
         }
     }];
 
-    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"取消"
+    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:LLang(@"取消")
                                                            style:UIAlertActionStyleCancel
                                                          handler:nil];
 
@@ -174,7 +175,7 @@
     if ([input.lowercaseString hasPrefix:@"http://"] || [input.lowercaseString hasPrefix:@"https://"]) {
         NSURL *parsedURL = [NSURL URLWithString:input];
         if (!parsedURL || !parsedURL.host) {
-            [self showFailAlertInViewController:vc input:input message:@"地址格式不正确，请检查输入"];
+            [self showFailAlertInViewController:vc input:input message:LLang(@"地址格式不正确，请检查输入")];
             return;
         }
         httpsOn = [parsedURL.scheme.lowercaseString isEqualToString:@"https"];
@@ -196,7 +197,7 @@
 
 + (void)testServerIP:(NSString *)ip httpsOn:(BOOL)httpsOn inViewController:(UIViewController *)vc {
     MBProgressHUD *hud = [MBProgressHUD showHUDAddedTo:vc.view animated:YES];
-    hud.label.text = @"正在测试服务器连接...";
+    hud.label.text = LLang(@"正在测试服务器连接...");
 
     NSString *scheme = httpsOn ? @"https" : @"http";
     NSString *urlString = [NSString stringWithFormat:@"%@://%@/api/v1/health", scheme, ip];
@@ -204,7 +205,7 @@
 
     if (!url) {
         [hud hideAnimated:YES];
-        [self showFailAlertInViewController:vc input:[NSString stringWithFormat:@"%@://%@", scheme, ip] message:@"服务器地址格式不正确"];
+        [self showFailAlertInViewController:vc input:[NSString stringWithFormat:@"%@://%@", scheme, ip] message:LLang(@"服务器地址格式不正确")];
         return;
     }
 
@@ -231,7 +232,7 @@
                     exit(0);
                 });
             } else {
-                NSString *msg = error.localizedDescription ?: [NSString stringWithFormat:@"服务器返回错误(%ld)", (long)httpResponse.statusCode];
+                NSString *msg = error.localizedDescription ?: [NSString stringWithFormat:LLang(@"服务器返回错误(%ld)"), (long)httpResponse.statusCode];
                 [self showFailAlertInViewController:vc input:[NSString stringWithFormat:@"%@://%@", scheme, ip] message:msg];
             }
         });
@@ -240,17 +241,17 @@
 }
 
 + (void)showFailAlertInViewController:(UIViewController *)vc input:(NSString *)input message:(NSString *)message {
-    UIAlertController *failAlert = [UIAlertController alertControllerWithTitle:@"连接失败"
-                                                                      message:[NSString stringWithFormat:@"无法连接到服务器：%@\n\n%@", input, message]
+    UIAlertController *failAlert = [UIAlertController alertControllerWithTitle:LLang(@"连接失败")
+                                                                      message:[NSString stringWithFormat:LLang(@"无法连接到服务器：%@\n\n%@"), input, message]
                                                                preferredStyle:UIAlertControllerStyleAlert];
 
-    [failAlert addAction:[UIAlertAction actionWithTitle:@"重新设置"
+    [failAlert addAction:[UIAlertAction actionWithTitle:LLang(@"重新设置")
                                                   style:UIAlertActionStyleDefault
                                                 handler:^(UIAlertAction *action) {
         [self showServerSettingAlertInViewController:vc];
     }]];
 
-    [failAlert addAction:[UIAlertAction actionWithTitle:@"取消"
+    [failAlert addAction:[UIAlertAction actionWithTitle:LLang(@"取消")
                                                   style:UIAlertActionStyleCancel
                                                 handler:nil]];
 
