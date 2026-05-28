@@ -383,12 +383,34 @@ static WKApp *_instance;
     if([WKApp shared].config.clusterOn) {
        [[WKSDK shared].connectionManager setGetConnectAddr:^(void (^ _Nonnull complete)(NSString * __nullable)) {
            [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"users/%@/im",weakSelf.loginInfo.uid] parameters:nil].then(^(NSDictionary *addrDict){
-               if(addrDict && addrDict[@"tcp_addr"]) {
-                    complete(addrDict[@"tcp_addr"]);
-               }else{
+               if(!addrDict) {
                    complete(nil);
+                   return;
                }
-              
+               // 地址优先级：wss_addr > ws_addr > tcp_addr。
+               // SDK 内部 useWSS=YES 时 ws/wss URL 会走 NSURLSessionWebSocketTask；
+               // useWSS=NO（灰度回退）时即便给到 ws/wss URL 也会被降级成 TCP。
+               NSString *addr = nil;
+               BOOL useWSS = [WKSDK shared].connectionManager.useWSS;
+               if (useWSS) {
+                   id wssAddr = addrDict[@"wss_addr"];
+                   if ([wssAddr isKindOfClass:[NSString class]] && ((NSString *)wssAddr).length > 0) {
+                       addr = wssAddr;
+                   } else {
+                       id wsAddr = addrDict[@"ws_addr"];
+                       if ([wsAddr isKindOfClass:[NSString class]] && ((NSString *)wsAddr).length > 0) {
+                           addr = wsAddr;
+                       }
+                   }
+               }
+               if (addr.length == 0) {
+                   id tcpAddr = addrDict[@"tcp_addr"];
+                   if ([tcpAddr isKindOfClass:[NSString class]] && ((NSString *)tcpAddr).length > 0) {
+                       addr = tcpAddr;
+                   }
+               }
+               complete(addr.length > 0 ? addr : nil);
+
            }).catch(^(NSError *error){
                complete(nil);
                WKLogError(@"获取IM连接地址失败！-> %@",error);

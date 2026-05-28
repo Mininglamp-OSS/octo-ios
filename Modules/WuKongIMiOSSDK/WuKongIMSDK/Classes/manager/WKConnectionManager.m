@@ -30,10 +30,17 @@
 #import "WKMessageQueueManager.h"
 
 
-@interface WKConnectionManager ()<GCDAsyncSocketDelegate>
+@interface WKConnectionManager ()<GCDAsyncSocketDelegate, NSURLSessionWebSocketDelegate>
 
 
 @property(nonatomic,strong) GCDAsyncSocket *ssocket;
+
+// === WSS (NSURLSessionWebSocketTask) ===
+// 灰度期 TCP / WSS 两条传输层路径并存，由 useWSS + 入参地址协议头共同决定走哪条。
+@property(nonatomic,strong) NSURLSession *wsSession;
+@property(nonatomic,strong) NSURLSessionWebSocketTask *wsTask;
+// 当前连接是否走的是 WS/WSS（用于在 disconnect / writeData 等地方分流）。
+@property(nonatomic,assign) BOOL connectedViaWS;
 
 /**
  *  用来存储所有添加j过的delegate
@@ -102,13 +109,14 @@ static dispatch_queue_t _imsocketQueue;
         _instance.connectStatusLock =[[NSLock alloc] init];
         _instance.tempBufferDataLock =[[NSLock alloc] init];
         _instance.tempPackets = [NSMutableArray array];
+        _instance.useWSS = YES; // 灰度期默认开启 WSS；地址不是 ws/wss 时仍会走 TCP
         _instance.reconnectBackoff = [WKBackoff createWithBuilder:^(WKBackoffBuilder *builder) {
             builder.base = 2; // 每次递增秒数
             builder.factor = 2; // 每次重连的系数 base*factor
             builder.jitter = 0;
             builder.cap = 60 * 1000; // 60s
         }];
-        
+
     });
     return _instance;
 }
@@ -171,6 +179,8 @@ static dispatch_queue_t _imsocketQueue;
                 [oldSocket disconnect];
             });
           }
+        // 同样清理掉旧的 WSS 连接，避免重连时叠两条 socket
+        [self teardownWS];
           // 循环去拿连接地址，直到拿到地址
           [self loopGetAddrToConnect];
         
@@ -195,20 +205,59 @@ static dispatch_queue_t _imsocketQueue;
                 });
                 return;
             }
-            NSArray *addrs = [addr componentsSeparatedByString:@":"];
-            if(addrs.count>0) {
-                [weakSelf connectSocket:addrs[0] port:[addrs[1] integerValue]];
-            }
+            [weakSelf dispatchConnectWithAddr:addr];
         });
     }else {
         [self connectSocket:[WKSDK shared].options.host port:[WKSDK shared].options.port];
     }
 }
 
+// 根据地址协议头 + useWSS 开关决定走 WS 还是 TCP。
+//   - useWSS=YES 且 addr 为 ws/wss URL → WSS（NSURLSessionWebSocketTask）
+//   - 其它情况（addr 是 host:port，或 useWSS=NO）→ TCP（GCDAsyncSocket）
+//     · useWSS=NO 时，若 addr 仍是 ws/wss URL，会取出 host[:port] 退化成 TCP，
+//       便于灰度回退而无需上层切换 addr 来源。
+-(void) dispatchConnectWithAddr:(NSString *)addr {
+    NSString *trimmed = [addr stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    BOOL looksLikeWSURL = [trimmed hasPrefix:@"ws://"] || [trimmed hasPrefix:@"wss://"];
+
+    if (self.useWSS && looksLikeWSURL) {
+        [self connectWebSocketWithURL:trimmed];
+        return;
+    }
+
+    NSString *host = nil;
+    NSInteger port = 0;
+    if (looksLikeWSURL) {
+        // useWSS=NO 且收到的是 ws/wss URL，强行降级到 TCP：取 host + port（默认 80/443）。
+        NSURL *url = [NSURL URLWithString:trimmed];
+        host = url.host;
+        if (url.port) {
+            port = url.port.integerValue;
+        } else {
+            port = [trimmed hasPrefix:@"wss://"] ? 443 : 80;
+        }
+    } else {
+        // host:port
+        NSArray *addrs = [trimmed componentsSeparatedByString:@":"];
+        if (addrs.count >= 2) {
+            host = addrs[0];
+            port = [addrs[1] integerValue];
+        }
+    }
+    if (host.length > 0 && port > 0) {
+        [self connectSocket:host port:(uint16_t)port];
+    } else {
+        NSLog(@"无法解析连接地址: %@", addr);
+        [self changeConnectStatus:WKDisconnected];
+    }
+}
+
 -(void) connectSocket:(NSString*)host port:(uint16_t)port {
     if ([WKSDK shared].isDebug) {
-        NSLog(@"开始连接IM服务器 -> %@:%i",host,port);
+        NSLog(@"开始连接IM服务器(TCP) -> %@:%i",host,port);
     }
+    self.connectedViaWS = NO;
     self.ssocket = [[GCDAsyncSocket alloc] initWithDelegate:self delegateQueue:_imsocketQueue];
     NSError *error=nil;
     [self.ssocket connectToHost:host onPort:port error:&error];
@@ -216,6 +265,151 @@ static dispatch_queue_t _imsocketQueue;
         NSLog(@"连接IM服务器失败-> %@",error);
         // 状态变为：已断开
         [self changeConnectStatus:WKDisconnected];
+    }
+}
+
+#pragma mark --- WSS (NSURLSessionWebSocketTask)
+
+// 建立 WS/WSS 长连接。WS 帧 payload 直接复用 wkproto 二进制帧，编解码层与 TCP 路径完全一致。
+-(void) connectWebSocketWithURL:(NSString *)urlStr {
+    NSURL *url = [NSURL URLWithString:urlStr];
+    if (!url || !url.scheme || !url.host) {
+        NSLog(@"WSS 地址解析失败 -> %@", urlStr);
+        [self changeConnectStatus:WKDisconnected];
+        return;
+    }
+    if ([WKSDK shared].isDebug) {
+        NSLog(@"开始连接IM服务器(WSS) -> %@", urlStr);
+    }
+
+    self.connectedViaWS = YES;
+
+    NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration defaultSessionConfiguration];
+    // 让回调串行投递到 _imsocketQueue，行为与 GCDAsyncSocket 路径一致，
+    // tempBufferData 等共享状态无需引入额外锁。
+    NSOperationQueue *delegateQueue = [[NSOperationQueue alloc] init];
+    delegateQueue.maxConcurrentOperationCount = 1;
+    delegateQueue.underlyingQueue = _imsocketQueue;
+
+    self.wsSession = [NSURLSession sessionWithConfiguration:cfg
+                                                   delegate:self
+                                              delegateQueue:delegateQueue];
+    self.wsTask = [self.wsSession webSocketTaskWithURL:url];
+    [self.wsTask resume];
+    [self receiveLoop];
+    // 注意：sendConnectPacket 不在这里调，要等 didOpenWithProtocol: 确认 WS Upgrade 完成后再发，
+    // 避免 wkproto Connect 帧被丢进尚未完成握手的连接里。
+}
+
+// 拆掉当前 WSS 连接（包括 cancel + invalidate session）。
+-(void) teardownWS {
+    NSURLSessionWebSocketTask *oldTask = self.wsTask;
+    NSURLSession *oldSession = self.wsSession;
+    self.wsTask = nil;
+    self.wsSession = nil;
+    if (oldTask) {
+        @try {
+            [oldTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeGoingAway reason:nil];
+        } @catch (__unused NSException *ex) {}
+    }
+    if (oldSession) {
+        // finishTasksAndInvalidate 会等待已发出的 sendMessage 完成回调，避免 dealloc 期间 crash
+        [oldSession finishTasksAndInvalidate];
+    }
+}
+
+// receiveMessage 是单次 callback；每收到一条消息就重新挂上一次。
+// 这是 NSURLSession 推荐用法，回调由 session 调度，不会在调用栈上累积。
+-(void) receiveLoop {
+    NSURLSessionWebSocketTask *task = self.wsTask;
+    if (!task) return;
+    __weak typeof(self) weakSelf = self;
+    [task receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage * _Nullable msg,
+                                                NSError * _Nullable err) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) return;
+        // 防御：如果此时 task 已经被替换（重连过），不要再继续处理它的消息也不要再挂下一次
+        if (task != self.wsTask) {
+            return;
+        }
+        if (err) {
+            // 这里只 log，断开/重连交给 didCloseWithCode: / didCompleteWithError: 统一处理，
+            // 避免重复触发 backoffReconnect
+            if ([WKSDK shared].isDebug) {
+                NSLog(@"WSS receive 出错 -> %@", err);
+            }
+            return;
+        }
+        if (msg.type == NSURLSessionWebSocketMessageTypeData && msg.data.length > 0) {
+            if ([WKSDK shared].isDebug) {
+                NSLog(@"WSS 收到 binary -> len=%lu", (unsigned long)msg.data.length);
+            }
+            [self unpacket:msg.data callback:^(NSArray<NSData *> *frames) {
+                NSLog(@"------------WSS 解包消息数量--------> %lu",(unsigned long)frames.count);
+                [self handlePacketData:frames];
+            }];
+        } else if (msg.type == NSURLSessionWebSocketMessageTypeString) {
+            // 移动端走 wkproto 二进制，不应收到 text 帧；忽略即可。
+            NSLog(@"WSS 收到非预期 text 帧，忽略 -> %@", msg.string);
+        }
+        // 继续监听下一条
+        [self receiveLoop];
+    }];
+}
+
+#pragma mark --- NSURLSessionWebSocketDelegate
+
+- (void)URLSession:(NSURLSession *)session
+     webSocketTask:(NSURLSessionWebSocketTask *)webSocketTask
+didOpenWithProtocol:(NSString *)protocol {
+    if (webSocketTask != self.wsTask) return; // 旧 task 的回调忽略
+    if ([WKSDK shared].isDebug) {
+        NSLog(@"WSS Upgrade 完成，发送 Connect 包");
+    }
+    // WS 握手完成后再发 wkproto Connect，行为对齐 TCP 路径的 didConnectToHost: 时点
+    [self sendConnectPacket:[WKSDK shared].options.connectInfo.uid
+                      token:[WKSDK shared].options.connectInfo.token];
+}
+
+- (void)URLSession:(NSURLSession *)session
+     webSocketTask:(NSURLSessionWebSocketTask *)webSocketTask
+  didCloseWithCode:(NSURLSessionWebSocketCloseCode)closeCode
+            reason:(NSData *)reason {
+    if (webSocketTask != self.wsTask) return;
+    NSString *reasonStr = reason ? [[NSString alloc] initWithData:reason encoding:NSUTF8StringEncoding] : nil;
+    NSLog(@"WSS 收到 close frame -> code=%ld reason=%@", (long)closeCode, reasonStr);
+    [self handleWSDisconnectWithError:nil];
+}
+
+// 链路异常 / TLS 失败 / 服务器 RST 等都会走这里
+- (void)URLSession:(NSURLSession *)session
+              task:(NSURLSessionTask *)task
+didCompleteWithError:(NSError *)error {
+    if (task != self.wsTask) return; // 旧 task 的延迟回调
+    if (error) {
+        NSLog(@"WSS 连接异常断开 -> %@", error);
+    } else if ([WKSDK shared].isDebug) {
+        NSLog(@"WSS 连接已关闭");
+    }
+    [self handleWSDisconnectWithError:error];
+}
+
+// 统一的 WSS 断开处理，等价于 TCP 路径的 socketDidDisconnect:withError:
+- (void)handleWSDisconnectWithError:(NSError *)err {
+    self.tempBufferData = [[NSMutableData alloc] init]; // 清掉缓存
+    [self changeConnectStatus:WKDisconnected];
+    [self stopHeartbeat];
+    // wsTask/Session 在这里就置空，避免后续 receiveLoop / writeData 误用
+    self.wsTask = nil;
+    NSURLSession *oldSession = self.wsSession;
+    self.wsSession = nil;
+    if (oldSession) {
+        [oldSession finishTasksAndInvalidate];
+    }
+    if(!self.forceDisconnect) {
+        [self backoffReconnect];
+    } else if ([WKSDK shared].isDebug) {
+        NSLog(@"WSS 已强制断开,不再重连！");
     }
 }
 
@@ -310,6 +504,13 @@ static dispatch_queue_t _imsocketQueue;
             [socket disconnect];
         });
     }
+    NSURLSessionWebSocketTask *wsTask = self.wsTask;
+    if (wsTask) {
+        // 主动 close frame；didCloseWithCode: + didCompleteWithError: 会走 handleWSDisconnect
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            [wsTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
+        });
+    }
 }
 
 -(void) logout {
@@ -317,10 +518,11 @@ static dispatch_queue_t _imsocketQueue;
     self.forceDisconnect = true;
     [WKSDK shared].options.connectInfo =nil;
     [self.connectStatusLock unlock];
-    
+
     [[WKSDK shared].channelManager removeChannelAllCache];
-    
+
     [self.ssocket disconnect];
+    [self teardownWS];
 }
 
 // 重连
@@ -464,6 +666,18 @@ static dispatch_queue_t _imsocketQueue;
 }
 
 -(void) writeData:(NSData*) data {
+    if (self.connectedViaWS && self.wsTask) {
+        // WSS 写入：单帧 = 单次 sendMessage，wkproto 二进制原样作为 WS binary payload
+        NSURLSessionWebSocketMessage *m =
+            [[NSURLSessionWebSocketMessage alloc] initWithData:data];
+        [self.wsTask sendMessage:m completionHandler:^(NSError * _Nullable e) {
+            if (e) {
+                // 不在这里直接 backoffReconnect — didCompleteWithError: 会兜底触发，避免重复
+                NSLog(@"WSS 发送失败 -> %@", e);
+            }
+        }];
+        return;
+    }
     [self.ssocket writeData:data withTimeout:1 tag:0];
 }
 
