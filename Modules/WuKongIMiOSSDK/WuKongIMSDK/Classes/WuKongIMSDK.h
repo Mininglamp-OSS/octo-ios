@@ -39,6 +39,9 @@
 #import "WKMessageExtra.h"
 #import "WKMessageExtraDB.h"
 #import "WKReminderDB.h"
+#import "WKUnreadStore.h"
+#import "WKUnreadAckQueueDB.h"
+#import "WKUnreadAckRunner.h"
 
 
 

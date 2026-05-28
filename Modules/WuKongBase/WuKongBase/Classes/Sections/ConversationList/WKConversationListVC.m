@@ -1195,66 +1195,17 @@
 
     // 处理网络信号监控
     if (status == WKConnected) {
-        NSLog(@"[ConvDebug] onConnectStatus: WKConnected, calling loadCurrentSpace + sync");
+        NSLog(@"[ConvDebug] onConnectStatus: WKConnected (SDK sync HTTP 完成,DB 写可能在后台进行中)");
         // 连接成功，重新加载 Space 信息
         [self loadCurrentSpace];
 
-        // 连接成功后主动同步会话列表（解决首次登录后会话列表为空的问题）
-        __weak typeof(self) weakSelf = self;
-        WKSyncConversationProvider provider = [WKSDK shared].conversationManager.syncConversationProvider;
-        if (provider) {
-            long long version = [[WKConversationDB shared] getConversationMaxVersion];
-            NSString *syncKey = [[WKConversationDB shared] getConversationSyncKey];
-            provider(version, syncKey, ^(WKSyncConversationWrapModel * _Nullable model, NSError * _Nullable error) {
-                if (error) {
-                    NSLog(@"❌ 连接后会话同步失败: %@", error);
-                    return;
-                }
-                if (model) {
-                    // handleSyncConversation 写入 DB 并通过 delegate 更新 UI
-                    [[WKSDK shared].conversationManager handleSyncConversation:model];
-                }
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    // 不再从 DB 重新加载（handleSyncConversation 的 delegate 已更新内存数据）
-                    // 直接记录白名单并刷新分组
-                    [weakSelf.conversationListVM snapshotSyncedGroupIds];
-                    // : snapshot 后再 prune 一遍，对齐 performSwitchToSpaceId 流程
-                    [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
-                    // YUJ-bot-isolation: 同步路径 race 兜底——若 registry 加载早于 sync
-                    // 写库，onSpaceBotRegistryDidLoad 那次 prune 跑在空 VM 上没用；这里
-                    // VM 已被 handleSyncConversation 回灌，必须重跑一次 bot prune。
-                    NSString *curSpaceForPrune = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
-                    if(curSpaceForPrune.length > 0) {
-                        [weakSelf.conversationListVM pruneNonCurrentSpaceBotsForSpace:curSpaceForPrune];
-                    }
-                    // : backend sync 可能不返回 botfather（按 X-Space-Id 过滤时）—
-                    // 本地兜底合成占位 entry，保证系统 bot 可见；已存在则无操作。
-                    [weakSelf.conversationListVM ensureSystemBotsVisible];
-                    [weakSelf rebuildGroupDisplayAndReload];
-                    [weakSelf refreshBadge];
-                    [weakSelf loadCategories];
-                });
-            });
-        } else {
-            // 没有 syncProvider 时直接从本地 DB 重新加载
-            [self.conversationListVM loadConversationList:^{
-                // 无sync时也记录白名单（DB中的数据视为当前空间的）
-                [weakSelf.conversationListVM snapshotSyncedGroupIds];
-                // : prune 残留（见 performSwitchToSpaceId 注释）
-                [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
-                // YUJ-bot-isolation: 同 sync 完成路径，DB 冷启动也必须 bot prune
-                // 一次，避免上次 session 残留的跨 Space Bot 行被 sortConversationList 浮回。
-                NSString *curSpaceForPrune2 = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
-                if(curSpaceForPrune2.length > 0) {
-                    [weakSelf.conversationListVM pruneNonCurrentSpaceBotsForSpace:curSpaceForPrune2];
-                }
-                // : DB 冷启动也兜底（上次 sync 若未写入 botfather，DB 同样缺失）。
-                [weakSelf.conversationListVM ensureSystemBotsVisible];
-                [weakSelf rebuildGroupDisplayAndReload];
-                [weakSelf refreshBadge];
-                [weakSelf loadCategories];
-            }];
-        }
+        // : 这里不再跑 sync 完成后的 side-effects(loadCategories 等).
+        // WKConnected 只代表 SDK HTTP 完成,handleSyncConversation 把 DB 写派
+        // 发到了后台队列,这里 loadCategories → listThreads HTTP → getConversation
+        // 会拿到 nil,3 天活跃过滤兜底 apiTimestampFromUpdatedAt 偶发返 0 → 子区
+        // 预览整片消失. 改用 onConversationSyncFinished delegate(SDK 在
+        // mergeConversations + callOnConversationUpdateDelegates 之后才触发),
+        // 保证 DB 已就绪.
 
         // 记录时间并开始 ping 监控
         self.connectedAtTime = [[NSDate date] timeIntervalSince1970];
@@ -1263,6 +1214,23 @@
         // 连接中或已断开，停止 ping 监控
         [self stopPingMonitoring];
     }
+}
+
+#pragma mark - WKConversationManagerDelegate (sync finished)
+
+- (void)onConversationSyncFinished {
+    NSLog(@"[ConvDebug] onConversationSyncFinished: DB 已就绪,跑 side-effects");
+    // 已经被 SDK 派发回主线程,这里不再 dispatch_async.
+    [self.conversationListVM snapshotSyncedGroupIds];
+    [self.conversationListVM pruneNonCurrentSpaceGroups];
+    NSString *curSpaceForPrune = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if(curSpaceForPrune.length > 0) {
+        [self.conversationListVM pruneNonCurrentSpaceBotsForSpace:curSpaceForPrune];
+    }
+    [self.conversationListVM ensureSystemBotsVisible];
+    [self rebuildGroupDisplayAndReload];
+    [self refreshBadge];
+    [self loadCategories];
 }
 
 #pragma mark - WKConversationManagerDelegate

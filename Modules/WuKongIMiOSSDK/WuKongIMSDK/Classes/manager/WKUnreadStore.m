@@ -1,0 +1,139 @@
+//
+//  WKUnreadStore.m
+//  WuKongIMSDK
+//
+
+#import "WKUnreadStore.h"
+#import "WKUnreadAckQueueDB.h"
+#import "WKUnreadAckRunner.h"
+#import "WKConversationDB.h"
+#import "WKConversation.h"
+#import "WKConversationManager.h"
+#import "WKSDK.h"
+
+static NSString *const kLastReadSeqMapKey = @"WKUnreadStore.lastReadSeqByChannel";
+static NSString *const kLastLocalReadAtMapKey = @"WKUnreadStore.lastLocalReadAtByChannel";
+// 本地 mark-read 后多少秒内,server snapshot 不能把 unread 拉回.
+static NSTimeInterval const kLocalReadProtectionWindow = 60.0;
+
+@interface WKUnreadStore ()
+// 内存缓存,避免每次 reconcile 都读 NSUserDefaults.
+@property (nonatomic, strong) NSMutableDictionary<NSString*,NSNumber*> *lastReadSeqCache;
+@property (nonatomic, strong) NSMutableDictionary<NSString*,NSNumber*> *lastLocalReadAtCache;
+@property (nonatomic, strong) NSLock *cacheLock;
+@end
+
+@implementation WKUnreadStore
+
++ (instancetype) shared {
+    static WKUnreadStore *_inst;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        _inst = [[self alloc] init];
+    });
+    return _inst;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _cacheLock = [[NSLock alloc] init];
+        NSDictionary *seqMap = [[NSUserDefaults standardUserDefaults] dictionaryForKey:kLastReadSeqMapKey];
+        NSDictionary *atMap  = [[NSUserDefaults standardUserDefaults] dictionaryForKey:kLastLocalReadAtMapKey];
+        _lastReadSeqCache = seqMap ? [seqMap mutableCopy] : [NSMutableDictionary dictionary];
+        _lastLocalReadAtCache = atMap ? [atMap mutableCopy] : [NSMutableDictionary dictionary];
+    }
+    return self;
+}
+
+-(NSString*) keyFor:(WKChannel*)channel {
+    return [NSString stringWithFormat:@"%d:%@", channel.channelType, channel.channelId ?: @""];
+}
+
+-(void) persistCaches {
+    [[NSUserDefaults standardUserDefaults] setObject:[self.lastReadSeqCache copy] forKey:kLastReadSeqMapKey];
+    [[NSUserDefaults standardUserDefaults] setObject:[self.lastLocalReadAtCache copy] forKey:kLastLocalReadAtMapKey];
+}
+
+-(uint32_t) lastReadSeqForChannel:(WKChannel*)channel {
+    if (!channel || channel.channelId.length == 0) return 0;
+    [self.cacheLock lock];
+    NSNumber *v = self.lastReadSeqCache[[self keyFor:channel]];
+    [self.cacheLock unlock];
+    return v ? (uint32_t)[v unsignedLongLongValue] : 0;
+}
+
+-(NSTimeInterval) lastLocalReadAtForChannel:(WKChannel*)channel {
+    if (!channel || channel.channelId.length == 0) return 0;
+    [self.cacheLock lock];
+    NSNumber *v = self.lastLocalReadAtCache[[self keyFor:channel]];
+    [self.cacheLock unlock];
+    return v ? [v doubleValue] : 0;
+}
+
+-(void) markLocalRead:(WKChannel*)channel readSeq:(uint32_t)readSeq {
+    if (!channel || channel.channelId.length == 0) return;
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    NSString *key = [self keyFor:channel];
+
+    [self.cacheLock lock];
+    uint32_t prev = self.lastReadSeqCache[key] ? (uint32_t)[self.lastReadSeqCache[key] unsignedLongLongValue] : 0;
+    uint32_t merged = MAX(prev, readSeq);
+    self.lastReadSeqCache[key] = @(merged);
+    self.lastLocalReadAtCache[key] = @(now);
+    [self persistCaches];
+    [self.cacheLock unlock];
+
+    NSLog(@"[UnreadStore] markLocalRead channelId=%@ type=%d readSeq=%u (prev=%u)",
+          channel.channelId, channel.channelType, merged, prev);
+
+    // 清本地 DB unread + 通知 UI(走 SDK 既有路径,会触发 onConversationUnreadCountUpdate).
+    [[WKSDK shared].conversationManager clearConversationUnreadCount:channel];
+
+    // 入队上报给 server. WKUnreadAckRunner 负责实际 PUT + 重试.
+    [[WKUnreadAckQueueDB shared] enqueue:channel lastReadSeq:merged];
+    [[WKUnreadAckRunner shared] kick];
+}
+
+-(NSInteger) reconcileServerSnapshot:(WKChannel*)channel
+                         serverUnread:(NSInteger)serverUnread
+                        serverLastSeq:(uint32_t)serverLastSeq
+                          localUnread:(NSInteger)localUnread {
+    if (!channel || channel.channelId.length == 0) {
+        return MAX(localUnread, serverUnread);
+    }
+    uint32_t lastReadSeq = [self lastReadSeqForChannel:channel];
+    NSTimeInterval lastReadAt = [self lastLocalReadAtForChannel:channel];
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    BOOL hasPendingAck = [[WKUnreadAckQueueDB shared] hasPending:channel];
+    BOOL inProtectionWindow = (lastReadAt > 0 && (now - lastReadAt) < kLocalReadProtectionWindow);
+
+    // 1. 用户已经读过 server 那条最新 seq: 直接 0, server 的 unread 数是 stale.
+    if (lastReadSeq > 0 && serverLastSeq > 0 && lastReadSeq >= serverLastSeq) {
+        NSLog(@"[UnreadStore] reconcile channelId=%@ -> 0 (read past, lastReadSeq=%u >= serverLastSeq=%u)",
+              channel.channelId, lastReadSeq, serverLastSeq);
+        return 0;
+    }
+    // 2. 还有 pending ack: server 还不知道我们读了,用本地视图,不被 server 拉高.
+    if (hasPendingAck) {
+        NSLog(@"[UnreadStore] reconcile channelId=%@ -> %ld (pending ack, keep local; server=%ld)",
+              channel.channelId, (long)localUnread, (long)serverUnread);
+        return localUnread;
+    }
+    // 3. 近期本地 mark-read 保护窗口: 网络抖动导致 ack 还没成功 / cmd 还没下发,
+    //    保持本地 0 不让 server 重新点亮红点.
+    if (inProtectionWindow) {
+        NSLog(@"[UnreadStore] reconcile channelId=%@ -> %ld (within %.0fs read window; server=%ld)",
+              channel.channelId, (long)localUnread, kLocalReadProtectionWindow, (long)serverUnread);
+        return localUnread;
+    }
+    // 4. 默认: max, 防 sync 把刚 +1 的本地值拉低.
+    NSInteger result = MAX(localUnread, serverUnread);
+    if (result != localUnread || result != serverUnread) {
+        NSLog(@"[UnreadStore] reconcile channelId=%@ -> %ld (max of local=%ld server=%ld)",
+              channel.channelId, (long)result, (long)localUnread, (long)serverUnread);
+    }
+    return result;
+}
+
+@end

@@ -57,6 +57,13 @@ static WKReminderDB *_instance;
     if(!reminders || reminders.count==0) {
         return;
     }
+    // [ReminderTrace] 写库入口,server sync 和本地补偿都走这里.
+    for (WKReminder *r in reminders) {
+        NSLog(@"[ReminderTrace] DB addOrUpdate channelId=%@ type=%d reminderID=%lld msgId=%llu msgSeq=%u done=%d isLocate=%d publisher=%@ version=%lld",
+              r.channel.channelId, r.channel.channelType,
+              r.reminderID, r.messageId, r.messageSeq,
+              r.done, r.isLocate, r.publisher ?: @"", r.version);
+    }
     __weak typeof(self) weakSelf = self;
     [[WKDB sharedDB].dbQueue inTransaction:^(FMDatabase * _Nonnull db, BOOL * _Nonnull rollback) {
         for (WKReminder *reminder in reminders) {
@@ -126,6 +133,8 @@ static WKReminderDB *_instance;
     if(!ids||ids.count == 0) {
         return;
     }
+    // [ReminderTrace] 标记 reminder 为 done(用户阅读到了对应消息).
+    NSLog(@"[ReminderTrace] DB updateDone ids=%@", [ids componentsJoinedByString:@","]);
     [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
         [db executeUpdate:[NSString stringWithFormat:@"%@ (%@)",SQL_UPDATE_DONE,[ids componentsJoinedByString:@","]],@([[NSDate date] timeIntervalSince1970])];
     }];

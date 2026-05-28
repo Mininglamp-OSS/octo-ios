@@ -958,10 +958,13 @@
         model.unreadCount = self.newMsgCount;
         [[WKSDK shared].conversationManager callOnConversationUpdateDelegate:[model getConversation]];
     }
-    // 立即同步到服务器和本地 DB，防止用户按 Home 键或杀 app 时未读状态丢失
-    uint32_t messageSeq = self.lastMessage ? self.lastMessage.messageSeq : 0;
-    [[WKMessageManager shared] conversationSetUnread:self.channel unread:self.newMsgCount messageSeq:messageSeq complete:nil];
-    [[WKSDK shared].conversationManager setConversationUnreadCount:self.channel unread:self.newMsgCount];
+    // 用户滚到底 / 看到 last message → 已读 newMsgCount=0 这一段. 走 store
+    // 持久化 lastReadSeq + 清本地 DB + 入队上报(带重试),取代直接调
+    // conversationSetUnread + setConversationUnreadCount(后者上报失败会静默丢).
+    if (self.newMsgCount == 0) {
+        uint32_t messageSeq = self.lastMessage ? self.lastMessage.messageSeq : 0;
+        [[WKUnreadStore shared] markLocalRead:self.channel readSeq:messageSeq];
+    }
 }
 
 -(void) forceMarkAllAsRead {

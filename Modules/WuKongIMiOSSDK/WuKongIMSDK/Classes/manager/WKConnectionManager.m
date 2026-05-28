@@ -8,6 +8,7 @@
 #import "WKConnectionManager.h"
 #import <CocoaAsyncSocket/GCDAsyncSocket.h>
 #import "WKSDK.h"
+#import "WKUnreadAckRunner.h"
 #import "WKConnectPacket.h"
 #import "WKConnackPacket.h"
 #import "WKConst.h"
@@ -236,6 +237,9 @@ static dispatch_queue_t _imsocketQueue;
     // 同步会话
     long long version = [[WKConversationDB shared] getConversationMaxVersion];
     NSString *syncKey = [[WKConversationDB shared] getConversationSyncKey];
+    // [UnreadTrace] sync 入口,锁屏后回前台/网络抖动重连都会走这里;
+    // 后面紧跟一批 [UnreadTrace] replaceConversations 就是这次 sync 的覆盖动作.
+    NSLog(@"[UnreadTrace] syncConversations enter version=%lld syncKey=%@", version, syncKey ?: @"<nil>");
     [WKSDK shared].conversationManager.syncConversationProvider(version, syncKey, ^(WKSyncConversationWrapModel* _Nullable model, NSError * _Nullable error) {
         if(error) {
             // 如果拉取离线消息发生错误 则休息3秒再拉取
@@ -753,6 +757,8 @@ static dispatch_queue_t _imsocketQueue;
             [weakSelf changeConnectStatus:WKConnected];
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
                 [[WKSDK shared].cmdManager pullCMDMessages]; // 开始拉取cmd消息
+                // mark-read 上报队列重试: 上次离线时积累的本地已读现在补传给 server.
+                [[WKUnreadAckRunner shared] kick];
             });
         }else {
             if(error.code == 404) { // 没有syncConversationProvider
@@ -760,11 +766,12 @@ static dispatch_queue_t _imsocketQueue;
                 [weakSelf changeConnectStatus:WKConnected];
                 dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
                     [[WKSDK shared].cmdManager pullCMDMessages]; // 开始拉取cmd消息
+                    [[WKUnreadAckRunner shared] kick];
                 });
             }else {
                 NSLog(@"同步会话失败！-> %@",error);
             }
-           
+
         }
     }];
     
