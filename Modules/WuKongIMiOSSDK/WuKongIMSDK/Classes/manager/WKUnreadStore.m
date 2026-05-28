@@ -58,6 +58,10 @@ static NSTimeInterval const kLocalReadProtectionWindow = 60.0;
 -(void) persistCaches {
     [[NSUserDefaults standardUserDefaults] setObject:[self.lastReadSeqCache copy] forKey:kLastReadSeqMapKey];
     [[NSUserDefaults standardUserDefaults] setObject:[self.lastLocalReadAtCache copy] forKey:kLastLocalReadAtMapKey];
+    // 强制 flush. iOS 默认会延迟批量写,如果用户 mark-read 后立刻 kill app(iOS
+    // 没机会做 graceful suspend),lastReadSeq 会丢, 下次启动 reconcile 走不进
+    // branch 1, 退到 MAX(local, server) → 红点复活 regression.
+    [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
 -(uint32_t) lastReadSeqForChannel:(WKChannel*)channel {
@@ -78,6 +82,24 @@ static NSTimeInterval const kLocalReadProtectionWindow = 60.0;
 
 -(void) markLocalRead:(WKChannel*)channel readSeq:(uint32_t)readSeq {
     if (!channel || channel.channelId.length == 0) return;
+    // 调用方传 0 通常意味着 lastMessage 还没 ready(异步加载 race / subroom
+    // 冷启动). 不能用 0 上报: server 端 PUT coversation/clearUnread 收到
+    // message_seq=0 不会真清, 而 cache 里如果没有真值会落 lastReadSeq=0,
+    // reconcile branch 1 永远走不进, 重启后红点复活.
+    // 兜底从 DB local conversation row 拿 lastMessageSeq —— 那是 SDK 已知的
+    // 该频道最新 seq, 用它作为"已读到这里"的进度可接受(用户都点"全部已读"了).
+    if (readSeq == 0) {
+        WKConversation *local = [[WKSDK shared].conversationManager getConversation:channel];
+        if (local && local.lastMessageSeq > 0) {
+            readSeq = local.lastMessageSeq;
+            NSLog(@"[UnreadStore] markLocalRead channelId=%@ readSeq=0 → fallback to local.lastMessageSeq=%u",
+                  channel.channelId, readSeq);
+        } else {
+            NSLog(@"[UnreadStore] markLocalRead channelId=%@ readSeq=0 AND no local fallback, SKIP (would corrupt cache)",
+                  channel.channelId);
+            return;
+        }
+    }
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
     NSString *key = [self keyFor:channel];
 
