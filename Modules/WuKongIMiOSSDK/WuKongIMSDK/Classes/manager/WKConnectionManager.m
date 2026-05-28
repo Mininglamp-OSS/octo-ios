@@ -212,38 +212,30 @@ static dispatch_queue_t _imsocketQueue;
     }
 }
 
-// 根据地址协议头 + useWSS 开关决定走 WS 还是 TCP。
-//   - useWSS=YES 且 addr 为 ws/wss URL → WSS（NSURLSessionWebSocketTask）
-//   - 其它情况（addr 是 host:port，或 useWSS=NO）→ TCP（GCDAsyncSocket）
-//     · useWSS=NO 时，若 addr 仍是 ws/wss URL，会取出 host[:port] 退化成 TCP，
-//       便于灰度回退而无需上层切换 addr 来源。
+// 根据地址 scheme 决定走 WS 还是 TCP，scheme 是唯一权威：
+//   - addr 以 ws:// 或 wss:// 开头 → WebSocket path（NSURLSessionWebSocketTask）
+//     · wss:// 由 URLSession 自动协商 TLS；ws:// 是明文 WebSocket，依然走 WS path
+//       不再降级成 TCP — 服务端给的是 WebSocket 地址就按 WebSocket 连。
+//   - addr 是 host:port（无 scheme） → TCP path（GCDAsyncSocket）
+// useWSS 开关只影响地址来源侧的优先级（wss_addr > ws_addr > tcp_addr），
+// 不参与本函数的传输层 dispatch — 一旦拿到带 scheme 的地址，scheme 就是事实。
 -(void) dispatchConnectWithAddr:(NSString *)addr {
     NSString *trimmed = [addr stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     BOOL looksLikeWSURL = [trimmed hasPrefix:@"ws://"] || [trimmed hasPrefix:@"wss://"];
 
-    if (self.useWSS && looksLikeWSURL) {
+    if (looksLikeWSURL) {
+        // ws:// 与 wss:// 都是 WebSocket，区别仅在 TLS。NSURLSessionWebSocketTask 同时支持两者。
         [self connectWebSocketWithURL:trimmed];
         return;
     }
 
+    // 纯 host:port，走 TCP（无 scheme 信息可推断 WS 意图）
+    NSArray *addrs = [trimmed componentsSeparatedByString:@":"];
     NSString *host = nil;
     NSInteger port = 0;
-    if (looksLikeWSURL) {
-        // useWSS=NO 且收到的是 ws/wss URL，强行降级到 TCP：取 host + port（默认 80/443）。
-        NSURL *url = [NSURL URLWithString:trimmed];
-        host = url.host;
-        if (url.port) {
-            port = url.port.integerValue;
-        } else {
-            port = [trimmed hasPrefix:@"wss://"] ? 443 : 80;
-        }
-    } else {
-        // host:port
-        NSArray *addrs = [trimmed componentsSeparatedByString:@":"];
-        if (addrs.count >= 2) {
-            host = addrs[0];
-            port = [addrs[1] integerValue];
-        }
+    if (addrs.count >= 2) {
+        host = addrs[0];
+        port = [addrs[1] integerValue];
     }
     if (host.length > 0 && port > 0) {
         [self connectSocket:host port:(uint16_t)port];
@@ -531,6 +523,16 @@ didCompleteWithError:(NSError *)error {
 
     [self.ssocket disconnect];
     [self teardownWS];
+
+    // teardownWS 是同步路径：cancel 后 wsTask 立刻被 nil，
+    // didCloseWithCode: / didCompleteWithError: 回调会被 (task != self.wsTask) 早返过滤掉，
+    // handleWSDisconnectWithError: 不会被触发。因此 logout 必须显式同步对齐
+    // socketDidDisconnect:withError: 的清理逻辑：
+    //   - changeConnectStatus:WKDisconnected — 否则上层 UI 仍显示已连接
+    //   - stopHeartbeat — 否则心跳定时器继续跑
+    // forceDisconnect 已在上面置 true，不会触发 backoffReconnect。
+    [self changeConnectStatus:WKDisconnected];
+    [self stopHeartbeat];
 }
 
 // 重连
