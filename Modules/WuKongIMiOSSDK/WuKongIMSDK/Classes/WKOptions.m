@@ -1,6 +1,6 @@
 //
 //  WKOptions.m
-//  CocoaAsyncSocket
+//  WuKongIMSDK
 //
 //  Created by tt on 2019/11/23.
 //

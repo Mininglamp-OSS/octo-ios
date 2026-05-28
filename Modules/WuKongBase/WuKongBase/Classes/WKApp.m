@@ -387,26 +387,16 @@ static WKApp *_instance;
                    complete(nil);
                    return;
                }
-               // 地址优先级：wss_addr > ws_addr > tcp_addr。
-               // SDK 内部 useWSS=YES 时 ws/wss URL 会走 NSURLSessionWebSocketTask；
-               // useWSS=NO（灰度回退）时即便给到 ws/wss URL 也会被降级成 TCP。
+               // 客户端只走 WebSocket（TCP 已下线）。
+               // 地址优先级：wss_addr > ws_addr。其他地址字段（如旧的 TCP 地址）一律忽略。
                NSString *addr = nil;
-               BOOL useWSS = [WKSDK shared].connectionManager.useWSS;
-               if (useWSS) {
-                   id wssAddr = addrDict[@"wss_addr"];
-                   if ([wssAddr isKindOfClass:[NSString class]] && ((NSString *)wssAddr).length > 0) {
-                       addr = wssAddr;
-                   } else {
-                       id wsAddr = addrDict[@"ws_addr"];
-                       if ([wsAddr isKindOfClass:[NSString class]] && ((NSString *)wsAddr).length > 0) {
-                           addr = wsAddr;
-                       }
-                   }
-               }
-               if (addr.length == 0) {
-                   id tcpAddr = addrDict[@"tcp_addr"];
-                   if ([tcpAddr isKindOfClass:[NSString class]] && ((NSString *)tcpAddr).length > 0) {
-                       addr = tcpAddr;
+               id wssAddr = addrDict[@"wss_addr"];
+               if ([wssAddr isKindOfClass:[NSString class]] && ((NSString *)wssAddr).length > 0) {
+                   addr = wssAddr;
+               } else {
+                   id wsAddr = addrDict[@"ws_addr"];
+                   if ([wsAddr isKindOfClass:[NSString class]] && ((NSString *)wsAddr).length > 0) {
+                       addr = wsAddr;
                    }
                }
                complete(addr.length > 0 ? addr : nil);

@@ -50,25 +50,12 @@ typedef enum : NSUInteger {
 @property(nonatomic,assign,readonly) WKConnectStatus connectStatus;
 
 
-/**
- * 是否启用 WSS（NSURLSessionWebSocketTask）传输层。
- * 默认 YES。
- *
- * - YES：当 getConnectAddr 回调返回的地址以 ws:// 或 wss:// 开头时，
- *        使用 NSURLSessionWebSocketTask 建立长连接；否则 fallback 到 TCP。
- * - NO：始终强制使用 GCDAsyncSocket TCP 路径，即使地址是 ws/wss URL，
- *        也只取出 host:port 部分按 TCP 连接（用于灰度回退）。
- *
- * 灰度期 GCDAsyncSocket 与 NSURLSessionWebSocketTask 两条路径并存，
- * 通过本开关切换；setter 在下一次 connect/重连时生效。
- */
-@property(nonatomic,assign) BOOL useWSS;
-
 ///  获取连接地址
+///  传输层固定走 WebSocket（NSURLSessionWebSocketTask），不再支持 TCP。
 ///  支持的格式：
-///    - "host:port"            → 走 TCP（GCDAsyncSocket）
-///    - "ws://host:port/path"  → 走 WebSocket（明文，仅调试）
-///    - "wss://host[:port]/path" → 走 WebSocket Secure（生产）
+///    - "wss://host[:port]/path" → WebSocket Secure（生产环境）
+///    - "ws://host:port/path"    → WebSocket 明文（仅开发/调试）
+///  也接受裸 "host:port"，会被自动包装成 "wss://host:port" 再连接。
 @property(nonatomic,copy) void(^getConnectAddr)(void(^complete)(NSString * __nullable addr));
 /**
  *  连接悟空IM服务器
