@@ -237,8 +237,16 @@ static dispatch_queue_t _imsocketQueue;
         NSString *wssURL = [NSString stringWithFormat:@"wss://%@:%ld", host, (long)port];
         [self connectWebSocketWithURL:wssURL];
     } else {
-        NSLog(@"无法解析连接地址: %@", addr);
-        [self changeConnectStatus:WKDisconnected];
+        // 无法解析时不要直接断连：getConnectAddr 可能下发了一次脏数据，下一次轮询大概率
+        // 能拿到正常地址。直接 WKDisconnected 上层 UI 会瞬时闪一次"已断开"，且后续没有
+        // 任何主动重试入口（forceDisconnect 仍是 false）。统一走 backoffReconnect，
+        // backoff 间隔后重新 loopGetAddrToConnect 拉地址。
+        NSLog(@"无法解析连接地址，将退避后重试 -> %@", addr);
+        if (!self.forceDisconnect) {
+            [self backoffReconnect];
+        } else {
+            [self changeConnectStatus:WKDisconnected];
+        }
     }
 }
 
@@ -248,8 +256,14 @@ static dispatch_queue_t _imsocketQueue;
 -(void) connectWebSocketWithURL:(NSString *)urlStr {
     NSURL *url = [NSURL URLWithString:urlStr];
     if (!url || !url.scheme || !url.host) {
-        NSLog(@"WS 地址解析失败 -> %@", urlStr);
-        [self changeConnectStatus:WKDisconnected];
+        // URL 无法解析：同样走 backoff 重试而不是直接断连，避免 getConnectAddr 偶发脏数据
+        // 直接打死整条重连链路。
+        NSLog(@"WS 地址解析失败，将退避后重试 -> %@", urlStr);
+        if (!self.forceDisconnect) {
+            [self backoffReconnect];
+        } else {
+            [self changeConnectStatus:WKDisconnected];
+        }
         return;
     }
     if ([WKSDK shared].isDebug) {
@@ -330,7 +344,9 @@ static dispatch_queue_t _imsocketQueue;
             }];
         } else if (msg.type == NSURLSessionWebSocketMessageTypeString) {
             // 移动端走 wkproto 二进制，不应收到 text 帧；忽略即可。
-            NSLog(@"WS 收到非预期 text 帧，忽略 -> %@", msg.string);
+            // 只打长度不打内容，避免把服务端推送或调试信息泄漏到端侧日志。
+            NSUInteger textLen = msg.string.length;
+            NSLog(@"WS 收到非预期 text 帧，忽略 -> len=%lu", (unsigned long)textLen);
         }
         // 继续监听下一条
         [self receiveLoop];
