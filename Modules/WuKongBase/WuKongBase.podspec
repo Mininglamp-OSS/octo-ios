@@ -137,7 +137,6 @@ TODO: Add long description of the pod here.
   s.dependency 'LBXScan/UI', '~> 2.5'
   s.dependency 'MJRefresh','~> 3.0'
 #  s.dependency 'WKJavaScriptBridge', '~> 1.0.0'
-  s.dependency 'CocoaAsyncSocket', '~> 7.6.5'
   s.dependency 'TOCropViewController', '~> 2.5.3'
   s.dependency 'SDWebImage','~> 5.9.1'
   s.dependency 'SDWebImageWebPCoder','~> 0.6.1'

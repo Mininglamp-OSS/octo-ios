@@ -51,6 +51,11 @@ typedef enum : NSUInteger {
 
 
 ///  获取连接地址
+///  传输层固定走 WebSocket（NSURLSessionWebSocketTask），不再支持 TCP。
+///  支持的格式：
+///    - "wss://host[:port]/path" → WebSocket Secure（生产环境）
+///    - "ws://host:port/path"    → WebSocket 明文（仅开发/调试）
+///  也接受裸 "host:port"，会被自动包装成 "wss://host:port" 再连接。
 @property(nonatomic,copy) void(^getConnectAddr)(void(^complete)(NSString * __nullable addr));
 /**
  *  连接悟空IM服务器
