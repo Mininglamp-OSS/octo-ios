@@ -47,6 +47,11 @@ static NSTimeInterval const kLocalReadProtectionWindow = 60.0;
 }
 
 -(NSString*) keyFor:(WKChannel*)channel {
+    return [[self class] channelKeyFor:channel];
+}
+
++(NSString*) channelKeyFor:(WKChannel*)channel {
+    if (!channel) return @"";
     return [NSString stringWithFormat:@"%d:%@", channel.channelType, channel.channelId ?: @""];
 }
 
@@ -99,13 +104,31 @@ static NSTimeInterval const kLocalReadProtectionWindow = 60.0;
                          serverUnread:(NSInteger)serverUnread
                         serverLastSeq:(uint32_t)serverLastSeq
                           localUnread:(NSInteger)localUnread {
+    return [self reconcileServerSnapshot:channel
+                            serverUnread:serverUnread
+                           serverLastSeq:serverLastSeq
+                             localUnread:localUnread
+                     pendingChannelKeys:nil];
+}
+
+-(NSInteger) reconcileServerSnapshot:(WKChannel*)channel
+                         serverUnread:(NSInteger)serverUnread
+                        serverLastSeq:(uint32_t)serverLastSeq
+                          localUnread:(NSInteger)localUnread
+                  pendingChannelKeys:(NSSet<NSString*>*)pendingChannelKeys {
     if (!channel || channel.channelId.length == 0) {
         return MAX(localUnread, serverUnread);
     }
     uint32_t lastReadSeq = [self lastReadSeqForChannel:channel];
     NSTimeInterval lastReadAt = [self lastLocalReadAtForChannel:channel];
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    BOOL hasPendingAck = [[WKUnreadAckQueueDB shared] hasPending:channel];
+    BOOL hasPendingAck;
+    if (pendingChannelKeys) {
+        // 调用方已 prefetch 过(避免 inTransaction 嵌套 inDatabase 触发 FMDB 重入).
+        hasPendingAck = [pendingChannelKeys containsObject:[[self class] channelKeyFor:channel]];
+    } else {
+        hasPendingAck = [[WKUnreadAckQueueDB shared] hasPending:channel];
+    }
     BOOL inProtectionWindow = (lastReadAt > 0 && (now - lastReadAt) < kLocalReadProtectionWindow);
 
     // 1. 用户已经读过 server 那条最新 seq: 直接 0, server 的 unread 数是 stale.

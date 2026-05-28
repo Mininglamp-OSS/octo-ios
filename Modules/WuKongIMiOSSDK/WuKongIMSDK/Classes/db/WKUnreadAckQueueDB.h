@@ -37,11 +37,21 @@ NS_ASSUME_NONNULL_BEGIN
 /// 取本 channel 当前队列条目(没有返回 nil).
 -(nullable WKUnreadAckEntry*) entryForChannel:(WKChannel*)channel;
 
-/// 上报成功:删除队列条目.
--(void) markDone:(WKChannel*)channel;
+/// 上报成功:删除队列条目. 只有当 stored last_read_seq <= ackedSeq 时才删,
+/// 防止 race(老 upload 在飞时新 enqueue 把 seq 推高)删掉新读.
+-(void) markDone:(WKChannel*)channel ackedSeq:(uint32_t)ackedSeq;
 
 /// 上报失败:attempts++, next_retry_at 按指数退避计算.
 -(void) markFailed:(WKChannel*)channel;
+
+/// 当前有 pending 上报的所有 channel 的 key 集合("type:channelId").
+/// mergeConversations 在进 inTransaction 之前调用一次, 避免 reconcile 嵌套
+/// inDatabase 触发 FMDB 重入(WKUnreadStore.reconcileServerSnapshot:hasPendingHint:).
+-(NSSet<NSString*>*) allPendingChannelKeys;
+
+/// 取下一个未来到期的 next_retry_at(全队列 min). 没有返回 0.
+/// Runner drain 完后调度自动重试用.
+-(NSTimeInterval) earliestFutureRetryAt;
 
 /// 调试用:列全部条目.
 -(NSArray<WKUnreadAckEntry*>*) allEntries;

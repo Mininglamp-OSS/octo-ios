@@ -95,13 +95,37 @@ static WKUnreadAckQueueDB *_instance;
     return entry;
 }
 
--(void) markDone:(WKChannel*)channel {
+-(void) markDone:(WKChannel*)channel ackedSeq:(uint32_t)ackedSeq {
     if (!channel || channel.channelId.length == 0) return;
     [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
-        [db executeUpdate:@"delete from unread_ack_queue where channel_id=? and channel_type=?",
-         channel.channelId, @(channel.channelType)];
+        FMResultSet *rs = [db executeQuery:@"select last_read_seq from unread_ack_queue where channel_id=? and channel_type=?",
+                            channel.channelId, @(channel.channelType)];
+        BOOL exists = NO;
+        uint32_t storedSeq = 0;
+        if (rs.next) {
+            exists = YES;
+            storedSeq = (uint32_t)[rs unsignedLongLongIntForColumn:@"last_read_seq"];
+        }
+        [rs close];
+        if (!exists) {
+            return;
+        }
+        if (storedSeq <= ackedSeq) {
+            // ack 覆盖了 stored 的进度, 安全删掉.
+            [db executeUpdate:@"delete from unread_ack_queue where channel_id=? and channel_type=?",
+             channel.channelId, @(channel.channelType)];
+            NSLog(@"[UnreadAck] markDone channelId=%@ type=%d ackedSeq=%u (stored=%u, deleted)",
+                  channel.channelId, channel.channelType, ackedSeq, storedSeq);
+        } else {
+            // upload 在飞时用户又往后读了一段, stored 的 seq 比 acked 大.
+            // 不能删: 删了 server 还停留在 ackedSeq, 后面的进度就丢了.
+            // 把 attempts/next_retry_at 归零, 让下一轮 drain 立即把新 seq 顶上去.
+            [db executeUpdate:@"update unread_ack_queue set attempts=0, next_retry_at=0, last_attempt_at=0 where channel_id=? and channel_type=?",
+             channel.channelId, @(channel.channelType)];
+            NSLog(@"[UnreadAck] markDone SUPERSEDED channelId=%@ type=%d ackedSeq=%u storedSeq=%u (keep row, retry immediately)",
+                  channel.channelId, channel.channelType, ackedSeq, storedSeq);
+        }
     }];
-    NSLog(@"[UnreadAck] markDone channelId=%@ type=%d", channel.channelId, channel.channelType);
 }
 
 -(void) markFailed:(WKChannel*)channel {
@@ -127,6 +151,39 @@ static WKUnreadAckQueueDB *_instance;
         FMResultSet *rs = [db executeQuery:@"select * from unread_ack_queue order by created_at asc"];
         while (rs.next) {
             [result addObject:[self toEntry:rs]];
+        }
+        [rs close];
+    }];
+    return result;
+}
+
+-(NSSet<NSString*>*) allPendingChannelKeys {
+    NSMutableSet<NSString*> *result = [NSMutableSet set];
+    [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
+        FMResultSet *rs = [db executeQuery:@"select channel_id, channel_type from unread_ack_queue"];
+        while (rs.next) {
+            NSString *cid = [rs stringForColumn:@"channel_id"];
+            NSInteger ctype = [rs intForColumn:@"channel_type"];
+            if (cid.length > 0) {
+                [result addObject:[NSString stringWithFormat:@"%ld:%@", (long)ctype, cid]];
+            }
+        }
+        [rs close];
+    }];
+    return result;
+}
+
+-(NSTimeInterval) earliestFutureRetryAt {
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    __block NSTimeInterval result = 0;
+    [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
+        FMResultSet *rs = [db executeQuery:@"select min(next_retry_at) m from unread_ack_queue where next_retry_at>?",
+                            @(now)];
+        if (rs.next) {
+            id v = [rs objectForColumn:@"m"];
+            if (v && ![v isKindOfClass:[NSNull class]]) {
+                result = [v doubleValue];
+            }
         }
         [rs close];
     }];

@@ -36,6 +36,20 @@ NS_ASSUME_NONNULL_BEGIN
                         serverLastSeq:(uint32_t)serverLastSeq
                           localUnread:(NSInteger)localUnread;
 
+/// 同上,但 hasPendingHint 由调用方提前 prefetch 提供, 避免 reconcile 内部
+/// 再开 [dbQueue inDatabase:] —— mergeConversations 已经持有 inTransaction,
+/// 不能再嵌套, 否则触发 FMDB 重入断言/死锁.
+/// pendingChannelKeys: WKUnreadAckQueueDB.allPendingChannelKeys 的返回值.
+-(NSInteger) reconcileServerSnapshot:(WKChannel*)channel
+                         serverUnread:(NSInteger)serverUnread
+                        serverLastSeq:(uint32_t)serverLastSeq
+                          localUnread:(NSInteger)localUnread
+                  pendingChannelKeys:(nullable NSSet<NSString*>*)pendingChannelKeys;
+
+/// 给 reconcile 用的 channel key 格式("type:channelId"). pendingChannelKeys
+/// 里的 key 与此处一致.
++(NSString*) channelKeyFor:(WKChannel*)channel;
+
 /// 取 last_read_seq, 没有返回 0.
 -(uint32_t) lastReadSeqForChannel:(WKChannel*)channel;
 

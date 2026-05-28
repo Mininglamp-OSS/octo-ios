@@ -9,6 +9,7 @@
 #import "WKDB.h"
 #import "WKConversationUtil.h"
 #import "WKUnreadStore.h"
+#import "WKUnreadAckQueueDB.h"
 #define SQL_EXIST @"select count(*) cn from conversation where channel_id=? and channel_type=? and is_deleted=0"
 
 #define SQL_GET_SELECT @"conversation.*,IFNULL(channel.stick,0) stick,IFNULL(channel.mute,0) mute,IFNULL(conversation_extra.browse_to,0) browse_to,IFNULL(conversation_extra.keep_message_seq,0) keep_message_seq,IFNULL(conversation_extra.keep_offset_y,0) keep_offset_y,IFNULL(conversation_extra.draft,'') draft,IFNULL(conversation_extra.version,0) extra_version"
@@ -114,6 +115,11 @@ static WKConversationDB *_instance;
     if(!conversations || conversations.count<=0) {
         return;
     }
+    // FIX(reentrancy): prefetch pending ack channelKeys 在进 inTransaction 之前,
+    // 避免 reconcileServerSnapshot 内部再开 [dbQueue inDatabase:] 触发 FMDB 重入
+    // (FMDatabaseQueue 是串行队列,在 inTransaction 块内调 inDatabase 会断言/死锁).
+    NSSet<NSString*> *pendingKeys = [[WKUnreadAckQueueDB shared] allPendingChannelKeys];
+
     [[WKDB sharedDB].dbQueue inTransaction:^(FMDatabase * _Nonnull db, BOOL * _Nonnull rollback) {
         for (WKConversation *conversation in conversations) {
             // 1) 拒收"空白行": server 偶尔会给系统通道(botfather / fileHelper /
@@ -159,7 +165,8 @@ static WKConversationDB *_instance;
             NSInteger newUnread = [[WKUnreadStore shared] reconcileServerSnapshot:conversation.channel
                                                                      serverUnread:conversation.unreadCount
                                                                     serverLastSeq:conversation.lastMessageSeq
-                                                                      localUnread:local.unreadCount];
+                                                                      localUnread:local.unreadCount
+                                                              pendingChannelKeys:pendingKeys];
             BOOL newIsDeleted = takeMeta ? conversation.isDeleted : local.isDeleted;
             // parent 字段沿用 server 端(子区不会换爹)
             NSString *newParentChannelID = parentChannelID.length > 0 ? parentChannelID : (local.parentChannel ? local.parentChannel.channelId : @"");
