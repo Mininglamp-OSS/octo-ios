@@ -303,15 +303,21 @@ static dispatch_queue_t _imsocketQueue;
 
 // 拆掉当前 WSS 连接（包括 cancel + invalidate session）。
 -(void) teardownWS {
+    // 先 cancel、再 nil：cancel 触发的 didClose:/didCompleteWithError: 回调里 `task != self.wsTask`
+    // 判断需要在 wsTask 还指向旧 task 的时刻成立才能进入 handleWSDisconnect；否则状态会卡在
+    // WKConnected、心跳不停、下次 connect 被早返拒绝。
     NSURLSessionWebSocketTask *oldTask = self.wsTask;
     NSURLSession *oldSession = self.wsSession;
-    self.wsTask = nil;
-    self.wsSession = nil;
     if (oldTask) {
         @try {
             [oldTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeGoingAway reason:nil];
         } @catch (__unused NSException *ex) {}
     }
+    self.wsTask = nil;
+    self.wsSession = nil;
+    // 不依赖 cancel 的回调来重置 flag —— teardownWS 可能在 logout / onlyConnect 的同步路径被调用，
+    // 回调到达前 connectedViaWS 必须先归位，避免 writeData 仍然走 WS 分支。
+    self.connectedViaWS = NO;
     if (oldSession) {
         // finishTasksAndInvalidate 会等待已发出的 sendMessage 完成回调，避免 dealloc 期间 crash
         [oldSession finishTasksAndInvalidate];
@@ -403,6 +409,8 @@ didCompleteWithError:(NSError *)error {
     self.wsTask = nil;
     NSURLSession *oldSession = self.wsSession;
     self.wsSession = nil;
+    // flag 必须在所有断开路径上都 reset，否则下一次 connectSocket: 之前 writeData 可能仍走 WS 分支
+    self.connectedViaWS = NO;
     if (oldSession) {
         [oldSession finishTasksAndInvalidate];
     }
@@ -666,11 +674,23 @@ didCompleteWithError:(NSError *)error {
 }
 
 -(void) writeData:(NSData*) data {
-    if (self.connectedViaWS && self.wsTask) {
+    // 一次性 snapshot，避免在断连重连窗口内 connectedViaWS / wsTask 多次读取出现 race
+    // 例：第一次读 connectedViaWS=YES，第二次读 wsTask 已被 teardownWS 置 nil →
+    // 数据静默落空 socket，无 error 上报。
+    BOOL viaWS = self.connectedViaWS;
+    NSURLSessionWebSocketTask *task = self.wsTask;
+    if (viaWS) {
+        if (!task) {
+            // 处于 WS 断连窗口：不再回退到 self.ssocket（TCP 已被 connectWebSocketWithURL 取代），
+            // 显式 log 让上层 / 重连逻辑感知，避免静默丢数据
+            NSLog(@"WSS 发送失败 -> wsTask is nil during WS disconnect window, drop %lu bytes",
+                  (unsigned long)data.length);
+            return;
+        }
         // WSS 写入：单帧 = 单次 sendMessage，wkproto 二进制原样作为 WS binary payload
         NSURLSessionWebSocketMessage *m =
             [[NSURLSessionWebSocketMessage alloc] initWithData:data];
-        [self.wsTask sendMessage:m completionHandler:^(NSError * _Nullable e) {
+        [task sendMessage:m completionHandler:^(NSError * _Nullable e) {
             if (e) {
                 // 不在这里直接 backoffReconnect — didCompleteWithError: 会兜底触发，避免重复
                 NSLog(@"WSS 发送失败 -> %@", e);
