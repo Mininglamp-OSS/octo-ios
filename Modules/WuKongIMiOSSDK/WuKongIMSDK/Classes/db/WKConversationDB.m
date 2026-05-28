@@ -115,10 +115,11 @@ static WKConversationDB *_instance;
     if(!conversations || conversations.count<=0) {
         return;
     }
-    // FIX(reentrancy): prefetch pending ack channelKeys 在进 inTransaction 之前,
-    // 避免 reconcileServerSnapshot 内部再开 [dbQueue inDatabase:] 触发 FMDB 重入
-    // (FMDatabaseQueue 是串行队列,在 inTransaction 块内调 inDatabase 会断言/死锁).
-    NSSet<NSString*> *pendingKeys = [[WKUnreadAckQueueDB shared] allPendingChannelKeys];
+    // FIX(reentrancy): prefetch reconcile context 在进 inTransaction 之前一次拉完
+    // (pending ack keys + unread_state map), 避免 reconcileServerSnapshot 内部
+    // 再开 [dbQueue inDatabase:] 触发 FMDB 重入. 同 sync 批可能 250+ 行,
+    // prefetch 一次 vs 250 次单 query, 性能也好得多.
+    WKUnreadReconcileContext *reconcileCtx = [[WKUnreadStore shared] prefetchReconcileContext];
 
     [[WKDB sharedDB].dbQueue inTransaction:^(FMDatabase * _Nonnull db, BOOL * _Nonnull rollback) {
         for (WKConversation *conversation in conversations) {
@@ -166,7 +167,7 @@ static WKConversationDB *_instance;
                                                                      serverUnread:conversation.unreadCount
                                                                     serverLastSeq:conversation.lastMessageSeq
                                                                       localUnread:local.unreadCount
-                                                              pendingChannelKeys:pendingKeys];
+                                                                          context:reconcileCtx];
             BOOL newIsDeleted = takeMeta ? conversation.isDeleted : local.isDeleted;
             // parent 字段沿用 server 端(子区不会换爹)
             NSString *newParentChannelID = parentChannelID.length > 0 ? parentChannelID : (local.parentChannel ? local.parentChannel.channelId : @"");

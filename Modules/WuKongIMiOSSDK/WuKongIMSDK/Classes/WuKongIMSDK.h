@@ -42,6 +42,7 @@
 #import "WKUnreadStore.h"
 #import "WKUnreadAckQueueDB.h"
 #import "WKUnreadAckRunner.h"
+#import "WKUnreadStateDB.h"
 
 
 
