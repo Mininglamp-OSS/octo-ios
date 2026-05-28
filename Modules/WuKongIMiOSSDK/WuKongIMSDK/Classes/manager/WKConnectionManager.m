@@ -212,19 +212,51 @@ static dispatch_queue_t _imsocketQueue;
     }
 }
 
-// 根据地址 scheme 决定走 WS 还是 TCP，scheme 是唯一权威：
-//   - addr 以 ws:// 或 wss:// 开头 → WebSocket path（NSURLSessionWebSocketTask）
-//     · wss:// 由 URLSession 自动协商 TLS；ws:// 是明文 WebSocket，依然走 WS path
-//       不再降级成 TCP — 服务端给的是 WebSocket 地址就按 WebSocket 连。
-//   - addr 是 host:port（无 scheme） → TCP path（GCDAsyncSocket）
-// useWSS 开关只影响地址来源侧的优先级（wss_addr > ws_addr > tcp_addr），
-// 不参与本函数的传输层 dispatch — 一旦拿到带 scheme 的地址，scheme 就是事实。
+// 传输层 dispatch 入口。优先级：
+//   1. useWSS == NO 是 WSS 灰度的 kill-switch / rollback 开关——即便 server 下发的是
+//      ws:// 或 wss:// 地址，也必须强制 fallback 到 TCP（从 URL 提取 host:port，
+//      ws 默认 80 / wss 默认 443），否则线上一旦发现 WSS 链路异常就没法降级回退。
+//   2. useWSS == YES 时，地址 scheme 是权威：
+//        - ws:// / wss://（大小写不敏感）→ WebSocket path（NSURLSessionWebSocketTask）
+//          wss:// 由 URLSession 自动协商 TLS；ws:// 是明文 WebSocket，仍走 WS path。
+//        - host:port（无 scheme）→ TCP path（GCDAsyncSocket）。
 -(void) dispatchConnectWithAddr:(NSString *)addr {
     NSString *trimmed = [addr stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    BOOL looksLikeWSURL = [trimmed hasPrefix:@"ws://"] || [trimmed hasPrefix:@"wss://"];
+
+    // 用 NSURLComponents 解析 scheme，大小写不敏感（NSURL 对 scheme 的处理对大小写敏感，
+    // 但 RFC 3986 规定 scheme 应当不区分大小写，server 下发 WS:// / WSS:// 也应当能识别）。
+    NSURLComponents *components = [NSURLComponents componentsWithString:trimmed];
+    NSString *scheme = [components.scheme lowercaseString];
+    BOOL isWSScheme  = [scheme isEqualToString:@"ws"];
+    BOOL isWSSScheme = [scheme isEqualToString:@"wss"];
+    BOOL looksLikeWSURL = isWSScheme || isWSSScheme;
 
     if (looksLikeWSURL) {
-        // ws:// 与 wss:// 都是 WebSocket，区别仅在 TLS。NSURLSessionWebSocketTask 同时支持两者。
+        // rollback 开关：useWSS = NO 时，无论 scheme 是 ws 还是 wss 都必须 fallback 到 TCP。
+        // 否则一旦灰度期 WSS 出问题，关掉开关也救不回来。
+        if (!self.useWSS) {
+            NSString *host = components.host;
+            NSInteger port = 0;
+            if (components.port) {
+                port = components.port.integerValue;
+            } else {
+                port = isWSSScheme ? 443 : 80; // ws / wss 的默认端口
+            }
+            if (host.length > 0 && port > 0 && port <= UINT16_MAX) {
+                if ([WKSDK shared].isDebug) {
+                    NSLog(@"useWSS=NO rollback: %@ -> 强制走 TCP %@:%ld",
+                          trimmed, host, (long)port);
+                }
+                [self connectSocket:host port:(uint16_t)port];
+            } else {
+                NSLog(@"useWSS=NO rollback: 无法从 %@ 提取 host:port", trimmed);
+                [self changeConnectStatus:WKDisconnected];
+            }
+            return;
+        }
+
+        // useWSS = YES：ws:// 与 wss:// 都是 WebSocket，区别仅在 TLS。
+        // NSURLSessionWebSocketTask 同时支持两者。
         [self connectWebSocketWithURL:trimmed];
         return;
     }
@@ -331,11 +363,17 @@ static dispatch_queue_t _imsocketQueue;
             return;
         }
         if (err) {
-            // 这里只 log，断开/重连交给 didCloseWithCode: / didCompleteWithError: 统一处理，
-            // 避免重复触发 backoffReconnect
+            // receive 出错通常会紧跟 didCloseWithCode: / didCompleteWithError: 回调，
+            // 那两条路径会调 handleWSDisconnectWithError: 走重连。
+            // 但极端情况下（比如 cancel 后回调被吞 / 进程被挂起恢复后），单纯只 log
+            // 会导致 receive loop 静默停止：连接卡死、心跳还在跑、上层永远不重连。
+            // 防御性主动触发一次 disconnect：handleWSDisconnectWithError: 内部会把
+            // wsTask / wsSession 置 nil，didCloseWithCode: / didCompleteWithError: 走到
+            // `task != self.wsTask` 早返，不会重复触发 backoffReconnect（幂等保护）。
             if ([WKSDK shared].isDebug) {
                 NSLog(@"WSS receive 出错 -> %@", err);
             }
+            [self handleWSDisconnectWithError:err];
             return;
         }
         if (msg.type == NSURLSessionWebSocketMessageTypeData && msg.data.length > 0) {
