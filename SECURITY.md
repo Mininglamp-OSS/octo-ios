@@ -1,12 +1,10 @@
 # Security Policy
 
-> 🌐 **Read in**: **English** · [简体中文](SECURITY.zh.md)
-
 ## Reporting a Vulnerability
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-Instead, report them via email to **security@example-app.com**.
+Instead, report them via email to **security@mininglamp.com**.
 
 You should receive a response within **72 hours**. If for some reason you do
 not, please follow up via email to ensure we received your original message.

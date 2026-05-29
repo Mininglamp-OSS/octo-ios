@@ -16,9 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License Apache 2.0"></a>
-  <a href="https://developer.apple.com/ios/"><img src="https://img.shields.io/badge/Platform-iOS%2014.0%2B-lightgrey.svg" alt="Platform iOS 14.0+"></a>
-  <a href="https://developer.apple.com/swift/"><img src="https://img.shields.io/badge/Lang-Objective--C%20%2F%20Swift-orange.svg" alt="Language Objective-C / Swift"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
   <a href="./README.zh.md"><img src="https://img.shields.io/badge/lang-简体中文-red.svg" alt="简体中文"></a>
 </p>
 
@@ -28,126 +26,90 @@
 
 # OCTO iOS
 
-> **Native iOS client** for the OCTO messaging platform — Objective-C + Swift, talks to `octo-server` over the WuKongIM TCP protocol.
+> **Native iOS client** for the OCTO messaging platform — Swift / Objective-C, talking to `octo-server` over REST + WebSocket.
 
-`octo-ios` is the iPhone & iPad client for OCTO. It ships the full chat
-experience (1:1, group, channel, multi-space), AI agent surfaces (Lobster
-dialogs, one-tap conversation summary), and a CocoaPods-based modular layout
-that's easy to fork and re-skin for in-house IM deployments.
+`octo-ios` is the official iOS front-end for OCTO. It is a native Swift /
+Objective-C app (not a webview wrapper) that talks to
+[`octo-server`](https://github.com/Mininglamp-OSS/octo-server) over REST +
+WebSocket, and drives the same Lobster-agent conversation surface as
+[`octo-web`](https://github.com/Mininglamp-OSS/octo-web) and
+[`octo-android`](https://github.com/Mininglamp-OSS/octo-android).
 
 ## 🌟 Why OCTO iOS
 
-- **Production-grade client, not a demo.** Multi-space switching, real-name verification, burn-after-reading, share extension, push, AI agent integration — all wired up out of the box, not "TODO: implement".
-- **Lobster-ready chat UI.** AI agent conversations are first-class: streaming replies, agent identity chips, one-tap conversation summary, custom-prompt agent dialogs.
-- **Self-hostable, config-first.** All sensitive runtime values (Apple Team ID, Bugly App IDs, IM gateway hosts, URL scheme, Universal Link domain) live in a single `OctoConfig.xcconfig` (gitignored). No internal endpoints baked into source.
+- **Native, not a webview.** UIKit + SwiftUI hybrid, uses platform features (APNS push, Share / Notification / Widget extensions, Universal Links, Shortcuts) rather than shipping a browser shell. First-class mobile UX for Lobster conversations.
+- **Ships without secrets.** No `GoogleService-Info.plist`, no signing certificates, no provisioning profiles bound to the upstream team. You bring your own Apple Developer team, your own Bundle Identifier (`com.example.octo` placeholder → `com.yourcompany.octo`), your own Firebase project, your own certificates. All stripped by the `octo-release` pipeline before this repo is published.
+- **Mirrors the web surface.** Same REST + WebSocket protocol as `octo-web` / `octo-android`, same i18n resource keys (English · 简体中文), same Lobster identity / streaming / typing indicators — so feature work can land on three clients without a protocol fork.
 
 ## 🚀 Quickstart
+
+**⚠️ Mandatory pre-flight** — this fork will **not** build a signed or
+distributable `.ipa` until you swap four placeholder artefacts:
+
+1. **Bundle Identifier** — see [`README-BUNDLE-ID.md`](README-BUNDLE-ID.md)
+   for the full rename checklist across the `.pbxproj`, entitlements,
+   and every extension target (`com.example.octo` → your reverse-DNS).
+2. **Firebase configuration** — see [`firebase-template.md`](firebase-template.md)
+   for how to obtain and drop in your own `GoogleService-Info.plist`.
+3. **Provisioning / certificates** — use your Apple Developer team's own
+   signing certificate and provisioning profile; the upstream fork
+   references none.
+4. **Universal Links** — see [`universal-link-setup.md`](universal-link-setup.md)
+   for the `apple-app-site-association` file that your domain must host
+   before deep-links resolve to your build.
+
+Once those are done, open in Xcode:
 
 ```bash
 git clone https://github.com/Mininglamp-OSS/octo-ios.git
 cd octo-ios
 
-# 1. Copy & fill in private config
-cp OctoConfig.xcconfig.template OctoConfig.xcconfig
-# Edit OctoConfig.xcconfig — at minimum:
-#   APPLE_TEAM_ID            (your 10-char Apple Team ID)
-#   OCTO_APP_GROUP           (your provisioned App Group ID, e.g. group.com.yourorg.octo —
-#                             must match Apple Developer config; cross-process share between
-#                             main app and ShareExtension will silently fail otherwise)
-#   OCTO_IM_PRESET_1_HOST    (host of your deployed octo-server)
-#   OCTO_IM_PRESET_1_LABEL   (display name shown in the server picker)
-
-# 2. Install dependencies
+# CocoaPods (if used):
 pod install
 
-# 3. Open workspace and run
-open OctoiOS.xcworkspace
-# In Xcode: choose the OctoiOS scheme + a simulator/device, ⌘R
+# Or Swift Package Manager — handled by Xcode on open.
+
+open OCTO.xcworkspace   # or OCTO.xcodeproj
 ```
 
-You'll need a reachable [`octo-server`](https://github.com/Mininglamp-OSS/octo-server)
-instance. The login page accepts long-press on the **OCTO** title to switch
-between up to three preset servers configured in `OctoConfig.xcconfig`.
+From CLI, a development build after signing is configured:
+
+```bash
+xcodebuild -workspace OCTO.xcworkspace \
+    -scheme OCTO \
+    -configuration Debug \
+    -destination 'generic/platform=iOS Simulator' \
+    build
+```
+
+By default the app points at `http://localhost:8080` for `octo-server`.
+Edit `OCTO/Config/Config.plist` (or the flavour-specific equivalent) to
+aim at your own deployment.
 
 ## 📦 Modules / Architecture
 
-```
-.
-├── Octo/                       # Main app target (AppDelegate, Tab assembly, push)
-├── ShareExtension/             # System share-sheet extension
-├── NotificationService/        # APNs service extension (rich notifications)
-├── NotificationContent/        # Notification content extension
-├── Modules/                    # CocoaPods local pods (business modules)
-│   ├── WuKongIMiOSSDK/         # IM protocol SDK (connection, messaging, SQLite)
-│   ├── WuKongBase/             # Chat UI, conversation list, shared utilities
-│   ├── WuKongLogin/            # Login, register, third-party auth (Apple ID, OIDC)
-│   ├── WuKongContacts/         # Contacts, groups, spaces
-│   └── WuKongDataSource/       # Data-source abstraction layer
-├── Vendor/                     # Vendored third-party (auto-update alert, …)
-├── docs/                       # Design docs & screenshots
-├── OctoConfig.xcconfig.template # Private config template (your file is gitignored)
-├── Podfile
-├── LICENSE                     # Apache 2.0
-├── NOTICE                      # Third-party attributions
-├── README.md
-├── README.zh.md
-├── CONTRIBUTING.md
-├── SECURITY.md
-└── CODE_OF_CONDUCT.md
-```
+Top-level layout (typical OCTO iOS tree):
 
 | Path | Purpose |
 |---|---|
-| `Octo/` | Main app — AppDelegate, push registration, root tab controller |
-| `Modules/WuKongIMiOSSDK/` | Long-lived TCP connection, heartbeat, message serialization, FMDB / SQLCipher storage |
-| `Modules/WuKongBase/` | All chat UI — message cells, conversation list, input bar, WebView bridge, AI summary entry |
-| `Modules/WuKongLogin/` | Sign-in flows (phone, Apple, OIDC) |
-| `Modules/WuKongContacts/` | Contact list, group management, multi-space switching |
-| `Modules/WuKongDataSource/` | Pluggable data-source protocols used across modules |
+| `OCTO/` | Main app target — view controllers, SwiftUI views, app delegate |
+| `OCTO/UI/` | Screen surfaces: chat, channels, org, settings |
+| `OCTO/Data/` | REST + WebSocket client, local cache, Core Data / Realm models |
+| `OCTO/Agent/` | Lobster-aware UI components (streaming, tool-call previews, agent identity) |
+| `OCTO/Push/` | APNS registration + push routing + notification-service extension |
+| `OCTO/Resources/` | Assets, localisations (`en.lproj`, `zh-Hans.lproj`), launch storyboards |
+| `ShareExtension/` | Share-sheet target for forwarding content into OCTO |
+| `NotificationExtension/` | Rich-notification + encryption-aware decryption target |
+| `WuKongSDK/` | WuKongIM iOS client wrapper (real-time messaging transport) |
+| `Pods/` or `Packages/` | CocoaPods / SPM dependencies |
 
-Build targets:
+Runtime pillars:
 
-```bash
-pod install                  # install / update dependencies
-pod install --repo-update    # also refresh the CocoaPods spec repo
-# Then open OctoiOS.xcworkspace and use Xcode for build / run / archive
-```
-
-For release builds see [RELEASE.md](RELEASE.md).
-For Universal Links setup see [docs/universal-link-setup.md](docs/universal-link-setup.md).
-
-## 🛠️ Configuration
-
-All sensitive runtime values live in `OctoConfig.xcconfig` (gitignored). The
-template lists every supported field — main ones:
-
-| Field | Required | Purpose |
-|---|---|---|
-| `APPLE_TEAM_ID` | ✅ | Auto-signing (injected into pbxproj via `$(APPLE_TEAM_ID)`) |
-| `OCTO_APP_GROUP` | ✅ | App Group ID for main app ↔ ShareExtension cross-process data (must match Apple Developer provisioning) |
-| `OCTO_IM_PRESET_{1,2,3}_HOST` | one required | Up to 3 preset IM gateway hosts, shown in the server picker. Preset 1 is also used as default if `OCTO_IM_DEFAULT_HOST` is unset. |
-| `OCTO_IM_PRESET_{1,2,3}_LABEL` |  | Display name for each preset |
-| `OCTO_URL_SCHEME` |  | Custom URL scheme for deep-links / OIDC / share extension callback (default `octo`) |
-| `OCTO_ASSOCIATED_DOMAIN` |  | Universal Link domain (substituted into `Octo.entitlements` at sign time) |
-| `OCTO_INVITE_URL` |  | URL appended to invite-friend message (default `https://github.com/Mininglamp-OSS`) |
-| `OCTO_BUGLY_APP_ID_MAIN` |  | Optional Tencent Bugly crash reporting (see below) |
-
-### Optional integrations
-
-**Bugly crash reporting** (closed-source SDK, disabled by default):
-
-> ⚠️ Bugly is a Tencent commercial SDK governed by Tencent's own EULA, **not** Apache 2.0. The OSS distribution of Octo iOS ships **without** the Bugly framework — `pod install` only pulls it in when you provide your own `OCTO_BUGLY_APP_ID_MAIN`. Downstream redistributors who enable Bugly are responsible for accepting Tencent's terms.
-
-1. Register at https://bugly.qq.com and download the iOS SDK
-2. Place `Bugly.framework` at `Modules/WuKongBase/WuKongBase/Bugly.framework/`
-3. Fill `OCTO_BUGLY_APP_ID_MAIN` in `OctoConfig.xcconfig`
-4. Re-run `pod install` — auto-enables (`Bugly: ENABLED` printed)
-5. **Stop Podfile.lock from leaking your Bugly setup into commits** (one-shot per clone):
-   ```bash
-   git update-index --skip-worktree Podfile.lock
-   git update-index --skip-worktree Modules/WuKongBase/Example/Podfile.lock
-   ```
-   Filling a real `OCTO_BUGLY_APP_ID_MAIN` makes `WuKongBase.podspec` declare `s.dependency 'Bugly'`, so `pod install` rewrites `Podfile.lock` to include Bugly. The OSS-default lockfile in this repo is intentionally Bugly-free; `--skip-worktree` lets you `pod install` freely without polluting `git status`. To genuinely modify `Podfile`, undo it with `git update-index --no-skip-worktree Podfile.lock`, edit, and (before committing) regenerate the clean lockfile with `OCTO_BUGLY_APP_ID_MAIN` set to the `YOUR_BUGLY_APP_ID` sentinel.
+1. **Auth** — token / refresh-token stored in Keychain.
+2. **Transport** — `URLSession` for REST; WuKongIM iOS SDK for the persistent WebSocket.
+3. **Persistence** — Core Data (or Realm, depending on flavour) for message cache and offline drafts; file attachments under the app container.
+4. **Push** — APNS device token → `octo-server` → Firebase fan-out (optional) → Notification-Service extension decrypts the payload before display.
+5. **UI** — UIKit navigation skeleton + SwiftUI screens where it pays off; Dynamic Type + Dark Mode supported by default.
 
 ## 🔗 OCTO Ecosystem
 
@@ -216,22 +178,14 @@ For security issues please follow [SECURITY.md](SECURITY.md) instead of the publ
 
 ## 📄 License
 
-Released under **[Apache License 2.0](LICENSE)**. Our own source and the resulting binary contain **no statically-linked GPL or strong-copyleft code** — the historical `TelegramUtils/` (GPL v2) subtree and `SoundTouch` (LGPL v2.1) vendored code have been removed.
-
-| Layer | License | Notes |
-|---|---|---|
-| Our new code (`Octo/`, extensions, new code in modules) | **Apache 2.0** | See [LICENSE](LICENSE) |
-| `WuKong*` modules | **MIT** | Upstream [WuKongIM iOS SDK](https://github.com/WuKongIM/WuKongIMiOSSDK) — preserved with original attributions |
-| `librlottie` (transitive, via `SDWebImageLottieCoder`) | **MIT** | Samsung rlottie has been MIT-licensed since 2020; see [NOTICE](NOTICE) |
-
-Full third-party attribution lives in [NOTICE](NOTICE).
+Apache License 2.0 — see [LICENSE](LICENSE) for the full text and [NOTICE](NOTICE) for third-party attributions.
 
 ## 🙏 Acknowledgments
 
-`octo-ios` builds on the shoulders of:
+`octo-ios` owes its original scaffolding to:
 
-- **[WuKongIM iOS SDK](https://github.com/WuKongIM/WuKongIMiOSSDK)** — the real-time messaging protocol SDK that `octo-server` drives.
-- **[TangSengDaoDao iOS](https://github.com/TangSengDaoDao/TangSengDaoDaoiOS)** — the upstream IM client this app's chat UI scaffolds from.
+- **[TangSengDaoDaoiOS](https://github.com/TangSengDaoDao/TangSengDaoDaoiOS)** — our upstream, by the TangSengDaoDao team.
+- **[WuKongIM](https://github.com/WuKongIM/WuKongIM)** — the real-time messaging core that `octo-server` drives behind this client.
 
 See [NOTICE](NOTICE) for the full attribution list and third-party component licenses.
 

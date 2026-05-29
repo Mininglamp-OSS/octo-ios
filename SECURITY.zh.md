@@ -1,12 +1,10 @@
 # 安全策略（简体中文）
 
-> 🌐 **语言**: [English](SECURITY.md) · **简体中文**
-
 ## 报告安全漏洞
 
 **请不要通过公开 GitHub Issue 报告安全漏洞。**
 
-请通过邮件发送至 **security@example-app.com**。
+请通过邮件发送至 **security@mininglamp.com**。
 
 你应在 **72 小时**内收到回复。如果没有，请通过邮件追问以确认我们已收到。
 

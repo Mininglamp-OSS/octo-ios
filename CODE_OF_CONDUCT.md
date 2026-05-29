@@ -1,7 +1,5 @@
 # Contributor Covenant Code of Conduct
 
-> 🌐 **Read in**: **English** · [简体中文](CODE_OF_CONDUCT.zh.md)
-
 ## Our Pledge
 
 We as members, contributors, and leaders pledge to make participation in our
@@ -46,7 +44,7 @@ an individual is officially representing the community in public spaces.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders at **conduct@example-app.com**. All complaints
+reported to the community leaders at **conduct@mininglamp.com**. All complaints
 will be reviewed and investigated promptly and fairly.
 
 ## Attribution

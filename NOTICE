@@ -1,145 +1,41 @@
-Octo iOS
+OCTO iOS
 Copyright 2026 MININGLAMP Technology and the OCTO contributors
 
-This product includes software developed by:
-  MININGLAMP Technology and the OCTO open source contributors.
+This product includes software developed by the following projects:
 
-Octo's own additions and modifications (主 App、扩展、本仓库新写的替换组件等)
-are licensed under the Apache License, Version 2.0 (the "License").
-You may obtain a copy of the License at
+* TangSengDaoDaoiOS
+  https://github.com/TangSengDaoDao/TangSengDaoDaoiOS
+  Copyright TangSengDaoDao contributors
+  Licensed under the Apache License, Version 2.0
+  OCTO iOS is a derivative work with significant modifications.
 
-    http://www.apache.org/licenses/LICENSE-2.0
+* WuKongIM
+  https://github.com/WuKongIM/WuKongIM
+  Copyright WuKongIM contributors
+  Licensed under the Apache License, Version 2.0
+  Used as the underlying real-time messaging core via octo-server.
 
-Portions of this product are derived from upstream open-source projects and
-remain under their original licenses. See the sections below for details.
+See LICENSE for full license text.
 
+--------------------------------------------------------------------
+Third-party components requiring attribution
+--------------------------------------------------------------------
 
-================================================================================
-Upstream Origin (本项目 fork 自以下上游项目，保留其原始许可证)
-================================================================================
+The OCTO iOS client bundles third-party SDKs and libraries typical for
+a modern native iOS application:
 
-  - WuKongIM iOS SDK
-      MIT License
-      Copyright (c) 2019 tangtaoit
-      https://github.com/WuKongIM/WuKongIMiOSSDK
-      Used at:
-        Modules/WuKongIMiOSSDK/
-      Status: 原始 SDK 源文件保留 MIT 协议与命名，未做版权归属变更。
-      本项目对该 SDK 的派生修改也以 MIT 协议继续发布。
+  - Swift standard library (Apache-2.0) — Apple
+  - SDWebImage (MIT) — image caching
+  - SnapKit (MIT) — Auto Layout DSL
+  - Firebase Messaging iOS SDK (Apache-2.0) — Google
+    (BYO-Firebase-project; see overlay/octo-ios/firebase-template.md)
+  - WuKongIM iOS client SDK (Apache-2.0)
 
-  - WuKongBase / WuKongLogin / WuKongContacts / WuKongDataSource
-      MIT License (per upstream podspec)
-      Copyright (c) 2019 tangtaoit <tt@wukong.ai>
-      https://github.com/tangtaoit/
-      Used at:
-        Modules/WuKongBase/
-        Modules/WuKongLogin/
-        Modules/WuKongContacts/
-        Modules/WuKongDataSource/
-      Status: 上游业务模块代码保留 MIT 协议。MININGLAMP 在本项目中提交的
-      新增/修改文件单独以 Apache 2.0 发布（仅限本仓库内可识别为新增的文件，
-      详见各文件顶部的 SPDX 标识）。
+A full per-dependency license inventory should be regenerated via
+`pod outdated` / Swift Package Manager before shipping a downstream
+release.
 
-  - TangSengDaoDao iOS (主 App 壳)
-      Apache License, Version 2.0
-      https://github.com/TangSengDaoDao/TangSengDaoDaoiOS
-      Used at: Octo/ 目录中部分初始文件（原 TangSengDaoDao/ 目录，P8 重命名为 Octo/）
-
-
-================================================================================
-Bundled Third-Party Components
-================================================================================
-
-  [x] opencore-amr / vo-amrwbenc       opencore-amr: Apache 2.0
-                                       vo-amrwbenc: Apache 2.0 (Frauhofer 双许可)
-                                       上游: https://sourceforge.net/projects/opencore-amr/
-                                       Bundled as static .a in:
-                                         Modules/WuKongIMiOSSDK/WuKongIMSDK/Classes/private/arm/lib/
-                                       (libopencore-amrnb.a, libopencore-amrwb.a, libvo-amrwbenc.a)
-                                       用途：语音消息 AMR 编解码（IM 标准音频格式）
-                                       源代码副本保留在同目录 arm/opencore-amrnb/, arm/opencore-amrwb/,
-                                       arm/vo-amrwbenc/ 子目录中，以满足许可证下游分发义务。
-
-  [x]   librlottie                    MIT             rlottie 引擎本体为 MIT
-                                                  (Samsung 官方 rlottie 自 2020 年改授权
-                                                  为 MIT, 见 Pods/librlottie/rlottie/COPYING).
-                                                  通过 SDWebImageLottieCoder (Apache 2.0)
-                                                  传入. 消费方: WKApp.m 注册
-                                                  WKSDImageLottieCoder 用于消息列表
-                                                  Lottie 贴图解码.
-                                                  内部子组件许可: SKIA (BSD-3-Clause),
-                                                  FreeType (FTL), Pixman (MIT), STB
-                                                  (Public Domain), RapidJSON (MIT).
-                                                  全部 Apache 2.0 兼容.
-
-  [REMOVED 2026-05] SoundTouch        LGPL v2.1       已物理移除（git rm 67 个 .cpp/.h/.mm）。
-                                                  消费链 (CWVoiceChangePlayCell.mm 等)
-                                                  早先已 stub 为 no-op，#include "SoundTouch.h"
-                                                  全部清零。变声 pitch shift 功能下线，
-                                                  待用 AVAudioUnitTimePitch 重新实现。
-
-  [REMOVED 2026-05] TelegramUtils      GPL v2          已整体物理移除（git rm 270+ 文件 /
-  (Telegram iOS)                                    62500 行）。原核心 cell 长按出菜单的 4
-                                                  件套 (ContextGesture / ContextControllerSourceNode /
-                                                  ContextExtractedContentContainingNode /
-                                                  TapLongTapOrDoubleTapGestureRecognizer) 由
-                                                  Modules/.../Sections/Common/MessageGesture/
-                                                  下的 Octo clean-room 自实现替代
-                                                  (OctoContextGesture / OctoMessageGestureContainerNode /
-                                                  OctoMessageContentContainingNode /
-                                                  OctoTapLongTapOrDoubleTapRecognizer)。
-                                                  贴纸 shimmer (StickerShimmerEffectNode)
-                                                  由 Sections/Common/Component/WKShimmerView
-                                                  替代。其余 Display / SwiftSignalKit /
-                                                  UIKitRuntimeUtils / ObjCRuntimeUtils /
-                                                  AppBundle / Markdown / Utils / Svg /
-                                                  YuvConversion / TelegramUIPreferences /
-                                                  Others / ManagedFile / GZip / ContextUI /
-                                                  ReactionSelectionNode / TextSelectionNode /
-                                                  RadialStatusNode / GradientBackground /
-                                                  MetalImageView / MediaResources /
-                                                  LegacyComponents / LiMaoMock /
-                                                  AnimationCompression / AnimatedStickerNode /
-                                                  TelegramAnimatedStickerNode 经深度审计后
-                                                  全部为 0 外部消费方 + 0 动态查找的死代码，
-                                                  随 TelegramUtils 一并 git rm。
-
-  [REMOVED 2026-05] Facebook POP       Apache 2.0      原 Vendor/LegacyComponents/ 目录 (POP
-                                                  动画系列)，0 消费方。已 git rm。
-
-  [REMOVED with TelegramUtils] nanosvg zlib            仅在 TelegramUtils/Svg/ 内部使用，
-                                                  随 TelegramUtils 一并移除。
-
-  [x]   SwiftConfettiView             MIT             用于 🎉 / 🎊 表情礼花效果。
-                                                  上游：https://github.com/ugurethemaydin/SwiftConfettiView
-                                                  Copyright (c) Uğur Ethem Aydın
-                                                  通过 CocoaPods 依赖（~> 2.0）。
-                                                  消费方 WKConfettiView.swift 仅复用其 pod
-                                                  自带的 confetti.mp3 爆裂声资产；粒子系统
-                                                  是自写 CAEmitterLayer，不走该库的粒子。
-
-  [x]   crowd-cheering-yahoo.wav       CC0             礼花爆开时的"全场欢呼"短音。
-        (cheer_short.m4a)                              来源：https://freesound.org/s/511788/
-                                                  作者：kinoton
-                                                  License: Creative Commons 0
-                                                  （CC0 / Public Domain Dedication，免归属，
-                                                  本项目仍记录出处便于追溯）
-                                                  改动：用 ffmpeg 裁前 2.10s 并转 AAC 96kbps
-                                                  m4a，资产位于 WuKongBase/Assets/Other/
-                                                  cheer_short.m4a (~26KB)。
-
-
---------------------------------------------------------------------------------
-其他通过 CocoaPods 引入的依赖
---------------------------------------------------------------------------------
-
-Podfile 声明的所有依赖（AFNetworking / SDWebImage / FMDB / MBProgressHUD /
-SSZipArchive / SocketRocket / Aspects / ReactiveObjC / Socket.IO-Client-Swift
-/ YBImageBrowser / YYImage / AsyncDisplayKit / libcmark_gfm / DoraemonKit /
-Bugly 等）均按各自上游协议发布，本项目不修改其源码。详见 Podfile.lock 与
-对应 pod 的 LICENSE 文件。
-
-
-================================================================================
-End of NOTICE
-================================================================================
+The fork ships with a placeholder Bundle Identifier `com.example.octo`.
+See `README-BUNDLE-ID.md` for the full set of changes needed before
+building, signing, or distributing. Universal Links configuration is
+documented in `universal-link-setup.md`.

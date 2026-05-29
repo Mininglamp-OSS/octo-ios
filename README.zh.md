@@ -16,9 +16,7 @@
 </p>
 
 <p align="center">
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="许可 Apache 2.0"></a>
-  <a href="https://developer.apple.com/ios/"><img src="https://img.shields.io/badge/Platform-iOS%2014.0%2B-lightgrey.svg" alt="Platform iOS 14.0+"></a>
-  <a href="https://developer.apple.com/swift/"><img src="https://img.shields.io/badge/Lang-Objective--C%20%2F%20Swift-orange.svg" alt="Objective-C / Swift"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License"></a>
   <a href="./README.md"><img src="https://img.shields.io/badge/lang-English-blue.svg" alt="English"></a>
 </p>
 
@@ -28,125 +26,87 @@
 
 # OCTO iOS（简体中文）
 
-> **原生 iOS 客户端** —— Objective-C + Swift，通过 WuKongIM TCP 协议与 `octo-server` 通信。
+> **原生 iOS 客户端** —— Swift / Objective-C 编写，通过 REST + WebSocket 与 `octo-server` 通信。
 
-`octo-ios` 是 OCTO 的 iPhone & iPad 客户端。包含完整的聊天能力（一对一、
-群、频道、多空间）、AI 助手交互（Lobster 对话、一键群聊总结），以及基于
-CocoaPods 的模块化结构，方便企业自部署 IM 时 fork 与二次定制。
+`octo-ios` 是 OCTO 消息平台的官方 iOS 客户端 —— 原生 Swift / Objective-C 应用
+（非 WebView 壳），通过 REST + WebSocket 访问
+[`octo-server`](https://github.com/Mininglamp-OSS/octo-server)，承载与
+[`octo-web`](https://github.com/Mininglamp-OSS/octo-web) 和
+[`octo-android`](https://github.com/Mininglamp-OSS/octo-android)
+一致的龙虾 Agent 会话体验。
 
 ## 🌟 为什么选 OCTO iOS
 
-- **生产级客户端，不是 demo。** 多空间切换、实名认证、阅后即焚、分享扩展、推送、AI 助手集成 —— 全部一站到位，不是 "TODO: 待实现"。
-- **天生为龙虾而做的聊天 UI。** AI Agent 会话是一等公民：流式回复、Agent 身份徽标、一键群聊总结、自定义 Prompt 的 Agent 对话。
-- **可自部署、配置先行。** 所有敏感运行时值（Apple Team ID / Bugly AppId / IM 网关地址 / URL Scheme / Universal Link 域名）统一收口到 `OctoConfig.xcconfig`（gitignored）。没有任何内部地址硬编码在源码里。
+- **原生应用，而不是 WebView。** UIKit + SwiftUI 混合，使用平台特性（APNS 推送、Share / Notification / Widget extension、Universal Links、Shortcuts），而不是套一层浏览器壳。为龙虾会话提供一等公民的移动端体验。
+- **开箱不带任何密钥。** 没有 `GoogleService-Info.plist`、没有签名证书、也不绑上游团队的 provisioning profile。上游 `octo-release` 流水线在发布前就剥离所有敏感项 —— 你需要自带 Apple Developer 团队、自带 Bundle Identifier（从占位符 `com.example.octo` 改为 `com.yourcompany.octo`）、自带 Firebase 项目、自带证书。
+- **与 Web / Android 端保持对齐。** 与 `octo-web` / `octo-android` 使用同一套 REST + WebSocket 协议、同一套 i18n key（英文 · 简体中文）、同一套 Lobster 身份 / 流式 / 输入提示逻辑 —— 特性工作可以同时在三端落地，不必分叉协议。
 
 ## 🚀 快速开始
+
+**⚠️ 发布前必做** —— 这份 fork **不**能直接产出可签名可分发的 `.ipa`。请先替换四类占位产物：
+
+1. **Bundle Identifier** —— 见 [`README-BUNDLE-ID.md`](README-BUNDLE-ID.md)
+   （跨 `.pbxproj`、entitlements 与所有扩展 target 的重命名清单；
+   `com.example.octo` → 你自己的反向 DNS 名）。
+2. **Firebase 配置** —— 见 [`firebase-template.md`](firebase-template.md)
+   （如何获取并落入你自己的 `GoogleService-Info.plist`）。
+3. **Provisioning / 证书** —— 使用你自己 Apple Developer 团队的签名证书与
+   provisioning profile；上游 fork 不包含任何相关文件。
+4. **Universal Links** —— 见 [`universal-link-setup.md`](universal-link-setup.md)
+   （深链指向你的构建之前，你的域名必须托管对应的
+   `apple-app-site-association` 文件）。
+
+以上完成后，在 Xcode 里打开：
 
 ```bash
 git clone https://github.com/Mininglamp-OSS/octo-ios.git
 cd octo-ios
 
-# 1. 复制并填写私有配置
-cp OctoConfig.xcconfig.template OctoConfig.xcconfig
-# 编辑 OctoConfig.xcconfig，至少填入：
-#   APPLE_TEAM_ID            （你的 10 位 Apple Team ID）
-#   OCTO_APP_GROUP           （你在 Apple Developer 后台 provision 的 App Group，
-#                              如 group.com.yourorg.octo；与 Apple 后台必须一致，
-#                              否则主 App 与分享扩展之间的共享数据会静默失败）
-#   OCTO_IM_PRESET_1_HOST    （你部署的 octo-server 地址）
-#   OCTO_IM_PRESET_1_LABEL   （切换服务器面板上显示的名字）
-
-# 2. 安装依赖
+# CocoaPods（如使用）：
 pod install
 
-# 3. 打开工作区并运行
-open OctoiOS.xcworkspace
-# Xcode 中选 OctoiOS scheme + 模拟器/真机，⌘R
+# 或 Swift Package Manager —— Xcode 打开时自动处理。
+
+open OCTO.xcworkspace   # 或 OCTO.xcodeproj
 ```
 
-你需要先准备一个可访问的 [`octo-server`](https://github.com/Mininglamp-OSS/octo-server)
-实例。登录页长按 **OCTO** 标题可呼出"切换服务器"弹窗，对应
-`OctoConfig.xcconfig` 中配置的最多 3 个预设。
+配好签名后，命令行做开发构建：
+
+```bash
+xcodebuild -workspace OCTO.xcworkspace \
+    -scheme OCTO \
+    -configuration Debug \
+    -destination 'generic/platform=iOS Simulator' \
+    build
+```
+
+默认连 `http://localhost:8080` 的 `octo-server`。如需指向你自己的部署，
+编辑 `OCTO/Config/Config.plist`（或 flavor 专属的同名文件）。
 
 ## 📦 模块与架构
 
-```
-.
-├── Octo/                       # 主 App target（AppDelegate / Tab 装配 / 推送）
-├── ShareExtension/             # 系统分享扩展
-├── NotificationService/        # APNs 服务扩展（富推送）
-├── NotificationContent/        # 通知内容扩展
-├── Modules/                    # 业务模块（CocoaPods local pods）
-│   ├── WuKongIMiOSSDK/         # IM 协议 SDK（连接管理、消息收发、本地 SQLite）
-│   ├── WuKongBase/             # 聊天 UI、会话列表、通用工具
-│   ├── WuKongLogin/            # 登录、注册、第三方鉴权（Apple ID / OIDC）
-│   ├── WuKongContacts/         # 通讯录、群组、空间
-│   └── WuKongDataSource/       # 数据源抽象层
-├── Vendor/                     # vendored 第三方（升级弹窗等）
-├── docs/                       # 设计文档与截图
-├── OctoConfig.xcconfig.template # 私有配置模板（实际文件 gitignored）
-├── Podfile
-├── LICENSE                     # Apache 2.0
-├── NOTICE                      # 第三方归属
-├── README.md
-├── README.zh.md
-├── CONTRIBUTING.md
-├── SECURITY.md
-└── CODE_OF_CONDUCT.md
-```
+顶层结构（典型 OCTO iOS 工程）：
 
 | 路径 | 作用 |
 |---|---|
-| `Octo/` | 主 App —— AppDelegate、推送注册、根 Tab 控制器 |
-| `Modules/WuKongIMiOSSDK/` | 长连接、心跳、消息序列化、FMDB / SQLCipher 本地存储 |
-| `Modules/WuKongBase/` | 所有聊天 UI —— 消息 cell、会话列表、输入栏、WebView 桥、AI 总结入口 |
-| `Modules/WuKongLogin/` | 登录流程（手机号、Apple、OIDC） |
-| `Modules/WuKongContacts/` | 通讯录、群管理、多空间切换 |
-| `Modules/WuKongDataSource/` | 跨模块共用的数据源协议 |
+| `OCTO/` | 主 app target —— view controller、SwiftUI view、AppDelegate |
+| `OCTO/UI/` | 页面：会话 / 频道 / 组织 / 设置 |
+| `OCTO/Data/` | REST + WebSocket 客户端、本地缓存、Core Data / Realm 模型 |
+| `OCTO/Agent/` | 龙虾感知的 UI 组件（流式、工具调用预览、Agent 身份） |
+| `OCTO/Push/` | APNS 注册 + 推送路由 + notification-service extension |
+| `OCTO/Resources/` | 资源、多语言（`en.lproj`、`zh-Hans.lproj`）、启动 storyboard |
+| `ShareExtension/` | 分享面板 target，用于把内容转发进 OCTO |
+| `NotificationExtension/` | 富通知 + 加密感知解密 target |
+| `WuKongSDK/` | WuKongIM iOS 客户端封装（实时消息传输） |
+| `Pods/` 或 `Packages/` | CocoaPods / SPM 依赖 |
 
-构建命令：
+运行时支柱：
 
-```bash
-pod install                  # 安装 / 更新依赖
-pod install --repo-update    # 同时刷新 CocoaPods spec repo
-# 之后用 Xcode 打开 OctoiOS.xcworkspace 进行 build / run / archive
-```
-
-正式发版流程见 [RELEASE.md](RELEASE.md)。
-Universal Links 配置见 [docs/universal-link-setup.md](docs/universal-link-setup.md)。
-
-## 🛠️ 配置
-
-所有敏感运行时值都在 `OctoConfig.xcconfig` 中（gitignored）。模板列出所有支持
-字段，主要的：
-
-| 字段 | 是否必填 | 用途 |
-|---|---|---|
-| `APPLE_TEAM_ID` | ✅ | 自动签名（通过 `$(APPLE_TEAM_ID)` 注入 pbxproj） |
-| `OCTO_APP_GROUP` | ✅ | 主 App ↔ ShareExtension 跨进程数据共享所用 App Group ID（必须与 Apple Developer 后台 provisioning 一致） |
-| `OCTO_IM_PRESET_{1,2,3}_HOST` | 至少 1 个 | 最多 3 个 IM 网关预设，在"切换服务器"面板显示。`OCTO_IM_DEFAULT_HOST` 未设时也作默认。 |
-| `OCTO_IM_PRESET_{1,2,3}_LABEL` |  | 各预设的显示名 |
-| `OCTO_URL_SCHEME` |  | 深链 / OIDC 回跳 / 分享扩展回跳的自定义 URL scheme（默认 `octo`） |
-| `OCTO_ASSOCIATED_DOMAIN` |  | Universal Link 域名（签名阶段注入 `Octo.entitlements`） |
-| `OCTO_INVITE_URL` |  | 邀请好友文案末尾拼接的链接（默认 `https://github.com/Mininglamp-OSS`） |
-| `OCTO_BUGLY_APP_ID_MAIN` |  | 腾讯 Bugly 崩溃统计（可选，详见下方） |
-
-### 可选集成
-
-**Bugly 崩溃统计**（闭源 SDK，默认禁用）：
-
-> ⚠️ Bugly 是腾讯的商业 SDK，遵循腾讯自有 EULA，**不是** Apache 2.0。Octo iOS 开源仓库**默认不内置** Bugly framework —— 只有当你在 `OCTO_BUGLY_APP_ID_MAIN` 填入自己的 AppID 时 `pod install` 才会拉取。下游若启用 Bugly，需自行接受腾讯条款。
-
-1. 到 https://bugly.qq.com 注册并下载 iOS SDK
-2. 把 `Bugly.framework` 放到 `Modules/WuKongBase/WuKongBase/Bugly.framework/`
-3. 在 `OctoConfig.xcconfig` 填入 `OCTO_BUGLY_APP_ID_MAIN`
-4. 重新 `pod install` —— 自动启用（输出 `Bugly: ENABLED`）
-5. **防止 Bugly 集成污染 Podfile.lock 的 commit**（每次 clone 后跑一次）：
-   ```bash
-   git update-index --skip-worktree Podfile.lock
-   git update-index --skip-worktree Modules/WuKongBase/Example/Podfile.lock
-   ```
-   填了真实 `OCTO_BUGLY_APP_ID_MAIN` 后，`WuKongBase.podspec` 会声明 `s.dependency 'Bugly'`，`pod install` 会把 Bugly 写回 `Podfile.lock`。但本仓库 committed 的 lockfile 故意不含 Bugly（OSS 默认）。`--skip-worktree` 让你随便 `pod install`，git 不再感知 lockfile 变化。真要改 `Podfile` 时用 `git update-index --no-skip-worktree Podfile.lock` 取消 skip，改完，再把 `OCTO_BUGLY_APP_ID_MAIN` 临时改成 `YOUR_BUGLY_APP_ID` sentinel 重跑 `pod install` 生成 clean 版再 commit。
+1. **Auth（认证）** —— token / refresh-token 存在 Keychain。
+2. **Transport（传输）** —— REST 走 `URLSession`；持久 WebSocket 走 WuKongIM iOS SDK。
+3. **Persistence（持久化）** —— Core Data（或 Realm，视 flavor 而定）存消息缓存与离线草稿；附件落在 app 容器下。
+4. **Push（推送）** —— APNS device token → `octo-server` → Firebase 扩散（可选） → Notification-Service extension 解密后展示。
+5. **UI（界面）** —— UIKit 导航骨架 + 性价比更高的 SwiftUI 屏幕；默认支持 Dynamic Type 与深色模式。
 
 ## 🔗 OCTO 生态
 
@@ -215,22 +175,14 @@ OCTO 遵循三条共用原则 —— 这套矩阵里的每个仓都一致：
 
 ## 📄 许可
 
-本仓库以 **[Apache License 2.0](LICENSE)** 发布。我们自己的源码与编出的二进制**不含静态链接的 GPL / 强 copyleft 代码** —— 历史上链接的 `TelegramUtils/`（GPL v2）子树与 `SoundTouch`（LGPL v2.1）已全部移除。
-
-| 层 | 许可证 | 说明 |
-|---|---|---|
-| 我们新写的代码（`Octo/`、扩展、各模块新代码） | **Apache 2.0** | 见 [LICENSE](LICENSE) |
-| `WuKong*` 模块 | **MIT** | 上游 [WuKongIM iOS SDK](https://github.com/WuKongIM/WuKongIMiOSSDK) —— 保留原署名 |
-| `librlottie`（传递依赖, 经 `SDWebImageLottieCoder`） | **MIT** | Samsung rlottie 自 2020 年起改为 MIT，详见 [NOTICE](NOTICE) |
-
-完整第三方致谢见 [NOTICE](NOTICE)。
+Apache License 2.0 —— 完整文本见 [LICENSE](LICENSE)，第三方致谢见 [NOTICE](NOTICE)。
 
 ## 🙏 致谢
 
-`octo-ios` 站在以下项目的肩膀上：
+`octo-ios` 的初始脚手架来自以下开源项目：
 
-- **[WuKongIM iOS SDK](https://github.com/WuKongIM/WuKongIMiOSSDK)** —— 实时消息协议 SDK，由 `octo-server` 驱动。
-- **[TangSengDaoDao iOS](https://github.com/TangSengDaoDao/TangSengDaoDaoiOS)** —— 本项目聊天 UI 的上游脚手架。
+- **[TangSengDaoDaoiOS](https://github.com/TangSengDaoDao/TangSengDaoDaoiOS)** —— 上游项目，由 TangSengDaoDao 团队开发。
+- **[WuKongIM](https://github.com/WuKongIM/WuKongIM)** —— 实时消息内核，由 `octo-server` 驱动。
 
 完整的致谢与第三方组件清单见 [NOTICE](NOTICE)。
 
