@@ -35,13 +35,12 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    
+
     [self.view addSubview:self.avatarImgView];
     [self.view addSubview:self.tipLbl];
     [self.view addSubview:self.passwordView];
     [self.view addSubview:self.forgetPwdBtn];
     [self.view addSubview:self.warnLbl];
-    
     if(!self.allowBack) {
         self.navigationBar.hidden = YES;
         id target = self.navigationController.interactivePopGestureRecognizer.delegate;
@@ -137,10 +136,23 @@
         [[_forgetPwdBtn titleLabel] setFont:[[WKApp shared].config appFontOfSize:14.0f]];
         [_forgetPwdBtn setTitleColor:[UIColor redColor] forState:UIControlStateNormal];
         [_forgetPwdBtn sizeToFit];
-        
+
         [_forgetPwdBtn addTarget:self action:@selector(forgetPwdPressed) forControlEvents:UIControlEventTouchUpInside];
     }
     return _forgetPwdBtn;
+}
+
+- (void)viewConfigChange:(WKViewConfigChangeType)type {
+    [super viewConfigChange:type];
+    if (type != WKViewConfigChangeTypeLang) return;
+    if (_tipLbl) {
+        _tipLbl.text = LLang(@"请输入锁屏密码");
+        [_tipLbl sizeToFit];
+    }
+    if (_forgetPwdBtn) {
+        [_forgetPwdBtn setTitle:LLang(@"忘记密码") forState:UIControlStateNormal];
+        [_forgetPwdBtn sizeToFit];
+    }
 }
 
 -(void) forgetPwdPressed {

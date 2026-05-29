@@ -8,6 +8,8 @@
 #import "WKConversationDB.h"
 #import "WKDB.h"
 #import "WKConversationUtil.h"
+#import "WKUnreadStore.h"
+#import "WKUnreadAckQueueDB.h"
 #define SQL_EXIST @"select count(*) cn from conversation where channel_id=? and channel_type=? and is_deleted=0"
 
 #define SQL_GET_SELECT @"conversation.*,IFNULL(channel.stick,0) stick,IFNULL(channel.mute,0) mute,IFNULL(conversation_extra.browse_to,0) browse_to,IFNULL(conversation_extra.keep_message_seq,0) keep_message_seq,IFNULL(conversation_extra.keep_offset_y,0) keep_offset_y,IFNULL(conversation_extra.draft,'') draft,IFNULL(conversation_extra.version,0) extra_version"
@@ -96,7 +98,100 @@ static WKConversationDB *_instance;
             NSString *parentChannelID  = conversation.parentChannel?conversation.parentChannel.channelId:@"";
             uint8_t parentChannelType = conversation.parentChannel?conversation.parentChannel.channelType:0;
             NSString *extraStr = [self extraToStr:conversation.extra];
+            // [UnreadTrace] sync 全量覆盖：把 server 快照的 unreadCount 写回 DB,
+            // 如果它比当前内存/DB 中刚 +1 的值小,会把红点擦掉.
+            WKConversation *_ut_old = [self getConversationWithChannelInAll:conversation.channel db:db];
+            NSLog(@"[UnreadTrace] replaceConversations channelId=%@ type=%d dbBefore=%ld serverSnapshot=%ld lastSeqBefore=%u lastSeqAfter=%u version=%lld",
+                  conversation.channel.channelId, conversation.channel.channelType,
+                  (long)_ut_old.unreadCount, (long)conversation.unreadCount,
+                  _ut_old.lastMessageSeq, conversation.lastMessageSeq,
+                  conversation.version);
             [db executeUpdate:SQL_REPLACE,conversation.channel.channelId,@(conversation.channel.channelType),parentChannelID,@(parentChannelType),conversation.avatar?:@"",conversation.lastClientMsgNo?:@"",@(conversation.lastMessageSeq),@(conversation.lastMsgTimestamp),@(conversation.unreadCount),extraStr,@(conversation.version),@(conversation.isDeleted)];
+        }
+    }];
+}
+
+-(void) mergeConversations:(NSArray<WKConversation*>*)conversations {
+    if(!conversations || conversations.count<=0) {
+        return;
+    }
+    // FIX(reentrancy): prefetch reconcile context 在进 inTransaction 之前一次拉完
+    // (pending ack keys + unread_state map), 避免 reconcileServerSnapshot 内部
+    // 再开 [dbQueue inDatabase:] 触发 FMDB 重入. 同 sync 批可能 250+ 行,
+    // prefetch 一次 vs 250 次单 query, 性能也好得多.
+    WKUnreadReconcileContext *reconcileCtx = [[WKUnreadStore shared] prefetchReconcileContext];
+
+    [[WKDB sharedDB].dbQueue inTransaction:^(FMDatabase * _Nonnull db, BOOL * _Nonnull rollback) {
+        for (WKConversation *conversation in conversations) {
+            // 1) 拒收"空白行": server 偶尔会给系统通道(botfather / fileHelper /
+            //    notification / u_10000)返回 version=0 && last_msg_seq=0 的占位条目,
+            //    裸 REPLACE 会把本地真实状态(unread=1, lastSeq=298)整行擦成 0.
+            //    放过新会话(local 不存在)的"全 0 但 timestamp 非 0"行: 那是真新建.
+            WKConversation *local = [self getConversationWithChannelInAll:conversation.channel db:db];
+            BOOL serverIsBlank = (conversation.version <= 0
+                                  && conversation.lastMessageSeq == 0
+                                  && conversation.unreadCount == 0
+                                  && conversation.lastMsgTimestamp <= 0);
+            if (serverIsBlank && local) {
+                NSLog(@"[UnreadTrace] mergeConversations REJECT-BLANK channelId=%@ type=%d localUnread=%ld localLastSeq=%u",
+                      conversation.channel.channelId, conversation.channel.channelType,
+                      (long)local.unreadCount, local.lastMessageSeq);
+                continue;
+            }
+
+            NSString *parentChannelID  = conversation.parentChannel?conversation.parentChannel.channelId:@"";
+            uint8_t parentChannelType = conversation.parentChannel?conversation.parentChannel.channelType:0;
+            NSString *extraStr = [self extraToStr:conversation.extra];
+
+            if (!local) {
+                // 新会话直接插入
+                NSLog(@"[UnreadTrace] mergeConversations INSERT channelId=%@ type=%d unread=%ld lastSeq=%u version=%lld",
+                      conversation.channel.channelId, conversation.channel.channelType,
+                      (long)conversation.unreadCount, conversation.lastMessageSeq, conversation.version);
+                [db executeUpdate:SQL_REPLACE,conversation.channel.channelId,@(conversation.channel.channelType),parentChannelID,@(parentChannelType),conversation.avatar?:@"",conversation.lastClientMsgNo?:@"",@(conversation.lastMessageSeq),@(conversation.lastMsgTimestamp),@(conversation.unreadCount),extraStr,@(conversation.version),@(conversation.isDeleted)];
+                continue;
+            }
+
+            // 2) 对已有会话: server.version > local.version 才覆盖元数据.
+            //    unread 走 WKUnreadStore.reconcileServerSnapshot —— 本地优先策略
+            //    (用户已读过 / pending ack / 60s 保护窗口 三档),解决子区 server
+            //    永远=1 + 锁屏后红点复活两个 bug.
+            BOOL takeMeta = (conversation.version > local.version);
+            uint32_t newLastSeq = takeMeta ? MAX(conversation.lastMessageSeq, local.lastMessageSeq) : local.lastMessageSeq;
+            int64_t newTs = takeMeta ? MAX(conversation.lastMsgTimestamp, local.lastMsgTimestamp) : local.lastMsgTimestamp;
+            NSString *newClientMsgNo = takeMeta && conversation.lastClientMsgNo.length > 0 ? conversation.lastClientMsgNo : (local.lastClientMsgNo ?: @"");
+            NSString *newAvatar = takeMeta && conversation.avatar.length > 0 ? conversation.avatar : (local.avatar ?: @"");
+            NSString *newExtraStr = takeMeta ? extraStr : [self extraToStr:local.extra];
+            int64_t newVersion = MAX(conversation.version, local.version);
+            NSInteger newUnread = [[WKUnreadStore shared] reconcileServerSnapshot:conversation.channel
+                                                                     serverUnread:conversation.unreadCount
+                                                                    serverLastSeq:conversation.lastMessageSeq
+                                                                      localUnread:local.unreadCount
+                                                                          context:reconcileCtx];
+            BOOL newIsDeleted = takeMeta ? conversation.isDeleted : local.isDeleted;
+            // parent 字段沿用 server 端(子区不会换爹)
+            NSString *newParentChannelID = parentChannelID.length > 0 ? parentChannelID : (local.parentChannel ? local.parentChannel.channelId : @"");
+            uint8_t newParentChannelType = parentChannelType > 0 ? parentChannelType : (local.parentChannel ? local.parentChannel.channelType : 0);
+
+            NSLog(@"[UnreadTrace] mergeConversations MERGE channelId=%@ type=%d local(unread=%ld,seq=%u,ver=%lld) server(unread=%ld,seq=%u,ver=%lld) -> (unread=%ld,seq=%u,ver=%lld) takeMeta=%d",
+                  conversation.channel.channelId, conversation.channel.channelType,
+                  (long)local.unreadCount, local.lastMessageSeq, local.version,
+                  (long)conversation.unreadCount, conversation.lastMessageSeq, conversation.version,
+                  (long)newUnread, newLastSeq, newVersion, takeMeta);
+
+            [db executeUpdate:SQL_REPLACE,
+             conversation.channel.channelId,
+             @(conversation.channel.channelType),
+             newParentChannelID,
+             @(newParentChannelType),
+             newAvatar,
+             newClientMsgNo,
+             @(newLastSeq),
+             @(newTs),
+             @(newUnread),
+             newExtraStr,
+             @(newVersion),
+             @(newIsDeleted)];
         }
     }];
 }

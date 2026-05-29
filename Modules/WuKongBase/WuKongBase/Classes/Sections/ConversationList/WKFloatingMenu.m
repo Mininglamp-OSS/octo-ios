@@ -100,7 +100,38 @@ static const void *kMenuItemsKey = &kMenuItemsKey;
     dismissTap.delegate = [self sharedTapFilter]; // 拦截 menuContainer 子树里的 touch，让按钮 TouchUpInside 正常派发
     [overlay addGestureRecognizer:dismissTap];
 
-    CGFloat menuWidth = 160;
+    // 木桶效应：菜单宽度由最长 item 决定，多语言下不再被截断。
+    // 旧代码写死 160pt 是按中文 4 字 + 图标量出来的，"+ New Category" 这种英文翻译会爆。
+    //
+    // 不要用 UIButton.intrinsicContentSize / sizeThatFits —— 系统 button 内部还有
+    // 一层不可见的 padding（约 6–12pt 一边），返回值会比实际渲染需要的短半截，
+    // 在 "Move category" 这种刚好顶到边的英文上就会触发 truncating（PR review #2）。
+    // 直接用 boundingRect 量文本，按 icon / inset 写死的几何加 padding，更可控。
+    UIFont *itemFont = [[WKApp shared].config appFontOfSize:15.0f];
+    const CGFloat kContentLeftInset  = 16;     // contentEdgeInsets.left
+    const CGFloat kContentRightInset = 16;     // contentEdgeInsets.right
+    const CGFloat kIconSlot          = 20;     // icon 真实绘制尺寸 (见 iconFollow / iconMoveCategory 等)
+    const CGFloat kIconTitleGap      = 10;     // titleEdgeInsets.left (icon 与 title 间距)
+    const CGFloat kSafetyPad         = 16;     // 兜底: kerning / 系统按钮内置间距 / ceil 取整
+    CGFloat maxTextWidth = 0;
+    BOOL anyHasIcon = NO;
+    for (NSDictionary *item in items) {
+        NSString *title = item[@"title"] ?: @"";
+        if (item[@"icon"]) anyHasIcon = YES;
+        CGRect r = [title boundingRectWithSize:CGSizeMake(CGFLOAT_MAX, 44)
+                                       options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                    attributes:@{NSFontAttributeName: itemFont}
+                                       context:nil];
+        maxTextWidth = MAX(maxTextWidth, ceil(r.size.width));
+    }
+    CGFloat itemPadding = kContentLeftInset + kContentRightInset
+                        + (anyHasIcon ? (kIconSlot + kIconTitleGap) : 0)
+                        + kSafetyPad;
+    const CGFloat kMenuMinWidth = 140;       // 中文也不要太窄, 视觉一致
+    const CGFloat kMenuMaxRatio = 0.8;       // 上限: 不超过窗口 80%, 极端长翻译时让 label 自己截断
+    CGFloat menuWidth = ceil(maxTextWidth + itemPadding);
+    menuWidth = MAX(menuWidth, kMenuMinWidth);
+    menuWidth = MIN(menuWidth, window.lim_width * kMenuMaxRatio);
     CGFloat rowHeight = 44;
     CGFloat menuHeight = items.count * rowHeight;
     CGFloat cornerRadius = 12;

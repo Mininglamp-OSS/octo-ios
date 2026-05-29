@@ -331,21 +331,19 @@
         messageSeq = self.messageListView.lastMessage.messageSeq;
     }
     NSInteger newUnread = self.messageListView.newMsgCount;
-    NSInteger targetUnread = -1;
+    BOOL shouldClear = NO;
     if(self.messageListView.browseToOrderSeq == 0 && newUnread > 0) {
-        targetUnread = 0;
+        shouldClear = YES;
     } else if(conversation.unreadCount != newUnread) {
-        targetUnread = newUnread;
-    } else if(self.messageListView.hasRecvMsg) {
-        targetUnread = newUnread;
+        shouldClear = (newUnread == 0);  // 只有"读完了"才走 store
+    } else if(self.messageListView.hasRecvMsg && newUnread == 0) {
+        shouldClear = YES;
     }
-    if(targetUnread >= 0) {
-        [[WKMessageManager shared] conversationSetUnread:self.channel unread:targetUnread messageSeq:messageSeq complete:nil];
-        // 同步更新本地 DB，防止 loadConversationList: 从 DB 重新加载时覆盖内存中已清零的未读数
-        // 根因：大量机器人消息（如 100 条子区创建消息）造成 unreadCount=100，
-        // 用户进入会话已阅读，但 WebSocket 重连等场景触发 loadConversationList: 从旧 DB 重载，
-        // 导致会话列表红点复现并无法消除
-        [[WKSDK shared].conversationManager setConversationUnreadCount:self.channel unread:targetUnread];
+    if(shouldClear) {
+        // : 老路径直接调 conversationSetUnread + setConversationUnreadCount,
+        // server 上报失败就静默丢失,造成"子区 server 永远=1". 改走 store:
+        // markLocalRead 持久化 lastReadSeq + 清本地 DB + 入队上报(带重试).
+        [[WKUnreadStore shared] markLocalRead:self.channel readSeq:messageSeq];
     }
 }
 

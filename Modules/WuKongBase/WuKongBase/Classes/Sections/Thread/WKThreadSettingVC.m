@@ -43,10 +43,23 @@
 #define MEMBER_GRID_TOP 20.0f
 #define MEMBER_LIMIT 20
 
+- (NSString *)langTitle {
+    // base class 切语言时通过这个 hook 自动刷 nav title
+    return LLang(@"子区详情");
+}
+
+- (void)viewConfigChange:(WKViewConfigChangeType)type {
+    [super viewConfigChange:type];
+    if (type != WKViewConfigChangeTypeLang) return;
+    if (_memberGridView) {
+        _memberGridView.moreBtnTitle = LLang(@"查看更多子区成员");
+    }
+    [self.tableView reloadData];
+}
+
 - (void)viewDidLoad {
     [super viewDidLoad];
 
-    self.title = LLang(@"子区详情");
     self.view.backgroundColor = [WKApp shared].config.backgroundColor;
 
     // 解析 groupNo 和 shortId

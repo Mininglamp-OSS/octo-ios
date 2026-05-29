@@ -29,6 +29,17 @@
     [self layoutUI];
 }
 
+// 切语言时刷 nav title + 两行 menu row 标题 (用 tag 反查内嵌 label)
+- (void)viewConfigChange:(WKViewConfigChangeType)type {
+    [super viewConfigChange:type];
+    if (type != WKViewConfigChangeTypeLang) return;
+    self.title = [NSString stringWithFormat:@"%@%@", LLang(@"关于"), [WKApp shared].config.appName ?: @""];
+    UILabel *l1 = (UILabel *)[_userAgreementRow viewWithTag:9001];
+    UILabel *l2 = (UILabel *)[_privacyPolicyRow viewWithTag:9001];
+    l1.text = LLang(@"用户协议");
+    l2.text = LLang(@"隐私政策");
+}
+
 - (void)setupUI {
     // App Icon
     [self.view addSubview:self.appIconView];
@@ -156,6 +167,7 @@
     row.userInteractionEnabled = YES;
 
     UILabel *titleLabel = [[UILabel alloc] init];
+    titleLabel.tag = 9001;     // viewConfigChange 切语言时按 tag 反查重置文案
     titleLabel.text = title;
     titleLabel.font = [UIFont systemFontOfSize:16.0f];
     titleLabel.textColor = WKApp.shared.config.defaultTextColor;

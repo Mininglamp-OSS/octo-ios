@@ -904,7 +904,13 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     NSMutableString *reminderStr  = [[NSMutableString alloc] init];
     if(model.simpleReminders && model.simpleReminders.count>0) {
         for (WKReminder *reminder in model.simpleReminders) {
-            [reminderStr appendString:reminder.text];
+            // SDK 把 [有人@我] 写死为中文 (WKChatManager.m:792, 不走 LLang),
+            // 这里按 reminder.type 用 LLang 替换, 让英文模式下也显示 [Mention]。
+            if (reminder.type == WKReminderTypeMentionMe) {
+                [reminderStr appendString:LLang(@"[有人@我]")];
+            } else {
+                [reminderStr appendString:reminder.text];
+            }
         }
     }
     NSString *fullContentStr;

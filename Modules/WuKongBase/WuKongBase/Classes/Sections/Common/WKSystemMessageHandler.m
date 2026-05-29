@@ -313,6 +313,9 @@ bool needRemind = false; // 是否需要提醒
             unread = [param[@"unread"] integerValue];
         }
         WKChannel *channel = [[WKChannel alloc] initWith:param[@"channel_id"] channelType:[param[@"channel_type"] intValue]];
+        // [UnreadTrace] 多端已读同步 cmd 强制写 unread,把整 param 打出来便于追溯发起方.
+        NSLog(@"[UnreadTrace] WKCMDUnreadClear channelId=%@ type=%d setUnread=%ld param=%@",
+              channel.channelId, channel.channelType, (long)unread, param);
         [[WKSDK shared].conversationManager setConversationUnreadCount:channel unread:unread];
     }else if([cmd isEqualToString:WKCMDGroupAvatarUpdate] && param&&param[@"group_no"]) { // 群头像更新
          WKLogDebug(@"处理群头像更新！->%@",param[@"group_no"]);

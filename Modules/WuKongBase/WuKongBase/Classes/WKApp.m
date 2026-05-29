@@ -383,12 +383,24 @@ static WKApp *_instance;
     if([WKApp shared].config.clusterOn) {
        [[WKSDK shared].connectionManager setGetConnectAddr:^(void (^ _Nonnull complete)(NSString * __nullable)) {
            [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"users/%@/im",weakSelf.loginInfo.uid] parameters:nil].then(^(NSDictionary *addrDict){
-               if(addrDict && addrDict[@"tcp_addr"]) {
-                    complete(addrDict[@"tcp_addr"]);
-               }else{
+               if(!addrDict) {
                    complete(nil);
+                   return;
                }
-              
+               // 客户端只走 WebSocket（TCP 已下线）。
+               // 地址优先级：wss_addr > ws_addr。其他地址字段（如旧的 TCP 地址）一律忽略。
+               NSString *addr = nil;
+               id wssAddr = addrDict[@"wss_addr"];
+               if ([wssAddr isKindOfClass:[NSString class]] && ((NSString *)wssAddr).length > 0) {
+                   addr = wssAddr;
+               } else {
+                   id wsAddr = addrDict[@"ws_addr"];
+                   if ([wsAddr isKindOfClass:[NSString class]] && ((NSString *)wsAddr).length > 0) {
+                       addr = wsAddr;
+                   }
+               }
+               complete(addr.length > 0 ? addr : nil);
+
            }).catch(^(NSError *error){
                complete(nil);
                WKLogError(@"获取IM连接地址失败！-> %@",error);

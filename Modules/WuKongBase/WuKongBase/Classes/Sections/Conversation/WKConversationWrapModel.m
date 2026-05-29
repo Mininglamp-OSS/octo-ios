@@ -214,22 +214,11 @@
 
 
 - (NSInteger)unreadCount {
-    // Person 多空间：对齐 Android `ChatFragment.adjustPersonalForSpace` 的极简策略——
-    // 只信任 SDK DB 的全会话 unreadCount（DB 持久化、重启可恢复），
-    // 仅在最后一条消息明确归属其它空间时把红点显示为 0，避免跨 space 污染。
-    // 不再维护客户端 spaceUnread cache：它依赖内存、重启后会被 server 聚合失真值（space_unread=0）
-    // 重新 seed 成 0，导致红点丢失（YUJ-XXX 复现：>30 条消息后重启红点消失）。
-    if (self.c.channel.channelType == WK_PERSON) {
-        NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
-        if (currentSpaceId.length > 0) {
-            WKMessage *lastMsg = self.c.lastMessage;
-            NSString *msgSpaceId = lastMsg.content.contentDict[@"space_id"];
-            if ([msgSpaceId isKindOfClass:[NSString class]] && msgSpaceId.length > 0
-                && ![msgSpaceId isEqualToString:currentSpaceId]) {
-                return 0;
-            }
-        }
-    }
+    // : 这里以前会按 lastMessage.space_id 过滤,DM 多空间下会把 DB 实际有红点
+    // 的会话压成 0,造成"DB 有红点 / UI 显示 0"的不一致(诊断 log [UnreadTrace]
+    // wrap.unreadCount mask 抓的就是这个).space 过滤的责任已经迁到
+    // WKConversationListVC.isConversationInCurrentSpace 这层(在 conversation
+    // 落到列表前就过滤掉),getter 不再做覆盖. unread 唯一来源 = SDK DB.
     return self.c.unreadCount;
 }
 

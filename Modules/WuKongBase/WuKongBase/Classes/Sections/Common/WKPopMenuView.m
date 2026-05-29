@@ -43,16 +43,30 @@ static CGFloat const kCellHeight = 44;
         _tableData = [array copy];
         _trianglePoint = point;
         self.action = action;
-        
-        
+
+
         // 添加手势
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tap)];
         tap.delegate = self;
         [self addGestureRecognizer:tap];
-        
-        
+
+        // 木桶效应：菜单宽度由最长 title 决定。原 width 参数当下限用，避免中文短文案下菜单缩太窄。
+        // cell 布局: leftIcon 15pt left + 22pt 宽 + 10pt spacing → title 起点 47pt; 右留 12pt
+        UIFont *titleFont = [[WKApp shared].config appFontOfSize:16.0f];
+        CGFloat maxTextWidth = 0;
+        for (NSDictionary *item in array) {
+            NSString *title = item[@"title"] ?: @"";
+            CGSize sz = [title sizeWithAttributes:@{NSFontAttributeName: titleFont}];
+            maxTextWidth = MAX(maxTextWidth, sz.width);
+        }
+        const CGFloat titleStart = 47;
+        const CGFloat titleRightMargin = 12;
+        CGFloat bucketWidth = ceil(maxTextWidth + titleStart + titleRightMargin);
+        CGFloat finalWidth = MAX(width, bucketWidth);
+        finalWidth = MIN(finalWidth, SCREEN_WIDTH * 0.8);    // 极端长翻译时让 label 自己截断, 不出屏
+
         // 创建tableView
-        _tableView = [[UITableView alloc] initWithFrame:CGRectMake(SCREEN_WIDTH - width - 5, point.y + 10, width, kCellHeight * array.count) style:UITableViewStylePlain];
+        _tableView = [[UITableView alloc] initWithFrame:CGRectMake(SCREEN_WIDTH - finalWidth - 5, point.y + 10, finalWidth, kCellHeight * array.count) style:UITableViewStylePlain];
         _tableView.delegate = self;
         _tableView.dataSource = self;
         _tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
@@ -62,7 +76,7 @@ static CGFloat const kCellHeight = 44;
         _tableView.rowHeight = kCellHeight;
         [_tableView registerClass:[PopMenuTableViewCell class] forCellReuseIdentifier:@"PopMenuTableViewCell"];
         [self addSubview:_tableView];
-        
+
     }
     return self;
 }

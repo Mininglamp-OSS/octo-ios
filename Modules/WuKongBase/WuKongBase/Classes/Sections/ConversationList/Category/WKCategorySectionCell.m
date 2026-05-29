@@ -6,6 +6,7 @@
 #import "WKCategorySectionCell.h"
 #import "WKApp.h"
 #import "UIView+WK.h"
+#import "WuKongBase.h"  // LLang 宏
 
 @interface WKCategorySectionCell ()
 @property (nonatomic, strong) UIImageView *arrowView;
@@ -105,7 +106,7 @@
     // @提醒标识（折叠时，分组内有@我则显示在数量后面）
     if (self.collapsed && self.hasMention) {
         _mentionLbl.hidden = NO;
-        _mentionLbl.text = @"[有人@我]";
+        _mentionLbl.text = LLang(@"[有人@我]");
         [_mentionLbl sizeToFit];
         CGFloat mentionLeft = _countLbl.hidden ? (_titleLbl.lim_right + 4) : (_countLbl.lim_right + 4);
         _mentionLbl.frame = CGRectMake(mentionLeft, 0, _mentionLbl.lim_width, h);

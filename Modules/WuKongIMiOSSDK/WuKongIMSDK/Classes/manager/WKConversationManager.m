@@ -42,8 +42,12 @@
     [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
         WKConversation *conversation =  [[WKConversationDB shared] getConversationWithChannelInAll:cs.channel db:db];
         if(conversation) {
-            
+            NSInteger _ut_before = conversation.unreadCount;
             conversation.unreadCount +=unUnreadCount ;
+            NSLog(@"[UnreadTrace] addOrUpdate channelId=%@ type=%d before=%ld inc=%ld after=%ld lastSeq=%u",
+                  cs.channel.channelId, cs.channel.channelType,
+                  (long)_ut_before, (long)unUnreadCount, (long)conversation.unreadCount,
+                  cs.lastMessageInner.messageSeq);
             if([self needUpdate:cs old:conversation]) { // (cs.lastMessageInner.messageSeq应该是发送的消息) 当前最近会话的最后一条消息的messageSeq小于更新的messageSeq才更新
                 conversation.lastClientMsgNo = cs.lastClientMsgNo;
                 conversation.lastMsgTimestamp = cs.lastMsgTimestamp;
@@ -143,6 +147,10 @@
 //}
 
 -(void) clearConversationUnreadCount:(WKChannel*)channel {
+    // [UnreadTrace] SDK 层硬清零入口,带短调用栈定位 caller.
+    NSArray *_ut_stack = [NSThread callStackSymbols];
+    NSString *_ut_top = _ut_stack.count > 4 ? [[_ut_stack subarrayWithRange:NSMakeRange(1, MIN(3u, _ut_stack.count - 1))] componentsJoinedByString:@" | "] : [_ut_stack componentsJoinedByString:@" | "];
+    NSLog(@"[UnreadTrace] clearConversationUnreadCount channelId=%@ type=%d caller=%@", channel.channelId, channel.channelType, _ut_top);
     // 清除指定频道消息未读数
     [[WKConversationDB shared] clearConversationUnreadCount:channel];
     // 通知UI层
@@ -150,6 +158,10 @@
 }
 
 -(void) setConversationUnreadCount:(WKChannel*)channel unread:(NSInteger)unread {
+    // [UnreadTrace] SDK 层硬设值入口,带短调用栈定位 caller.
+    NSArray *_ut_stack = [NSThread callStackSymbols];
+    NSString *_ut_top = _ut_stack.count > 4 ? [[_ut_stack subarrayWithRange:NSMakeRange(1, MIN(3u, _ut_stack.count - 1))] componentsJoinedByString:@" | "] : [_ut_stack componentsJoinedByString:@" | "];
+    NSLog(@"[UnreadTrace] setConversationUnreadCount channelId=%@ type=%d unread=%ld caller=%@", channel.channelId, channel.channelType, (long)unread, _ut_top);
     // 设置指定频道消息未读数
        [[WKConversationDB shared] setConversationUnreadCount:channel unread:unread];
     // 通知UI层
@@ -255,7 +267,7 @@
                     conversation.reminders = reminderDict[conversation.channel];
                 }
             }
-            [[WKConversationDB shared] replaceConversations:conversations];
+            [[WKConversationDB shared] mergeConversations:conversations];
 
             // 将同步的 stick/mute 状态写入 channel 表
             for (WKSyncConversationModel *syncModel in syncConversations) {
@@ -291,6 +303,11 @@
         if (syncElapsed > 30) {
             NSLog(@"[ANR-Trace] handleSyncConversation took %.0fms (background), syncCount=%lu, msgCount=%lu", syncElapsed, (unsigned long)syncConversations.count, (unsigned long)messages.count);
         }
+
+        // DB 已写 + delegate 已通知,主线程派发 sync 完成信号,VC 用这个信号跑
+        // side-effects(loadCategories 等),保证 getConversation 能拿到刚 merge
+        // 进 DB 的子区行,不再被 3 天活跃过滤误删.
+        [self callOnConversationSyncFinishedDelegates];
     });
 }
 
@@ -477,7 +494,24 @@
             }else {
                 [delegate onConversationAllDelete];
             }
-            
+
+        }
+    }
+}
+
+- (void)callOnConversationSyncFinishedDelegates {
+    [self.delegateLock lock];
+    NSHashTable *copyDelegates = [self.delegates copy];
+    [self.delegateLock unlock];
+    for (id delegate in copyDelegates) {
+        if (delegate && [delegate respondsToSelector:@selector(onConversationSyncFinished)]) {
+            if (![NSThread isMainThread]) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [delegate onConversationSyncFinished];
+                });
+            } else {
+                [delegate onConversationSyncFinished];
+            }
         }
     }
 }

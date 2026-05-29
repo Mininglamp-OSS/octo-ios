@@ -72,6 +72,14 @@
     return LLang(@"我的二维码");
 }
 
+// nav title 由 base class 通过 langTitle hook 自动刷; 这里只刷底部 remark 文案。
+// qrcodeMaskView 里的"该群已开启进群验证 / 只可通过邀请进群" 是只对开启进群验证的群可见, 罕见路径, 暂留 (已记录)
+- (void)viewConfigChange:(WKViewConfigChangeType)type {
+    [super viewConfigChange:type];
+    if (type != WKViewConfigChangeTypeLang) return;
+    [self updateRemark:[NSString stringWithFormat:LLang(@"扫一扫上面的二维码图案，加我%@"), [WKApp shared].config.appName]];
+}
+
 -(UIButton*) moreButtonItem {
     if(!_moreButtonItem) {
         _moreButtonItem = [UIButton buttonWithType:UIButtonTypeCustom];

@@ -93,6 +93,22 @@
     return LLang(@"群二维码名片");
 }
 
+// nav title 由 base class 通过 langTitle 自动刷; 这里刷复制按钮 + mask 文案。
+// updateRemark 那条 (含动态天数/失效时间) 没有最新模型, 只能等下次进页重拉, 暂不刷。
+- (void)viewConfigChange:(WKViewConfigChangeType)type {
+    [super viewConfigChange:type];
+    if (type != WKViewConfigChangeTypeLang) return;
+    if (_copyInviteBtn) {
+        [_copyInviteBtn setTitle:LLang(@"复制邀请链接") forState:UIControlStateNormal];
+    }
+    if (_qrcodeMaskView) {
+        UILabel *l1 = (UILabel *)[_qrcodeMaskView viewWithTag:9001];
+        UILabel *l2 = (UILabel *)[_qrcodeMaskView viewWithTag:9002];
+        l1.text = LLang(@"该群已开启进群验证");
+        l2.text = LLang(@"只可通过邀请进群");
+    }
+}
+
 -(UIButton*) moreButtonItem {
     if(!_moreButtonItem) {
         _moreButtonItem = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -169,6 +185,7 @@
         _qrcodeMaskView.layer.opacity = 0.98f;
         
         UILabel *titleLbl1 = [[UILabel alloc] init];
+        titleLbl1.tag = 9001;     // viewConfigChange 切语言时按 tag 反查重置
         titleLbl1.text = LLang(@"该群已开启进群验证");
         [titleLbl1 setFont:[UIFont systemFontOfSize:20.0f]];
         [titleLbl1 setTextColor:[UIColor grayColor]];
@@ -178,6 +195,7 @@
         titleLbl1.lim_top = _qrcodeMaskView.lim_height/2.0f - titleLbl1.lim_height;
         
         UILabel *titleLbl2 = [[UILabel alloc] init];
+        titleLbl2.tag = 9002;
         titleLbl2.text = LLang(@"只可通过邀请进群");
         [titleLbl2 setFont:[UIFont systemFontOfSize:20.0f]];
         [titleLbl2 setTextColor:[UIColor grayColor]];

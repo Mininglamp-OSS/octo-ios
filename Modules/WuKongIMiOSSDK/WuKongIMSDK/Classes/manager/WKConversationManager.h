@@ -164,6 +164,13 @@ typedef void (^WKUpdateConversationExtraProvider)(WKConversationExtra *extra,WKU
 /// 所有最近会话删除
 -(void) onConversationAllDelete;
 
+
+/// handleSyncConversation 全量 sync 完成后(DB 已写,delegate 已通知)触发.
+/// VC 用这个信号跑 sync 完成后的 side-effects(snapshotSyncedGroupIds /
+/// rebuildGroupDisplayAndReload / loadCategories 等),不再依赖 WKConnected
+/// 状态(后者会在 DB 后台写完成前触发,引发子区预览拿不到 conv 的 race).
+-(void) onConversationSyncFinished;
+
 @end
 
 

@@ -30,10 +30,24 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = LLang(@"设置解锁密码");
     [self.view addSubview:self.corePasswordView];
     [self.view addSubview:self.titleLbl];
     [self.corePasswordView beginInput];
+}
+
+- (NSString *)langTitle {
+    // 改用 langTitle hook —— base class 切语言时会自动调本方法刷 nav title
+    return LLang(@"设置解锁密码");
+}
+
+- (void)viewConfigChange:(WKViewConfigChangeType)type {
+    [super viewConfigChange:type];
+    if (type != WKViewConfigChangeTypeLang) return;
+    if (_titleLbl) {
+        _titleLbl.text = LLang(@"请输入密码");
+        [_titleLbl sizeToFit];
+        _titleLbl.lim_centerX_parent = self.view;
+    }
 }
 
 

@@ -40,6 +40,8 @@
     [self setOfflineMessageProvider];
     // 设置同步会话提供者
     [self setSyncConversationProvider];
+    // mark-read 上报队列的 provider 注入(SDK 不能直接依赖 WKAPIClient)
+    [self setUnreadAckProvider];
     // 最近会话扩展
     [self setSyncConversationExtraProvider];
     [self setUpdateConversationExtraProvider];
@@ -691,6 +693,25 @@
     }
     
     return reminder;
+}
+
+#pragma mark - Unread mark-read ack queue
+
+-(void) setUnreadAckProvider {
+    [[WKUnreadAckRunner shared] setUploadProvider:^(WKChannel *channel, uint32_t lastReadSeq, void(^complete)(NSError * _Nullable)) {
+        // unread=0 表示"已读到 message_seq=lastReadSeq".server 端已有的
+        // PUT coversation/clearUnread 接受这种语义.
+        [[WKAPIClient sharedClient] PUT:@"coversation/clearUnread" parameters:@{
+            @"channel_id": channel.channelId ?: @"",
+            @"channel_type": @(channel.channelType),
+            @"unread": @(0),
+            @"message_seq": @(lastReadSeq),
+        }].then(^{
+            if (complete) complete(nil);
+        }).catch(^(NSError *err){
+            if (complete) complete(err);
+        });
+    }];
 }
 
 

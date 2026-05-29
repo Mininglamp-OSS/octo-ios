@@ -24,8 +24,11 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = LLang(@"功能模块");
-   
+}
+
+- (NSString *)langTitle {
+    // 改用 langTitle hook —— base class 切语言时会自动刷 nav title
+    return LLang(@"功能模块");
 }
 
 -(void) viewDidAppear:(BOOL)animated {
@@ -37,7 +40,7 @@
     [super viewDidDisappear:animated];
     
     if(self.viewModel.settingChange) {
-        [WKAlertUtil alert:@"开启或关闭模块需要重启，是否重启？" buttonsStatement:@[@"否",@"是"] chooseBlock:^(NSInteger buttonIdx) {
+        [WKAlertUtil alert:LLang(@"开启或关闭模块需要重启，是否重启？") buttonsStatement:@[LLang(@"否"), LLang(@"是")] chooseBlock:^(NSInteger buttonIdx) {
             if(buttonIdx == 1) {
                 exit(0);
             }

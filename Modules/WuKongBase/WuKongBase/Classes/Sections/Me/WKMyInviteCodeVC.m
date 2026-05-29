@@ -26,17 +26,27 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = LLang(@"我的邀请码");
-    
+
     [self.view addSubview:self.boxView];
     [self.boxView addSubview:self.avatar];
     [self.boxView addSubview:self.nicknameLbl];
     [self.boxView addSubview:self.inviteCodeLbl];
     [self.boxView addSubview:self.cpBtn];
     [self.boxView addSubview:self.disableBtn];
-    
+
     [self layout];
-    
+
     [self loadInviteCode];
+}
+
+// 切语言时刷 nav title + 复制按钮 + 禁用/启用按钮 (后者在 layout 里, 复用)
+- (void)viewConfigChange:(WKViewConfigChangeType)type {
+    [super viewConfigChange:type];
+    if (type != WKViewConfigChangeTypeLang) return;
+    self.title = LLang(@"我的邀请码");
+    [_cpBtn setTitle:LLang(@"复制") forState:UIControlStateNormal];
+    [_cpBtn sizeToFit];
+    [self layout];   // layout 里会按 self.disable 重设 disableBtn title
 }
 
 -(void) loadInviteCode {

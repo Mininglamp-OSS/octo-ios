@@ -28,6 +28,17 @@ NS_ASSUME_NONNULL_BEGIN
 -(void) replaceConversations:(NSArray<WKConversation*>*)conversations;
 
 
+/// 防御性合并 server 的会话快照到本地 DB.
+/// 与 replaceConversations 的差别:
+///  - 拒收 version=0 && lastMsgSeq=0 的"空白行"(防 server 返回缩水的系统通道把
+///    botfather / fileHelper / notification / u_10000 的 lastSeq / unread 擦成 0).
+///  - server.version > local.version 才覆盖元数据(lastMsgSeq / lastMsgTimestamp / extra).
+///  - unreadCount 取 max(local, server).这是 phase 1 的兜底, phase 2 接入
+///    WKUnreadStore 后会改成本地优先策略.
+///  - 新会话(local 无记录): 整条插入.
+-(void) mergeConversations:(NSArray<WKConversation*>*)conversations;
+
+
 /// 添加最近会话信息
 /// @param conversation <#conversation description#>
 -(void) addConversation:(WKConversation*)conversation;

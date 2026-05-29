@@ -107,6 +107,25 @@
     if(hasDone) {
         [self markReminderDoneIfNeed];
     }
+
+    // [ReminderTrace] force pass(进入聊天后第一次扫描)结束时,如果还有 reminder 没被标 done,
+    // 把它们的 messageSeq 在本地 message DB 里查一下,区分是"消息不存在/已 revoke"还是
+    // "消息存在但当前不在可见区".这是定位"[有人@我]幽灵 reminder"的关键观测点.
+    if (force) {
+        for (WKReminder *reminder in reminders) {
+            if (reminder.done) continue;
+            if (reminder.type != WKReminderTypeMentionMe) continue;
+            WKMessage *msg = [[WKMessageDB shared] getMessage:reminder.channel messageSeq:reminder.messageSeq];
+            BOOL inVisible = (reminder.messageSeq != 0
+                              && minVisiableOrderSeq != 0
+                              && [[WKSDK shared].chatManager getOrderSeq:reminder.messageSeq] >= minVisiableOrderSeq
+                              && [[WKSDK shared].chatManager getOrderSeq:reminder.messageSeq] <= maxVisiableOrderSeq);
+            NSLog(@"[ReminderTrace] orphan-check channelId=%@ reminderID=%lld msgSeq=%u localMsgExists=%d localMsgIsDeleted=%d inVisibleRange=%d minVisOrder=%u maxVisOrder=%u",
+                  reminder.channel.channelId, reminder.reminderID, reminder.messageSeq,
+                  msg != nil, msg ? (int)msg.isDeleted : -1, inVisible,
+                  minVisiableOrderSeq, maxVisiableOrderSeq);
+        }
+    }
 }
 
 -(void) updatePostionReminders {
