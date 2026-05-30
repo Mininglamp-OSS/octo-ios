@@ -40,8 +40,6 @@ jobs:
 
       - name: Install CocoaPods
         run: |
-          # Update xcodeproj gem to support Xcode 15+ objectVersion=70 project format
-          sudo gem install xcodeproj --no-document
           pod install
 
       - name: Build
