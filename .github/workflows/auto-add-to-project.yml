@@ -1,0 +1,15 @@
+name: Auto add to project
+
+on:
+  issues:
+    types: [opened]
+  pull_request_target:
+    types: [opened, edited]
+
+permissions: {}
+
+jobs:
+  add-to-project:
+    uses: Mininglamp-OSS/.github/.github/workflows/auto-add-to-project.yml@main
+    secrets:
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
