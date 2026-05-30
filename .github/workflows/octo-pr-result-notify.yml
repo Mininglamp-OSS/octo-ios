@@ -1,12 +1,30 @@
 name: Octo PR Result Notify
 
 on:
+  pull_request_target:
+    types: [closed]
   pull_request_review:
     types: [submitted]
 
 permissions: {}
 
 jobs:
+  pr-result:
+    if: github.event_name == 'pull_request_target'
+    uses: Mininglamp-OSS/.github/.github/workflows/octo-pr-result-notify.yml@main
+    with:
+      repo_name: ${{ github.event.repository.name }}
+      pr_number: ${{ github.event.pull_request.number }}
+      pr_title: ${{ github.event.pull_request.title }}
+      pr_url: ${{ github.event.pull_request.html_url }}
+      pr_author: ${{ github.event.pull_request.user.login }}
+      event_kind: ${{ github.event.pull_request.merged == true && 'pr_merged' || 'pr_closed' }}
+      pr_additions: ${{ github.event.pull_request.additions }}
+      pr_deletions: ${{ github.event.pull_request.deletions }}
+      pr_changed_files: ${{ github.event.pull_request.changed_files }}
+    secrets:
+      OCTO_BOT_TOKEN: *** secrets.OCTO_BOT_TOKEN }}
+
   review-result:
     if: >-
       github.event_name == 'pull_request_review' &&
@@ -21,6 +39,5 @@ jobs:
       pr_author: ${{ github.event.pull_request.user.login }}
       event_kind: ${{ github.event.review.state == 'approved' && 'review_approved' || 'review_changes_requested' }}
       reviewer: ${{ github.event.review.user.login }}
-      feed_group_id: "40dd577b7e55490ab278301065f431a3"
     secrets:
-      OCTO_BOT_TOKEN: ${{ secrets.OCTO_BOT_TOKEN }}
+      OCTO_BOT_TOKEN: *** secrets.OCTO_BOT_TOKEN }}
