@@ -38,7 +38,10 @@ jobs:
           languages: swift
 
       - name: Install CocoaPods dependencies
-        run: pod install
+        run: |
+          # Update xcodeproj gem to support Xcode 15+ objectVersion=70 project format
+          sudo gem install xcodeproj --no-document
+          pod install
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3

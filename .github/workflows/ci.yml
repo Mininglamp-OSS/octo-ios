@@ -39,7 +39,10 @@ jobs:
             ${{ runner.os }}-pods-
 
       - name: Install CocoaPods
-        run: pod install
+        run: |
+          # Update xcodeproj gem to support Xcode 15+ objectVersion=70 project format
+          sudo gem install xcodeproj --no-document
+          pod install
 
       - name: Build
         run: |
