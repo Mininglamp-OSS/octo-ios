@@ -27,6 +27,18 @@
 APPLE_TEAM_ID = YOUR_TEAM_ID
 
 
+// ── App Bundle Identifier（主 App 包名）────────────────────────────────────
+// 主 App 的 bundle id。三个扩展会自动派生为：
+//   $(OCTO_BUNDLE_ID).ShareExtension
+//   $(OCTO_BUNDLE_ID).NotificationService
+//   $(OCTO_BUNDLE_ID).NotificationContent
+// 必须与你在 Apple Developer 后台注册的 App ID 一致，且要能被你的
+// provisioning profile 覆盖。改完需重新 pod install + Clean Build Folder。
+// 注意：这与 OCTO_APP_GROUP 是两个独立的值，请分别配置。
+
+OCTO_BUNDLE_ID = com.example-app.octo
+
+
 // ── Bugly 崩溃 + 卡顿采集（腾讯，闭源 SDK）─────────────────────────────────
 // 控制台：https://bugly.qq.com
 // 开源版默认不附带 Bugly.framework（闭源二进制，11MB）。如需启用：

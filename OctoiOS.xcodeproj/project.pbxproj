@@ -698,7 +698,7 @@
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example-app.octo.ShareExtension;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OCTO_BUNDLE_ID).ShareExtension";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -732,7 +732,7 @@
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example-app.octo.ShareExtension;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OCTO_BUNDLE_ID).ShareExtension";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -758,7 +758,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example-app.octo.NotificationService;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OCTO_BUNDLE_ID).NotificationService";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SKIP_INSTALL = YES;
@@ -783,7 +783,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example-app.octo.NotificationService;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OCTO_BUNDLE_ID).NotificationService";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SKIP_INSTALL = YES;
@@ -808,7 +808,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example-app.octo.NotificationContent;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OCTO_BUNDLE_ID).NotificationContent";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SKIP_INSTALL = YES;
@@ -833,7 +833,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example-app.octo.NotificationContent;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OCTO_BUNDLE_ID).NotificationContent";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SKIP_INSTALL = YES;
@@ -1067,7 +1067,7 @@
 					"-framework",
 					"\"WuKongIMSDK\"",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.example-app.octo;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OCTO_BUNDLE_ID)";
 				PRODUCT_NAME = Octo;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -1177,7 +1177,7 @@
 					"-framework",
 					"\"WuKongIMSDK\"",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.example-app.octo;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OCTO_BUNDLE_ID)";
 				PRODUCT_NAME = Octo;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
