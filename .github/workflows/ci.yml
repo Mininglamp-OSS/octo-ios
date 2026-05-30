@@ -45,7 +45,7 @@ jobs:
         run: |
           xcodebuild build-for-testing \
             -workspace OctoiOS.xcworkspace \
-            -scheme 'Octo' \
+            -scheme 'OctoiOS' \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGN_IDENTITY='' \
             CODE_SIGNING_REQUIRED=NO

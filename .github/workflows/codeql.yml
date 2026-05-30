@@ -37,6 +37,9 @@ jobs:
         with:
           languages: swift
 
+      - name: Install CocoaPods dependencies
+        run: pod install
+
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
 
