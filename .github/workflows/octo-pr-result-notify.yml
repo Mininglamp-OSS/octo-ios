@@ -22,6 +22,7 @@ jobs:
       pr_additions: ${{ github.event.pull_request.additions }}
       pr_deletions: ${{ github.event.pull_request.deletions }}
       pr_changed_files: ${{ github.event.pull_request.changed_files }}
+      feed_group_id: ${{ vars.OCTO_PR_FEED_GROUP_ID }}
     secrets:
       OCTO_BOT_TOKEN: ${{ secrets.OCTO_BOT_TOKEN }}
 
@@ -39,5 +40,6 @@ jobs:
       pr_author: ${{ github.event.pull_request.user.login }}
       event_kind: ${{ github.event.review.state == 'approved' && 'review_approved' || 'review_changes_requested' }}
       reviewer: ${{ github.event.review.user.login }}
+      feed_group_id: ${{ vars.OCTO_PR_FEED_GROUP_ID }}
     secrets:
       OCTO_BOT_TOKEN: ${{ secrets.OCTO_BOT_TOKEN }}
