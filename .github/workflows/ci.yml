@@ -42,6 +42,12 @@ jobs:
         run: |
           pod install
 
+      - name: Generate OctoConfig.xcconfig for CI build
+        # OctoConfig.xcconfig is gitignored but referenced as baseConfigurationReference
+        # in extension targets; xcodebuild fails if the file is absent.
+        # Copying the template with placeholder values satisfies the reference.
+        run: cp OctoConfig.xcconfig.template OctoConfig.xcconfig
+
       - name: Build
         run: |
           xcodebuild build-for-testing \
@@ -49,4 +55,5 @@ jobs:
             -scheme 'OctoiOS' \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGN_IDENTITY='' \
-            CODE_SIGNING_REQUIRED=NO
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO

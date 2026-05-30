@@ -41,6 +41,11 @@ jobs:
         run: |
           pod install
 
+      - name: Generate OctoConfig.xcconfig for CI build
+        # OctoConfig.xcconfig is gitignored but referenced as baseConfigurationReference
+        # in extension targets; xcodebuild fails if the file is absent.
+        run: cp OctoConfig.xcconfig.template OctoConfig.xcconfig
+
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
 
