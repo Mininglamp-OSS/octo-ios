@@ -673,8 +673,11 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         for (NSUInteger i = 0; i < self.segmentViews.count; i++) {
             UIView *v = self.segmentViews[i];
             CGFloat spacing = (i < self.segmentViews.count - 1) ? kMFTableTopSpace : 0;
-            if ([v isKindOfClass:[UILabel class]]) {
-                CGSize fitSize = [(UILabel *)v sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
+            // 文本段是 M80AttributedLabel（UIView 子类，不是 UILabel），表格段才是普通 UIView 容器。
+            // 早先文本段用 UILabel，改成 M80 以支持 markdown 链接点击后，这里的类型判断没同步，
+            // 导致文本段被当成表格段、赋成 tag(=0) 高度而不可见（表现为表格之后的内容“算了高度但空白”）。
+            if ([v isKindOfClass:[M80AttributedLabel class]] || [v isKindOfClass:[UILabel class]]) {
+                CGSize fitSize = [v sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
                 v.frame = CGRectMake(0, y, ceilf(fitSize.width), ceilf(fitSize.height));
                 y += ceilf(fitSize.height) + spacing;
             } else {
@@ -911,11 +914,14 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         CGFloat totalHeight = 0;
         CGFloat totalWidth = maxWidth;
 
-        static UILabel *measureLabel;
+        // 用 M80AttributedLabel 测高，必须和 refresh: 里真正渲染文本段用的类型一致：
+        // M80 走 CoreText，UILabel 走 TextKit，两者对同一段 markdown 的行高/换行结果会有差异，
+        // 若测高用 UILabel 而渲染用 M80，最后一段可能被裁掉（高度偏小）。
+        static M80AttributedLabel *measureLabel;
         if (!measureLabel) {
-            measureLabel = [[UILabel alloc] init];
+            measureLabel = [[M80AttributedLabel alloc] init];
             measureLabel.numberOfLines = 0;
-            measureLabel.lineBreakMode = NSLineBreakByWordWrapping;
+            measureLabel.lineBreakMode = kCTLineBreakByWordWrapping;
         }
         measureLabel.font = [UIFont systemFontOfSize:[WKApp shared].config.messageTextFontSize];
 
@@ -930,10 +936,10 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
                     if (mdAttr) {
                         measureLabel.attributedText = mdAttr;
                     } else {
-                        measureLabel.text = segContent;
+                        [measureLabel setText:segContent];
                     }
                 } else {
-                    measureLabel.text = segContent;
+                    [measureLabel setText:segContent];
                 }
                 CGSize fitSize = [measureLabel sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
                 totalHeight += ceilf(fitSize.height) + spacing;
