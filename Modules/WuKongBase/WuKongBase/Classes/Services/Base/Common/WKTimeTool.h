@@ -39,6 +39,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (NSString*)getTimeString:(NSDate*)dt format:(NSString*)fmt;
 
+/// 搜索结果时间展示：完整到时分秒；当年省略年份。
+/// 当年 → "MM-dd HH:mm:ss"，往年 → "yyyy-MM-dd HH:mm:ss"
++ (NSString*)searchResultTimeString:(NSDate*)dt;
+
 /**
  
   * 获得指定NSDate对象iOS时间戳（格式遵从ios的习惯，以秒为单位）。

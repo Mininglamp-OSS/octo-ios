@@ -107,6 +107,10 @@
 -(UIScrollView*) scrollView {
     if(!_scrollView) {
         _scrollView = [[UIScrollView alloc] initWithFrame:self.frame];
+        // 标签固定不滚动（聊天/联系人/群组/文件 一行展示即可）
+        _scrollView.scrollEnabled = NO;
+        _scrollView.showsHorizontalScrollIndicator = NO;
+        _scrollView.bounces = NO;
     }
     return _scrollView;
 }

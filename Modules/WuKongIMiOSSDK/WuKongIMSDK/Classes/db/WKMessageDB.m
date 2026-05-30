@@ -42,7 +42,16 @@
 #define SQL_MESSAGE_QUERY(symbol) [NSString stringWithFormat:@"select message.*,%@  from %@ left join message_extra on message.message_id=message_extra.message_id  where message.channel_id=? and message.channel_type=? and message.is_deleted=0  and message.content_type<>99 order by message.order_seq %@,message.timestamp %@ limit 0,?",SQL_EXTRA_COLS,TB_MESSAGE,symbol,symbol]
 
 // 通过关键字搜索频道内的消息
-#define SQL_MESSAGE_WITH_CHANNEL_AND_KEYWORD [NSString stringWithFormat:@"select message.*  from %@ where message.channel_id=? and message.channel_type=? and message.is_deleted=0  and message.content_type<>99 and message.searchable_word like ? order by message.order_seq desc,message.timestamp desc limit ?",TB_MESSAGE]
+// 除 searchable_word 外，对 content（完整 JSON 正文）做 LIKE 兜底，与全局搜索 SQL 口径一致：
+// 富文本 / 未注册类型 / 旧消息的 searchable_word 可能为空，正文一定在 content 里。
+// 撤回过滤：撤回状态权威源是 message_extra.revoke（旧数据已从 message.revoke 迁移过去，
+// 见 Migration 202204151134），故 LEFT JOIN message_extra 并按其 revoke 过滤。
+#define SQL_MESSAGE_WITH_CHANNEL_AND_KEYWORD [NSString stringWithFormat:@"select message.*  from %@ left join message_extra on message.message_id=message_extra.message_id where message.channel_id=? and message.channel_type=? and message.is_deleted=0  and message.content_type<>99 and message.revoke=0 and IFNULL(message_extra.revoke,0)=0 and (message.searchable_word like ? or message.content like ?) order by message.order_seq desc,message.timestamp desc limit ?",TB_MESSAGE]
+
+// 跨频道按文件名搜索文件消息（content_type=8/WK_FILE）。文件名存在 content JSON 的
+// "name" 字段里（searchable_word 仅为字面量 "[文件]" 无法命中），故对 content 做 LIKE。
+// 撤回过滤同上：LEFT JOIN message_extra 按其 revoke 过滤。
+#define SQL_FILE_MESSAGE_WITH_KEYWORD [NSString stringWithFormat:@"select message.*  from %@ left join message_extra on message.message_id=message_extra.message_id where message.content_type=8 and message.is_deleted=0 and message.revoke=0 and IFNULL(message_extra.revoke,0)=0 and message.from_uid<>'' and message.content like ? order by message.order_seq desc,message.timestamp desc limit ?",TB_MESSAGE]
 
 // 将等待发送中的消息修改为错误状态
 #define SQL_MESSAGE_UPDATE_SENDING_TO_ERROR [NSString stringWithFormat:@"update %@ set status=? where status=? or status=?",TB_MESSAGE]
@@ -458,7 +467,22 @@ static WKMessageDB *_instance;
 -(NSArray<WKMessage*>*) getMessages:(WKChannel*)channel keyword:(NSString*)keyword limit:(int) limit {
     __block NSMutableArray *messages = [NSMutableArray new];
     [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
-        FMResultSet *result = [db executeQuery:SQL_MESSAGE_WITH_CHANNEL_AND_KEYWORD,channel.channelId,@(channel.channelType),[NSString stringWithFormat:@"%%%@%%",keyword?:@""],@(limit)];
+        NSString *likeKeyword = [NSString stringWithFormat:@"%%%@%%",keyword?:@""];
+        // 两个 like 参数：searchable_word / content
+        FMResultSet *result = [db executeQuery:SQL_MESSAGE_WITH_CHANNEL_AND_KEYWORD,channel.channelId,@(channel.channelType),likeKeyword,likeKeyword,@(limit)];
+        while (result.next) {
+            NSDictionary *resultDic = result.resultDictionary;
+            [messages addObject:[self toMessage:resultDic db:db]];
+        }
+        [result close];
+    }];
+    return messages;
+}
+
+-(NSArray<WKMessage*>*) searchFileMessagesWithKeyword:(NSString*)keyword limit:(int)limit {
+    __block NSMutableArray *messages = [NSMutableArray new];
+    [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
+        FMResultSet *result = [db executeQuery:SQL_FILE_MESSAGE_WITH_KEYWORD,[NSString stringWithFormat:@"%%%@%%",keyword?:@""],@(limit)];
         while (result.next) {
             NSDictionary *resultDic = result.resultDictionary;
             [messages addObject:[self toMessage:resultDic db:db]];

@@ -63,7 +63,8 @@
     
     self.avatarImgView.url = model.avatar;
     self.nameLbl.text = model.name;
-    self.timestampLbl.text = [WKTimeTool getTimeStringAutoShort2:[NSDate dateWithTimeIntervalSince1970:model.timestamp.doubleValue] mustIncludeTime:NO];
+    // 显示完整时分秒；当年省略年份，避免同一天多条消息无法区分具体时刻
+    self.timestampLbl.text = [WKTimeTool searchResultTimeString:[NSDate dateWithTimeIntervalSince1970:model.timestamp.doubleValue]];
     [self.timestampLbl sizeToFit];
     self.contentLbl.attributedText = nil;
     if(model.content && ![model.content isEqualToString:@""]) {
@@ -89,17 +90,17 @@
     self.timestampLbl.lim_left = WKScreenWidth - self.timestampLbl.lim_width - 10.0f;
     self.timestampLbl.lim_top = self.avatarImgView.lim_top;
     
-    // name
+    // name（右侧给 timestamp 留出空间，避免完整日期时间与较长昵称重叠）
     CGFloat nameLeftSpace = 15.0f;
     CGFloat nameHeight = 20.0f;
-    self.nameLbl.lim_width = self.lim_width -( self.avatarImgView.lim_right + nameLeftSpace + 20.0f);
-    self.nameLbl.lim_height = nameHeight;
     self.nameLbl.lim_left = self.avatarImgView.lim_right + nameLeftSpace;
-    
+    self.nameLbl.lim_width = self.timestampLbl.lim_left - 8.0f - self.nameLbl.lim_left;
+    self.nameLbl.lim_height = nameHeight;
+
     self.nameLbl.lim_top = 10.0f;
-    
-    // content
-    self.contentLbl.lim_width = self.nameLbl.lim_width;
+
+    // content（内容行不与右侧时间同行，可占满到右边距）
+    self.contentLbl.lim_width = self.lim_width - self.nameLbl.lim_left - 20.0f;
     self.contentLbl.lim_height = 15.0f;
     self.contentLbl.lim_left = self.nameLbl.lim_left;
     self.contentLbl.lim_top = self.nameLbl.lim_bottom + 10.0f;

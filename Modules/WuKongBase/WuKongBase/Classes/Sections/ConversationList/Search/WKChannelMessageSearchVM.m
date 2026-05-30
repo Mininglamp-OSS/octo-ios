@@ -53,7 +53,7 @@
            @"name":name,
            @"avatar":[WKAvatarUtil getFullAvatarWIthPath:logo],
            @"keyword": self.keyword?:@"",
-           @"content": [message.content searchableWord]?:@"",
+           @"content": [self previewTextForMessage:message],
            @"timestamp": @(message.timestamp),
            @"showBottomLine":@(NO),
            @"showTopLine":@(NO),
@@ -69,6 +69,24 @@
          @"height":@(0.01f),
          @"items":items,
     }];
+}
+
+/// 消息预览文字（按类型而定，口径与全局搜索一致）：
+/// - 文件：展示真实文件名（而非占位 [文件]）
+/// - 合并转发：searchableWord 为空 → 用 conversationDigest（[聊天记录]）
+/// - 文本/富文本：正文 searchableWord
+/// - 其它（图片/语音…）：searchableWord 占位，空时回退 conversationDigest
+- (NSString *)previewTextForMessage:(WKMessage *)message {
+    WKMessageContent *content = message.content;
+    if (!content) return @"";
+    if ([content isKindOfClass:[WKFileContent class]]) {
+        NSString *fileName = ((WKFileContent *)content).name;
+        if (fileName.length > 0) return fileName;
+    }
+    NSString *word = [content searchableWord];
+    if (word.length > 0) return word;
+    NSString *digest = [content conversationDigest];
+    return digest ?: @"";
 }
 
 

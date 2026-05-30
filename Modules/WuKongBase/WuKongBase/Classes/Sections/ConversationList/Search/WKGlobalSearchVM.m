@@ -19,6 +19,7 @@
 #import "WKConversationVC.h"
 #import "WKSearchMediaCell.h"
 #import "WKConversationListVM.h"
+#import "WKSpaceFilter.h"
 #define WKSearchMaxCount 4
 
 @interface WKGlobalSearchVM ()
@@ -31,6 +32,7 @@
 @property(nonatomic,assign) BOOL hasMore;// 是否有更多数据
 @property(nonatomic,copy) NSString *tabType;
 @property(nonatomic,strong) NSArray<WKChannelMessageSearchResult*> *localMessageSearchResults;
+@property(nonatomic,strong) NSArray<WKMessage*> *localFileSearchResults;
 
 @end
 
@@ -113,9 +115,21 @@
 -(void) search:(void(^)(NSError * _Nullable))complete {
     __weak typeof(self) weakSelf = self;
 
-    // 聊天 tab：从本地会话列表中按名称过滤
-    if ([self.tabType isEqualToString:@"all"] && !self.searchInChannel) {
+    // 全局搜索（非频道内）：聊天 / 联系人 / 群组 / 文件 全部走本地 DB，不再请求网络。
+    // 各 tab 的展示过滤在 handleSearchResult: 里按 tabType 处理。
+    if (!self.searchInChannel &&
+        ([self.tabType isEqualToString:@"all"] ||
+         [self.tabType isEqualToString:@"contacts"] ||
+         [self.tabType isEqualToString:@"group"])) {
         [self searchLocalConversations];
+        if (complete) complete(nil);
+        [weakSelf reloadData];
+        return;
+    }
+
+    // 文件 tab（全局搜索）：本地 DB 按文件名搜索 + 当前空间过滤
+    if ([self.tabType isEqualToString:@"file"] && !self.searchInChannel) {
+        [self searchLocalFiles];
         if (complete) complete(nil);
         [weakSelf reloadData];
         return;
@@ -195,7 +209,7 @@
     }];
 }
 
-/// 聊天 tab：从本地会话列表按名称过滤 + 从本地 DB 按消息内容搜索
+/// 聊天 tab：本地 DB 联系人/群组名称匹配 + 本地 DB 消息内容搜索（全程不走网络）
 - (void)searchLocalConversations {
     NSString *keyword = self.keyword;
     if (!keyword || keyword.length == 0) {
@@ -204,38 +218,190 @@
         return;
     }
 
-    // 1) 按会话名称匹配
-    NSArray<WKConversationWrapModel*> *allConversations = [[WKConversationListVM shared] conversationList];
-    NSMutableArray *matchedFriends = [NSMutableArray array];
-    NSMutableArray *matchedGroups = [NSMutableArray array];
-
-    for (WKConversationWrapModel *conv in allConversations) {
-        NSString *displayName = conv.channelInfo ? conv.channelInfo.displayName : @"";
-        if (!displayName || [displayName rangeOfString:keyword options:NSCaseInsensitiveSearch].location == NSNotFound) {
-            continue;
-        }
-        NSDictionary *item = @{
-            @"channel_id": conv.channel.channelId ?: @"",
-            @"channel_name": displayName,
-            @"channel_remark": @"",
-            @"channel_type": @(conv.channel.channelType),
-        };
-        if (conv.channel.channelType == WK_GROUP) {
-            [matchedGroups addObject:item];
-        } else {
-            [matchedFriends addObject:item];
-        }
-    }
-
-    // 2) 按消息内容搜索（本地 DB）
-    NSArray<WKChannelMessageSearchResult*> *msgResults = [[WKChannelInfoDB shared] searchChannelMessageWithKeyword:keyword limit:50];
-    self.localMessageSearchResults = msgResults;
-
+    // 1) 联系人 + 群组：本地 DB 名称/备注匹配（覆盖全部好友/群，不局限于有会话的频道）
     self.searchResult = @{
-        @"friends": matchedFriends,
-        @"groups": matchedGroups,
+        @"friends": [self localFriendItemsWithKeyword:keyword],
+        @"groups": [self localGroupItemsWithKeyword:keyword],
         @"messages": @[],
     };
+
+    // 2) 按消息内容搜索（本地 DB）
+    //    message 表不含 space_id 列且切换空间时不会清空，需按当前空间做频道级过滤，
+    //    口径与会话列表 / 消息列表一致（WKSpaceFilter）。否则其它空间的历史消息会
+    //    泄漏进当前空间的搜索结果。
+    NSArray<WKChannelMessageSearchResult*> *msgResults = [[WKChannelInfoDB shared] searchChannelMessageWithKeyword:keyword limit:50];
+    self.localMessageSearchResults = [self filterSearchResultsByCurrentSpace:msgResults];
+}
+
+/// 本地好友（个人频道 follow=friend）名称/备注匹配，按当前空间过滤
+- (NSArray<NSDictionary*>*)localFriendItemsWithKeyword:(NSString*)keyword {
+    NSArray<WKChannelInfo*> *friends = [[WKChannelInfoDB shared] queryChannelInfoWithFriend:keyword limit:50];
+    NSMutableArray<NSDictionary*> *items = [NSMutableArray array];
+    for (WKChannelInfo *info in friends) {
+        if (!info.channel || info.channel.channelId.length == 0) continue;
+        if (![self isChannelInCurrentSpace:info.channel]) continue;
+        [items addObject:@{
+            @"channel_id": info.channel.channelId ?: @"",
+            @"channel_name": info.name ?: @"",
+            @"channel_remark": info.remark ?: @"",
+            @"channel_type": @(info.channel.channelType),
+        }];
+    }
+    return items;
+}
+
+/// 本地群组（群频道）名称/备注匹配，按当前空间过滤
+- (NSArray<NSDictionary*>*)localGroupItemsWithKeyword:(NSString*)keyword {
+    NSArray<WKChannelInfo*> *groups = [[WKChannelInfoDB shared] queryChannelInfoWithType:keyword channelType:WK_GROUP limit:50];
+    NSMutableArray<NSDictionary*> *items = [NSMutableArray array];
+    for (WKChannelInfo *info in groups) {
+        if (!info.channel || info.channel.channelId.length == 0) continue;
+        if (![self isChannelInCurrentSpace:info.channel]) continue;
+        [items addObject:@{
+            @"channel_id": info.channel.channelId ?: @"",
+            @"channel_name": info.name ?: @"",
+            @"channel_remark": info.remark ?: @"",
+            @"channel_type": @(info.channel.channelType),
+        }];
+    }
+    return items;
+}
+
+/// 按当前空间过滤本地聊天记录搜索结果（频道级判定，与会话/消息列表口径一致）
+- (NSArray<WKChannelMessageSearchResult*> *)filterSearchResultsByCurrentSpace:(NSArray<WKChannelMessageSearchResult*> *)results {
+    if (!results || results.count == 0) {
+        return results;
+    }
+    NSMutableArray<WKChannelMessageSearchResult*> *filtered = [NSMutableArray array];
+    for (WKChannelMessageSearchResult *result in results) {
+        if ([self isChannelInCurrentSpace:result.channel]) {
+            [filtered addObject:result];
+        }
+    }
+    return filtered;
+}
+
+/// 判断频道是否属于当前空间，口径对齐 WKConversationListVC.isConversationInCurrentSpace：
+/// - 群聊(WK_GROUP)：WKSpaceFilter 判定，FailOpen 时降级到会话列表白名单（fail-closed）；
+/// - 子区(WK_COMMUNITY_TOPIC)：取父群 channelId（`{groupId}____{topicId}`）走群聊判定；
+/// - 私聊/Bot(WK_PERSON)：WKSpaceFilter 判定，Skip 才排除（缺 space_id 向前兼容放行）；
+/// - 无 currentSpaceId（单空间/未设置）：不过滤。
+- (BOOL)isChannelInCurrentSpace:(WKChannel *)channel {
+    if (!channel || channel.channelId.length == 0) {
+        return NO;
+    }
+    NSString *currentSpaceId = [[WKSpaceFilter shared] currentSpaceId];
+    if (currentSpaceId.length == 0) {
+        return YES; // 单空间 / 未设置空间：不做过滤
+    }
+
+    uint8_t type = channel.channelType;
+
+    // 子区：归属由父群决定（channelId 形如 `{groupId}____{topicId}`）
+    if (type == WK_COMMUNITY_TOPIC) {
+        NSString *channelId = channel.channelId;
+        NSRange sep = [channelId rangeOfString:@"____"];
+        NSString *groupId = (sep.location != NSNotFound) ? [channelId substringToIndex:sep.location] : channelId;
+        return [self isGroupInCurrentSpace:groupId];
+    }
+
+    if (type == WK_GROUP) {
+        return [self isGroupInCurrentSpace:channel.channelId];
+    }
+
+    // 私聊 / Bot：Skip 才排除，Keep / FailOpen 放行（缺 space_id 的历史私聊向前兼容）
+    WKSpaceFilterDecision decision = [[WKSpaceFilter shared] decideChannel:channel.channelId channelType:type];
+    return decision != WKSpaceFilterDecisionSkip;
+}
+
+/// 群聊空间归属判定：Keep→YES，Skip→NO，FailOpen→会话列表白名单兜底（白名单未初始化时 fail-closed）
+- (BOOL)isGroupInCurrentSpace:(NSString *)groupId {
+    if (groupId.length == 0) {
+        return NO;
+    }
+    WKSpaceFilterDecision decision = [[WKSpaceFilter shared] decideChannel:groupId channelType:WK_GROUP];
+    if (decision == WKSpaceFilterDecisionKeep) {
+        return YES;
+    }
+    if (decision == WKSpaceFilterDecisionSkip) {
+        return NO;
+    }
+    // FailOpen：channelInfo / member 未缓存 → 降级到会话列表白名单（与 isConversationInCurrentSpace 一致）
+    WKConversationListVM *vm = [WKConversationListVM shared];
+    if (![vm isGroupWhitelistInitialized]) {
+        return NO; // 白名单未初始化期严格过滤，避免其它空间群聊漏入
+    }
+    return [vm isGroupInWhitelist:groupId];
+}
+
+/// 取一条聊天记录命中的预览文字：
+/// 优先 searchable_word；当其为空或为占位（如 [图片]/[文件]，而关键字其实命中了 content
+/// 里的正文/文件名）时，解码 content JSON 还原真实预览，避免「命中了却看不到关键词」或空白。
+- (NSString *)previewTextForSearchResult:(WKChannelMessageSearchResult *)result {
+    NSString *kw = self.keyword ?: @"";
+    NSString *word = result.searchableWord ?: @"";
+    // searchable_word 已包含关键字（普通文本场景）→ 直接用
+    if (word.length > 0 && kw.length > 0 &&
+        [word rangeOfString:kw options:NSCaseInsensitiveSearch].location != NSNotFound) {
+        return word;
+    }
+    // 否则解码 content，得到「按类型而定」的预览：文件→文件名，合并消息→[聊天记录]，
+    // 文本/富文本→正文，图片/语音等→占位。覆盖 searchable_word 为空/占位的情况。
+    NSString *decoded = [self decodedContentTextForResult:result];
+    if (decoded.length > 0) {
+        return decoded;
+    }
+    // 理论兜底
+    if (word.length > 0) return word;
+    return @"";
+}
+
+/// 解码该命中行的 content（NSData），返回「按类型而定」的预览文字：
+/// - 文件：文件名（而非占位 [文件]）
+/// - 合并转发：[聊天记录] 等 conversationDigest
+/// - 文本/富文本：正文（searchableWord）
+/// - 其它（图片/语音…）：searchableWord 占位，空时回退 conversationDigest
+- (NSString *)decodedContentTextForResult:(WKChannelMessageSearchResult *)result {
+    NSData *contentData = result.content;
+    if (![contentData isKindOfClass:[NSData class]] || contentData.length == 0) return @"";
+    WKMessageContent *messageContent = [WKSDK.shared.chatManager getMessageContent:result.contentType];
+    if (!messageContent) return @"";
+    [messageContent decode:contentData];
+
+    // 文件：展示真实文件名
+    if ([messageContent isKindOfClass:[WKFileContent class]]) {
+        NSString *name = ((WKFileContent *)messageContent).name;
+        if (name.length > 0) return name;
+    }
+
+    NSString *word = messageContent.searchableWord;
+    if (word.length > 0) return word;
+    // searchableWord 为空（如合并转发）→ 用 conversationDigest（[聊天记录] 等）
+    NSString *digest = [messageContent conversationDigest];
+    return digest ?: @"";
+}
+
+/// 文件 tab：本地 DB 按文件名搜索文件消息 + 当前空间频道级过滤
+- (void)searchLocalFiles {
+    // 文件 tab 不复用「聊天」tab 的本地聊天记录结果，避免跨 tab 串扰
+    self.localMessageSearchResults = nil;
+    NSString *keyword = self.keyword;
+    if (!keyword || keyword.length == 0) {
+        self.localFileSearchResults = nil;
+        // searchResult 置为非 nil 空结果，确保 tableSections 不被 short-circuit
+        self.searchResult = @{@"friends":@[], @"groups":@[], @"messages":@[]};
+        return;
+    }
+    NSArray<WKMessage*> *fileMessages = [[WKMessageDB shared] searchFileMessagesWithKeyword:keyword limit:50];
+    NSMutableArray<WKMessage*> *filtered = [NSMutableArray array];
+    for (WKMessage *message in fileMessages) {
+        if ([self isChannelInCurrentSpace:message.channel]) {
+            [filtered addObject:message];
+        }
+    }
+    self.localFileSearchResults = filtered;
+    // 文件 section 独立从 localFileSearchResults 渲染；searchResult 仅需非 nil
+    self.searchResult = @{@"friends":@[], @"groups":@[], @"messages":@[]};
 }
 
 /// 截取关键词周围的上下文片段（关键词前后各保留一段文字，超出用 ... 省略）
@@ -376,10 +542,11 @@
 
         for (WKChannelMessageSearchResult *result in self.localMessageSearchResults) {
             WKChannel *ch = result.channel;
-            NSString *searchableWord = result.searchableWord ?: @"";
+            // 预览文字：优先 searchable_word；为空（富文本/未注册类型/旧消息）时解码 content 兜底
+            NSString *previewText = [self previewTextForSearchResult:result];
 
             // 截取关键词周围的上下文片段用于预览
-            NSString *snippet = [self snippetFromText:searchableWord keyword:kw maxLength:40];
+            NSString *snippet = [self snippetFromText:previewText keyword:kw maxLength:40];
 
             if (result.messageCount == 1) {
                 // 单条命中 → 显示消息预览，点击直接跳到该消息
@@ -390,7 +557,7 @@
                     @"keyword": kw,
                     @"content": snippet,
                     @"messageCount": @(1),
-                    @"timestamp": @(0),
+                    @"timestamp": @(result.timestamp),
                     @"showBottomLine": @(NO),
                     @"showTopLine": @(NO),
                     @"onClick": ^{
@@ -428,6 +595,44 @@
         }];
     }
 
+    // 本地文件名搜索结果（「文件」tab，按文件名匹配，点击定位到文件所在聊天位置）
+    // 展示样式复用聊天记录结果（WKSearchMessageModel）：会话头像 + 会话名 + 文件名行 + 时间。
+    if (self.localFileSearchResults && self.localFileSearchResults.count > 0 && [self.tabType isEqualToString:@"file"]) {
+        NSString *kw = self.keyword ?: @"";
+        NSMutableArray<NSDictionary*> *fileItems = [NSMutableArray array];
+
+        for (WKMessage *message in self.localFileSearchResults) {
+            if (![message.content isKindOfClass:[WKFileContent class]]) {
+                continue;
+            }
+            WKFileContent *fileContent = (WKFileContent *)message.content;
+            WKChannel *channel = message.channel;
+            uint32_t orderSeq = message.orderSeq;
+
+            [fileItems addObject:@{
+                @"class": WKSearchMessageModel.class,
+                @"channel": channel,
+                @"keyword": kw,
+                @"content": fileContent.name ?: @"",
+                @"messageCount": @(1),
+                @"timestamp": @(message.timestamp),
+                @"showBottomLine": @(NO),
+                @"showTopLine": @(NO),
+                @"onClick": ^{
+                    WKConversationVC *vc = [[WKConversationVC alloc] init];
+                    vc.channel = channel;
+                    vc.locationAtOrderSeq = orderSeq;
+                    [[WKNavigationManager shared] pushViewController:vc animated:YES];
+                }
+            }];
+        }
+
+        [items addObject:@{
+            @"height": WKSectionHeight,
+            @"items": fileItems,
+        }];
+    }
+
     // messages (API results)
     if(messages && messages.count>0 && ![self.tabType isEqualToString:@"media"]) {
         if(![self.tabType isEqualToString:@"file"] && ![self searchInChannel]) {
@@ -435,10 +640,10 @@
                 @"class":WKSearchHeaderModel.class,
                 @"title":LLang(@"聊天记录"),
                 @"showBottomLine":@(NO),
-                
+
             }];
         }
-       
+
         NSMutableArray<NSDictionary*> *messagesItems = [NSMutableArray array];
         for (NSInteger i=0; i<messages.count; i++) {
             NSDictionary *message = messages[i];
