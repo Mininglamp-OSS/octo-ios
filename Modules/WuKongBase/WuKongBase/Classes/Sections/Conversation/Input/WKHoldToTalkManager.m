@@ -1176,9 +1176,7 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
             members = [self.delegate holdToTalkManagerChannelMembers:self];
         }
         NSMutableArray<WKInputMentionItem *> *mentions = [NSMutableArray array];
-        if (members.count > 0) {
-            text = [self parseMentionMarkers:text members:members mentions:mentions];
-        }
+        text = [self parseMentionMarkers:text members:(members ?: @[]) mentions:mentions];
         if (mentions.count > 0 && [self.delegate respondsToSelector:@selector(holdToTalkManager:sendText:mentions:)]) {
             [self.delegate holdToTalkManager:self sendText:text mentions:mentions];
         } else if ([self.delegate respondsToSelector:@selector(holdToTalkManager:sendText:)]) {
@@ -1336,6 +1334,10 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
     }];
 
     NSString *allName = LLang(@"所有人");
+    // 三态 mention 广播 token：@所有AI（中文 canonical + 英文别名）。
+    // sentinel uid "__ais__" 与键盘路径对齐 → WKConversationContextImpl 映射到 mention.ais=1。
+    NSString *aisName = @"所有AI"; // hardcode: locale-independent, LLang() would break in English locale
+    NSString *aisEnName = @"All AIs";
     NSMutableString *result = [NSMutableString string];
     NSUInteger i = 0;
     NSUInteger len = text.length;
@@ -1357,6 +1359,34 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
             [mentions addObject:item];
             [result appendFormat:@"@%@%@", allName, WKInputAtEndChar];
             i += 1 + allName.length;
+            if (i < len && [text characterAtIndex:i] == ' ') i++;
+            continue;
+        }
+        // 匹配 @所有AI（sentinel uid "__ais__"：与键盘路径对齐 → mention.ais=1）
+        if ([rest hasPrefix:aisName] &&
+            (rest.length == aisName.length ||
+             (![NSCharacterSet.alphanumericCharacterSet characterIsMember:[rest characterAtIndex:aisName.length]] &&
+              [rest characterAtIndex:aisName.length] != '_'))) {
+            WKInputMentionItem *item = [[WKInputMentionItem alloc] init];
+            item.uid = @"__ais__";
+            item.name = aisName;
+            [mentions addObject:item];
+            [result appendFormat:@"@%@%@", aisName, WKInputAtEndChar];
+            i += 1 + aisName.length;
+            if (i < len && [text characterAtIndex:i] == ' ') i++;
+            continue;
+        }
+        // 匹配 @All AIs（英文别名）。必须在 @all 之前判断，否则 "All AIs" 会被 @all 抢先命中。
+        if ([rest.lowercaseString hasPrefix:aisEnName.lowercaseString] &&
+            (rest.length == aisEnName.length ||
+             (![NSCharacterSet.alphanumericCharacterSet characterIsMember:[rest characterAtIndex:aisEnName.length]] &&
+              [rest characterAtIndex:aisEnName.length] != '_'))) {
+            WKInputMentionItem *item = [[WKInputMentionItem alloc] init];
+            item.uid = @"__ais__";
+            item.name = aisName;
+            [mentions addObject:item];
+            [result appendFormat:@"@%@%@", aisName, WKInputAtEndChar];
+            i += 1 + aisEnName.length;
             if (i < len && [text characterAtIndex:i] == ' ') i++;
             continue;
         }
