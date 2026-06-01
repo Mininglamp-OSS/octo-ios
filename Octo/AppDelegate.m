@@ -88,7 +88,6 @@
     buglyConfig.channel = @"TestFlight";
     buglyConfig.blockMonitorEnable = YES;       // 开启卡顿监控
     buglyConfig.blockMonitorTimeout = 1.0;      // 主线程卡顿超过 1 秒上报堆栈
-    buglyConfig.debugMode = YES;                // 临时排障：让 Bugly 把初始化/上报日志打到 console
     NSString *buglyAppId = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOBuglyAppIdMain"];
     // 占位符防御：OCTO_ENABLE_BUGLY 编译开关由 Podfile post_install 在
     // OCTO_BUGLY_APP_ID_MAIN 通过校验后开启，但 Info.plist 的字面值在
@@ -98,21 +97,9 @@
     BOOL buglyMainIdValid = buglyAppId.length > 0
         && ![buglyAppId isEqualToString:@"YOUR_BUGLY_APP_ID"]
         && ![buglyAppId hasPrefix:@"$("];
-    NSDictionary *infoDict = [[NSBundle mainBundle] infoDictionary];
-    NSLog(@"[BuglyChk] OCTO_ENABLE_BUGLY=1, appIdRaw=%@, valid=%@, bundleId=%@, shortVer=%@, build=%@",
-          buglyAppId,
-          buglyMainIdValid ? @"YES" : @"NO",
-          infoDict[@"CFBundleIdentifier"],
-          infoDict[@"CFBundleShortVersionString"],
-          infoDict[@"CFBundleVersion"]);
     if (buglyMainIdValid) {
         [Bugly startWithAppId:buglyAppId config:buglyConfig];
-        NSLog(@"[BuglyChk] startWithAppId 调用完成: %@, sdk userId=%@", buglyAppId, [Bugly buglyUserIdentifier]);
-    } else {
-        NSLog(@"[BuglyChk] ❌ 跳过 startWithAppId, appId 不合法");
     }
-#else
-    NSLog(@"[BuglyChk] ❌ OCTO_ENABLE_BUGLY 宏未定义, Bugly 整个 #ifdef 块没编进来");
 #endif
 
     // 预热 WKWebView：首次初始化会启动 WebKit 进程（~200-500ms），
