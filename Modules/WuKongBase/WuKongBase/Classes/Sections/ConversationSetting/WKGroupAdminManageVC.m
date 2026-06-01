@@ -270,7 +270,7 @@ static CGFloat const kHeaderHeight = 38.0f;
     if (section == WKGroupAdminSectionManagers) {
         title = LLang(@"群主和管理员");
     } else if (section == WKGroupAdminSectionBotAdmins) {
-        title = LLang(@"机器人管理员");
+        title = LLang(@"Bot 管理员");
     }
     UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, tableView.lim_width, kHeaderHeight)];
     header.backgroundColor = [UIColor clearColor];
@@ -306,13 +306,13 @@ static CGFloat const kHeaderHeight = 38.0f;
     if (indexPath.section == WKGroupAdminSectionBotAdmins) {
         if (self.isCreator && indexPath.row == (NSInteger)self.viewModel.botAdmins.count) {
             WKGroupAdminActionCell *cell = [tableView dequeueReusableCellWithIdentifier:kActionCellId];
-            [cell refreshWithTitle:LLang(@"添加机器人管理员")];
+            [cell refreshWithTitle:LLang(@"添加 Bot 管理员")];
             return cell;
         }
         WKChannelMember *bot = self.viewModel.botAdmins[indexPath.row];
         WKGroupAdminMemberCell *cell = [tableView dequeueReusableCellWithIdentifier:kMemberCellId];
         UIColor *botColor = [UIColor colorWithRed:0x10/255.0 green:0xB9/255.0 blue:0x81/255.0 alpha:1.0]; // 绿
-        [cell refreshWithMember:bot roleText:LLang(@"机器人") roleColor:botColor canRemove:self.isCreator];
+        [cell refreshWithMember:bot roleText:LLang(@"Bot") roleColor:botColor canRemove:self.isCreator];
         return cell;
     }
     return [UITableViewCell new];
@@ -430,7 +430,7 @@ static CGFloat const kHeaderHeight = 38.0f;
 - (void)pickAddBotAdmin {
     __weak typeof(self) weakSelf = self;
     WKMemberListVC *vc = [WKMemberListVC new];
-    vc.title = LLang(@"添加机器人管理员");
+    vc.title = LLang(@"添加 Bot 管理员");
     vc.channel = self.channel;
     vc.edit = YES;
     // 隐藏：自己 + 已是 bot admin + 所有非机器人成员（只有机器人能升为 Bot 管理员）
@@ -468,9 +468,9 @@ static CGFloat const kHeaderHeight = 38.0f;
 - (void)confirmRemoveBotAdmin:(WKChannelMember *)bot {
     __weak typeof(self) weakSelf = self;
     NSString *name = bot.memberRemark.length > 0 ? bot.memberRemark : bot.memberName;
-    NSString *tip = [NSString stringWithFormat:LLang(@"是否移除机器人管理员 %@？"), name ?: @""];
+    NSString *tip = [NSString stringWithFormat:LLang(@"是否移除 Bot 管理员 %@？"), name ?: @""];
     WKActionSheetView2 *sheet = [WKActionSheetView2 initWithTip:tip cancel:LLang(@"取消")];
-    [sheet addItem:[WKActionSheetButtonItem2 initWithAlertTitle:LLang(@"移除机器人管理员") onClick:^{
+    [sheet addItem:[WKActionSheetButtonItem2 initWithAlertTitle:LLang(@"移除 Bot 管理员") onClick:^{
         [[WKNavigationManager shared].topViewController.view showHUD];
         [[WKGroupManager shared] groupNo:weakSelf.channel.channelId removeBotAdmin:bot.memberUid ?: @"" complete:^(NSError *error) {
             [[WKNavigationManager shared].topViewController.view hideHud];
