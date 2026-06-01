@@ -19,6 +19,7 @@
 #import <WuKongIMSDK/WKFileContent.h>
 #import <WuKongIMSDK/WKVoiceContent.h>
 #import "WKNavigationManager.h"
+#import "WKWebViewVC.h"
 #import "WKMergeForwardContent.h"
 #import "WKMergeForwardDetailVC.h"
 #import "WKExternalViewerResolver.h"
@@ -727,8 +728,10 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     NSURL *url = navigationAction.request.URL;
     NSString *scheme = url.scheme.lowercaseString;
-    if (url && ([scheme isEqualToString:@"https"] || [scheme isEqualToString:@"http"])) {
-        [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+    // 表格 / 富文本 WebView 渲染完成后的首次加载不拦，否则空白 —— 仅拦用户点击触发的导航
+    if (navigationAction.navigationType == WKNavigationTypeLinkActivated &&
+        ([scheme isEqualToString:@"https"] || [scheme isEqualToString:@"http"])) {
+        [self openURLInAppWebView:url];
         decisionHandler(WKNavigationActionPolicyCancel);
         return;
     }
@@ -768,8 +771,15 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         url = [NSURL URLWithString:(NSString *)linkData];
     }
     if (url && ([@[@"http", @"https"] containsObject:url.scheme.lowercaseString])) {
-        [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+        [self openURLInAppWebView:url];
     }
+}
+
+- (void)openURLInAppWebView:(NSURL *)url {
+    if (!url) return;
+    WKWebViewVC *vc = [[WKWebViewVC alloc] init];
+    vc.url = url;
+    [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
 
 

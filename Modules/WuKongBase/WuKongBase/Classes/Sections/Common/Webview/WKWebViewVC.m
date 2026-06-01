@@ -15,6 +15,8 @@
 #import "WuKongBase.h"
 #import "WKConversationVC.h"
 #import "WKWebViewService.h"
+#include <libcmark_gfm/cmark-gfm.h>
+#include <libcmark_gfm/cmark-gfm-core-extensions.h>
 @interface WKWebViewVC ()<WKUIDelegate,WKNavigationDelegate,UIScrollViewDelegate>
 
 @property (nonatomic, strong) WKWebViewJavascriptBridge *bridge;
@@ -36,6 +38,13 @@
 @property(nonatomic,strong) UIButton *gobackBtn;
 
 @property(nonatomic,strong) WKWebViewService *webViewService;
+
+// 服务器未声明 charset 的文本响应（如 .md），自行下载后用 cmark / loadHTMLString 渲染；
+// 渲染失败或文件过大走原始加载的 URL 记录在此集合中，避免再次拦截造成死循环。
+@property (nonatomic, strong) NSMutableSet<NSURL *> *bypassUTF8ReloadURLs;
+
+// 当前正在下载的文本文件任务；用 task.progress KVO 驱动 progressView 显示下载进度。
+@property (nonatomic, strong) NSURLSessionDataTask *currentTextDownloadTask;
 
 @end
 
@@ -79,6 +88,13 @@
         _webViewService = [[WKWebViewService alloc] init];
     }
     return _webViewService;
+}
+
+- (NSMutableSet<NSURL *> *)bypassUTF8ReloadURLs {
+    if(!_bypassUTF8ReloadURLs) {
+        _bypassUTF8ReloadURLs = [NSMutableSet set];
+    }
+    return _bypassUTF8ReloadURLs;
 }
 
 - (UIButton *)moreBtn {
@@ -274,9 +290,18 @@
                                  [self.progressView setProgress:0 animated:NO];
                              }];
         }
-        
+
     } else if(object == self.webView && [keyPath isEqualToString:@"URL"]) {
         [self checkGoAndGobackBtn];
+    } else if (object == self.currentTextDownloadTask.progress && [keyPath isEqualToString:@"fractionCompleted"]) {
+        // 文本/Markdown 下载进度。封顶 0.95，剩余 5% 留给本地 cmark 渲染和 loadHTMLString。
+        CGFloat p = (CGFloat)self.currentTextDownloadTask.progress.fractionCompleted;
+        if (p > 0.95f) p = 0.95f;
+        if (p < 0.02f) p = 0.02f;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.progressView.alpha = 1.0f;
+            [self.progressView setProgress:p animated:YES];
+        });
     } else {
         [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
     }
@@ -284,6 +309,7 @@
 
 - (void)dealloc
 {
+    [self stopObservingTextDownload];
     [self.webView removeObserver:self forKeyPath:@"estimatedProgress"];
     [self.webView removeObserver:self forKeyPath:@"URL"];
     self.webView.navigationDelegate = nil;
@@ -374,6 +400,402 @@
     }
 
     decisionHandler(WKNavigationActionPolicyAllow);
+}
+
+
+// 服务器对 .md / .txt 等纯文本文档常常不带 charset，WKWebView 默认按 Latin-1
+// 解码，导致中文乱码。此处仅在「主 frame + 文本类响应 + 无 charset」时拦截，
+// 自行下载后按 UTF-8 重灌；其他响应一律放行，不影响普通网页加载。
+- (void)webView:(WKWebView *)webView decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
+    NSURLResponse *response = navigationResponse.response;
+    NSURL *url = response.URL;
+
+    if (!navigationResponse.isForMainFrame) {
+        decisionHandler(WKNavigationResponsePolicyAllow);
+        return;
+    }
+    if (url && [self.bypassUTF8ReloadURLs containsObject:url]) {
+        decisionHandler(WKNavigationResponsePolicyAllow);
+        return;
+    }
+    // 服务器自带 charset（或我们 loadData 重灌后），直接放行
+    if (response.textEncodingName.length > 0) {
+        decisionHandler(WKNavigationResponsePolicyAllow);
+        return;
+    }
+
+    NSString *mime = response.MIMEType ?: @"";
+    NSString *ext = url.pathExtension.lowercaseString ?: @"";
+    static NSSet *textExts;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        textExts = [NSSet setWithArray:@[@"md", @"markdown", @"txt", @"log", @"csv", @"json", @"xml", @"yml", @"yaml"]];
+    });
+    BOOL isText = [mime hasPrefix:@"text/"] || [textExts containsObject:ext];
+    if (!isText) {
+        decisionHandler(WKNavigationResponsePolicyAllow);
+        return;
+    }
+
+    decisionHandler(WKNavigationResponsePolicyCancel);
+    [self reloadWithUTF8ForResponse:response];
+}
+
+- (void)reloadWithUTF8ForResponse:(NSURLResponse *)response {
+    static const long long kMaxBytes = 10 * 1024 * 1024; // 超过 10MB 不缓冲，回退原始加载
+    NSURL *url = response.URL;
+    if (!url) return;
+
+    if (response.expectedContentLength > kMaxBytes) {
+        [self.bypassUTF8ReloadURLs addObject:url];
+        [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+        return;
+    }
+
+    NSString *ext = url.pathExtension.lowercaseString ?: @"";
+    NSString *mime = response.MIMEType.lowercaseString ?: @"";
+    BOOL isMarkdown = [ext isEqualToString:@"md"] || [ext isEqualToString:@"markdown"] || [mime containsString:@"markdown"];
+    BOOL isCSV = [ext isEqualToString:@"csv"] || [mime containsString:@"csv"];
+
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url
+                                                       cachePolicy:NSURLRequestReloadIgnoringCacheData
+                                                   timeoutInterval:30.0];
+    [req setValue:[WKApp shared].config.langue forHTTPHeaderField:@"Accept-Language"];
+
+    __weak typeof(self) weakSelf = self;
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            [strongSelf stopObservingTextDownload];
+            if (err || data.length == 0 || data.length > kMaxBytes) {
+                [strongSelf.bypassUTF8ReloadURLs addObject:url];
+                [strongSelf.webView loadRequest:[NSURLRequest requestWithURL:url]];
+                return;
+            }
+            NSString *text = [strongSelf decodeTextFromData:data];
+            NSString *html;
+            if (isMarkdown) {
+                html = [strongSelf htmlForMarkdown:text];
+            } else if (isCSV) {
+                html = [strongSelf htmlForCSV:text];
+            } else {
+                html = [strongSelf htmlForPlainText:text];
+            }
+            // baseURL 用文档目录，让相对路径的图片 / 资源能够正确解析
+            NSURL *baseURL = [url URLByDeletingLastPathComponent];
+            [strongSelf.webView loadHTMLString:html baseURL:baseURL];
+        });
+    }];
+
+    [self stopObservingTextDownload];
+    self.currentTextDownloadTask = task;
+    [task.progress addObserver:self forKeyPath:@"fractionCompleted" options:NSKeyValueObservingOptionNew context:nil];
+    // 取消 navigation 后 estimatedProgress 可能仍在排队的 fade 动画，先打断，避免我们刚显示的进度被淡出
+    [self.progressView.layer removeAllAnimations];
+    self.progressView.alpha = 1.0f;
+    [self.progressView setProgress:0.02f animated:NO]; // 给个初始可视进度，避免显示空白
+    [task resume];
+}
+
+- (void)stopObservingTextDownload {
+    if (_currentTextDownloadTask) {
+        @try {
+            [_currentTextDownloadTask.progress removeObserver:self forKeyPath:@"fractionCompleted"];
+        } @catch (NSException *e) {}
+        if (_currentTextDownloadTask.state == NSURLSessionTaskStateRunning) {
+            [_currentTextDownloadTask cancel];
+        }
+        _currentTextDownloadTask = nil;
+    }
+}
+
+#pragma mark - Text 渲染
+
+// 拷贝自 WKSafeFilePreviewVC.decodeTextFromData:，保持同一套编码嗅探逻辑。
+// 关键顺序：
+//   1. UTF-32 BOM 必须在 UTF-16 BOM 之前判定（UTF-32 LE BOM 前两字节与 UTF-16 LE BOM 重合）
+//   2. ISO-2022-* 优先于 UTF-8（UTF-8 严格解码 ISO-2022 不会失败，但输出乱码）
+//   3. CJK 启发式放在 GB18030 / Big5 直试之前（GB18030 过度宽容会把 Big5 当成假中文）
+- (NSString *)decodeTextFromData:(NSData *)data {
+    if (data.length == 0) return @"";
+    const unsigned char *bytes = data.bytes;
+    NSUInteger len = data.length;
+
+    if (len >= 4 && bytes[0] == 0xFF && bytes[1] == 0xFE && bytes[2] == 0x00 && bytes[3] == 0x00) {
+        NSString *s = [[NSString alloc] initWithData:data encoding:NSUTF32LittleEndianStringEncoding];
+        if (s) return s;
+    }
+    if (len >= 4 && bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0xFE && bytes[3] == 0xFF) {
+        NSString *s = [[NSString alloc] initWithData:data encoding:NSUTF32BigEndianStringEncoding];
+        if (s) return s;
+    }
+    if (len >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+        NSString *s = [[NSString alloc] initWithData:[data subdataWithRange:NSMakeRange(3, len - 3)]
+                                            encoding:NSUTF8StringEncoding];
+        if (s) return s;
+    }
+    if (len >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
+        NSString *s = [[NSString alloc] initWithData:data encoding:NSUTF16LittleEndianStringEncoding];
+        if (s) return s;
+    }
+    if (len >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
+        NSString *s = [[NSString alloc] initWithData:data encoding:NSUTF16BigEndianStringEncoding];
+        if (s) return s;
+    }
+
+    NSUInteger sniffLen = MIN(len, (NSUInteger)4096);
+    BOOL maybeISO2022 = NO;
+    for (NSUInteger i = 0; i + 1 < sniffLen; i++) {
+        if (bytes[i] == 0x1B) {
+            unsigned char next = bytes[i + 1];
+            if (next == '$' || next == '(' || next == ')') { maybeISO2022 = YES; break; }
+        }
+    }
+    if (maybeISO2022) {
+        NSStringEncoding candidates[] = {
+            CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingISO_2022_CN),
+            CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingISO_2022_JP),
+            CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingISO_2022_KR),
+        };
+        for (int i = 0; i < 3; i++) {
+            NSString *s = [[NSString alloc] initWithData:data encoding:candidates[i]];
+            if (s) return s;
+        }
+    }
+
+    NSString *s = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (s) return s;
+
+    NSArray<NSNumber *> *suggested = @[
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingGB_18030_2000)),
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingBig5)),
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingISO_2022_CN)),
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingISO_2022_JP)),
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingISO_2022_KR)),
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingShiftJIS)),
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingEUC_JP)),
+        @(CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingEUC_KR)),
+        @(NSUTF16LittleEndianStringEncoding),
+        @(NSUTF16BigEndianStringEncoding),
+        @(NSUTF32LittleEndianStringEncoding),
+        @(NSUTF32BigEndianStringEncoding),
+    ];
+    NSDictionary *opts = @{
+        NSStringEncodingDetectionSuggestedEncodingsKey: suggested,
+        NSStringEncodingDetectionUseOnlySuggestedEncodingsKey: @YES,
+    };
+    NSString *detected = nil;
+    NSStringEncoding guessed = [NSString stringEncodingForData:data
+                                               encodingOptions:opts
+                                               convertedString:&detected
+                                           usedLossyConversion:NULL];
+    if (guessed != 0 && detected.length > 0) return detected;
+
+    NSStringEncoding gb18030 = CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingGB_18030_2000);
+    s = [[NSString alloc] initWithData:data encoding:gb18030];
+    if (s) return s;
+    NSStringEncoding big5 = CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingBig5);
+    s = [[NSString alloc] initWithData:data encoding:big5];
+    if (s) return s;
+
+    return [[NSString alloc] initWithBytes:data.bytes
+                                    length:data.length
+                                  encoding:NSUTF8StringEncoding] ?: @"";
+}
+
+- (NSString *)htmlForMarkdown:(NSString *)text {
+    if (text.length == 0) return [self htmlForPlainText:@""];
+
+    cmark_gfm_core_extensions_ensure_registered();
+    cmark_parser *parser = cmark_parser_new(CMARK_OPT_DEFAULT);
+    const char *extNames[] = {"strikethrough", "table", "autolink", "tagfilter"};
+    for (int i = 0; i < 4; i++) {
+        cmark_syntax_extension *ext = cmark_find_syntax_extension(extNames[i]);
+        if (ext) cmark_parser_attach_syntax_extension(parser, ext);
+    }
+    const char *utf8 = [text UTF8String];
+    cmark_parser_feed(parser, utf8, strlen(utf8));
+    cmark_node *doc = cmark_parser_finish(parser);
+    char *htmlCStr = cmark_render_html(doc, CMARK_OPT_DEFAULT, cmark_parser_get_syntax_extensions(parser));
+    NSString *body = [NSString stringWithUTF8String:htmlCStr] ?: @"";
+    free(htmlCStr);
+    cmark_node_free(doc);
+    cmark_parser_free(parser);
+
+    return [NSString stringWithFormat:
+        @"<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        @"<style>%@</style></head><body>%@</body></html>", [self markdownCSS], body];
+}
+
+- (NSString *)htmlForPlainText:(NSString *)text {
+    NSString *escaped = [self escapeHTML:text];
+    BOOL isDark = [WKApp shared].config.style == WKSystemStyleDark;
+    return [NSString stringWithFormat:
+        @"<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        @"<style>body{font-family:-apple-system;font-size:15px;padding:12px;word-wrap:break-word;white-space:pre-wrap;"
+        @"background:%@;color:%@}</style></head>"
+        @"<body>%@</body></html>",
+        isDark ? @"#1c1c1e" : @"#fff",
+        isDark ? @"#e5e5e7" : @"#333",
+        escaped];
+}
+
+- (NSString *)escapeHTML:(NSString *)s {
+    if (s.length == 0) return @"";
+    NSMutableString *m = [s mutableCopy];
+    [m replaceOccurrencesOfString:@"&" withString:@"&amp;" options:0 range:NSMakeRange(0, m.length)];
+    [m replaceOccurrencesOfString:@"<" withString:@"&lt;" options:0 range:NSMakeRange(0, m.length)];
+    [m replaceOccurrencesOfString:@">" withString:@"&gt;" options:0 range:NSMakeRange(0, m.length)];
+    return m;
+}
+
+// 把 CSV 渲染成可横向滚动的表格。首行视作表头并 sticky。
+- (NSString *)htmlForCSV:(NSString *)text {
+    NSArray<NSArray<NSString *> *> *rows = [self parseCSV:text];
+    if (rows.count == 0) return [self htmlForPlainText:text];
+
+    BOOL isDark = [WKApp shared].config.style == WKSystemStyleDark;
+    NSString *bg = isDark ? @"#1c1c1e" : @"#fff";
+    NSString *fg = isDark ? @"#e5e5e7" : @"#333";
+    NSString *border = isDark ? @"#3a3a3c" : @"#e5e5e7";
+    NSString *headerBg = isDark ? @"#2c2c2e" : @"#f5f5f7";
+    NSString *altBg = isDark ? @"#242426" : @"#fafafa";
+
+    NSUInteger maxCols = 0;
+    for (NSArray *r in rows) if (r.count > maxCols) maxCols = r.count;
+
+    NSMutableString *html = [NSMutableString stringWithCapacity:rows.count * 64];
+    [html appendFormat:
+        @"<html><head><meta charset='utf-8'>"
+        @"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        @"<style>"
+        @"html,body{margin:0;padding:0;height:100%%;background:%@;color:%@;"
+        @"font-family:-apple-system,system-ui;font-size:14px}"
+        @".wrap{overflow:auto;-webkit-overflow-scrolling:touch;height:100%%}"
+        @"table{border-collapse:collapse;width:max-content;min-width:100%%}"
+        @"th,td{padding:8px 12px;border:1px solid %@;white-space:nowrap;"
+        @"vertical-align:top;text-align:left;max-width:480px;overflow:hidden;text-overflow:ellipsis}"
+        @"th{background:%@;font-weight:600;position:sticky;top:0;z-index:1}"
+        @"tbody tr:nth-child(even){background:%@}"
+        @"td{user-select:text;-webkit-user-select:text}"
+        @"</style></head><body><div class='wrap'><table>",
+        bg, fg, border, headerBg, altBg];
+
+    NSArray<NSString *> *header = rows.firstObject;
+    [html appendString:@"<thead><tr>"];
+    for (NSUInteger i = 0; i < maxCols; i++) {
+        NSString *cell = i < header.count ? header[i] : @"";
+        [html appendFormat:@"<th>%@</th>", [self escapeHTML:cell]];
+    }
+    [html appendString:@"</tr></thead><tbody>"];
+
+    for (NSUInteger r = 1; r < rows.count; r++) {
+        NSArray<NSString *> *row = rows[r];
+        [html appendString:@"<tr>"];
+        for (NSUInteger i = 0; i < maxCols; i++) {
+            NSString *cell = i < row.count ? row[i] : @"";
+            [html appendFormat:@"<td>%@</td>", [self escapeHTML:cell]];
+        }
+        [html appendString:@"</tr>"];
+    }
+    [html appendString:@"</tbody></table></div></body></html>"];
+    return html;
+}
+
+// RFC4180-兼容的 CSV 解析。支持：引号包围字段（含字段内逗号/换行）、""转义引号、CRLF/LF 行尾。
+// 不处理变种分隔符（如 TSV/分号），保持职责单一。
+- (NSArray<NSArray<NSString *> *> *)parseCSV:(NSString *)text {
+    if (text.length == 0) return @[];
+    NSMutableArray<NSArray<NSString *> *> *rows = [NSMutableArray array];
+    NSMutableArray<NSString *> *row = [NSMutableArray array];
+    NSMutableString *field = [NSMutableString string];
+    BOOL inQuotes = NO;
+    NSUInteger len = text.length;
+
+    // 一次性把 UTF-16 unit 拷到栈/堆 buffer，避免逐字符调用 characterAtIndex: 的开销
+    unichar *buf = (unichar *)malloc(sizeof(unichar) * len);
+    if (!buf) return @[];
+    [text getCharacters:buf range:NSMakeRange(0, len)];
+
+    void (^commitField)(void) = ^{
+        [row addObject:[field copy]];
+        [field setString:@""];
+    };
+    void (^commitRow)(void) = ^{
+        // 跳过完全空白行（只有一个空 field 的情况）
+        if (!(row.count == 1 && [row[0] length] == 0)) {
+            [rows addObject:[row copy]];
+        }
+        [row removeAllObjects];
+    };
+
+    for (NSUInteger i = 0; i < len; i++) {
+        unichar c = buf[i];
+        if (inQuotes) {
+            if (c == '"') {
+                if (i + 1 < len && buf[i + 1] == '"') {
+                    [field appendString:@"\""];
+                    i++;
+                } else {
+                    inQuotes = NO;
+                }
+            } else {
+                [field appendFormat:@"%C", c];
+            }
+        } else {
+            if (c == '"') {
+                inQuotes = YES;
+            } else if (c == ',') {
+                commitField();
+            } else if (c == '\r' || c == '\n') {
+                if (c == '\r' && i + 1 < len && buf[i + 1] == '\n') i++;
+                commitField();
+                commitRow();
+            } else {
+                [field appendFormat:@"%C", c];
+            }
+        }
+    }
+    // 最后没有换行结尾时收尾
+    if (field.length > 0 || row.count > 0) {
+        commitField();
+        commitRow();
+    }
+    free(buf);
+    return rows;
+}
+
+- (NSString *)markdownCSS {
+    BOOL isDark = [WKApp shared].config.style == WKSystemStyleDark;
+    if (isDark) {
+        return @"body{font-family:-apple-system,system-ui;font-size:16px;line-height:1.6;padding:16px;max-width:100%;"
+               @"background:#1c1c1e;color:#e5e5e7}"
+               @"h1,h2,h3,h4{margin-top:1.2em;margin-bottom:0.4em}"
+               @"h1{font-size:1.6em;border-bottom:1px solid #333;padding-bottom:6px}"
+               @"h2{font-size:1.4em;border-bottom:1px solid #333;padding-bottom:4px}"
+               @"h3{font-size:1.2em}"
+               @"code{background:#2c2c2e;padding:2px 5px;border-radius:3px;font-family:Menlo,monospace;font-size:0.9em}"
+               @"pre{background:#2c2c2e;padding:12px;border-radius:6px;overflow-x:auto}"
+               @"pre code{background:none;padding:0}"
+               @"blockquote{border-left:4px solid #555;margin:0;padding:4px 12px;color:#aaa}"
+               @"table{border-collapse:collapse;width:100%}th,td{border:1px solid #444;padding:6px 10px;text-align:left}"
+               @"th{background:#2c2c2e;font-weight:600}"
+               @"img{max-width:100%}a{color:#58a6ff}";
+    }
+    return @"body{font-family:-apple-system,system-ui;font-size:16px;line-height:1.6;padding:16px;color:#333;max-width:100%;"
+           @"background:#fff}"
+           @"h1,h2,h3,h4{margin-top:1.2em;margin-bottom:0.4em}"
+           @"h1{font-size:1.6em;border-bottom:1px solid #eee;padding-bottom:6px}"
+           @"h2{font-size:1.4em;border-bottom:1px solid #eee;padding-bottom:4px}"
+           @"h3{font-size:1.2em}"
+           @"code{background:#f5f5f5;padding:2px 5px;border-radius:3px;font-family:Menlo,monospace;font-size:0.9em}"
+           @"pre{background:#f5f5f5;padding:12px;border-radius:6px;overflow-x:auto}"
+           @"pre code{background:none;padding:0}"
+           @"blockquote{border-left:4px solid #ddd;margin:0;padding:4px 12px;color:#666}"
+           @"table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:6px 10px;text-align:left}"
+           @"th{background:#f5f5f5;font-weight:600}"
+           @"img{max-width:100%}a{color:#0366d6}";
 }
 
 
