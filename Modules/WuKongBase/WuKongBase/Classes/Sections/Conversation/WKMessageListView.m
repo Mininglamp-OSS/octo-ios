@@ -2408,6 +2408,11 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     if(status == WKConnected) { // 如果已连接，则重新请求消息
         __weak typeof(self) weakSelf = self;
         [self pullup:^(bool more) {
+            // 重连/回前台拉取消息后，若当前 channel 仍残留 typing（后台期间 bot 回复经
+            // conversation-sync 直写 DB 绕过了 onRecvMessages 的清除路径），显式清掉。
+            if([[WKTypingManager shared] hasTyping:weakSelf.channel]) {
+                [[WKTypingManager shared] removeTypingByChannel:weakSelf.channel newMessage:nil];
+            }
             WKMessageModel *localLastMsg = [weakSelf.dataProvider lastMessage];
             if(!localLastMsg) {
                 return;

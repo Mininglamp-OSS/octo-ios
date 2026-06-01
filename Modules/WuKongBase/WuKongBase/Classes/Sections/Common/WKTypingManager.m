@@ -45,6 +45,37 @@ static WKTypingManager *_instance = nil;
     return _instance;
 }
 
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        // 监听 conversation-sync 落库通知：后台期间 bot 回复经同步直写 DB 绕过
+        // onRecvMessages，导致 typing 卡死，这里收到通知后清除对应 channel 的 typing。
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(onConversationSyncedNewMessages:)
+                                                     name:@"WKConversationSyncedNewMessages"
+                                                   object:nil];
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)onConversationSyncedNewMessages:(NSNotification *)notification {
+    WKChannel *channel = notification.object;
+    if (![channel isKindOfClass:[WKChannel class]]) {
+        return;
+    }
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self removeTypingByChannel:channel newMessage:nil];
+        });
+    } else {
+        [self removeTypingByChannel:channel newMessage:nil];
+    }
+}
+
 - (NSMutableDictionary<WKChannel *,WKMessage *> *)channelTypingMessageDict {
     if(!_channelTypingMessageDict) {
         _channelTypingMessageDict = [[NSMutableDictionary alloc] init];

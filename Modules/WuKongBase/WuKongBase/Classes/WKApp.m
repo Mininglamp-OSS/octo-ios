@@ -58,6 +58,7 @@
 #import "WKTypingMessageCell.h"
 #import "WKTypingContent.h"
 #import "WKOnlineStatusManager.h"
+#import "WKTypingManager.h"
 #import "WKHistorySplitTipCell.h"
 #import "WKHistorySplitTipContent.h"
 #import "WKMergeForwardContent.h"
@@ -766,6 +767,13 @@ static WKApp *_instance;
         // 解决网页端异常断开后iOS端仍显示"网页端在线"的问题
         [WKOnlineStatusManager shared].needUpdate = YES;
         [[WKOnlineStatusManager shared] requestUpdateChannelOnlineStatusIfNeed];
+    }
+
+    // 回前台时无任何 typing reset 机制，叠加后台期间 bot 回复经 conversation-sync 绕过
+    // typing 清除路径，会导致 typing indicator 永久卡死。这里统一清掉所有残留 typing；
+    // 若对方确实仍在输入，下一个 typing CMD 到达后会自然恢复。
+    for (WKMessage *typingMsg in [[WKTypingManager shared] getAllTypingMessages]) {
+        [[WKTypingManager shared] removeTypingByChannel:typingMsg.channel newMessage:nil];
     }
     // 连接
     if([[WKSDK shared] connectionManager].connectStatus == WKDisconnected  && [WKApp shared].isLogined) {
