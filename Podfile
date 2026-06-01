@@ -89,6 +89,36 @@ post_install do |installer|
             config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] = defs
         end
     end
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Bugly 静态库防重复链接 (2026-06)
+    # Bugly 是腾讯发布的**静态** framework，CocoaPods 看到 s.dependency 'Bugly'
+    # 后会**同时**把 -framework "Bugly" 自动写进:
+    #   1) WuKongBase pod 自己的 xcconfig (Pods/Target Support Files/WuKongBase/)
+    #   2) 主 App 的 aggregate xcconfig (Pods-OctoiOSBase-OctoiOS)
+    # 二者都链同一份静态库 → 运行时 objc[] 报
+    #   "Class Bugly is implemented in both WuKongBase.framework and Octo.debug.dylib"
+    # 包体积也虚胖一份。
+    # 策略: 只让主 App 链一份, WuKongBase 改用 -Wl,-undefined,dynamic_lookup
+    # (在 WuKongBase.podspec 的 pod_target_xcconfig 里), runtime 由 Obj-C
+    # flat namespace 自动指向主 App 那份。这里负责把 CocoaPods 自动写入的
+    # `-framework "Bugly"` 从 WuKongBase 的 xcconfig 里物理擦掉, 否则
+    # podspec 的 OTHER_LDFLAGS 设置会被 CocoaPods 自动行覆盖。
+    # 幂等: 每次 pod install 重新生成, 不会累积。
+    # ─────────────────────────────────────────────────────────────────────
+    if bugly_enabled
+        wukongbase_xcconfigs = Dir.glob(File.join(__dir__,
+            'Pods/Target Support Files/WuKongBase/WuKongBase.*.xcconfig'))
+        wukongbase_xcconfigs.each do |xcconfig_path|
+            content = File.read(xcconfig_path)
+            # 用空格兜底 (前后都可能是空格), 一次性把 -framework "Bugly" 抠掉
+            new_content = content.gsub(/\s*-framework\s+"Bugly"/, '')
+            if new_content != content
+                File.write(xcconfig_path, new_content)
+                puts "🧹 Stripped -framework \"Bugly\" from #{File.basename(xcconfig_path)} (防 duplicate class)"
+            end
+        end
+    end
     # 主 App target (OctoiOS) 的 OCTO_ENABLE_BUGLY=1 宏：注入到 Pods 聚合
     # xcconfig（每次 pod install 重新生成），不再写主工程的 pbxproj —— 那样
     # 会让 pbxproj 永久带着这个宏，clean clone 没装 Bugly 就编译挂

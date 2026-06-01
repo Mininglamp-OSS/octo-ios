@@ -17,7 +17,7 @@ PODS:
     - AFNetworking/NSURLSession
   - Aspects (1.4.1)
   - AsyncDisplayKit (1.0.0)
-  - CocoaAsyncSocket (7.6.5)
+  - Bugly (2.6.1)
   - CocoaLumberjack (3.9.0):
     - CocoaLumberjack/Core (= 3.9.0)
   - CocoaLumberjack/Core (3.9.0)
@@ -103,7 +103,7 @@ PODS:
     - ActionSheetPicker-3.0
     - AFNetworking (~> 4.0)
     - AsyncDisplayKit (~> 1.0)
-    - CocoaAsyncSocket (~> 7.6.5)
+    - Bugly (~> 2.6)
     - CocoaLumberjack (~> 3.0)
     - DGActivityIndicatorView (~> 2.1.1)
     - FMDB/SQLCipher (~> 2.7.5)
@@ -142,7 +142,6 @@ PODS:
     - WuKongBase
     - WuKongIMSDK
   - WuKongIMSDK (1.1.0):
-    - CocoaAsyncSocket (~> 7.6.5)
     - FMDB/SQLCipher (~> 2.7.5)
   - WuKongLogin (0.1.0):
     - Masonry
@@ -187,7 +186,7 @@ SPEC REPOS:
     - ActionSheetPicker-3.0
     - AFNetworking
     - Aspects
-    - CocoaAsyncSocket
+    - Bugly
     - CocoaLumberjack
     - DGActivityIndicatorView
     - DoraemonKit
@@ -260,7 +259,7 @@ SPEC CHECKSUMS:
   AFNetworking: 3bd23d814e976cd148d7d44c3ab78017b744cd58
   Aspects: 7595ba96a6727a58ebcbfc954497fc5d2fdde546
   AsyncDisplayKit: 8f2440c10169b416e3f5d9e191b7766579b7d990
-  CocoaAsyncSocket: 065fd1e645c7abab64f7a6a2007a48038fdc6a99
+  Bugly: 217ac2ce5f0f2626d43dbaa4f70764c953a26a31
   CocoaLumberjack: 5644158777912b7de7469fa881f8a3f259c2512a
   DGActivityIndicatorView: ff2c76073d79692f724863c8dd38685866a03cb6
   DoraemonKit: 0b45c9dc6ab34bd426a2782ee1bf7ab13492a60b
@@ -293,16 +292,16 @@ SPEC CHECKSUMS:
   Toast: 1f5ea13423a1e6674c4abdac5be53587ae481c4e
   TOCropViewController: da59f531f8ac8a94ef6d6c0fc34009350f9e8bfe
   TZImagePickerController: 2cad3db94ba70eb947d26c10ff5c66c9a93798c8
-  WuKongBase: 7816946025c82f1791c0e91a74fcae17e7fc721e
+  WuKongBase: c42a253106add5b088efb6d21fd3d1e9b698d4e4
   WuKongContacts: 8d67498a5c219c1f6520bd81224ef55d836f63a6
   WuKongDataSource: b9089cb962310af96af523032df4534e272cd932
-  WuKongIMSDK: 5a09b65f7a67905ce3d572cd222f897beed81093
+  WuKongIMSDK: 9f1d0d3d64e2bc25f9cd8def4ab2db312b75c525
   WuKongLogin: 88bbcd7380c05ecef739715ce71b6319b8b95e84
   YBImageBrowser: 7ecc8bf33ffa5f3b94c397c29b4f3638dd37f527
   YYImage: 6db68da66f20d9f169ceb94dfb9947c3867b9665
   ZLImageEditor: ee86f044fb7c5dec6b5de49eb7bb6fd42286f2ae
   ZLPhotoBrowser: 6fb0eff03c8269001e29ef233e7bdab0691e05fe
 
-PODFILE CHECKSUM: f55e850dbbcb4d3ab1d5a18471b672e34b962914
+PODFILE CHECKSUM: e71d963f35b439924743a2aecfd664566e19d7df
 
 COCOAPODS: 1.16.2
