@@ -1,0 +1,18 @@
+name: Check Sprint
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  check-sprint:
+    if: ${{ !github.event.pull_request.draft }}
+    uses: Mininglamp-OSS/.github/.github/workflows/reusable-check-sprint.yml@main
+    with:
+      pr-number: ${{ github.event.pull_request.number }}
+      repo-name: ${{ github.repository }}
+    secrets:
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}

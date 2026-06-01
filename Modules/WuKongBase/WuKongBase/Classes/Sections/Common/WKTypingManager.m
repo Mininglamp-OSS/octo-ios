@@ -23,6 +23,13 @@
 
 @property(nonatomic,strong) NSMutableDictionary<WKChannel*,dispatch_block_t> *cancelTypingBlockDict; // 取消输入中状态的的block
 
+/**
+ *  dictLock 用于保护 channelTypingMessageDict / cancelTypingBlockDict 的读写。
+ *  超时 timer 现已挂在后台队列(见 addTypingByMessage)，回调会从后台线程访问这两个
+ *  dict，无锁访问 NSMutableDictionary 在多群并发 typing 时会崩溃，故统一加锁。
+ */
+@property(nonatomic,strong) NSObject *dictLock;
+
 @property(nonatomic,assign) BOOL offTyping; // 是否关闭typing
 @end
 
@@ -39,10 +46,46 @@ static WKTypingManager *_instance = nil;
 }
 
 +(instancetype) shared{
-    if (_instance == nil) {
-        _instance = [[super alloc]init];
-    }
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        _instance = [[super alloc] init];
+    });
     return _instance;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        // 提前初始化共享状态，保证后台 timer 回调与主线程访问看到的是同一份 dict / lock。
+        _channelTypingMessageDict = [[NSMutableDictionary alloc] init];
+        _cancelTypingBlockDict = [[NSMutableDictionary alloc] init];
+        _dictLock = [[NSObject alloc] init];
+        // 监听 conversation-sync 落库通知：后台期间 bot 回复经同步直写 DB 绕过
+        // onRecvMessages，导致 typing 卡死，这里收到通知后清除对应 channel 的 typing。
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(onConversationSyncedNewMessages:)
+                                                     name:@"WKConversationSyncedNewMessages"
+                                                   object:nil];
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)onConversationSyncedNewMessages:(NSNotification *)notification {
+    WKChannel *channel = notification.object;
+    if (![channel isKindOfClass:[WKChannel class]]) {
+        return;
+    }
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self removeTypingByChannel:channel newMessage:nil];
+        });
+    } else {
+        [self removeTypingByChannel:channel newMessage:nil];
+    }
 }
 
 - (NSMutableDictionary<WKChannel *,WKMessage *> *)channelTypingMessageDict {
@@ -57,6 +100,13 @@ static WKTypingManager *_instance = nil;
         _cancelTypingBlockDict = [[NSMutableDictionary alloc] init];
     }
     return _cancelTypingBlockDict;
+}
+
+- (NSObject *)dictLock {
+    if (_dictLock == nil) {
+        _dictLock = [[NSObject alloc] init];
+    }
+    return _dictLock;
 }
 
 - (NSLock *)delegateLock {
@@ -85,7 +135,10 @@ static WKTypingManager *_instance = nil;
 }
 
 -(BOOL) hasTyping:(WKChannel*)channel {
-    WKMessage *message = self.channelTypingMessageDict[channel];
+    WKMessage *message = nil;
+    @synchronized (self.dictLock) {
+        message = self.channelTypingMessageDict[channel];
+    }
     if(message) {
         return true;
     }
@@ -93,31 +146,42 @@ static WKTypingManager *_instance = nil;
 }
 
 - (void)addTypingByMessage:(WKMessage *)typingMessage {
-    
+
 //    WKMessage *typingMessage = [self convertMessageToTypingMessage:message];
     if( [typingMessage.fromUid isEqualToString:[WKApp shared].loginInfo.uid]) {
         return;
     }
-    
+
     WKChannel *channel = typingMessage.channel;
-    WKMessage *oldTypingMessage = self.channelTypingMessageDict[channel];
-    self.channelTypingMessageDict[channel] = typingMessage;
-    
-    dispatch_block_t cancelTypingBlock = self.cancelTypingBlockDict[channel];
-     if(cancelTypingBlock) {
-         dispatch_block_cancel(cancelTypingBlock);
-     }
-     __weak typeof(self) weakSelf = self;
-     cancelTypingBlock = dispatch_block_create(0, ^{
-         [weakSelf removeTypingByChannel:channel newMessage:nil];
-     });
-     self.cancelTypingBlockDict[channel] = cancelTypingBlock;
-     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)), dispatch_get_main_queue(),cancelTypingBlock);
-    if(!oldTypingMessage) {
+    __weak typeof(self) weakSelf = self;
+    BOOL isNewTyping = NO;
+    @synchronized (self.dictLock) {
+        WKMessage *oldTypingMessage = self.channelTypingMessageDict[channel];
+        self.channelTypingMessageDict[channel] = typingMessage;
+        isNewTyping = (oldTypingMessage == nil);
+
+        dispatch_block_t oldCancelBlock = self.cancelTypingBlockDict[channel];
+        if(oldCancelBlock) {
+            dispatch_block_cancel(oldCancelBlock);
+        }
+        // timer 改挂后台队列，避免 App 进后台时 main queue 挂起导致 8s 超时冻结，
+        // 切回前台后 typing 卡死不消失。回调内按时间戳判定是否过期再清除。
+        dispatch_block_t cancelTypingBlock = dispatch_block_create(0, ^{
+            WKMessage *cur = nil;
+            @synchronized (weakSelf.dictLock) {
+                cur = weakSelf.channelTypingMessageDict[channel];
+            }
+            if (cur && ([[NSDate date] timeIntervalSince1970] - cur.timestamp >= 8.0)) {
+                [weakSelf removeTypingByChannel:channel newMessage:nil];
+            }
+        });
+        self.cancelTypingBlockDict[channel] = cancelTypingBlock;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)),
+                       dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), cancelTypingBlock);
+    }
+    if(isNewTyping) {
         [self callTypingAddDelegate:typingMessage];
     }
-     
-    
 }
 
 -(WKMessage*) convertParamToTypingMessage:(NSDictionary*)param {
@@ -150,20 +214,32 @@ static WKTypingManager *_instance = nil;
 }
 
 - (NSArray<WKMessage *> *)getAllTypingMessages {
-    
-    return [self.channelTypingMessageDict allValues];
+    @synchronized (self.dictLock) {
+        return [self.channelTypingMessageDict allValues];
+    }
 }
 
 - (WKMessage *)getTypingMessage:(WKChannel *)channel {
-    
-    return self.channelTypingMessageDict[channel];
+    @synchronized (self.dictLock) {
+        return self.channelTypingMessageDict[channel];
+    }
 }
 
 
 - (void)removeTypingByChannel:(WKChannel *)channel newMessage:(WKMessage*)newMessage{
-    WKMessage *message = [self.channelTypingMessageDict objectForKey:channel];
+    WKMessage *message = nil;
+    @synchronized (self.dictLock) {
+        message = [self.channelTypingMessageDict objectForKey:channel];
+        if(message) {
+            [self.channelTypingMessageDict removeObjectForKey:channel];
+            dispatch_block_t cancelBlock = self.cancelTypingBlockDict[channel];
+            if(cancelBlock) {
+                dispatch_block_cancel(cancelBlock);
+                [self.cancelTypingBlockDict removeObjectForKey:channel];
+            }
+        }
+    }
     if(message) {
-        [self.channelTypingMessageDict removeObjectForKey:channel];
         [self callTypingRemoveDelegate:message newMessage:newMessage];
     }
 }

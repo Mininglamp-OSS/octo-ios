@@ -22,7 +22,7 @@
 #import "WKMessageCell.h"
 #import "WKMultipleSelectToHereButton.h"
 #import <SDWebImage/SDWebImage.h>
-@interface WKMessageListView ()<UITableViewDelegate,UITableViewDataSource,WKConversationTableViewDelegate,WKChannelManagerDelegate,WKChatManagerDelegate,WKReactionManagerDelegate,WKConnectionManagerDelegate,WKTypingManagerDelegate,WKReminderManagerDelegate>
+@interface WKMessageListView ()<UITableViewDelegate,UITableViewDataSource,WKConversationTableViewDelegate,WKChannelManagerDelegate,WKChatManagerDelegate,WKReactionManagerDelegate,WKConnectionManagerDelegate,WKTypingManagerDelegate,WKReminderManagerDelegate,WKConversationManagerDelegate>
 
 @property(nonatomic,strong) UIViewPropertyAnimator *headerViewsAnimator;
 @property(nonatomic,assign) BOOL didManuallyStoppedTableViewDecelerating;
@@ -118,6 +118,7 @@
     [[WKSDK shared].chatManager addDelegate:self]; // 消息监听
     [[WKSDK shared].reactionManager addDelegate:self]; // 回应监听
     [[WKSDK shared].connectionManager addDelegate:self]; // 连接状态监听
+    [[WKSDK shared].conversationManager addDelegate:self]; // conversation-sync 完成监听(后台收消息切回前台补刷)
     [[WKTypingManager shared] addDelegate:self]; // 正在输入...
     [[WKReminderManager shared] addDelegate:self]; // 提醒项监听
     // 外部分享消息发送通知
@@ -131,6 +132,7 @@
     [[WKSDK shared].chatManager removeDelegate:self];
     [[WKSDK shared].reactionManager removeDelegate:self];
     [[WKSDK shared].connectionManager  removeDelegate:self];
+    [[WKSDK shared].conversationManager removeDelegate:self];
     [[WKTypingManager shared] removeDelegate:self];
     [[WKReminderManager shared] removeDelegate:self];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKShareExtensionMessageSent" object:nil];
@@ -2408,6 +2410,11 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     if(status == WKConnected) { // 如果已连接，则重新请求消息
         __weak typeof(self) weakSelf = self;
         [self pullup:^(bool more) {
+            // 重连/回前台拉取消息后，若当前 channel 仍残留 typing（后台期间 bot 回复经
+            // conversation-sync 直写 DB 绕过了 onRecvMessages 的清除路径），显式清掉。
+            if([[WKTypingManager shared] hasTyping:weakSelf.channel]) {
+                [[WKTypingManager shared] removeTypingByChannel:weakSelf.channel newMessage:nil];
+            }
             WKMessageModel *localLastMsg = [weakSelf.dataProvider lastMessage];
             if(!localLastMsg) {
                 return;
@@ -2422,6 +2429,54 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
             }
         }];
     }
+}
+
+#pragma mark - WKConversationManagerDelegate
+
+// conversation-sync 完成后(SDK 已 merge 进 DB)的全量补刷钩子，对齐 Android 的
+// syncCompleted → getData(true)。App 后台期间收到的新消息经 conversation-sync 直写
+// DB，可能绕过 onRecvMessages 的增量插入；切回前台 sync 完成后，这里检查当前 channel
+// 的 DB 最后一条消息是否比 UI 显示的更新，有更新则强制补刷，避免 pullup 的 drift 兜底
+// 吞掉刷新导致新消息不显示。已由 SDK 派发回主线程，这里不再 dispatch_async。
+- (void)onConversationSyncFinished {
+    if(!self.channel) {
+        return;
+    }
+    WKMessage *dbLastMsg = [[WKSDK shared].chatManager getLastMessage:self.channel];
+    if(!dbLastMsg) {
+        return;
+    }
+    // DB 最后一条与 UI 当前最后一条一致 → 无更新，跳过。
+    if(self.lastMessage && [self.lastMessage.clientMsgNo isEqualToString:dbLastMsg.clientMsgNo]) {
+        return;
+    }
+
+    // 残留 typing 一并清掉(后台期间 bot 回复直写 DB 绕过了清除路径)。
+    if([[WKTypingManager shared] hasTyping:self.channel]) {
+        [[WKTypingManager shared] removeTypingByChannel:self.channel newMessage:nil];
+    }
+
+    __weak typeof(self) weakSelf = self;
+    if([self pullupHasMore]) {
+        // 下方还有未加载的历史分页，整页 reloadData 会破坏分页锚点，
+        // 这里只更新最后一条预览引用，让 pullup/滚动时再增量补齐。
+        [self updateLastMsgIfNeed:[[WKMessageModel alloc] initWithMessage:dbLastMsg]];
+        return;
+    }
+    // 已到底：补刷把新消息拉进 dataProvider 并刷新 UI。
+    [self pullup:^(bool more) {
+        WKMessageModel *localLastMsg = [weakSelf.dataProvider lastMessage];
+        if(!localLastMsg) {
+            return;
+        }
+        if(weakSelf.lastMessage && [weakSelf.lastMessage.clientMsgNo isEqualToString:localLastMsg.clientMsgNo]) {
+            return;
+        }
+        WKMessage *newLastMsg = [[WKSDK shared].chatManager getLastMessage:weakSelf.channel];
+        if(newLastMsg) {
+            [weakSelf updateLastMsgIfNeed:[[WKMessageModel alloc] initWithMessage:newLastMsg]];
+        }
+    }];
 }
 
 #pragma mark - WKTypingManagerDelegate

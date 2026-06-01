@@ -299,6 +299,16 @@
             [self callOnConversationUpdateDelegates:conversations];
         }
 
+        // 后台期间 bot 回复经 conversation-sync 直写 DB，绕过 onRecvMessages 的 typing 清除路径，
+        // 导致 typing indicator 永久卡死。落库后对有新消息(recents)的 channel 发通知，
+        // 由 WKTypingManager 监听并清除对应 channel 的 typing（observer 内部会切回主线程）。
+        for (WKSyncConversationModel *syncConversationModel in syncConversations) {
+            if(syncConversationModel.recents.count > 0) {
+                [[NSNotificationCenter defaultCenter] postNotificationName:@"WKConversationSyncedNewMessages"
+                                                                    object:syncConversationModel.conversation.channel];
+            }
+        }
+
         CFAbsoluteTime syncElapsed = (CFAbsoluteTimeGetCurrent() - syncStart) * 1000;
         if (syncElapsed > 30) {
             NSLog(@"[ANR-Trace] handleSyncConversation took %.0fms (background), syncCount=%lu, msgCount=%lu", syncElapsed, (unsigned long)syncConversations.count, (unsigned long)messages.count);

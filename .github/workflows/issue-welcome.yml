@@ -1,0 +1,13 @@
+name: Issue Welcome
+
+on:
+  issues:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  welcome:
+    permissions:
+      issues: write
+    uses: Mininglamp-OSS/.github/.github/workflows/issue-welcome.yml@main
