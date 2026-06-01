@@ -310,6 +310,18 @@ static WKGroupManager *_instance;
        }
 }
 
+- (void)groupNo:(NSString *)groupNo addBotAdmin:(NSString *)uid complete:(void (^)(NSError * _Nullable))complete {
+    if(_delegate && [_delegate respondsToSelector:@selector(groupManager:groupNo:addBotAdmin:complete:)]) {
+        [_delegate groupManager:self groupNo:groupNo addBotAdmin:uid complete:complete];
+    }
+}
+
+- (void)groupNo:(NSString *)groupNo removeBotAdmin:(NSString *)uid complete:(void (^)(NSError * _Nullable))complete {
+    if(_delegate && [_delegate respondsToSelector:@selector(groupManager:groupNo:removeBotAdmin:complete:)]) {
+        [_delegate groupManager:self groupNo:groupNo removeBotAdmin:uid complete:complete];
+    }
+}
+
 - (void)groupSetting:(NSString *)groupNo settingKey:(WKGroupSettingKey)key on:(BOOL)on {
     if(_delegate && [_delegate respondsToSelector:@selector(groupManagerSetting:groupNo:settingKey:on:)]) {
         [_delegate groupManagerSetting:self groupNo:groupNo settingKey:key on:on];

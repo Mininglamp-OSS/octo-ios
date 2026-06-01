@@ -100,6 +100,18 @@ static NSString *WKGroupAttrKeyName = @"name";
 -(void) groupManager:(WKGroupManager*)manager groupNo:(NSString*)groupNo managersToMember:(NSArray<NSString*>*)managers complete:(void(^__nullable)(NSError * __nullable error))complete;
 
 
+/// 添加机器人管理员
+/// @param groupNo 群编号
+/// @param uid 机器人 uid
+-(void) groupManager:(WKGroupManager*)manager groupNo:(NSString*)groupNo addBotAdmin:(NSString*)uid complete:(void(^__nullable)(NSError * __nullable error))complete;
+
+
+/// 移除机器人管理员
+/// @param groupNo 群编号
+/// @param uid 机器人 uid
+-(void) groupManager:(WKGroupManager*)manager groupNo:(NSString*)groupNo removeBotAdmin:(NSString*)uid complete:(void(^__nullable)(NSError * __nullable error))complete;
+
+
 /**
  同步群信息
 
@@ -277,6 +289,18 @@ static NSString *WKGroupAttrKeyName = @"name";
 /// @param managers 需要设置成普通成员的管理员
 /// @param complete <#complete description#>
 -(void) groupNo:(NSString*)groupNo managersToMember:(NSArray<NSString*>*)managers complete:(void(^__nullable)(NSError *error))complete;
+
+
+/// 添加机器人管理员
+/// @param groupNo 群编号
+/// @param uid 机器人 uid
+-(void) groupNo:(NSString*)groupNo addBotAdmin:(NSString*)uid complete:(void(^__nullable)(NSError * __nullable error))complete;
+
+
+/// 移除机器人管理员
+/// @param groupNo 群编号
+/// @param uid 机器人 uid
+-(void) groupNo:(NSString*)groupNo removeBotAdmin:(NSString*)uid complete:(void(^__nullable)(NSError * __nullable error))complete;
 
 
 /**

@@ -436,6 +436,34 @@
     });
 }
 
+// 添加机器人管理员
+- (void)groupManager:(nonnull WKGroupManager *)manager groupNo:(nonnull NSString *)groupNo addBotAdmin:(nonnull NSString *)uid complete:(void (^ _Nullable)(NSError * _Nullable))complete {
+    [[WKAPIClient sharedClient] PUT:[NSString stringWithFormat:@"groups/%@/bot_admin/%@",groupNo,uid] parameters:nil].then(^{
+        if(complete) {
+            complete(nil);
+        }
+    }).catch(^(NSError *error){
+        if(complete) {
+            complete(error);
+        }
+        WKLogError(@"添加机器人管理员失败！->%@",error);
+    });
+}
+
+// 移除机器人管理员
+- (void)groupManager:(nonnull WKGroupManager *)manager groupNo:(nonnull NSString *)groupNo removeBotAdmin:(nonnull NSString *)uid complete:(void (^ _Nullable)(NSError * _Nullable))complete {
+    [[WKAPIClient sharedClient] DELETE:[NSString stringWithFormat:@"groups/%@/bot_admin/%@",groupNo,uid] parameters:nil].then(^{
+        if(complete) {
+            complete(nil);
+        }
+    }).catch(^(NSError *error){
+        if(complete) {
+            complete(error);
+        }
+        WKLogError(@"移除机器人管理员失败！->%@",error);
+    });
+}
+
 // 群禁言
 - (void)groupManager:(WKGroupManager *)manager group:(NSString *)groupNo forbidden:(BOOL)forbidden complete:(void (^)(NSError * _Nullable))complete {
     [[WKAPIClient sharedClient] POST:[NSString stringWithFormat:@"groups/%@/forbidden/%d",groupNo,forbidden?1:0] parameters:nil].then(^{

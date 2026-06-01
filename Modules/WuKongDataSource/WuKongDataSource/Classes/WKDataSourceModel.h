@@ -48,6 +48,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,copy) NSString *inviteUID; // 邀请人uid
 @property(nonatomic,copy) NSString *vercode; // 加好友的code
 @property(nonatomic,assign) BOOL robot; // 是否是机器人
+@property(nonatomic,assign) BOOL botAdmin; // 是否是机器人管理员（仅 robot=YES 时有意义）
 @property(nonatomic,assign) BOOL isDeleted; // 是否已删除
 @property(nonatomic,copy)   NSString *createdAt; // 创建时间
 @property(nonatomic,copy)  NSString *updatedAt; // 更新时间

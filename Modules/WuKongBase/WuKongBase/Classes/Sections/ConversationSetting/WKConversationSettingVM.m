@@ -23,6 +23,7 @@
 #import "WKThreadListVC.h"
 #import "WKThreadService.h"
 #import "WKGroupMdVC.h"
+#import "WKGroupAdminManageVC.h"
 
 @interface WKConversationSettingVM ()<WKChannelManagerDelegate>
 
@@ -257,7 +258,7 @@
                 @{
                     @"class": WKLabelItemModel.class,
                     @"label": LLang(@"子区"),
-                    @"showBottomLine":@(YES),
+                    @"showBottomLine":@(NO),
                     @"onClick":^{
                         WKThreadListVC *vc = [WKThreadListVC new];
                         vc.groupNo = weakSelf.channel.channelId;
@@ -326,6 +327,32 @@
             ]
         };
     } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89650];
+
+    // 群管理（仅群主和管理员可见，与 web 端 module.tsx 行为一致）
+    [[WKApp shared] setMethod:@"channelsetting.groupmanage" handler:^id _Nullable(id  _Nonnull param) {
+        WKChannel *channel = param[@"channel"];
+        BOOL isCreatorOrManager = [param[@"is_creator_or_manager"] boolValue];
+        if(channel.channelType != WK_GROUP || !isCreatorOrManager) {
+            return nil;
+        }
+        BOOL isCreator = [weakSelf isCreatorForMe];
+        return @{
+            @"height":@(0.0f),
+            @"items": @[
+                @{
+                    @"class": WKLabelItemModel.class,
+                    @"label": LLang(@"群管理"),
+                    @"showBottomLine":@(NO),
+                    @"onClick":^{
+                        WKGroupAdminManageVC *vc = [WKGroupAdminManageVC new];
+                        vc.channel = weakSelf.channel;
+                        vc.isCreator = isCreator;
+                        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+                    }
+                }
+            ]
+        };
+    } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89625];
 
     [[WKApp shared] setMethod:@"channelsetting.hsitory" handler:^id _Nullable(id  _Nonnull param) {
         return @{
