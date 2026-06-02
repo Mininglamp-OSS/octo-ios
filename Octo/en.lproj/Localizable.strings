@@ -7,3 +7,6 @@
 // MARK: - 底部 tabbar 用的 key（与 WKMainTabController 一致, 与上方"联系人/我的"是不同的 key, 不能合）
 "通讯录"="Contacts";
 "我"="Me";
+
+// 消息 fallback（SDK 未知消息摘要）
+"[未知消息]"="[Unknown message]";

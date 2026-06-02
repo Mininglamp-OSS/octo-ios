@@ -964,3 +964,8 @@
 // 录音 / 语音
 "松手结束，上移取消"="Release to send; swipe up to cancel";
 "语音输入"="Voice input";
+
+// 图文混排 RichText=14 / 消息 fallback
+"[富文本消息]"="[Rich text message]";
+"[不支持的消息类型，或许可升级版本后查看]"="[Unsupported message type. Please try upgrading the app.]";
+"[消息无法解密，因为双方密钥有发送变更]"="[Message could not be decrypted because the keys changed.]";

@@ -14,7 +14,7 @@
 }
 
 - (NSString *)conversationDigest {
-    return @"[未知消息]";
+    return NSLocalizedString(@"[未知消息]", nil);
 }
 
 // 重写decode 让其不执行父类的decode操作
