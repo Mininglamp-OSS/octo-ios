@@ -19,6 +19,11 @@
 @property(nonatomic,strong) NSData *thumbData;
 
 @property(nonatomic,copy) NSString *_localPath; // 本地路径
+// 持久化第一次嗅出的扩展名。原实现每次都从 self.data 嗅 magic bytes，
+// 而 self.data 在上传完会被 releaseData 置 nil，导致 extension 默认回 ".png"，
+// localPath 也跟着变 ".png"，但实际文件是按 ".gif" 写盘的——读不到，气泡 GIF
+// 在上传完成那一刻就消失了 (回退到 URL → 经常被 SDImageCache 单帧静态命中)。
+@property(nonatomic,copy) NSString *cachedExtension;
 @end
 
 @implementation WKImageContent
@@ -71,7 +76,19 @@
 }
 
 - (NSString *)extension {
-    // 检测实际图片格式，返回对应扩展名
+    // 优先返回已持久化的扩展名，避免 self.data 被 releaseData 置 nil 后 localPath 抖动
+    if (self.cachedExtension.length > 0) {
+        return self.cachedExtension;
+    }
+    NSString *ext = [self detectExtensionFromData];
+    if (ext.length > 0) {
+        self.cachedExtension = ext;
+    }
+    return ext;
+}
+
+// 检测实际图片格式，返回对应扩展名
+- (NSString *)detectExtensionFromData {
     if (self.data) {
         if (self.data.length >= 2) {
             uint8_t header[2];
@@ -91,11 +108,18 @@
             }
         }
     }
+    // 兜底优先级：remoteUrl 扩展名 → 默认 .png
+    NSString *urlExt = [[self.remoteUrl pathExtension] lowercaseString];
+    if ([urlExt isEqualToString:@"gif"]) return @".gif";
+    if ([urlExt isEqualToString:@"jpg"] || [urlExt isEqualToString:@"jpeg"]) return @".jpg";
     return @".png";
 }
 
 - (void) writeDataToLocalPath {
     [super writeDataToLocalPath];
+    // 写盘前先冻结一次 extension (此时 self.data 还在)，避免后续 releaseData
+    // 让 localPath 漂走
+    [self extension];
     // 获取本地路径
    if(self.orgImage) {
        self.width = self.orgImage.size.width;

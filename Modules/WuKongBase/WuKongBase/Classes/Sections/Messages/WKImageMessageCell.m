@@ -130,10 +130,10 @@
 }
 
 - (void)refresh:(WKMessageModel *)model {
-    
+
     model.flameIconSizeFactor = 1.2f;
     model.flameNode.view.lim_size =  CGSizeMake(60.0f, 60.0f);
-    
+
     [super refresh:model];
     self.messageModel = model;
     WKImageContent *imageContent = (WKImageContent*)model.content;
@@ -142,13 +142,13 @@
     self.imgView.lim_height = imageSize.height;
     self.imgView.image = nil;
     [[self.imgView sd_imageIndicator] stopAnimatingIndicator];
-    
+
     if(model.content.flame) {
         self.visualEffectView.hidden = NO;
     }else{
         self.visualEffectView.hidden = YES;
     }
-      
+
     NSData *orgData = imageContent.originalImageData;
     if(orgData) {
         [self setImageWithData:orgData];
@@ -159,25 +159,29 @@
         }else{
             [[self.imgView sd_imageIndicator] startAnimatingIndicator];
             NSURL *url = [[WKApp shared] getImageFullUrl:imageContent.remoteUrl];
-            [self.imgView lim_setImageWithURL:url options:SDWebImageProgressiveLoad|SDWebImageScaleDownLargeImages context:@{
+            // 不能加 SDWebImageScaleDownLargeImages —— SDWebImage 5.5.0+ 把动图也按
+            // imageThumbnailPixelSize 走，结果只解出单帧静态图，GIF / APNG / 动 WebP
+            // 在气泡里就不动了。SDWebImageProgressiveLoad 对动图也不安全（流式解码
+            // 中途的 partial 帧会替换掉完整动图）。聊天图片本身不会特别大，按原样
+            // 解一次即可。
+            [self.imgView lim_setImageWithURL:url options:0 context:@{
                 SDWebImageContextStoreCacheType: @(SDImageCacheTypeAll),
             } completed:nil];
         }
     }
-    
+
     // 更新上传进度
     [self updateProgress];
-    
-   
+
+
 }
 
 -(void) setImageWithData:(NSData*)data {
-    SDImageFormat imgFmt = [NSData sd_imageFormatForImageData:data];
-    if(imgFmt == SDImageFormatGIF) {
-        self.imgView.image = [[SDImageGIFCoder sharedCoder] decodedImageWithData:data options:0];
-    }else {
-        self.imgView.image = [[UIImage alloc] initWithData:data];
-    }
+    // imgView 是 WKImageView (SDAnimatedImageView 子类)。
+    // 优先用 SDAnimatedImage 解，能拿到多帧的就让它自动播 (GIF / APNG / 动 WebP);
+    // 拿不到 (静态图) 回退普通 UIImage。
+    UIImage *img = [SDAnimatedImage imageWithData:data] ?: [[UIImage alloc] initWithData:data];
+    self.imgView.image = img;
 }
 
 // 更新上传进度
@@ -295,8 +299,17 @@
                     if(cell && [cell isKindOfClass:[WKImageMessageCell class]]) {
                         UIImage *image = ((WKImageMessageCell*)cell).imgView.image;
                         if(image) {
-                            // TODO: 以下代码会使点开图片的速度变慢
-                            NSData *imgData = [[SDImageCodersManager sharedManager] encodedDataWithImage:image format:[image sd_imageFormat] options:nil];
+                            NSData *imgData = nil;
+                            // SDAnimatedImage 直接拿原始多帧字节，跳过 re-encode
+                            // (re-encode 对 GIF/APNG/动 WebP 经常只输出当前帧，
+                            // 大图浏览器拿到的就是静态图)。
+                            if ([image conformsToProtocol:@protocol(SDAnimatedImage)]) {
+                                imgData = [(id<SDAnimatedImage>)image animatedImageData];
+                            }
+                            if (!imgData) {
+                                // TODO: 以下代码会使点开图片的速度变慢
+                                imgData = [[SDImageCodersManager sharedManager] encodedDataWithImage:image format:[image sd_imageFormat] options:nil];
+                            }
                             if (imgData) {
                                 data.image = ^UIImage * _Nullable{
                                     return [YYImage imageWithData:imgData];

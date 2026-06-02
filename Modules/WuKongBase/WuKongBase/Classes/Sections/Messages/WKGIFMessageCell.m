@@ -10,12 +10,16 @@
 #import "WKGIFContent.h"
 #import "UIImage+WK.h"
 #import "WKResource.h"
+#import "WKImageView.h"
 #define WK_GIF_MAX_WIDTH 150.0f
 
 
 @interface WKGIFMessageCell ()
 
-@property(nonatomic,strong) SDAnimatedImageView *imgView;
+// 不直接用 SDAnimatedImageView 是因为它在某些 iOS 版本上播放速度被 SDDisplayLink
+// 的 frameInterval 翻倍（实测 4×）。WKImageView 已经在 init 里 set playbackRate
+// 补偿，所以直接用它就有正确速度。
+@property(nonatomic,strong) WKImageView *imgView;
 
 @end
 
@@ -36,7 +40,7 @@
 
 - (void)initUI {
     [super initUI];
-    self.imgView = [[SDAnimatedImageView alloc] init];
+    self.imgView = [[WKImageView alloc] init];
     [self.imgView setSd_imageIndicator:SDWebImageActivityIndicator.grayIndicator];
     self.imgView.layer.masksToBounds = YES;
     self.imgView.layer.cornerRadius = 5.0f;

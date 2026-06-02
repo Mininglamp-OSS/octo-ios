@@ -24,9 +24,13 @@ static  DDLogLevel ddLogLevel = DDLogLevelAll;
     #define WKLogError(fmt,...)  NSLog(fmt,##__VA_ARGS__)
     #define WKLogWarn(fmt,...)  NSLog(fmt,##__VA_ARGS__)
 #else
-    #define WKLogInfo(fmt,...)  NSLog(fmt,##__VA_ARGS__)
-    #define WKLogDebug(fmt,...)  NSLog(fmt,##__VA_ARGS__)
+    // Release 下全部 no-op:
+    // 主线程 NSLog 会经由 Bugly 的 LibLogRedirect 全局 os_unfair_lock 串行化,
+    // 高频/大对象日志(如 WKAPIClient.logRequestEnd: 打整个 response)在并发完成回调里
+    // 会把主线程卡到 >1s, 被 Bugly 抓成卡顿堆栈。release 包不需要这些调试日志。
+    #define WKLogInfo(fmt,...)  ((void)0)
+    #define WKLogDebug(fmt,...)  ((void)0)
     //#define WKLogVerbose(fmt,...)  DDLogVerbose(fmt,##__VA_ARGS__)
-    #define WKLogError(fmt,...)  NSLog(fmt,##__VA_ARGS__)
-    #define WKLogWarn(fmt,...)  NSLog(fmt,##__VA_ARGS__)
+    #define WKLogError(fmt,...)  ((void)0)
+    #define WKLogWarn(fmt,...)  ((void)0)
 #endif

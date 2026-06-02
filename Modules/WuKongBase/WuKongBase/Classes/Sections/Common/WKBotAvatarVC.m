@@ -7,6 +7,8 @@
 #import "WKActionSheetView2.h"
 #import "WKMediaPickerController.h"
 #import "TOCropViewController.h"
+#import "WKAvatarMediaFlow.h"
+#import <SDWebImage/SDAnimatedImage.h>
 
 @interface WKBotAvatarVC ()<TOCropViewControllerDelegate>
 
@@ -71,7 +73,10 @@
         [weakSelf cameraPressed];
     }]];
     [actionSheet addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"从手机相册选择") onClick:^{
-        [[WKPhotoService shared] getPhotoOneFromLibrary:^(UIImage * _Nonnull image) {
+        [WKAvatarMediaFlow pickAvatarFromLibraryWithHost:weakSelf
+                                              onAnimated:^(NSData *gifData) {
+            [weakSelf uploadAnimatedAvatar:gifData];
+        } onStaticPicked:^(UIImage *image) {
             [weakSelf cropAvatar:image];
         }];
     }]];
@@ -157,6 +162,56 @@
         [[NSURLCache sharedURLCache] removeCachedResponseForRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:avatarKey]]];
 
         [[NSNotificationCenter defaultCenter] postNotificationName:WKNOTIFY_USER_AVATAR_UPDATE object:@{@"uid": uid ?: @""}];
+    }];
+}
+
+#pragma mark - 动图上传
+
+// 动图头像（GIF / APNG / 动 WebP / 视频转 GIF）上传：跳过 TOCropViewController 与 JPEG 压缩，
+// 直接把字节扔后端；缓存层用 storeImageData: 保留动画。
+-(void) uploadAnimatedAvatar:(NSData *)data {
+    if (self.botUid.length == 0) {
+        [self.view showHUDWithHide:LLang(@"上传失败")];
+        return;
+    }
+
+    __weak typeof(self) weakSelf = self;
+    [self.view showHUD:LLang(@"上传中")];
+
+    NSString *uploadPath = [NSString stringWithFormat:@"users/%@/avatar", self.botUid];
+    [[WKAPIClient sharedClient] fileUpload:uploadPath
+                                       data:data
+                                   progress:^(NSProgress * _Nonnull progress) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf.view switchHUDProgress:progress.fractionCompleted];
+        });
+    } completeCallback:^(id  _Nullable resposeObject, NSError * _Nullable error) {
+        if (error) {
+            [weakSelf.view switchHUDSuccess:LLangW(@"上传失败", weakSelf)];
+            WKLogError(@"Bot 动图头像上传失败 -> %@", error);
+            return;
+        }
+
+        UIImage *previewImg = [SDAnimatedImage imageWithData:data] ?: [UIImage imageWithData:data];
+        weakSelf.avatarImgView.avatarImgView.image = previewImg;
+        [weakSelf.view switchHUDSuccess:LLangW(@"上传成功", weakSelf)];
+
+        NSString *uid = weakSelf.botUid;
+        WKChannel *botChannel = [WKChannel personWithChannelID:uid];
+        [[WKSDK shared].channelManager refreshAvatarCacheKey:botChannel];
+        WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:botChannel];
+        NSString *avatarKey = [WKAvatarUtil getAvatar:uid cacheKey:info.avatarCacheKey];
+
+        [[SDImageCache sharedImageCache] storeImage:previewImg
+                                           imageData:data
+                                              forKey:avatarKey
+                                              toDisk:YES
+                                          completion:nil];
+        [[NSURLCache sharedURLCache] removeCachedResponseForRequest:
+            [NSURLRequest requestWithURL:[NSURL URLWithString:avatarKey]]];
+
+        [[NSNotificationCenter defaultCenter] postNotificationName:WKNOTIFY_USER_AVATAR_UPDATE
+                                                            object:@{@"uid": uid ?: @""}];
     }];
 }
 

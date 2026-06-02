@@ -82,6 +82,7 @@
 #import "WKLottieStickerCell.h"
 #import "WKLottieStickerContent.h"
 #import <SDWebImageLottieCoder/SDWebImageLottieCoder.h>
+#import "WKAnimatedImageCoders.h"
 #import "WKEndToEndEncryptHitContent.h"
 #import "WKEndToEndEncryptHitCell.h"
 #import "WKSignalErrorCell.h"
@@ -217,13 +218,20 @@ static WKApp *_instance;
 }
 
 -(void) configSDWebImage {
-    
+
     // webp格式支持
     SDImageWebPCoder *webPCoder = [SDImageWebPCoder sharedCoder];
     [[SDImageCodersManager sharedManager] addCoder:webPCoder];
-    
+
     // lottie支持
     [[SDImageCodersManager sharedManager] addCoder:WKSDImageLottieCoder.sharedCoder];
+
+    // GIF / APNG 延时矫正——继承官方 coder，仅把 ≤ 20ms 的"快帧" delay 强制到 100ms，
+    // 对齐 Photos.app / Safari / 微信。否则 SDAnimatedImageView 会真按 20-30ms
+    // 原始 delay 播，看起来比别处快 1-2 倍。详见 WKAnimatedImageCoders.h 注释。
+    // SDImageCodersManager 按 reverseObjectEnumerator 匹配，越晚 addCoder 优先级越高。
+    [[SDImageCodersManager sharedManager] addCoder:WKImageAPNGCoder.sharedCoder];
+    [[SDImageCodersManager sharedManager] addCoder:WKImageGIFCoder.sharedCoder];
     
     [SDImageCacheConfig defaultCacheConfig].maxMemoryCost = 400 * 1024 * 1024; // 400M
     
