@@ -17,6 +17,9 @@
 
 // 按 block 处理的截断阈值（累计纯文本字符数），勿在 block 内部切断（契约 §5.2）。
 static const NSInteger kRichTextTruncateThreshold = 10000;
+// 单条消息最多渲染/下载的图片块数；超出则截断走"查看全文"，避免 100+ 纯图消息
+// 全量渲染+下载（纯图消息不产生文本字符，仅靠文本阈值无法触发截断）。
+static const NSInteger kRichTextMaxImageCount = 20;
 static const CGFloat kViewFullTextBtnHeight = 36.0f;
 // 内联图片的最大边长（避免单图撑满气泡）。
 static const CGFloat kRichTextImageMaxLength = 220.0f;
@@ -48,10 +51,11 @@ static const CGFloat kRichTextImageMaxLength = 220.0f;
 
     CGFloat maxWidth = [WKApp shared].config.messageContentMaxWidth;
     NSInteger accumulated = 0;
+    NSInteger imageCount = 0;
     BOOL didTruncate = NO;
 
     for (WKRichTextBlock *block in content.content) {
-        // 按 block 截断：累计已过阈值则丢弃后续整块（含图片），不切碎单块。
+        // 文本累计过阈值则丢弃后续整块（含图片），不切碎单块。
         if (accumulated >= kRichTextTruncateThreshold) {
             didTruncate = YES;
             break;
@@ -59,6 +63,12 @@ static const CGFloat kRichTextImageMaxLength = 220.0f;
 
         if (block.type == WKRichTextBlockTypeImage) {
             if (block.url.length == 0) {
+                continue;
+            }
+            // 图片数过上限只跳过多余图片（不中断整个循环），后续文本块仍渲染：
+            // 既避免 100+ 图全量渲染+下载，又不把跟在大量图片后的短文本藏进"查看全文"。
+            if (imageCount >= kRichTextMaxImageCount) {
+                didTruncate = YES;
                 continue;
             }
             // 图片独占一行，前后补换行，保证穿插清晰。
@@ -72,6 +82,7 @@ static const CGFloat kRichTextImageMaxLength = 220.0f;
             token.size = displaySize;
             [attr appendRemoteImage:token];
             [attr appendText:@"\n"];
+            imageCount += 1;
         } else if (block.type == WKRichTextBlockTypeText) {
             NSString *text = block.text ?: @"";
             if (text.length == 0) {
@@ -182,7 +193,9 @@ static const CGFloat kRichTextImageMaxLength = 220.0f;
     NSString *fullText = @"";
     if ([self.messageModel.content isKindOfClass:[WKRichTextContent class]]) {
         WKRichTextContent *content = (WKRichTextContent*)self.messageModel.content;
-        // plain 优先；缺失时 conversationDigest 会遍历 content 兜底，勿丢字。
+        // Phase 1：查看全文仅展示纯文本（图片块此处不重排渲染），plain 优先；
+        // 缺失时 conversationDigest 遍历 content 兜底（图片→[图片] 占位），勿丢字。
+        // 图文完整重排留 Phase 2。
         fullText = content.plain.length > 0 ? content.plain : [content conversationDigest];
     }
     UIViewController *vc = [[UIViewController alloc] init];
