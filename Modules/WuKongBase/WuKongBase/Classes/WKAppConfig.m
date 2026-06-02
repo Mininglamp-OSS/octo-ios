@@ -62,8 +62,9 @@
         self.messageContentMaxWidth = WKScreenWidth - (10.0f + self.messageAvatarSize.width + 10.0f) * 2;
         self.systemMessageContentMaxWidth = WKScreenWidth - 60.0f;
         self.messageTipColor = [UIColor colorWithRed:255.0f/255.0f green:255.0f/255.0f blue:255.0f/255.0f alpha:0.5f];
-        self.unkownMessageText = @"[不支持的消息类型，或许可升级版本后查看]";
-        self.signalErrorMessageText = @"[消息无法解密，因为双方密钥有发送变更]";
+        // unkownMessageText / signalErrorMessageText 的默认文案改走本地化 getter
+        // （见下方 -unkownMessageText / -signalErrorMessageText），此处不再硬编码
+        // 中文，避免 init 期间 LLang 递归读取尚未赋值的 config。
         self.messageTipTimeInterval = 60 * 5;
         self.messageTextMaxBytes = 1024*10;
         
@@ -387,6 +388,21 @@
         _innerLangue = lang;
     }
     return _innerLangue;
+}
+
+// 默认文案走本地化（zh/en），上层未显式 set 时按当前语言返回。
+- (NSString *)unkownMessageText {
+    if (_unkownMessageText) {
+        return _unkownMessageText;
+    }
+    return LLang(@"[不支持的消息类型，或许可升级版本后查看]");
+}
+
+- (NSString *)signalErrorMessageText {
+    if (_signalErrorMessageText) {
+        return _signalErrorMessageText;
+    }
+    return LLang(@"[消息无法解密，因为双方密钥有发送变更]");
 }
 
 - (void)setLangue:(NSString *)langue {

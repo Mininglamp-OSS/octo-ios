@@ -49,6 +49,8 @@
 #import "WKWebViewVC.h"
 #import "WKCardContent.h"
 #import "WKCardCell.h"
+#import "WKRichTextContent.h"
+#import "WKRichTextCell.h"
 #import "WKUserInfoVC.h"
 #import "WKMeInfoVC.h"
 #import "WKMeItem.h"
@@ -251,6 +253,7 @@ static WKApp *_instance;
     [self.messageRegitry registerCellClass:WKEmojiStickerCell.class forMessageContentClass:WKEmojiStickerContent.class];
     [self.messageRegitry registerCellClass:[WKFileMessageCell class] forMessageContentClass:[WKFileContent class]]; // 文件消息
     [self.messageRegitry registerCellClass:[WKThreadCreatedCell class] forMessageContentClass:[WKThreadCreatedContent class]]; // 子区创建通知
+    [self.messageRegitry registerCellClass:[WKRichTextCell class] forMessageContentClass:[WKRichTextContent class]]; // 图文混排（RichText=14）
 }
 
 -(void) traceConfig {
@@ -1379,6 +1382,7 @@ static WKApp *_instance;
     
     // 复制
     [[WKApp shared] addMessageAllowCopy:WK_TEXT];
+    [[WKApp shared] addMessageAllowCopy:WK_RICHTEXT];
     [self setMethod:WKPOINT_LONGMENUS_COPY handler:^id _Nullable(id  _Nonnull param) {
         WKMessageModel *message = param[@"message"];
 
@@ -1387,11 +1391,17 @@ static WKApp *_instance;
         }
         UIImage *icon = [GenerateImageUtils generateTintedImgWithImage:[weakSelf imageName:@"Conversation/ContextMenu/Copy"] color:weakSelf.config.contextMenu.primaryColor backgroundColor:nil];
         return [WKMessageLongMenusItem initWithTitle:LLangW(@"复制", weakSelf) icon:icon onTap:^(id<WKConversationContext> context){
-            WKTextContent *textConent =  (WKTextContent*)message.content;
-            NSRegularExpression *regularExpretion=[NSRegularExpression regularExpressionWithPattern:@"<[^>]*>|\n"
-                                                    options:0
-                                                     error:nil];
-            NSString *newContent=[regularExpretion stringByReplacingMatchesInString:textConent.content options:NSMatchingReportProgress range:NSMakeRange(0, textConent.content.length) withTemplate:@""];
+            NSString *newContent = nil;
+            if ([message.content isKindOfClass:[WKRichTextContent class]]) {
+                // 图文混排取顶层 plain（image 已是 [图片] 占位），勿丢字。
+                newContent = ((WKRichTextContent*)message.content).plain ?: @"";
+            } else {
+                WKTextContent *textConent =  (WKTextContent*)message.content;
+                NSRegularExpression *regularExpretion=[NSRegularExpression regularExpressionWithPattern:@"<[^>]*>|\n"
+                                                        options:0
+                                                         error:nil];
+                newContent=[regularExpretion stringByReplacingMatchesInString:textConent.content options:NSMatchingReportProgress range:NSMakeRange(0, textConent.content.length) withTemplate:@""];
+            }
             UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
             pasteboard.string = newContent;
             UIView *topView = [WKNavigationManager shared].topViewController.view;
