@@ -837,12 +837,26 @@
  @param webView wkwebview
  */
 - (void)addUserScript:(WKWebView *)webView {
-//    NSString *js = [WKWebViewCookieMgr clientCookieScripts];
-//    if (!js) return;
-//    WKUserScript *jsscript = [[WKUserScript alloc]initWithSource:js
-//                                                   injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-//                                                forMainFrameOnly:NO];
-//    [webView.configuration.userContentController addUserScript:jsscript];
+    // 让网页（含登录 OIDC 页）跟随 App 内语言切换，而不是 iOS 系统语言。
+    // 背景：WKWebView 的 navigator.language / navigator.languages 取自
+    // NSLocale.preferredLanguages（设备系统语言），不受 [WKApp shared].config.langue 影响；
+    // 而前端用 navigator.language 决定首屏语言。Android 端是 WebView 自动继承
+    // Activity Configuration 的 locale，所以表现为「跟随 App 语言」。iOS 这里用
+    // WKUserScript 在 documentStart 注入 getter 覆盖，效果对齐 Android。
+    // 归一化原因：App 存 `zh-Hans`，但 Android 走 Locale.SIMPLIFIED_CHINESE
+    // → navigator.language = `zh-CN`，前端按 `zh-CN` / `zh-TW` / `en` 匹配。
+    NSString *appLang = [WKApp shared].config.langue ?: @"zh-Hans";
+    NSString *navLang = appLang;
+    if([appLang isEqualToString:@"zh-Hans"]) {
+        navLang = @"zh-CN";
+    } else if([appLang isEqualToString:@"zh-Hant"]) {
+        navLang = @"zh-TW";
+    }
+    NSString *js = [NSString stringWithFormat:@"(function(){try{var l='%@';Object.defineProperty(navigator,'language',{get:function(){return l;},configurable:true});Object.defineProperty(navigator,'languages',{get:function(){return [l];},configurable:true});}catch(e){}})();", navLang];
+    WKUserScript *langScript = [[WKUserScript alloc] initWithSource:js
+                                                      injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                                                   forMainFrameOnly:NO];
+    [webView.configuration.userContentController addUserScript:langScript];
 }
 
 #pragma mark -- UIScrollViewDelegate
