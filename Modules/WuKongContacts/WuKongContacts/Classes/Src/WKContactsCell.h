@@ -30,6 +30,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,assign) BOOL robot; // 是否是机器人
 
+/// 当前 cell 表示一个群（YES）还是一个人（NO）。WKAllGroupListVC 把群 No 塞进 uid 复用
+/// 此 model，需要靠这个标记决定关注菜单/已关注图标走 WKFollowTargetTypeChannel 还是 DM。
+@property(nonatomic,assign) BOOL isGroup;
+
 @end
 
 @interface WKContactsCell : WKCell

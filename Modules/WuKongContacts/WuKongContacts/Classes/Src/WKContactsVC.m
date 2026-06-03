@@ -7,6 +7,7 @@
 
 #import "WKContactsVC.h"
 #import "WKContactsCell.h"
+#import "WKContactFollowHelper.h"
 #import <Masonry/Masonry.h>
 #import "WKChineseSort.h"
 #import "WKContactsHeaderItemCell.h"
@@ -15,6 +16,7 @@
 #import "WKAvatarUtil.h"
 #import "WKSearchbarView.h"
 #import "WKGlobalSearchResultController.h"
+#import <WuKongBase/WKFollowedKeysStore.h>
 
 @interface WKContactsVC ()<UITableViewDataSource,UITableViewDelegate,WKContactsManagerDelegate,WKChannelManagerDelegate>
 @property(nonatomic,strong) UITableView *tableView;
@@ -69,6 +71,15 @@
     [[WKSDK shared].channelManager addDelegate:self];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(contactsUpdate:) name:WK_NOTIFY_CONTACTS_UPDATE object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshContactsHeader) name:WK_NOTIFY_CONTACTS_HEADER_UPDATE object:nil];
+    // FollowedKeysStore 任何 reload 都广播这个通知（关注/取消关注后由 helper 触发 reload）
+    // → 重画可见 cell 的金色五角星。
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onFollowedKeysUpdate) name:kWKFollowedKeysStoreDidUpdateNotification object:nil];
+
+    // 长按 cell → 弹"关注 / 取消关注"菜单。挂在 tableView 而不是 cell 上，
+    // 这样 cell reuse 不会重复挂 gesture。
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(onContactLongPress:)];
+    lp.minimumPressDuration = 0.4;
+    [self.tableView addGestureRecognizer:lp];
 
     // 先从DB缓存加载旧数据显示，再异步拉取API最新数据
     [self loadFromDBCacheThenFetchAPI];
@@ -169,6 +180,7 @@
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WK_NOTIFY_CONTACTS_UPDATE object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WK_NOTIFY_CONTACTS_HEADER_UPDATE object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WK_NOTIFY_CONTACTS_TAB_REDDOT_UPDATE object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:kWKFollowedKeysStoreDidUpdateNotification object:nil];
 }
 
 // 开启大标题模式
@@ -694,6 +706,7 @@
     contactsCellModel.online = channelInfo.online;
     contactsCellModel.lastOffline = channelInfo.lastOffline;
     contactsCellModel.channelInfo = channelInfo;
+    contactsCellModel.isGroup = NO; // 通讯录 cell 永远是 person，已关注图标走 WKFollowTargetTypeDM
     
     contactsCellModel.robot = channelInfo.robot;
     if(channelInfo.logo) {
@@ -715,7 +728,48 @@
 
 
 
-#pragma mark - table
+#pragma mark - 长按关注菜单
+
+- (void)onContactLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan) return;
+    CGPoint pInTable = [gesture locationInView:self.tableView];
+    NSIndexPath *ip = [self.tableView indexPathForRowAtPoint:pInTable];
+    if (!ip) return;
+    if (ip.section <= 0 || ip.section >= (NSInteger)self.items.count) return; // section 0 是 header items
+    NSArray *sectionItems = self.items[ip.section];
+    if (ip.row >= (NSInteger)sectionItems.count) return;
+    id model = sectionItems[ip.row];
+    if (![model isKindOfClass:[WKContactsCellModel class]]) return;
+    WKContactsCellModel *contact = model;
+    if (contact.uid.length == 0) return;
+
+    UIWindow *window = [UIApplication sharedApplication].keyWindow ?: [UIApplication sharedApplication].windows.firstObject;
+    CGPoint pInWindow = [self.tableView convertPoint:pInTable toView:window];
+    WKChannel *channel = [[WKChannel alloc] initWith:contact.uid channelType:WK_PERSON];
+    [WKContactFollowHelper showFollowMenuForChannel:channel
+                                     atPointInWindow:pInWindow
+                                       presentingVC:self
+                                        onDidChange:nil]; // 状态变化由 FollowedKeysStore 通知统一刷
+}
+
+- (void)onFollowedKeysUpdate {
+    // 仅刷新可见的 contact cell — header section 0 不动；contact cell 的关注图标根据
+    // store 的最新状态重画。整表 reloadData 也行，但仅重画可见的避免触发字母索引重计算。
+    NSArray<NSIndexPath *> *visible = self.tableView.indexPathsForVisibleRows;
+    NSMutableArray<NSIndexPath *> *contactPaths = [NSMutableArray array];
+    for (NSIndexPath *ip in visible) {
+        if (ip.section == 0) continue;
+        [contactPaths addObject:ip];
+    }
+    if (contactPaths.count == 0) return;
+    @try {
+        [self.tableView reloadRowsAtIndexPaths:contactPaths withRowAnimation:UITableViewRowAnimationNone];
+    } @catch (NSException *ex) {
+        [self.tableView reloadData];
+    }
+}
+
+#pragma mark table
 
 -(UIView*) tableHeader {
     if(!_tableHeader) {
