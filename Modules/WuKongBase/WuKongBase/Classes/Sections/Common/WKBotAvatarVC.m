@@ -159,6 +159,9 @@
         NSString *avatarKey = [WKAvatarUtil getAvatar:uid cacheKey:info.avatarCacheKey];
 
         [[SDImageCache sharedImageCache] storeImage:image forKey:avatarKey toDisk:YES completion:nil];
+        // 同时清掉无 cacheKey 版本的旧缓存（搜索 / 消息列表等大量入口使用），
+        // 否则那些位置仍会拿到上传前的旧头像。
+        [[SDImageCache sharedImageCache] removeImageForKey:[WKAvatarUtil getAvatar:uid] withCompletion:nil];
         [[NSURLCache sharedURLCache] removeCachedResponseForRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:avatarKey]]];
 
         [[NSNotificationCenter defaultCenter] postNotificationName:WKNOTIFY_USER_AVATAR_UPDATE object:@{@"uid": uid ?: @""}];
@@ -207,6 +210,8 @@
                                               forKey:avatarKey
                                               toDisk:YES
                                           completion:nil];
+        // 同步清掉无 cacheKey 版本的旧缓存，理由同上方静态分支。
+        [[SDImageCache sharedImageCache] removeImageForKey:[WKAvatarUtil getAvatar:uid] withCompletion:nil];
         [[NSURLCache sharedURLCache] removeCachedResponseForRequest:
             [NSURLRequest requestWithURL:[NSURL URLWithString:avatarKey]]];
 

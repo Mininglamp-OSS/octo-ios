@@ -143,6 +143,14 @@ didCropToImage:(nonnull UIImage *)image withRect:(CGRect)cropRect
             // 写入 SDWebImage 缓存（内存 + 磁盘）
             [[SDImageCache sharedImageCache] storeImage:image forKey:avatarKey toDisk:YES completion:nil];
 
+            // 同时清掉**无 cacheKey 版本**的旧缓存。项目里大量入口
+            // (搜索 VM / 消息列表 / 我的二维码 / 邀请码 / 用户授权页 ...) 用的是
+            // [WKAvatarUtil getAvatar:uid] 不带 cacheKey 的 URL，本次更新只写了
+            // 带 cacheKey 的 key，老入口仍会命中过期的旧静态/动图。这里显式让
+            // 那条键失效，下次访问即从网络拉最新。
+            NSString *noVerKey = [WKAvatarUtil getAvatar:uid];
+            [[SDImageCache sharedImageCache] removeImageForKey:noVerKey withCompletion:nil];
+
             // 清除 NSURLCache 中该 URL 的 HTTP 缓存
             [[NSURLCache sharedURLCache] removeCachedResponseForRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:avatarKey]]];
 
@@ -188,6 +196,11 @@ didCropToImage:(nonnull UIImage *)image withRect:(CGRect)cropRect
                                               forKey:avatarKey
                                               toDisk:YES
                                           completion:nil];
+
+        // 同步清掉无 cacheKey 版本的旧缓存（搜索 / 消息列表等大量入口使用），
+        // 否则那些位置仍会拿到上传前的旧静态图。
+        NSString *noVerKey = [WKAvatarUtil getAvatar:uid];
+        [[SDImageCache sharedImageCache] removeImageForKey:noVerKey withCompletion:nil];
 
         [[NSURLCache sharedURLCache] removeCachedResponseForRequest:
             [NSURLRequest requestWithURL:[NSURL URLWithString:avatarKey]]];

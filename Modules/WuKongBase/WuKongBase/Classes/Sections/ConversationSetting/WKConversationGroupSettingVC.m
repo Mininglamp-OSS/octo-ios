@@ -692,6 +692,9 @@
         WKChannelInfo *updatedInfo = [[WKSDK shared].channelManager getChannelInfo:weakSelf.channel];
         NSString *cacheURL = [WKAvatarUtil getGroupAvatar:weakSelf.channel.channelId cacheKey:updatedInfo.avatarCacheKey];
         [[SDImageCache sharedImageCache] storeImage:image forKey:cacheURL toDisk:YES completion:nil];
+        // 同步清掉无 cacheKey 版本的旧缓存（搜索 / 消息列表等大量入口使用），
+        // 否则那些位置仍会拿到上传前的旧头像。
+        [[SDImageCache sharedImageCache] removeImageForKey:[WKAvatarUtil getGroupAvatar:weakSelf.channel.channelId] withCompletion:nil];
         [[WKSDK shared].channelManager fetchChannelInfo:weakSelf.channel completion:nil];
         [weakSelf reloadData];
     }];
@@ -726,6 +729,8 @@
                                               forKey:cacheURL
                                               toDisk:YES
                                           completion:nil];
+        // 同步清掉无 cacheKey 版本的旧缓存，理由同上方静态分支。
+        [[SDImageCache sharedImageCache] removeImageForKey:[WKAvatarUtil getGroupAvatar:weakSelf.channel.channelId] withCompletion:nil];
         [[NSURLCache sharedURLCache] removeCachedResponseForRequest:
             [NSURLRequest requestWithURL:[NSURL URLWithString:cacheURL]]];
         [[WKSDK shared].channelManager fetchChannelInfo:weakSelf.channel completion:nil];
