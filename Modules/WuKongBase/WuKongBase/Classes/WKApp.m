@@ -1428,9 +1428,30 @@ static WKApp *_instance;
             return nil;
         }
 
+        // 撤回按钮可见性：
+        //   群聊 (WK_GROUP) ——
+        //     · 自己发的消息：显示（仍受撤回时窗限制）
+        //     · 群主：对任何人显示，不受时窗限制
+        //     · 管理员：仅对普通成员显示，对其他管理员/群主隐藏（避免越权）
+        //     · 普通成员：仅对自己的消息显示
+        //   子区 (WK_COMMUNITY_TOPIC) —— TODO: 待 octo-server#222 完成后基于
+        //     父群角色判断；当前仅按 isSend + 时窗（落到下方 !isManager 分支）。
+        //   Bot 创建者 —— TODO: 待后端把 bot_creator_uid 下放到 channel_member.extra
+        //     后，在此追加「self == from.bot_creator」分支让 Bot 拥有者可撤回该 Bot 消息。
+        NSString *loginUid = [WKApp shared].loginInfo.uid;
         BOOL isManager = false;
         if(message.channel.channelType == WK_GROUP) {
-            isManager = [[WKSDK shared].channelManager isManager:message.channel memberUID:[WKApp shared].loginInfo.uid];
+            WKChannelMember *selfMember = [[WKSDK shared].channelManager getMember:message.channel uid:loginUid];
+            WKMemberRole selfRole = selfMember ? selfMember.role : WKMemberRoleCommon;
+            if(selfRole == WKMemberRoleCreator) {
+                // 群主：对任何人显示
+                isManager = true;
+            } else if(selfRole == WKMemberRoleManager) {
+                // 管理员：仅对普通成员显示，对其他管理员/群主隐藏
+                WKChannelMember *targetMember = [[WKSDK shared].channelManager getMember:message.channel uid:message.fromUid];
+                WKMemberRole targetRole = targetMember ? targetMember.role : WKMemberRoleCommon;
+                isManager = (targetRole == WKMemberRoleCommon);
+            }
         }
         if(!isManager) {
             if(![message isSend]) {
