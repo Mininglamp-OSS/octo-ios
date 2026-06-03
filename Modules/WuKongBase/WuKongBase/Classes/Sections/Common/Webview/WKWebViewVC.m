@@ -404,8 +404,8 @@
 
 
 // 服务器对 .md / .txt 等纯文本文档常常不带 charset，WKWebView 默认按 Latin-1
-// 解码，导致中文乱码。此处仅在「主 frame + 文本类响应 + 无 charset」时拦截，
-// 自行下载后按 UTF-8 重灌；其他响应一律放行，不影响普通网页加载。
+// 解码，导致中文乱码。此处仅在「主 frame + 纯文本类响应（非 text/html）+ 无 charset」
+// 时拦截，自行下载后按 UTF-8 重灌；其他响应一律放行，不影响普通网页加载。
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
     NSURLResponse *response = navigationResponse.response;
     NSURL *url = response.URL;
@@ -424,14 +424,17 @@
         return;
     }
 
-    NSString *mime = response.MIMEType ?: @"";
+    NSString *mime = (response.MIMEType ?: @"").lowercaseString;
     NSString *ext = url.pathExtension.lowercaseString ?: @"";
     static NSSet *textExts;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         textExts = [NSSet setWithArray:@[@"md", @"markdown", @"txt", @"log", @"csv", @"json", @"xml", @"yml", @"yaml"]];
     });
-    BOOL isText = [mime hasPrefix:@"text/"] || [textExts containsObject:ext];
+    // 关键：text/html / application/xhtml+xml 是网页，交给 WebKit 自己渲染，
+    // 不能因为没声明 charset 就当成纯文本下载（否则登录跳转等页面会被 <pre> 包起来）。
+    BOOL isHTML = [mime isEqualToString:@"text/html"] || [mime isEqualToString:@"application/xhtml+xml"];
+    BOOL isText = !isHTML && ([mime hasPrefix:@"text/"] || [textExts containsObject:ext]);
     if (!isText) {
         decisionHandler(WKNavigationResponsePolicyAllow);
         return;
