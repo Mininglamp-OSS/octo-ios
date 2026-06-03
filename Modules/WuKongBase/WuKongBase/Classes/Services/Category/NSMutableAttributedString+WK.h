@@ -27,6 +27,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 -(void) lim_render:(NSString *)text tokens:(NSArray<id<WKMatchToken>>*)tokens;
 
+// 追加纯文本，返回新增文本所在 range（沿用当前 font/textColor）。
+-(NSRange) appendText:(NSString*)text;
+
+// 追加远程图片占位（WKRemoteImageToken → WKRemoteImageAttachment），返回占位 range。
+-(NSRange) appendRemoteImage:(WKRemoteImageToken*)token;
+
 
 // 最后一行的宽度
 -(CGFloat)lastlineWidth:(CGFloat)maxWidth;
