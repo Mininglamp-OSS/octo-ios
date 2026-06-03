@@ -137,6 +137,40 @@ NS_ASSUME_NONNULL_BEGIN
 -(NSArray*) invokes:(NSString*)category param:(__nullable id)param;
 
 /**
+ 图文混排发送（RichText=14）：把多张已压缩的图片 + 附带文本聚合成单条消息。
+
+ 用于主聊天「相册选图时输入框已有文本」场景——避免图发出而文字被静默丢弃。每张图先
+ 写入临时文件再走与分享入口一致的上传/构造链路（图 block 在前 + text block 在后），
+ 任一图片失败则整条中止（原子性），成功/失败都会清理临时文件。
+
+ 调用方应在调用前清空输入框（避免重复发送）；若上传/构造在任一环节失败，`onFailure`
+ 会在主线程回调，调用方据此把文本恢复到输入框，保证文字绝不被静默丢弃。
+
+ @param imageDatas 已压缩的图片二进制（与相册回调一致，顺序即展示顺序）
+ @param extraText  输入框待发文本（调用方保证非空白）
+ @param channel    目标会话
+ @param onFailure  发送失败时主线程回调（用于恢复输入框草稿），可为 nil
+ */
+-(void) sendRichTextMixedImageDatas:(NSArray<NSData*>*)imageDatas
+                          extraText:(NSString*)extraText
+                          toChannel:(WKChannel*)channel
+                          onFailure:(void(^_Nullable)(void))onFailure;
+
+/**
+ 相册选图发送决策（footgun 守卫，纯函数，便于单测）：仅当选中全为图片、至少一张、
+ 且输入框存在非空白待发文本时，才把「图 + 文本」聚合成单条 RichText(=14)；否则走原
+ 逐条发送路径（纯图 / 含视频 / 无文本零回归）。
+
+ @param allImages   选中项是否全部为图片（含「至少选了一项」的语义由调用方保证传入）
+ @param imageCount  选中的图片数量
+ @param pendingText 输入框当前文本（未 trim，内部做空白裁剪判定）
+ @return YES 表示应走图文聚合路径
+ */
++ (BOOL)shouldAggregateAlbumImagesWithText:(BOOL)allImages
+                                imageCount:(NSUInteger)imageCount
+                               pendingText:(nullable NSString *)pendingText;
+
+/**
  设置方法
 
  @param sid poit唯一id

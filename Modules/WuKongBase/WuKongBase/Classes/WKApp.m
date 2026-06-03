@@ -120,6 +120,9 @@ typedef void(^WKOnComplete)(id data,NSError *error);
 
 // 图文混排（RichText=14）发送私有方法（在 sendShareFiles: 之后定义，此处前置声明）。
 -(void) sendRichTextMixedImages:(NSArray *)fileInfos extraText:(NSString *)extraText toChannel:(WKChannel *)channel;
+// 上传核心：cleanup 在成功/失败终态都会执行，由调用方决定清理对象（分享目录 / 临时文件）；
+// onFailure 仅在失败终态主线程回调（用于恢复输入框草稿等）。
+-(void) sendRichTextMixedImages:(NSArray *)fileInfos extraText:(NSString *)extraText toChannel:(WKChannel *)channel cleanup:(void(^_Nullable)(void))cleanup onFailure:(void(^_Nullable)(void))onFailure;
 - (NSString *)richTextMimeForExtension:(NSString *)ext;
 
 /**
@@ -2221,6 +2224,18 @@ static CGSize _WKRichTextImagePixelSize(NSString *path) {
  * - 上传/网络在后台线程链式串行，全部就绪后回主线程构造并发送一条消息。
  */
 -(void) sendRichTextMixedImages:(NSArray *)fileInfos extraText:(NSString *)extraText toChannel:(WKChannel *)channel {
+    // 分享入口：终态清理拷进 App Group 的分享目录（成功/失败都清，与原逐条路径对称）。
+    // 分享入口无输入框草稿，onFailure 传 nil（失败已由 HUD 提示）。
+    [self sendRichTextMixedImages:fileInfos extraText:extraText toChannel:channel cleanup:^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_global_queue(0, 0), ^{
+            NSURL *container = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:_OctoShareAppGroupId()];
+            NSURL *dir = [container URLByAppendingPathComponent:kShareDirName];
+            [[NSFileManager defaultManager] removeItemAtURL:dir error:nil];
+        });
+    } onFailure:nil];
+}
+
+-(void) sendRichTextMixedImages:(NSArray *)fileInfos extraText:(NSString *)extraText toChannel:(WKChannel *)channel cleanup:(void(^)(void))cleanup onFailure:(void(^)(void))onFailure {
     UIView *topView = [WKNavigationManager shared].topViewController.view;
     [topView showHUD:LLang(@"发送中")];
 
@@ -2243,13 +2258,9 @@ static CGSize _WKRichTextImagePixelSize(NSString *path) {
     // 终态显式置 nil 打破 retain cycle，避免泄漏。
     __block void (^uploadNext)(NSUInteger) = nil;
 
-    // 分享目录清理：成功/失败都要清，避免失败时把拷进来的分享文件残留（与原路径对称）。
+    // 终态清理：成功/失败都执行调用方注入的 cleanup（分享目录 / 临时文件），避免残留。
     void (^cleanupShareDir)(void) = ^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_global_queue(0, 0), ^{
-            NSURL *container = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:_OctoShareAppGroupId()];
-            NSURL *dir = [container URLByAppendingPathComponent:kShareDirName];
-            [[NSFileManager defaultManager] removeItemAtURL:dir error:nil];
-        });
+        if (cleanup) cleanup();
     };
 
     void (^fail)(void) = ^{
@@ -2259,6 +2270,8 @@ static CGSize _WKRichTextImagePixelSize(NSString *path) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [topView hideHud];
             [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送失败")];
+            // 失败先恢复草稿（图文聚合发送整条中止 → 文字不能丢），再清理临时资源。
+            if (onFailure) onFailure();
             cleanupShareDir();
         });
     };
@@ -2375,6 +2388,73 @@ static CGSize _WKRichTextImagePixelSize(NSString *path) {
     if ([ext isEqualToString:@"webp"]) return @"image/webp";
     if ([ext isEqualToString:@"heic"]) return @"image/heic";
     return @"image/jpeg";
+}
+
+// 由图片二进制内容嗅探扩展名（相册回调给的是已压缩 NSData，没有文件名/路径）。
+// 用于构造临时文件名与上传 MIME，未知格式回退 jpg（与上传 MIME 默认一致）。
+static NSString *_WKRichTextExtForImageData(NSData *data) {
+    SDImageFormat fmt = [NSData sd_imageFormatForImageData:data];
+    switch (fmt) {
+        case SDImageFormatPNG:  return @"png";
+        case SDImageFormatGIF:  return @"gif";
+        case SDImageFormatWebP: return @"webp";
+        case SDImageFormatHEIC:
+        case SDImageFormatHEIF: return @"heic";
+        case SDImageFormatJPEG:
+        default:                return @"jpg";
+    }
+}
+
++ (BOOL)shouldAggregateAlbumImagesWithText:(BOOL)allImages
+                                imageCount:(NSUInteger)imageCount
+                               pendingText:(NSString *)pendingText {
+    if (!allImages || imageCount == 0) return NO;
+    NSString *trimmed = [pendingText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return trimmed.length > 0;
+}
+
+-(void) sendRichTextMixedImageDatas:(NSArray<NSData*>*)imageDatas
+                          extraText:(NSString*)extraText
+                          toChannel:(WKChannel*)channel
+                          onFailure:(void(^)(void))onFailure {
+    // 主聊天「相册选图 + 输入框有文本」：先把每张已压缩图片落临时文件（上传链路与分享
+    // 入口共用，按文件路径走，不依赖内存里的 NSData），再聚合成单条 RichText(=14)。
+    NSString *trimmed = [extraText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed.length == 0 || imageDatas.count == 0) {
+        if (onFailure) onFailure(); // 防御：无文本或无图不应进此路径（调用方已判定）；仍恢复草稿。
+        return;
+    }
+
+    NSString *tmpDir = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                        [NSString stringWithFormat:@"richtext-album-%@", [[NSUUID UUID] UUIDString]]];
+    [[NSFileManager defaultManager] createDirectoryAtPath:tmpDir withIntermediateDirectories:YES attributes:nil error:nil];
+
+    NSMutableArray<NSDictionary *> *fileInfos = [NSMutableArray array];
+    for (NSUInteger i = 0; i < imageDatas.count; i++) {
+        NSData *data = imageDatas[i];
+        if (data.length == 0) continue;
+        NSString *ext = _WKRichTextExtForImageData(data);
+        NSString *fileName = [NSString stringWithFormat:@"image_%lu.%@", (unsigned long)i, ext];
+        NSString *path = [tmpDir stringByAppendingPathComponent:fileName];
+        if ([data writeToFile:path atomically:YES]) {
+            [fileInfos addObject:@{@"type": @"image", @"path": path}];
+        }
+    }
+
+    // 落盘全失败（极端磁盘异常）：恢复草稿（文字绝不丢），清理空临时目录后返回。
+    if (fileInfos.count == 0) {
+        [[NSFileManager defaultManager] removeItemAtPath:tmpDir error:nil];
+        if (onFailure) onFailure();
+        return;
+    }
+
+    // 终态清理：删整个临时目录（成功/失败都执行），与分享入口清理对称；失败时回调
+    // onFailure 让调用方恢复输入框草稿。
+    [self sendRichTextMixedImages:fileInfos extraText:extraText toChannel:channel cleanup:^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_global_queue(0, 0), ^{
+            [[NSFileManager defaultManager] removeItemAtPath:tmpDir error:nil];
+        });
+    } onFailure:onFailure];
 }
 
 

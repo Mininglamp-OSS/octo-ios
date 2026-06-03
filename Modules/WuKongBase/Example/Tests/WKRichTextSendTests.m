@@ -14,6 +14,7 @@
 
 @import XCTest;
 #import "WKRichTextContent.h"
+#import "WKApp.h"
 
 @interface WKRichTextSendTests : XCTestCase
 @end
@@ -121,6 +122,39 @@
     XCTAssertEqual(i.height, 20);
     XCTAssertEqual(i.size, 81920);
     XCTAssertEqualObjects(i.name, @"a.png");
+}
+
+#pragma mark - 相册选图 footgun 守卫（输入框有文本时不丢字）
+// octo-ios#21：相册选图发图前若输入框有待发文本，须把图+文本聚合成单条 RichText(=14)，
+// 不能只发图把文字静默丢掉。下面覆盖聚合决策的全部分支（含「选图时输入框有文本」回归）。
+
+- (void)testAlbumAggregate_imagesWithText_aggregates {
+    // 回归核心：选图时输入框有文本 → 走图文聚合（修复前是只发图丢文字）。
+    XCTAssertTrue([WKApp shouldAggregateAlbumImagesWithText:YES imageCount:2 pendingText:@"看这个"]);
+}
+
+- (void)testAlbumAggregate_singleImageWithText_aggregates {
+    XCTAssertTrue([WKApp shouldAggregateAlbumImagesWithText:YES imageCount:1 pendingText:@"hi"]);
+}
+
+- (void)testAlbumAggregate_imagesWithoutText_doesNotAggregate {
+    // 纯图无文本：原逐条发送路径不动，零回归。
+    XCTAssertFalse([WKApp shouldAggregateAlbumImagesWithText:YES imageCount:3 pendingText:nil]);
+    XCTAssertFalse([WKApp shouldAggregateAlbumImagesWithText:YES imageCount:3 pendingText:@""]);
+}
+
+- (void)testAlbumAggregate_whitespaceOnlyText_doesNotAggregate {
+    // 仅空白文本视作无文本，不聚合（避免发出一条只含空白的多余文本块）。
+    XCTAssertFalse([WKApp shouldAggregateAlbumImagesWithText:YES imageCount:1 pendingText:@"   \n\t "]);
+}
+
+- (void)testAlbumAggregate_containsNonImage_doesNotAggregate {
+    // 含视频/其它（allImages=NO）：即使有文本也不聚合，走原路径，零回归。
+    XCTAssertFalse([WKApp shouldAggregateAlbumImagesWithText:NO imageCount:2 pendingText:@"看这个"]);
+}
+
+- (void)testAlbumAggregate_noImage_doesNotAggregate {
+    XCTAssertFalse([WKApp shouldAggregateAlbumImagesWithText:YES imageCount:0 pendingText:@"看这个"]);
 }
 
 @end

@@ -106,11 +106,31 @@ static WKMoreItemClickEvent *_instance;
    
     
     [context endEditing];
-    
+
     UIView *topView = [WKNavigationManager shared].topViewController.view;
-   
+
     __block NSInteger handleCount = 0;
     [[WKPhotoBrowser shared] showPreviewWithSender:[context targetVC] selectCompressImageBlock:^(NSArray<NSData *> * _Nonnull images, NSArray<PHAsset *> * _Nonnull assets, BOOL isOriginal) {
+        // footgun 修复：相册选图时主聊天输入框已有待发文本 → 不能只发图把文字静默丢掉。
+        // 选中全为图片（无视频/其它）且输入框有非空白文本时，把「图 + 文本」聚合成单条
+        // RichText(=14)（复用 #19 落地的发送能力），图发出后清空输入框；任一条件不满足
+        // （有视频、纯图无文本）走原逐条发送路径，纯图零回归。
+        BOOL allImages = assets.count > 0;
+        for (PHAsset *a in assets) {
+            if (a.mediaType != PHAssetMediaTypeImage) { allImages = NO; break; }
+        }
+        NSString *pendingText = [weakContext inputText];
+        if ([WKApp shouldAggregateAlbumImagesWithText:allImages imageCount:images.count pendingText:pendingText]) {
+            [weakContext inputSetText:@""]; // 文本随聚合消息发出，先清空输入框避免重复。
+            // 发送失败则把草稿恢复回输入框——文字绝不被静默丢弃（footgun 修复核心保证）。
+            [[WKApp shared] sendRichTextMixedImageDatas:images extraText:pendingText toChannel:[weakContext channel] onFailure:^{
+                if ([weakContext inputText].length == 0) {
+                    [weakContext inputSetText:pendingText];
+                }
+            }];
+            return;
+        }
+
         [topView showHUD:LLang(@"压缩中")];
         if(assets && assets.count>0) {
             handleCount = assets.count;
