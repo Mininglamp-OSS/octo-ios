@@ -26,6 +26,7 @@
 		873B8AEB1B1F5CCA007FD442 /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 873B8AEA1B1F5CCA007FD442 /* Main.storyboard */; };
 		93FBC126DB4B04BC75AF04E2 /* WKExternalViewerResolverTests.m in Sources */ = {isa = PBXBuildFile; fileRef = 85EB8C00E7C49A151B670678 /* WKExternalViewerResolverTests.m */; };
 		A1410000000000000000F001 /* WKJoinGroupSuccessHelperTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A1410000000000000000F002 /* WKJoinGroupSuccessHelperTests.m */; };
+		A1990000000000000000F001 /* WKRichTextSendTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A1990000000000000000F002 /* WKRichTextSendTests.m */; };
 		A2130000000000000000F001 /* WKGroupScanJoinResponseParsingTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */; };
 		A35414ED98745ED690EC26AF /* Pods_LiMaoBase_Example.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4F569B6CE3F4D594F10B3833 /* Pods_LiMaoBase_Example.framework */; };
 		A97C0DE197001001E7B8C3A1 /* WKGroupQRCodeInfoModelTests.m in Sources */ = {isa = PBXBuildFile; fileRef = A97C0DE197001001E7B8C3A2 /* WKGroupQRCodeInfoModelTests.m */; };
@@ -87,6 +88,7 @@
 		873B8AEA1B1F5CCA007FD442 /* Main.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = Main.storyboard; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		996488C1EDA937D964C11C1B /* README.md */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = net.daringfireball.markdown; name = README.md; path = ../README.md; sourceTree = "<group>"; };
 		A1410000000000000000F002 /* WKJoinGroupSuccessHelperTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKJoinGroupSuccessHelperTests.m; sourceTree = "<group>"; };
+		A1990000000000000000F002 /* WKRichTextSendTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKRichTextSendTests.m; sourceTree = "<group>"; };
 		A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKGroupScanJoinResponseParsingTests.m; sourceTree = "<group>"; };
 		A97C0DE197001001E7B8C3A2 /* WKGroupQRCodeInfoModelTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKGroupQRCodeInfoModelTests.m; sourceTree = "<group>"; };
 		B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WKConversationListVMSystemBotsTests.m; sourceTree = "<group>"; };
@@ -209,6 +211,7 @@
 				F1900190F19001000190F202 /* WKUserInfoVMExternalTests.m */,
 				F1900190F19001000190F302 /* WKUserInfoExternalGateTests.m */,
 				A1410000000000000000F002 /* WKJoinGroupSuccessHelperTests.m */,
+				A1990000000000000000F002 /* WKRichTextSendTests.m */,
 				A2130000000000000000F002 /* WKGroupScanJoinResponseParsingTests.m */,
 				B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */,
 				B2360000000000000000F002 /* WKSpaceConvSyncCacheRemovalTests.m */,
@@ -551,6 +554,7 @@
 				F1900190F19001000190F201 /* WKUserInfoVMExternalTests.m in Sources */,
 				F1900190F19001000190F301 /* WKUserInfoExternalGateTests.m in Sources */,
 				A1410000000000000000F001 /* WKJoinGroupSuccessHelperTests.m in Sources */,
+				A1990000000000000000F001 /* WKRichTextSendTests.m in Sources */,
 				A2130000000000000000F001 /* WKGroupScanJoinResponseParsingTests.m in Sources */,
 				B2180000000000000000F001 /* WKConversationListVMSystemBotsTests.m in Sources */,
 				B2360000000000000000F001 /* WKSpaceConvSyncCacheRemovalTests.m in Sources */,
