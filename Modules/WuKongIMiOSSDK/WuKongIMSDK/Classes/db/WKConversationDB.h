@@ -33,10 +33,14 @@ NS_ASSUME_NONNULL_BEGIN
 ///  - 拒收 version=0 && lastMsgSeq=0 的"空白行"(防 server 返回缩水的系统通道把
 ///    botfather / fileHelper / notification / u_10000 的 lastSeq / unread 擦成 0).
 ///  - server.version > local.version 才覆盖元数据(lastMsgSeq / lastMsgTimestamp / extra).
-///  - unreadCount 取 max(local, server).这是 phase 1 的兜底, phase 2 接入
-///    WKUnreadStore 后会改成本地优先策略.
+///  - unreadCount 走 WKUnreadStore.reconcileServerSnapshot(本地优先 + 60s 保护窗口 + 已读 seq).
 ///  - 新会话(local 无记录): 整条插入.
--(void) mergeConversations:(NSArray<WKConversation*>*)conversations;
+///
+/// 返回 channelKey("channelType:channelId") → 本次 reconcile 后写进 DB 的真实 unread,
+/// 调用方需要把这个真值同步回内存里的 WKConversation.unreadCount 再 dispatch 给 UI,
+/// 否则 UI 会拿到 server 的原始 unread(可能被本地保护策略覆盖前的旧值),出现
+/// "DB 红点对、UI 红点 0" 的不一致(锁屏后偶发的红点丢失就是这一路径).
+-(NSDictionary<NSString*, NSNumber*>*) mergeConversations:(NSArray<WKConversation*>*)conversations;
 
 
 /// 添加最近会话信息

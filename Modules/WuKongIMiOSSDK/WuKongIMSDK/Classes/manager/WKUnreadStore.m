@@ -123,8 +123,14 @@ static NSTimeInterval const kLocalReadProtectionWindow = 60.0;
     BOOL inProtectionWindow = (lastReadAt > 0 && (now - lastReadAt) < kLocalReadProtectionWindow);
 
     // 1. 用户已经读过 server 那条最新 seq: 直接 0, server 的 unread 是 stale.
-    if (lastReadSeq > 0 && serverLastSeq > 0 && lastReadSeq >= serverLastSeq) {
-        NSLog(@"[UnreadStore] reconcile channelId=%@ -> 0 (read past, lastReadSeq=%u >= serverLastSeq=%u)",
+    //    必须额外要求 localUnread==0, 否则会误杀 "本地 socket 已经先收到比 server
+    //    sync 接口快照更新的消息,把 unread +1 到了 1" 的真值. server snapshot 落后
+    //    (serverLastSeq < lastReadSeq) 是常态; 锁屏后 socket 重连那一瞬,
+    //    handleRecv 通常先于 conversation/sync 返回, DB 里已经有 unread=1, 这时
+    //    sync 接口给的 serverLastSeq 还是用户上次 lastReadSeq 前的值, 不加这个守卫
+    //    会把刚 +1 的红点擦掉, 用户视角是 "预览到了但红点没起来".
+    if (lastReadSeq > 0 && serverLastSeq > 0 && lastReadSeq >= serverLastSeq && localUnread == 0) {
+        NSLog(@"[UnreadStore] reconcile channelId=%@ -> 0 (read past, lastReadSeq=%u >= serverLastSeq=%u, localUnread=0)",
               channel.channelId, lastReadSeq, serverLastSeq);
         return 0;
     }

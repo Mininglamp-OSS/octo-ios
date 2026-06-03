@@ -595,8 +595,17 @@
     model.lastMsgSeq = (uint32_t)[dataDict[@"last_msg_seq"] unsignedLongValue];
     model.lastMsgClientNo = dataDict[@"last_client_msg_no"];
     model.version = [dataDict[@"version"] longLongValue];
-    model.stick = dataDict[@"stick"]?[dataDict[@"stick"] boolValue]:false;
-    model.mute = dataDict[@"mute"]?[dataDict[@"mute"] boolValue]:false;
+    // 区分 "server 没下发字段" 与 "server 明确下发 false". 在 handleSyncConversation
+    // 写回 channelInfo 那一步会用这两个 flag 做 gate, 避免 server 偶发漏字段时把本地
+    // 用户置顶/静音擦掉. NSNull 与 nil 都视为未下发. 顺便规避了老写法
+    // `dataDict[@"stick"] ? [.. boolValue] : false` 撞到 NSNull 时
+    // -[NSNull boolValue] 的 unrecognized-selector 风险.
+    id _stickRaw = dataDict[@"stick"];
+    model.stickPresent = (_stickRaw != nil && ![_stickRaw isKindOfClass:[NSNull class]]);
+    model.stick = model.stickPresent ? [_stickRaw boolValue] : NO;
+    id _muteRaw = dataDict[@"mute"];
+    model.mutePresent = (_muteRaw != nil && ![_muteRaw isKindOfClass:[NSNull class]]);
+    model.mute = model.mutePresent ? [_muteRaw boolValue] : NO;
     
     if(dataDict[@"extra"]) {
         model.remoteExtra = [self toConversationExtra:dataDict[@"extra"]];

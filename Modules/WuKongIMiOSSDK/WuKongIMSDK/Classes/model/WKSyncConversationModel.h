@@ -27,6 +27,14 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,assign) BOOL stick;
 
+// server 是否在 conversation/sync 响应里显式带了 mute / stick 字段.
+// 区分 "server 漏发字段(NO)" 与 "server 明确说 false(YES + mute/stick=NO)".
+// handleSyncConversation 写回 channelInfo 时,只在 *Present=YES 才覆盖本地值,
+// 防止 server 偶发缩水的 sync 响应把用户在 iOS / 其它设备上的置顶/静音擦掉
+// (锁屏几小时后醒来偶发的 "置顶突然没了 / 红点没了" 都源自这条路径).
+@property(nonatomic,assign) BOOL mutePresent;
+@property(nonatomic,assign) BOOL stickPresent;
+
 @property(nonatomic,assign) NSTimeInterval timestamp; // 最后一次会话时间
 
 @property(nonatomic,assign) uint32_t lastMsgSeq; // 最后一次会话的消息序列号
