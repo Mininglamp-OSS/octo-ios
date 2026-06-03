@@ -330,6 +330,24 @@
                     if (needUpdate) {
                         [[WKSDK shared].channelManager updateChannelInfo:channelInfo];
                     }
+
+                    // 同上 unread 回填的对称修复：把 channelInfo 上权威的 stick/mute 回填到
+                    // syncModel.conversation —— 它就是上面 conversations 数组里的对象，
+                    // 会被 callOnConversationUpdateDelegates: 透传给 UI。stick 被守卫保住的
+                    // 是 channelInfo 这一路；conversation 对象上的 stick 仍是 syncModel.stick
+                    // (server 漏字段时 = 0)，不回填 UI 就会出现"channelInfo 是 YES、UI 显示
+                    // 取消置顶"的错位（DM 偶发掉置顶根因，重启读 DB join channel.stick 才恢复）。
+                    // 群少踩坑是因为 group 还有 group_setting / Group VM 多路回填兜底，DM 只
+                    // 这一条路径。
+                    if (syncModel.conversation.stick != channelInfo.stick) {
+                        NSLog(@"[StickTrace] patch UI conversation.stick channelId=%@ type=%d syncRaw=%d authoritative=%d",
+                              syncModel.channel.channelId, syncModel.channel.channelType,
+                              syncModel.conversation.stick, channelInfo.stick);
+                        syncModel.conversation.stick = channelInfo.stick;
+                    }
+                    if (syncModel.conversation.mute != channelInfo.mute) {
+                        syncModel.conversation.mute = channelInfo.mute;
+                    }
                 }
             }
 

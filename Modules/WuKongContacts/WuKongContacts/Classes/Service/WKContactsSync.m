@@ -103,6 +103,19 @@
             long long version = [contacts.lastObject[@"version"] longLongValue];
             [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%lld",version] forKey:cacheKey];
             [[NSUserDefaults standardUserDefaults] synchronize];
+            // [本地态保留] friend/sync 不返 online/stick/mute/deviceFlag 等字段，
+            // toChannelInfo: 造的新 info 这些字段全是默认值，直接 addOrUpdate 会把
+            // 用户已设的私聊置顶/静音擦掉（DM 偶发掉置顶根因之一；syncSpaceContacts
+            // 在 channelInfo 已存在时复用旧对象 + 只改 name/logo/follow，所以没事）。
+            for (WKChannelInfo *info in channelInfos) {
+                WKChannelInfo *old = [[WKSDK shared].channelManager getChannelInfo:info.channel];
+                if (!old) continue;
+                info.online = old.online;
+                info.lastOffline = old.lastOffline;
+                info.deviceFlag = old.deviceFlag;
+                info.stick = old.stick;
+                info.mute = old.mute;
+            }
             [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
 
             // 如果返回的数量等于限制数量，说明可能还有更多数据，延迟后继续同步
