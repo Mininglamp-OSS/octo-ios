@@ -48,6 +48,8 @@
 "清空聊天记录"="Clear Chat History";
 "投诉"="Report";
 "发送成功"="Sent Successfully";
+"发送中"="Sending";
+"发送失败"="Failed to send";
 "删除"="Delete";
 "取消"="Cancel";
 "上午"="AM";
