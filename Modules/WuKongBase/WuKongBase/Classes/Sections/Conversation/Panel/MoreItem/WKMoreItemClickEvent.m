@@ -112,21 +112,28 @@ static WKMoreItemClickEvent *_instance;
     __block NSInteger handleCount = 0;
     [[WKPhotoBrowser shared] showPreviewWithSender:[context targetVC] selectCompressImageBlock:^(NSArray<NSData *> * _Nonnull images, NSArray<PHAsset *> * _Nonnull assets, BOOL isOriginal) {
         // footgun 修复：相册选图时主聊天输入框已有待发文本 → 不能只发图把文字静默丢掉。
-        // 选中全为图片（无视频/其它）且输入框有非空白文本时，把「图 + 文本」聚合成单条
-        // RichText(=14)（复用 #19 落地的发送能力），图发出后清空输入框；任一条件不满足
-        // （有视频、纯图无文本）走原逐条发送路径，纯图零回归。
+        // 选中全为图片（无视频/其它）且输入框有非空白文本时，由图文聚合路径接管：把「图 +
+        // 文本」聚合成单条 RichText(=14)（复用 #19 落地的发送能力，最终走 [context sendMessage:]
+        // 保留全部会话语义），图发出后清空输入框。任一条件不满足（有视频、纯图无文本）走原
+        // 逐条发送路径，纯图零回归。
+        // 决策基于 assets.count（用户实际选中数），不看压缩结果 images.count——压缩可能丢图
+        // 甚至全丢，但只要选了图且有文本就必须接管（否则文本被原路径丢掉 + 原 loop 按
+        // assets 下标索引 images 越界崩溃）。压缩丢图的原子性由发送方法校验：丢图时整条
+        // 失败并恢复草稿。
         BOOL allImages = assets.count > 0;
         for (PHAsset *a in assets) {
             if (a.mediaType != PHAssetMediaTypeImage) { allImages = NO; break; }
         }
         NSString *pendingText = [weakContext inputText];
-        if ([WKApp shouldAggregateAlbumImagesWithText:allImages imageCount:images.count pendingText:pendingText]) {
+        if ([WKApp shouldAggregateAlbumImagesWithText:allImages assetCount:assets.count pendingText:pendingText]) {
             [weakContext inputSetText:@""]; // 文本随聚合消息发出，先清空输入框避免重复。
             // 发送失败则把草稿恢复回输入框——文字绝不被静默丢弃（footgun 修复核心保证）。
-            [[WKApp shared] sendRichTextMixedImageDatas:images extraText:pendingText toChannel:[weakContext channel] onFailure:^{
-                if ([weakContext inputText].length == 0) {
-                    [weakContext inputSetText:pendingText];
-                }
+            // 边界：上传在途时用户又输入了新内容 → 不能直接覆盖（会丢新内容），把原草稿
+            // 前置拼到当前输入前，两段文字都不丢。
+            [[WKApp shared] sendRichTextMixedImageDatas:images assetCount:assets.count extraText:pendingText inContext:weakContext onFailure:^{
+                NSString *current = [weakContext inputText] ?: @"";
+                NSString *restored = current.length == 0 ? pendingText : [NSString stringWithFormat:@"%@%@", pendingText, current];
+                [weakContext inputSetText:restored];
             }];
             return;
         }

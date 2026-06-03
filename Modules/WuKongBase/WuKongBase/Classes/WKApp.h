@@ -140,34 +140,52 @@ NS_ASSUME_NONNULL_BEGIN
  图文混排发送（RichText=14）：把多张已压缩的图片 + 附带文本聚合成单条消息。
 
  用于主聊天「相册选图时输入框已有文本」场景——避免图发出而文字被静默丢弃。每张图先
- 写入临时文件再走与分享入口一致的上传/构造链路（图 block 在前 + text block 在后），
- 任一图片失败则整条中止（原子性），成功/失败都会清理临时文件。
+ 写入临时文件再走与分享入口一致的上传/构造链路（图 block 在前 + text block 在后）。
 
- 调用方应在调用前清空输入框（避免重复发送）；若上传/构造在任一环节失败，`onFailure`
- 会在主线程回调，调用方据此把文本恢复到输入框，保证文字绝不被静默丢弃。
+ 与分享入口的根本区别：本方法在**活跃会话上下文**内发送，最终落地走 `context` 的
+ `sendMessage:`——与原相册单图发送（`[context sendMessage:WKImageContent]`）完全同一
+ 路径，从而保留回执设置 / 阅后即焚 expiry / spaceId / 父子频道 topic 路由 / reply
+ 元数据 / 本地 tracing + 列表插入等全部会话语义；绝不退化为 `forwardMessage:`（裸
+ save+send）那样绕过这些装饰。
+
+ 原子性（全发或全不发）：进入聚合发送前先校验 `imageDatas.count == assetCount`
+ （压缩阶段未丢图），再要求**每一张**图都成功落盘；任一条件不满足 → 整条中止、弹
+ 「发送失败」HUD、回调 `onFailure` 恢复草稿。绝不静默只发其中几张（违反原子性声明）。
+
+ 调用方应在调用前清空输入框（避免重复发送）；若任一环节失败，`onFailure` 会在主线程
+ 回调，调用方据此把文本恢复到输入框，保证文字绝不被静默丢弃。
 
  @param imageDatas 已压缩的图片二进制（与相册回调一致，顺序即展示顺序）
+ @param assetCount 用户实际选中的图片资产数量（用于原子性校验：压缩阶段是否丢图）
  @param extraText  输入框待发文本（调用方保证非空白）
- @param channel    目标会话
+ @param context    当前会话上下文（最终消息走 `context.sendMessage:`，channel 取自其中）
  @param onFailure  发送失败时主线程回调（用于恢复输入框草稿），可为 nil
  */
 -(void) sendRichTextMixedImageDatas:(NSArray<NSData*>*)imageDatas
+                         assetCount:(NSUInteger)assetCount
                           extraText:(NSString*)extraText
-                          toChannel:(WKChannel*)channel
+                          inContext:(id<WKConversationContext>)context
                           onFailure:(void(^_Nullable)(void))onFailure;
 
 /**
- 相册选图发送决策（footgun 守卫，纯函数，便于单测）：仅当选中全为图片、至少一张、
- 且输入框存在非空白待发文本时，才把「图 + 文本」聚合成单条 RichText(=14)；否则走原
- 逐条发送路径（纯图 / 含视频 / 无文本零回归）。
+ 相册选图「是否由图文聚合路径接管」决策（footgun 守卫，纯函数，便于单测）：仅当选中
+ 全为图片、至少选了一张（assetCount>0）、且输入框存在非空白待发文本时，才由聚合路径
+ 接管（把图 + 文本聚合成单条 RichText(=14)）；否则走原逐条发送路径（纯图 / 含视频 /
+ 无文本零回归）。
+
+ 关键：决策基于**用户实际选中的图片资产数**（assetCount），不依赖压缩结果数——只要
+ 选了图且有文本就必须接管。绝不能因「压缩丢图」（压缩后图变少甚至为 0）退回原逐条
+ 路径，否则 (a) 文本被原路径丢掉（即 #21 footgun），(b) 原逐条 loop 会按 assets 下标
+ 索引 images 数组越界崩溃。压缩丢图的原子性在接管后的发送方法内校验
+ （`imageDatas.count == assetCount` 不满足 → 整条失败并恢复草稿）。
 
  @param allImages   选中项是否全部为图片（含「至少选了一项」的语义由调用方保证传入）
- @param imageCount  选中的图片数量
+ @param assetCount  用户实际选中的图片资产数量
  @param pendingText 输入框当前文本（未 trim，内部做空白裁剪判定）
- @return YES 表示应走图文聚合路径
+ @return YES 表示应由图文聚合路径接管
  */
 + (BOOL)shouldAggregateAlbumImagesWithText:(BOOL)allImages
-                                imageCount:(NSUInteger)imageCount
+                                assetCount:(NSUInteger)assetCount
                                pendingText:(nullable NSString *)pendingText;
 
 /**
