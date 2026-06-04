@@ -2248,6 +2248,22 @@ static CGSize _WKRichTextImagePixelSize(NSString *path) {
 }
 
 -(void) sendRichTextMixedImages:(NSArray *)fileInfos extraText:(NSString *)extraText toChannel:(WKChannel *)channel cleanup:(void(^)(void))cleanup onFailure:(void(^)(void))onFailure send:(void(^)(WKRichTextContent *content))send {
+    // ★ 入口处显式 heap-copy 三个形参 block（cleanup/onFailure/send）。
+    // 崩溃签名 EXC_BAD_ACCESS(code=1, address=0x10) 是「call 已释放的野 block」典型特征：
+    // invoke 调用时读 Block_layout->invoke（结构体偏移 0x10），基址≈null 即 block 内存已坏。
+    // 根因：ARC 下方法形参 block 的存储域不保证在堆上——调用方传入的可能是「栈 block」
+    // （如 caption 路径 2503 传入的字面量闭包，捕获了 tmpDir / context）。这些形参随后被
+    // cleanupShareDir 及 finish/fail（本身经 dispatch_async escape）跨栈帧捕获，等异步回调
+    // 真正执行时，原栈帧早已销毁，栈 block 成了悬垂指针 → invoke 野指针。
+    // ARC 对「被另一个 block 捕获的 block」理论上会做 copy，但跨「形参→局部 block→async
+    // block」多层捕获 + caption 路径更深的嵌套链（dismiss completion → onSend →
+    // sendRichTextMixedImageDatas → 本方法）放大了编译器 copy 时机的不确定性。最稳做法是
+    // 在方法入口就把三者搬到堆上，后续所有捕获都基于稳定的 heap block，彻底消除栈逃逸面。
+    // [block copy] 对已是 heap block 的入参是廉价的 retain（无副本），对 nil 安全返回 nil。
+    cleanup = [cleanup copy];
+    onFailure = [onFailure copy];
+    send = [send copy];
+
     UIView *topView = [WKNavigationManager shared].topViewController.view;
     [topView showHUD:LLang(@"发送中")];
 
@@ -2271,9 +2287,13 @@ static CGSize _WKRichTextImagePixelSize(NSString *path) {
     __block void (^uploadNext)(NSUInteger) = nil;
 
     // 终态清理：成功/失败都执行调用方注入的 cleanup（分享目录 / 临时文件），避免残留。
-    void (^cleanupShareDir)(void) = ^{
+    // 显式 copy 把这个局部 block 钉死在堆上：它会被 finish/fail 的主线程 async block 跨栈帧
+    // 捕获，异步执行（2306）才调用；入口 cleanup 已 heap-copy，这里再确保 cleanupShareDir
+    // 本体也是 heap block，整条「形参 cleanup → cleanupShareDir → async block」捕获链全程
+    // 无栈 block，杜绝异步执行时 invoke 野指针（EXC_BAD_ACCESS 0x10）。
+    void (^cleanupShareDir)(void) = [^{
         if (cleanup) cleanup();
-    };
+    } copy];
 
     void (^fail)(void) = ^{
         if (settled) return;
@@ -2447,6 +2467,11 @@ static NSString *_WKRichTextExtForImageData(NSData *data) {
                           extraText:(NSString*)extraText
                           inContext:(id<WKConversationContext>)context
                           onFailure:(void(^)(void))onFailure {
+    // onFailure 同样在入口 heap-copy：它既被本方法的 failEarly（dispatch_async escape）捕获，
+    // 又向下透传给 6-arg 方法（再被其 fail 的 async block 捕获）。caption 路径的调用方多为
+    // 字面量栈 block，跨多层 async 捕获后若仍是栈 block，异步执行即野指针。入口钉到堆上
+    // 一劳永逸（nil 安全；已 heap 的入参仅 retain）。
+    onFailure = [onFailure copy];
     // 主聊天「相册选图 + 输入框有文本」：先把每张已压缩图片落临时文件（上传链路与分享
     // 入口共用，按文件路径走，不依赖内存里的 NSData），再聚合成单条 RichText(=14)。
     // 失败统一收口：弹「发送失败」HUD + 回调 onFailure 恢复草稿（文字绝不静默丢）。
