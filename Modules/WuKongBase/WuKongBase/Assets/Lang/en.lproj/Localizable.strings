@@ -48,6 +48,8 @@
 "清空聊天记录"="Clear Chat History";
 "投诉"="Report";
 "发送成功"="Sent Successfully";
+"发送中"="Sending";
+"发送失败"="Failed to send";
 "删除"="Delete";
 "取消"="Cancel";
 "上午"="AM";
@@ -967,5 +969,8 @@
 
 // 图文混排 RichText=14 / 消息 fallback
 "[富文本消息]"="[Rich text message]";
+// 图文混排 Phase 2 caption 确认页
+"添加描述"="Add a caption";
+"说点什么…"="Say something…";
 "[不支持的消息类型，或许可升级版本后查看]"="[Unsupported message type. Please try upgrading the app.]";
 "[消息无法解密，因为双方密钥有发送变更]"="[Message could not be decrypted because the keys changed.]";

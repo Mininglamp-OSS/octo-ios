@@ -6,6 +6,7 @@
 //
 #import <UserNotifications/UserNotifications.h>
 #import <WebKit/WebKit.h>
+#import <ImageIO/ImageIO.h>
 
 #import "WKApp.h"
 #import "WKEndpointManager.h"
@@ -117,6 +118,15 @@ typedef void(^WKOnComplete)(id data,NSError *error);
 
 
 @interface WKApp ()<WKNetworkListenerDelegate,WKConnectionManagerDelegate>
+
+// 图文混排（RichText=14）发送私有方法（在 sendShareFiles: 之后定义，此处前置声明）。
+-(void) sendRichTextMixedImages:(NSArray *)fileInfos extraText:(NSString *)extraText toChannel:(WKChannel *)channel;
+// 上传核心：cleanup 在成功/失败终态都会执行，由调用方决定清理对象（分享目录 / 临时文件）；
+// onFailure 仅在失败终态主线程回调（用于恢复输入框草稿等）；send 由调用方注入「内容就绪后
+// 如何发送 + 插入列表」——分享入口走 forwardMessage:（无会话上下文），主聊天相册入口走
+// [context sendMessage:]（保留回执/阅后即焚/spaceId/topic/reply/tracing/列表插入等全部会话语义）。
+-(void) sendRichTextMixedImages:(NSArray *)fileInfos extraText:(NSString *)extraText toChannel:(WKChannel *)channel cleanup:(void(^_Nullable)(void))cleanup onFailure:(void(^_Nullable)(void))onFailure send:(void(^)(WKRichTextContent *content))send;
+- (NSString *)richTextMimeForExtension:(NSString *)ext;
 
 /**
  *  用来存储所有添加j过的delegate
@@ -2088,6 +2098,26 @@ static NSString *const kShareDirName = @"ShareExtensionFiles";
 }
 
 -(void) sendShareFiles:(NSArray *)fileInfos toChannel:(WKChannel *)channel extraText:(NSString *)extraText {
+    // 图文混排（RichText=14）：分享条目全为图片、且附带了文本时，聚合成单条 type=14
+    // 消息（image blocks 按序在前 + text block 在后，沿用本入口「图在前文在后」的阅读
+    // 顺序），而不是拆成多条独立消息。任一其它条目（file/video/audio/link/text）或无
+    // 附带文本时仍走下方逐条发送路径，纯图/纯文/含文件零回归。
+    NSString *trimmedExtra = [extraText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    BOOL hasText = trimmedExtra.length > 0;
+    BOOL hasImage = NO;
+    BOOL hasNonImage = NO;
+    for (NSDictionary *info in fileInfos) {
+        if ([info[@"type"] isEqualToString:@"image"]) {
+            hasImage = YES;
+        } else {
+            hasNonImage = YES;
+        }
+    }
+    if (hasText && hasImage && !hasNonImage) {
+        [self sendRichTextMixedImages:fileInfos extraText:extraText toChannel:channel];
+        return;
+    }
+
     NSMutableArray<WKMessage *> *sentMessages = [NSMutableArray array];
 
     // 先发送文件/图片（文件在前，文本在后，符合阅读习惯）
@@ -2181,6 +2211,331 @@ static NSString *const kShareDirName = @"ShareExtensionFiles";
         NSURL *dir = [container URLByAppendingPathComponent:kShareDirName];
         [[NSFileManager defaultManager] removeItemAtURL:dir error:nil];
     });
+}
+
+#pragma mark - 图文混排发送（RichText=14）
+
+// 图文 URL scheme allowlist：仅 http/https 且 host 非空，阻断 javascript:/data:/
+// file: 注入与无 host 的畸形 URL，与接收侧（octo-lib 契约 §1.4）对称。
+static BOOL _WKRichTextIsSafeImageURL(NSString *url) {
+    if (url.length == 0) return NO;
+    NSURLComponents *c = [NSURLComponents componentsWithString:url];
+    NSString *scheme = c.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) return NO;
+    return c.host.length > 0;
+}
+
+// 不解码整图、仅读图片元数据拿像素尺寸（避免 share 多图时整图解码撑爆内存）。
+static CGSize _WKRichTextImagePixelSize(NSString *path) {
+    CGImageSourceRef src = CGImageSourceCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:path], NULL);
+    if (!src) return CGSizeZero;
+    CGSize size = CGSizeZero;
+    NSDictionary *props = (__bridge_transfer NSDictionary *)CGImageSourceCopyPropertiesAtIndex(src, 0, NULL);
+    NSNumber *w = props[(__bridge NSString *)kCGImagePropertyPixelWidth];
+    NSNumber *h = props[(__bridge NSString *)kCGImagePropertyPixelHeight];
+    if (w && h) size = CGSizeMake(w.doubleValue, h.doubleValue);
+    CFRelease(src);
+    return size;
+}
+
+/**
+ * 图文混排发送：把分享的图片 + 附带文本聚合成单条 RichText(=14) 消息。
+ *
+ * 仅在「分享条目全为图片、且有附带文本」时由 sendShareFiles: 调用。schema 复用接收侧
+ * #16 WKRichTextContent（imageBlock/textBlock/contentWithBlocks），wire-format 与
+ * octo-lib 权威 schema 字节对齐。
+ *
+ * - 原子性：单条 RichText 是整体，任一图片上传失败 / URL 不安全 / 本地尺寸读取失败 →
+ *   整条中止并提示，绝不「发一半」（契约 §5.1）。
+ * - 图片尺寸取**本地文件**（与纯图片发送一致），不依赖刚上传的 downloadUrl，避免 CDN
+ *   read-after-write 延迟导致 width/height=0 违反 image schema 必填>0。
+ * - 上传成功后图片 URL 走 http/https allowlist 校验，与接收侧对称。
+ * - plain 由 contentWithBlocks 本地填非本地化占位（image→[图片]），server #232 Finalize
+ *   重算覆盖。
+ * - 上传/网络在后台线程链式串行，全部就绪后回主线程构造并发送一条消息。
+ */
+-(void) sendRichTextMixedImages:(NSArray *)fileInfos extraText:(NSString *)extraText toChannel:(WKChannel *)channel {
+    // 分享入口：终态清理拷进 App Group 的分享目录（成功/失败都清，与原逐条路径对称）。
+    // 分享入口无输入框草稿，onFailure 传 nil（失败已由 HUD 提示）。
+    // 分享入口没有活跃会话上下文（从系统分享面板拉起），无法走 context.sendMessage:，
+    // 故 send 用 forwardMessage:（裸 save+send）+ 通知驱动列表插入——这是分享场景的既有
+    // 行为，会话语义（回执/阅后即焚/topic 等）在分享入口本就不适用。
+    [self sendRichTextMixedImages:fileInfos extraText:extraText toChannel:channel cleanup:^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_global_queue(0, 0), ^{
+            NSURL *container = [[NSFileManager defaultManager] containerURLForSecurityApplicationGroupIdentifier:_OctoShareAppGroupId()];
+            NSURL *dir = [container URLByAppendingPathComponent:kShareDirName];
+            [[NSFileManager defaultManager] removeItemAtURL:dir error:nil];
+        });
+    } onFailure:nil send:^(WKRichTextContent *content) {
+        WKMessage *msg = [[WKSDK shared].chatManager forwardMessage:content channel:channel];
+        if (msg) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                [[NSNotificationCenter defaultCenter] postNotificationName:@"WKShareExtensionMessageSent" object:channel userInfo:@{@"messages": @[msg]}];
+            });
+        }
+    }];
+}
+
+-(void) sendRichTextMixedImages:(NSArray *)fileInfos extraText:(NSString *)extraText toChannel:(WKChannel *)channel cleanup:(void(^)(void))cleanup onFailure:(void(^)(void))onFailure send:(void(^)(WKRichTextContent *content))send {
+    UIView *topView = [WKNavigationManager shared].topViewController.view;
+    [topView showHUD:LLang(@"发送中")];
+
+    // 只挑出图片条目（调用方已保证全为图片，这里防御性再过滤一次）。
+    NSMutableArray<NSDictionary *> *images = [NSMutableArray array];
+    for (NSDictionary *info in fileInfos) {
+        if ([info[@"type"] isEqualToString:@"image"]) {
+            [images addObject:info];
+        }
+    }
+
+    __weak typeof(self) weakSelf = self;
+    // 串行上传每张图片，收集 image block；任一失败 → fail block 中止整条。
+    NSMutableArray<WKRichTextBlock *> *imageBlocks = [NSMutableArray array];
+
+    // 终态守卫：finish/fail 只允许触发一次。上传/promise 回调异步到达，已进入的回调
+    // 可能在 uploadNext 置 nil 后仍调用 finish/fail，故用一次性 flag 拦截竞态。
+    __block BOOL settled = NO;
+    // uploadNext 自持有（completion block 强捕获自身，保证 async 回调期间链不被释放），
+    // 终态显式置 nil 打破 retain cycle，避免泄漏。
+    __block void (^uploadNext)(NSUInteger) = nil;
+
+    // 终态清理：成功/失败都执行调用方注入的 cleanup（分享目录 / 临时文件），避免残留。
+    void (^cleanupShareDir)(void) = ^{
+        if (cleanup) cleanup();
+    };
+
+    void (^fail)(void) = ^{
+        if (settled) return;
+        settled = YES;
+        // 退链（打破 uploadNext↔completion 的 retain cycle）必须推迟到主线程 async block 内：
+        // fail/finish 经由 uploadNext 调到，此刻 uploadNext 往往是 fail/finish 自身唯一的强持有
+        // 者；若在此处同步 `uploadNext = nil`，会把正在执行的 fail/finish 块（及其捕获的
+        // cleanupShareDir/topView 等）当场释放，随后构造的 async block 捕获到的就是悬垂指针，
+        // 异步执行到 cleanupShareDir() 时 call 野 block → EXC_BAD_ACCESS（崩在 block_invoke_2）。
+        // 放进 async block：① 内层 block 独立 retain 住 cleanupShareDir/topView 等捕获，与
+        // uploadNext 生命周期解耦；② 退链发生在 fail/finish 早已返回之后，绝不自释放执行中的块。
+        dispatch_async(dispatch_get_main_queue(), ^{
+            uploadNext = nil;
+            [topView hideHud];
+            [topView showHUDWithHide:LLang(@"发送失败")];
+            // 失败先恢复草稿（图文聚合发送整条中止 → 文字不能丢），再清理临时资源。
+            if (onFailure) onFailure();
+            cleanupShareDir();
+        });
+    };
+
+    // 全部图片就绪后：主线程构造单条 RichText 并通过调用方注入的 send 发送。
+    // send 决定走哪条发送路径：分享入口 forwardMessage:（无会话上下文）；主聊天相册入口
+    // [context sendMessage:]（保留全部会话语义）。本核心方法只负责「装配内容 + 终态收口」，
+    // 不再硬编码 forwardMessage:，避免相册聚合路径绕过会话发送装饰（footgun 修复核心）。
+    void (^finish)(void) = ^{
+        if (settled) return;
+        settled = YES;
+        // 退链推迟到主线程 async block 内（同 fail 注释的根因）：在此处同步 `uploadNext = nil`
+        // 会释放正在执行的 finish 块本体，其捕获的 cleanupShareDir/topView 等随之悬垂，async
+        // block 异步执行到 2306 `cleanupShareDir()` 时 call 野 block → EXC_BAD_ACCESS。
+        dispatch_async(dispatch_get_main_queue(), ^{
+            uploadNext = nil;
+            NSMutableArray<WKRichTextBlock *> *blocks = [imageBlocks mutableCopy];
+            [blocks addObject:[WKRichTextContent textBlock:extraText]];
+            WKRichTextContent *content = [WKRichTextContent contentWithBlocks:blocks];
+            // 异步收尾时 topViewController 可能已切换（用户发完立即退会话/切频道），topView 与
+            // 当前 topViewController.view 已不是同一个；hideHud/showHUD 都用捕获的 topView 快照，
+            // 不再二次取 [WKNavigationManager shared].topViewController.view，避免对已易主的 UI
+            // 误操作。topView 为 strong 捕获，async 执行期间稳定存活，nil 时消息无副作用。
+            [topView hideHud];
+            [topView showHUDWithHide:LLang(@"发送成功")];
+            if (send) send(content);
+            cleanupShareDir();
+        });
+    };
+
+    uploadNext = ^(NSUInteger index) {
+        if (index >= images.count) {
+            finish();
+            return;
+        }
+        NSDictionary *info = images[index];
+        NSString *path = info[@"path"];
+        if (path.length == 0 || ![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+            fail();
+            return;
+        }
+        // 1. 仅读图片元数据拿像素尺寸（schema 必填>0，不受 CDN 延迟影响；不整图解码，
+        //    避免 share 多图时内存峰值把扩展进程拉爆）。
+        CGSize px = _WKRichTextImagePixelSize(path);
+        NSInteger w = (NSInteger)lround(px.width);
+        NSInteger h = (NSInteger)lround(px.height);
+        if (w <= 0 || h <= 0) {
+            fail();
+            return;
+        }
+        // 文件字节大小走 NSFileManager 属性，不把整图读进内存。
+        NSNumber *sizeNum = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil][NSFileSize];
+        NSInteger fileSize = sizeNum.integerValue;
+        NSString *fileName = [path lastPathComponent];
+        NSString *ext = [[path pathExtension] lowercaseString];
+        if (ext.length == 0) ext = @"jpg";
+        NSString *contentType = [weakSelf richTextMimeForExtension:ext];
+        NSString *uuid = [[[NSUUID UUID] UUIDString] stringByReplacingOccurrencesOfString:@"-" withString:@""];
+        NSString *objectKey = [NSString stringWithFormat:@"/%d/%@/%@.%@", channel.channelType, channel.channelId, uuid, ext];
+
+        // 2. 取凭证 → PUT 直传 → 拿 downloadUrl（与 WKFileUploadTask / sticker 同套两步）。
+        AnyPromise *credPromise = [[WKAPIClient sharedClient] getUploadCredentialsForPath:objectKey
+                                                                                     type:@"chat"
+                                                                                 filename:fileName
+                                                                              contentType:contentType
+                                                                                 fileSize:(long long)fileSize];
+        credPromise.then(^(NSDictionary *result){
+            NSString *uploadUrl = result[@"uploadUrl"];
+            NSString *downloadUrl = result[@"downloadUrl"];
+            NSString *signedContentType = result[@"contentType"] ?: contentType;
+            NSString *contentDisposition = result[@"contentDisposition"];
+            if (uploadUrl.length == 0 || downloadUrl.length == 0) {
+                fail();
+                return;
+            }
+            NSURLSessionUploadTask *task = [[WKAPIClient sharedClient]
+                createFileUploadPutTask:uploadUrl
+                                fileURL:path
+                            contentType:signedContentType
+                     contentDisposition:contentDisposition
+                               progress:nil
+                       completeCallback:^(NSInteger statusCode, NSError * _Nullable error) {
+                           if (error) {
+                               fail();
+                               return;
+                           }
+                           // 3. 安全：图片 URL 走 http/https allowlist，与接收侧对称。
+                           if (!_WKRichTextIsSafeImageURL(downloadUrl)) {
+                               fail();
+                               return;
+                           }
+                           [imageBlocks addObject:[WKRichTextContent imageBlock:downloadUrl
+                                                                          width:w
+                                                                         height:h
+                                                                           size:fileSize
+                                                                           name:fileName]];
+                           // 强捕获 uploadNext：async 回调期间保持链存活（终态会置 nil）。
+                           if (uploadNext) {
+                               uploadNext(index + 1);
+                           }
+                       }];
+            if (task) {
+                [task resume];
+            } else {
+                fail();
+            }
+        }).catch(^(NSError *error){
+            fail();
+        });
+    };
+    uploadNext(0);
+}
+
+// 由扩展名取 MIME（与 sticker 上传一致），用于上传凭证 contentType。
+- (NSString *)richTextMimeForExtension:(NSString *)ext {
+    if ([ext isEqualToString:@"png"])  return @"image/png";
+    if ([ext isEqualToString:@"jpg"] || [ext isEqualToString:@"jpeg"]) return @"image/jpeg";
+    if ([ext isEqualToString:@"gif"])  return @"image/gif";
+    if ([ext isEqualToString:@"webp"]) return @"image/webp";
+    if ([ext isEqualToString:@"heic"]) return @"image/heic";
+    return @"image/jpeg";
+}
+
+// 由图片二进制内容嗅探扩展名（相册回调给的是已压缩 NSData，没有文件名/路径）。
+// 用于构造临时文件名与上传 MIME，未知格式回退 jpg（与上传 MIME 默认一致）。
+static NSString *_WKRichTextExtForImageData(NSData *data) {
+    SDImageFormat fmt = [NSData sd_imageFormatForImageData:data];
+    switch (fmt) {
+        case SDImageFormatPNG:  return @"png";
+        case SDImageFormatGIF:  return @"gif";
+        case SDImageFormatWebP: return @"webp";
+        case SDImageFormatHEIC:
+        case SDImageFormatHEIF: return @"heic";
+        case SDImageFormatJPEG:
+        default:                return @"jpg";
+    }
+}
+
++ (BOOL)shouldAggregateAlbumImagesWithText:(BOOL)allImages
+                                assetCount:(NSUInteger)assetCount
+                               pendingText:(NSString *)pendingText {
+    if (!allImages || assetCount == 0) return NO;
+    // 决策基于用户实际选中的图片资产数（assetCount），不看压缩结果数：只要选了图且输入框
+    // 有非空白文本就接管。绝不能因压缩丢图退回原逐条路径——否则文本被原路径丢掉（#21
+    // footgun），且原 loop 会按 assets 下标索引压缩后的 images 数组越界崩溃。压缩丢图的
+    // 原子性校验在 sendRichTextMixedImageDatas: 内做（imageDatas.count != assetCount →
+    // 整条失败 + 恢复草稿）。
+    NSString *trimmed = [pendingText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return trimmed.length > 0;
+}
+
+-(void) sendRichTextMixedImageDatas:(NSArray<NSData*>*)imageDatas
+                         assetCount:(NSUInteger)assetCount
+                          extraText:(NSString*)extraText
+                          inContext:(id<WKConversationContext>)context
+                          onFailure:(void(^)(void))onFailure {
+    // 主聊天「相册选图 + 输入框有文本」：先把每张已压缩图片落临时文件（上传链路与分享
+    // 入口共用，按文件路径走，不依赖内存里的 NSData），再聚合成单条 RichText(=14)。
+    // 失败统一收口：弹「发送失败」HUD + 回调 onFailure 恢复草稿（文字绝不静默丢）。
+    // selectCompressImageBlock 可能在后台压缩回调线程触发本方法，UI/草稿恢复一律切主线程。
+    void (^failEarly)(void) = ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送失败")];
+            if (onFailure) onFailure();
+        });
+    };
+
+    NSString *trimmed = [extraText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    // 原子性闸门（Critical 2）：无文本/无图/无上下文，或压缩阶段丢了图
+    // （imageDatas.count != assetCount）→ 整条失败，绝不只发部分图。
+    if (trimmed.length == 0 || imageDatas.count == 0 || context == nil || imageDatas.count != assetCount) {
+        failEarly();
+        return;
+    }
+
+    NSString *tmpDir = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                        [NSString stringWithFormat:@"richtext-album-%@", [[NSUUID UUID] UUIDString]]];
+    [[NSFileManager defaultManager] createDirectoryAtPath:tmpDir withIntermediateDirectories:YES attributes:nil error:nil];
+
+    // 原子性（Critical 2）：每一张选中图都必须有非空数据且成功落盘，任一张失败 → 整条
+    // 中止、清理临时目录、恢复草稿。绝不静默丢掉失败那张只发其余（违反原子性声明）。
+    NSMutableArray<NSDictionary *> *fileInfos = [NSMutableArray array];
+    BOOL allWritten = YES;
+    for (NSUInteger i = 0; i < imageDatas.count; i++) {
+        NSData *data = imageDatas[i];
+        if (data.length == 0) { allWritten = NO; break; }
+        NSString *ext = _WKRichTextExtForImageData(data);
+        NSString *fileName = [NSString stringWithFormat:@"image_%lu.%@", (unsigned long)i, ext];
+        NSString *path = [tmpDir stringByAppendingPathComponent:fileName];
+        if ([data writeToFile:path atomically:YES]) {
+            [fileInfos addObject:@{@"type": @"image", @"path": path}];
+        } else {
+            allWritten = NO;
+            break;
+        }
+    }
+
+    // 任一图片数据为空或落盘失败：整条中止，恢复草稿（文字绝不丢），清理临时目录后返回。
+    if (!allWritten || fileInfos.count != imageDatas.count) {
+        [[NSFileManager defaultManager] removeItemAtPath:tmpDir error:nil];
+        failEarly();
+        return;
+    }
+
+    // 终态清理：删整个临时目录（成功/失败都执行），与分享入口清理对称；失败时回调
+    // onFailure 让调用方恢复输入框草稿。
+    // send：相册入口在活跃会话上下文内发送，走 [context sendMessage:]——与原相册单图发送
+    // 同一路径，保留回执/阅后即焚 expiry/spaceId/父子频道 topic/reply 元数据/本地
+    // tracing + 列表插入等全部会话语义（Critical 1 修复核心：不走 forwardMessage: 绕过）。
+    [self sendRichTextMixedImages:fileInfos extraText:extraText toChannel:context.channel cleanup:^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_global_queue(0, 0), ^{
+            [[NSFileManager defaultManager] removeItemAtPath:tmpDir error:nil];
+        });
+    } onFailure:onFailure send:^(WKRichTextContent *content) {
+        [context sendMessage:content];
+    }];
 }
 
 
