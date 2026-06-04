@@ -21,6 +21,7 @@
 #import "NSData+ImageFormat.h"
 #import "UIImage+Compression.h"
 #import "WKPhotoBrowser.h"
+#import "WKRichTextCaptionViewController.h"
 #import <WuKongIMSDK/WKFileContent.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 @interface WKMoreItemClickEvent () <UIImagePickerControllerDelegate,UINavigationControllerDelegate,UIDocumentPickerDelegate>
@@ -111,30 +112,63 @@ static WKMoreItemClickEvent *_instance;
 
     __block NSInteger handleCount = 0;
     [[WKPhotoBrowser shared] showPreviewWithSender:[context targetVC] selectCompressImageBlock:^(NSArray<NSData *> * _Nonnull images, NSArray<PHAsset *> * _Nonnull assets, BOOL isOriginal) {
-        // footgun 修复：相册选图时主聊天输入框已有待发文本 → 不能只发图把文字静默丢掉。
-        // 选中全为图片（无视频/其它）且输入框有非空白文本时，由图文聚合路径接管：把「图 +
-        // 文本」聚合成单条 RichText(=14)（复用 #19 落地的发送能力，最终走 [context sendMessage:]
-        // 保留全部会话语义），图发出后清空输入框。任一条件不满足（有视频、纯图无文本）走原
-        // 逐条发送路径，纯图零回归。
-        // 决策基于 assets.count（用户实际选中数），不看压缩结果 images.count——压缩可能丢图
-        // 甚至全丢，但只要选了图且有文本就必须接管（否则文本被原路径丢掉 + 原 loop 按
-        // assets 下标索引 images 越界崩溃）。压缩丢图的原子性由发送方法校验：丢图时整条
-        // 失败并恢复草稿。
+        // Phase 2（方案1）：相册选图全为图片 → 发送前弹 caption 确认页（微信/TG 标准款），
+        // 这是主聊天「图文混排」的权威入口。用户可在确认页补一段描述（caption），点发送把
+        // 「图 + caption」打成单条 RichText(=14)（复用 #19 的发送能力，走 [context sendMessage:]
+        // 保留全部会话语义）；不写 caption 则纯图发送，wire 零回归。
+        // 草稿不丢（硬约束 2「选图/打字任意顺序都不丢草稿」）：进确认页前把输入框已有文本预填
+        // 进 caption 框并清空输入框；取消 / 发送失败都把这段文本恢复回输入框（与期间新输入合并）。
+        // 含视频/其它（allImages=NO）：RichText=14 仅支持图文，走原逐条发送路径，零回归。
         BOOL allImages = assets.count > 0;
         for (PHAsset *a in assets) {
             if (a.mediaType != PHAssetMediaTypeImage) { allImages = NO; break; }
         }
-        NSString *pendingText = [weakContext inputText];
-        if ([WKApp shouldAggregateAlbumImagesWithText:allImages assetCount:assets.count pendingText:pendingText]) {
-            [weakContext inputSetText:@""]; // 文本随聚合消息发出，先清空输入框避免重复。
-            // 发送失败则把草稿恢复回输入框——文字绝不被静默丢弃（footgun 修复核心保证）。
-            // 边界：上传在途时用户又输入了新内容 → 不能直接覆盖（会丢新内容），把原草稿
-            // 前置拼到当前输入前，两段文字都不丢。
-            [[WKApp shared] sendRichTextMixedImageDatas:images assetCount:assets.count extraText:pendingText inContext:weakContext onFailure:^{
-                NSString *current = [weakContext inputText] ?: @"";
-                NSString *restored = current.length == 0 ? pendingText : [NSString stringWithFormat:@"%@%@", pendingText, current];
-                [weakContext inputSetText:restored];
-            }];
+        if (allImages) {
+            NSUInteger assetCount = assets.count;
+            // 线程安全（lml2468 P0）：selectCompressImageBlock 可能在 GIF 压缩后台线程回调触发，
+            // 而读写输入框（inputText/inputSetText:）+ present caption 控制器全是 UIKit，off-main
+            // 操作 UIKit 是未定义行为/崩溃。这里统一 hop 到主线程；上传/发送本身仍可 off-main。
+            dispatch_block_t presentCaption = ^{
+                NSString *pendingText = [weakContext inputText] ?: @"";
+                [weakContext inputSetText:@""]; // 草稿移入 caption 框，先清空输入框避免重复。
+
+                // 草稿恢复（取消 / 纯图发送 / 发送失败共用）：把原草稿前置拼到当前输入前，期间
+                // 用户新输入的内容也不丢。pendingText 为空则无需恢复。
+                void (^restoreDraft)(NSString *) = ^(NSString *draft) {
+                    if (draft.length == 0) return;
+                    NSString *current = [weakContext inputText] ?: @"";
+                    NSString *restored = current.length == 0 ? draft : [NSString stringWithFormat:@"%@%@", draft, current];
+                    [weakContext inputSetText:restored];
+                };
+
+                WKRichTextCaptionViewController *captionVC =
+                    [[WKRichTextCaptionViewController alloc] initWithImageDatas:images initialCaption:pendingText];
+                captionVC.onSend = ^(NSString *caption) {
+                    // 决策复用 #19/#22 的纯函数闸门：caption 非空白 → 打 RichText(=14)；否则纯图发送。
+                    if ([WKApp shouldAggregateAlbumImagesWithText:YES assetCount:assetCount pendingText:caption]) {
+                        // 图 + caption 聚合成单条 RichText(=14)。失败把 caption 恢复回输入框（文字绝不丢）。
+                        [[WKApp shared] sendRichTextMixedImageDatas:images assetCount:assetCount extraText:caption inContext:weakContext onFailure:^{
+                            restoreDraft(caption);
+                        }];
+                    } else {
+                        // 无 caption（清掉/仅空白直接发）：原草稿 pendingText 未随消息发出 → 必须恢复
+                        // 回输入框，与 onCancel/onFailure 对齐，文字绝不静默丢（yujiawei P0）。
+                        restoreDraft(pendingText);
+                        // 纯图发送走原子性闸门（与 captioned 路径对称，Jerry-Xin critical）：压缩
+                        // 丢图时整条可见失败，绝不静默只发部分图。
+                        [weakSelf sendAlbumImageDatas:images assetCount:assetCount context:weakContext];
+                    }
+                };
+                captionVC.onCancel = ^{
+                    restoreDraft(pendingText);
+                };
+                [[WKNavigationManager shared].topViewController presentViewController:captionVC animated:YES completion:nil];
+            };
+            if ([NSThread isMainThread]) {
+                presentCaption();
+            } else {
+                dispatch_async(dispatch_get_main_queue(), presentCaption);
+            }
             return;
         }
 
@@ -221,7 +255,33 @@ static WKMoreItemClickEvent *_instance;
 -(void) sendImageMessageOfData:(NSData*)data full:(BOOL)full targetSize:(CGSize)size context:(id<WKConversationContext>)context {
     WKImageContent *imageMessageContent = [WKImageContent initWithData:data width:size.width height:size.height];
     [context sendMessage:imageMessageContent];
-    
+
+}
+
+// Phase 2 纯图（无 caption）发送：caption 确认页里用户没写描述 → 逐张发已压缩图片，
+// 与原相册单图发送同一路径（[context sendMessage:]），wire 与会话语义零回归。
+// 原子性闸门（Jerry-Xin critical，与 captioned 路径 sendRichTextMixedImageDatas: 对称）：
+// 压缩可能返回 nil/丢图，使 imageDatas.count < assetCount。此时绝不静默只发部分图——
+// 整条可见失败（弹「发送失败」HUD），与 captioned 路径的 count==assetCount gate 一致。
+-(void) sendAlbumImageDatas:(NSArray<NSData *> *)imageDatas assetCount:(NSUInteger)assetCount context:(id<WKConversationContext>)context {
+    if (context == nil) return;
+    void (^failVisible)(void) = ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送失败")];
+        });
+    };
+    // 选了 N 张就必须发齐 N 张：数量不符或存在空数据 → 整条中止、可见失败，不部分发送。
+    if (imageDatas.count == 0 || imageDatas.count != assetCount) {
+        failVisible();
+        return;
+    }
+    for (NSData *data in imageDatas) {
+        if (data.length == 0) { failVisible(); return; }
+    }
+    for (NSData *data in imageDatas) {
+        UIImage *image = [[UIImage alloc] initWithData:data];
+        [self sendImageMessageOfData:data full:NO targetSize:image.size context:context];
+    }
 }
 
 -(void) onCameraIPressed:(id<WKConversationContext>)context {
