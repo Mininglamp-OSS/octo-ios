@@ -2278,10 +2278,17 @@ static CGSize _WKRichTextImagePixelSize(NSString *path) {
     void (^fail)(void) = ^{
         if (settled) return;
         settled = YES;
-        uploadNext = nil;
+        // 退链（打破 uploadNext↔completion 的 retain cycle）必须推迟到主线程 async block 内：
+        // fail/finish 经由 uploadNext 调到，此刻 uploadNext 往往是 fail/finish 自身唯一的强持有
+        // 者；若在此处同步 `uploadNext = nil`，会把正在执行的 fail/finish 块（及其捕获的
+        // cleanupShareDir/topView 等）当场释放，随后构造的 async block 捕获到的就是悬垂指针，
+        // 异步执行到 cleanupShareDir() 时 call 野 block → EXC_BAD_ACCESS（崩在 block_invoke_2）。
+        // 放进 async block：① 内层 block 独立 retain 住 cleanupShareDir/topView 等捕获，与
+        // uploadNext 生命周期解耦；② 退链发生在 fail/finish 早已返回之后，绝不自释放执行中的块。
         dispatch_async(dispatch_get_main_queue(), ^{
+            uploadNext = nil;
             [topView hideHud];
-            [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送失败")];
+            [topView showHUDWithHide:LLang(@"发送失败")];
             // 失败先恢复草稿（图文聚合发送整条中止 → 文字不能丢），再清理临时资源。
             if (onFailure) onFailure();
             cleanupShareDir();
@@ -2295,13 +2302,20 @@ static CGSize _WKRichTextImagePixelSize(NSString *path) {
     void (^finish)(void) = ^{
         if (settled) return;
         settled = YES;
-        uploadNext = nil;
+        // 退链推迟到主线程 async block 内（同 fail 注释的根因）：在此处同步 `uploadNext = nil`
+        // 会释放正在执行的 finish 块本体，其捕获的 cleanupShareDir/topView 等随之悬垂，async
+        // block 异步执行到 2306 `cleanupShareDir()` 时 call 野 block → EXC_BAD_ACCESS。
         dispatch_async(dispatch_get_main_queue(), ^{
+            uploadNext = nil;
             NSMutableArray<WKRichTextBlock *> *blocks = [imageBlocks mutableCopy];
             [blocks addObject:[WKRichTextContent textBlock:extraText]];
             WKRichTextContent *content = [WKRichTextContent contentWithBlocks:blocks];
+            // 异步收尾时 topViewController 可能已切换（用户发完立即退会话/切频道），topView 与
+            // 当前 topViewController.view 已不是同一个；hideHud/showHUD 都用捕获的 topView 快照，
+            // 不再二次取 [WKNavigationManager shared].topViewController.view，避免对已易主的 UI
+            // 误操作。topView 为 strong 捕获，async 执行期间稳定存活，nil 时消息无副作用。
             [topView hideHud];
-            [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送成功")];
+            [topView showHUDWithHide:LLang(@"发送成功")];
             if (send) send(content);
             cleanupShareDir();
         });
