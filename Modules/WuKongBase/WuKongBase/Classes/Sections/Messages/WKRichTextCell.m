@@ -11,6 +11,7 @@
 #import "NSMutableAttributedString+WK.h"
 #import "WKRemoteImageAttachment.h"
 #import "WKMatchToken.h"
+#import "WKMentionService.h"
 #import "UIImage+WK.h"
 #import "WKNavigationManager.h"
 #import "WKMessageLongMenusItem.h"
@@ -91,6 +92,10 @@ static const char kRichTextSelOrigDelegateKey = 0;
     NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] init];
     attr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
     attr.textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
+    // 与 WKTextMessageCell:1454-1462 同款 mention 配色——发送方紫色气泡用白，接收方白气泡用主题色，
+    // 统一加下划线表征"可点跳名片"。appendMetion: 内部直接读这两个属性写到 mention range 上。
+    attr.metionColor = model.isSend ? [UIColor whiteColor] : [WKApp shared].config.themeColor;
+    attr.metionUnderline = YES;
 
     if (![model.content isKindOfClass:[WKRichTextContent class]]) {
         if (truncated) { *truncated = NO; }
@@ -102,6 +107,12 @@ static const char kRichTextSelOrigDelegateKey = 0;
     NSInteger accumulated = 0;
     NSInteger imageCount = 0;
     BOOL didTruncate = NO;
+    // mentionInfo.uids 是按全消息顺序累计的——多个 text block 共享一份 mentionInfo，需要跨 block
+    // 推进消费下标。每个 block 单独 parseMention 时把 uids 切片偏移给它，让 token.index 对齐到
+    // 该 block 内的局部序号即可。
+    WKMentionedInfo *mentionedInfo = content.mentionedInfo;
+    NSInteger mentionConsumed = 0;
+    NSMutableArray<id<WKMatchToken>> *collectedTokens = [NSMutableArray array];
 
     for (WKRichTextBlock *block in content.content) {
         // 文本累计过阈值则丢弃后续整块（含图片），不切碎单块。
@@ -144,7 +155,11 @@ static const char kRichTextSelOrigDelegateKey = 0;
                 text = [text substringToIndex:remaining];
                 didTruncate = YES;
             }
-            [attr appendText:text];
+            mentionConsumed = [[self class] appendTextBlock:text
+                                                     toAttr:attr
+                                              mentionedInfo:mentionedInfo
+                                            mentionConsumed:mentionConsumed
+                                                outTokens:collectedTokens];
             accumulated += text.length;
         }
     }
@@ -154,8 +169,61 @@ static const char kRichTextSelOrigDelegateKey = 0;
         [attr deleteCharactersInRange:NSMakeRange(attr.length - 1, 1)];
     }
 
+    // tokens 给 WKMessageTextView 做点击命中（matchDidTapAttributedTextInLabelWithPoint:），
+    // 没有 mention 时是空数组——textLbl 那边直接 short-circuit 不命中任何 token。
+    attr.tokens = collectedTokens;
+
     if (truncated) { *truncated = didTruncate; }
     return attr;
+}
+
+/// 把一段 text block 解析后追加到 attr：先用 WKMentionService 按 sub-uids 偏移拆 tokens，
+/// 普通 text 段直接 appendText；mention 段走 appendMetion（自动套 attr.metionColor +
+/// metionUnderline）并把"已偏移到 attr 真实位置"的 token 收集起来供命中检测用。
+/// 返回更新后的 mention 消费下标（caller 用作下一个 text block 的偏移）。
++ (NSInteger)appendTextBlock:(NSString *)text
+                      toAttr:(NSMutableAttributedString *)attr
+               mentionedInfo:(WKMentionedInfo *)mentionedInfo
+             mentionConsumed:(NSInteger)mentionConsumed
+                   outTokens:(NSMutableArray<id<WKMatchToken>> *)outTokens {
+    // 给该 block 切一份 sub-mentionInfo：parseMention 内部按 mentionIndex 从 0 起在 uids 里取，
+    // 我们把已被前面 block 消费过的 uid 砍掉，让该 block 看到的就是属于自己的那段。
+    WKMentionedInfo *sub = nil;
+    if (mentionedInfo && mentionedInfo.uids && (NSUInteger)mentionConsumed < mentionedInfo.uids.count) {
+        sub = [WKMentionedInfo new];
+        sub.uids = [mentionedInfo.uids subarrayWithRange:NSMakeRange(mentionConsumed,
+                                                                     mentionedInfo.uids.count - mentionConsumed)];
+    }
+    NSArray<id<WKMatchToken>> *tokens = [[WKMentionService shared] parseMention:text mentionInfo:sub];
+    // 没有任何 @ 直接 append 原文，零开销。
+    if (tokens.count == 0) {
+        [attr appendText:text];
+        return mentionConsumed;
+    }
+    NSInteger consumedDelta = 0;
+    for (id<WKMatchToken> token in tokens) {
+        if (token.type == WKatchTokenTypeMetion) {
+            WKMetionToken *mt = (WKMetionToken *)token;
+            NSRange newRange = [attr appendMetion:mt];
+            // appendMetion 用了 mt.text 但保留 mt 原 range（block 内的），命中检测要 attr 绝对 range。
+            WKMetionToken *placed = [WKMetionToken new];
+            placed.text = mt.text;
+            placed.uid = mt.uid;
+            placed.index = mt.index;
+            placed.range = newRange;
+            [outTokens addObject:placed];
+            // 广播 sentinel（uid=="all" 或 "__ais__"）不消费真实 uids。WKMentionService 当前
+            // 给 broadcast 设的 uid 是 "all"——所以判 uid 是否非 sentinel 即可。
+            if (mt.uid.length > 0
+                && ![mt.uid isEqualToString:@"all"]
+                && ![mt.uid isEqualToString:@"__ais__"]) {
+                consumedDelta++;
+            }
+        } else {
+            [attr appendText:token.text];
+        }
+    }
+    return mentionConsumed + consumedDelta;
 }
 
 + (CGSize)displaySizeForBlock:(WKRichTextBlock*)block maxWidth:(CGFloat)maxWidth {
@@ -218,6 +286,9 @@ static const char kRichTextSelOrigDelegateKey = 0;
     if (![key isEqualToString:lastKey]) {
         objc_setAssociatedObject(self, &kRichTextLastRenderKey, key, OBJC_ASSOCIATION_COPY_NONATOMIC);
         self.textLbl.attributedText = attr;
+        // 同步 mention/link tokens 给 textLbl 用作命中检测（与 WKTextMessageCell.m:1472 一致）。
+        // attr 没有 mention 时是空数组，matchDidTapAttributedTextInLabelWithPoint: 直接返 nil。
+        self.textLbl.tokens = attr.tokens;
         self.viewFullTextBtn.hidden = !truncated;
         [self triggerImageDownloads:attr forModel:model];
     } else {
@@ -305,6 +376,13 @@ static const char kRichTextSelOrigDelegateKey = 0;
     if (gesture.gesture == nil) return;
     CGPoint pointInTextLbl = [gesture.gesture locationInView:self.textLbl];
     if (!CGRectContainsPoint(self.textLbl.bounds, pointInTextLbl)) return;
+    // 先看是否命中 @mention（参考 WKTextMessageCell:1771-1783）：mention/link token 命中
+    // 优先于图片预览，避免点 @张三 弹大图。sentinel 由 didMetionClick: 自己短路。
+    id<WKMatchToken> hitToken = [self.textLbl matchDidTapAttributedTextInLabelWithPoint:pointInTextLbl];
+    if (hitToken && hitToken.type == WKatchTokenTypeMetion) {
+        [self didMetionClick:(WKMetionToken *)hitToken];
+        return;
+    }
     NSUInteger charIndex = [self _wkRichCharacterIndexAtPoint:pointInTextLbl];
     if (charIndex == NSNotFound) return;
     NSAttributedString *attr = self.textLbl.attributedText;
@@ -312,6 +390,20 @@ static const char kRichTextSelOrigDelegateKey = 0;
     id attach = [attr attribute:NSAttachmentAttributeName atIndex:charIndex effectiveRange:nil];
     if (![attach isKindOfClass:[WKRemoteImageAttachment class]]) return;
     [self _wkRichShowImageBrowserAtCharIndex:charIndex];
+}
+
+// 与 WKTextMessageCell:2205-2223 等价：sentinel 不打开名片，普通成员调 WKPOINT_USER_INFO 弹卡片。
+- (void)didMetionClick:(WKMetionToken *)token {
+    NSString *atUID = token.uid;
+    if (!atUID || atUID.length == 0) return;
+    if ([atUID isEqualToString:@"all"] || [atUID isEqualToString:@"__ais__"]) return;
+    WKChannelMember *member = [[WKSDK shared].channelManager getMember:self.messageModel.channel uid:atUID];
+    NSString *vercode = member.extra[WKChannelExtraKeyVercode] ?: @"";
+    [[WKApp shared] invoke:WKPOINT_USER_INFO param:@{
+        @"channel": self.messageModel.channel,
+        @"uid": atUID,
+        @"vercode": vercode,
+    }];
 }
 
 // 把 point（textLbl 坐标系）映射回 attributedText 的 character index；NSNotFound 表示
