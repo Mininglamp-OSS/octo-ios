@@ -121,8 +121,10 @@
 #pragma mark - Data
 
 - (void)reload {
-    // DM 没有群成员，只暴露 @所有AI sentinel（含 bot 路由）；群里走 searchMembers 全列。
-    if (!self.channel || self.channel.channelType != WK_GROUP) {
+    // 与主聊天 WKConversationContextImpl -getMentionUserListWithKeyword: 行为对齐：
+    // 不按 channelType 短路，直接 searchMembers——子区/话题(WK_COMMUNITY_TOPIC)依赖
+    // SDK 自己回退父群，DM 自然返回空。assembleItems 里 sentinel 仍会展示。
+    if (!self.channel) {
         self.items = [self assembleItems:@[]];
         [self.tableView reloadData];
         return;
@@ -144,8 +146,7 @@
     NSString *kw = self.currentKeyword ?: @"";
     NSMutableArray<WKMentionUserCellModel *> *list = [NSMutableArray array];
     NSString *allStr = LLang(@"所有人");
-    if (self.channel.channelType == WK_GROUP
-        && (kw.length == 0 || [allStr containsString:kw])) {
+    if (kw.length == 0 || [allStr containsString:kw]) {
         [list addObject:[WKMentionUserCellModel uid:@"all" name:allStr]];
     }
     NSString *aisStr = LLang(@"所有AI");
