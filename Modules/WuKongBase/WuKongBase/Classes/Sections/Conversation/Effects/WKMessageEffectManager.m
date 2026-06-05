@@ -9,8 +9,8 @@
 #import "WKStarburstEffect.h"
 #import "WKHeartEffect.h"
 #import "WKPartyEffect.h"
-#import "WKClassyEffect.h"
 #import "WKActionVideoEffect.h"
+#import "WKClassyVideoEffect.h"
 #import "WKMessageModel.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 
@@ -67,8 +67,7 @@ static const NSInteger kMaxTriggeredIds = 1000;
             @"🎊": @"party",
             @"[使命必达]": @"rocketLaunch",
             @"[崇尚行动]": @"actionVideo",
-            // [有品位] classy 特效暂时屏蔽（效果未达标，WKClassyEffect.m 代码保留以便以后迭代）
-            // @"[有品位]": @"classy",
+            @"[有品位]":   @"classyVideo",
         };
 
         _triggeredMessageIds = [NSMutableOrderedSet orderedSet];
@@ -246,10 +245,10 @@ static const NSInteger kMaxTriggeredIds = 1000;
                               sourceRect:sourceRect
                              avatarImage:self.pendingAvatarImage
                            memberAvatars:self.pendingMemberAvatars];
-    } else if ([effectType isEqualToString:@"classy"]) {
-        [WKClassyEffect playInView:effectView sourceRect:sourceRect fromSelf:self.pendingFromSelf];
     } else if ([effectType isEqualToString:@"actionVideo"]) {
         [WKActionVideoEffect playInView:effectView sourceRect:sourceRect];
+    } else if ([effectType isEqualToString:@"classyVideo"]) {
+        [WKClassyVideoEffect playInView:effectView sourceRect:sourceRect];
     }
 
     self.pendingEffectType = nil;
