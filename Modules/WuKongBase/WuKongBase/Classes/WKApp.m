@@ -1463,21 +1463,35 @@ static WKApp *_instance;
         //     · 群主：对任何人显示，不受时窗限制
         //     · 管理员：仅对普通成员显示，对其他管理员/群主隐藏（避免越权）
         //     · 普通成员：仅对自己的消息显示
-        //   子区 (WK_COMMUNITY_TOPIC) —— TODO: 待 octo-server#222 完成后基于
-        //     父群角色判断；当前仅按 isSend + 时窗（落到下方 !isManager 分支）。
+        //   子区 (WK_COMMUNITY_TOPIC) —— 同群聊；以父群（channelId 形如
+        //     "<groupNo>____<shortId>"，取 ____ 前一段）的成员角色为判断依据,
+        //     与 WKThreadSettingVC 里 isGroupAdmin 同源。子区消息的 fromUid 也是
+        //     父群成员，所以 target 角色直接查父群即可。
         //   Bot 创建者 —— TODO: 待后端把 bot_creator_uid 下放到 channel_member.extra
         //     后，在此追加「self == from.bot_creator」分支让 Bot 拥有者可撤回该 Bot 消息。
         NSString *loginUid = [WKApp shared].loginInfo.uid;
         BOOL isManager = false;
+        WKChannel *roleChannel = nil;
         if(message.channel.channelType == WK_GROUP) {
-            WKChannelMember *selfMember = [[WKSDK shared].channelManager getMember:message.channel uid:loginUid];
+            roleChannel = message.channel;
+        } else if(message.channel.channelType == WK_COMMUNITY_TOPIC) {
+            NSRange sep = [message.channel.channelId rangeOfString:@"____"];
+            if(sep.location != NSNotFound) {
+                NSString *groupNo = [message.channel.channelId substringToIndex:sep.location];
+                if(groupNo.length > 0) {
+                    roleChannel = [[WKChannel alloc] initWith:groupNo channelType:WK_GROUP];
+                }
+            }
+        }
+        if(roleChannel) {
+            WKChannelMember *selfMember = [[WKSDK shared].channelManager getMember:roleChannel uid:loginUid];
             WKMemberRole selfRole = selfMember ? selfMember.role : WKMemberRoleCommon;
             if(selfRole == WKMemberRoleCreator) {
                 // 群主：对任何人显示
                 isManager = true;
             } else if(selfRole == WKMemberRoleManager) {
                 // 管理员：仅对普通成员显示，对其他管理员/群主隐藏
-                WKChannelMember *targetMember = [[WKSDK shared].channelManager getMember:message.channel uid:message.fromUid];
+                WKChannelMember *targetMember = [[WKSDK shared].channelManager getMember:roleChannel uid:message.fromUid];
                 WKMemberRole targetRole = targetMember ? targetMember.role : WKMemberRoleCommon;
                 isManager = (targetRole == WKMemberRoleCommon);
             }

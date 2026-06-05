@@ -2,7 +2,11 @@
 //  WKForwardSelectVC.m
 //  WuKongBase
 //
-//  转发选择会话：群聊/私聊 Tab + 分组 + 子区折叠 + 多选 + 搜索
+//  转发选择会话：关注/最近 Tab + 分组 + 子区折叠 + 多选 + 搜索
+//  口径与会话列表保持一致：
+//    关注 tab —— WKFollowedKeysStore 提供的已关注集合（DM/Channel/Thread），
+//                按用户分组展示，分组内含群、群下子区、已关注 DM。
+//    最近 tab —— SDK getConversationList 的全部类型（DM/群/子区），按时间倒序平铺。
 //
 
 #import "WKForwardSelectVC.h"
@@ -20,6 +24,8 @@
 #import "WKForwardDirectoryVC.h"
 #import "WKUserAvatar.h"
 #import "WKAvatarUtil.h"
+#import "WKFollowedKeysStore.h"
+#import "WKSidebarItemEntity.h"
 #import <SDWebImage/UIImageView+WebCache.h>
 #import <WuKongBase/WuKongBase.h>
 
@@ -264,6 +270,22 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     [self setupTabView];
     [self setupTableView];
     [self loadData];
+
+    // store 异步加载完成后刷新关注 tab —— 冷启动时 store 还没数据，filterAndDisplay 退化路径
+    // 拿到的内容跟用户期望不符；store 一就绪就重排。
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(onFollowedKeysStoreDidUpdate)
+                                                 name:kWKFollowedKeysStoreDidUpdateNotification
+                                               object:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)onFollowedKeysStoreDidUpdate {
+    if (_currentTab != 0) return;
+    [self filterAndDisplay];
 }
 
 - (void)setupNavBar {
@@ -382,7 +404,7 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     NSArray<WKConversation *> *conversations = [[WKSDK shared].conversationManager getConversationList];
     _allConversations = [NSMutableArray array];
     for (WKConversation *conv in conversations) {
-        if (conv.channel.channelType == WK_COMMUNITY_TOPIC) continue;
+        // 不再过滤 WK_COMMUNITY_TOPIC —— 最近 tab 要展示子区会话，关注 tab 也要用子区 followed 集合。
         [_allConversations addObject:[[WKConversationWrapModel alloc] initWithConversation:conv]];
     }
     [self sortList:_allConversations];
@@ -408,7 +430,7 @@ typedef NS_ENUM(NSInteger, FWItemType) {
         NSArray<WKConversation *> *conversations = [[WKSDK shared].conversationManager getConversationList];
         [ws.allConversations removeAllObjects];
         for (WKConversation *conv in conversations) {
-            if (conv.channel.channelType == WK_COMMUNITY_TOPIC) continue;
+            // 与 loadData 保持一致：含 WK_COMMUNITY_TOPIC。
             [ws.allConversations addObject:[[WKConversationWrapModel alloc] initWithConversation:conv]];
         }
         [ws sortList:ws.allConversations];
@@ -492,22 +514,58 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     NSMutableArray<FWDisplayItem *> *list = [NSMutableArray array];
 
     if (_currentTab == 0) {
-        // 群聊 tab：按分组显示
-        NSMutableDictionary<NSString *, WKConversationWrapModel *> *channelMap = [NSMutableDictionary dictionary];
+        // 关注 tab：按用户分组显示「已关注的群（含群下子区）+ 已关注 DM」。
+        // 关注集合的唯一可信源是 WKFollowedKeysStore（与会话列表关注 tab 同源）；store 没加载完
+        // 时退化到「展示自定义分组下所有群」的旧行为，避免冷启动时关注 tab 一片空白。
+        WKFollowedKeysStore *followStore = [WKFollowedKeysStore shared];
+        BOOL followLoaded = followStore.loaded;
+        NSSet<NSString *> *followedGroupNos = followStore.followedGroupNos;
+        NSDictionary<NSString *, NSArray<WKSidebarItemEntity *> *> *followItemsByCat = followStore.itemsByCategory;
+
+        // 建立 channelId → wrap 映射，DM 也要建（关注 tab 要展示已关注 DM）。
+        NSMutableDictionary<NSString *, WKConversationWrapModel *> *groupMap = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString *, WKConversationWrapModel *> *dmMap = [NSMutableDictionary dictionary];
         for (WKConversationWrapModel *m in _allConversations) {
-            if (m.channel.channelType == WK_GROUP) channelMap[m.channel.channelId] = m;
-        }
-        NSMutableSet *grouped = [NSMutableSet set];
-        for (WKCategoryEntity *cat in _categoryList) {
-            if (!cat.category_id || cat.category_id.length == 0) continue;
-            if (cat.is_default) continue; // 默认分组不单独成组，其群落到「未归组」无 header 展示
-            for (WKCategoryGroup *cg in cat.groups) [grouped addObject:cg.group_no];
+            if (m.channel.channelType == WK_GROUP) groupMap[m.channel.channelId] = m;
+            else if (m.channel.channelType == WK_PERSON) dmMap[m.channel.channelId] = m;
         }
 
-        // 用户分组
         for (WKCategoryEntity *cat in _categoryList) {
             if (!cat.category_id || cat.category_id.length == 0) continue;
-            if (cat.is_default) continue; // 不显示默认分组 header
+            if (cat.is_default) continue; // 默认分组不显示 header
+
+            // 计算本分组要展示的群与 DM
+            NSMutableArray<WKConversationWrapModel *> *visibleGroups = [NSMutableArray array];
+            for (WKCategoryGroup *cg in cat.groups) {
+                if (followLoaded && ![followedGroupNos containsObject:cg.group_no]) continue;
+                WKConversationWrapModel *m = groupMap[cg.group_no];
+                if (m) [visibleGroups addObject:m];
+            }
+            NSMutableArray<WKConversationWrapModel *> *visibleDMs = [NSMutableArray array];
+            NSArray<WKSidebarItemEntity *> *items = followItemsByCat[cat.category_id] ?: @[];
+            NSMutableSet<NSString *> *addedDMIds = [NSMutableSet set];
+            for (WKSidebarItemEntity *it in items) {
+                if (it.target_type != WKFollowTargetTypeDM) continue;
+                if (it.target_id.length == 0) continue;
+                if ([addedDMIds containsObject:it.target_id]) continue;
+                WKConversationWrapModel *dm = dmMap[it.target_id];
+                if (dm) {
+                    [visibleDMs addObject:dm];
+                    [addedDMIds addObject:it.target_id];
+                }
+            }
+
+            // store 没加载完时退化：展示分组下所有有 conv 的群，DM 集合为空（无可信源）
+            if (!followLoaded) {
+                [visibleGroups removeAllObjects];
+                for (WKCategoryGroup *cg in cat.groups) {
+                    WKConversationWrapModel *m = groupMap[cg.group_no];
+                    if (m) [visibleGroups addObject:m];
+                }
+            }
+
+            if (visibleGroups.count == 0 && visibleDMs.count == 0) continue;
+
             FWDisplayItem *header = [FWDisplayItem new];
             header.type = FWItemSectionHeader;
             header.sectionId = cat.category_id;
@@ -515,28 +573,41 @@ typedef NS_ENUM(NSInteger, FWItemType) {
             [list addObject:header];
 
             if (![_collapsedSections containsObject:cat.category_id]) {
-                NSMutableArray *items = [NSMutableArray array];
-                for (WKCategoryGroup *cg in cat.groups) {
-                    WKConversationWrapModel *m = channelMap[cg.group_no];
-                    if (m) [items addObject:m];
-                }
-                [self sortList:items];
-                for (WKConversationWrapModel *m in items) {
+                [self sortList:visibleGroups];
+                for (WKConversationWrapModel *m in visibleGroups) {
                     FWDisplayItem *ci = [FWDisplayItem new]; ci.type = FWItemConversation; ci.conversation = m;
                     [list addObject:ci];
                     [self appendThreads:list forGroupNo:m.channel.channelId];
                 }
+                [self sortList:visibleDMs];
+                for (WKConversationWrapModel *dm in visibleDMs) {
+                    FWDisplayItem *ci = [FWDisplayItem new]; ci.type = FWItemConversation; ci.conversation = dm;
+                    [list addObject:ci];
+                }
             }
         }
-
-        // 仅展示自定义分组下的群，未归组与默认分组的群不展示
     } else {
-        // 私聊 tab
+        // 最近 tab：DM + 群 + 子区，按时间倒序平铺（置顶优先），与会话列表最近 tab 同口径。
+        NSMutableArray<WKConversationWrapModel *> *flat = [NSMutableArray array];
         for (WKConversationWrapModel *m in _allConversations) {
-            if (m.channel.channelType == WK_PERSON) {
-                FWDisplayItem *ci = [FWDisplayItem new]; ci.type = FWItemConversation; ci.conversation = m;
-                [list addObject:ci];
+            uint8_t type = m.channel.channelType;
+            if (type == WK_PERSON || type == WK_GROUP || type == WK_COMMUNITY_TOPIC) {
+                [flat addObject:m];
             }
+        }
+        [self sortList:flat];
+        for (WKConversationWrapModel *m in flat) {
+            FWDisplayItem *ci = [FWDisplayItem new];
+            // 子区用 FWItemThread cell（# 图标 + name）以与关注 tab 子区行视觉一致。
+            if (m.channel.channelType == WK_COMMUNITY_TOPIC) {
+                ci.type = FWItemThread;
+                ci.threadChannelId = m.channel.channelId;
+                ci.threadName = m.channelInfo ? m.channelInfo.displayName : @"";
+            } else {
+                ci.type = FWItemConversation;
+                ci.conversation = m;
+            }
+            [list addObject:ci];
         }
     }
 
@@ -573,27 +644,62 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     NSString *lower = [keyword lowercaseString];
     NSMutableArray<FWDisplayItem *> *list = [NSMutableArray array];
 
+    WKFollowedKeysStore *followStore = [WKFollowedKeysStore shared];
+    BOOL followLoaded = followStore.loaded;
+    NSSet<NSString *> *followedGroupNos = followStore.followedGroupNos;
+
     for (WKConversationWrapModel *m in _allConversations) {
-        if (_currentTab == 0 && m.channel.channelType != WK_GROUP) continue;
-        if (_currentTab == 1 && m.channel.channelType != WK_PERSON) continue;
-        NSString *name = m.channelInfo ? m.channelInfo.displayName : @"";
-        if ([name.lowercaseString containsString:lower]) {
-            FWDisplayItem *ci = [FWDisplayItem new]; ci.type = FWItemConversation; ci.conversation = m;
-            [list addObject:ci];
+        uint8_t type = m.channel.channelType;
+        if (_currentTab == 0) {
+            // 关注 tab 搜索范围：已关注的群 + 已关注 DM + 已关注子区。store 未加载时退化到群/DM/子区全部。
+            if (type == WK_GROUP) {
+                if (followLoaded && ![followedGroupNos containsObject:m.channel.channelId]) continue;
+            } else if (type == WK_PERSON) {
+                if (followLoaded && ![followStore isFollowedWithType:WKFollowTargetTypeDM targetId:m.channel.channelId]) continue;
+            } else if (type == WK_COMMUNITY_TOPIC) {
+                if (followLoaded && ![followStore isFollowedWithType:WKFollowTargetTypeThread targetId:m.channel.channelId]) continue;
+            } else {
+                continue;
+            }
+        } else {
+            // 最近 tab 搜索范围：DM + 群 + 子区。
+            if (type != WK_PERSON && type != WK_GROUP && type != WK_COMMUNITY_TOPIC) continue;
         }
+        NSString *name = m.channelInfo ? m.channelInfo.displayName : @"";
+        if (![name.lowercaseString containsString:lower]) continue;
+        FWDisplayItem *ci = [FWDisplayItem new];
+        if (type == WK_COMMUNITY_TOPIC) {
+            ci.type = FWItemThread;
+            ci.threadChannelId = m.channel.channelId;
+            ci.threadName = name;
+        } else {
+            ci.type = FWItemConversation;
+            ci.conversation = m;
+        }
+        [list addObject:ci];
     }
 
-    // 搜索子区（仅群聊 tab）
+    // 关注 tab 还要补一类子区：通过群下子区缓存（WKThreadService 拉到、但未必在 conversationList 里）搜索，
+    // 仅当 store 已加载时按 followed 过滤；未加载时回退展示全部命中。
     if (_currentTab == 0) {
+        NSMutableSet<NSString *> *alreadyAdded = [NSMutableSet set];
+        for (FWDisplayItem *item in list) {
+            if (item.type == FWItemThread && item.threadChannelId.length > 0) {
+                [alreadyAdded addObject:item.threadChannelId];
+            }
+        }
         for (NSString *groupNo in _threadCache) {
+            if (followLoaded && ![followedGroupNos containsObject:groupNo]) continue;
             for (WKThreadModel *t in _threadCache[groupNo]) {
-                if ([t.name.lowercaseString containsString:lower]) {
-                    FWDisplayItem *ti = [FWDisplayItem new];
-                    ti.type = FWItemThread;
-                    ti.threadChannelId = t.channelId;
-                    ti.threadName = t.name;
-                    [list addObject:ti];
-                }
+                if ([alreadyAdded containsObject:t.channelId]) continue;
+                if (followLoaded && ![followStore isFollowedWithType:WKFollowTargetTypeThread targetId:t.channelId]) continue;
+                if (![t.name.lowercaseString containsString:lower]) continue;
+                FWDisplayItem *ti = [FWDisplayItem new];
+                ti.type = FWItemThread;
+                ti.threadChannelId = t.channelId;
+                ti.threadName = t.name;
+                [list addObject:ti];
+                [alreadyAdded addObject:t.channelId];
             }
         }
     }
