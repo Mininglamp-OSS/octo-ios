@@ -408,6 +408,7 @@
 "个人头像"="Profile Picture";
 "拍照"="Take Photo";
 "从手机相册选择"="Choose from  Album";
+"从相册选择"="Choose from Album";
 "保存图片"="Save Photo";
 "保存失败！"="Save failed!";
 "保存成功！"="Saved successfully!";
@@ -825,7 +826,7 @@
 "功能介绍"="Features";
 "%@在线"="%@ online";
 "刚刚%@在线"="%@ online just now";
-"%0.0f分钟前%@在线"="%@ online %0.0f min ago";
+"%0.0f分钟前%@在线"="%2$@ online %1$0.0f min ago";
 "1分钟"="1 minute";
 "10分钟"="10 minutes";
 "1小时"="1 hour";

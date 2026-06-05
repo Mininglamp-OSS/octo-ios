@@ -782,9 +782,14 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
 }
 
 -(void) refreshStatus:(WKConversationWrapModel*)model {
-    // 消息状态
+    // 消息状态：仅当时间标签有内容时才显示——发送状态图标视觉上是「时间行」的一部分，
+    // 时间空了（lastMsgTimestamp<=0 或系统 bot 跨空间过滤掉）就让 status 也跟着收起，
+    // 否则 lastMsgTimeLbl sizeToFit 后高度=0，layoutSubviews 用它做 anchor 算出来的
+    // statusImgView.top 与 muteIcon.top 只差 5pt，两个 14~17pt 高的图标必然重叠
+    // （英文 cell 时间被某些路径置空就触发，bug repro 现场）。
     self.statusImgView.hidden = YES;
-    if(self.model.lastMessage && self.model.lastMessage.isSend) {
+    BOOL hasTime = self.lastMsgTimeLbl.text.length > 0;
+    if(self.model.lastMessage && self.model.lastMessage.isSend && hasTime) {
         self.statusImgView.hidden = NO;
         [self updateStatus];
     }

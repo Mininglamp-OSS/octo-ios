@@ -127,6 +127,7 @@ typedef void(^WKOnComplete)(id data,NSError *error);
 // [context sendMessage:]（保留回执/阅后即焚/spaceId/topic/reply/tracing/列表插入等全部会话语义）。
 -(void) sendRichTextMixedImages:(NSArray *)fileInfos extraText:(NSString *)extraText toChannel:(WKChannel *)channel cleanup:(void(^_Nullable)(void))cleanup onFailure:(void(^_Nullable)(void))onFailure send:(void(^)(WKRichTextContent *content))send;
 - (NSString *)richTextMimeForExtension:(NSString *)ext;
++ (NSString *)wk_richTextPlainTextOnly:(WKRichTextContent *)content;
 
 /**
  *  用来存储所有添加j过的delegate
@@ -1008,6 +1009,21 @@ static WKApp *_instance;
     [self.allowForwards addObject:[NSString stringWithFormat:@"%ld",(long)contentType]];
 }
 
+/// RichText(=14) 仅文本拼接（跳过 image 占位）。供「复制」菜单使用——wire 的 [图片] 占位
+/// 进 clipboard 没意义，用户期望复制到的是真实的文字。空串表示纯图消息无可复制内容。
++ (NSString *)wk_richTextPlainTextOnly:(WKRichTextContent *)content {
+    NSMutableString *buffer = [NSMutableString string];
+    for (WKRichTextBlock *block in content.content) {
+        if (block.type == WKRichTextBlockTypeText && block.text.length > 0) {
+            if (buffer.length > 0) {
+                [buffer appendString:@"\n"];
+            }
+            [buffer appendString:block.text];
+        }
+    }
+    return buffer;
+}
+
 - (void)addMessageAllowCopy:(NSInteger)contentType {
     [self.allowCopys addObject:[NSString stringWithFormat:@"%ld",(long)contentType]];
 }
@@ -1411,8 +1427,11 @@ static WKApp *_instance;
         return [WKMessageLongMenusItem initWithTitle:LLangW(@"复制", weakSelf) icon:icon onTap:^(id<WKConversationContext> context){
             NSString *newContent = nil;
             if ([message.content isKindOfClass:[WKRichTextContent class]]) {
-                // 图文混排取顶层 plain（image 已是 [图片] 占位），勿丢字。
-                newContent = ((WKRichTextContent*)message.content).plain ?: @"";
+                // 图文混排：菜单复制使用 text-only 拼接（跳过 [图片] wire 占位），那个占位
+                // 上 clipboard 没意义。用户拖动选区 + 系统 Copy 走的是 UITextView selectedText
+                // 路径，不经过这里——这里只服务"全文复制"路径。
+                NSString *plainText = [WKApp wk_richTextPlainTextOnly:(WKRichTextContent*)message.content];
+                newContent = plainText.length > 0 ? plainText : (((WKRichTextContent*)message.content).plain ?: @"");
             } else {
                 WKTextContent *textConent =  (WKTextContent*)message.content;
                 NSRegularExpression *regularExpretion=[NSRegularExpression regularExpressionWithPattern:@"<[^>]*>|\n"
@@ -1497,6 +1516,7 @@ static WKApp *_instance;
     [[WKApp shared] addMessageAllowForward:WK_FILE];
     [[WKApp shared] addMessageAllowForward:WK_SMALLVIDEO];
     [[WKApp shared] addMessageAllowForward:WK_MERGEFORWARD];
+    [[WKApp shared] addMessageAllowForward:WK_RICHTEXT]; // 图文混排（RichText=14）：与接收 cell 注册对称，长按需出现「转发」
     [self setMethod:WKPOINT_LONGMENUS_FORWARD handler:^id _Nullable(id  _Nonnull param) {
         WKMessageModel *message = param[@"message"];
         
@@ -2476,6 +2496,24 @@ static NSString *_WKRichTextExtForImageData(NSData *data) {
                           extraText:(NSString*)extraText
                           inContext:(id<WKConversationContext>)context
                           onFailure:(void(^)(void))onFailure {
+    [self sendRichTextMixedImageDatas:imageDatas
+                            assetCount:assetCount
+                             extraText:extraText
+                              mentions:nil
+                              entities:nil
+                         mentionedInfo:nil
+                             inContext:context
+                             onFailure:onFailure];
+}
+
+-(void) sendRichTextMixedImageDatas:(NSArray<NSData*>*)imageDatas
+                         assetCount:(NSUInteger)assetCount
+                          extraText:(NSString*)extraText
+                           mentions:(NSArray<WKInputMentionItem*>*)mentions
+                           entities:(NSArray<WKMessageEntity*>*)entities
+                      mentionedInfo:(WKMentionedInfo*)mentionedInfo
+                          inContext:(id<WKConversationContext>)context
+                          onFailure:(void(^)(void))onFailure {
     // 主聊天「相册选图 + 输入框有文本」：先把每张已压缩图片落临时文件（上传链路与分享
     // 入口共用，按文件路径走，不依赖内存里的 NSData），再聚合成单条 RichText(=14)。
     // 失败统一收口：弹「发送失败」HUD + 回调 onFailure 恢复草稿（文字绝不静默丢）。
@@ -2534,6 +2572,15 @@ static NSString *_WKRichTextExtForImageData(NSData *data) {
             [[NSFileManager defaultManager] removeItemAtPath:tmpDir error:nil];
         });
     } onFailure:onFailure send:^(WKRichTextContent *content) {
+        // caption 上的 @人/@AI：装到 RichText 顶层的 WKMessageContent.entities / mentionedInfo
+        // —— 与 WKTextContent 走同一份序列化路径（base class 的 encodeMentionInfo:），
+        // server / 对端按既有 mention.uids / humans / ais / entities 协议处理，与文本消息对齐。
+        if (entities.count > 0) {
+            content.entities = entities;
+        }
+        if (mentionedInfo) {
+            content.mentionedInfo = mentionedInfo;
+        }
         [context sendMessage:content];
     }];
 }
