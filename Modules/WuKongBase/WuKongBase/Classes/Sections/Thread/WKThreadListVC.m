@@ -164,6 +164,7 @@ static const NSInteger kPageSize = 15;
         [weakSelf.allLoadedThreads addObjectsFromArray:list];
         [weakSelf filterAndReload];
         [weakSelf updateFooterVisibility];
+        [weakSelf loadMoreUntilFillsScreenIfNeed];
     }).catch(^(NSError *error) {
         if (gen != weakSelf.loadGeneration) return; // stale
         weakSelf.loading = NO;
@@ -202,6 +203,7 @@ static const NSInteger kPageSize = 15;
         [weakSelf.allLoadedThreads addObjectsFromArray:newItems];
         [weakSelf filterAndReload];
         [weakSelf updateFooterVisibility];
+        [weakSelf loadMoreUntilFillsScreenIfNeed];
     }).catch(^(NSError *error) {
         weakSelf.isLoadingMore = NO;
         [weakSelf.footerSpinner stopAnimating];
@@ -218,6 +220,24 @@ static const NSInteger kPageSize = 15;
 - (void)updateFooterVisibility {
     BOOL hasMore = (self.allLoadedThreads.count < (NSUInteger)self.totalCount);
     self.tableView.tableFooterView = hasMore ? self.tableFooterView : [[UIView alloc] init];
+}
+
+// 首屏数据如果不够撑满 tableView (contentHeight <= frameHeight), scrollViewDidScroll
+// 的 if (contentHeight > frameHeight ...) 直接 false, 永远不会触发 loadMoreThreads,
+// 用户看到的就是"177 个子区只显示 2 个"。这里在主线程下一拍主动 loadMore 凑齐
+// 第一屏。loadMoreThreads 内部已有 isLoadingMore / hasMore / generation token
+// 防御, 重入安全。
+- (void)loadMoreUntilFillsScreenIfNeed {
+    BOOL hasMore = (self.allLoadedThreads.count < (NSUInteger)self.totalCount);
+    if (!hasMore) return;
+    [self.tableView layoutIfNeeded];
+    CGFloat contentH = self.tableView.contentSize.height;
+    CGFloat frameH = self.tableView.frame.size.height;
+    if (frameH <= 0 || contentH > frameH) return; // 已撑满, 走原 scrollViewDidScroll
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [weakSelf loadMoreThreads];
+    });
 }
 
 #pragma mark - UIScrollViewDelegate (load more on scroll)
