@@ -197,8 +197,16 @@ static WKPhotoService *_instance;
         __block BOOL cancelled = NO;
         __block NSProgress *loadProgress = nil;
         __block dispatch_source_t pollTimer = nil;
+        // race 守卫: completion handler 可能在后台 queue 早于主线程 pollTimer 创建
+        // 块执行 (cached/local asset 路径), stopPoll 那时 pollTimer 还是 nil 不做事;
+        // 之后主线程才创建 + resume timer, 而 timer handler 只在 cancelled 时自停
+        // → 加载已成功不是 cancel → timer 100ms 周期永远跑 retain hud/loadProgress
+        // (PR #32 R13 review: yujiawei / lml2468)。
+        // finished 在 stopPoll 内部置 YES, pollTimer 创建块判 !finished 跳过 race 输的那次。
+        __block BOOL finished = NO;
 
         void (^stopPoll)(void) = ^{
+            finished = YES;
             if (pollTimer) {
                 dispatch_source_cancel(pollTimer);
                 pollTimer = nil;
@@ -262,7 +270,10 @@ static WKPhotoService *_instance;
         // 用一个 100ms 的 GCD timer 轮询 NSProgress.fractionCompleted。
         // 比 KVO 简单，且 NSProgress 在 iCloud 下载场景下不一定每帧都触发 KVO，
         // 轮询更平滑。
-        if (loadProgress) {
+        // race 守卫: 如果 completion handler 已经在后台 queue 触发 (cached asset
+        // 路径) 并 stopPoll 置 finished=YES, 这里就不再建 timer, 避免漏一个永远
+        // 跑的主线程 timer (PR #32 R13 review)。
+        if (loadProgress && !finished) {
             pollTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0,
                                                0, dispatch_get_main_queue());
             dispatch_source_set_timer(pollTimer,
@@ -270,7 +281,7 @@ static WKPhotoService *_instance;
                                       100 * NSEC_PER_MSEC,
                                       20 * NSEC_PER_MSEC);
             dispatch_source_set_event_handler(pollTimer, ^{
-                if (cancelled) { stopPoll(); return; }
+                if (cancelled || finished) { stopPoll(); return; }
                 double frac = loadProgress.fractionCompleted;
                 [hud setProgress:frac * 0.7]; // 阶段 1 占 0-70%
             });
