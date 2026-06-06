@@ -244,6 +244,10 @@ typedef NS_ENUM(NSInteger, FWItemType) {
 
 // 选中状态（用 channelId 持久化，重建 displayList 时恢复）
 @property (nonatomic, strong) NSMutableSet<NSString *> *checkedIds;
+// 跨刷新持久化勾选 channel——按 uniqueKey 反查。原 onConfirm 走 _displayList 遍历,
+// 折叠 section / 切 tab 后那些 row 不在 _displayList 里, 勾选静默丢 (PR #32 R7 review)。
+// 与 sibling WKForwardDirectoryVC._checkedChannels 同款思路, 与 _checkedIds 一一对偶维护。
+@property (nonatomic, strong) NSMutableDictionary<NSString *, WKChannel *> *checkedChannels;
 
 // 展示列表
 @property (nonatomic, strong) NSArray<FWDisplayItem *> *displayList;
@@ -263,6 +267,7 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     _expandedThreadGroups = [NSMutableSet set];
     _displayList = @[];
     _checkedIds = [NSMutableSet set];
+    _checkedChannels = [NSMutableDictionary dictionary];
 
     [self setupNavBar];
     [self setupSearchBar];
@@ -869,8 +874,20 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     item.isChecked = !item.isChecked;
     NSString *key = [item uniqueKey];
     if (key) {
-        if (item.isChecked) [_checkedIds addObject:key];
-        else [_checkedIds removeObject:key];
+        if (item.isChecked) {
+            [_checkedIds addObject:key];
+            // 同步记录 channel, onConfirm 直接读 _checkedChannels.allValues 不走 _displayList。
+            WKChannel *ch = nil;
+            if (item.type == FWItemConversation && item.conversation) {
+                ch = item.conversation.channel;
+            } else if (item.type == FWItemThread && item.threadChannelId) {
+                ch = [WKChannel channelID:item.threadChannelId channelType:WK_COMMUNITY_TOPIC];
+            }
+            if (ch) _checkedChannels[key] = ch;
+        } else {
+            [_checkedIds removeObject:key];
+            [_checkedChannels removeObjectForKey:key];
+        }
     }
     [tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
     [self updateConfirmBtn];
@@ -890,15 +907,9 @@ typedef NS_ENUM(NSInteger, FWItemType) {
 }
 
 - (void)onConfirm {
-    NSMutableArray<WKChannel *> *channels = [NSMutableArray array];
-    for (FWDisplayItem *item in _displayList) {
-        if (!item.isChecked) continue;
-        if (item.type == FWItemConversation && item.conversation) {
-            [channels addObject:item.conversation.channel];
-        } else if (item.type == FWItemThread && item.threadChannelId) {
-            [channels addObject:[WKChannel channelID:item.threadChannelId channelType:WK_COMMUNITY_TOPIC]];
-        }
-    }
+    // 直接读持久化的 _checkedChannels, 与 _displayList 解耦; 否则折叠 section
+    // 或切 tab 把行移出 _displayList 后, 勾选会被静默丢掉 (PR #32 R7 review)。
+    NSArray<WKChannel *> *channels = [_checkedChannels.allValues copy];
 
     if (channels.count > 0) {
         // 先发送消息
