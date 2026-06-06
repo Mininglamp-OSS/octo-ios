@@ -248,6 +248,9 @@ typedef NS_ENUM(NSInteger, FWItemType) {
 // 折叠 section / 切 tab 后那些 row 不在 _displayList 里, 勾选静默丢 (PR #32 R7 review)。
 // 与 sibling WKForwardDirectoryVC._checkedChannels 同款思路, 与 _checkedIds 一一对偶维护。
 @property (nonatomic, strong) NSMutableDictionary<NSString *, WKChannel *> *checkedChannels;
+// 一次性 guard: onConfirm 内 dispatch_after 0.3s 才 pop, 期间 confirmBtn 仍 tappable,
+// 下游 forwardMessage: 链路无 dedup, 一秒内双击会双发 (PR #32 R10 review)。
+@property (nonatomic, assign) BOOL confirming;
 
 // 展示列表
 @property (nonatomic, strong) NSArray<FWDisplayItem *> *displayList;
@@ -907,6 +910,8 @@ typedef NS_ENUM(NSInteger, FWItemType) {
 }
 
 - (void)onConfirm {
+    if (_confirming) return;
+    _confirming = YES;
     // 直接读持久化的 _checkedChannels, 与 _displayList 解耦; 否则折叠 section
     // 或切 tab 把行移出 _displayList 后, 勾选会被静默丢掉 (PR #32 R7 review)。
     NSArray<WKChannel *> *channels = [_checkedChannels.allValues copy];

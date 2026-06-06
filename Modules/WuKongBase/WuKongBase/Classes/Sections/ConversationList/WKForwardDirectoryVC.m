@@ -265,6 +265,9 @@ typedef NS_ENUM(NSInteger, WKDirItemType) {
 @property (nonatomic, strong) WKDirSegment *segment;
 @property (nonatomic, strong) UITableView *tableView;
 @property (nonatomic, strong) UIButton *confirmBtn;
+// 一次性 guard: onConfirm 内 dispatch_after 0.3s 才 pop, 期间 confirmBtn 仍 tappable,
+// 下游 forwardMessage: 链路无 dedup, 一秒内双击会双发 (PR #32 R10 review)。
+@property (nonatomic, assign) BOOL confirming;
 
 @property (nonatomic, assign) WKDirTab currentTab;
 
@@ -871,6 +874,8 @@ typedef NS_ENUM(NSInteger, WKDirItemType) {
 }
 
 - (void)onConfirm {
+    if (_confirming) return;
+    _confirming = YES;
     NSArray<WKChannel *> *channels = _checkedChannels.allValues;
     if (channels.count > 0) {
         if (self.onConfirmChannels) {

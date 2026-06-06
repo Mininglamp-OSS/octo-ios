@@ -21,6 +21,10 @@ static const NSInteger kMsgFieldTag = 88802;
 @property (nonatomic, copy) void(^onSend)(NSString * _Nullable extraText);
 @property (nonatomic, strong, nullable) NSArray<NSDictionary *> *shareFileInfos;
 @property (nonatomic, weak) UIView *overlay;
+// 一次性 guard: dismissPanel 是 0.25s 淡出动画, removeFromSuperview 只在 completion
+// 里执行; 期间 sendBtn 仍 enabled 仍 tappable, 下游 forwardMessage: 链路无 dedup —
+// 一秒内双击同一次会话双发 (PR #32 R10 review)。
+@property (nonatomic, assign) BOOL settled;
 @end
 
 @implementation WKForwardConfirmPanel
@@ -368,6 +372,9 @@ static const NSInteger kMsgFieldTag = 88802;
 }
 
 - (void)onSendTap {
+    if (self.settled) return;
+    self.settled = YES;
+
     UIView *overlay = self.overlay;
     UITextField *msgField = [overlay viewWithTag:kMsgFieldTag];
     NSString *extraText = msgField.text;
