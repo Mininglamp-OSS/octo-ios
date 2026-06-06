@@ -165,13 +165,18 @@ static WKMoreItemClickEvent *_instance;
                     WKMentionedInfo *mentionedInfo = [weakContext mentionedInfo:caption mentionCache:cache];
 
                     if (finalImages.count == 0) {
-                        // 纯文本降级路径：调用方此前的草稿已被 captionVC 用 inputSetText:@"" 移走；
-                        // sendTextMessage:entities: 自己会从 self.mentionCache 取 mentionedInfo，
-                        // 所以把 mentions 推回 context 的 mentionCache，文本就近就能带上 @ 信息。
+                        // 纯文本降级路径：caption 已经把 mentions 推进 context.mentionCache
+                        // (line 171-173), sendTextMessage:entities:robotID: sink (line 423,
+                        // 493) 会从 self.mentionCache 重算 mentionedInfo 并 append entities;
+                        // 这里 entities 参数必须传 nil — 否则 ① 我们预算的 entities + ②
+                        // sink append 的同 cache 算出的 entities 会重复序列化 mention 范围
+                        // (同 uid 同 range 出现两次), 多端 RichText 渲染高亮重复 / cell 高度
+                        // 出错 (PR #32 R12 review: Jerry-Xin / lml2468)。sink 内 mentionedInfo
+                        // 也由 cache 重算, 不需要外部传入。
                         if (mentions.count > 0 && [weakContext respondsToSelector:@selector(addMentionItems:)]) {
                             [weakContext addMentionItems:mentions];
                         }
-                        [weakContext sendTextMessage:caption entities:entities robotID:nil];
+                        [weakContext sendTextMessage:caption entities:nil robotID:nil];
                         return;
                     }
                     if ([WKApp shouldAggregateAlbumImagesWithText:YES assetCount:finalImages.count pendingText:caption]) {
