@@ -44,6 +44,15 @@
 // 渲染失败或文件过大走原始加载的 URL 记录在此集合中，避免再次拦截造成死循环。
 @property (nonatomic, strong) NSMutableSet<NSURL *> *bypassUTF8ReloadURLs;
 
+// 下一次 navigation 强制关闭 JS。当 reloadWithUTF8ForResponse 把不可信远程
+// 内容 (markdown / CSV / 纯文本) 通过 loadHTMLString 灌进本 webview 时, 因为本
+// webview 注册了 WKWebViewJavascriptBridge (暴露 chooseConversation / auth 等
+// 原生 handler), 不可信 HTML 可能注入 inline JS 调用 bridge 越权 (PR #32 R5
+// review)。flag 在 decidePolicyForNavigationAction:preferences: 里被识别 →
+// preferences.allowsContentJavaScript = NO → 这次 navigation 的 user script
+// (含 bridge 注入) 和 inline JS 都不会执行, 隔离不可信内容。
+@property (nonatomic, assign) BOOL nextNavigationDisablesJS;
+
 // 当前正在下载的文本文件任务；用 task.progress KVO 驱动 progressView 显示下载进度。
 @property (nonatomic, strong) NSURLSessionDataTask *currentTextDownloadTask;
 
@@ -349,6 +358,25 @@
 #pragma mark - WKNavigationDelegate
 
 
+// iOS 13+ 的新版 decidePolicy: 同时实现 preferences 版与旧版时, UIKit **只**调用
+// preferences 版, 旧版被忽略。所以这里 inline 复用旧版逻辑 (把 decisionHandler
+// 包成 (policy) → (policy, preferences)), 并在 nextNavigationDisablesJS 命中时
+// 把 preferences.allowsContentJavaScript 置 NO, 隔离 loadHTMLString 灌入的
+// 不可信内容免触达 JS bridge (PR #32 R5 安全修复)。
+- (void)webView:(WKWebView *)webView
+      decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
+                          preferences:(WKWebpagePreferences *)preferences
+                      decisionHandler:(void (^)(WKNavigationActionPolicy, WKWebpagePreferences * _Nonnull))decisionHandler API_AVAILABLE(ios(13.0)) {
+    if (self.nextNavigationDisablesJS) {
+        preferences.allowsContentJavaScript = NO;
+        self.nextNavigationDisablesJS = NO;
+    }
+    [self webView:webView decidePolicyForNavigationAction:navigationAction decisionHandler:^(WKNavigationActionPolicy policy) {
+        decisionHandler(policy, preferences);
+    }];
+}
+
+
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     [self checkGoAndGobackBtn];
     
@@ -459,7 +487,6 @@
         [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
         return;
     }
-
     NSString *ext = url.pathExtension.lowercaseString ?: @"";
     NSString *mime = response.MIMEType.lowercaseString ?: @"";
     BOOL isMarkdown = [ext isEqualToString:@"md"] || [ext isEqualToString:@"markdown"] || [mime containsString:@"markdown"];
@@ -491,8 +518,11 @@
             } else {
                 html = [strongSelf htmlForPlainText:text];
             }
-            // baseURL 用文档目录，让相对路径的图片 / 资源能够正确解析
+            // baseURL 用文档目录，让相对路径的图片 / 资源能够正确解析。
+            // 关 JS: 渲染前置 flag, decidePolicyForNavigationAction:preferences: 会
+            // 把这次 navigation 的 allowsContentJavaScript 设为 NO, 隔离 bridge 越权。
             NSURL *baseURL = [url URLByDeletingLastPathComponent];
+            strongSelf.nextNavigationDisablesJS = YES;
             [strongSelf.webView loadHTMLString:html baseURL:baseURL];
         });
     }];

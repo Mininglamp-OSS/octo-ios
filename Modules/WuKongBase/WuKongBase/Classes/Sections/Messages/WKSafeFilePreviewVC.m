@@ -187,6 +187,13 @@ static UIWindow *_previousKeyWindow = nil;
 
 - (void)setupWebViewInFrame:(CGRect)frame {
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
+    // 远程下载的 markdown / CSV / 纯文本属于不可信内容, 关掉 JS 防御 inline
+    // <img onerror>/javascript: scheme 等 XSS 向量 (PR #32 R5 安全修复)。本 VC
+    // 不挂 bridge, 所以仅是防御性 hardening, 与 WKWebViewVC 的 nextNavigationDisablesJS
+    // 同源策略对齐。
+    if (@available(iOS 14.0, *)) {
+        config.defaultWebpagePreferences.allowsContentJavaScript = NO;
+    }
     self.webView = [[WKWebView alloc] initWithFrame:frame configuration:config];
     self.webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.webView.opaque = NO;
