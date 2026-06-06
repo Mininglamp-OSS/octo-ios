@@ -167,19 +167,30 @@ static const NSInteger kMsgFieldTag = 88802;
                 iconURL = [NSString stringWithFormat:@"%@://%@/favicon.ico", parsedURL.scheme, parsedURL.host];
             }
             if (iconURL) {
-                NSString *faviconURL = iconURL;
-                dispatch_async(dispatch_get_global_queue(0, 0), ^{
-                    NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:faviconURL]];
-                    if (data) {
+                NSURL *faviconParsed = [NSURL URLWithString:iconURL];
+                if (faviconParsed) {
+                    // 5s timeout + 512KB cap (PR #32 R13/R15 review): 原来用
+                    // NSData dataWithContentsOfURL: 无超时无 byte cap, 恶意 URL 可以
+                    // 拖死面板 + 解码任意大小远程图片。
+                    static const NSTimeInterval kFaviconTimeout = 5.0;
+                    static const NSInteger kFaviconMaxBytes = 512 * 1024;
+                    NSMutableURLRequest *favReq = [NSMutableURLRequest requestWithURL:faviconParsed
+                                                                          cachePolicy:NSURLRequestUseProtocolCachePolicy
+                                                                      timeoutInterval:kFaviconTimeout];
+                    NSURLSessionDataTask *favTask = [[NSURLSession sharedSession] dataTaskWithRequest:favReq
+                                                                                    completionHandler:^(NSData * _Nullable data,
+                                                                                                       NSURLResponse * _Nullable resp,
+                                                                                                       NSError * _Nullable err) {
+                        if (err || data.length == 0 || data.length > kFaviconMaxBytes) return;
                         UIImage *icon = [UIImage imageWithData:data];
-                        if (icon) {
-                            dispatch_async(dispatch_get_main_queue(), ^{
-                                faviconView.image = icon;
-                                faviconView.backgroundColor = [UIColor clearColor];
-                            });
-                        }
-                    }
-                });
+                        if (!icon) return;
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            faviconView.image = icon;
+                            faviconView.backgroundColor = [UIColor clearColor];
+                        });
+                    }];
+                    [favTask resume];
+                }
             }
 
             // 标题
