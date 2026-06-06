@@ -25,6 +25,9 @@ static const NSInteger kThumbCount   = 10;
 @property(nonatomic, strong) AVPlayer *player;
 @property(nonatomic, strong) AVPlayerLayer *playerLayer;
 @property(nonatomic, strong) UIView *playerView;
+// addPeriodicTimeObserverForInterval 返回的 token, dealloc 时必须 removeTimeObserver,
+// 否则 observer 会保留 player 强引用, 引发观察者生命周期问题。
+@property(nonatomic, strong) id timeObserverToken;
 
 @property(nonatomic, strong) UIView *thumbBar;       // 缩略图带容器
 @property(nonatomic, strong) UIView *windowView;     // 半透明白框 (3 秒窗口)
@@ -110,7 +113,7 @@ static const NSInteger kThumbCount   = 10;
 
     // 循环播放到窗口末端就 seek 回起点
     __weak typeof(self) ws = self;
-    [self.player addPeriodicTimeObserverForInterval:CMTimeMakeWithSeconds(0.05, 600)
+    self.timeObserverToken = [self.player addPeriodicTimeObserverForInterval:CMTimeMakeWithSeconds(0.05, 600)
                                               queue:dispatch_get_main_queue()
                                          usingBlock:^(CMTime time) {
         NSTimeInterval cur = CMTimeGetSeconds(time);
@@ -379,6 +382,10 @@ static const NSInteger kThumbCount   = 10;
 
 - (void)dealloc {
     [_player pause];
+    if (_timeObserverToken && _player) {
+        [_player removeTimeObserver:_timeObserverToken];
+        _timeObserverToken = nil;
+    }
 }
 
 @end

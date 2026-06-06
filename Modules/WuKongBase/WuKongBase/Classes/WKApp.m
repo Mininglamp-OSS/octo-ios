@@ -1490,10 +1490,19 @@ static WKApp *_instance;
                 // 群主：对任何人显示
                 isManager = true;
             } else if(selfRole == WKMemberRoleManager) {
-                // 管理员：仅对普通成员显示，对其他管理员/群主隐藏
+                // 管理员：仅对普通成员显示，对其他管理员/群主隐藏。
+                // 优先用 channel cache; 缓存未命中时回退到 message.memberOfFrom.role; 仍未知
+                // 则 fail-closed (不放行) —— 不能默认当成 Common, 否则缓存未同步时管理员会得到
+                // 撤群主消息的权限 (review #32 提到的 fail-open 风险)。
                 WKChannelMember *targetMember = [[WKSDK shared].channelManager getMember:roleChannel uid:message.fromUid];
-                WKMemberRole targetRole = targetMember ? targetMember.role : WKMemberRoleCommon;
-                isManager = (targetRole == WKMemberRoleCommon);
+                if (!targetMember) {
+                    targetMember = message.memberOfFrom;
+                }
+                if (targetMember) {
+                    isManager = (targetMember.role == WKMemberRoleCommon);
+                } else {
+                    isManager = false;
+                }
             }
         }
         if(!isManager) {
