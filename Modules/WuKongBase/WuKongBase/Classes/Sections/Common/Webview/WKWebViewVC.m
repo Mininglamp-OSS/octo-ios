@@ -450,7 +450,11 @@
     NSURL *url = response.URL;
     if (!url) return;
 
-    if (response.expectedContentLength > kMaxBytes) {
+    // 已知超大 / 未知长度 (chunked transfer, expectedContentLength == -1) 直接 bypass。
+    // -1 不能进 dataTask 全量 buffer, 否则远端可以推任意大小的响应到 NSData 把 App 撑爆
+    // (PR #32 review: 完成回调里 data.length 检查是缓冲完整 response 之后才跑, OOM 已发生)。
+    if (response.expectedContentLength > kMaxBytes
+        || response.expectedContentLength == NSURLResponseUnknownLength) {
         [self.bypassUTF8ReloadURLs addObject:url];
         [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
         return;
@@ -620,7 +624,11 @@
         if (ext) cmark_parser_attach_syntax_extension(parser, ext);
     }
     const char *utf8 = [text UTF8String];
-    cmark_parser_feed(parser, utf8, strlen(utf8));
+    // 用 lengthOfBytesUsingEncoding 而非 strlen, 避免 text 含嵌入 NUL 字节时被截断
+    // (PR #32 review)。NSString 内部允许 NUL, UTF8String 返回的 C buffer 里也保留,
+    // strlen 在第一个 NUL 处停。
+    NSUInteger utf8Len = [text lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    cmark_parser_feed(parser, utf8, utf8Len);
     cmark_node *doc = cmark_parser_finish(parser);
     char *htmlCStr = cmark_render_html(doc, CMARK_OPT_DEFAULT, cmark_parser_get_syntax_extensions(parser));
     NSString *body = [NSString stringWithUTF8String:htmlCStr] ?: @"";
@@ -738,7 +746,12 @@
     } else if([appLang isEqualToString:@"zh-Hant"]) {
         navLang = @"zh-TW";
     }
-    NSString *js = [NSString stringWithFormat:@"(function(){try{var l='%@';Object.defineProperty(navigator,'language',{get:function(){return l;},configurable:true});Object.defineProperty(navigator,'languages',{get:function(){return [l];},configurable:true});}catch(e){}})();", navLang];
+    // JS 字符串 escape: navLang 走 App 配置 (理论上只会是 zh-CN/zh-TW/en 之类),
+    // 防御性 escape 反斜杠 / 单引号 / 换行, 避免值含 ' 时 break out 注入 JS (PR #32 review)。
+    NSString *safeLang = [[[navLang stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"]
+                                    stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"]
+                                    stringByReplacingOccurrencesOfString:@"\n" withString:@""];
+    NSString *js = [NSString stringWithFormat:@"(function(){try{var l='%@';Object.defineProperty(navigator,'language',{get:function(){return l;},configurable:true});Object.defineProperty(navigator,'languages',{get:function(){return [l];},configurable:true});}catch(e){}})();", safeLang];
     WKUserScript *langScript = [[WKUserScript alloc] initWithSource:js
                                                       injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                                    forMainFrameOnly:NO];

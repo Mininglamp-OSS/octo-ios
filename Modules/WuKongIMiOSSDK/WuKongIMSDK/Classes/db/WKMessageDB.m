@@ -50,8 +50,10 @@
 
 // 跨频道按文件名搜索文件消息（content_type=8/WK_FILE）。文件名存在 content JSON 的
 // "name" 字段里（searchable_word 仅为字面量 "[文件]" 无法命中），故对 content 做 LIKE。
+// content 列由 sqlite3_bind_blob 写入, storage class 是 BLOB, SQLite 的 LIKE 不会把
+// BLOB 隐式当 TEXT 匹配 (会返 0 行); 必须 CAST AS TEXT 才能命中 (PR #32 review)。
 // 撤回过滤同上：LEFT JOIN message_extra 按其 revoke 过滤。
-#define SQL_FILE_MESSAGE_WITH_KEYWORD [NSString stringWithFormat:@"select message.*  from %@ left join message_extra on message.message_id=message_extra.message_id where message.content_type=8 and message.is_deleted=0 and message.revoke=0 and IFNULL(message_extra.revoke,0)=0 and message.from_uid<>'' and message.content like ? order by message.order_seq desc,message.timestamp desc limit ?",TB_MESSAGE]
+#define SQL_FILE_MESSAGE_WITH_KEYWORD [NSString stringWithFormat:@"select message.*  from %@ left join message_extra on message.message_id=message_extra.message_id where message.content_type=8 and message.is_deleted=0 and message.revoke=0 and IFNULL(message_extra.revoke,0)=0 and message.from_uid<>'' and CAST(message.content AS TEXT) like ? order by message.order_seq desc,message.timestamp desc limit ?",TB_MESSAGE]
 
 // 将等待发送中的消息修改为错误状态
 #define SQL_MESSAGE_UPDATE_SENDING_TO_ERROR [NSString stringWithFormat:@"update %@ set status=? where status=? or status=?",TB_MESSAGE]
