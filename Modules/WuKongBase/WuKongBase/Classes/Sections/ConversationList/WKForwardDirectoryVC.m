@@ -442,12 +442,20 @@ typedef NS_ENUM(NSInteger, WKDirItemType) {
 - (void)preloadAllThreads {
     if (![WKApp shared].remoteConfig.threadOn) return;
     if (_groups.count == 0) return;
+    // cap 在 20 (与 sibling ensureThreadsLoadedForSearch 一致); 否则大账号 cold
+    // start 会对 N 个群并发跑 listAllThreads:maxPages:10 引爆请求风暴 (PR #32
+    // R13 review: yujiawei / lml2468)。剩下的群等用户实际展开 / 搜索时再 lazy load
+    // (didSelectRow / ensureThreadsLoadedForSearch 已覆盖)。
+    static const NSInteger kMaxPreloadGroups = 20;
+    NSInteger triggered = 0;
     __block NSInteger pending = 0;
     __weak typeof(self) ws = self;
     for (WKDirItem *g in _groups) {
         NSString *groupNo = g.channelId;
         if (groupNo.length == 0) continue;
         if (_threadCache[groupNo] || [_threadLoading containsObject:groupNo]) continue;
+        if (triggered >= kMaxPreloadGroups) break;
+        triggered++;
         pending++;
         [self loadThreadsForGroup:groupNo then:^{
             pending--;
