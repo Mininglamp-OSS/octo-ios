@@ -194,6 +194,8 @@
         _searchbarView.placeholder = LLang(@"搜索联系人、AI、群聊");
         _searchbarView.onClick = ^{
             WKGlobalSearchResultController *vc = [WKGlobalSearchResultController new];
+            // 通讯录入口：搜索页默认选中"联系人"tab（会话列表入口走默认的"聊天"tab）。
+            vc.searchType = WKHistoryMessageSearchTypeContacts;
             [[WKNavigationManager shared] pushViewController:vc animated:NO];
         };
     }

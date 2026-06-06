@@ -52,9 +52,17 @@
     self.vm.keyword = self.keyword;
     
     [[WKSDK shared].channelManager addDelegate:self];
-    
+
     self.tabbar.lim_bottom = self.tableView.lim_top;
-    
+
+    // 入口决定默认 tab：searchType==Contacts(通讯录搜索框入口) → 联系人 tab(index 1)；
+    // 其它入口（会话列表搜索框, 默认 All）走 tab 0(聊天) 不动。tab 顺序定义见
+    // -tabbar getter: 聊天 / [联系人 / 群组] / (媒体) / 文件。频道内搜索时联系人 tab
+    // 不存在，加 !searchInChannel 守卫避免误切到群组 tab。
+    if (self.searchType == WKHistoryMessageSearchTypeContacts && !self.vm.searchInChannel) {
+        [self.tabbar selectItemAtIndex:1];
+    }
+
 }
 - (CGRect)tableViewFrame {
     CGRect rect = [self visibleRect];

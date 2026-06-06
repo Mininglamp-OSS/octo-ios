@@ -23,6 +23,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 -(id) initWithItems:(NSArray<WKTabbarItem*>*)items width:(CGFloat)width;
 
+/// 程序式选中第 index 项。行为等价于用户点击该项：刷新选中高亮 + 触发 item.onClick。
+/// index 越界 / 重复选中当前项时为 no-op。
+- (void)selectItemAtIndex:(NSInteger)index;
+
 @end
 
 

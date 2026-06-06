@@ -143,13 +143,19 @@
 }
 
 -(void) itemClick:(UIButton*)btn {
-    self.selectedIndex = btn.tag;
-    
+    [self selectItemAtIndex:btn.tag];
+}
+
+- (void)selectItemAtIndex:(NSInteger)index {
+    if (index < 0 || index >= (NSInteger)self.items.count) return;
+    if (index == self.selectedIndex) return;
+    self.selectedIndex = index;
+
     [UIView animateWithDuration:0.2f animations:^{
         [self layoutSubviews];
     }];
-    WKTabbarItem *item =  self.items[self.selectedIndex];
-    if(item.onClick) {
+    WKTabbarItem *item = self.items[index];
+    if (item.onClick) {
         item.onClick();
     }
 }
