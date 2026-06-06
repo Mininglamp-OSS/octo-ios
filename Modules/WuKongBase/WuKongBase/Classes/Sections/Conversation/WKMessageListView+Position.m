@@ -18,27 +18,65 @@
     self.conversationPositionBarView = [[WKConversationPositionBarView alloc] init];
     __weak typeof(self) weakSelf = self;
     [self.conversationPositionBarView setOnScrollToBottom:^{
-        [weakSelf pullBottom];
+        __strong typeof(weakSelf) ws = weakSelf;
+        if (!ws) return;
+        // 微信式两步定位:
+        //   第 1 次 (有未读 + 视口未看到首条未读): 锚到首条未读, 让用户开始按时间
+        //     往下读, 不 mark read (用户还没看完);
+        //   第 2 次 (首条未读已在视口 / 没未读): 走原行为, pullBottom + 三端同步
+        //     mark read。
+        // 用「位置语义」自然区分一二次, 无状态 flag。
+        uint32_t firstUnreadOS = [ws ks_firstUnreadOrderSeqForScrollToBottom];
+        if (firstUnreadOS > 0 &&
+            ws.conversationPositionBarView.maxVisiableOrderSeq < firstUnreadOS) {
+            [ws locateMessageCellWithOrderSeqForReminder:firstUnreadOS
+                                           tablePosition:UITableViewScrollPositionTop];
+            return;
+        }
+        [ws pullBottom];
         // 「跑到最底部」按钮 = 用户主动声明「我都看完了」，必须显式做三端同步。
         // 不能复用 refreshNewMsgCount 的 oldMsgCount != newMsgCount 路径 —— 这条
         // 路径在 browseToOrderSeq=0 起步、newMsgCount 一直是 0 的场景会被 bypass，
         // 表现就是「视觉上 badge 消了，server 上 unread 没动，杀进程重启又复现」。
-        [weakSelf forceMarkAllAsRead];
+        [ws forceMarkAllAsRead];
     }];
     [self.conversationPositionBarView setOnScrollToPosition:^(WKConversationPosition * _Nonnull position,UITableViewScrollPosition tablePosition) {
         [weakSelf locateMessageCellWithOrderSeqForReminder:position.orderSeq tablePosition:tablePosition];
     }];
-    
-    
+
+
     [self addSubview:self.conversationPositionBarView];
-    
+
     NSArray<WKReminder*> *reminders = self.reminders;
     [self updateVisiableOrderSeq];
     [self.conversationPositionBarView updateReminders:reminders];
-    
+
     [self.conversationPositionBarView showScrollBottom:!self.positionAtBottom animateComplete:nil];
-    
+
     [self layoutConversationPositionBarView];
+}
+
+// 计算"首条未读"的 orderSeq, 用于向下按钮两步定位的第 1 步锚点。
+// 与 WKConversationView.calcKeepPositionAndBrowseToOrderSeq 同款算法:
+//   - 优先 lastReadSeq + 1 (精确, 不受撤回/删除/推送 race 影响)
+//   - 兜底 lastMsgSeq - newMsgCount + 1 (新会话 / 旧版数据 lastReadSeq=0 时用)
+// 没未读 / 计算失败时返 0, 调用方回退到原 pullBottom 行为。
+- (uint32_t)ks_firstUnreadOrderSeqForScrollToBottom {
+    if (self.newMsgCount <= 0) return 0;
+    WKChannel *ch = self.channel;
+    if (!ch) return 0;
+    uint32_t firstUnreadSeq = 0;
+    uint32_t lastReadSeq = [[WKUnreadStore shared] lastReadSeqForChannel:ch];
+    if (lastReadSeq > 0) {
+        firstUnreadSeq = lastReadSeq + 1;
+    } else if (self.lastMessage) {
+        uint32_t lastMsgSeq = self.lastMessage.messageSeq;
+        if (lastMsgSeq > (uint32_t)self.newMsgCount) {
+            firstUnreadSeq = lastMsgSeq - (uint32_t)self.newMsgCount + 1;
+        }
+    }
+    if (firstUnreadSeq == 0) return 0;
+    return [[WKSDK shared].chatManager getOrderSeq:firstUnreadSeq];
 }
 
 
