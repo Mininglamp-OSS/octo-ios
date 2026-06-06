@@ -382,23 +382,41 @@
 }
 
 -(void) calcKeepPositionAndBrowseToOrderSeq {
-    
+
     if(!self.currentConversation) {
         return;
     }
-    
+
     NSInteger keepOffSetY = 0;
     uint32_t keepOrderSeq = 0;
     NSInteger newMsgCount = self.currentConversation.unreadCount;
     WKMessage *conversationLastMessage = self.currentConversation.lastMessage;
-    if(newMsgCount>0) { // 有新消息，则定位到新消息第一条
-        uint32_t lastMessageSeq = [[WKSDK shared].chatManager getOrNearbyMessageSeq:conversationLastMessage.orderSeq];
-        if(lastMessageSeq>newMsgCount) {
-            self.messageListView.browseToOrderSeq= [[WKSDK shared].chatManager getOrderSeq:lastMessageSeq - (uint32_t)newMsgCount];
-            keepOrderSeq = self.messageListView.browseToOrderSeq;
-            keepOffSetY = -120.0f;
+    // 微信式打开会话定位"首条未读"。优先用 WKUnreadStore.lastReadSeq + 1 作锚点
+    // (精确, 不受撤回/删除/推送 race 影响); 兜底 lastMessageSeq - unreadCount
+    // (新会话 lastReadSeq=0 或 lastReadSeq 异常时用)。
+    //
+    // 为何不再单纯依赖 unreadCount: 群里有撤回/删除时 seq 不连续, last - unread
+    // 可能落到已删除消息 seq → getOrderSeq 返 0 → keepPosition 失效退化到最底部;
+    // 子区/远端 reconcile race 也可能让 unreadCount 偏小, 同样退化。
+    if(newMsgCount > 0 && conversationLastMessage) {
+        uint32_t firstUnreadSeq = 0;
+        uint32_t lastReadSeq = [[WKUnreadStore shared] lastReadSeqForChannel:self.channel];
+        uint32_t lastMsgSeq = [[WKSDK shared].chatManager getOrNearbyMessageSeq:conversationLastMessage.orderSeq];
+        if (lastReadSeq > 0 && lastMsgSeq > lastReadSeq) {
+            // 首选: 上次离开会话时已确认读到 lastReadSeq, 下一条 (lastReadSeq+1) 就是首条未读
+            firstUnreadSeq = lastReadSeq + 1;
+        } else if (lastMsgSeq > newMsgCount) {
+            // 兜底: 没有 lastReadSeq 时 (首次进/旧版本数据), 用 last - unread 近似
+            firstUnreadSeq = (uint32_t)(lastMsgSeq - newMsgCount + 1);
         }
-        
+        if (firstUnreadSeq > 0) {
+            uint32_t orderSeq = [[WKSDK shared].chatManager getOrderSeq:firstUnreadSeq];
+            if (orderSeq > 0) {
+                self.messageListView.browseToOrderSeq = orderSeq;
+                keepOrderSeq = orderSeq;
+                keepOffSetY = -120.0f;
+            }
+        }
     }
     BOOL useKeep = false; // 是否使用保持的位置
     if(self.currentConversation.remoteExtra.keepMessageSeq>0) { // 有保持位置
@@ -418,7 +436,7 @@
     if(keepOrderSeq>0) {
         self.messageListView.keepPosition =  [WKConversationPosition orderSeq:keepOrderSeq offset:(int)keepOffSetY];
     }
-    
+
     if(self.locationAtOrderSeq!=0) { // 传过来的定位orderSeq最优先
         CGFloat offset = -self.input.lim_height - 40.0f;
         self.messageListView.needPositionReminder = true;
