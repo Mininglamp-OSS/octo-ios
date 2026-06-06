@@ -429,11 +429,6 @@
         decisionHandler(WKNavigationResponsePolicyAllow);
         return;
     }
-    // 服务器自带 charset（或我们 loadData 重灌后），直接放行
-    if (response.textEncodingName.length > 0) {
-        decisionHandler(WKNavigationResponsePolicyAllow);
-        return;
-    }
 
     NSString *mime = (response.MIMEType ?: @"").lowercaseString;
     NSString *ext = url.pathExtension.lowercaseString ?: @"";
@@ -447,6 +442,19 @@
     BOOL isHTML = [mime isEqualToString:@"text/html"] || [mime isEqualToString:@"application/xhtml+xml"];
     BOOL isText = !isHTML && ([mime hasPrefix:@"text/"] || [textExts containsObject:ext]);
     if (!isText) {
+        decisionHandler(WKNavigationResponsePolicyAllow);
+        return;
+    }
+
+    // markdown / CSV 即便服务器声明了 charset 也要走自渲染 (cmark + WKCSVRenderer),
+    // 否则 WebKit 用 native <pre> 显示就丢了渲染效果。GitHub raw 等 CDN 默认带
+    // Content-Type: text/markdown; charset=utf-8, 之前 textEncodingName 早 return 把
+    // 整条 isolated 渲染路径 bypass (PR #32 R15: lml2468)。
+    // 非 markdown/CSV (.txt/.log/.json/.yml/.xml) 服务器带 charset 时直接放行让
+    // WebKit 自己解码, 行为与原代码一致。
+    BOOL isMarkdown = [ext isEqualToString:@"md"] || [ext isEqualToString:@"markdown"] || [mime containsString:@"markdown"];
+    BOOL isCSV = [ext isEqualToString:@"csv"] || [mime containsString:@"csv"];
+    if (!isMarkdown && !isCSV && response.textEncodingName.length > 0) {
         decisionHandler(WKNavigationResponsePolicyAllow);
         return;
     }
@@ -480,11 +488,24 @@
     [req setValue:[WKApp shared].config.langue forHTTPHeaderField:@"Accept-Language"];
 
     __weak typeof(self) weakSelf = self;
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+    __block NSURLSessionDataTask *task = nil;
+    task = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong typeof(weakSelf) strongSelf = weakSelf;
             if (!strongSelf) return;
+            // race guard: 老 task 的 late completion 跑到这里时, currentTextDownloadTask
+            // 可能已被新 task 替换 (用户连续触发同类型 link)。如果不 check 就走下去会:
+            // ① stopObservingTextDownload 把新 task cancel 掉; ② 用老 task 的 stale data
+            // 渲染 isolated view, 用户看到老 URL 的内容 (PR #32 R15: lml2468)。
+            if (strongSelf.currentTextDownloadTask != task) {
+                return;
+            }
             [strongSelf stopObservingTextDownload];
+            // 我们主动 cancel 的 task 静默不 fallback (避免回灌 bypassUTF8ReloadURLs 把
+            // 用户后续点同一 URL 永久走 native render)。
+            if (err.code == NSURLErrorCancelled) {
+                return;
+            }
             if (err || data.length == 0 || data.length > kMaxBytes) {
                 [strongSelf.bypassUTF8ReloadURLs addObject:url];
                 [strongSelf.webView loadRequest:[NSURLRequest requestWithURL:url]];
@@ -756,13 +777,13 @@
 
 - (void)webView:(WKWebView *)webView didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition disposition, NSURLCredential * _Nullable credential))completionHandler{
 
-    if ([challenge.protectionSpace.authenticationMethod isEqualToString:NSURLAuthenticationMethodServerTrust]) {
-        NSURLCredential *card = [[NSURLCredential alloc]initWithTrust:challenge.protectionSpace.serverTrust];
-        completionHandler(NSURLSessionAuthChallengeUseCredential, card);
-    } else {
-        // 其他认证方式走默认处理，必须调用 completionHandler 否则 WebKit 会崩溃
-        completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, nil);
-    }
+    // 全部走系统默认 TLS 验证。原代码在 ServerTrust 分支用
+    //   [[NSURLCredential alloc] initWithTrust:serverTrust]
+    // 等于无条件接受任何证书 (自签 / 过期 / 域名不匹配都接受), 开放 MITM 注入面 —
+    // 攻击者可以拦截 HTTPS 注入任意内容; 在 merged-forward 把任意链接路由进本 webview
+    // 之后影响面更大 (PR #32 R15 critical: Jerry-Xin)。
+    // 系统默认验证就是正确做法; 若业务确需自签证书, 应走 cert pinning 而非 bypass。
+    completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, nil);
 
 }
 
