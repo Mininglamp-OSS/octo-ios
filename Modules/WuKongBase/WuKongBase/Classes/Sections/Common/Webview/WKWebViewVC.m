@@ -44,14 +44,15 @@
 // 渲染失败或文件过大走原始加载的 URL 记录在此集合中，避免再次拦截造成死循环。
 @property (nonatomic, strong) NSMutableSet<NSURL *> *bypassUTF8ReloadURLs;
 
-// 下一次 navigation 强制关闭 JS。当 reloadWithUTF8ForResponse 把不可信远程
-// 内容 (markdown / CSV / 纯文本) 通过 loadHTMLString 灌进本 webview 时, 因为本
-// webview 注册了 WKWebViewJavascriptBridge (暴露 chooseConversation / auth 等
-// 原生 handler), 不可信 HTML 可能注入 inline JS 调用 bridge 越权 (PR #32 R5
-// review)。flag 在 decidePolicyForNavigationAction:preferences: 里被识别 →
-// preferences.allowsContentJavaScript = NO → 这次 navigation 的 user script
-// (含 bridge 注入) 和 inline JS 都不会执行, 隔离不可信内容。
-@property (nonatomic, assign) BOOL nextNavigationDisablesJS;
+// 渲染远程不可信内容 (markdown / CSV / 纯文本) 专用的隔离 webview。
+// 主 webview (_webView) 挂了 WKWebViewJavascriptBridge (暴露 auth / chooseConversation
+// / showConversation 等敏感原生 handler), 任何远程 HTML 灌进去 inline JS 都能越权调用。
+// 此 webview: ① config 时直接 allowsContentJavaScript=NO 关 JS (iOS 14+); ② 不挂 bridge;
+// ③ 出现时遮在 _webView 之上, 沿用原 nav 的 back 即可离开。
+// 之前用 nextNavigationDisablesJS flag + :preferences: 路径是死代码 — bridge
+// 抢了 navigationDelegate 且只 forward legacy 方法, VC 的 :preferences: 永远不会被调
+// 用 (PR #32 R10 review: yujiawei / lml2468)。
+@property (nonatomic, strong) WKWebView *isolatedRenderWebView;
 
 // 当前正在下载的文本文件任务；用 task.progress KVO 驱动 progressView 显示下载进度。
 @property (nonatomic, strong) NSURLSessionDataTask *currentTextDownloadTask;
@@ -358,25 +359,6 @@
 #pragma mark - WKNavigationDelegate
 
 
-// iOS 13+ 的新版 decidePolicy: 同时实现 preferences 版与旧版时, UIKit **只**调用
-// preferences 版, 旧版被忽略。所以这里 inline 复用旧版逻辑 (把 decisionHandler
-// 包成 (policy) → (policy, preferences)), 并在 nextNavigationDisablesJS 命中时
-// 把 preferences.allowsContentJavaScript 置 NO, 隔离 loadHTMLString 灌入的
-// 不可信内容免触达 JS bridge (PR #32 R5 安全修复)。
-- (void)webView:(WKWebView *)webView
-      decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
-                          preferences:(WKWebpagePreferences *)preferences
-                      decisionHandler:(void (^)(WKNavigationActionPolicy, WKWebpagePreferences * _Nonnull))decisionHandler API_AVAILABLE(ios(13.0)) {
-    if (self.nextNavigationDisablesJS) {
-        preferences.allowsContentJavaScript = NO;
-        self.nextNavigationDisablesJS = NO;
-    }
-    [self webView:webView decidePolicyForNavigationAction:navigationAction decisionHandler:^(WKNavigationActionPolicy policy) {
-        decisionHandler(policy, preferences);
-    }];
-}
-
-
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     [self checkGoAndGobackBtn];
     
@@ -518,12 +500,11 @@
             } else {
                 html = [strongSelf htmlForPlainText:text];
             }
-            // baseURL 用文档目录，让相对路径的图片 / 资源能够正确解析。
-            // 关 JS: 渲染前置 flag, decidePolicyForNavigationAction:preferences: 会
-            // 把这次 navigation 的 allowsContentJavaScript 设为 NO, 隔离 bridge 越权。
+            // baseURL 用文档目录, 相对路径图片/资源能正确解析。灌进**隔离 webview**
+            // (无 bridge, JS 已 config 时关), 即便 cmark 输出含 inline JS 也无法
+            // 执行/触达 bridge 越权 (PR #32 R10 review)。
             NSURL *baseURL = [url URLByDeletingLastPathComponent];
-            strongSelf.nextNavigationDisablesJS = YES;
-            [strongSelf.webView loadHTMLString:html baseURL:baseURL];
+            [strongSelf showIsolatedRenderWithHTML:html baseURL:baseURL];
         });
     }];
 
@@ -547,6 +528,37 @@
         }
         _currentTextDownloadTask = nil;
     }
+}
+
+// 渲染远程不可信 markdown / CSV / 纯文本用的隔离 webview。
+// config 时直接关 JS (iOS 14+), 不挂 bridge, 与主 webview (含 bridge) 物理隔离。
+// 即便后续有人开 cmark CMARK_OPT_UNSAFE 或加新注入面, JS 不执行 = 无法触达 bridge。
+- (WKWebView *)isolatedRenderWebView {
+    if (!_isolatedRenderWebView) {
+        WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
+        if (@available(iOS 14.0, *)) {
+            config.defaultWebpagePreferences.allowsContentJavaScript = NO;
+        }
+        _isolatedRenderWebView = [[WKWebView alloc] initWithFrame:self.webView.frame configuration:config];
+        _isolatedRenderWebView.autoresizingMask = self.webView.autoresizingMask;
+        _isolatedRenderWebView.opaque = NO;
+        _isolatedRenderWebView.backgroundColor = self.webView.backgroundColor ?: [UIColor whiteColor];
+    }
+    return _isolatedRenderWebView;
+}
+
+- (void)showIsolatedRenderWithHTML:(NSString *)html baseURL:(nullable NSURL *)baseURL {
+    WKWebView *isolated = self.isolatedRenderWebView;
+    isolated.frame = self.webView.frame;
+    if (isolated.superview != self.view) {
+        // 覆盖在主 webview 之上, nav back 直接 pop 整个 VC 即可离开。
+        [self.view insertSubview:isolated aboveSubview:self.webView];
+        // 保持 progressView 在最上层 (本身是细线进度条, 渲染完会淡出)。
+        if (self.progressView) {
+            [self.view bringSubviewToFront:self.progressView];
+        }
+    }
+    [isolated loadHTMLString:html baseURL:baseURL];
 }
 
 #pragma mark - Text 渲染
