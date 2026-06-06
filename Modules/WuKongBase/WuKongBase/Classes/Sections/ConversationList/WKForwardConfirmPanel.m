@@ -25,6 +25,10 @@ static const NSInteger kMsgFieldTag = 88802;
 // 里执行; 期间 sendBtn 仍 enabled 仍 tappable, 下游 forwardMessage: 链路无 dedup —
 // 一秒内双击同一次会话双发 (PR #32 R10 review)。
 @property (nonatomic, assign) BOOL settled;
+// 暗色蒙层 dismiss 手势; delegate 判 touch.view 在 panel 内时拒绝 fire, 避免
+// 用户点 message UITextField / 按钮 / panel 内空白时被 dismissPanel 误关 panel
+// (PR #32 R18 review: 否则附言输入框完全不可用)。
+@property (nonatomic, weak) UITapGestureRecognizer *bgTap;
 @end
 
 @implementation WKForwardConfirmPanel
@@ -59,7 +63,9 @@ static const NSInteger kMsgFieldTag = 88802;
     objc_setAssociatedObject(overlay, "panelOwner", self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     UITapGestureRecognizer *bgTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissPanel)];
+    bgTap.delegate = self;
     [overlay addGestureRecognizer:bgTap];
+    self.bgTap = bgTap;
 
     // 底部面板（高度稍后根据内容动态设置）
     CGFloat safeBottom = 0;
@@ -347,7 +353,18 @@ static const NSInteger kMsgFieldTag = 88802;
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
-    // 点在按钮或输入框上时，不触发收键盘手势
+    // bgTap: 只允许点在 panel 外的暗色蒙层时触发 dismissPanel; 否则用户点
+    // message UITextField / 按钮 / 文件卡 / 任何 panel 内空白都会关 panel,
+    // 附言输入框完全不可用 (PR #32 R18 review)。
+    if (gestureRecognizer == self.bgTap) {
+        UIView *overlay = self.overlay;
+        UIView *panel = [overlay viewWithTag:kPanelTag];
+        if (panel && [touch.view isDescendantOfView:panel]) {
+            return NO;
+        }
+        return YES;
+    }
+    // panelTap (dismissKeyboard): 点按钮/输入框时不收键盘 (原行为)
     if ([touch.view isKindOfClass:[UIButton class]] || [touch.view isKindOfClass:[UITextField class]]) {
         return NO;
     }

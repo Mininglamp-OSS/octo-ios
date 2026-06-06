@@ -194,6 +194,15 @@
     self.videoOutput = nil;
     self.player = nil;
     self.playerItem = nil;
+    // 必须 nil completion: 调用方 (WKActionVideoEffect / WKClassyVideoEffect) 的
+    // playWithCompletion: block 内 strong-capture videoView (UIView animateWithDuration
+    // 里 videoView.alpha = 0.0), 而 completion 是本 view 的 copy property →
+    // videoView → completion → videoView retain cycle。cancel 路径 (cancelCurrentEffect
+    // → removeFromSuperview → willMoveToWindow:nil → stop) 不 nil completion 会
+    // 漏一整套 AVPlayer / AVPlayerItem / AVPlayerItemVideoOutput / CIContext /
+    // MTLCommandQueue / MTLDevice + dealloc 里 CGColorSpaceRelease 永不跑
+    // (PR #32 R18 review: yujiawei)。
+    self.completion = nil;
 }
 
 #pragma mark - Lifecycle hooks

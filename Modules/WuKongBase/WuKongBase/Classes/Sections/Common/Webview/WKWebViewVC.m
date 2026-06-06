@@ -177,6 +177,15 @@
 }
 
 -(void) gobackPressed {
+    // isolated 渲染 webview 显示时, back 优先关 isolated 回到主 webview;
+    // 否则 isolated 覆盖在主 webview 之上, 这里 [self.webView goBack] 操作的是
+    // 被覆盖的主 webview, 用户看到的画面不变, bottom toolbar 死按钮, 唯一逃生
+    // 路径只剩 nav-bar back (pop VC) (PR #32 R18 review)。
+    if (_isolatedRenderWebView && _isolatedRenderWebView.superview != nil) {
+        [_isolatedRenderWebView removeFromSuperview];
+        [self checkGoAndGobackBtn];
+        return;
+    }
     [self.webView goBack];
     [self checkGoAndGobackBtn];
 }
