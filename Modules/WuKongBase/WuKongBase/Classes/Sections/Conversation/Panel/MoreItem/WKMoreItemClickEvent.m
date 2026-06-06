@@ -22,6 +22,7 @@
 #import "UIImage+Compression.h"
 #import "WKPhotoBrowser.h"
 #import "WKRichTextCaptionViewController.h"
+#import "WKInputMentionCache.h"
 #import <WuKongIMSDK/WKFileContent.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 @interface WKMoreItemClickEvent () <UIImagePickerControllerDelegate,UINavigationControllerDelegate,UIDocumentPickerDelegate>
@@ -142,21 +143,58 @@ static WKMoreItemClickEvent *_instance;
                 };
 
                 WKRichTextCaptionViewController *captionVC =
-                    [[WKRichTextCaptionViewController alloc] initWithImageDatas:images initialCaption:pendingText];
-                captionVC.onSend = ^(NSString *caption) {
-                    // 决策复用 #19/#22 的纯函数闸门：caption 非空白 → 打 RichText(=14)；否则纯图发送。
-                    if ([WKApp shouldAggregateAlbumImagesWithText:YES assetCount:assetCount pendingText:caption]) {
+                    [[WKRichTextCaptionViewController alloc] initWithImageDatas:images
+                                                                 initialCaption:pendingText
+                                                                        channel:weakContext.channel];
+                captionVC.onSend = ^(NSArray<NSData *> *finalImages, NSString *caption, NSArray<WKInputMentionItem *> *mentions) {
+                    // 删图 → 全删 + 有文字：降级走纯文本 sendTextMessage（保留 @ entities）。
+                    // 主路径：finalImages 非空 + caption 非空白 → 走 RichText(=14) 聚合，
+                    // mentions 注入 mentionedInfo + entities（含 sentinel uid → humans/ais flag）。
+                    // 没图也没文字理论上 caption VC 自己拦截走 onCancel，这里再做一次防御兜底。
+                    NSString *trimmed = [caption stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                    if (finalImages.count == 0 && trimmed.length == 0) {
+                        restoreDraft(pendingText);
+                        return;
+                    }
+                    // 把 mentions 装进临时 mentionCache 喂给 context，得到 entities + mentionedInfo。
+                    WKInputMentionCache *cache = [WKInputMentionCache new];
+                    for (WKInputMentionItem *m in mentions) {
+                        [cache addMentionItem:m];
+                    }
+                    NSArray<WKMessageEntity *> *entities = [weakContext entities:caption mentionCache:cache];
+                    WKMentionedInfo *mentionedInfo = [weakContext mentionedInfo:caption mentionCache:cache];
+
+                    if (finalImages.count == 0) {
+                        // 纯文本降级路径：caption 已经把 mentions 推进 context.mentionCache
+                        // (line 171-173), sendTextMessage:entities:robotID: sink (line 423,
+                        // 493) 会从 self.mentionCache 重算 mentionedInfo 并 append entities;
+                        // 这里 entities 参数必须传 nil — 否则 ① 我们预算的 entities + ②
+                        // sink append 的同 cache 算出的 entities 会重复序列化 mention 范围
+                        // (同 uid 同 range 出现两次), 多端 RichText 渲染高亮重复 / cell 高度
+                        // 出错 (PR #32 R12 review: Jerry-Xin / lml2468)。sink 内 mentionedInfo
+                        // 也由 cache 重算, 不需要外部传入。
+                        if (mentions.count > 0 && [weakContext respondsToSelector:@selector(addMentionItems:)]) {
+                            [weakContext addMentionItems:mentions];
+                        }
+                        [weakContext sendTextMessage:caption entities:nil robotID:nil];
+                        return;
+                    }
+                    if ([WKApp shouldAggregateAlbumImagesWithText:YES assetCount:finalImages.count pendingText:caption]) {
                         // 图 + caption 聚合成单条 RichText(=14)。失败把 caption 恢复回输入框（文字绝不丢）。
-                        [[WKApp shared] sendRichTextMixedImageDatas:images assetCount:assetCount extraText:caption inContext:weakContext onFailure:^{
+                        [[WKApp shared] sendRichTextMixedImageDatas:finalImages
+                                                          assetCount:finalImages.count
+                                                           extraText:caption
+                                                            mentions:mentions
+                                                            entities:entities
+                                                       mentionedInfo:mentionedInfo
+                                                           inContext:weakContext
+                                                           onFailure:^{
                             restoreDraft(caption);
                         }];
                     } else {
-                        // 无 caption（清掉/仅空白直接发）：原草稿 pendingText 未随消息发出 → 必须恢复
-                        // 回输入框，与 onCancel/onFailure 对齐，文字绝不静默丢（yujiawei P0）。
+                        // caption 全空白（用户删干净又点发送）：恢复原草稿，纯图发送（与 #22 路径对齐）。
                         restoreDraft(pendingText);
-                        // 纯图发送走原子性闸门（与 captioned 路径对称，Jerry-Xin critical）：压缩
-                        // 丢图时整条可见失败，绝不静默只发部分图。
-                        [weakSelf sendAlbumImageDatas:images assetCount:assetCount context:weakContext];
+                        [weakSelf sendAlbumImageDatas:finalImages assetCount:finalImages.count context:weakContext];
                     }
                 };
                 captionVC.onCancel = ^{

@@ -7,6 +7,7 @@
 
 #import "WKContactsCell.h"
 #import "WKContacts.h"
+#import "WKContactFollowHelper.h"
 #import <Masonry/Masonry.h>
 #import <WuKongBase/WKOfficialTag.h>
 #import <WuKongBase/WKConstant.h>
@@ -27,6 +28,8 @@
 @property(nonatomic,strong) WKOfficialTag *officialTag;
 // / Phase A —— 通讯录 cell 实名 ✓ 徽章
 @property(nonatomic,strong) UIImageView *realnameVerifiedImgView;
+// 已关注金色五角星（与子区 cell 同款，14pt）。仅已关注时显示，不显示空状态描边。
+@property(nonatomic,strong) UIImageView *followIcon;
 
 @end
 
@@ -75,6 +78,12 @@
     _realnameVerifiedImgView.image = [WKApp.shared loadImage:@"Common/ic_realname_verified_mini" moduleID:@"WuKongBase"];
     _realnameVerifiedImgView.hidden = YES;
     [self.contentView addSubview:_realnameVerifiedImgView];
+
+    // 已关注小图标：与子区列表 cell 同款，金色五角星 14pt，仅已关注时显示。
+    _followIcon = [[UIImageView alloc] init];
+    _followIcon.contentMode = UIViewContentModeScaleAspectFit;
+    _followIcon.hidden = YES;
+    [self.contentView addSubview:_followIcon];
 }
 
 +(NSString*) cellId{
@@ -149,12 +158,56 @@
     if (_contactModel.online) {
         self.onlineDot.hidden = NO;
     }
+
+    // 已关注金色五角星：依据 WKFollowedKeysStore 唯一可信源。WKAllGroupListVC 复用此 cell
+    // 时会把 isGroup=YES，走 WKFollowTargetTypeChannel 分支；联系人 isGroup=NO 走 DM。
+    {
+        WKChannelType ctype = _contactModel.isGroup ? WK_GROUP : WK_PERSON;
+        WKChannel *ch = [[WKChannel alloc] initWith:_contactModel.uid ?: @"" channelType:ctype];
+        BOOL followed = [WKContactFollowHelper isFollowedForChannel:ch];
+        if (followed) {
+            self.followIcon.image = [WKContactsCell cachedFollowStarIcon];
+            self.followIcon.hidden = NO;
+        } else {
+            self.followIcon.image = nil;
+            self.followIcon.hidden = YES;
+        }
+    }
+}
+
++ (UIImage *)cachedFollowStarIcon {
+    static UIImage *img;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        UIColor *followedColor = [UIColor colorWithRed:1.0 green:0.72 blue:0.0 alpha:1.0]; // #FFB800
+        CGSize s = CGSizeMake(14, 14);
+        UIGraphicsBeginImageContextWithOptions(s, NO, 0);
+        CGContextRef ctx = UIGraphicsGetCurrentContext();
+        [followedColor setFill];
+        CGFloat cx = s.width / 2.0, cy = s.height / 2.0;
+        CGFloat outerR = MIN(s.width, s.height) / 2.0 - 0.5;
+        CGFloat innerR = outerR * 0.42;
+        for (int i = 0; i < 10; i++) {
+            CGFloat r = (i % 2 == 0) ? outerR : innerR;
+            CGFloat a = -M_PI / 2 + i * M_PI / 5;
+            CGFloat x = cx + r * cos(a);
+            CGFloat y = cy + r * sin(a);
+            if (i == 0) CGContextMoveToPoint(ctx, x, y);
+            else CGContextAddLineToPoint(ctx, x, y);
+        }
+        CGContextClosePath(ctx);
+        CGContextFillPath(ctx);
+        img = UIGraphicsGetImageFromCurrentImageContext();
+        UIGraphicsEndImageContext();
+    });
+    return img;
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
 
     CGFloat leftPad = 16.0f;
+    CGFloat rightPad = 16.0f;
     CGFloat avatarToName = 12.0f;
 
     // Avatar
@@ -165,6 +218,18 @@
     if (!self.onlineDot.hidden) {
         self.onlineDot.lim_left = self.avatarImgView.lim_right - self.onlineDot.lim_width;
         self.onlineDot.lim_top = self.avatarImgView.lim_bottom - self.onlineDot.lim_height;
+    }
+
+    // 已关注星标贴最右；nameLbl 后面的 official/realname/AI 不需要避让它（cell 内宽足够，
+    // 名字太长会先 truncate 而不是和右侧图标重叠 —— accessory 风格而非内联）。
+    if (!self.followIcon.hidden) {
+        CGFloat iconW = 14.0f;
+        CGFloat iconH = 14.0f;
+        self.followIcon.frame = CGRectMake(self.contentView.lim_width - rightPad - iconW,
+                                           (self.lim_height - iconH) / 2.0f,
+                                           iconW, iconH);
+    } else {
+        self.followIcon.frame = CGRectZero;
     }
 
     // Name

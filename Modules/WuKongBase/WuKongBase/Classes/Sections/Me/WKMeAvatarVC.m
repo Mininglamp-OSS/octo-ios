@@ -9,6 +9,8 @@
 #import "WKActionSheetView2.h"
 #import "WKMediaPickerController.h"
 #import "TOCropViewController.h"
+#import "WKAvatarMediaFlow.h"
+#import <SDWebImage/SDAnimatedImage.h>
 @interface WKMeAvatarVC ()<TOCropViewControllerDelegate>
 
 @property(nonatomic,strong) WKUserAvatar *avatarImgView;
@@ -69,7 +71,10 @@
         [weakSelf cameraPressed];
     }]];
     [actionSheet addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"从手机相册选择") onClick:^{
-        [[WKPhotoService shared] getPhotoOneFromLibrary:^(UIImage * _Nonnull image) {
+        [WKAvatarMediaFlow pickAvatarFromLibraryWithHost:weakSelf
+                                              onAnimated:^(NSData *gifData) {
+            [weakSelf uploadAnimatedAvatar:gifData];
+        } onStaticPicked:^(UIImage *image) {
             [weakSelf cropAvatar:image];
         }];
     }]];
@@ -109,11 +114,11 @@
 didCropToImage:(nonnull UIImage *)image withRect:(CGRect)cropRect
                      angle:(NSInteger)angle {
     [self dismissViewControllerAnimated:YES completion:nil];
-   
-    
+
+
     NSData *data = [[WKPhotoService shared] compressImageSize:image toByte:1024*50]; // 压缩到50k
-    
-    
+
+
     __weak typeof(self) weakSelf = self;
     [self.view showHUD:LLang(@"上传中")];
     [[WKAPIClient sharedClient] fileUpload:@"users/{uid}/avatar" data:data progress:^(NSProgress * _Nonnull progress) {
@@ -138,13 +143,70 @@ didCropToImage:(nonnull UIImage *)image withRect:(CGRect)cropRect
             // 写入 SDWebImage 缓存（内存 + 磁盘）
             [[SDImageCache sharedImageCache] storeImage:image forKey:avatarKey toDisk:YES completion:nil];
 
+            // 同时清掉**无 cacheKey 版本**的旧缓存。项目里大量入口
+            // (搜索 VM / 消息列表 / 我的二维码 / 邀请码 / 用户授权页 ...) 用的是
+            // [WKAvatarUtil getAvatar:uid] 不带 cacheKey 的 URL，本次更新只写了
+            // 带 cacheKey 的 key，老入口仍会命中过期的旧静态/动图。这里显式让
+            // 那条键失效，下次访问即从网络拉最新。
+            NSString *noVerKey = [WKAvatarUtil getAvatar:uid];
+            [[SDImageCache sharedImageCache] removeImageForKey:noVerKey withCompletion:nil];
+
             // 清除 NSURLCache 中该 URL 的 HTTP 缓存
             [[NSURLCache sharedURLCache] removeCachedResponseForRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:avatarKey]]];
 
             // 发送通知，其他页面从缓存加载新头像
             [[NSNotificationCenter defaultCenter] postNotificationName:WKNOTIFY_USER_AVATAR_UPDATE object:@{@"uid":uid?:@""}];
         }
-        
+
+    }];
+}
+
+#pragma mark - 动图上传
+
+// 动图头像（GIF / APNG / 动 WebP / 视频转 GIF）上传：跳过裁剪 & JPEG 压缩，
+// 直接把原始字节扔给后端；缓存层用 storeImageData: 保留动画。
+-(void) uploadAnimatedAvatar:(NSData *)data {
+    __weak typeof(self) weakSelf = self;
+    [self.view showHUD:LLang(@"上传中")];
+    [[WKAPIClient sharedClient] fileUpload:@"users/{uid}/avatar"
+                                       data:data
+                                   progress:^(NSProgress * _Nonnull progress) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf.view switchHUDProgress:progress.fractionCompleted];
+        });
+    } completeCallback:^(id  _Nullable resposeObject, NSError * _Nullable error) {
+        if (error) {
+            [weakSelf.view switchHUDSuccess:LLangW(@"上传失败", weakSelf)];
+            WKLogError(@"动图头像上传失败！-> %@", error);
+            return;
+        }
+
+        UIImage *previewImg = [SDAnimatedImage imageWithData:data] ?: [UIImage imageWithData:data];
+        weakSelf.avatarImgView.avatarImgView.image = previewImg;
+        [weakSelf.view switchHUDSuccess:LLangW(@"上传成功", weakSelf)];
+
+        NSString *uid = [WKApp shared].loginInfo.uid;
+        [[WKSDK shared].channelManager refreshAvatarCacheKey:[WKChannel personWithChannelID:uid]];
+        WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:uid]];
+        NSString *avatarKey = [WKAvatarUtil getAvatar:uid cacheKey:info.avatarCacheKey];
+
+        // 关键差异：传 imageData，让磁盘缓存留住完整动画字节；内存缓存放 SDAnimatedImage 实例
+        [[SDImageCache sharedImageCache] storeImage:previewImg
+                                           imageData:data
+                                              forKey:avatarKey
+                                              toDisk:YES
+                                          completion:nil];
+
+        // 同步清掉无 cacheKey 版本的旧缓存（搜索 / 消息列表等大量入口使用），
+        // 否则那些位置仍会拿到上传前的旧静态图。
+        NSString *noVerKey = [WKAvatarUtil getAvatar:uid];
+        [[SDImageCache sharedImageCache] removeImageForKey:noVerKey withCompletion:nil];
+
+        [[NSURLCache sharedURLCache] removeCachedResponseForRequest:
+            [NSURLRequest requestWithURL:[NSURL URLWithString:avatarKey]]];
+
+        [[NSNotificationCenter defaultCenter] postNotificationName:WKNOTIFY_USER_AVATAR_UPDATE
+                                                            object:@{@"uid": uid ?: @""}];
     }];
 }
 

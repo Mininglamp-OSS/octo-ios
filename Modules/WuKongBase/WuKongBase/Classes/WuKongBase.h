@@ -107,6 +107,16 @@
 #import "WKServerConfig.h"
 #import "WKServerSettingHelper.h"
 
+// 动图 / 视频头像支持
+#import "WKAvatarLimits.h"
+#import "WKAvatarMediaFlow.h"
+#import "WKVideoTrimmerVC.h"
+#import "WKVideoLoadProgressHUD.h"
+#import "WKAnimatedAvatarPreviewVC.h"
+#import "WKVideoToGIFConverter.h"
+#import "WKAnimatedImageCoders.h"
+#import "WKDisplayLinkCalibration.h"
+
 #import "WKModelConvert.h"
 
 

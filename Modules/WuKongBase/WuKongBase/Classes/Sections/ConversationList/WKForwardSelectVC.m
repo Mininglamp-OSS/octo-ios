@@ -2,7 +2,11 @@
 //  WKForwardSelectVC.m
 //  WuKongBase
 //
-//  转发选择会话：群聊/私聊 Tab + 分组 + 子区折叠 + 多选 + 搜索
+//  转发选择会话：关注/最近 Tab + 分组 + 子区折叠 + 多选 + 搜索
+//  口径与会话列表保持一致：
+//    关注 tab —— WKFollowedKeysStore 提供的已关注集合（DM/Channel/Thread），
+//                按用户分组展示，分组内含群、群下子区、已关注 DM。
+//    最近 tab —— SDK getConversationList 的全部类型（DM/群/子区），按时间倒序平铺。
 //
 
 #import "WKForwardSelectVC.h"
@@ -15,9 +19,15 @@
 #import "WKConversationTabView.h"
 #import "WKThreadModel.h"
 #import "WKThreadService.h"
+#import "WKSpaceFilter.h"
+#import "WKConversationListVM.h"
 #import "WKSearchbarView.h"
+#import "WKForwardConfirmPanel.h"
+#import "WKForwardDirectoryVC.h"
 #import "WKUserAvatar.h"
 #import "WKAvatarUtil.h"
+#import "WKFollowedKeysStore.h"
+#import "WKSidebarItemEntity.h"
 #import <SDWebImage/UIImageView+WebCache.h>
 #import <WuKongBase/WuKongBase.h>
 
@@ -102,17 +112,23 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     _nameLbl.text = model.channelInfo ? model.channelInfo.displayName : @"";
 
     BOOL isGroup = (model.channel.channelType == WK_GROUP);
-    _hashTagLbl.hidden = !isGroup;
-    _avatarView.hidden = isGroup;
+    _hashTagLbl.hidden = YES;
+    _avatarView.hidden = NO;
 
-    if (!isGroup && model.channelInfo) {
-        NSString *avatarURL = [WKAvatarUtil getAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
-        if (model.channelInfo.logo && model.channelInfo.logo.length > 0) {
+    NSString *avatarURL = nil;
+    if (isGroup) {
+        avatarURL = [WKAvatarUtil getGroupAvatar:model.channel.channelId];
+        if (model.channelInfo.logo.length > 0) {
             avatarURL = [WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo];
         }
-        [_avatarView.avatarImgView sd_setImageWithURL:[NSURL URLWithString:avatarURL]
-                                     placeholderImage:[WKApp.shared loadImage:@"Common/Index/DefaultAvatar" moduleID:@"WuKongBase"]];
+    } else if (model.channelInfo) {
+        avatarURL = [WKAvatarUtil getAvatar:model.channel.channelId cacheKey:model.channelInfo.avatarCacheKey];
+        if (model.channelInfo.logo.length > 0) {
+            avatarURL = [WKAvatarUtil getFullAvatarWIthPath:model.channelInfo.logo];
+        }
     }
+    [_avatarView.avatarImgView sd_setImageWithURL:[NSURL URLWithString:avatarURL ?: @""]
+                                 placeholderImage:[WKApp.shared loadImage:@"Common/Index/DefaultAvatar" moduleID:@"WuKongBase"]];
 }
 
 - (void)layoutSubviews {
@@ -126,13 +142,8 @@ typedef NS_ENUM(NSInteger, FWItemType) {
         left = 42;
     }
 
-    if (!_hashTagLbl.hidden) {
-        _hashTagLbl.frame = CGRectMake(left, (h - 30) / 2, 30, 30);
-        _nameLbl.frame = CGRectMake(left + 32, 0, w - left - 47, h);
-    } else {
-        _avatarView.frame = CGRectMake(left + 3, (h - 40) / 2, 40, 40);
-        _nameLbl.frame = CGRectMake(left + 48, 0, w - left - 63, h);
-    }
+    _avatarView.frame = CGRectMake(left + 3, (h - 40) / 2, 40, 40);
+    _nameLbl.frame = CGRectMake(left + 48, 0, w - left - 63, h);
 }
 
 - (void)prepareForReuse {
@@ -235,6 +246,13 @@ typedef NS_ENUM(NSInteger, FWItemType) {
 
 // 选中状态（用 channelId 持久化，重建 displayList 时恢复）
 @property (nonatomic, strong) NSMutableSet<NSString *> *checkedIds;
+// 跨刷新持久化勾选 channel——按 uniqueKey 反查。原 onConfirm 走 _displayList 遍历,
+// 折叠 section / 切 tab 后那些 row 不在 _displayList 里, 勾选静默丢 (PR #32 R7 review)。
+// 与 sibling WKForwardDirectoryVC._checkedChannels 同款思路, 与 _checkedIds 一一对偶维护。
+@property (nonatomic, strong) NSMutableDictionary<NSString *, WKChannel *> *checkedChannels;
+// 一次性 guard: onConfirm 内 dispatch_after 0.3s 才 pop, 期间 confirmBtn 仍 tappable,
+// 下游 forwardMessage: 链路无 dedup, 一秒内双击会双发 (PR #32 R10 review)。
+@property (nonatomic, assign) BOOL confirming;
 
 // 展示列表
 @property (nonatomic, strong) NSArray<FWDisplayItem *> *displayList;
@@ -254,12 +272,30 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     _expandedThreadGroups = [NSMutableSet set];
     _displayList = @[];
     _checkedIds = [NSMutableSet set];
+    _checkedChannels = [NSMutableDictionary dictionary];
 
     [self setupNavBar];
     [self setupSearchBar];
+    [self setupNewSessionEntry];
     [self setupTabView];
     [self setupTableView];
     [self loadData];
+
+    // store 异步加载完成后刷新关注 tab —— 冷启动时 store 还没数据，filterAndDisplay 退化路径
+    // 拿到的内容跟用户期望不符；store 一就绪就重排。
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(onFollowedKeysStoreDidUpdate)
+                                                 name:kWKFollowedKeysStoreDidUpdateNotification
+                                               object:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+- (void)onFollowedKeysStoreDidUpdate {
+    if (_currentTab != 0) return;
+    [self filterAndDisplay];
 }
 
 - (void)setupNavBar {
@@ -304,9 +340,43 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     container.tag = 8801;
 }
 
-- (void)setupTabView {
+- (void)setupNewSessionEntry {
     UIView *searchContainer = [self.view viewWithTag:8801];
     CGFloat y = searchContainer.lim_bottom;
+    CGFloat w = self.view.lim_width;
+    CGFloat h = 38;
+
+    UIView *entry = [[UIView alloc] initWithFrame:CGRectMake(0, y, w, h)];
+    entry.backgroundColor = [WKApp shared].config.backgroundColor;
+    entry.tag = 8802;
+
+    // 右侧蓝色文字链接「新建会话」（仿微信「创建聊天」）
+    UIButton *createBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [createBtn setTitle:LLang(@"新建会话") forState:UIControlStateNormal];
+    [createBtn setTitleColor:[WKApp shared].config.themeColor forState:UIControlStateNormal];
+    createBtn.titleLabel.font = [UIFont systemFontOfSize:15];
+    [createBtn addTarget:self action:@selector(onNewSessionTap) forControlEvents:UIControlEventTouchUpInside];
+    CGFloat btnW = 90;
+    createBtn.frame = CGRectMake(w - btnW - 15, 0, btnW, h);
+    createBtn.contentHorizontalAlignment = UIControlContentHorizontalAlignmentRight;
+    [entry addSubview:createBtn];
+
+    [self.view addSubview:entry];
+}
+
+- (void)onNewSessionTap {
+    WKForwardDirectoryVC *vc = [WKForwardDirectoryVC new];
+    vc.singleSelectMode = self.singleSelectMode;
+    vc.shareFileInfos = self.shareFileInfos;
+    vc.onSelect = self.onSelect;
+    vc.onConfirmChannels = self.onConfirmChannels;
+    vc.onSingleConfirm = self.onSingleConfirm;
+    [[WKNavigationManager shared] pushViewController:vc animated:YES];
+}
+
+- (void)setupTabView {
+    UIView *entry = [self.view viewWithTag:8802];
+    CGFloat y = entry.lim_bottom;
     _tabView = [[WKConversationTabView alloc] initWithFrame:CGRectMake(0, y, self.view.lim_width, 40)];
     _tabView.selectedIndex = 0;
     __weak typeof(self) ws = self;
@@ -344,7 +414,9 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     NSArray<WKConversation *> *conversations = [[WKSDK shared].conversationManager getConversationList];
     _allConversations = [NSMutableArray array];
     for (WKConversation *conv in conversations) {
-        if (conv.channel.channelType == WK_COMMUNITY_TOPIC) continue;
+        // 不再过滤 WK_COMMUNITY_TOPIC —— 最近 tab 要展示子区会话，关注 tab 也要用子区 followed 集合。
+        // 按当前空间过滤 (跨空间的会话不应出现在转发候选里)。
+        if (![self shouldKeepConversationForSpace:conv]) continue;
         [_allConversations addObject:[[WKConversationWrapModel alloc] initWithConversation:conv]];
     }
     [self sortList:_allConversations];
@@ -370,7 +442,8 @@ typedef NS_ENUM(NSInteger, FWItemType) {
         NSArray<WKConversation *> *conversations = [[WKSDK shared].conversationManager getConversationList];
         [ws.allConversations removeAllObjects];
         for (WKConversation *conv in conversations) {
-            if (conv.channel.channelType == WK_COMMUNITY_TOPIC) continue;
+            // 与 loadData 保持一致：含 WK_COMMUNITY_TOPIC + 当前空间过滤。
+            if (![ws shouldKeepConversationForSpace:conv]) continue;
             [ws.allConversations addObject:[[WKConversationWrapModel alloc] initWithConversation:conv]];
         }
         [ws sortList:ws.allConversations];
@@ -381,6 +454,44 @@ typedef NS_ENUM(NSInteger, FWItemType) {
             [ws retryLoadDataWithCount:count + 1];
         }
     });
+}
+
+#pragma mark - Filtering helpers
+
+// 按当前空间过滤会话: 直接复用主列表 WKConversationListVM (singleton) 的
+// shouldShowConversation:, 与主会话列表完全一致 — 含 WKSpaceFilter 决策 + 系统/
+// 文件助手/BotFather 放行 + WK_GROUP FailOpen 时降级走 syncedGroupChannelIds
+// 白名单 + WK_PERSON FailOpen 时看 lastMessage.content.space_id 兜底。
+// 子区由父群代表 anchor, 转发候选放行 (子区关闭/删除另由 isTopicChannelVisible 过滤)。
+- (BOOL)shouldKeepConversationForSpace:(WKConversation *)conv {
+    if (conv.channel.channelType == WK_COMMUNITY_TOPIC) return YES;
+    return [[WKConversationListVM shared] shouldShowConversation:conv];
+}
+
+// 子区在最近 tab 是否可见: 过滤掉已关闭/删除的子区。
+// 两个判定信号互为兜底:
+//   1) channelInfo.displayName 空 → server 端不再下发 thread info, 大概率是
+//      关闭/删除 (cache miss 也会空, 但即便误判, 没名字的子区用户也用不上)
+//   2) _threadCache 已加载 (_threadsLoaded=YES) 但找不到该 channelId →
+//      server 端不再返回 = WKThreadStatus Archived / Deleted
+// fail-open: thread cache 未加载时不过滤, 等用户后续刷新自然收敛, 避免错过滤。
+- (BOOL)isTopicChannelVisible:(WKConversationWrapModel *)m {
+    NSString *displayName = m.channelInfo ? m.channelInfo.displayName : @"";
+    if (displayName.length == 0) return NO;
+    if (!_threadsLoaded) return YES;
+    NSString *cid = m.channel.channelId;
+    // 子区 channelId 格式: "groupNo____shortId" (4 下划线, 见 WKThreadModel.h:21)
+    NSArray *parts = [cid componentsSeparatedByString:@"____"];
+    if (parts.count < 2) return YES;
+    NSString *groupNo = parts[0];
+    NSArray<WKThreadModel *> *threads = _threadCache[groupNo];
+    if (threads.count == 0) return YES;  // 父群的 thread 列表还没拉到, fail-open
+    for (WKThreadModel *t in threads) {
+        if ([t.channelId isEqualToString:cid]) {
+            return t.status == WKThreadStatusActive;
+        }
+    }
+    return NO;  // thread 列表已加载但找不到这个 channelId → 已 archived/deleted
 }
 
 - (void)loadCategories {
@@ -454,20 +565,58 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     NSMutableArray<FWDisplayItem *> *list = [NSMutableArray array];
 
     if (_currentTab == 0) {
-        // 群聊 tab：按分组显示
-        NSMutableDictionary<NSString *, WKConversationWrapModel *> *channelMap = [NSMutableDictionary dictionary];
+        // 关注 tab：按用户分组显示「已关注的群（含群下子区）+ 已关注 DM」。
+        // 关注集合的唯一可信源是 WKFollowedKeysStore（与会话列表关注 tab 同源）；store 没加载完
+        // 时退化到「展示自定义分组下所有群」的旧行为，避免冷启动时关注 tab 一片空白。
+        WKFollowedKeysStore *followStore = [WKFollowedKeysStore shared];
+        BOOL followLoaded = followStore.loaded;
+        NSSet<NSString *> *followedGroupNos = followStore.followedGroupNos;
+        NSDictionary<NSString *, NSArray<WKSidebarItemEntity *> *> *followItemsByCat = followStore.itemsByCategory;
+
+        // 建立 channelId → wrap 映射，DM 也要建（关注 tab 要展示已关注 DM）。
+        NSMutableDictionary<NSString *, WKConversationWrapModel *> *groupMap = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString *, WKConversationWrapModel *> *dmMap = [NSMutableDictionary dictionary];
         for (WKConversationWrapModel *m in _allConversations) {
-            if (m.channel.channelType == WK_GROUP) channelMap[m.channel.channelId] = m;
-        }
-        NSMutableSet *grouped = [NSMutableSet set];
-        for (WKCategoryEntity *cat in _categoryList) {
-            if (!cat.category_id || cat.category_id.length == 0) continue;
-            for (WKCategoryGroup *cg in cat.groups) [grouped addObject:cg.group_no];
+            if (m.channel.channelType == WK_GROUP) groupMap[m.channel.channelId] = m;
+            else if (m.channel.channelType == WK_PERSON) dmMap[m.channel.channelId] = m;
         }
 
-        // 用户分组
         for (WKCategoryEntity *cat in _categoryList) {
             if (!cat.category_id || cat.category_id.length == 0) continue;
+            if (cat.is_default) continue; // 默认分组不显示 header
+
+            // 计算本分组要展示的群与 DM
+            NSMutableArray<WKConversationWrapModel *> *visibleGroups = [NSMutableArray array];
+            for (WKCategoryGroup *cg in cat.groups) {
+                if (followLoaded && ![followedGroupNos containsObject:cg.group_no]) continue;
+                WKConversationWrapModel *m = groupMap[cg.group_no];
+                if (m) [visibleGroups addObject:m];
+            }
+            NSMutableArray<WKConversationWrapModel *> *visibleDMs = [NSMutableArray array];
+            NSArray<WKSidebarItemEntity *> *items = followItemsByCat[cat.category_id] ?: @[];
+            NSMutableSet<NSString *> *addedDMIds = [NSMutableSet set];
+            for (WKSidebarItemEntity *it in items) {
+                if (it.target_type != WKFollowTargetTypeDM) continue;
+                if (it.target_id.length == 0) continue;
+                if ([addedDMIds containsObject:it.target_id]) continue;
+                WKConversationWrapModel *dm = dmMap[it.target_id];
+                if (dm) {
+                    [visibleDMs addObject:dm];
+                    [addedDMIds addObject:it.target_id];
+                }
+            }
+
+            // store 没加载完时退化：展示分组下所有有 conv 的群，DM 集合为空（无可信源）
+            if (!followLoaded) {
+                [visibleGroups removeAllObjects];
+                for (WKCategoryGroup *cg in cat.groups) {
+                    WKConversationWrapModel *m = groupMap[cg.group_no];
+                    if (m) [visibleGroups addObject:m];
+                }
+            }
+
+            if (visibleGroups.count == 0 && visibleDMs.count == 0) continue;
+
             FWDisplayItem *header = [FWDisplayItem new];
             header.type = FWItemSectionHeader;
             header.sectionId = cat.category_id;
@@ -475,39 +624,45 @@ typedef NS_ENUM(NSInteger, FWItemType) {
             [list addObject:header];
 
             if (![_collapsedSections containsObject:cat.category_id]) {
-                NSMutableArray *items = [NSMutableArray array];
-                for (WKCategoryGroup *cg in cat.groups) {
-                    WKConversationWrapModel *m = channelMap[cg.group_no];
-                    if (m) [items addObject:m];
-                }
-                [self sortList:items];
-                for (WKConversationWrapModel *m in items) {
+                [self sortList:visibleGroups];
+                for (WKConversationWrapModel *m in visibleGroups) {
                     FWDisplayItem *ci = [FWDisplayItem new]; ci.type = FWItemConversation; ci.conversation = m;
                     [list addObject:ci];
                     [self appendThreads:list forGroupNo:m.channel.channelId];
                 }
+                [self sortList:visibleDMs];
+                for (WKConversationWrapModel *dm in visibleDMs) {
+                    FWDisplayItem *ci = [FWDisplayItem new]; ci.type = FWItemConversation; ci.conversation = dm;
+                    [list addObject:ci];
+                }
             }
-        }
-
-        // 未归组
-        NSMutableArray *ungrouped = [NSMutableArray array];
-        for (WKConversationWrapModel *m in _allConversations) {
-            if (m.channel.channelType == WK_GROUP && ![grouped containsObject:m.channel.channelId]) {
-                [ungrouped addObject:m];
-            }
-        }
-        for (WKConversationWrapModel *m in ungrouped) {
-            FWDisplayItem *ci = [FWDisplayItem new]; ci.type = FWItemConversation; ci.conversation = m;
-            [list addObject:ci];
-            [self appendThreads:list forGroupNo:m.channel.channelId];
         }
     } else {
-        // 私聊 tab
+        // 最近 tab：DM + 群 + 子区，按时间倒序平铺（置顶优先），与会话列表最近 tab 同口径。
+        NSMutableArray<WKConversationWrapModel *> *flat = [NSMutableArray array];
         for (WKConversationWrapModel *m in _allConversations) {
-            if (m.channel.channelType == WK_PERSON) {
-                FWDisplayItem *ci = [FWDisplayItem new]; ci.type = FWItemConversation; ci.conversation = m;
-                [list addObject:ci];
+            uint8_t type = m.channel.channelType;
+            if (type == WK_PERSON || type == WK_GROUP) {
+                [flat addObject:m];
+            } else if (type == WK_COMMUNITY_TOPIC) {
+                // 过滤掉已关闭/删除的子区 + 名字空的子区
+                if (![self isTopicChannelVisible:m]) continue;
+                [flat addObject:m];
             }
+        }
+        [self sortList:flat];
+        for (WKConversationWrapModel *m in flat) {
+            FWDisplayItem *ci = [FWDisplayItem new];
+            // 子区用 FWItemThread cell（# 图标 + name）以与关注 tab 子区行视觉一致。
+            if (m.channel.channelType == WK_COMMUNITY_TOPIC) {
+                ci.type = FWItemThread;
+                ci.threadChannelId = m.channel.channelId;
+                ci.threadName = m.channelInfo ? m.channelInfo.displayName : @"";
+            } else {
+                ci.type = FWItemConversation;
+                ci.conversation = m;
+            }
+            [list addObject:ci];
         }
     }
 
@@ -544,27 +699,64 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     NSString *lower = [keyword lowercaseString];
     NSMutableArray<FWDisplayItem *> *list = [NSMutableArray array];
 
+    WKFollowedKeysStore *followStore = [WKFollowedKeysStore shared];
+    BOOL followLoaded = followStore.loaded;
+    NSSet<NSString *> *followedGroupNos = followStore.followedGroupNos;
+
     for (WKConversationWrapModel *m in _allConversations) {
-        if (_currentTab == 0 && m.channel.channelType != WK_GROUP) continue;
-        if (_currentTab == 1 && m.channel.channelType != WK_PERSON) continue;
-        NSString *name = m.channelInfo ? m.channelInfo.displayName : @"";
-        if ([name.lowercaseString containsString:lower]) {
-            FWDisplayItem *ci = [FWDisplayItem new]; ci.type = FWItemConversation; ci.conversation = m;
-            [list addObject:ci];
+        uint8_t type = m.channel.channelType;
+        if (_currentTab == 0) {
+            // 关注 tab 搜索范围：已关注的群 + 已关注 DM + 已关注子区。store 未加载时退化到群/DM/子区全部。
+            if (type == WK_GROUP) {
+                if (followLoaded && ![followedGroupNos containsObject:m.channel.channelId]) continue;
+            } else if (type == WK_PERSON) {
+                if (followLoaded && ![followStore isFollowedWithType:WKFollowTargetTypeDM targetId:m.channel.channelId]) continue;
+            } else if (type == WK_COMMUNITY_TOPIC) {
+                if (followLoaded && ![followStore isFollowedWithType:WKFollowTargetTypeThread targetId:m.channel.channelId]) continue;
+            } else {
+                continue;
+            }
+        } else {
+            // 最近 tab 搜索范围：DM + 群 + 子区。
+            if (type != WK_PERSON && type != WK_GROUP && type != WK_COMMUNITY_TOPIC) continue;
+            // 子区: 过滤已关闭/删除 (与 filterAndDisplay 最近 tab 同口径)
+            if (type == WK_COMMUNITY_TOPIC && ![self isTopicChannelVisible:m]) continue;
         }
+        NSString *name = m.channelInfo ? m.channelInfo.displayName : @"";
+        if (![name.lowercaseString containsString:lower]) continue;
+        FWDisplayItem *ci = [FWDisplayItem new];
+        if (type == WK_COMMUNITY_TOPIC) {
+            ci.type = FWItemThread;
+            ci.threadChannelId = m.channel.channelId;
+            ci.threadName = name;
+        } else {
+            ci.type = FWItemConversation;
+            ci.conversation = m;
+        }
+        [list addObject:ci];
     }
 
-    // 搜索子区（仅群聊 tab）
+    // 关注 tab 还要补一类子区：通过群下子区缓存（WKThreadService 拉到、但未必在 conversationList 里）搜索，
+    // 仅当 store 已加载时按 followed 过滤；未加载时回退展示全部命中。
     if (_currentTab == 0) {
+        NSMutableSet<NSString *> *alreadyAdded = [NSMutableSet set];
+        for (FWDisplayItem *item in list) {
+            if (item.type == FWItemThread && item.threadChannelId.length > 0) {
+                [alreadyAdded addObject:item.threadChannelId];
+            }
+        }
         for (NSString *groupNo in _threadCache) {
+            if (followLoaded && ![followedGroupNos containsObject:groupNo]) continue;
             for (WKThreadModel *t in _threadCache[groupNo]) {
-                if ([t.name.lowercaseString containsString:lower]) {
-                    FWDisplayItem *ti = [FWDisplayItem new];
-                    ti.type = FWItemThread;
-                    ti.threadChannelId = t.channelId;
-                    ti.threadName = t.name;
-                    [list addObject:ti];
-                }
+                if ([alreadyAdded containsObject:t.channelId]) continue;
+                if (followLoaded && ![followStore isFollowedWithType:WKFollowTargetTypeThread targetId:t.channelId]) continue;
+                if (![t.name.lowercaseString containsString:lower]) continue;
+                FWDisplayItem *ti = [FWDisplayItem new];
+                ti.type = FWItemThread;
+                ti.threadChannelId = t.channelId;
+                ti.threadName = t.name;
+                [list addObject:ti];
+                [alreadyAdded addObject:t.channelId];
             }
         }
     }
@@ -734,8 +926,20 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     item.isChecked = !item.isChecked;
     NSString *key = [item uniqueKey];
     if (key) {
-        if (item.isChecked) [_checkedIds addObject:key];
-        else [_checkedIds removeObject:key];
+        if (item.isChecked) {
+            [_checkedIds addObject:key];
+            // 同步记录 channel, onConfirm 直接读 _checkedChannels.allValues 不走 _displayList。
+            WKChannel *ch = nil;
+            if (item.type == FWItemConversation && item.conversation) {
+                ch = item.conversation.channel;
+            } else if (item.type == FWItemThread && item.threadChannelId) {
+                ch = [WKChannel channelID:item.threadChannelId channelType:WK_COMMUNITY_TOPIC];
+            }
+            if (ch) _checkedChannels[key] = ch;
+        } else {
+            [_checkedIds removeObject:key];
+            [_checkedChannels removeObjectForKey:key];
+        }
     }
     [tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
     [self updateConfirmBtn];
@@ -755,15 +959,11 @@ typedef NS_ENUM(NSInteger, FWItemType) {
 }
 
 - (void)onConfirm {
-    NSMutableArray<WKChannel *> *channels = [NSMutableArray array];
-    for (FWDisplayItem *item in _displayList) {
-        if (!item.isChecked) continue;
-        if (item.type == FWItemConversation && item.conversation) {
-            [channels addObject:item.conversation.channel];
-        } else if (item.type == FWItemThread && item.threadChannelId) {
-            [channels addObject:[WKChannel channelID:item.threadChannelId channelType:WK_COMMUNITY_TOPIC]];
-        }
-    }
+    if (_confirming) return;
+    _confirming = YES;
+    // 直接读持久化的 _checkedChannels, 与 _displayList 解耦; 否则折叠 section
+    // 或切 tab 把行移出 _displayList 后, 勾选会被静默丢掉 (PR #32 R7 review)。
+    NSArray<WKChannel *> *channels = [_checkedChannels.allValues copy];
 
     if (channels.count > 0) {
         // 先发送消息
@@ -785,378 +985,24 @@ typedef NS_ENUM(NSInteger, FWItemType) {
 #pragma mark - Share Confirm Panel
 
 - (void)showShareConfirmPanel:(WKChannel *)channel name:(NSString *)name isGroup:(BOOL)isGroup isThread:(BOOL)isThread {
-    UIWindow *window = [UIApplication sharedApplication].keyWindow;
-    if (!window) window = [UIApplication sharedApplication].windows.firstObject;
-    CGFloat screenW = window.lim_width;
-    CGFloat screenH = window.lim_height;
-
-    // 半透明遮罩
-    UIView *overlay = [[UIView alloc] initWithFrame:window.bounds];
-    overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.4];
-    overlay.alpha = 0;
-    overlay.tag = 88800;
-    [window addSubview:overlay];
-
-    UITapGestureRecognizer *bgTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissShareConfirmPanel)];
-    [overlay addGestureRecognizer:bgTap];
-
-    // 底部面板（高度稍后根据内容动态设置）
-    CGFloat safeBottom = 0;
-    if (@available(iOS 11.0, *)) {
-        safeBottom = window.safeAreaInsets.bottom;
-    }
-    UIView *panel = [[UIView alloc] init];
-    panel.backgroundColor = [WKApp shared].config.cellBackgroundColor;
-    panel.tag = 88801;
-    [overlay addSubview:panel];
-
-    CGFloat pad = 20;
-    CGFloat y = pad;
-
-    // "发送给" 标题
-    UILabel *titleLbl = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, screenW - pad*2, 22)];
-    titleLbl.text = LLang(@"发送给");
-    titleLbl.font = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
-    titleLbl.textColor = [UIColor colorWithWhite:0.4 alpha:1];
-    [panel addSubview:titleLbl];
-    y += 30;
-
-    // 目标行：图标/头像 + 名称
-    UIView *targetRow = [[UIView alloc] initWithFrame:CGRectMake(pad, y, screenW - pad*2, 44)];
-    [panel addSubview:targetRow];
-
-    CGFloat iconLeft = 0;
-    if (isGroup) {
-        UILabel *hashLbl = [[UILabel alloc] initWithFrame:CGRectMake(0, 7, 30, 30)];
-        hashLbl.text = @"#";
-        hashLbl.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
-        hashLbl.textColor = [UIColor colorWithRed:148/255.0 green:152/255.0 blue:168/255.0 alpha:1.0];
-        hashLbl.textAlignment = NSTextAlignmentCenter;
-        [targetRow addSubview:hashLbl];
-        iconLeft = 34;
-    } else if (isThread) {
-        UIImageView *threadIcon = [[UIImageView alloc] initWithImage:[WKConversationGroupThreadCell channelHashIconWithSize:CGSizeMake(20, 20) color:[UIColor colorWithRed:148/255.0 green:152/255.0 blue:168/255.0 alpha:1.0]]];
-        threadIcon.frame = CGRectMake(4, 12, 20, 20);
-        [targetRow addSubview:threadIcon];
-        iconLeft = 30;
-    } else {
-        // 私聊头像
-        WKUserAvatar *avatar = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 2, 40, 40)];
-        WKChannelInfo *chInfo = [[WKSDK shared].channelManager getChannelInfo:channel];
-        if (chInfo) {
-            NSString *avatarURL = [WKAvatarUtil getAvatar:channel.channelId cacheKey:chInfo.avatarCacheKey];
-            if (chInfo.logo.length > 0) avatarURL = [WKAvatarUtil getFullAvatarWIthPath:chInfo.logo];
-            [avatar.avatarImgView sd_setImageWithURL:[NSURL URLWithString:avatarURL]
-                                    placeholderImage:[WKApp.shared loadImage:@"Common/Index/DefaultAvatar" moduleID:@"WuKongBase"]];
+    __weak typeof(self) ws = self;
+    [WKForwardConfirmPanel showForChannel:channel
+                                     name:name
+                                  isGroup:isGroup
+                                 isThread:isThread
+                           shareFileInfos:self.shareFileInfos
+                                   onSend:^(NSString * _Nullable extraText) {
+        if (channel) {
+            if (ws.onSingleConfirm) {
+                ws.onSingleConfirm(channel, extraText);
+            } else if (ws.onSelect) {
+                ws.onSelect(channel);
+            }
         }
-        [targetRow addSubview:avatar];
-        iconLeft = 48;
-    }
-
-    UILabel *nameLbl = [[UILabel alloc] initWithFrame:CGRectMake(iconLeft, 0, targetRow.lim_width - iconLeft, 44)];
-    nameLbl.text = name;
-    nameLbl.font = [[WKApp shared].config appFontOfSizeMedium:16];
-    nameLbl.textColor = [WKApp shared].config.defaultTextColor;
-    [targetRow addSubview:nameLbl];
-    y += 52;
-
-    // 文件/链接预览卡片
-    if (self.shareFileInfos.count > 0) {
-        NSDictionary *fileInfo = self.shareFileInfos.firstObject;
-        NSString *type = fileInfo[@"type"];
-        NSString *fileName = fileInfo[@"fileName"] ?: @"";
-        NSString *filePath = fileInfo[@"path"];
-
-        CGFloat cardW = screenW * 0.62;
-        CGFloat cardH = 66;
-        CGFloat cardX = (screenW - cardW) / 2.0;
-
-        // 链接分享：显示网页标题 + favicon
-        if ([type isEqualToString:@"link"]) {
-            NSString *linkTitle = fileInfo[@"title"] ?: @"";
-            NSString *linkURL = fileInfo[@"url"] ?: @"";
-            CGFloat linkPad = pad + 10;
-            cardW = screenW - linkPad * 2;
-            cardX = linkPad;
-            cardH = 70;
-
-            UIView *fileCard = [[UIView alloc] initWithFrame:CGRectMake(cardX, y, cardW, cardH)];
-            fileCard.backgroundColor = [WKApp shared].config.backgroundColor;
-            fileCard.layer.cornerRadius = 10;
-            fileCard.layer.borderColor = [[UIColor grayColor] colorWithAlphaComponent:0.1].CGColor;
-            fileCard.layer.borderWidth = 0.5;
-            [panel addSubview:fileCard];
-
-            // favicon（右侧）
-            CGFloat iconSize = 36;
-            UIImageView *faviconView = [[UIImageView alloc] initWithFrame:CGRectMake(cardW - iconSize - 14, (cardH - iconSize) / 2, iconSize, iconSize)];
-            faviconView.contentMode = UIViewContentModeScaleAspectFit;
-            faviconView.layer.cornerRadius = 6;
-            faviconView.layer.masksToBounds = YES;
-            faviconView.backgroundColor = [[UIColor grayColor] colorWithAlphaComponent:0.08];
-            // 默认链接图标（地球）
-            if (@available(iOS 13.0, *)) {
-                UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIFontWeightRegular];
-                faviconView.image = [[UIImage systemImageNamed:@"globe" withConfiguration:config] imageWithTintColor:[UIColor grayColor] renderingMode:UIImageRenderingModeAlwaysOriginal];
-            }
-            [fileCard addSubview:faviconView];
-            // 异步加载网站 favicon（直接请求网站的 /favicon.ico）
-            NSString *iconURL = fileInfo[@"icon"];
-            NSURL *parsedURL = [NSURL URLWithString:linkURL];
-            if (!iconURL && parsedURL.scheme && parsedURL.host) {
-                iconURL = [NSString stringWithFormat:@"%@://%@/favicon.ico", parsedURL.scheme, parsedURL.host];
-            }
-            if (iconURL) {
-                NSString *faviconURL = iconURL;
-                dispatch_async(dispatch_get_global_queue(0, 0), ^{
-                    NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:faviconURL]];
-                    if (data) {
-                        UIImage *icon = [UIImage imageWithData:data];
-                        if (icon) {
-                            dispatch_async(dispatch_get_main_queue(), ^{
-                                faviconView.image = icon;
-                                faviconView.backgroundColor = [UIColor clearColor];
-                            });
-                        }
-                    }
-                });
-            }
-
-            // 标题
-            CGFloat textW = cardW - iconSize - 40;
-            UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 12, textW, 22)];
-            titleLabel.text = linkTitle.length > 0 ? linkTitle : linkURL;
-            titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
-            titleLabel.textColor = [WKApp shared].config.defaultTextColor;
-            titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-            [fileCard addSubview:titleLabel];
-
-            // URL
-            UILabel *urlLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 36, textW, 16)];
-            urlLabel.text = linkURL;
-            urlLabel.font = [UIFont systemFontOfSize:11];
-            urlLabel.textColor = [UIColor grayColor];
-            urlLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-            [fileCard addSubview:urlLabel];
-
-            y += cardH + 12;
-        } else {
-            // 文件/图片预览卡片（居中，宽约60%）
-            UIView *fileCard = [[UIView alloc] initWithFrame:CGRectMake(cardX, y, cardW, cardH)];
-            fileCard.backgroundColor = [WKApp shared].config.backgroundColor;
-            fileCard.layer.cornerRadius = 8;
-            fileCard.layer.borderColor = [[UIColor grayColor] colorWithAlphaComponent:0.12].CGColor;
-            fileCard.layer.borderWidth = 0.5;
-            [panel addSubview:fileCard];
-
-            // 文件图标（右侧）
-            CGFloat iconSize = 38;
-            UIImageView *fileIconView = [[UIImageView alloc] initWithFrame:CGRectMake(cardW - iconSize - 12, (cardH - iconSize) / 2, iconSize, iconSize)];
-            fileIconView.contentMode = UIViewContentModeScaleAspectFit;
-
-            if ([type isEqualToString:@"image"] && filePath) {
-                fileIconView.image = [UIImage imageWithContentsOfFile:filePath];
-                fileIconView.contentMode = UIViewContentModeScaleAspectFill;
-                fileIconView.clipsToBounds = YES;
-                fileIconView.layer.cornerRadius = 4;
-            } else {
-                NSString *ext = [fileName pathExtension];
-                fileIconView.image = [self fileIconForExtension:ext];
-            }
-            [fileCard addSubview:fileIconView];
-
-        // 文件名
-        CGFloat textW = cardW - iconSize - 34;
-        UILabel *fl = [[UILabel alloc] initWithFrame:CGRectMake(12, 10, textW, 36)];
-        fl.text = fileName;
-        fl.font = [UIFont systemFontOfSize:14];
-        fl.textColor = [WKApp shared].config.defaultTextColor;
-        fl.lineBreakMode = NSLineBreakByTruncatingMiddle;
-        fl.numberOfLines = 2;
-        [fileCard addSubview:fl];
-
-        // 文件大小
-        if (filePath && [[NSFileManager defaultManager] fileExistsAtPath:filePath]) {
-            NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:filePath error:nil];
-            unsigned long long size = [attrs fileSize];
-            NSString *sizeStr;
-            if (size < 1024) sizeStr = [NSString stringWithFormat:@"%lluB", size];
-            else if (size < 1024*1024) sizeStr = [NSString stringWithFormat:@"%.1fKB", size/1024.0];
-            else sizeStr = [NSString stringWithFormat:@"%.1fMB", size/1024.0/1024.0];
-            UILabel *sl = [[UILabel alloc] initWithFrame:CGRectMake(12, cardH - 22, textW, 16)];
-            sl.text = sizeStr;
-            sl.font = [UIFont systemFontOfSize:11];
-            sl.textColor = [UIColor grayColor];
-            [fileCard addSubview:sl];
-        }
-            y += cardH + 12;
-        } // end else (file/image)
-    }
-
-    // 输入框
-    UITextField *msgField = [[UITextField alloc] initWithFrame:CGRectMake(pad, y, screenW - pad*2, 40)];
-    msgField.backgroundColor = [WKApp shared].config.backgroundColor;
-    msgField.layer.cornerRadius = 6;
-    msgField.placeholder = LLang(@"发消息");
-    msgField.font = [UIFont systemFontOfSize:14];
-    msgField.leftView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 12, 40)];
-    msgField.leftViewMode = UITextFieldViewModeAlways;
-    msgField.tag = 88802;
-    [panel addSubview:msgField];
-    y += 50;
-
-    // 按钮行
-    CGFloat btnW = (screenW - pad*2 - 12) / 2;
-    CGFloat btnH = 44;
-
-    UIButton *cancelBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    cancelBtn.frame = CGRectMake(pad, y, btnW, btnH);
-    [cancelBtn setTitle:LLang(@"取消") forState:UIControlStateNormal];
-    [cancelBtn setTitleColor:[WKApp shared].config.defaultTextColor forState:UIControlStateNormal];
-    cancelBtn.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
-    cancelBtn.backgroundColor = [WKApp shared].config.backgroundColor;
-    cancelBtn.layer.cornerRadius = 8;
-    [cancelBtn addTarget:self action:@selector(dismissShareConfirmPanel) forControlEvents:UIControlEventTouchUpInside];
-    [panel addSubview:cancelBtn];
-
-    UIButton *sendBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    sendBtn.frame = CGRectMake(pad + btnW + 12, y, btnW, btnH);
-    [sendBtn setTitle:LLang(@"发送") forState:UIControlStateNormal];
-    [sendBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    sendBtn.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
-    sendBtn.backgroundColor = [UIColor colorWithRed:7/255.0 green:193/255.0 blue:96/255.0 alpha:1.0];
-    sendBtn.layer.cornerRadius = 8;
-    sendBtn.tag = 88803;
-    [sendBtn addTarget:self action:@selector(onShareConfirmSend) forControlEvents:UIControlEventTouchUpInside];
-    [panel addSubview:sendBtn];
-
-    // 存储 channel
-    objc_setAssociatedObject(overlay, "shareChannel", channel, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-    // 监听键盘
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(shareConfirmKeyboardWillShow:) name:UIKeyboardWillShowNotification object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(shareConfirmKeyboardWillHide:) name:UIKeyboardWillHideNotification object:nil];
-
-    // 点击面板空白区域收键盘（按钮/输入框上不触发）
-    UITapGestureRecognizer *panelTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(shareConfirmDismissKeyboard)];
-    panelTap.delegate = self;
-    [overlay addGestureRecognizer:panelTap];
-
-    // 动态计算面板高度
-    y += btnH + safeBottom + 16;
-    CGFloat panelH = y;
-    panel.frame = CGRectMake(0, screenH, screenW, panelH);
-
-    // 圆角蒙版
-    UIBezierPath *maskPath = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, screenW, panelH) byRoundingCorners:UIRectCornerTopLeft | UIRectCornerTopRight cornerRadii:CGSizeMake(16, 16)];
-    CAShapeLayer *maskLayer = [CAShapeLayer layer];
-    maskLayer.path = maskPath.CGPath;
-    panel.layer.mask = maskLayer;
-
-    // 弹出动画
-    [UIView animateWithDuration:0.3 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
-        overlay.alpha = 1;
-        panel.frame = CGRectMake(0, screenH - panelH, screenW, panelH);
-    } completion:nil];
-}
-
-- (void)dismissShareConfirmPanel {
-    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIKeyboardWillShowNotification object:nil];
-    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIKeyboardWillHideNotification object:nil];
-    [self.view endEditing:YES];
-
-    UIWindow *window = [UIApplication sharedApplication].keyWindow;
-    UIView *overlay = [window viewWithTag:88800];
-    if (!overlay) return;
-    UIView *panel = [overlay viewWithTag:88801];
-    CGFloat screenH = window.lim_height;
-    [UIView animateWithDuration:0.25 animations:^{
-        overlay.alpha = 0;
-        panel.frame = CGRectMake(0, screenH, panel.lim_width, panel.lim_height);
-    } completion:^(BOOL finished) {
-        [overlay removeFromSuperview];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [[WKNavigationManager shared] popViewControllerAnimated:YES];
+        });
     }];
-}
-
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
-    // 点在按钮或输入框上时，不触发收键盘手势
-    if ([touch.view isKindOfClass:[UIButton class]] || [touch.view isKindOfClass:[UITextField class]]) {
-        return NO;
-    }
-    return YES;
-}
-
-- (void)shareConfirmDismissKeyboard {
-    UIWindow *window = [UIApplication sharedApplication].keyWindow;
-    UIView *overlay = [window viewWithTag:88800];
-    [overlay endEditing:YES];
-}
-
-- (void)shareConfirmKeyboardWillShow:(NSNotification *)notification {
-    CGRect kbFrame = [notification.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
-    NSTimeInterval duration = [notification.userInfo[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
-    UIWindow *window = [UIApplication sharedApplication].keyWindow;
-    UIView *panel = [[window viewWithTag:88800] viewWithTag:88801];
-    if (!panel) return;
-    CGFloat screenH = window.lim_height;
-    CGFloat panelBottom = screenH - kbFrame.size.height;
-    [UIView animateWithDuration:duration animations:^{
-        panel.frame = CGRectMake(0, panelBottom - panel.lim_height, panel.lim_width, panel.lim_height);
-    }];
-}
-
-- (void)shareConfirmKeyboardWillHide:(NSNotification *)notification {
-    NSTimeInterval duration = [notification.userInfo[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
-    UIWindow *window = [UIApplication sharedApplication].keyWindow;
-    UIView *panel = [[window viewWithTag:88800] viewWithTag:88801];
-    if (!panel) return;
-    CGFloat screenH = window.lim_height;
-    [UIView animateWithDuration:duration animations:^{
-        panel.frame = CGRectMake(0, screenH - panel.lim_height, panel.lim_width, panel.lim_height);
-    }];
-}
-
-- (void)onShareConfirmSend {
-    UIWindow *window = [UIApplication sharedApplication].keyWindow;
-    UIView *overlay = [window viewWithTag:88800];
-    WKChannel *channel = objc_getAssociatedObject(overlay, "shareChannel");
-    UITextField *msgField = [overlay viewWithTag:88802];
-    NSString *extraText = msgField.text;
-
-    [self dismissShareConfirmPanel];
-
-    if (channel) {
-        if (self.onSingleConfirm) {
-            self.onSingleConfirm(channel, extraText);
-        } else if (self.onSelect) {
-            self.onSelect(channel);
-        }
-    }
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [[WKNavigationManager shared] popViewControllerAnimated:YES];
-    });
-}
-
-- (UIImage *)fileIconForExtension:(NSString *)ext {
-    NSString *lowExt = [[ext lowercaseString] stringByReplacingOccurrencesOfString:@"." withString:@""];
-    NSString *imageName = nil;
-    if ([@[@"doc", @"docx", @"docm", @"rtf", @"odt", @"wps"] containsObject:lowExt]) imageName = @"FileType/FileWord";
-    else if ([@[@"xls", @"xlsx", @"xlsm", @"csv", @"ods", @"et"] containsObject:lowExt]) imageName = @"FileType/FileExcel";
-    else if ([lowExt isEqualToString:@"pdf"]) imageName = @"FileType/FilePDF";
-    else if ([@[@"ppt", @"pptx", @"pptm", @"pps", @"ppsx"] containsObject:lowExt]) imageName = @"FileType/FilePPT";
-    else if ([@[@"mp4", @"mov", @"avi", @"mkv", @"wmv", @"flv", @"webm"] containsObject:lowExt]) imageName = @"FileType/FileVideo";
-    else if ([@[@"md", @"markdown"] containsObject:lowExt]) imageName = @"FileType/FileMarkdown";
-    if (imageName) {
-        UIImage *img = [[WKApp shared] loadImage:imageName moduleID:@"WuKongBase"];
-        if (img) return [img imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
-    }
-    if (@available(iOS 13.0, *)) {
-        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:28 weight:UIImageSymbolWeightRegular];
-        UIImage *img = [UIImage systemImageNamed:@"doc.fill" withConfiguration:config];
-        return [img imageWithTintColor:[UIColor systemBlueColor] renderingMode:UIImageRenderingModeAlwaysOriginal];
-    }
-    return nil;
 }
 
 #pragma mark - Helper Images

@@ -634,8 +634,11 @@
     CGPoint touchInWindow = [gestureRecognizer locationInView:nil];
     __weak typeof(messageCell) weakCell = messageCell;
 
-    // 文本消息：长按直接进入全选模式，菜单在选区上方显示，无需单独「选择文字」按钮
-    if (contextMessage.contentType == WK_TEXT) {
+    // 文本/图文混排：长按直接进入气泡内选区模式，拖动句柄选片段，菜单浮在选区上方。
+    // WK_RICHTEXT 走与 WK_TEXT 相同入口，因为图文气泡里的文字 user 也期望能拖句柄选+复制；
+    // 各自 cell 内 startInBubbleTextSelectionWithMenuItems: 实现差异（WK_TEXT 自绘句柄，
+    // WK_RICHTEXT 用原生 UITextView 选区 + UIMenuController 挂自定义菜单项）。
+    if (contextMessage.contentType == WK_TEXT || contextMessage.contentType == WK_RICHTEXT) {
         NSArray *capturedMenus = [toolbarMenus copy];
         [messageCell startInBubbleTextSelectionWithMenuItems:capturedMenus];
         return;

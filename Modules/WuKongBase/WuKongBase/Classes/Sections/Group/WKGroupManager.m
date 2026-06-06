@@ -269,8 +269,17 @@ static WKGroupManager *_instance;
                             complete(WKChannelMemberCacheTypeNetwork,members);
                         }
                     }
-                   
-                    
+
+
+                } else {
+                    // 网络错误兜底 (PR #32 R13 review: 之前漏 else 分支, 让
+                    // WKRequestStrategyOnlyNetwork 的 caller (如 WKGroupAdminManageVM)
+                    // loading=YES 永远不清, 群管理页死锁空白)。
+                    // needDB=true 时 DB 路径已 complete 过 (line 249), 不重复 callback
+                    // 避免 caller 双回调; needDB=false 才真正需要 fallback。
+                    if(!needDB && complete) {
+                        complete(WKChannelMemberCacheTypeNetwork, @[]);
+                    }
                 }
             }];
         }
@@ -308,6 +317,18 @@ static WKGroupManager *_instance;
     if(_delegate && [_delegate respondsToSelector:@selector(groupManager:groupNo:managersToMember:complete:)]) {
            [_delegate groupManager:self groupNo:groupNo managersToMember:managers complete:complete];
        }
+}
+
+- (void)groupNo:(NSString *)groupNo addBotAdmin:(NSString *)uid complete:(void (^)(NSError * _Nullable))complete {
+    if(_delegate && [_delegate respondsToSelector:@selector(groupManager:groupNo:addBotAdmin:complete:)]) {
+        [_delegate groupManager:self groupNo:groupNo addBotAdmin:uid complete:complete];
+    }
+}
+
+- (void)groupNo:(NSString *)groupNo removeBotAdmin:(NSString *)uid complete:(void (^)(NSError * _Nullable))complete {
+    if(_delegate && [_delegate respondsToSelector:@selector(groupManager:groupNo:removeBotAdmin:complete:)]) {
+        [_delegate groupManager:self groupNo:groupNo removeBotAdmin:uid complete:complete];
+    }
 }
 
 - (void)groupSetting:(NSString *)groupNo settingKey:(WKGroupSettingKey)key on:(BOOL)on {
@@ -348,7 +369,7 @@ static WKGroupManager *_instance;
 }
 
 -(void) didGroupDisband:(NSString*)groupNo complete:(void(^__nullable)(NSError *error))complete{
-    if(_delegate && [_delegate respondsToSelector:@selector(groupManager:didGroupExit:complete:)]) {
+    if(_delegate && [_delegate respondsToSelector:@selector(groupManager:didGroupDisband:complete:)]) {
         [_delegate groupManager:self didGroupDisband:groupNo complete:complete];
     }
 }

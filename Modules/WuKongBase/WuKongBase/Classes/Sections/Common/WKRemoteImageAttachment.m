@@ -40,17 +40,35 @@
     if(self.isDownloading) {
         return;
     }
-    self.isDownloading  = true;
+    // 命中 SDWebImage 缓存（内存或磁盘）就直接用，跳过 download——不然每次 cell refresh 都会
+    // 新建一个 attachment 实例（self.image=nil），triggerImageDownloads 又会跑一遍下载，
+    // 用户视觉上看到的就是图片「闪一下」。同 URL 走 SDImageCache 同一 key 必然命中。
+    UIImage *cachedMem = [[SDImageCache sharedImageCache] imageFromMemoryCacheForKey:self.url];
+    if (cachedMem) {
+        self.image = cachedMem;
+        if (complete) complete(cachedMem);
+        return;
+    }
+    self.isDownloading = true;
     __weak typeof(self) weakSelf = self;
-    [[SDWebImageDownloader sharedDownloader] downloadImageWithURL:[NSURL URLWithString:self.url] completed:^(UIImage * _Nullable image, NSData * _Nullable data, NSError * _Nullable error, BOOL finished) {
+    // 走 SDWebImageManager 而非 raw downloader——它会先查 disk cache（命中则不发网络请求），
+    // 拉完也会自动写回 memory cache（下次 cell 复用直接命中上面的 memory 分支）。
+    [[SDWebImageManager sharedManager] loadImageWithURL:[NSURL URLWithString:self.url]
+                                                options:0
+                                               progress:nil
+                                              completed:^(UIImage * _Nullable image,
+                                                          NSData * _Nullable data,
+                                                          NSError * _Nullable error,
+                                                          SDImageCacheType cacheType,
+                                                          BOOL finished,
+                                                          NSURL * _Nullable imageURL) {
         weakSelf.isDownloading = false;
-        if(image) {
+        if (image) {
             weakSelf.image = image;
-            if(complete) {
+            if (complete) {
                 complete(image);
             }
         }
-        
     }];
 }
 

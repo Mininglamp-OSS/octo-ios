@@ -2573,20 +2573,7 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         if ([[WKMessageEffectManager shared] hasTriggeredForMessage:message]) return;
         [[WKMessageEffectManager shared] markTriggeredForMessage:message];
 
-        CGRect sourceRect = CGRectZero;
-        // classy 特效要精确锚定在气泡上（气泡本身 ≈ 表情图片，
-        // 因为 [有品位] 是 tag-only 消息，文本气泡里只有这一张内联图）。
-        // 先强制 layout 一次，避免首次入视图时 bubble frame 尚未稳定。
-        if ([effectType isEqualToString:@"classy"] && [cell isKindOfClass:WKMessageCell.class]) {
-            [cell layoutIfNeeded];
-            UIView *bubble = ((WKMessageCell *)cell).bubbleBackgroundView;
-            if (bubble && !CGRectIsEmpty(bubble.bounds)) {
-                sourceRect = [self convertRect:bubble.bounds fromView:bubble];
-            }
-        }
-        if (CGRectIsEmpty(sourceRect)) {
-            sourceRect = [self.tableView convertRect:cell.frame toView:self];
-        }
+        CGRect sourceRect = [self.tableView convertRect:cell.frame toView:self];
 
         // 头像源规则:
         //   - 私聊(channel.channelType == WK_PERSON) → 取对方头像(channel.channelId = 对方 uid)

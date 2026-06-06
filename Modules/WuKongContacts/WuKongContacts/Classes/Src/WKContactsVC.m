@@ -7,6 +7,7 @@
 
 #import "WKContactsVC.h"
 #import "WKContactsCell.h"
+#import "WKContactFollowHelper.h"
 #import <Masonry/Masonry.h>
 #import "WKChineseSort.h"
 #import "WKContactsHeaderItemCell.h"
@@ -15,6 +16,7 @@
 #import "WKAvatarUtil.h"
 #import "WKSearchbarView.h"
 #import "WKGlobalSearchResultController.h"
+#import <WuKongBase/WKFollowedKeysStore.h>
 
 @interface WKContactsVC ()<UITableViewDataSource,UITableViewDelegate,WKContactsManagerDelegate,WKChannelManagerDelegate>
 @property(nonatomic,strong) UITableView *tableView;
@@ -69,6 +71,15 @@
     [[WKSDK shared].channelManager addDelegate:self];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(contactsUpdate:) name:WK_NOTIFY_CONTACTS_UPDATE object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshContactsHeader) name:WK_NOTIFY_CONTACTS_HEADER_UPDATE object:nil];
+    // FollowedKeysStore 任何 reload 都广播这个通知（关注/取消关注后由 helper 触发 reload）
+    // → 重画可见 cell 的金色五角星。
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onFollowedKeysUpdate) name:kWKFollowedKeysStoreDidUpdateNotification object:nil];
+
+    // 长按 cell → 弹"关注 / 取消关注"菜单。挂在 tableView 而不是 cell 上，
+    // 这样 cell reuse 不会重复挂 gesture。
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(onContactLongPress:)];
+    lp.minimumPressDuration = 0.4;
+    [self.tableView addGestureRecognizer:lp];
 
     // 先从DB缓存加载旧数据显示，再异步拉取API最新数据
     [self loadFromDBCacheThenFetchAPI];
@@ -169,6 +180,7 @@
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WK_NOTIFY_CONTACTS_UPDATE object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WK_NOTIFY_CONTACTS_HEADER_UPDATE object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WK_NOTIFY_CONTACTS_TAB_REDDOT_UPDATE object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:kWKFollowedKeysStoreDidUpdateNotification object:nil];
 }
 
 // 开启大标题模式
@@ -182,6 +194,8 @@
         _searchbarView.placeholder = LLang(@"搜索联系人、AI、群聊");
         _searchbarView.onClick = ^{
             WKGlobalSearchResultController *vc = [WKGlobalSearchResultController new];
+            // 通讯录入口：搜索页默认选中"联系人"tab（会话列表入口走默认的"聊天"tab）。
+            vc.searchType = WKHistoryMessageSearchTypeContacts;
             [[WKNavigationManager shared] pushViewController:vc animated:NO];
         };
     }
@@ -596,16 +610,22 @@
             // 仅写 dbInfos —— 不把 not_added/pending 的 space_bots 写入 follow=Friend，
             // 否则会污染选人页（拉群成员）的好友查询。
             //
-            // [Online 保留] 通讯录 API 返回里**没有** online/lastOffline/deviceFlag 字段，
-            // 直接 addOrUpdate 会把这些字段覆盖为默认值（online=NO），污染所有依赖
-            // channelInfo.online 的判定（如 AI 总结按钮、在线小绿点）。这里在批写前从
-            // 已有 channelInfo merge 这几个字段，让 OnlineStatusManager 维护的状态保留。
+            // [本地态保留] 通讯录 API 返回里**没有** online/lastOffline/deviceFlag/stick/mute
+            // 等字段，直接 addOrUpdate 会把这些字段全部 reset 成默认值。后果分别是：
+            //   - online=NO：污染 AI 总结按钮 / 在线小绿点
+            //   - stick=NO：用户切到通讯录再回会话列表，私聊置顶突然消失（DM 偶发掉置顶
+            //     根因，因为只有 DM 走通讯录这条 channelInfo 写回路径；群在
+            //     group_setting 路径上有兜底）
+            //   - mute=NO：静音同理
+            // 这里在批写前把所有上游 API 不维护、但本地权威的字段全部 merge 回去。
             for (WKChannelInfo *info in dbInfos) {
                 WKChannelInfo *old = [[WKSDK shared].channelManager getChannelInfo:info.channel];
                 if (!old) continue;
                 info.online = old.online;
                 info.lastOffline = old.lastOffline;
                 info.deviceFlag = old.deviceFlag;
+                info.stick = old.stick;
+                info.mute = old.mute;
             }
             weakSelf.isBatchUpdating = YES;
             [[WKSDK shared].channelManager addOrUpdateChannelInfos:dbInfos];
@@ -657,13 +677,16 @@
                 long long version = [contacts.lastObject[@"version"] longLongValue];
                 // iOS 12+ 系统会自动调度落盘，去掉主动 synchronize 以减少阻塞
                 [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%lld",version] forKey:cacheKey];
-                // [Online 保留] friend/sync 同样不返 online 字段，merge 旧值避免覆盖
+                // [本地态保留] friend/sync 同样不返 online/stick/mute 等字段，
+                // 全部从旧 channelInfo merge 回来（详见上面 fetchAllDataWithSpaceId 同款注释）。
                 for (WKChannelInfo *info in channelInfos) {
                     WKChannelInfo *old = [[WKSDK shared].channelManager getChannelInfo:info.channel];
                     if (!old) continue;
                     info.online = old.online;
                     info.lastOffline = old.lastOffline;
                     info.deviceFlag = old.deviceFlag;
+                    info.stick = old.stick;
+                    info.mute = old.mute;
                 }
                 weakSelf.isBatchUpdating = YES;
                 [[WKSDK shared].channelManager addOrUpdateChannelInfos:channelInfos];
@@ -694,6 +717,7 @@
     contactsCellModel.online = channelInfo.online;
     contactsCellModel.lastOffline = channelInfo.lastOffline;
     contactsCellModel.channelInfo = channelInfo;
+    contactsCellModel.isGroup = NO; // 通讯录 cell 永远是 person，已关注图标走 WKFollowTargetTypeDM
     
     contactsCellModel.robot = channelInfo.robot;
     if(channelInfo.logo) {
@@ -715,7 +739,48 @@
 
 
 
-#pragma mark - table
+#pragma mark - 长按关注菜单
+
+- (void)onContactLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan) return;
+    CGPoint pInTable = [gesture locationInView:self.tableView];
+    NSIndexPath *ip = [self.tableView indexPathForRowAtPoint:pInTable];
+    if (!ip) return;
+    if (ip.section <= 0 || ip.section >= (NSInteger)self.items.count) return; // section 0 是 header items
+    NSArray *sectionItems = self.items[ip.section];
+    if (ip.row >= (NSInteger)sectionItems.count) return;
+    id model = sectionItems[ip.row];
+    if (![model isKindOfClass:[WKContactsCellModel class]]) return;
+    WKContactsCellModel *contact = model;
+    if (contact.uid.length == 0) return;
+
+    UIWindow *window = [UIApplication sharedApplication].keyWindow ?: [UIApplication sharedApplication].windows.firstObject;
+    CGPoint pInWindow = [self.tableView convertPoint:pInTable toView:window];
+    WKChannel *channel = [[WKChannel alloc] initWith:contact.uid channelType:WK_PERSON];
+    [WKContactFollowHelper showFollowMenuForChannel:channel
+                                     atPointInWindow:pInWindow
+                                       presentingVC:self
+                                        onDidChange:nil]; // 状态变化由 FollowedKeysStore 通知统一刷
+}
+
+- (void)onFollowedKeysUpdate {
+    // 仅刷新可见的 contact cell — header section 0 不动；contact cell 的关注图标根据
+    // store 的最新状态重画。整表 reloadData 也行，但仅重画可见的避免触发字母索引重计算。
+    NSArray<NSIndexPath *> *visible = self.tableView.indexPathsForVisibleRows;
+    NSMutableArray<NSIndexPath *> *contactPaths = [NSMutableArray array];
+    for (NSIndexPath *ip in visible) {
+        if (ip.section == 0) continue;
+        [contactPaths addObject:ip];
+    }
+    if (contactPaths.count == 0) return;
+    @try {
+        [self.tableView reloadRowsAtIndexPaths:contactPaths withRowAnimation:UITableViewRowAnimationNone];
+    } @catch (NSException *ex) {
+        [self.tableView reloadData];
+    }
+}
+
+#pragma mark table
 
 -(UIView*) tableHeader {
     if(!_tableHeader) {

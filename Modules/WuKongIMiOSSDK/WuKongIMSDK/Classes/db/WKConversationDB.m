@@ -111,15 +111,21 @@ static WKConversationDB *_instance;
     }];
 }
 
--(void) mergeConversations:(NSArray<WKConversation*>*)conversations {
+-(NSDictionary<NSString*, NSNumber*>*) mergeConversations:(NSArray<WKConversation*>*)conversations {
     if(!conversations || conversations.count<=0) {
-        return;
+        return @{};
     }
     // FIX(reentrancy): prefetch reconcile context 在进 inTransaction 之前一次拉完
     // (pending ack keys + unread_state map), 避免 reconcileServerSnapshot 内部
     // 再开 [dbQueue inDatabase:] 触发 FMDB 重入. 同 sync 批可能 250+ 行,
     // prefetch 一次 vs 250 次单 query, 性能也好得多.
     WKUnreadReconcileContext *reconcileCtx = [[WKUnreadStore shared] prefetchReconcileContext];
+    // channelKey ("type:id") → reconcile 后真正写进 DB 的 unread.调用方需要回填到
+    // 内存中的 WKConversation.unreadCount 再 dispatch UI delegate, 否则 server 原始
+    // unread 会替换掉本地刚 +1 的真值(场景: 锁屏期间 socket 重连后 sync 接口返回的
+    // unread 比真实少, mergeConversations 通过 reconcile 守住了 DB,但 callDelegate
+    // 收到的 conversation.unreadCount 还是 server 原值, UI 红点被擦掉).
+    NSMutableDictionary<NSString*, NSNumber*> *reconciledUnread = [NSMutableDictionary dictionaryWithCapacity:conversations.count];
 
     [[WKDB sharedDB].dbQueue inTransaction:^(FMDatabase * _Nonnull db, BOOL * _Nonnull rollback) {
         for (WKConversation *conversation in conversations) {
@@ -136,6 +142,9 @@ static WKConversationDB *_instance;
                 NSLog(@"[UnreadTrace] mergeConversations REJECT-BLANK channelId=%@ type=%d localUnread=%ld localLastSeq=%u",
                       conversation.channel.channelId, conversation.channel.channelType,
                       (long)local.unreadCount, local.lastMessageSeq);
+                // 拒收的行: 也把 local 真值塞回 map, 让 caller 能用同一份数据 dispatch.
+                NSString *keyB = [NSString stringWithFormat:@"%d:%@", conversation.channel.channelType, conversation.channel.channelId ?: @""];
+                reconciledUnread[keyB] = @(local.unreadCount);
                 continue;
             }
 
@@ -143,12 +152,14 @@ static WKConversationDB *_instance;
             uint8_t parentChannelType = conversation.parentChannel?conversation.parentChannel.channelType:0;
             NSString *extraStr = [self extraToStr:conversation.extra];
 
+            NSString *keyInsert = [NSString stringWithFormat:@"%d:%@", conversation.channel.channelType, conversation.channel.channelId ?: @""];
             if (!local) {
                 // 新会话直接插入
                 NSLog(@"[UnreadTrace] mergeConversations INSERT channelId=%@ type=%d unread=%ld lastSeq=%u version=%lld",
                       conversation.channel.channelId, conversation.channel.channelType,
                       (long)conversation.unreadCount, conversation.lastMessageSeq, conversation.version);
                 [db executeUpdate:SQL_REPLACE,conversation.channel.channelId,@(conversation.channel.channelType),parentChannelID,@(parentChannelType),conversation.avatar?:@"",conversation.lastClientMsgNo?:@"",@(conversation.lastMessageSeq),@(conversation.lastMsgTimestamp),@(conversation.unreadCount),extraStr,@(conversation.version),@(conversation.isDeleted)];
+                reconciledUnread[keyInsert] = @(conversation.unreadCount);
                 continue;
             }
 
@@ -192,8 +203,10 @@ static WKConversationDB *_instance;
              newExtraStr,
              @(newVersion),
              @(newIsDeleted)];
+            reconciledUnread[keyInsert] = @(newUnread);
         }
     }];
+    return reconciledUnread;
 }
 
 -(void) addConversation:(WKConversation*)conversation {

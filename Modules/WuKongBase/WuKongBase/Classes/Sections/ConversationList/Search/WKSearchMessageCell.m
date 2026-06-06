@@ -118,7 +118,8 @@
     }
 
     if (model.timestamp > 0) {
-        self.timeLbl.text = [WKTimeTool getTimeStringAutoShort2:[NSDate dateWithTimeIntervalSince1970:model.timestamp] mustIncludeTime:true];
+        // 显示完整时分秒；当年省略年份，避免同一天多条消息无法区分具体时刻
+        self.timeLbl.text = [WKTimeTool searchResultTimeString:[NSDate dateWithTimeIntervalSince1970:model.timestamp]];
         self.timeLbl.hidden = NO;
     } else {
         self.timeLbl.text = @"";
@@ -167,23 +168,23 @@
     self.avatarImgView.lim_top = [self lim_centerY:self.avatarImgView];
     
     
+    // time（先算出位置，name 据此让出右侧空间，避免完整日期时间与较长会话名重叠）
+    self.timeLbl.lim_top = 10.0f;
+    self.timeLbl.lim_left = self.lim_width - self.timeLbl.lim_width - 10.0f;
+
     // name
     CGFloat nameLeftSpace = 15.0f;
     CGFloat nameHeight = 20.0f;
-    self.nameLbl.lim_width = self.lim_width -( self.avatarImgView.lim_right + nameLeftSpace + 20.0f);
-    self.nameLbl.lim_height = nameHeight;
     self.nameLbl.lim_left = self.avatarImgView.lim_right + nameLeftSpace;
-    
+    self.nameLbl.lim_width = (self.timeLbl.hidden ? (self.lim_width - 20.0f) : (self.timeLbl.lim_left - 8.0f)) - self.nameLbl.lim_left;
+    self.nameLbl.lim_height = nameHeight;
     self.nameLbl.lim_top = 10.0f;
-    
-    // content
-    self.contentLbl.lim_width = self.nameLbl.lim_width;
+
+    // content（内容行整行可用，不与时间同行）
+    self.contentLbl.lim_width = self.lim_width - self.nameLbl.lim_left - 20.0f;
     self.contentLbl.lim_height = 15.0f;
     self.contentLbl.lim_left = self.nameLbl.lim_left;
     self.contentLbl.lim_top = self.nameLbl.lim_bottom + 10.0f;
-    
-    self.timeLbl.lim_top = self.nameLbl.lim_top;
-    self.timeLbl.lim_left = self.lim_width - self.timeLbl.lim_width - 10.0f;
 }
 
 @end

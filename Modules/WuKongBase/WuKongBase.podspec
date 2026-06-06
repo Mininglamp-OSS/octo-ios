@@ -85,7 +85,13 @@ TODO: Add long description of the pod here.
   # CocoaPods 的"transitive static"误报，是最简洁的方案。
   local_bugly_path = File.expand_path('WuKongBase/Bugly.framework', __dir__)
   bugly_will_be_used = false
-  if File.exist?(local_bugly_path)
+  # ENV 短路: 设 OCTO_HAS_PRIVATE_CONFIG=0 强制走 OSS 视角 (跳过 Bugly 检测),
+  # 用于本地有私有配置但想验证 lock 与 clean clone 一致的开发者:
+  #     OCTO_HAS_PRIVATE_CONFIG=0 pod install
+  # 否则保持原 "本地 framework / OctoConfig 存在则启用" 自动判定行为。
+  if ENV['OCTO_HAS_PRIVATE_CONFIG'] == '0'
+    # forced OSS mode: bugly_will_be_used 留 false, 跳过下面整段
+  elsif File.exist?(local_bugly_path)
     s.vendored_frameworks = 'WuKongBase/Bugly.framework'
     bugly_will_be_used = true
   else
@@ -159,13 +165,26 @@ TODO: Add long description of the pod here.
   # pod 自带的 confetti.mp3 资产（爆裂声），粒子系统是 WKConfettiView 自写
   # CAEmitterLayer，不走该库的粒子实现。
   s.dependency 'SwiftConfettiView', '~> 2.0'      # MIT, ugurethemaydin
-  # Bugly 启用时（s.dependency 'Bugly' 或本地 vendored_frameworks），WuKongBase
-  # 自身也必须 link Bugly 才能解析 _OBJC_CLASS_$_Bugly 等符号；CocoaPods 对
-  # static_framework + 跨 pod 依赖的自动 link 不到位，这里显式加。
-  bugly_ldflag = bugly_will_be_used ? ' -framework "Bugly"' : ''
+  # Bugly 静态 framework 链接策略（修复 objc duplicate class 警告 — 2026-06）
+  #
+  # 历史问题：Bugly 是腾讯发布的**静态** framework。CocoaPods 看到
+  # `s.dependency 'Bugly'` 后，会同时给：
+  #   1) WuKongBase pod 的 xcconfig 自动加 `-framework "Bugly"`
+  #   2) 主 App 的 aggregate xcconfig 也加 `-framework "Bugly"`（传递依赖）
+  # 结果：Bugly 的 class 被静态吸进 WuKongBase.framework 和主二进制两处，
+  # 启动时 dyld 报 "Class Bugly is implemented in both ..."，包体积也虚胖一份。
+  #
+  # 修复：让 Bugly 只在主 App 链接一份，WuKongBase 只享用 header、不参与 link。
+  #   a) 这里 pod_target_xcconfig 的 OTHER_LDFLAGS 用 `-Wl,-undefined,dynamic_lookup`
+  #      允许 link WuKongBase.framework 时让 _OBJC_CLASS_$_Bugly 等符号悬空，
+  #      运行时由 Obj-C runtime 的 flat namespace 自动把它指到主 App 的那份。
+  #   b) Podfile 的 post_install 负责把 CocoaPods 自动写入到
+  #      Pods/Target Support Files/WuKongBase/WuKongBase.{debug,release}.xcconfig
+  #      里的 `-framework "Bugly"` 擦掉，否则 a) 设置依然会被 CocoaPods 覆盖。
+  # 两处必须同步改，缺一不可。
   s.pod_target_xcconfig = {
     'SWIFT_INCLUDE_PATHS' => '$(inherited)',
-    'OTHER_LDFLAGS' => '$(inherited)' + bugly_ldflag
+    'OTHER_LDFLAGS' => '$(inherited)' + (bugly_will_be_used ? ' -Wl,-undefined,dynamic_lookup' : '')
   }
   
 #  s.dependency 'SVGKit'

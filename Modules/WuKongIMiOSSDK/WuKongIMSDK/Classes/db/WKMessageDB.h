@@ -54,6 +54,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// @param keyword 关键字
 -(NSArray<WKMessage*>*) getMessages:(WKChannel*)channel keyword:(NSString*)keyword limit:(int) limit;
 
+/// 跨频道按文件名搜索文件消息（content_type=WK_FILE）
+/// @param keyword 文件名关键字（匹配 content JSON 里的 name 字段）
+/// @param limit 数据限制
+-(NSArray<WKMessage*>*) searchFileMessagesWithKeyword:(NSString*)keyword limit:(int)limit;
+
 /// 获取消息
 /// @param messageSeq 偏移的messageSeq
 /// @param limit 数据限制

@@ -24,10 +24,18 @@ typedef NS_ENUM(NSUInteger, JLImageFormat) {
 
 /**
  根据图片的data数据,获取图片类型
- 
+
  @param data 图片的data数据
  @return 图片类型
  */
 + (JLImageFormat)jl_imageFormatWithImageData:(nullable NSData *)data;
+
+/**
+ 检测图片字节是否是动图 (GIF / APNG / 动画 WebP)，纯 magic-bytes 嗅探，不依赖扩展名。
+ - GIF: GIF87a / GIF89a 头
+ - APNG: PNG 头 + 第一个 IDAT 之前出现 acTL chunk
+ - 动 WebP: RIFF....WEBP 容器内 VP8X chunk 的 flags 字节 ANIM 位 (0x02) 置位
+ */
++ (BOOL)wk_isAnimatedImageData:(nullable NSData *)data;
 
 @end

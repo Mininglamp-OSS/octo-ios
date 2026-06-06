@@ -107,6 +107,10 @@
 -(UIScrollView*) scrollView {
     if(!_scrollView) {
         _scrollView = [[UIScrollView alloc] initWithFrame:self.frame];
+        // 标签固定不滚动（聊天/联系人/群组/文件 一行展示即可）
+        _scrollView.scrollEnabled = NO;
+        _scrollView.showsHorizontalScrollIndicator = NO;
+        _scrollView.bounces = NO;
     }
     return _scrollView;
 }
@@ -139,13 +143,19 @@
 }
 
 -(void) itemClick:(UIButton*)btn {
-    self.selectedIndex = btn.tag;
-    
+    [self selectItemAtIndex:btn.tag];
+}
+
+- (void)selectItemAtIndex:(NSInteger)index {
+    if (index < 0 || index >= (NSInteger)self.items.count) return;
+    if (index == self.selectedIndex) return;
+    self.selectedIndex = index;
+
     [UIView animateWithDuration:0.2f animations:^{
         [self layoutSubviews];
     }];
-    WKTabbarItem *item =  self.items[self.selectedIndex];
-    if(item.onClick) {
+    WKTabbarItem *item = self.items[index];
+    if (item.onClick) {
         item.onClick();
     }
 }

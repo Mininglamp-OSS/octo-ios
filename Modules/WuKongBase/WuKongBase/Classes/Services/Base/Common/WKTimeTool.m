@@ -214,6 +214,16 @@
     return [formatter stringFromDate:(dt == nil ? [WKTimeTool getIOSDefaultDate] : dt)];
 }
 
++ (NSString *)searchResultTimeString:(NSDate *)dt {
+    if (!dt) return @"";
+    NSCalendar *calendar = [NSCalendar currentCalendar];
+    NSInteger currentYear = [calendar component:NSCalendarUnitYear fromDate:[NSDate date]];
+    NSInteger srcYear = [calendar component:NSCalendarUnitYear fromDate:dt];
+    // 当年省略年份，仅往年才带年份
+    NSString *fmt = (currentYear == srcYear) ? @"MM-dd HH:mm:ss" : @"yyyy-MM-dd HH:mm:ss";
+    return [self getTimeString:dt format:fmt];
+}
+
 + (NSTimeInterval) getIOSTimeStamp:(NSDate *)dat{
     NSTimeInterval a = [dat timeIntervalSince1970];
     return a;

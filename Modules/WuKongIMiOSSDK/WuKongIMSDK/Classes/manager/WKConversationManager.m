@@ -267,7 +267,28 @@
                     conversation.reminders = reminderDict[conversation.channel];
                 }
             }
-            [[WKConversationDB shared] mergeConversations:conversations];
+            NSDictionary<NSString*, NSNumber*> *reconciledUnread = [[WKConversationDB shared] mergeConversations:conversations];
+
+            // 关键: callOnConversationUpdateDelegates 把当前数组里的 WKConversation 直接
+            // 透传给 UI delegate. 这些对象上的 unreadCount 还是 server sync 接口返回的
+            // 原值,可能比 mergeConversations 走 WKUnreadStore.reconcileServerSnapshot
+            // 写回 DB 的真值小(锁屏几小时再前台时 server 偶发返回缩水 unread 的典型场景).
+            // 不修正就会出现 "DB 红点对 / UI 红点 0" 的不一致, 用户视角是预览更新了但红点
+            // 没起来,重启 app loadConversationList 从 DB 回读才正常.
+            for (WKConversation *conversation in conversations) {
+                NSString *key = [NSString stringWithFormat:@"%d:%@",
+                                 conversation.channel.channelType,
+                                 conversation.channel.channelId ?: @""];
+                NSNumber *reconciled = reconciledUnread[key];
+                if (reconciled) {
+                    if (conversation.unreadCount != reconciled.integerValue) {
+                        NSLog(@"[UnreadTrace] handleSyncConversation patch UI unread channelId=%@ type=%d serverRaw=%ld reconciled=%ld",
+                              conversation.channel.channelId, conversation.channel.channelType,
+                              (long)conversation.unreadCount, (long)reconciled.integerValue);
+                    }
+                    conversation.unreadCount = reconciled.integerValue;
+                }
+            }
 
             // 将同步的 stick/mute 状态写入 channel 表
             for (WKSyncConversationModel *syncModel in syncConversations) {
@@ -281,16 +302,51 @@
                 WKChannelInfo *channelInfo = [[WKSDK shared].channelManager getChannelInfo:syncModel.channel];
                 if (channelInfo) {
                     BOOL needUpdate = NO;
-                    if (channelInfo.stick != syncModel.stick) {
+                    // server 没下发 stick 字段(stickPresent=NO)时,绝对不覆盖本地的
+                    // channelInfo.stick. 锁屏几小时再回前台时 server 偶发返回缩水的
+                    // conversation/sync 响应(漏 stick / 漏 mute),旧代码会把本地置顶
+                    // 直接擦成 NO, 用户视角是会话突然不置顶了,重启 app channelInfo
+                    // DB 回读才恢复. mute 同理.
+                    if (syncModel.stickPresent && channelInfo.stick != syncModel.stick) {
+                        NSLog(@"[StickTrace] sync apply stick channelId=%@ type=%d local=%d server=%d",
+                              syncModel.channel.channelId, syncModel.channel.channelType,
+                              channelInfo.stick, syncModel.stick);
                         channelInfo.stick = syncModel.stick;
                         needUpdate = YES;
+                    } else if (!syncModel.stickPresent && channelInfo.stick) {
+                        NSLog(@"[StickTrace] sync SKIP stick wipe channelId=%@ type=%d local=YES serverMissing",
+                              syncModel.channel.channelId, syncModel.channel.channelType);
                     }
-                    if (channelInfo.mute != syncModel.mute) {
+                    if (syncModel.mutePresent && channelInfo.mute != syncModel.mute) {
+                        NSLog(@"[StickTrace] sync apply mute channelId=%@ type=%d local=%d server=%d",
+                              syncModel.channel.channelId, syncModel.channel.channelType,
+                              channelInfo.mute, syncModel.mute);
                         channelInfo.mute = syncModel.mute;
                         needUpdate = YES;
+                    } else if (!syncModel.mutePresent && channelInfo.mute) {
+                        NSLog(@"[StickTrace] sync SKIP mute wipe channelId=%@ type=%d local=YES serverMissing",
+                              syncModel.channel.channelId, syncModel.channel.channelType);
                     }
                     if (needUpdate) {
                         [[WKSDK shared].channelManager updateChannelInfo:channelInfo];
+                    }
+
+                    // 同上 unread 回填的对称修复：把 channelInfo 上权威的 stick/mute 回填到
+                    // syncModel.conversation —— 它就是上面 conversations 数组里的对象，
+                    // 会被 callOnConversationUpdateDelegates: 透传给 UI。stick 被守卫保住的
+                    // 是 channelInfo 这一路；conversation 对象上的 stick 仍是 syncModel.stick
+                    // (server 漏字段时 = 0)，不回填 UI 就会出现"channelInfo 是 YES、UI 显示
+                    // 取消置顶"的错位（DM 偶发掉置顶根因，重启读 DB join channel.stick 才恢复）。
+                    // 群少踩坑是因为 group 还有 group_setting / Group VM 多路回填兜底，DM 只
+                    // 这一条路径。
+                    if (syncModel.conversation.stick != channelInfo.stick) {
+                        NSLog(@"[StickTrace] patch UI conversation.stick channelId=%@ type=%d syncRaw=%d authoritative=%d",
+                              syncModel.channel.channelId, syncModel.channel.channelType,
+                              syncModel.conversation.stick, channelInfo.stick);
+                        syncModel.conversation.stick = channelInfo.stick;
+                    }
+                    if (syncModel.conversation.mute != channelInfo.mute) {
+                        syncModel.conversation.mute = channelInfo.mute;
                     }
                 }
             }

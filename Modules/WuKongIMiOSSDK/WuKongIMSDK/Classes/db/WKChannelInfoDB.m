@@ -27,7 +27,21 @@
 #define SQL_EXTRA_COLS [NSString stringWithFormat:@"%@,%@,%@,%@,%@,%@,%@,%@,%@",@"IFNULL(message_extra.readed,0) readed",@"IFNULL(message_extra.readed_count,0) readed_count",@"IFNULL(message_extra.unread_count,0) unread_count",@"IFNULL(message_extra.revoke,'') revoke",@"IFNULL(message_extra.revoker,0) revoker",@"IFNULL(message_extra.content_edit,'') content_edit",@"IFNULL(message_extra.edited_at,0) edited_at",@"IFNULL(message_extra.upload_status,0) upload_status",@"IFNULL(message_extra.extra_version,0) extra_version"]
 
 // 搜索频道消息
-#define SQL_CHANNEL_MESSAGE_SEARCH [NSString stringWithFormat:@"SELECT * from (select channel_id,channel_type,count(*) message_count,max(created_at) created_at,searchable_word,max(order_seq) order_seq  from message where searchable_word like ? and content_type<>99 and from_uid <> '' and is_deleted=0 and revoke=0 group by channel_id,channel_type ) t order by created_at desc limit ?"]
+// 按会话分组，每组取「最新一条命中消息」的 searchable_word / order_seq / timestamp。
+// 关键点 1：SQLite 仅当聚合里有且只有一个 min()/max() 时，才保证其余裸列取自该 min/max 行
+// （bare-columns 特性）。旧实现同时用了 max(created_at) 和 max(order_seq) 两个聚合，
+// 导致 searchable_word 取自任意行 —— 预览片段与定位的 order_seq 不是同一条消息，
+// 既显示错乱又像「搜不到」。这里只保留唯一的 max(order_seq)，使三者来自同一条最新命中。
+// 关键点 2：除 searchable_word 外，再对 content（存的是完整 JSON 正文）做 LIKE 兜底。
+// 富文本 / 未注册类型 / 旧消息的 searchable_word 可能为空，但正文一定在 content 里，
+// 否则会「明明有这句话却搜不到」。命中行的预览片段优先用 searchable_word，空时回退 content。
+// content 列存的是 sqlite3_bind_blob 写入的 BLOB, SQLite LIKE 不会把 BLOB 当 TEXT
+// 匹配 (返 0 行), 必须 CAST AS TEXT (PR #32 R7 review: 原来这条与 frequencely 内搜索
+// 都漏 CAST, 兜底是死代码)。
+// 撤回过滤：撤回状态的权威源是 message_extra.revoke（旧数据已从 message.revoke 迁移过去，
+// 见 Migration 202204151134），message.revoke 可能是迁移前的陈旧值。必须 LEFT JOIN
+// message_extra 并按其 revoke 过滤，否则已撤回消息仍会被搜出来。
+#define SQL_CHANNEL_MESSAGE_SEARCH [NSString stringWithFormat:@"select message.channel_id,message.channel_type,count(*) message_count,message.searchable_word,message.content,message.content_type,message.timestamp,max(message.order_seq) order_seq from message left join message_extra on message.message_id=message_extra.message_id where (message.searchable_word like ? or CAST(message.content AS TEXT) like ?) and message.content_type<>99 and message.from_uid <> '' and message.is_deleted=0 and message.revoke=0 and IFNULL(message_extra.revoke,0)=0 group by message.channel_id,message.channel_type order by order_seq desc limit ?"]
 
 // 移除频道数据
 #define SQL_CHANNEL_DELETE @"delete from channel  where channel_id=? and channel_type=?"
@@ -219,17 +233,19 @@ static WKChannelInfoDB *_instance;
      __block NSMutableArray *channelMessageSearchResults = [NSMutableArray array];
      NSString *likeKeyword = [NSString stringWithFormat:@"%%%@%%",keyword];
     [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
-        FMResultSet *result =  [db executeQuery:SQL_CHANNEL_MESSAGE_SEARCH,likeKeyword,@(limit)];
+        // 两个 ? 分别绑定 searchable_word like / content like
+        FMResultSet *result =  [db executeQuery:SQL_CHANNEL_MESSAGE_SEARCH,likeKeyword,likeKeyword,@(limit)];
          while(result.next) {
-//             WKChannelInfo *channelInfo = [self toChannelInfo:result.resultDictionary];
              WKChannelMessageSearchResult *searchResult = [WKChannelMessageSearchResult new];
              NSString *channelID = [result stringForColumn:@"channel_id"];
              NSInteger channelType = [result intForColumn:@"channel_type"];
              searchResult.channel = [[WKChannel alloc] initWith:channelID channelType:channelType];
-//             searchResult.channelInfo = channelInfo;
              searchResult.orderSeq = (uint32_t)[result unsignedLongLongIntForColumn:@"order_seq"];
              searchResult.messageCount = [result.resultDictionary[@"message_count"] intValue];
              searchResult.searchableWord = result.resultDictionary[@"searchable_word"];
+             searchResult.content = [result dataForColumn:@"content"];
+             searchResult.contentType = [result.resultDictionary[@"content_type"] integerValue];
+             searchResult.timestamp = [result.resultDictionary[@"timestamp"] integerValue];
              [channelMessageSearchResults addObject:searchResult];
          }
         [result close];

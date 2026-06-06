@@ -17,6 +17,8 @@
 #import "WKEndpointManager.h"
 #import "WKStickerPackage.h"
 #import <PromiseKit/PromiseKit.h>
+
+@class WKInputMentionItem;
 NS_ASSUME_NONNULL_BEGIN
 
 
@@ -164,6 +166,26 @@ NS_ASSUME_NONNULL_BEGIN
 -(void) sendRichTextMixedImageDatas:(NSArray<NSData*>*)imageDatas
                          assetCount:(NSUInteger)assetCount
                           extraText:(NSString*)extraText
+                          inContext:(id<WKConversationContext>)context
+                          onFailure:(void(^_Nullable)(void))onFailure;
+
+/**
+ 主聊天相册聚合发送（带 @ mention 变体）：在 [sendRichTextMixedImageDatas:...] 基础上注入
+ 调用方算好的 entities + mentionedInfo（caption VC 收集的 @人/@AI），发送前挂到
+ WKRichTextContent，与文本消息的 mention 走同一份 WKMessageContent 序列化路径，server / 对端
+ 按既有 mention.uids / humans / ais / entities 协议处理。mentions 数组允许为空（此时与上面那
+ 个不带 mention 的方法等价）。
+
+ @param mentions       caption 里 picker 选中的成员（含 sentinel uid"all"/"__ais__"），仅用于日志/扩展用途
+ @param entities       已算好的 mention range entities（来自 context entities:mentionCache:）
+ @param mentionedInfo  已算好的 WKMentionedInfo（来自 context mentionedInfo:mentionCache:）
+ */
+-(void) sendRichTextMixedImageDatas:(NSArray<NSData*>*)imageDatas
+                         assetCount:(NSUInteger)assetCount
+                          extraText:(NSString*)extraText
+                           mentions:(nullable NSArray<WKInputMentionItem*>*)mentions
+                           entities:(nullable NSArray<WKMessageEntity*>*)entities
+                      mentionedInfo:(nullable WKMentionedInfo*)mentionedInfo
                           inContext:(id<WKConversationContext>)context
                           onFailure:(void(^_Nullable)(void))onFailure;
 

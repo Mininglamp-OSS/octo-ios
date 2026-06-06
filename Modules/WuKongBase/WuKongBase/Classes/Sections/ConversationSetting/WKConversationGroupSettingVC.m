@@ -28,6 +28,8 @@
 #import "WKRealnamePrefetcher.h"
 #import "TOCropViewController.h"
 #import <SDWebImage/SDImageCache.h>
+#import <SDWebImage/SDAnimatedImage.h>
+#import "WKAvatarMediaFlow.h"
 
 @interface WKConversationGroupSettingVC ()<WKConversationSettingDelegate,WKSettingMemberGridViewDelegate,TOCropViewControllerDelegate>
 
@@ -649,7 +651,10 @@
         }];
     }]];
     [actionSheet addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"从手机相册选择") onClick:^{
-        [[WKPhotoService shared] getPhotoOneFromLibrary:^(UIImage * _Nonnull image) {
+        [WKAvatarMediaFlow pickAvatarFromLibraryWithHost:weakSelf
+                                              onAnimated:^(NSData *gifData) {
+            [weakSelf uploadAnimatedGroupAvatar:gifData];
+        } onStaticPicked:^(UIImage *image) {
             [weakSelf cropGroupAvatar:image];
         }];
     }]];
@@ -687,6 +692,47 @@
         WKChannelInfo *updatedInfo = [[WKSDK shared].channelManager getChannelInfo:weakSelf.channel];
         NSString *cacheURL = [WKAvatarUtil getGroupAvatar:weakSelf.channel.channelId cacheKey:updatedInfo.avatarCacheKey];
         [[SDImageCache sharedImageCache] storeImage:image forKey:cacheURL toDisk:YES completion:nil];
+        // 同步清掉无 cacheKey 版本的旧缓存（搜索 / 消息列表等大量入口使用），
+        // 否则那些位置仍会拿到上传前的旧头像。
+        [[SDImageCache sharedImageCache] removeImageForKey:[WKAvatarUtil getGroupAvatar:weakSelf.channel.channelId] withCompletion:nil];
+        [[WKSDK shared].channelManager fetchChannelInfo:weakSelf.channel completion:nil];
+        [weakSelf reloadData];
+    }];
+}
+
+#pragma mark - 动图群头像
+
+// 动图群头像（GIF / APNG / 动 WebP / 视频转 GIF）上传：跳过 TOCropViewController 与 JPEG 压缩，
+// 直接把字节扔后端；缓存层用 storeImageData: 保留动画。
+-(void) uploadAnimatedGroupAvatar:(NSData *)data {
+    NSString *path = [NSString stringWithFormat:@"groups/%@/avatar", self.channel.channelId];
+    __weak typeof(self) weakSelf = self;
+    [self.view showHUD:LLang(@"上传中")];
+    [[WKAPIClient sharedClient] fileUpload:path data:data progress:^(NSProgress *progress) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf.view switchHUDProgress:progress.fractionCompleted];
+        });
+    } completeCallback:^(id resposeObject, NSError *error) {
+        if (error) {
+            [weakSelf.view switchHUDSuccess:LLangW(@"上传失败", weakSelf)];
+            WKLogError(@"群动图头像上传失败 -> %@", error);
+            return;
+        }
+        [weakSelf.view switchHUDSuccess:LLangW(@"上传成功", weakSelf)];
+        [[WKSDK shared].channelManager refreshAvatarCacheKey:weakSelf.channel];
+        WKChannelInfo *updatedInfo = [[WKSDK shared].channelManager getChannelInfo:weakSelf.channel];
+        NSString *cacheURL = [WKAvatarUtil getGroupAvatar:weakSelf.channel.channelId
+                                                cacheKey:updatedInfo.avatarCacheKey];
+        UIImage *previewImg = [SDAnimatedImage imageWithData:data] ?: [UIImage imageWithData:data];
+        [[SDImageCache sharedImageCache] storeImage:previewImg
+                                           imageData:data
+                                              forKey:cacheURL
+                                              toDisk:YES
+                                          completion:nil];
+        // 同步清掉无 cacheKey 版本的旧缓存，理由同上方静态分支。
+        [[SDImageCache sharedImageCache] removeImageForKey:[WKAvatarUtil getGroupAvatar:weakSelf.channel.channelId] withCompletion:nil];
+        [[NSURLCache sharedURLCache] removeCachedResponseForRequest:
+            [NSURLRequest requestWithURL:[NSURL URLWithString:cacheURL]]];
         [[WKSDK shared].channelManager fetchChannelInfo:weakSelf.channel completion:nil];
         [weakSelf reloadData];
     }];

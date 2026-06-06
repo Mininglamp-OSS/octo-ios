@@ -1,7 +1,9 @@
 #import "WKGroupMdVC.h"
 #import "WKActionSheetView2.h"
+#import <WuKongBase/WuKongBase-Swift.h>
 
 #define WK_GROUPMD_MAX_BYTES 10240
+#define WK_GROUPMD_FONT_SIZE 14.0f
 
 static NSString * const kPlaceholderText = @"# 群组说明\n\n## 简介\n描述本群的用途和主题...\n\n## 规则\n1. 规则一\n2. 规则二\n\n## 常用链接\n- 链接一\n- 链接二\n";
 
@@ -74,7 +76,7 @@ static NSString * const kPlaceholderText = @"# 群组说明\n\n## 简介\n描述
         CGRect visibleRect = [self visibleRect];
         CGFloat bottomPadding = self.canEdit ? 50 : 10;
         _textView = [[UITextView alloc] initWithFrame:CGRectMake(16, visibleRect.origin.y + 10, self.view.lim_width - 32, visibleRect.size.height - bottomPadding)];
-        _textView.font = [UIFont fontWithName:@"Menlo" size:14.0f] ?: [UIFont monospacedSystemFontOfSize:14.0f weight:UIFontWeightRegular];
+        _textView.font = [UIFont fontWithName:@"Menlo" size:WK_GROUPMD_FONT_SIZE] ?: [UIFont monospacedSystemFontOfSize:WK_GROUPMD_FONT_SIZE weight:UIFontWeightRegular];
         _textView.textColor = [WKApp shared].config.defaultTextColor;
         _textView.backgroundColor = [WKApp shared].config.cellBackgroundColor;
         _textView.layer.cornerRadius = 8.0f;
@@ -157,14 +159,56 @@ static NSString * const kPlaceholderText = @"# 群组说明\n\n## 简介\n描述
 -(void) refreshUI:(NSString *)content {
     BOOL empty = (!content || [content isEqualToString:@""]);
 
-    self.textView.text = content;
+    // 不在编辑态时优先尝试 markdown 渲染；纯文本或编辑中走原始 text。
+    // 这样的好处是只读用户进来就能看到富文本，可编辑用户点进 textView 才看到原始 markdown，
+    // 不会误把渲染后的字符当成可输入字符。
+    if (!empty && ![self.textView isFirstResponder] && [self shouldRenderMarkdown:content]) {
+        [self applyMarkdownRender:content];
+    } else {
+        [self applyPlainText:content];
+    }
     self.placeholderLbl.hidden = !empty;
     [self updateByteCount];
 }
 
+-(BOOL) shouldRenderMarkdown:(NSString *)content {
+    if (content.length == 0) return NO;
+    return [WKMarkdownRenderer containsMarkdown:content];
+}
+
+-(void) applyMarkdownRender:(NSString *)content {
+    UIColor *textColor = [WKApp shared].config.defaultTextColor;
+    NSString *colorHex = [textColor toHexRGB];
+    NSAttributedString *attr = nil;
+    @try {
+        attr = [WKMarkdownRenderer render:content fontSize:WK_GROUPMD_FONT_SIZE textColorHex:colorHex dynamicTextColor:textColor];
+    } @catch (NSException *e) {
+        attr = nil;
+    }
+    if (attr.length > 0) {
+        self.textView.attributedText = attr;
+        // 修正 attributedText 之后 typingAttributes / 默认字号没同步，下次进入编辑态新输入字符会
+        // 拿到 markdown 渲染段尾的字体；这里手动复位到 Menlo / defaultTextColor。
+        self.textView.font = [UIFont fontWithName:@"Menlo" size:WK_GROUPMD_FONT_SIZE] ?: [UIFont monospacedSystemFontOfSize:WK_GROUPMD_FONT_SIZE weight:UIFontWeightRegular];
+        self.textView.textColor = textColor;
+    } else {
+        [self applyPlainText:content];
+    }
+}
+
+-(void) applyPlainText:(NSString *)content {
+    self.textView.font = [UIFont fontWithName:@"Menlo" size:WK_GROUPMD_FONT_SIZE] ?: [UIFont monospacedSystemFontOfSize:WK_GROUPMD_FONT_SIZE weight:UIFontWeightRegular];
+    self.textView.textColor = [WKApp shared].config.defaultTextColor;
+    self.textView.text = content ?: @"";
+}
+
 -(void) updateByteCount {
     if(!self.canEdit) return;
-    NSString *text = self.textView.text ?: @"";
+    // 关键：byte 计数读 self.originalContent，不能读 textView.text。
+    // 渲染态下 textView.attributedText 是格式化后的字符串，textView.text 会返回去掉 markdown
+    // 标记后的文本（比如 "**bold**" → "bold"），byte 数会偏小。textViewDidChange 已经把
+    // 编辑态的最新文本同步进 originalContent。
+    NSString *text = self.originalContent ?: @"";
     NSUInteger byteLen = [text lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
     self.byteCountLbl.text = [NSString stringWithFormat:@"%lu / %d bytes", (unsigned long)byteLen, WK_GROUPMD_MAX_BYTES];
     self.byteCountLbl.textColor = (byteLen > WK_GROUPMD_MAX_BYTES) ? [UIColor redColor] : [WKApp shared].config.tipColor;
@@ -173,7 +217,9 @@ static NSString * const kPlaceholderText = @"# 群组说明\n\n## 简介\n描述
 #pragma mark - Actions
 
 -(void) onSavePressed {
-    NSString *content = self.textView.text ?: @"";
+    // 读 originalContent 而不是 textView.text — 渲染态下 textView.text 会丢掉 markdown 标记。
+    // textViewDidChange 已经把编辑过程中的最新文本同步进 originalContent。
+    NSString *content = self.originalContent ?: @"";
     NSUInteger byteLen = [content lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
     if(byteLen > WK_GROUPMD_MAX_BYTES) {
         [self.view showMsg:LLang(@"内容超出大小限制")];
@@ -219,8 +265,24 @@ static NSString * const kPlaceholderText = @"# 群组说明\n\n## 简介\n描述
 
 #pragma mark - UITextViewDelegate
 
+-(void) textViewDidBeginEditing:(UITextView *)textView {
+    // 进入编辑态：把当前显示从 markdown 渲染态切回原始文本，方便用户改 markdown 源串。
+    [self applyPlainText:self.originalContent];
+}
+
+-(void) textViewDidEndEditing:(UITextView *)textView {
+    // 退出编辑态：用最新文本再渲染一次（用户可能按了 done 而没点保存）。
+    NSString *current = textView.text ?: @"";
+    if ([self shouldRenderMarkdown:current]) {
+        [self applyMarkdownRender:current];
+    }
+}
+
 -(void) textViewDidChange:(UITextView *)textView {
-    BOOL empty = (!textView.text || [textView.text isEqualToString:@""]);
+    // 编辑过程中 textView.text 是原始字符串（textViewDidBeginEditing 已切回 plain），
+    // 同步进 originalContent 让 save / byteCount 用同一份 truth。
+    self.originalContent = textView.text ?: @"";
+    BOOL empty = (self.originalContent.length == 0);
     self.placeholderLbl.hidden = !empty;
     [self updateByteCount];
 }

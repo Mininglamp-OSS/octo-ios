@@ -7,6 +7,8 @@
 #import "WKAllGroupListVM.h"
 #import "WKContactsCell.h"
 #import "WKChineseSort.h"
+#import "WKContactFollowHelper.h"
+#import <WuKongBase/WKFollowedKeysStore.h>
 
 @interface WKAllGroupListVC () <UITableViewDataSource, UITableViewDelegate>
 
@@ -26,7 +28,23 @@
     self.items = [NSMutableArray array];
     self.sectionTitleArr = [NSMutableArray array];
     [self.view addSubview:self.tableView];
+
+    // 长按 cell → 弹"关注 / 取消关注"菜单（与联系人 tab 同款 helper，Group 走
+    // refollowChannel + moveGroup 链）
+    UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(onGroupLongPress:)];
+    lp.minimumPressDuration = 0.4;
+    [self.tableView addGestureRecognizer:lp];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                              selector:@selector(onFollowedKeysUpdate)
+                                                  name:kWKFollowedKeysStoreDidUpdateNotification
+                                                object:nil];
+
     [self requestData];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (UITableView *)tableView {
@@ -56,6 +74,7 @@
             WKContactsCellModel *model = [WKContactsCellModel new];
             model.uid = group.groupNo;
             model.name = group.displayName;
+            model.isGroup = YES; // 让 cell 的关注图标走 WKFollowTargetTypeChannel
             WKChannelInfo *channelInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:group.groupNo channelType:WK_GROUP]];
             NSString *cacheKey = (channelInfo && channelInfo.avatarCacheKey.length > 0) ? channelInfo.avatarCacheKey : nil;
             model.avatar = [WKAvatarUtil getGroupAvatar:group.groupNo cacheKey:cacheKey];
@@ -146,6 +165,38 @@
     if (self.items.count <= indexPath.section || self.items[indexPath.section].count <= indexPath.row) return;
     WKContactsCellModel *model = self.items[indexPath.section][indexPath.row];
     [[WKApp shared] pushConversation:[[WKChannel alloc] initWith:model.uid channelType:WK_GROUP]];
+}
+
+#pragma mark - 长按关注菜单
+
+- (void)onGroupLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan) return;
+    CGPoint pInTable = [gesture locationInView:self.tableView];
+    NSIndexPath *ip = [self.tableView indexPathForRowAtPoint:pInTable];
+    if (!ip) return;
+    if (ip.section >= (NSInteger)self.items.count) return;
+    NSArray *sectionItems = self.items[ip.section];
+    if (ip.row >= (NSInteger)sectionItems.count) return;
+    WKContactsCellModel *model = sectionItems[ip.row];
+    if (![model isKindOfClass:[WKContactsCellModel class]] || model.uid.length == 0) return;
+
+    UIWindow *window = [UIApplication sharedApplication].keyWindow ?: [UIApplication sharedApplication].windows.firstObject;
+    CGPoint pInWindow = [self.tableView convertPoint:pInTable toView:window];
+    WKChannel *channel = [[WKChannel alloc] initWith:model.uid channelType:WK_GROUP];
+    [WKContactFollowHelper showFollowMenuForChannel:channel
+                                     atPointInWindow:pInWindow
+                                       presentingVC:self
+                                        onDidChange:nil];
+}
+
+- (void)onFollowedKeysUpdate {
+    NSArray<NSIndexPath *> *visible = self.tableView.indexPathsForVisibleRows;
+    if (visible.count == 0) return;
+    @try {
+        [self.tableView reloadRowsAtIndexPaths:visible withRowAnimation:UITableViewRowAnimationNone];
+    } @catch (NSException *ex) {
+        [self.tableView reloadData];
+    }
 }
 
 @end

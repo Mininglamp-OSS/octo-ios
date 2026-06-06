@@ -27,17 +27,19 @@
     self = [super init];
     if (self) {
         self.vm = [WKGlobalSearchVM new];
-        self.vm.enablePullup = true;
         self.viewModel = self.vm;
     }
     return self;
 }
 
 - (void)viewDidLoad {
-    
+
     self.vm.searchType = self.searchType;
     self.vm.channel = self.channel;
-    
+    // 仅频道内搜索（媒体/远程结果）需要上拉分页；全局搜索（聊天/联系人/群组/文件）
+    // 数据均为本地或一次性返回，不分页 —— 否则会残留一个一直转的上拉小菊花。
+    self.vm.enablePullup = (self.channel != nil);
+
     [super viewDidLoad];
    
     [self.navigationBar addSubview:self.searchBarView];
@@ -50,9 +52,17 @@
     self.vm.keyword = self.keyword;
     
     [[WKSDK shared].channelManager addDelegate:self];
-    
+
     self.tabbar.lim_bottom = self.tableView.lim_top;
-    
+
+    // 入口决定默认 tab：searchType==Contacts(通讯录搜索框入口) → 联系人 tab(index 1)；
+    // 其它入口（会话列表搜索框, 默认 All）走 tab 0(聊天) 不动。tab 顺序定义见
+    // -tabbar getter: 聊天 / [联系人 / 群组] / (媒体) / 文件。频道内搜索时联系人 tab
+    // 不存在，加 !searchInChannel 守卫避免误切到群组 tab。
+    if (self.searchType == WKHistoryMessageSearchTypeContacts && !self.vm.searchInChannel) {
+        [self.tabbar selectItemAtIndex:1];
+    }
+
 }
 - (CGRect)tableViewFrame {
     CGRect rect = [self visibleRect];
@@ -125,7 +135,10 @@
         }
         
         
-        if(existFileModule) {
+        // 全局搜索的「文件」tab 改为内置本地文件名搜索（不依赖
+        // WKPOINT_SEARCH_ITEM_FILE 模块），即使未注册文件模块也始终显示。
+        // in-channel 场景仍只在注册了文件模块时显示，沿用原模块逻辑。
+        if(existFileModule || !self.vm.searchInChannel) {
             [items addObject:[[WKTabbarItem alloc] initWithTitle:LLang(@"文件") onClick:^{
                 [weakSelf.vm changeTabType:@"file"];
             }]];

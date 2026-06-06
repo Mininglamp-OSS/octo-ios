@@ -78,6 +78,7 @@
     model.vercode = dictory[@"vercode"]?:@"";
     model.inviteUID = dictory[@"invite_uid"] ?: @"";
     model.robot = [dictory[@"robot"] integerValue]==1;
+    model.botAdmin = [dictory[@"bot_admin"] integerValue]==1;
     model.isDeleted = [dictory[@"is_deleted"] integerValue]==1;
     model.createdAt = dictory[@"created_at"];
     model.updatedAt = dictory[@"updated_at"];
@@ -126,6 +127,9 @@
     channelMember.isDeleted = self.isDeleted;
     channelMember.role = self.role;
     channelMember.robot = self.robot;
+    if(self.botAdmin) {
+        channelMember.extra[@"bot_admin"] = @(1);
+    }
     channelMember.status = self.status==0?1:self.status;
     if(self.vercode) {
         channelMember.extra[@"vercode"] = self.vercode;

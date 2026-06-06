@@ -4,6 +4,7 @@
 #import "WKApp.h"
 #import "WKNavigationManager.h"
 #import "WKRootNavigationController.h"
+#import "WKCSVRenderer.h"
 #include <libcmark_gfm/cmark-gfm.h>
 #include <libcmark_gfm/cmark-gfm-core-extensions.h>
 
@@ -186,6 +187,13 @@ static UIWindow *_previousKeyWindow = nil;
 
 - (void)setupWebViewInFrame:(CGRect)frame {
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
+    // 远程下载的 markdown / CSV / 纯文本属于不可信内容, 关掉 JS 防御 inline
+    // <img onerror>/javascript: scheme 等 XSS 向量 (PR #32 R5 安全修复)。本 VC
+    // 不挂 bridge, 所以仅是防御性 hardening, 与 WKWebViewVC 的 nextNavigationDisablesJS
+    // 同源策略对齐。
+    if (@available(iOS 14.0, *)) {
+        config.defaultWebpagePreferences.allowsContentJavaScript = NO;
+    }
     self.webView = [[WKWebView alloc] initWithFrame:frame configuration:config];
     self.webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.webView.opaque = NO;
@@ -199,9 +207,10 @@ static UIWindow *_previousKeyWindow = nil;
 
     NSString *ext = self.fileURL.pathExtension.lowercaseString;
     BOOL isMarkdown = [ext isEqualToString:@"md"] || [ext isEqualToString:@"markdown"];
+    BOOL isCSV = [ext isEqualToString:@"csv"];
     BOOL isPlainText = [ext isEqualToString:@"txt"] || [ext isEqualToString:@"log"] ||
         [ext isEqualToString:@"json"] || [ext isEqualToString:@"xml"] ||
-        [ext isEqualToString:@"csv"] || [ext isEqualToString:@"yml"] ||
+        [ext isEqualToString:@"yml"] ||
         [ext isEqualToString:@"yaml"] || [ext isEqualToString:@"ini"] ||
         [ext isEqualToString:@"conf"] || [ext isEqualToString:@"sh"] ||
         [ext isEqualToString:@"swift"] || [ext isEqualToString:@"java"] ||
@@ -211,6 +220,8 @@ static UIWindow *_previousKeyWindow = nil;
 
     if (isMarkdown) {
         [self loadMarkdownFile];
+    } else if (isCSV) {
+        [self loadCSVFile];
     } else if (isPlainText) {
         [self loadPlainTextFile];
     } else {
@@ -376,10 +387,14 @@ static UIWindow *_previousKeyWindow = nil;
         if (ext) cmark_parser_attach_syntax_extension(parser, ext);
     }
     const char *utf8 = [text UTF8String];
-    cmark_parser_feed(parser, utf8, strlen(utf8));
+    // 用 lengthOfBytesUsingEncoding 而非 strlen, 避免 text 含嵌入 NUL 时被截断 (PR #32 review)。
+    NSUInteger utf8Len = [text lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    cmark_parser_feed(parser, utf8, utf8Len);
     cmark_node *doc = cmark_parser_finish(parser);
     char *htmlCStr = cmark_render_html(doc, CMARK_OPT_DEFAULT, cmark_parser_get_syntax_extensions(parser));
-    NSString *body = [NSString stringWithUTF8String:htmlCStr];
+    // 加 ?: @"" 守卫: cmark 在异常情况下返回的 C 字符串可能不是合法 UTF-8,
+    // stringWithUTF8String: 失败会返 nil, 不加守卫拼到 HTML 里会变成 "(null)" (PR #32 review)。
+    NSString *body = [NSString stringWithUTF8String:htmlCStr] ?: @"";
     free(htmlCStr);
     cmark_node_free(doc);
     cmark_parser_free(parser);
@@ -388,6 +403,17 @@ static UIWindow *_previousKeyWindow = nil;
         @"<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
         @"<style>%@</style></head><body>%@</body></html>", [self markdownCSS], body];
 
+    [self.webView loadHTMLString:html baseURL:self.fileURL.URLByDeletingLastPathComponent];
+}
+
+#pragma mark - CSV (按表格渲染：首行表头 sticky，可横向 + 纵向滚动)
+
+- (void)loadCSVFile {
+    NSData *data = [NSData dataWithContentsOfURL:self.fileURL];
+    if (!data) return;
+    NSString *text = [self decodeTextFromData:data];
+    BOOL isDark = [WKApp shared].config.style == WKSystemStyleDark;
+    NSString *html = [WKCSVRenderer htmlFromCSVText:text darkMode:isDark];
     [self.webView loadHTMLString:html baseURL:self.fileURL.URLByDeletingLastPathComponent];
 }
 
