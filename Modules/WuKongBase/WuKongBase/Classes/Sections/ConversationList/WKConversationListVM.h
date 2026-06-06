@@ -41,6 +41,15 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 
 -(void) reset; // 重置数据
 
+/// 是否应在当前空间显示该会话。复用主会话列表的全套空间过滤逻辑:
+///   - 系统通知 / 文件助手 全局放行
+///   - BotFather 当前空间未隐藏时放行
+///   - WK_GROUP: WKSpaceFilter Skip → 过滤; FailOpen 时降级走 syncedGroupChannelIds 白名单
+///   - WK_PERSON: WKSpaceFilter Skip → 过滤; FailOpen 时看 lastMessage.content.space_id 兜底
+/// 转发选择 / 新建会话目录等独立 VC 通过 [WKConversationListVM shared] 复用此过滤,
+/// 避免重复实现导致与主列表不一致 (白名单 race / FailOpen 漏过等场景)。
+-(BOOL) shouldShowConversation:(WKConversation*)conversation;
+
 /// sync完成后调用：记录当前VM中的群聊channelId作为"当前空间合法群聊"白名单
 /// shouldShowConversation: 中会用此白名单过滤其他空间的群聊
 -(void) snapshotSyncedGroupIds;

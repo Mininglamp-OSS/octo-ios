@@ -20,6 +20,7 @@
 #import "WKThreadModel.h"
 #import "WKThreadService.h"
 #import "WKSpaceFilter.h"
+#import "WKConversationListVM.h"
 #import "WKSearchbarView.h"
 #import "WKForwardConfirmPanel.h"
 #import "WKForwardDirectoryVC.h"
@@ -457,24 +458,14 @@ typedef NS_ENUM(NSInteger, FWItemType) {
 
 #pragma mark - Filtering helpers
 
-// 按当前空间过滤会话: 与主会话列表 isConversationInCurrentSpace 主路径同款
-// (WKSpaceFilter 决策 + 系统通知/文件助手/botfather 全局放行); 不复制主列表
-// 的 Bot DM lastMessage.space_id / 切换闸门等 race-handling, 转发候选对边缘
-// noise 不敏感, 主路径过滤已经足够 (PR feedback: 之前最近 tab 无空间过滤,
-// 跨空间的会话也显示)。
+// 按当前空间过滤会话: 直接复用主列表 WKConversationListVM (singleton) 的
+// shouldShowConversation:, 与主会话列表完全一致 — 含 WKSpaceFilter 决策 + 系统/
+// 文件助手/BotFather 放行 + WK_GROUP FailOpen 时降级走 syncedGroupChannelIds
+// 白名单 + WK_PERSON FailOpen 时看 lastMessage.content.space_id 兜底。
+// 子区由父群代表 anchor, 转发候选放行 (子区关闭/删除另由 isTopicChannelVisible 过滤)。
 - (BOOL)shouldKeepConversationForSpace:(WKConversation *)conv {
-    NSString *cid = conv.channel.channelId;
-    if (cid.length == 0) return NO;
-    // 系统通知 / 文件助手 / botfather 是全局会话, 始终放行
-    if ([cid isEqualToString:[WKApp shared].config.systemUID] ||
-        [cid isEqualToString:[WKApp shared].config.fileHelperUID] ||
-        [cid isEqualToString:[WKApp shared].config.botfatherUID]) {
-        return YES;
-    }
-    // 子区跟随父群 (父群被过滤掉则子区在 UI 中无 anchor 显示, 与主列表一致)
     if (conv.channel.channelType == WK_COMMUNITY_TOPIC) return YES;
-    return ![[WKSpaceFilter shared] shouldSkipChannelForSpace:cid
-                                                  channelType:conv.channel.channelType];
+    return [[WKConversationListVM shared] shouldShowConversation:conv];
 }
 
 // 子区在最近 tab 是否可见: 过滤掉已关闭/删除的子区。
