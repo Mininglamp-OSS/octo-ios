@@ -168,25 +168,41 @@ post_install do |installer|
     # "symbol not found in flat namespace '_OBJC_CLASS_$_Bugly'" 直接 abort
     # (build 64 现网命中)。改用 -force_load 把 Bugly framework 整个 .o 强制
     # 吸进主 App 二进制，绕过 -ObjC 启发式，dead strip 触不到。
-    # 注意: -force_load 和 -framework "Bugly" 同时存在会把 Bugly 静态库
+    #
+    # 路径分两种 Bugly 集成方式：
+    #   * pod 模式 (OCTO_BUGLY_APP_ID_MAIN 配了): $(PODS_ROOT)/Bugly/Bugly.framework/Bugly
+    #   * local framework 模式 (用户手动放 .framework): $(SRCROOT)/Modules/WuKongBase/WuKongBase/Bugly.framework/Bugly
+    #     主 App aggregate xcconfig 里 $(SRCROOT) = 项目根, 与 podspec 里
+    #     File.expand_path('Modules/WuKongBase/...', __dir__) 一致.
+    # 写错路径 -force_load 会让 ld 报 file not found, archive 直接挂.
+    #
+    # 注意 1: -force_load 和 -framework "Bugly" 同时存在会把 Bugly 静态库
     # load 两遍 → 420 duplicate symbol。所以一定要同步把 -framework "Bugly"
     # 抠掉，只留 -force_load 这一份。
-    # 还要把主 App 的 STRIP_STYLE 从默认 "all" 改成 "debugging" —— 否则
-    # archive 阶段 strip 会把 Bugly classes 的 external symbol (例如
+    # 注意 2: 还要把主 App 的 STRIP_STYLE 从默认 "all" 改成 "debugging" ——
+    # 否则 archive 阶段 strip 会把 Bugly classes 的 external symbol (例如
     # _OBJC_CLASS_$_Bugly) 一并 strip 掉, WuKongBase 在 dyld load 时通过
     # flat namespace 查找仍然落空, 跟修之前 (build 64) 同款 abort。
     # `debugging` 只 strip 调试符号, external symbols 保留 → dyld 能解到。
     # xcodebuild build 默认 DEPLOYMENT_POSTPROCESSING=NO 所以不 strip,
     # archive 默认开 strip → 必须显式覆盖。
-    # 幂等: 已含 force_load 就跳过 (回归到只有 -framework "Bugly" 的状态
-    # 会重新触发 strip + 注入)。
+    # 幂等: 用专门的 marker comment (不是字符串 match force_load_flag),
+    # 这样以后改路径不会漏处理已 patched 的 xcconfig.
     # ─────────────────────────────────────────────────────────────────────
     if bugly_enabled
-        force_load_flag = '-force_load "$(PODS_ROOT)/Bugly/Bugly.framework/Bugly"'
+        bugly_binary_path = if bugly_installed_via_pod
+                                '$(PODS_ROOT)/Bugly/Bugly.framework/Bugly'
+                            else
+                                # local framework 模式: __dir__ = 项目根, 用 $(SRCROOT)
+                                # 主 App SRCROOT = .xcodeproj 同级 = 项目根
+                                '$(SRCROOT)/Modules/WuKongBase/WuKongBase/Bugly.framework/Bugly'
+                            end
+        force_load_flag = "-force_load \"#{bugly_binary_path}\""
+        bugly_marker = '# bugly-force-load-injected (Podfile post_install)'
         aggregate_xcconfigs.each do |xcconfig_path|
             content = File.read(xcconfig_path)
-            already_injected = content.include?(force_load_flag)
-            unless already_injected
+            already_patched = content.include?(bugly_marker)
+            unless already_patched
                 changed = false
                 # 删掉 CocoaPods 自动写入的 -framework "Bugly"，否则跟 -force_load
                 # 串联 link 会把 Bugly 静态库吸两遍, ld 报 duplicate symbol.
@@ -201,20 +217,18 @@ post_install do |installer|
                 else
                     content += "\nOTHER_LDFLAGS = $(inherited) #{force_load_flag}\n"
                 end
-                puts "🔗 Swapped -framework \"Bugly\" → -force_load in #{File.basename(xcconfig_path)} (主 App 强制 link)" if changed
-                puts "🔗 Injected -force_load Bugly into #{File.basename(xcconfig_path)} (主 App 强制 link)" unless changed
-            end
-            # 强制保留 external symbols（含 _OBJC_CLASS_$_Bugly 等），
-            # 否则 archive 时 STRIP_STYLE=all 会把 force_load 进来的符号 strip 掉。
-            unless content =~ /^STRIP_STYLE\s*=\s*debugging/
+                # 强制保留 external symbols（含 _OBJC_CLASS_$_Bugly 等），
+                # 否则 archive 时 STRIP_STYLE=all 会把 force_load 进来的符号 strip 掉。
                 if content =~ /^STRIP_STYLE\s*=.*$/
                     content = content.sub(/^STRIP_STYLE\s*=.*$/, 'STRIP_STYLE = debugging')
                 else
                     content += "\nSTRIP_STYLE = debugging\n"
                 end
-                puts "🔧 Set STRIP_STYLE=debugging in #{File.basename(xcconfig_path)} (保留 Bugly external symbols 让 dyld flat namespace 解析)"
+                # 写 marker 在文件末尾, 下次 pod install 通过它检测幂等.
+                content += "\n#{bugly_marker} source=#{bugly_source}\n"
+                File.write(xcconfig_path, content)
+                puts "🔗 Patched #{File.basename(xcconfig_path)}: force_load=#{bugly_binary_path}, STRIP_STYLE=debugging (主 App 强制 link Bugly, source=#{bugly_source}, swapped_framework=#{changed})"
             end
-            File.write(xcconfig_path, content)
         end
     end
 
