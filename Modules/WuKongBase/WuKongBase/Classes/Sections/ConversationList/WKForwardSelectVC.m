@@ -19,6 +19,7 @@
 #import "WKConversationTabView.h"
 #import "WKThreadModel.h"
 #import "WKThreadService.h"
+#import "WKSpaceFilter.h"
 #import "WKSearchbarView.h"
 #import "WKForwardConfirmPanel.h"
 #import "WKForwardDirectoryVC.h"
@@ -413,6 +414,8 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     _allConversations = [NSMutableArray array];
     for (WKConversation *conv in conversations) {
         // 不再过滤 WK_COMMUNITY_TOPIC —— 最近 tab 要展示子区会话，关注 tab 也要用子区 followed 集合。
+        // 按当前空间过滤 (跨空间的会话不应出现在转发候选里)。
+        if (![self shouldKeepConversationForSpace:conv]) continue;
         [_allConversations addObject:[[WKConversationWrapModel alloc] initWithConversation:conv]];
     }
     [self sortList:_allConversations];
@@ -438,7 +441,8 @@ typedef NS_ENUM(NSInteger, FWItemType) {
         NSArray<WKConversation *> *conversations = [[WKSDK shared].conversationManager getConversationList];
         [ws.allConversations removeAllObjects];
         for (WKConversation *conv in conversations) {
-            // 与 loadData 保持一致：含 WK_COMMUNITY_TOPIC。
+            // 与 loadData 保持一致：含 WK_COMMUNITY_TOPIC + 当前空间过滤。
+            if (![ws shouldKeepConversationForSpace:conv]) continue;
             [ws.allConversations addObject:[[WKConversationWrapModel alloc] initWithConversation:conv]];
         }
         [ws sortList:ws.allConversations];
@@ -449,6 +453,54 @@ typedef NS_ENUM(NSInteger, FWItemType) {
             [ws retryLoadDataWithCount:count + 1];
         }
     });
+}
+
+#pragma mark - Filtering helpers
+
+// 按当前空间过滤会话: 与主会话列表 isConversationInCurrentSpace 主路径同款
+// (WKSpaceFilter 决策 + 系统通知/文件助手/botfather 全局放行); 不复制主列表
+// 的 Bot DM lastMessage.space_id / 切换闸门等 race-handling, 转发候选对边缘
+// noise 不敏感, 主路径过滤已经足够 (PR feedback: 之前最近 tab 无空间过滤,
+// 跨空间的会话也显示)。
+- (BOOL)shouldKeepConversationForSpace:(WKConversation *)conv {
+    NSString *cid = conv.channel.channelId;
+    if (cid.length == 0) return NO;
+    // 系统通知 / 文件助手 / botfather 是全局会话, 始终放行
+    if ([cid isEqualToString:[WKApp shared].config.systemUID] ||
+        [cid isEqualToString:[WKApp shared].config.fileHelperUID] ||
+        [cid isEqualToString:[WKApp shared].config.botfatherUID]) {
+        return YES;
+    }
+    // 子区跟随父群 (父群被过滤掉则子区在 UI 中无 anchor 显示, 与主列表一致)
+    if (conv.channel.channelType == WK_COMMUNITY_TOPIC) return YES;
+    return ![[WKSpaceFilter shared] shouldSkipChannelForSpace:cid
+                                                  channelType:conv.channel.channelType];
+}
+
+// 子区在最近 tab 是否可见: 过滤掉已关闭/删除的子区。
+// 两个判定信号互为兜底:
+//   1) channelInfo.displayName 空 → server 端不再下发 thread info, 大概率是
+//      关闭/删除 (cache miss 也会空, 但即便误判, 没名字的子区用户也用不上)
+//   2) _threadCache 已加载 (_threadsLoaded=YES) 但找不到该 channelId →
+//      server 端不再返回 = WKThreadStatus Archived / Deleted
+// fail-open: thread cache 未加载时不过滤, 等用户后续刷新自然收敛, 避免错过滤。
+- (BOOL)isTopicChannelVisible:(WKConversationWrapModel *)m {
+    NSString *displayName = m.channelInfo ? m.channelInfo.displayName : @"";
+    if (displayName.length == 0) return NO;
+    if (!_threadsLoaded) return YES;
+    NSString *cid = m.channel.channelId;
+    // 子区 channelId 格式: "groupNo____shortId" (4 下划线, 见 WKThreadModel.h:21)
+    NSArray *parts = [cid componentsSeparatedByString:@"____"];
+    if (parts.count < 2) return YES;
+    NSString *groupNo = parts[0];
+    NSArray<WKThreadModel *> *threads = _threadCache[groupNo];
+    if (threads.count == 0) return YES;  // 父群的 thread 列表还没拉到, fail-open
+    for (WKThreadModel *t in threads) {
+        if ([t.channelId isEqualToString:cid]) {
+            return t.status == WKThreadStatusActive;
+        }
+    }
+    return NO;  // thread 列表已加载但找不到这个 channelId → 已 archived/deleted
 }
 
 - (void)loadCategories {
@@ -599,7 +651,11 @@ typedef NS_ENUM(NSInteger, FWItemType) {
         NSMutableArray<WKConversationWrapModel *> *flat = [NSMutableArray array];
         for (WKConversationWrapModel *m in _allConversations) {
             uint8_t type = m.channel.channelType;
-            if (type == WK_PERSON || type == WK_GROUP || type == WK_COMMUNITY_TOPIC) {
+            if (type == WK_PERSON || type == WK_GROUP) {
+                [flat addObject:m];
+            } else if (type == WK_COMMUNITY_TOPIC) {
+                // 过滤掉已关闭/删除的子区 + 名字空的子区
+                if (![self isTopicChannelVisible:m]) continue;
                 [flat addObject:m];
             }
         }
@@ -672,6 +728,8 @@ typedef NS_ENUM(NSInteger, FWItemType) {
         } else {
             // 最近 tab 搜索范围：DM + 群 + 子区。
             if (type != WK_PERSON && type != WK_GROUP && type != WK_COMMUNITY_TOPIC) continue;
+            // 子区: 过滤已关闭/删除 (与 filterAndDisplay 最近 tab 同口径)
+            if (type == WK_COMMUNITY_TOPIC && ![self isTopicChannelVisible:m]) continue;
         }
         NSString *name = m.channelInfo ? m.channelInfo.displayName : @"";
         if (![name.lowercaseString containsString:lower]) continue;
