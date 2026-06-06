@@ -156,6 +156,68 @@ post_install do |installer|
         File.write(xcconfig_path, content)
     end
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Bugly 主 App 强制 link (2026-06)
+    # WuKongBase 用 -Wl,-undefined,dynamic_lookup 跳过 link-time 检查 (见
+    # WuKongBase.podspec)，期望主 App 二进制里有 Bugly classes，runtime 由
+    # Obj-C flat namespace 把 WuKongBase 那侧的悬空 _OBJC_CLASS_$_Bugly 等
+    # 符号解到主 App。CocoaPods 默认给主 App aggregate xcconfig 加的
+    # `-ObjC -framework "Bugly"` 在 Debug 模式靠 -ObjC 启发式把 ObjC class 拉
+    # 进二进制能 work，但 Release archive 时 LTO + dead-code strip 可能漏掉
+    # 静态 framework 的 class，TestFlight 包启动时 dyld 报
+    # "symbol not found in flat namespace '_OBJC_CLASS_$_Bugly'" 直接 abort
+    # (build 64 现网命中)。改用 -force_load 把 Bugly framework 整个 .o 强制
+    # 吸进主 App 二进制，绕过 -ObjC 启发式，dead strip 触不到。
+    # 注意: -force_load 和 -framework "Bugly" 同时存在会把 Bugly 静态库
+    # load 两遍 → 420 duplicate symbol。所以一定要同步把 -framework "Bugly"
+    # 抠掉，只留 -force_load 这一份。
+    # 还要把主 App 的 STRIP_STYLE 从默认 "all" 改成 "debugging" —— 否则
+    # archive 阶段 strip 会把 Bugly classes 的 external symbol (例如
+    # _OBJC_CLASS_$_Bugly) 一并 strip 掉, WuKongBase 在 dyld load 时通过
+    # flat namespace 查找仍然落空, 跟修之前 (build 64) 同款 abort。
+    # `debugging` 只 strip 调试符号, external symbols 保留 → dyld 能解到。
+    # xcodebuild build 默认 DEPLOYMENT_POSTPROCESSING=NO 所以不 strip,
+    # archive 默认开 strip → 必须显式覆盖。
+    # 幂等: 已含 force_load 就跳过 (回归到只有 -framework "Bugly" 的状态
+    # 会重新触发 strip + 注入)。
+    # ─────────────────────────────────────────────────────────────────────
+    if bugly_enabled
+        force_load_flag = '-force_load "$(PODS_ROOT)/Bugly/Bugly.framework/Bugly"'
+        aggregate_xcconfigs.each do |xcconfig_path|
+            content = File.read(xcconfig_path)
+            already_injected = content.include?(force_load_flag)
+            unless already_injected
+                changed = false
+                # 删掉 CocoaPods 自动写入的 -framework "Bugly"，否则跟 -force_load
+                # 串联 link 会把 Bugly 静态库吸两遍, ld 报 duplicate symbol.
+                if content =~ /\s*-framework\s+"Bugly"/
+                    content = content.gsub(/\s*-framework\s+"Bugly"/, '')
+                    changed = true
+                end
+                if content =~ /^OTHER_LDFLAGS\s*=\s*(.*)$/
+                    content = content.sub(/^OTHER_LDFLAGS\s*=\s*(.*)$/) do
+                        "OTHER_LDFLAGS = #{$1.rstrip} #{force_load_flag}"
+                    end
+                else
+                    content += "\nOTHER_LDFLAGS = $(inherited) #{force_load_flag}\n"
+                end
+                puts "🔗 Swapped -framework \"Bugly\" → -force_load in #{File.basename(xcconfig_path)} (主 App 强制 link)" if changed
+                puts "🔗 Injected -force_load Bugly into #{File.basename(xcconfig_path)} (主 App 强制 link)" unless changed
+            end
+            # 强制保留 external symbols（含 _OBJC_CLASS_$_Bugly 等），
+            # 否则 archive 时 STRIP_STYLE=all 会把 force_load 进来的符号 strip 掉。
+            unless content =~ /^STRIP_STYLE\s*=\s*debugging/
+                if content =~ /^STRIP_STYLE\s*=.*$/
+                    content = content.sub(/^STRIP_STYLE\s*=.*$/, 'STRIP_STYLE = debugging')
+                else
+                    content += "\nSTRIP_STYLE = debugging\n"
+                end
+                puts "🔧 Set STRIP_STYLE=debugging in #{File.basename(xcconfig_path)} (保留 Bugly external symbols 让 dyld flat namespace 解析)"
+            end
+            File.write(xcconfig_path, content)
+        end
+    end
+
     # 把 OctoConfig.xcconfig 软引用注入到每一个 Pods xcconfig。
     # 路径深度：xcconfig 位于 Pods/Target Support Files/<Pod>/<Pod>.<config>.xcconfig，
     # 距离仓库根 (OctoConfig.xcconfig) 需要回退 3 层。`#include?` 静默失败，
