@@ -145,6 +145,10 @@ static const CGFloat kRingSide = 72.0f;
         dispatch_async(dispatch_get_main_queue(), ^{ [ws dismiss]; });
         return;
     }
+    // 必须 nil 掉 onCancel: 调用方 (WKPhotoService) 在 block 里 strong-capture hud,
+    // 形成 hud → _onCancel block → hud 闭环; 不主动断, HUD + 闭包链 (transitively 含
+    // avatar VC 回调) 每次都漏 (PR #32 R7 review)。
+    self.onCancel = nil;
     [UIView animateWithDuration:0.18
                      animations:^{ self.alpha = 0; }
                      completion:^(BOOL finished) { [self removeFromSuperview]; }];

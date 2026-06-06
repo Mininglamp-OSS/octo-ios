@@ -205,13 +205,16 @@ static WKPhotoService *_instance;
             }
         };
 
+        // 用 weak 引用 hud, 避免 block strong capture 形成 hud → onCancel → hud 闭环
+        // (PR #32 R7 review)。dismiss 内部也已 nil onCancel 做双重防御。
+        __weak typeof(hud) weakHud = hud;
         hud.onCancel = ^{
             cancelled = YES;
             if (loadProgress && !loadProgress.isCancelled) {
                 [loadProgress cancel];
             }
             stopPoll();
-            [hud dismiss];
+            [weakHud dismiss];
             complete(nil, nil, NO);
         };
 
