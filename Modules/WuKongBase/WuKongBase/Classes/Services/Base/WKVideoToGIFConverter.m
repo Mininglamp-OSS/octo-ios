@@ -197,6 +197,17 @@ static const NSUInteger kTierCount = sizeof(kTiers) / sizeof(WKGIFTier);
         if (pixelBuffer) {
             CIImage *ci = [CIImage imageWithCVPixelBuffer:pixelBuffer];
             ci = [ci imageByApplyingTransform:preferred];
+            // 解码时立即按"短边 ≤ 最高档 dim"下采样, 避免按源原生分辨率全帧缓存:
+            // 4K (3840×2160) 一帧 BGRA ~33 MB × 50 帧 ≈ 1.6 GB 必 OOM (PR #32 review)。
+            // 缩到 256 短边后单帧 ≤ 0.3 MB, 50 帧 ≈ 13 MB, 与最终输出尺寸一致, 不损失信息。
+            CGFloat sw = ci.extent.size.width;
+            CGFloat sh = ci.extent.size.height;
+            CGFloat minSide = MIN(sw, sh);
+            CGFloat maxDim = kTiers[0].dim;  // 最高档边长, 当前是 256
+            if (minSide > maxDim && minSide > 0) {
+                CGFloat scale = maxDim / minSide;
+                ci = [ci imageByApplyingTransform:CGAffineTransformMakeScale(scale, scale)];
+            }
             static CIContext *ctx = nil;
             static dispatch_once_t once;
             dispatch_once(&once, ^{
