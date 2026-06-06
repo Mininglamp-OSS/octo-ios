@@ -399,21 +399,29 @@
     // 可能落到已删除消息 seq → getOrderSeq 返 0 → keepPosition 失效退化到最底部;
     // 子区/远端 reconcile race 也可能让 unreadCount 偏小, 同样退化。
     if(newMsgCount > 0 && conversationLastMessage) {
-        uint32_t firstUnreadSeq = 0;
         uint32_t lastReadSeq = [[WKUnreadStore shared] lastReadSeqForChannel:self.channel];
         uint32_t lastMsgSeq = [[WKSDK shared].chatManager getOrNearbyMessageSeq:conversationLastMessage.orderSeq];
+        // readBoundary = "最后一条已读" 的 seq:
+        //   - 首选 lastReadSeq (上次离开会话时精确写入, 不受撤回/删除/推送 race 影响)
+        //   - 兜底 lastMsgSeq - newMsgCount (与原算法语义完全对齐, lastReadSeq=0 时用)
+        uint32_t readBoundarySeq = 0;
         if (lastReadSeq > 0 && lastMsgSeq > lastReadSeq) {
-            // 首选: 上次离开会话时已确认读到 lastReadSeq, 下一条 (lastReadSeq+1) 就是首条未读
-            firstUnreadSeq = lastReadSeq + 1;
+            readBoundarySeq = lastReadSeq;
         } else if (lastMsgSeq > newMsgCount) {
-            // 兜底: 没有 lastReadSeq 时 (首次进/旧版本数据), 用 last - unread 近似
-            firstUnreadSeq = (uint32_t)(lastMsgSeq - newMsgCount + 1);
+            readBoundarySeq = (uint32_t)(lastMsgSeq - newMsgCount);
         }
-        if (firstUnreadSeq > 0) {
-            uint32_t orderSeq = [[WKSDK shared].chatManager getOrderSeq:firstUnreadSeq];
-            if (orderSeq > 0) {
-                self.messageListView.browseToOrderSeq = orderSeq;
-                keepOrderSeq = orderSeq;
+        if (readBoundarySeq > 0) {
+            uint32_t readBoundaryOrderSeq = [[WKSDK shared].chatManager getOrderSeq:readBoundarySeq];
+            if (readBoundaryOrderSeq > 0) {
+                // browseToOrderSeq 必须保持"已读边界"语义 (refreshNewMsgCount 用它算红点数,
+                // insertHistoryMsgSplitUI 在它之后插「以下是新消息」分割线), 不能换成
+                // 首条未读 seq, 否则红点偏小 1 + 首条未读被划成已读 (PR #33 R1 review)。
+                self.messageListView.browseToOrderSeq = readBoundaryOrderSeq;
+                // keepPosition 也锚定到 readBoundary (已读消息肯定 loaded, 不受撤回影响),
+                // 靠 offset = -120 把视口下推一行, 让首条未读 (readBoundary 下方) 自然
+                // 出现在视口顶部。即便首条未读 (lastReadSeq+1) 是撤回消息 indexPath 拿
+                // 不到, 也仍能命中 readBoundary 完成定位, 不退化到 scrollToBottom。
+                keepOrderSeq = readBoundaryOrderSeq;
                 keepOffSetY = -120.0f;
             }
         }
