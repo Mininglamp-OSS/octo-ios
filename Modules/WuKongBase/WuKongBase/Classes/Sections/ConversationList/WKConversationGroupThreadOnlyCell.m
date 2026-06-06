@@ -59,11 +59,10 @@
         }
     }
     CGFloat topH = hasMention ? (TOP_HEIGHT + 10) : TOP_HEIGHT;
-    // 走已关注子区数（与 WKConversationGroupThreadCell 同源），不能直接用 model.threadCount
-    // 那是父群的 raw 总数，包括未关注子区 —— follow tab 已关注 = 0 但 raw > 0 时高度会
-    // 多出 +N 子区那一行的占位（实际不显示），与 updateMoreLabel 的过滤口径不一致。
-    NSInteger visibleThreadCount = [WKConversationGroupThreadCell visibleThreadCountFor:model];
-    if (visibleThreadCount > 0) {
+    // OnlyCell 物理上不渲染任何 preview 行，previewCount 必须按 0 算（PR review #3 critical）。
+    // followedThreadCount > 0 才有 "+N 个子区" 行可显示，与 updateMoreLabel 同口径。
+    NSInteger followedThreadCount = [WKConversationGroupThreadCell visibleThreadCountFor:model];
+    if (followedThreadCount > 0) {
         return topH + MORE_HEIGHT + 6.0f;
     }
     return topH;
@@ -198,12 +197,10 @@
 
 -(void) updateMoreLabel {
     // OnlyCell 由 VC 在 visiblePreviews.count == 0 时才选用（见 WKConversationListVC.m
-    // cellForRowAt 分派），物理上不渲染任何 preview 行 —— previewCount 必须按 0 算，
-    // 而不是 raw self.model.threadPreviews.count（PR review #3 critical）。
-    // 旧实现 raw count > 0 时（活跃 preview 全部未关注 + 已关注子区在 dormant 区的场景）
-    // moreCount = followedThreadCount - raw 会 ≤ 0 把整行 + 红点错误隐藏。
+    // cellForRowAt 分派），物理上不渲染任何 preview 行 —— previewCount 按 0 算
+    // （PR review #3 critical：不能用 raw self.model.threadPreviews.count，
+    // 那是父群下全部 active 子区，OnlyCell 一条都没渲染到屏幕上）。
     NSInteger previewCount = 0;
-    // moreCount = 已关注子区数 - 当前展示的 preview 数（OnlyCell 始终为 0）
     NSInteger followedThreadCount = [WKConversationGroupThreadCell visibleThreadCountFor:self.model];
     NSInteger moreCount = followedThreadCount - previewCount;
     if (moreCount <= 0) {

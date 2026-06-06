@@ -2595,6 +2595,7 @@
             [threadCell setOnMoreThreadsTap:^(NSString *groupNo) {
                 WKThreadListVC *vc = [WKThreadListVC new];
                 vc.groupNo = groupNo;
+                vc.initialSegmentIndex = 1; // "+X 个子区" 中 X = 归档数 → 直接进归档 tab
                 [[WKNavigationManager shared] pushViewController:vc animated:YES];
             }];
             [threadCell setOnToggleThreadPreview:^(NSString *channelId) {
@@ -2610,6 +2611,7 @@
             [threadOnlyCell setOnMoreThreadsTap:^(NSString *groupNo) {
                 WKThreadListVC *vc = [WKThreadListVC new];
                 vc.groupNo = groupNo;
+                vc.initialSegmentIndex = 1; // "+X 个子区" 中 X = 归档数 → 直接进归档 tab
                 [[WKNavigationManager shared] pushViewController:vc animated:YES];
             }];
             [threadOnlyCell setOnToggleThreadPreview:^(NSString *channelId) {

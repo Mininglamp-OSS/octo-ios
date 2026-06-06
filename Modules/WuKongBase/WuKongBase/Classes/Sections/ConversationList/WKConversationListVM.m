@@ -645,26 +645,16 @@ static WKConversationListVM *_instance;
             NSArray<WKThreadModel*> *threads = result[@"threads"] ?: @[];
             BOOL complete = [result[@"complete"] boolValue];
             NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
-            NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
-            NSMutableArray *recentPreviews = [NSMutableArray array];
-            NSInteger inactiveCount = 0;
+            // 去掉旧的 3 天客户端切片：会话列表 preview 行直接展示子区列表 API
+            // 返回的全部 status=active 子区（对齐 web ConversationList groupThreadsWithParent）。
+            // dormant active 子区也属于活跃，归档区单独走下面的 archived count 探查。
+            NSMutableArray *activeThreads = [NSMutableArray array];
             for (WKThreadModel *t in sorted) {
                 if (t.status != WKThreadStatusActive) continue;
-                WKConversation *conv = [[WKSDK shared].conversationManager getConversation:[t toChannel]];
-                // SDK miss 时用 API 字段 updatedAt 当 fallback 活跃判定 —— 不能再无脑
-                // 塞进 previews。开了分页之后大群一次回 176 条，里面有六七十条 dormant
-                // 子区 SDK 没 cache，旧逻辑会把它们全当 active 跳到 preview 行，与
-                // "3 天没消息折叠"的产品契约不符。
-                NSTimeInterval ts = conv ? conv.lastMsgTimestamp
-                                         : [WKConversationListVM apiTimestampFromUpdatedAt:t.updatedAt];
-                if (ts > threeDaysAgo) {
-                    [recentPreviews addObject:t];
-                } else {
-                    inactiveCount++;
-                }
+                [activeThreads addObject:t];
             }
-            model.threadPreviews = [recentPreviews copy];
-            model.threadCount = (NSInteger)recentPreviews.count + inactiveCount;
+            model.threadPreviews = [activeThreads copy];
+            model.threadCount = (NSInteger)activeThreads.count;
             NSArray<WKConversation*> *convs = [self materializeThreadConvs:sorted];
             @synchronized (threadConvsAccum) {
                 threadConvsAccum[groupNo] = convs;
@@ -777,25 +767,18 @@ static WKConversationListVM *_instance;
             NSArray<WKThreadModel*> *threads = result[@"threads"] ?: @[];
             BOOL complete = [result[@"complete"] boolValue];
             NSArray *sorted = [self sortThreadsByLocalTimestamp:threads];
-            NSTimeInterval threeDaysAgo = [[NSDate date] timeIntervalSince1970] - 3 * 24 * 3600;
-            NSMutableArray *recentPreviews = [NSMutableArray array];
-            NSInteger inactiveCount = 0;
+            // 与 fetchThreadCountsForGroupsWithCompletion 同款：去 3 天切片，
+            // 全部 active 子区都进 previews（dormant active 也算活跃）。
+            NSMutableArray *activeThreads = [NSMutableArray array];
             for (WKThreadModel *t in sorted) {
                 if (t.status != WKThreadStatusActive) continue;
-                WKConversation *conv = [[WKSDK shared].conversationManager getConversation:[t toChannel]];
-                NSTimeInterval ts = conv ? conv.lastMsgTimestamp
-                                         : [WKConversationListVM apiTimestampFromUpdatedAt:t.updatedAt];
-                if (ts > threeDaysAgo) {
-                    [recentPreviews addObject:t];
-                } else {
-                    inactiveCount++;
-                }
+                [activeThreads addObject:t];
             }
             WKConversationWrapModel *currentModel = [self modelAtChannel:[WKChannel groupWithChannelID:groupNo]];
             if (!currentModel) currentModel = model;
-            currentModel.threadPreviews = [recentPreviews copy];
-            currentModel.threadCount = (NSInteger)recentPreviews.count + inactiveCount;
-            for (WKThreadModel *t in recentPreviews) {
+            currentModel.threadPreviews = [activeThreads copy];
+            currentModel.threadCount = (NSInteger)activeThreads.count;
+            for (WKThreadModel *t in activeThreads) {
                 if (t.channelId.length > 0) {
                     [WKThreadCreatedContent messageCountCache][t.channelId] = @(t.messageCount);
                 }
@@ -900,16 +883,6 @@ static WKConversationListVM *_instance;
         WK_THREAD_BADGE_DBG(@"[ThreadSync] threadWrapModels=%ld filteredConversations=%ld filterType=%ld",
               (long)self.threadWrapModels.count, (long)self.filteredConversations.count, (long)self.filterType);
     }
-}
-
-/// 把 WKThreadModel.updatedAt（API 给的 "yyyy-MM-dd HH:mm:ss" 字符串，Asia/Shanghai 时区）
-/// 转成 timeIntervalSince1970，给 SDK 没缓存到 conv 的子区做"3 天活跃"判定 fallback。
-/// 解析失败返回 0（threeDaysAgo 比较时永远落入 inactive 桶）—— 服务端偶发返回空字符串
-/// 时不至于把整页 dormant 子区炸到 preview 行。
-+(NSTimeInterval) apiTimestampFromUpdatedAt:(NSString *)updatedAt {
-    if (updatedAt.length == 0) return 0;
-    NSDate *d = [WKTimeTool dateFromString:updatedAt];
-    return d ? d.timeIntervalSince1970 : 0;
 }
 
 /// 用本地会话时间戳排序子区（解决服务端 updated_at 延迟导致首条消息排序不更新）

@@ -161,6 +161,9 @@
         for (WKReminder *r in rems) { if (r.type == WKReminderTypeMentionMe) { tMention = YES; break; } }
         h += tMention ? 44.0f : THREAD_ROW_HEIGHT;
     }
+    // "+N 个子区" 行：N = 已关注总数 − 已显示在 cell 里的数；followedCount 把
+    // 已关注的归档/未在 listAllThreads 当页拿到的子区都算进去，所以 N 一般是
+    // followed-but-not-shown（多数是已关注的归档子区）。
     NSInteger totalFollowed = [self visibleThreadCountFor:model];
     if (totalFollowed > (NSInteger)visiblePreviews.count) {
         h += MORE_HEIGHT;
@@ -484,7 +487,9 @@
     // 分割线：有 2 个及以上预览行时显示
     self.separatorLine.hidden = (count < 2);
 
-    // 更多
+    // "+N 个子区" 入口：N = 已关注总数 − 已显示行数。followedCount 拿的是 store
+    // 里这个群下的全部已关注子区（含归档），所以 +N 通常代表"已关注但没在 cell
+    // 里露出的"——多半是已关注的归档子区。
     NSInteger totalFollowedThreads = [WKConversationGroupThreadCell visibleThreadCountFor:self.model];
     if (totalFollowedThreads > count) {
         self.moreLbl.hidden = NO;
@@ -494,9 +499,7 @@
             [self.moreLbl addGestureRecognizer:moreTap];
         }
 
-        // 计算子区的未读数和@提醒（从 VM 缓存读取，无 DB 查询）。
-        // 排除当前已作为预览行展示的子区 —— 预览行自己的红点已单独渲染，
-        // "+N个子区"badge 只应聚合剩余未显示子区的未读，否则会与预览行重复计数。
+        // 排除已渲染 preview 行，避免与预览行自己的红点重复计数。
         NSMutableSet<NSString *> *excluded = [NSMutableSet setWithCapacity:count];
         for (NSInteger i = 0; i < count; i++) {
             WKThreadModel *p = previews[i];
@@ -509,13 +512,13 @@
                                                      threadUnread:&moreUnread
                                                  threadHasMention:&moreMention];
 
-        // 构建文本：+N个子区 [有人@我]
         NSString *moreText = [NSString stringWithFormat:@"+%ld %@", (long)(totalFollowedThreads - count), LLang(@"个子区")];
         if (moreMention) {
             NSMutableAttributedString *attrText = [[NSMutableAttributedString alloc] initWithString:moreText attributes:@{NSForegroundColorAttributeName: [WKApp shared].config.themeColor}];
             [attrText appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@" %@", LLang(@"[有人@我]")] attributes:@{NSForegroundColorAttributeName: [UIColor orangeColor]}]];
             self.moreLbl.attributedText = attrText;
         } else {
+            self.moreLbl.attributedText = nil;
             self.moreLbl.text = moreText;
             self.moreLbl.textColor = [WKApp shared].config.themeColor;
         }
