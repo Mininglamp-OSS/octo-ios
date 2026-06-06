@@ -4,6 +4,7 @@
 #import "WKApp.h"
 #import "WKNavigationManager.h"
 #import "WKRootNavigationController.h"
+#import "WKCSVRenderer.h"
 #include <libcmark_gfm/cmark-gfm.h>
 #include <libcmark_gfm/cmark-gfm-core-extensions.h>
 
@@ -199,9 +200,10 @@ static UIWindow *_previousKeyWindow = nil;
 
     NSString *ext = self.fileURL.pathExtension.lowercaseString;
     BOOL isMarkdown = [ext isEqualToString:@"md"] || [ext isEqualToString:@"markdown"];
+    BOOL isCSV = [ext isEqualToString:@"csv"];
     BOOL isPlainText = [ext isEqualToString:@"txt"] || [ext isEqualToString:@"log"] ||
         [ext isEqualToString:@"json"] || [ext isEqualToString:@"xml"] ||
-        [ext isEqualToString:@"csv"] || [ext isEqualToString:@"yml"] ||
+        [ext isEqualToString:@"yml"] ||
         [ext isEqualToString:@"yaml"] || [ext isEqualToString:@"ini"] ||
         [ext isEqualToString:@"conf"] || [ext isEqualToString:@"sh"] ||
         [ext isEqualToString:@"swift"] || [ext isEqualToString:@"java"] ||
@@ -211,6 +213,8 @@ static UIWindow *_previousKeyWindow = nil;
 
     if (isMarkdown) {
         [self loadMarkdownFile];
+    } else if (isCSV) {
+        [self loadCSVFile];
     } else if (isPlainText) {
         [self loadPlainTextFile];
     } else {
@@ -388,6 +392,17 @@ static UIWindow *_previousKeyWindow = nil;
         @"<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
         @"<style>%@</style></head><body>%@</body></html>", [self markdownCSS], body];
 
+    [self.webView loadHTMLString:html baseURL:self.fileURL.URLByDeletingLastPathComponent];
+}
+
+#pragma mark - CSV (按表格渲染：首行表头 sticky，可横向 + 纵向滚动)
+
+- (void)loadCSVFile {
+    NSData *data = [NSData dataWithContentsOfURL:self.fileURL];
+    if (!data) return;
+    NSString *text = [self decodeTextFromData:data];
+    BOOL isDark = [WKApp shared].config.style == WKSystemStyleDark;
+    NSString *html = [WKCSVRenderer htmlFromCSVText:text darkMode:isDark];
     [self.webView loadHTMLString:html baseURL:self.fileURL.URLByDeletingLastPathComponent];
 }
 
