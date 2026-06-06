@@ -32,6 +32,10 @@ DerivedData/
 Pods/
 # 子模块 Example 工程的 Pods/ 也不入库
 Modules/*/Example/Pods/
+# Podfile.lock 是本地依赖解析快照, 开源仓库不入库 (随 OctoConfig.xcconfig
+# 等私有配置差异, 不同环境下 pod install 解析结果会漂移)。
+Podfile.lock
+Modules/*/Example/Podfile.lock
 
 # ───────── Carthage ─────────
 Carthage/Build/
