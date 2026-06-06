@@ -401,27 +401,45 @@
     if(newMsgCount > 0 && conversationLastMessage) {
         uint32_t lastReadSeq = [[WKUnreadStore shared] lastReadSeqForChannel:self.channel];
         uint32_t lastMsgSeq = [[WKSDK shared].chatManager getOrNearbyMessageSeq:conversationLastMessage.orderSeq];
-        // readBoundary = "最后一条已读" 的 seq:
-        //   - 首选 lastReadSeq (上次离开会话时精确写入, 不受撤回/删除/推送 race 影响)
-        //   - 兜底 lastMsgSeq - newMsgCount (与原算法语义完全对齐, lastReadSeq=0 时用)
-        uint32_t readBoundarySeq = 0;
-        if (lastReadSeq > 0 && lastMsgSeq > lastReadSeq) {
-            readBoundarySeq = lastReadSeq;
-        } else if (lastMsgSeq > newMsgCount) {
-            readBoundarySeq = (uint32_t)(lastMsgSeq - newMsgCount);
+        // 关键: count-axis 和 anchor-axis 必须解耦, 之前一版 (#33 R1) 把两者绑到
+        // 同一个变量 (browseToOrderSeq=keepOrderSeq=lastReadSeq) 引入了红点偏离
+        // bug (PR #33 R6 yujiawei P1-1):
+        //   refreshNewMsgCount 用 lastMsgSeq - browseToMessageSeq 算红点,
+        //   browseToOrderSeq = getOrderSeq(lastReadSeq) → 红点 = lastMsgSeq - lastReadSeq
+        //   而 server unreadCount 算的是真未读数, 任何 own message / 撤回 / 删除
+        //   落在 (lastReadSeq, lastMsgSeq] 都会让 seq gap > 真 unreadCount → 红点偏大
+        //   并写回会话列表 model.unreadCount 推错值。
+        // 修法:
+        //   - browseToOrderSeq 回归原算法 getOrderSeq(lastMsgSeq - newMsgCount)
+        //     count-axis 与 server unreadCount 自洽, refreshNewMsgCount 算出来的
+        //     红点 = lastMsgSeq - (lastMsgSeq - newMsgCount) = newMsgCount, 一致
+        //   - keepOrderSeq (滚动锚点) 用 lastReadSeq, anchor 鲁棒, 已读消息肯定
+        //     loaded, 即便首条未读 (lastReadSeq+1) 被撤回 indexPath 拿不到, 仍能
+        //     命中 lastReadSeq 完成定位, 不退化到 scrollToBottom (这是 #33 引入
+        //     lastReadSeq 的本意)
+        //   - 两个 axis 独立, fallback (lastReadSeq=0) 时 keepOrderSeq 退到 count
+        //     一致的 readBoundary, 行为不变。
+        if (lastMsgSeq > newMsgCount) {
+            // count-axis: refreshNewMsgCount 用 browseToOrderSeq 算红点
+            uint32_t countBoundarySeq = (uint32_t)(lastMsgSeq - newMsgCount);
+            uint32_t countBoundaryOrderSeq = [[WKSDK shared].chatManager getOrderSeq:countBoundarySeq];
+            if (countBoundaryOrderSeq > 0) {
+                self.messageListView.browseToOrderSeq = countBoundaryOrderSeq;
+            }
         }
-        if (readBoundarySeq > 0) {
-            uint32_t readBoundaryOrderSeq = [[WKSDK shared].chatManager getOrderSeq:readBoundarySeq];
-            if (readBoundaryOrderSeq > 0) {
-                // browseToOrderSeq 必须保持"已读边界"语义 (refreshNewMsgCount 用它算红点数,
-                // insertHistoryMsgSplitUI 在它之后插「以下是新消息」分割线), 不能换成
-                // 首条未读 seq, 否则红点偏小 1 + 首条未读被划成已读 (PR #33 R1 review)。
-                self.messageListView.browseToOrderSeq = readBoundaryOrderSeq;
-                // keepPosition 也锚定到 readBoundary (已读消息肯定 loaded, 不受撤回影响),
-                // 靠 offset = -120 把视口下推一行, 让首条未读 (readBoundary 下方) 自然
-                // 出现在视口顶部。即便首条未读 (lastReadSeq+1) 是撤回消息 indexPath 拿
-                // 不到, 也仍能命中 readBoundary 完成定位, 不退化到 scrollToBottom。
-                keepOrderSeq = readBoundaryOrderSeq;
+        // anchor-axis: keepPosition 锚到 lastReadSeq (已读消息必 loaded);
+        // 没 lastReadSeq 时 fallback 到 count-axis 的 readBoundary (与原行为一致)。
+        uint32_t anchorSeq = 0;
+        if (lastReadSeq > 0 && lastMsgSeq > lastReadSeq) {
+            anchorSeq = lastReadSeq;
+        } else if (lastMsgSeq > newMsgCount) {
+            anchorSeq = (uint32_t)(lastMsgSeq - newMsgCount);
+        }
+        if (anchorSeq > 0) {
+            uint32_t anchorOrderSeq = [[WKSDK shared].chatManager getOrderSeq:anchorSeq];
+            if (anchorOrderSeq > 0) {
+                // 视口下推一行让首条未读 (anchorSeq+1) 自然出现在视口顶部。
+                keepOrderSeq = anchorOrderSeq;
                 keepOffSetY = -120.0f;
             }
         }
