@@ -1493,11 +1493,13 @@ static WKApp *_instance;
                 // 管理员：仅对普通成员显示，对其他管理员/群主隐藏。
                 // 优先用 channel cache; 缓存未命中时回退到 message.memberOfFrom.role; 仍未知
                 // 则 fail-closed (不放行) —— 不能默认当成 Common, 否则缓存未同步时管理员会得到
-                // 撤群主消息的权限 (review #32 提到的 fail-open 风险)。
+                // 撤群主消息的权限。
+                // 注意: memberOfFrom 是消息发送时的角色快照, 对方后续升管理员后快照仍是
+                // Common, 沿用快照会让管理员仍能撤群主消息 (PR #32 R3 review)。
+                // 此处选择最保守策略: cache miss 一律 fail-closed, 不依赖快照, 避免越权;
+                // 副作用是缓存还没同步好的瞬间, 管理员对自己成员的撤回也会不见, 等成员列表
+                // 刷一次就恢复, 可接受。
                 WKChannelMember *targetMember = [[WKSDK shared].channelManager getMember:roleChannel uid:message.fromUid];
-                if (!targetMember) {
-                    targetMember = message.memberOfFrom;
-                }
                 if (targetMember) {
                     isManager = (targetMember.role == WKMemberRoleCommon);
                 } else {

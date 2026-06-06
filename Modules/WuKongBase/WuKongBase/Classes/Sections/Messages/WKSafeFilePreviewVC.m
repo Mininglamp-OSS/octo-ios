@@ -380,10 +380,14 @@ static UIWindow *_previousKeyWindow = nil;
         if (ext) cmark_parser_attach_syntax_extension(parser, ext);
     }
     const char *utf8 = [text UTF8String];
-    cmark_parser_feed(parser, utf8, strlen(utf8));
+    // 用 lengthOfBytesUsingEncoding 而非 strlen, 避免 text 含嵌入 NUL 时被截断 (PR #32 review)。
+    NSUInteger utf8Len = [text lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    cmark_parser_feed(parser, utf8, utf8Len);
     cmark_node *doc = cmark_parser_finish(parser);
     char *htmlCStr = cmark_render_html(doc, CMARK_OPT_DEFAULT, cmark_parser_get_syntax_extensions(parser));
-    NSString *body = [NSString stringWithUTF8String:htmlCStr];
+    // 加 ?: @"" 守卫: cmark 在异常情况下返回的 C 字符串可能不是合法 UTF-8,
+    // stringWithUTF8String: 失败会返 nil, 不加守卫拼到 HTML 里会变成 "(null)" (PR #32 review)。
+    NSString *body = [NSString stringWithUTF8String:htmlCStr] ?: @"";
     free(htmlCStr);
     cmark_node_free(doc);
     cmark_parser_free(parser);

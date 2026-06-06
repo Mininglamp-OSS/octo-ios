@@ -145,8 +145,10 @@
 - (NSArray<WKMentionUserCellModel *> *)assembleItems:(NSArray<WKChannelMember *> *)members {
     NSString *kw = self.currentKeyword ?: @"";
     NSMutableArray<WKMentionUserCellModel *> *list = [NSMutableArray array];
+    // @所有人 仅在群/子区里有意义, 1v1 DM 不应该出现 group-wide sentinel (PR #32 review)。
+    BOOL isDM = (self.channel.channelType == WK_PERSON);
     NSString *allStr = LLang(@"所有人");
-    if (kw.length == 0 || [allStr containsString:kw]) {
+    if (!isDM && (kw.length == 0 || [allStr containsString:kw])) {
         [list addObject:[WKMentionUserCellModel uid:@"all" name:allStr]];
     }
     NSString *aisStr = LLang(@"所有AI");
