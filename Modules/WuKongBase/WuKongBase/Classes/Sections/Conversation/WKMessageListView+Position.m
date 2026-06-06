@@ -21,17 +21,27 @@
         __strong typeof(weakSelf) ws = weakSelf;
         if (!ws) return;
         // 微信式两步定位:
-        //   第 1 次 (有未读 + 视口未看到首条未读): 锚到首条未读, 让用户开始按时间
-        //     往下读, 不 mark read (用户还没看完);
-        //   第 2 次 (首条未读已在视口 / 没未读): 走原行为, pullBottom + 三端同步
-        //     mark read。
-        // 用「位置语义」自然区分一二次, 无状态 flag。
+        //   第 1 次 (有未读 + 视口未看到首条未读 = 用户上翻了历史): 锚到 readBoundary,
+        //     让用户开始按时间往下读, 不 mark read (用户还没看完);
+        //   第 2 次 (首条未读已在视口 / 没未读 / 自然开会就已 anchor 到 readBoundary):
+        //     走原行为 pullBottom + 三端同步 mark read。
+        // 用「位置语义」(maxVisible vs firstUnread) 自然区分一二次, 无状态 flag。
+        //
+        // discriminator 用 firstUnread (lastReadSeq+1) 数值比较, 不依赖消息存在;
+        // anchor 用 readBoundary (lastReadSeq), 已读消息肯定 loaded — 即便首条
+        // 未读被撤回 indexPath 拿不到, readBoundary 仍能命中, 不会静默 no-op
+        // (R6 P2 / P1-2 选 C: 与 calcKeepPosition 同款 anchor)。
+        // tablePosition=Top 让 readBoundary 在视口顶, 首条未读出现在第二行,
+        // 视觉上等价于 calcKeepPosition 的 readBoundary + offset=-120。
         uint32_t firstUnreadOS = [ws ks_firstUnreadOrderSeqForScrollToBottom];
         if (firstUnreadOS > 0 &&
             ws.conversationPositionBarView.maxVisiableOrderSeq < firstUnreadOS) {
-            [ws locateMessageCellWithOrderSeqForReminder:firstUnreadOS
-                                           tablePosition:UITableViewScrollPositionTop];
-            return;
+            uint32_t readBoundaryOS = [ws ks_readBoundaryOrderSeqForScrollToBottom];
+            if (readBoundaryOS > 0) {
+                [ws locateMessageCellWithOrderSeqForReminder:readBoundaryOS
+                                               tablePosition:UITableViewScrollPositionTop];
+                return;
+            }
         }
         [ws pullBottom];
         // 「跑到最底部」按钮 = 用户主动声明「我都看完了」，必须显式做三端同步。
@@ -56,11 +66,11 @@
     [self layoutConversationPositionBarView];
 }
 
-// 计算"首条未读"的 orderSeq, 用于向下按钮两步定位的第 1 步锚点。
-// 与 WKConversationView.calcKeepPositionAndBrowseToOrderSeq 同款算法:
+// 计算"首条未读"的 orderSeq, 用于向下按钮两步定位的 discriminator (判断
+// 视口是否已包含首条未读)。是纯算术 getOrderSeq, 不需要消息真实存在。
+// 算法与 WKConversationView.calcKeepPositionAndBrowseToOrderSeq 同款:
 //   - 优先 lastReadSeq + 1 (精确, 不受撤回/删除/推送 race 影响)
 //   - 兜底 lastMsgSeq - newMsgCount + 1 (新会话 / 旧版数据 lastReadSeq=0 时用)
-// 没未读 / 计算失败时返 0, 调用方回退到原 pullBottom 行为。
 - (uint32_t)ks_firstUnreadOrderSeqForScrollToBottom {
     if (self.newMsgCount <= 0) return 0;
     WKChannel *ch = self.channel;
@@ -77,6 +87,28 @@
     }
     if (firstUnreadSeq == 0) return 0;
     return [[WKSDK shared].chatManager getOrderSeq:firstUnreadSeq];
+}
+
+// 计算"已读边界"的 orderSeq (= 首条未读 - 1), 用于向下按钮两步定位的实际
+// anchor 目标。比首条未读更鲁棒——已读消息肯定 loaded, 不会因为首条未读被
+// 撤回导致 indexPath 拿不到而 locateMessageCell 静默 no-op (R6 P2 / P1-2 选 C)。
+// 与 calcKeepPositionAndBrowseToOrderSeq 的 anchorSeq 同款逻辑。
+- (uint32_t)ks_readBoundaryOrderSeqForScrollToBottom {
+    if (self.newMsgCount <= 0) return 0;
+    WKChannel *ch = self.channel;
+    if (!ch) return 0;
+    uint32_t readBoundarySeq = 0;
+    uint32_t lastReadSeq = [[WKUnreadStore shared] lastReadSeqForChannel:ch];
+    if (lastReadSeq > 0) {
+        readBoundarySeq = lastReadSeq;
+    } else if (self.lastMessage) {
+        uint32_t lastMsgSeq = self.lastMessage.messageSeq;
+        if (lastMsgSeq > (uint32_t)self.newMsgCount) {
+            readBoundarySeq = (uint32_t)(lastMsgSeq - (uint32_t)self.newMsgCount);
+        }
+    }
+    if (readBoundarySeq == 0) return 0;
+    return [[WKSDK shared].chatManager getOrderSeq:readBoundarySeq];
 }
 
 
