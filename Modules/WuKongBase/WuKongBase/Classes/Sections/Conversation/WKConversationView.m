@@ -429,7 +429,13 @@
     BOOL useKeep = false; // 是否使用保持的位置
     if(self.currentConversation.remoteExtra.keepMessageSeq>0) { // 有保持位置
         uint32_t kpOrderSeq = [[WKSDK shared].chatManager getOrderSeq:self.currentConversation.remoteExtra.keepMessageSeq];
-        if(keepOrderSeq == 0 || kpOrderSeq < keepOrderSeq) {
+        // 有未读 + 已经算出有效的 readBoundary 锚点 → 一律忽略 remoteExtra:
+        // 用户进会话时优先看到首条未读, 不应被"上次离开时的停留位置"覆盖到历史
+        // 消息位置 (微信式 UX; PR #33 后续反馈: 之前仍然定位到历史会话气泡)。
+        // 没未读 (newMsgCount==0) 或 readBoundary 路径失败 (keepOrderSeq==0):
+        // 仍用 remoteExtra 兜底, 保持上次停留位置 / 避免落到最底部, 行为不回归。
+        BOOL canOverride = (newMsgCount == 0) || (keepOrderSeq == 0);
+        if(canOverride && (keepOrderSeq == 0 || kpOrderSeq < keepOrderSeq)) {
             keepOrderSeq = kpOrderSeq;
             keepOffSetY = self.currentConversation.remoteExtra.keepOffsetY;
             useKeep = true;
