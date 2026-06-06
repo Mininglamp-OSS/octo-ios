@@ -85,7 +85,13 @@ TODO: Add long description of the pod here.
   # CocoaPods 的"transitive static"误报，是最简洁的方案。
   local_bugly_path = File.expand_path('WuKongBase/Bugly.framework', __dir__)
   bugly_will_be_used = false
-  if File.exist?(local_bugly_path)
+  # ENV 短路: 设 OCTO_HAS_PRIVATE_CONFIG=0 强制走 OSS 视角 (跳过 Bugly 检测),
+  # 用于本地有私有配置但想验证 lock 与 clean clone 一致的开发者:
+  #     OCTO_HAS_PRIVATE_CONFIG=0 pod install
+  # 否则保持原 "本地 framework / OctoConfig 存在则启用" 自动判定行为。
+  if ENV['OCTO_HAS_PRIVATE_CONFIG'] == '0'
+    # forced OSS mode: bugly_will_be_used 留 false, 跳过下面整段
+  elsif File.exist?(local_bugly_path)
     s.vendored_frameworks = 'WuKongBase/Bugly.framework'
     bugly_will_be_used = true
   else

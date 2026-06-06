@@ -3,6 +3,21 @@
 workspace 'OctoiOS.xcworkspace'
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Podfile.lock 协作规范 (PR #32 review 反馈)
+# ─────────────────────────────────────────────────────────────────────────────
+# 仓库内的 Podfile.lock 反映 **OSS 默认环境** 解析图 (无 OctoConfig.xcconfig,
+# 无本地 Bugly.framework)。clean clone 跑 pod install 应与该 lock 完全一致。
+#
+# 本地有私有配置 (OctoConfig.xcconfig 填了 OCTO_BUGLY_APP_ID_MAIN, 或仓库内
+# 放了 Bugly.framework) 时, pod install 会解出含 Bugly 的依赖图并改写
+# Podfile.lock —— **此时请不要 commit lock 的改动**, 它只在你本地有意义。
+#
+# 如需临时切回 OSS 视角验证 (例如想确认 lock 与公开仓库一致), 用 ENV 强制:
+#     OCTO_HAS_PRIVATE_CONFIG=0 pod install
+# 该 ENV 在 WuKongBase.podspec 里短路掉 Bugly 检测, 让解析图与 OSS 默认一致。
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Monkey-patch: 关掉 CocoaPods "transitive static binary" 检查
 # ─────────────────────────────────────────────────────────────────────────────
 # 启用 Bugly（腾讯静态 SDK）时这条检查会硬阻断 pod install:
