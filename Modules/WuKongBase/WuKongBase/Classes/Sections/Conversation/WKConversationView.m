@@ -429,13 +429,18 @@
     BOOL useKeep = false; // 是否使用保持的位置
     if(self.currentConversation.remoteExtra.keepMessageSeq>0) { // 有保持位置
         uint32_t kpOrderSeq = [[WKSDK shared].chatManager getOrderSeq:self.currentConversation.remoteExtra.keepMessageSeq];
-        // 有未读 + 已经算出有效的 readBoundary 锚点 → 一律忽略 remoteExtra:
-        // 用户进会话时优先看到首条未读, 不应被"上次离开时的停留位置"覆盖到历史
-        // 消息位置 (微信式 UX; PR #33 后续反馈: 之前仍然定位到历史会话气泡)。
-        // 没未读 (newMsgCount==0) 或 readBoundary 路径失败 (keepOrderSeq==0):
-        // 仍用 remoteExtra 兜底, 保持上次停留位置 / 避免落到最底部, 行为不回归。
-        BOOL canOverride = (newMsgCount == 0) || (keepOrderSeq == 0);
-        if(canOverride && (keepOrderSeq == 0 || kpOrderSeq < keepOrderSeq)) {
+        // remoteExtra.keepMessageSeq 是"上次离开时滚动条所在位置", 用户可能在
+        // 读完最新消息后又往上翻到老消息位置才退出, remoteExtra 落在那条老消息上。
+        // 微信式 UX: 再进会话应回到"上次读到的位置"(= lastReadSeq → 通常即最新
+        // 消息位置), 而不是"上次翻看历史的停留位置"。
+        // 收紧 remoteExtra 兜底条件:
+        //   - 有未读 + readBoundary OK: 上面已锚定首条未读, 不用 remoteExtra
+        //   - 有未读 + readBoundary 失败 (lastReadSeq=0 又算不出兜底): 用
+        //     remoteExtra 避免 scrollToBottom 把未读划过去
+        //   - 无未读: 让 scrollToBottom 默认显示最新消息 (= 上次读到的位置),
+        //     不再用 remoteExtra "上次停留位置"覆盖 (用户反馈)。
+        BOOL canUseRemoteExtra = (newMsgCount > 0 && keepOrderSeq == 0);
+        if(canUseRemoteExtra) {
             keepOrderSeq = kpOrderSeq;
             keepOffSetY = self.currentConversation.remoteExtra.keepOffsetY;
             useKeep = true;
