@@ -291,6 +291,16 @@
 #pragma mark ===============获取汉字首字母====================
 //获得 首字母组成的字符串保留非中文字符  电脑->DN  abc->ABC abc电脑->ABCDN
 + (NSString *)getFirstLetter:(NSString *)chinese{
+    // 防御：nil / 空串 / 纯空白直接归类到特殊段（# / specialCharSectionTitle）。
+    // 修崩溃 #DkDDvj4svKd2T5i8bC1M6t — WKContactsVC 增量更新有 displayName=nil/空的成员，
+    // 之前直接走到 329 行 [upperCaseStr characterAtIndex:0] 越界 NSException → SIGABRT。
+    if (chinese.length == 0) {
+        return WKChineseSortSetting.share.specialCharSectionTitle;
+    }
+    NSString *trimmed = [chinese stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (trimmed.length == 0) {
+        return WKChineseSortSetting.share.specialCharSectionTitle;
+    }
     //把已知的英文转为大写
     __block NSString* newChinese = [chinese uppercaseString];
     //吧多音字先替换
@@ -304,6 +314,8 @@
         //此处 对整个字符串转中文 而不单个字一次转 因为CFStringTransform太耗时 而这个时间又与字个数关系不大，所以尽量减少调用次数 以减少时间
         NSArray *wordArr = [[WKChineseSort transformChinese:newChinese] componentsSeparatedByString:@" "];
         for (NSString* word in wordArr) {
+            // 防御：transformChinese 在边角输入下可能产出空 token，characterAtIndex:0 会越界。
+            if (word.length == 0) continue;
             //如果word是小写 为汉字转的拼音 提取首字符 否则 保留全部
             char c = [word characterAtIndex:0];
             if ((c>96)&&(c<123)) {
@@ -326,7 +338,10 @@
     //全转为大写
     NSString *upperCaseStr = [result uppercaseString];
     //判断第一个字符是否为字母 英文或者中文转拼音后都是字母开头
-    if ([upperCaseStr characterAtIndex:0] >= 'A' && [upperCaseStr characterAtIndex:0] <= 'Z') {
+    // 防御：result 在 sortMode==1 全为空 token 或 sortMode!=1 全字符都过滤掉时长度为 0，
+    // characterAtIndex:0 会越界——直接退化到特殊段，跟"非字母开头"语义一致。
+    if (upperCaseStr.length > 0
+        && [upperCaseStr characterAtIndex:0] >= 'A' && [upperCaseStr characterAtIndex:0] <= 'Z') {
         return upperCaseStr;
     }else{//所有非字母的全分为 特殊字符分类中
         return WKChineseSortSetting.share.specialCharSectionTitle;
