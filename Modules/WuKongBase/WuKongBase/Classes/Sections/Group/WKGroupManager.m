@@ -360,7 +360,7 @@ static WKGroupManager *_instance;
 }
 
 -(void) didGroupDisband:(NSString*)groupNo complete:(void(^__nullable)(NSError *error))complete{
-    if(_delegate && [_delegate respondsToSelector:@selector(groupManager:didGroupExit:complete:)]) {
+    if(_delegate && [_delegate respondsToSelector:@selector(groupManager:didGroupDisband:complete:)]) {
         [_delegate groupManager:self didGroupDisband:groupNo complete:complete];
     }
 }
