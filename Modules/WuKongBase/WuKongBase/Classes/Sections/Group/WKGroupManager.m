@@ -269,8 +269,17 @@ static WKGroupManager *_instance;
                             complete(WKChannelMemberCacheTypeNetwork,members);
                         }
                     }
-                   
-                    
+
+
+                } else {
+                    // 网络错误兜底 (PR #32 R13 review: 之前漏 else 分支, 让
+                    // WKRequestStrategyOnlyNetwork 的 caller (如 WKGroupAdminManageVM)
+                    // loading=YES 永远不清, 群管理页死锁空白)。
+                    // needDB=true 时 DB 路径已 complete 过 (line 249), 不重复 callback
+                    // 避免 caller 双回调; needDB=false 才真正需要 fallback。
+                    if(!needDB && complete) {
+                        complete(WKChannelMemberCacheTypeNetwork, @[]);
+                    }
                 }
             }];
         }
