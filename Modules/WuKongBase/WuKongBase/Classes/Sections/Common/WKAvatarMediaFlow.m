@@ -63,6 +63,15 @@
         return;
     }
 
+    // 上限拦截: 超过 1 分钟的视频不支持转 GIF (PR #32 review 提到的 OOM 风险),
+    // 让用户改用更短的素材, 避免在 trimmer / converter 里炸内存。
+    if (total > WK_AVATAR_VIDEO_INPUT_MAX_SEC + 0.05) {
+        NSString *msg = [NSString stringWithFormat:LLang(@"请选择 %.0f 秒以内的视频"),
+                         (double)WK_AVATAR_VIDEO_INPUT_MAX_SEC];
+        [host.view showHUDWithHide:msg];
+        return;
+    }
+
     // 视频时长 ≤ 输出上限：跳过 trimmer，整段直接转，输出 GIF 时长 = 视频时长
     if (total <= WK_AVATAR_VIDEO_OUTPUT_MAX_SEC + 0.05) {
         [self convertVideo:url

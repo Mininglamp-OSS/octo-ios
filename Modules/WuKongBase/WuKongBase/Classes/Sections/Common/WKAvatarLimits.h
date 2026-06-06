@@ -19,6 +19,12 @@ static const NSUInteger WK_AVATAR_ANIMATED_MAX_BYTES = 5 * 1024 * 1024;
 /// 输入视频最少时长 (秒)。低于该时长直接拒绝。
 static const NSTimeInterval WK_AVATAR_VIDEO_MIN_SEC = 3.0;
 
+/// 输入视频最长时长 (秒)。超过则直接拒绝, 不进 trimmer / 不进 converter。
+/// 原因: 当前 WKVideoToGIFConverter 在解帧时按源视频原始分辨率全帧缓存,
+/// 长视频容易把内存撑爆 (PR #32 review 提到的 OOM 风险)。设个明显的产品门
+/// 挡掉非典型用例, 重构解码管线作为后续独立工作。
+static const NSTimeInterval WK_AVATAR_VIDEO_INPUT_MAX_SEC = 60.0;
+
 /// 输出 GIF 最长时长 (秒)。视频 ≤ 该值直接全转，> 该值进 trimmer 截取该长度窗口。
 /// 命名注意：是 MAX 而非固定值——4 秒视频会输出 4 秒 GIF，不会被砍成 3 秒。
 static const NSTimeInterval WK_AVATAR_VIDEO_OUTPUT_MAX_SEC = 5.0;
