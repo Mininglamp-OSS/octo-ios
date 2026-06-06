@@ -198,7 +198,7 @@ post_install do |installer|
                                 '$(SRCROOT)/Modules/WuKongBase/WuKongBase/Bugly.framework/Bugly'
                             end
         force_load_flag = "-force_load \"#{bugly_binary_path}\""
-        bugly_marker = '# bugly-force-load-injected (Podfile post_install)'
+        bugly_marker = '// bugly-force-load-injected (Podfile post_install)'
         aggregate_xcconfigs.each do |xcconfig_path|
             content = File.read(xcconfig_path)
             already_patched = content.include?(bugly_marker)
