@@ -62,6 +62,13 @@ static const NSInteger kPageSize = 15;
     [self.view addSubview:self.createBtn];
     [self.view addSubview:self.emptyLbl];
 
+    // 让 caller 透传初始 tab（会话列表点 "+X 个子区" 时直接进归档 tab）。
+    // 必须在 loadThreads 之前应用，否则首屏拉的是 active 然后 segment 才跳过去，
+    // 用户能看到一次 active 闪烁。
+    if (self.initialSegmentIndex == 0 || self.initialSegmentIndex == 1) {
+        self.segmentControl.selectedSegmentIndex = self.initialSegmentIndex;
+    }
+
     self.threads = @[];
     self.allLoadedThreads = [NSMutableArray array];
     [self loadThreads];
