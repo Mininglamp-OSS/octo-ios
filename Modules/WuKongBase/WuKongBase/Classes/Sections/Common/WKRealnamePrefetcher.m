@@ -34,10 +34,13 @@ static NSMutableSet<NSString *> *_kFetchedUidSet = nil;
 
     // 已经有显式 @YES：person 缓存被 SDK 推 / 上次 loadPersonChannelInfo 写过，
     // 不必重复打 /users/<uid>。@NO / nil 才需要拉。
+    // 例外：robot 且尚未拿到 bot_creator_uid 时仍需拉一次(撤回菜单要用)，
+    // 否则 realname 恰为 @YES 的 bot 会被短路、creator 永远拿不到。
     WKChannel *personChannel = [WKChannel personWithChannelID:uid];
     WKChannelInfo *cached = [[WKSDK shared].channelManager getChannelInfo:personChannel];
     id existing = cached.extra[@"realname_verified"];
-    if([existing isKindOfClass:[NSNumber class]] && [(NSNumber *)existing boolValue]) {
+    BOOL botNeedsCreator = cached.robot && !cached.extra[@"bot_creator_uid"];
+    if([existing isKindOfClass:[NSNumber class]] && [(NSNumber *)existing boolValue] && !botNeedsCreator) {
         [seen addObject:uid];
         return;
     }
@@ -80,6 +83,14 @@ static NSMutableSet<NSString *> *_kFetchedUidSet = nil;
             if(ts > 0) {
                 fresh.extra[@"realname_verified_at"] = @(ts);
             }
+        }
+
+        // Bot 创建者 uid 一并回写：撤回菜单据此判定「自己创建的 Bot 消息可撤回」
+        // (对齐 web orgData.bot_creator_uid)。channels 接口不下发该字段，只有
+        // /users/<uid> 顶层有，复用本预取器回写 person 缓存即可。
+        id creator = [data objectForKey:@"bot_creator_uid"];
+        if([creator isKindOfClass:[NSString class]] && [(NSString *)creator length] > 0) {
+            fresh.extra[@"bot_creator_uid"] = creator;
         }
 
         [[WKSDK shared].channelManager addOrUpdateChannelInfo:fresh];

@@ -63,6 +63,14 @@
         channelInfo.extra = [NSMutableDictionary dictionaryWithDictionary:extra];
     }
 
+    // Bot 创建者 uid：服务端在顶层下发 bot_creator_uid（仅 robot 频道），存入 extra
+    // 供撤回菜单判定「自己创建的 Bot 消息可撤回」(对齐 web orgData.bot_creator_uid)。
+    // 放在 extra 整块赋值之后，避免被上面覆盖。
+    id botCreatorUid = resultDict[@"bot_creator_uid"];
+    if([botCreatorUid isKindOfClass:[NSString class]] && [(NSString*)botCreatorUid length] > 0) {
+        channelInfo.extra[@"bot_creator_uid"] = botCreatorUid;
+    }
+
     // GROUP.md 状态：优先顶层字段，兜底 extra（与 Web 端对齐）
     if (resultDict[@"has_group_md"]) {
         channelInfo.extra[@"has_group_md"] = resultDict[@"has_group_md"];
@@ -110,8 +118,14 @@
     
     channelInfo.receipt = resultDict[@"receipt"]?[resultDict[@"receipt"] boolValue]:false;
     channelInfo.robot = resultDict[@"robot"]?[resultDict[@"robot"] boolValue]:false;
-    
-    channelInfo.online = resultDict[@"online"]?[resultDict[@"online"] boolValue]:false;
+
+    // Bot 创建者 uid：服务端 /users/<uid> 顶层下发 bot_creator_uid（仅 robot），存入 extra
+    // 供撤回菜单判定「自己创建的 Bot 消息可撤回」(对齐 web orgData.bot_creator_uid)。
+    id botCreatorUid = resultDict[@"bot_creator_uid"];
+    if([botCreatorUid isKindOfClass:[NSString class]] && [(NSString*)botCreatorUid length] > 0) {
+        channelInfo.extra[@"bot_creator_uid"] = botCreatorUid;
+    }
+
     channelInfo.lastOffline = [resultDict[@"last_offline"] integerValue];
     if(resultDict[@"device_flag"]) {
         channelInfo.deviceFlag = [resultDict[@"device_flag"] integerValue];

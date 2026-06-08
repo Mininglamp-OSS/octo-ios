@@ -36,6 +36,7 @@
 #import "WKConversationGroupSettingVC.h"
 #import "WKContactsSelectVC.h"
 #import "WKMessageManager.h"
+#import "WKRealnamePrefetcher.h"
 #import "WKEmojiContentView.h"
 #import "WKStickerGIFContentView.h"
 #import "WKGIFMessageCell.h"
@@ -1473,18 +1474,21 @@ static WKApp *_instance;
         NSString *loginUid = [WKApp shared].loginInfo.uid;
 
         // Bot 创建者判定：取发送者 person channelInfo，robot 且 bot_creator_uid==自己。
+        // bot_creator_uid 只在 /users/<uid> 顶层下发，channels/{id}/{type} 不带；
+        // person 缓存被 WKRealnamePrefetcher / 名片页刷过才有。缺失时触发预取，下次长按命中。
         BOOL isBotOwner = NO;
         if(message.fromUid.length > 0 && ![message.fromUid isEqualToString:loginUid]) {
             WKChannelInfo *fromInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:message.fromUid channelType:WK_PERSON]];
-            if(fromInfo && fromInfo.robot) {
-                id creator = fromInfo.extra[@"bot_creator_uid"];
-                if([creator isKindOfClass:[NSString class]] && [(NSString*)creator length] > 0
-                   && [(NSString*)creator isEqualToString:loginUid]) {
-                    isBotOwner = YES;
-                }
+            id creator = fromInfo.extra[@"bot_creator_uid"];
+            if(fromInfo && fromInfo.robot
+               && [creator isKindOfClass:[NSString class]] && [(NSString*)creator length] > 0
+               && [(NSString*)creator isEqualToString:loginUid]) {
+                isBotOwner = YES;
             }
-            // 缓存未命中时预取，下次长按即可命中(对齐 web 的 fetchChannelInfo fallback)。
-            if(!fromInfo) {
+            // robot 但缺 creator：拉 /users/<uid>(回写 bot_creator_uid 到 person 缓存)，下次长按命中。
+            if(fromInfo && fromInfo.robot && !creator) {
+                [WKRealnamePrefetcher ensureFetched:message.fromUid];
+            } else if(!fromInfo) {
                 [[WKSDK shared].channelManager fetchChannelInfo:[[WKChannel alloc] initWith:message.fromUid channelType:WK_PERSON]];
             }
         }
