@@ -125,6 +125,8 @@
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onShareExtensionMessageSent:) name:@"WKShareExtensionMessageSent" object:nil];
     // 多选模式下 cell 圆圈被勾选时刷新 anchor
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onMultipleAnchorDidChange:) name:@"WKMessageMultipleAnchorDidChange" object:nil];
+    // 回前台对账：修后台收消息离屏 insert 致最新消息行空白（见 onAppDidBecomeActiveReconcile:）
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppDidBecomeActiveReconcile:) name:UIApplicationDidBecomeActiveNotification object:nil];
 }
 
 -(void) removeDelegates {
@@ -137,6 +139,7 @@
     [[WKReminderManager shared] removeDelegate:self];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKShareExtensionMessageSent" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKMessageMultipleAnchorDidChange" object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidBecomeActiveNotification object:nil];
 }
 
 /// 外部分享的消息发送后，插入消息到当前聊天页面
@@ -1743,6 +1746,22 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         // 异源 typing 残留预清理：见 evictStaleTypingForIncomingMessage: 注释
         [self evictStaleTypingForIncomingMessage:messageModel];
 
+        // 后台收消息走 reloadData，不走离屏增量 insert（回归修复）：
+        //   App 在后台/锁屏时 tableView 不在可见 window，insertRowsAtIndexPaths 只更新
+        //   行簿记和 contentSize（precache 已写入高度缓存），但 UIKit 不会回调 willDisplayCell:，
+        //   cell 内容填充(refresh:)永不执行；回前台后 UIKit 认为这些行"已布局"，不再重渲染，
+        //   表现为"最新消息行空白、下滑是空区域"。同时 updateLastMsgIfNeed 已把 self.lastMessage
+        //   推进到这条新消息，导致 onConversationSyncFinished / onConnectStatus 的 last-message
+        //   相等判断提前 return，永远不会补一次 reloadData。reloadData 是惰性的，回前台下次
+        //   layout 会重查 numberOfRows 并重新 willDisplayCell:，自愈（对齐 git-init 的原行为）。
+        if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
+            [self.dataProvider addMessage:messageModel];
+            [self.tableView reloadData];
+            if (self.positionAtBottom) { [self scrollToBottom:NO]; }
+            else if ([message isSend]) { [self scrollToBottom:NO]; }
+            return;
+        }
+
         // Bugly #3054 兜底（另一路径 crash：before=31/after=32/inserted=0/deleted=0）：
         //   handleRecvMessage 可能在 dp 已经和 tv 漂移的状态下被调用（前一次 insert 抛异常被吞掉、
         //   或前序 send/recv 因嵌套 RunLoop 留下漂移）。进入增量更新前做一次一致性检查，不一致
@@ -2519,6 +2538,54 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     }
 }
 
+// 回前台对账：兜住"后台收消息离屏 insert 致最新消息行空白"的回归。
+//   不依赖 self.lastMessage == dbLastMsg 这种"anchor 相等 ⇒ UI 正确"的判断
+//   (那正是 handleRecvMessage 在后台把 anchor 提前推进后、让 onConversationSyncFinished
+//    误判跳过补刷的根因)。这里只问一个问题：底部那一行到底有没有被真正渲染出来。
+//   positionAtBottom 时底部行本应是已显示的 cell，cellForRowAtIndexPath: 返回 nil 说明它是
+//   被离屏 insert 进来、从未走过 willDisplayCell:/refresh: 的空白壳 —— 本 bug 的精确签名。
+//   只发 reloadData(安全 sink，重查 numberOfRows，不要求行数一致)，所有检查均为纯查询。
+- (void)onAppDidBecomeActiveReconcile:(NSNotification *)note {
+    if (!self.channel) {
+        return;
+    }
+    if (self.isPulldownInProgress) { // 不和进行中的 pulldown 抢 tableView
+        return;
+    }
+    if ([self pullupHasMore]) { // 用户上滑在看历史，reload 会跳位，放过
+        return;
+    }
+    WKMessageModel *dpLast = [self.dataProvider lastMessage];
+    if (!dpLast) {
+        return;
+    }
+
+    BOOL needsReload = NO;
+    if (![self isTableViewRowCountInSyncWithDataProvider]) {
+        needsReload = YES; // 行数已漂移 → reloadData 收敛
+    } else {
+        NSInteger sections = [self.tableView numberOfSections];
+        if (sections > 0) {
+            NSInteger lastSection = sections - 1;
+            NSInteger rows = [self.tableView numberOfRowsInSection:lastSection];
+            if (rows > 0) {
+                NSIndexPath *lastPath = [NSIndexPath indexPathForRow:rows - 1 inSection:lastSection];
+                UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:lastPath];
+                if (self.positionAtBottom && cell == nil) {
+                    needsReload = YES; // 在底部却没有底部 cell → 离屏 insert 漏渲染
+                }
+            }
+        }
+    }
+
+    if (needsReload) {
+        [self.tableView reloadData];
+        if (self.positionAtBottom) {
+            [self scrollToBottom:NO];
+        }
+    }
+}
+
 #pragma mark - WKConversationManagerDelegate
 
 // conversation-sync 完成后(SDK 已 merge 进 DB)的全量补刷钩子，对齐 Android 的
@@ -2548,6 +2615,9 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     if([self pullupHasMore]) {
         // 下方还有未加载的历史分页，整页 reloadData 会破坏分页锚点，
         // 这里只更新最后一条预览引用，让 pullup/滚动时再增量补齐。
+        // 注：UI 是否真正显示到最新，现由回前台对账(onAppDidBecomeActiveReconcile:)裁决，
+        // 不再依赖此处/下方的 last-message 相等判断；故此分支刻意保持原样，避免重蹈
+        // 910709e 的 scroll-jump / 首屏不显示回归。
         [self updateLastMsgIfNeed:[[WKMessageModel alloc] initWithMessage:dbLastMsg]];
         return;
     }
