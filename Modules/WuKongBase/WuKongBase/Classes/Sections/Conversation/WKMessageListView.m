@@ -1160,16 +1160,27 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 
 
 -(void) scrollToIndex:(NSIndexPath*)indexPath animated:(BOOL)animated{
-    if (index >= 0) {
+    if (indexPath) {
         [self scrollToIndex:indexPath animated:animated atScrollPosition:UITableViewScrollPositionTop];
    }
 }
 -(void) scrollToIndex:(NSIndexPath*)indexPath animated:(BOOL)animated atScrollPosition:(UITableViewScrollPosition)atScrollPosition{
-    if (indexPath) {
-        [self.tableView beginUpdates];
-        [self.tableView scrollToRowAtIndexPath:indexPath atScrollPosition:atScrollPosition animated:animated];
-        [self.tableView endUpdates];
-   }
+    if (!indexPath) return;
+    // dataProvider 的 orderSeq→indexPath 索引和 UITableView dataSource 在
+    // 增量更新窗口里会短暂不一致：indexPathAtOrderSeq 已能定位到刚 append
+    // 的行，但 tableView 还没拿到 numberOfRows 的新值；此时直接
+    // scrollToRowAtIndexPath 会抛 NSRangeException
+    // ("Attempted to scroll to out-of-bounds row N when there are only N rows").
+    // 这里用 tableView 当下真实尺寸做边界检查，越界就静默丢弃这次滚动 ——
+    // 真正"定位到刚到达的消息"的需求由 keepPosition / browseToOrderSeq
+    // 配合 reloadData 之后的二次 scroll 兜底，不会丢交互。
+    NSInteger sectionCount = [self.tableView numberOfSections];
+    if (indexPath.section < 0 || indexPath.section >= sectionCount) return;
+    NSInteger rowCount = [self.tableView numberOfRowsInSection:indexPath.section];
+    if (indexPath.row < 0 || indexPath.row >= rowCount) return;
+    [self.tableView beginUpdates];
+    [self.tableView scrollToRowAtIndexPath:indexPath atScrollPosition:atScrollPosition animated:animated];
+    [self.tableView endUpdates];
 }
 
 
