@@ -1467,9 +1467,28 @@ static WKApp *_instance;
         //     "<groupNo>____<shortId>"，取 ____ 前一段）的成员角色为判断依据,
         //     与 WKThreadSettingVC 里 isGroupAdmin 同源。子区消息的 fromUid 也是
         //     父群成员，所以 target 角色直接查父群即可。
-        //   Bot 创建者 —— TODO: 待后端把 bot_creator_uid 下放到 channel_member.extra
-        //     后，在此追加「self == from.bot_creator」分支让 Bot 拥有者可撤回该 Bot 消息。
+        //   Bot 创建者 —— 自己创建的 Bot 发送的消息可撤回，绕过 isSend / 时间窗 / 群角色
+        //     限制(对齐 web canShowRevokeMenu 的 isBotOwner 短路分支)。判定：发送者 person
+        //     channelInfo.robot == YES 且 extra[bot_creator_uid] == 登录 uid。
         NSString *loginUid = [WKApp shared].loginInfo.uid;
+
+        // Bot 创建者判定：取发送者 person channelInfo，robot 且 bot_creator_uid==自己。
+        BOOL isBotOwner = NO;
+        if(message.fromUid.length > 0 && ![message.fromUid isEqualToString:loginUid]) {
+            WKChannelInfo *fromInfo = [[WKSDK shared].channelManager getChannelInfo:[[WKChannel alloc] initWith:message.fromUid channelType:WK_PERSON]];
+            if(fromInfo && fromInfo.robot) {
+                id creator = fromInfo.extra[@"bot_creator_uid"];
+                if([creator isKindOfClass:[NSString class]] && [(NSString*)creator length] > 0
+                   && [(NSString*)creator isEqualToString:loginUid]) {
+                    isBotOwner = YES;
+                }
+            }
+            // 缓存未命中时预取，下次长按即可命中(对齐 web 的 fetchChannelInfo fallback)。
+            if(!fromInfo) {
+                [[WKSDK shared].channelManager fetchChannelInfo:[[WKChannel alloc] initWith:message.fromUid channelType:WK_PERSON]];
+            }
+        }
+
         BOOL isManager = false;
         WKChannel *roleChannel = nil;
         if(message.channel.channelType == WK_GROUP) {
@@ -1507,7 +1526,7 @@ static WKApp *_instance;
                 }
             }
         }
-        if(!isManager) {
+        if(!isManager && !isBotOwner) {
             if(![message isSend]) {
                 return nil;
             }
