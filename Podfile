@@ -378,6 +378,40 @@ post_install do |installer|
             end
         end
     end
+    # ─────────────────────────────────────────────────────────────────────
+    # SDWebImage 5.9.5 SDImageIOAnimatedCoder.createFrameAtIndex 缺 nil guard
+    # (Bugly 现网 SIGABRT, 栈顶 -[SDAnimatedImagePlayer displayDidRefresh:]
+    #  → animatedImageFrameAtIndex → createFrameAtIndex → UIKitCore
+    #  NSInvalidArgumentException)：thumbnail 路径下
+    #  CGImageCreateScaled(SDImageCoderHelper.m:310/315/318) 会因为
+    #  vImageBuffer_InitWithCGImage 失败 / malloc 失败 / vImageScale_ARGB8888
+    #  失败而返回 NULL，但 createFrameAtIndex 把它直接喂给
+    #  [[UIImage alloc] initWithCGImage:NULL ...]，UIKit 抛
+    #  NSInvalidArgumentException，CADisplayLink 回调里没人 catch → SIGABRT。
+    #  上游 5.10+ 重构了这块；项目暂 pin 5.9.5，本地补一行 nil 早返回。
+    #  幂等：用 marker 注释探测，已 patch 不重复注入。
+    # ─────────────────────────────────────────────────────────────────────
+    sd_coder_path = File.join(__dir__, 'Pods/SDWebImage/SDWebImage/Core/SDImageIOAnimatedCoder.m')
+    sd_coder_marker = '// octo-nil-imageref-guard (Podfile post_install)'
+    if File.exist?(sd_coder_path)
+        sd_content = File.read(sd_coder_path)
+        unless sd_content.include?(sd_coder_marker)
+            # 锚点：紧跟 thumbnail post-process 收尾的两层 } 之后、平台分支之前
+            anchor = "#if SD_UIKIT || SD_WATCH\n    UIImageOrientation imageOrientation = [SDImageCoderHelper imageOrientationFromEXIFOrientation:exifOrientation];"
+            inject = "if (!imageRef) {\n        return nil;\n    } #{sd_coder_marker}\n    #if SD_UIKIT || SD_WATCH\n    UIImageOrientation imageOrientation = [SDImageCoderHelper imageOrientationFromEXIFOrientation:exifOrientation];"
+            new_sd = sd_content.sub(anchor, inject)
+            if new_sd != sd_content
+                # CocoaPods 1.16+ 默认把 pod 源装成 0444 read-only, 直接 File.write 报 EACCES
+                File.chmod(0644, sd_coder_path)
+                File.write(sd_coder_path, new_sd)
+                File.chmod(0444, sd_coder_path)
+                puts "🛡️  Patched SDImageIOAnimatedCoder.m: nil-imageRef guard before initWithCGImage"
+            else
+                puts "⚠️  SDImageIOAnimatedCoder.m: anchor not found, nil-imageRef guard NOT applied (检查上游版本是否变了)"
+            end
+        end
+    end
+
     installer.pods_project.save
 end
 
