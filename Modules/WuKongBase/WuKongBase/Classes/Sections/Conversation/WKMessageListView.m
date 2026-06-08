@@ -713,7 +713,14 @@
     [self pullup:nil];
 }
 
+// pullup dedup 重试的硬上限：见下方 dedup-skip 分支注释。
+static const NSInteger kMaxPullupDedupRetry = 3;
+
 -(void) pullup:(void(^)(bool more))complete {
+    [self pullup:complete dedupRetry:0];
+}
+
+-(void) pullup:(void(^)(bool more))complete dedupRetry:(NSInteger)dedupRetry {
     __weak typeof(self) weakSelf = self;
     NSLog(@"[PullDebug] pullup START, mj_footer.state=%ld", (long)self.tableView.mj_footer.state);
 
@@ -817,12 +824,24 @@
             [weakSelf.tableView.mj_footer endRefreshing];
             NSLog(@"[PullDebug] pullup: COMPLETE (noData path), hasMore=%d, mj_footer.state=%ld", hasMore, (long)weakSelf.tableView.mj_footer.state);
 
-            // 去重跳过后重试
+            // 去重跳过后重试：仅在有限次数内重试。
+            // baseOrderSeq = dataProvider 尾部 orderSeq；newMsgs==0 时尾部未推进，
+            // 下次拉取游标不变 → SDK 返回同一页 → 若不封顶就是主队列无界自我重入，
+            // 打满 CPU 触发 iOS 热降频(全局 15fps + 发热)、主线程饥饿致气泡空白。
+            // 唯一可能推进的是并发 recv 改了尾部，故保留 kMaxPullupDedupRetry 次容忍后停止；
+            // 到顶后用户继续滚动会重新触发 footer pullup(深度归 0)，不丢分页功能。
             if(hasMore && newMsgs.count == 0) {
-                NSLog(@"[PullDebug] pullup: retrying (dedup skip)");
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [weakSelf pullup:complete];
-                });
+                if (dedupRetry < kMaxPullupDedupRetry) {
+                    NSLog(@"[PullDebug] pullup: retrying (dedup skip) %ld/%ld", (long)(dedupRetry + 1), (long)kMaxPullupDedupRetry);
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [weakSelf pullup:complete dedupRetry:dedupRetry + 1];
+                    });
+                    return;
+                }
+                NSLog(@"[PullDebug] pullup: dedup-skip retry capped at %ld, stop", (long)kMaxPullupDedupRetry);
+                if(complete) {
+                    complete(hasMore);
+                }
                 return;
             }
 
