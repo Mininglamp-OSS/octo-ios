@@ -188,6 +188,9 @@
     // 在布局回调中会走 WebKit 主线程 spin 嵌套 RunLoop，触发 UITableView 重入校验异常
     [self precacheHeightForMessage:message];
 
+    // 异源 typing 残留预清理：见 evictStaleTypingForIncomingMessage: 注释
+    [self evictStaleTypingForIncomingMessage:message];
+
     // Bugly: pulldown/pullup 把新消息写进 dataProvider 但 tableView 还没 reloadData 的窗口里，
     // 这里如果仍按 dataProvider 旧值算增量，insertRowsAtIndexPaths 的 count 和 tableView 实际行数
     // 对不上，endUpdates 会抛 _Bug_Detected_In_Client_Of_UITableView_Invalid_Number_Of_Rows_In_Section。
@@ -1495,12 +1498,16 @@
 }
 
 -(void) locateMessageCellWithMessageSeq:(uint32_t )messageSeq {
-   
+    [self locateMessageCellWithMessageSeq:messageSeq allowServerFallback:YES];
+}
+
+-(void) locateMessageCellWithMessageSeq:(uint32_t )messageSeq allowServerFallback:(BOOL)allowServerFallback {
+
 
     BOOL visible = false; // 消息是否在可见
     NSIndexPath *locatMessagePath; // 定位到的消息下表
     WKMessageModel *locatMessageModel; // 定位到的消息对象
-    
+
     locatMessagePath = [self.dataProvider indexPathAtOrderSeq:[WKSDK.shared.chatManager getOrderSeq:messageSeq]];
     if(locatMessagePath) {
         locatMessageModel = [self.dataProvider messageAtIndexPath:locatMessagePath];
@@ -1508,13 +1515,13 @@
     if(locatMessageModel!=nil) {
         visible = [self cellIsVisible:[self.tableView rectForRowAtIndexPath:locatMessagePath]];
     }
-    
+
     if(visible) { // 如果消息在可见范围内 则直接播提醒动画
         locatMessageModel.reminderAnimation = YES;
         [self.tableView reloadRowsAtIndexPaths:@[locatMessagePath] withRowAnimation:UITableViewRowAnimationNone];
         return;
     }
-    
+
     if(locatMessageModel) {
         __weak typeof(self) weakSelf = self;
         [self scrollToIndex:locatMessagePath animated:YES atScrollPosition:UITableViewScrollPositionMiddle];
@@ -1524,14 +1531,40 @@
             [weakSelf.tableView reloadRowsAtIndexPaths:@[locatMessagePath] withRowAnimation:UITableViewRowAnimationNone];
             [weakSelf.tableView endUpdates];
         });
-       
+
         return;
     }
-    
+
     // 查DB确认消息是否存在且可用（未删除、未撤回），不可用则直接提示
     WKMessage *targetMsg = [[WKMessageDB shared] getMessage:self.channel messageSeq:messageSeq];
-    if(!targetMsg || targetMsg.isDeleted || targetMsg.remoteExtra.revoke) {
+    if(targetMsg && (targetMsg.isDeleted || targetMsg.remoteExtra.revoke)) {
         [self.tableView showHUDWithHide:LLang(@"原消息不存在")];
+        return;
+    }
+    if(!targetMsg) {
+        // 本地 DB 没有命中：常见于"推送 APNs 先于 socket 消息到达"——服务端先把通知推到 APNs,
+        // 但 IM 通道的 onRecvMessages 还没把消息落到本地 DB。此时直接报"原消息不存在"是误报。
+        // 允许 fallback 时先走服务端 pullAround 拉一窗口(SDK 会写本地 DB),拿到后递归再走一遍定位;
+        // 仍然没有(allowServerFallback=NO)才真正提示。
+        if(!allowServerFallback) {
+            [self.tableView showHUDWithHide:LLang(@"原消息不存在")];
+            return;
+        }
+        __weak typeof(self) weakSelf = self;
+        [[WKSDK shared].chatManager pullAround:self.channel
+                                       orderSeq:0
+                                  maxMessageSeq:messageSeq
+                                          limit:[WKApp shared].config.eachPageMsgLimit
+                                       complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
+            void(^next)(void) = ^{
+                [weakSelf locateMessageCellWithMessageSeq:messageSeq allowServerFallback:NO];
+            };
+            if (![NSThread isMainThread]) {
+                dispatch_async(dispatch_get_main_queue(), next);
+            } else {
+                next();
+            }
+        }];
         return;
     }
 
@@ -1626,6 +1659,39 @@
     return [msgSpaceId isEqualToString:currentSpaceId];
 }
 
+// 异源 typing 残留预清理：多 bot 同时 typing 时,WKTypingManager 字典按 channel 单坑覆盖,
+// UI 端的 typing model 仍是首个 bot 的(因为后续 typing 不触发 typingAdd 回调)。
+// 此时若另一 bot 发来真实消息：
+//   - WKMessageList.addMessage 检测到末尾是 typing 但 fromUid 不同 → 走 `_insertMessage at row=count-1`
+//     把真实消息插到 typing 之前,typing 仍占末尾。
+//   - 但 handleRecvMessage/sendMessage 的增量 UI 更新假设新行追加到末尾,
+//     `insertRowsAtIndexPaths` 落在末尾索引上,tableView 取到的是 typing model(数据末尾仍是 typing),
+//     真实消息的行(在中间)从未被 tableView 感知 → 现象就是"页面卡住不刷新,真实消息隐形"。
+// 修复：在 addMessage 之前,若末尾 typing 与新消息 fromUid 不同,先把 UI 端 typing 删掉,
+// 再统一走"追加到末尾"路径。同时清掉 WKTypingManager 字典,让下一次 typing keepalive
+// 能重新走 typingAdd 把 typing 加回来(不影响后续 typing 动画)。
+-(void) evictStaleTypingForIncomingMessage:(WKMessageModel*)newMessageModel {
+    if (!newMessageModel || newMessageModel.contentType == WK_TYPING) {
+        return;
+    }
+    WKMessageModel *lastMsg = [self.dataProvider lastMessage];
+    if (!lastMsg || lastMsg.contentType != WK_TYPING) {
+        return;
+    }
+    // 同源会被 WKMessageList.replaceMessageLast 干净替换,不需要预清理
+    if ([lastMsg.fromUid isEqualToString:newMessageModel.fromUid]) {
+        return;
+    }
+    // 删除 UI 端 typing(deleteMessageUI 用 clientMsgNo 查 indexPath,内部已有越界保护)
+    if (lastMsg.message) {
+        [self deleteMessageUI:lastMsg.message];
+    }
+    // 同步清掉 manager 字典,让下次 typing 重新走 typingAdd 加回 UI(否则字典残留会让 typingAdd 静默)
+    if ([[WKTypingManager shared] hasTyping:self.channel]) {
+        [[WKTypingManager shared] removeTypingByChannel:self.channel newMessage:nil];
+    }
+}
+
 -(void) handleRecvMessage:(WKMessage*) message  {
     if(message.isDeleted) { // 已删除的消息不处理
         return;
@@ -1654,6 +1720,9 @@
 
         // 预缓存高度（触发 markdown 渲染），避免在 UITableView 布局回调中首次渲染
         [self precacheHeightForMessage:messageModel];
+
+        // 异源 typing 残留预清理：见 evictStaleTypingForIncomingMessage: 注释
+        [self evictStaleTypingForIncomingMessage:messageModel];
 
         // Bugly #3054 兜底（另一路径 crash：before=31/after=32/inserted=0/deleted=0）：
         //   handleRecvMessage 可能在 dp 已经和 tv 漂移的状态下被调用（前一次 insert 抛异常被吞掉、
