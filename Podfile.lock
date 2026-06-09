@@ -17,7 +17,6 @@ PODS:
     - AFNetworking/NSURLSession
   - Aspects (1.4.1)
   - AsyncDisplayKit (1.0.0)
-  - Bugly (2.6.1)
   - CocoaLumberjack (3.9.0):
     - CocoaLumberjack/Core (= 3.9.0)
   - CocoaLumberjack/Core (3.9.0)
@@ -103,7 +102,6 @@ PODS:
     - ActionSheetPicker-3.0
     - AFNetworking (~> 4.0)
     - AsyncDisplayKit (~> 1.0)
-    - Bugly (~> 2.6)
     - CocoaLumberjack (~> 3.0)
     - DGActivityIndicatorView (~> 2.1.1)
     - FMDB/SQLCipher (~> 2.7.5)
@@ -186,7 +184,6 @@ SPEC REPOS:
     - ActionSheetPicker-3.0
     - AFNetworking
     - Aspects
-    - Bugly
     - CocoaLumberjack
     - DGActivityIndicatorView
     - DoraemonKit
@@ -259,7 +256,6 @@ SPEC CHECKSUMS:
   AFNetworking: 3bd23d814e976cd148d7d44c3ab78017b744cd58
   Aspects: 7595ba96a6727a58ebcbfc954497fc5d2fdde546
   AsyncDisplayKit: 8f2440c10169b416e3f5d9e191b7766579b7d990
-  Bugly: 217ac2ce5f0f2626d43dbaa4f70764c953a26a31
   CocoaLumberjack: 5644158777912b7de7469fa881f8a3f259c2512a
   DGActivityIndicatorView: ff2c76073d79692f724863c8dd38685866a03cb6
   DoraemonKit: 0b45c9dc6ab34bd426a2782ee1bf7ab13492a60b

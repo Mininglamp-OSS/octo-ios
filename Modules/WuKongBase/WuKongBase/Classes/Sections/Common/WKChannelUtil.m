@@ -119,6 +119,8 @@
     channelInfo.receipt = resultDict[@"receipt"]?[resultDict[@"receipt"] boolValue]:false;
     channelInfo.robot = resultDict[@"robot"]?[resultDict[@"robot"] boolValue]:false;
 
+    channelInfo.online = resultDict[@"online"]?[resultDict[@"online"] boolValue]:false;
+
     // Bot 创建者 uid：服务端 /users/<uid> 顶层下发 bot_creator_uid（仅 robot），存入 extra
     // 供撤回菜单判定「自己创建的 Bot 消息可撤回」(对齐 web orgData.bot_creator_uid)。
     id botCreatorUid = resultDict[@"bot_creator_uid"];
