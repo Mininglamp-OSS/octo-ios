@@ -116,7 +116,7 @@ static CGFloat const kBadgeSize = 16.0f;
     // PR review #9 warning：走项目 LLang 取本地化，非中文 locale 才不会回退到硬编码中文
     lbl.text = LLang(@"[有人@我]");
     lbl.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
-    lbl.textColor = [UIColor orangeColor];
+    lbl.textColor = [UIColor redColor];
     lbl.textAlignment = NSTextAlignmentCenter;
     lbl.hidden = YES;
     return lbl;

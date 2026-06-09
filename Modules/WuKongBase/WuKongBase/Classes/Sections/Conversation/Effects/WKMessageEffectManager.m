@@ -67,9 +67,7 @@ static const NSInteger kMaxTriggeredIds = 1000;
             @"🎊": @"party",
             @"[使命必达]": @"rocketLaunch",
             @"[崇尚行动]": @"actionVideo",
-            // [有品位] 临时下线：等待替换为效果达标的视频素材后再放开
-            // (classy_celebrate.mp4 + WKClassyVideoEffect.h/.m 及 manager 的 dispatch 分支保留, 仅屏蔽入口)。
-            // @"[有品位]":   @"classyVideo",
+            @"[有品位]":   @"classyVideo",
         };
 
         _triggeredMessageIds = [NSMutableOrderedSet orderedSet];

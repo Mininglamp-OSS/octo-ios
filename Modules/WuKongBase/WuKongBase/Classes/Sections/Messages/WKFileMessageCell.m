@@ -288,6 +288,18 @@
     else if ([@[@"md", @"markdown", @"mdown", @"mkd", @"mdwn"] containsObject:lowExt]) {
         imageName = @"FileType/FileMarkdown";
     }
+    // HTML
+    else if ([@[@"html", @"htm"] containsObject:lowExt]) {
+        imageName = @"FileType/FileHTML";
+    }
+    // 压缩包
+    else if ([@[@"zip", @"rar", @"7z", @"tar", @"gz", @"tgz", @"bz2", @"xz"] containsObject:lowExt]) {
+        imageName = @"FileType/FileZip";
+    }
+    // 纯文本
+    else if ([lowExt isEqualToString:@"txt"]) {
+        imageName = @"FileType/FileTxt";
+    }
 
     if (imageName) {
         UIImage *img = [[WKApp shared] loadImage:imageName moduleID:@"WuKongBase"];

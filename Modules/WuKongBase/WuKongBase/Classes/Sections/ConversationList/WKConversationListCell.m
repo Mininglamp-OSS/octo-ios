@@ -941,7 +941,7 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     options.disableLink = true;
     [contentAttrStr lim_parse:fullContentStr mentionInfo:nil options:options];
     if(reminderStr.length>0) {
-        [contentAttrStr addAttribute:NSForegroundColorAttributeName value:[UIColor orangeColor] range:[fullContentStr rangeOfString:reminderStr]];
+        [contentAttrStr addAttribute:NSForegroundColorAttributeName value:[UIColor redColor] range:[fullContentStr rangeOfString:reminderStr]];
     }
     return contentAttrStr;
 }

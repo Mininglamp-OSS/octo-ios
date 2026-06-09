@@ -21,7 +21,10 @@
 
 @property(nonatomic,strong) id<WKConversationContext> conversationContextInner;
 
-
+/// 串行 I/O 队列：所有进入 SDK 的 pull* 调用都派发到这里，避免主线程被
+/// SDK 内部对 FMDB queue 的 `dispatch_sync` 阻塞（ANR 11:40:06 367ms 路径）。
+/// 必须串行——并发会让 SDK 的"递归补窗"两路同时写 messageList，破坏历史消息顺序。
+@property(nonatomic,strong) dispatch_queue_t ioQueue;
 
 @end
 
@@ -43,31 +46,45 @@
 
 // 请求第一屏消息
 -(void) pullFirst:(WKConversationPosition*)position complete:(void(^)(bool more))complete  {
-    
+
     WKConversationWrapModel *model = [[WKConversationListVM shared] modelAtChannel:self.channel];
     uint32_t maxMessageSeq = 0;
     if(model && model.lastMessage && model.lastMessage.messageSeq>0) {
         maxMessageSeq = model.lastMessage.messageSeq;
     }
-    
-    
+
+
     if(position && ![self needsSpaceFiltering]) {
         // 无需空间过滤时，使用 position 直接加载
         __weak typeof(self) weakSelf = self;
-        [[WKSDK shared].chatManager pullAround:self.channel orderSeq:position.orderSeq maxMessageSeq:maxMessageSeq limit:[WKApp shared].config.eachPageMsgLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
-            if(error || !messages || messages.count == 0) {
+        // 串到 ioQueue：SDK 内部 pullMessages → getLocalMessages 是同步 FMDB 读，
+        // 主线程发起会被 FMDB 串行队列堵 (ANR 11:40:06 367ms)；统一在 ioQueue 上发起。
+        dispatch_async(self.ioQueue, ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if(!strongSelf) {
                 if(complete) {
-                    complete(false);
+                    dispatch_async(dispatch_get_main_queue(), ^{ complete(false); });
                 }
                 return;
             }
-            [weakSelf.messageList clearMessages];
-            [weakSelf handleMessages:[weakSelf messagesToMessageModels:messages] insertFirst:false complete:complete];
-        }];
+            [[WKSDK shared].chatManager pullAround:strongSelf.channel orderSeq:position.orderSeq maxMessageSeq:maxMessageSeq limit:[WKApp shared].config.eachPageMsgLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
+                // complete 回调线程不确定：全本地命中走 ioQueue，calSync 走 SDK 内部 main hop。
+                // 统一 hop 回 main，下游 messageList 写入 + VC 那侧的 UIKit 调用才安全。
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if(error || !messages || messages.count == 0) {
+                        if(complete) {
+                            complete(false);
+                        }
+                        return;
+                    }
+                    [weakSelf.messageList clearMessages];
+                    [weakSelf handleMessages:[weakSelf messagesToMessageModels:messages] insertFirst:false complete:complete];
+                });
+            }];
+        });
     } else {
         // 需要空间过滤时，忽略全局 position（因为它可能指向其他空间的消息区域），
         // 从最新消息开始递归向前搜索当前空间的消息
-        __weak typeof(self) weakSelf = self;
         [self pullLastWithSpaceFilter:0 maxMessageSeq:maxMessageSeq accumulated:[NSMutableArray array] existingIds:[NSMutableSet set] complete:complete];
     }
 }
@@ -97,9 +114,53 @@
     NSInteger pageLimit = [WKApp shared].config.eachPageMsgLimit;
     __weak typeof(self) weakSelf = self;
 
-    [[WKSDK shared].chatManager pullLastMessages:self.channel endOrderSeq:endOrderSeq maxMessageSeq:maxMessageSeq limit:(int)pageLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
-        if (error || !messages || messages.count == 0) {
-            if (accumulated.count > 0) {
+    // 串到 ioQueue：SDK 内部本地 DB 读不再阻塞 main。递归调用本身也走 ioQueue，
+    // 串行队列保证补窗顺序与原实现一致（不会两路并发改 accumulated）。
+    dispatch_async(self.ioQueue, ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if(!strongSelf) {
+            if(complete) {
+                dispatch_async(dispatch_get_main_queue(), ^{ complete(NO); });
+            }
+            return;
+        }
+        [[WKSDK shared].chatManager pullLastMessages:strongSelf.channel endOrderSeq:endOrderSeq maxMessageSeq:maxMessageSeq limit:(int)pageLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (error || !messages || messages.count == 0) {
+                    if (accumulated.count > 0) {
+                        // 按 orderSeq 升序排列（旧消息在前，新消息在后）
+                        [accumulated sortUsingComparator:^NSComparisonResult(WKMessageModel *a, WKMessageModel *b) {
+                            if (a.orderSeq < b.orderSeq) return NSOrderedAscending;
+                            if (a.orderSeq > b.orderSeq) return NSOrderedDescending;
+                            return NSOrderedSame;
+                        }];
+                        [weakSelf.messageList clearMessages];
+                        [weakSelf handleMessages:accumulated insertFirst:NO complete:complete];
+                    } else if (complete) {
+                        complete(NO);
+                    }
+                    return;
+                }
+
+                NSArray<WKMessageModel*> *models = [weakSelf messagesToMessageModels:messages];
+                for (WKMessageModel *model in models) {
+                    if (![existingIds containsObject:model.clientMsgNo]) {
+                        [existingIds addObject:model.clientMsgNo];
+                        [accumulated addObject:model];
+                    }
+                }
+
+                BOOL rawHasMore = messages.count >= pageLimit;
+
+                if (accumulated.count < pageLimit && rawHasMore) {
+                    WKMessage *oldestMsg = messages.lastObject;
+                    if (oldestMsg.orderSeq > 0) {
+                        // 递归：再次进入会自己 dispatch 到 ioQueue
+                        [weakSelf pullLastWithSpaceFilter:oldestMsg.orderSeq maxMessageSeq:maxMessageSeq accumulated:accumulated existingIds:existingIds complete:complete];
+                        return;
+                    }
+                }
+
                 // 按 orderSeq 升序排列（旧消息在前，新消息在后）
                 [accumulated sortUsingComparator:^NSComparisonResult(WKMessageModel *a, WKMessageModel *b) {
                     if (a.orderSeq < b.orderSeq) return NSOrderedAscending;
@@ -108,39 +169,9 @@
                 }];
                 [weakSelf.messageList clearMessages];
                 [weakSelf handleMessages:accumulated insertFirst:NO complete:complete];
-            } else if (complete) {
-                complete(NO);
-            }
-            return;
-        }
-
-        NSArray<WKMessageModel*> *models = [weakSelf messagesToMessageModels:messages];
-        for (WKMessageModel *model in models) {
-            if (![existingIds containsObject:model.clientMsgNo]) {
-                [existingIds addObject:model.clientMsgNo];
-                [accumulated addObject:model];
-            }
-        }
-
-        BOOL rawHasMore = messages.count >= pageLimit;
-
-        if (accumulated.count < pageLimit && rawHasMore) {
-            WKMessage *oldestMsg = messages.lastObject;
-            if (oldestMsg.orderSeq > 0) {
-                [weakSelf pullLastWithSpaceFilter:oldestMsg.orderSeq maxMessageSeq:maxMessageSeq accumulated:accumulated existingIds:existingIds complete:complete];
-                return;
-            }
-        }
-
-        // 按 orderSeq 升序排列（旧消息在前，新消息在后）
-        [accumulated sortUsingComparator:^NSComparisonResult(WKMessageModel *a, WKMessageModel *b) {
-            if (a.orderSeq < b.orderSeq) return NSOrderedAscending;
-            if (a.orderSeq > b.orderSeq) return NSOrderedDescending;
-            return NSOrderedSame;
+            });
         }];
-        [weakSelf.messageList clearMessages];
-        [weakSelf handleMessages:accumulated insertFirst:NO complete:complete];
-    }];
+    });
 }
 
 -(NSArray<WKMessage*>*) filterMessagesBySpace:(NSArray<WKMessage*>*)messages {
@@ -265,6 +296,13 @@
     return _messageList;
 }
 
+- (dispatch_queue_t)ioQueue {
+    if(!_ioQueue) {
+        _ioQueue = dispatch_queue_create("com.octo.msglist.io", DISPATCH_QUEUE_SERIAL);
+    }
+    return _ioQueue;
+}
+
 
 
 #pragma mark -- WKMessageListDataProvider
@@ -317,12 +355,25 @@
         }else{
             baseOrderSeq = lastMessageModel.orderSeq;
         }
-        
+
     }
     __weak typeof(self) weakSelf = self;
-    [[WKSDK shared].chatManager pullUp:self.channel startOrderSeq:baseOrderSeq limit:[WKApp shared].config.eachPageMsgLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
-        [weakSelf handleMessages:[self messagesToMessageModels:messages] insertFirst:false complete:complete];
-    }];
+    // 串到 ioQueue：SDK 的 pullMessages 内部本地 DB 读不再在 main 上同步等 FMDB queue
+    dispatch_async(self.ioQueue, ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if(!strongSelf) {
+            if(complete) {
+                dispatch_async(dispatch_get_main_queue(), ^{ complete(false); });
+            }
+            return;
+        }
+        [[WKSDK shared].chatManager pullUp:strongSelf.channel startOrderSeq:baseOrderSeq limit:[WKApp shared].config.eachPageMsgLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
+            // 回调线程不确定，统一 hop 回 main 再走 messageList 写入 + VC complete
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf handleMessages:[weakSelf messagesToMessageModels:messages] insertFirst:false complete:complete];
+            });
+        }];
+    });
 }
 
 // 下拉加载
@@ -332,7 +383,6 @@
     if(firstMessageModel) {
         baseOrderSeq = firstMessageModel.orderSeq;
     }
-    __weak typeof(self) weakSelf = self;
     [self pullDownRecursive:baseOrderSeq accumulated:[NSMutableArray array] existingIds:[NSMutableSet set] complete:complete];
 }
 
@@ -340,37 +390,50 @@
 -(void) pullDownRecursive:(uint32_t)startOrderSeq accumulated:(NSMutableArray<WKMessageModel*>*)accumulated existingIds:(NSMutableSet*)existingIds complete:(void(^)(bool more))complete {
     NSInteger pageLimit = [WKApp shared].config.eachPageMsgLimit;
     __weak typeof(self) weakSelf = self;
-    [[WKSDK shared].chatManager pullDown:self.channel startOrderSeq:startOrderSeq limit:(int)pageLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
-        if (error || !messages || messages.count == 0) {
-            if (accumulated.count > 0) {
-                [weakSelf handleMessages:accumulated insertFirst:YES complete:complete];
-            } else if (complete) {
-                complete(NO);
+    // 串到 ioQueue：SDK 本地 DB 读不再卡 main；递归调用也走 ioQueue，串行队列保证补窗顺序。
+    dispatch_async(self.ioQueue, ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if(!strongSelf) {
+            if(complete) {
+                dispatch_async(dispatch_get_main_queue(), ^{ complete(NO); });
             }
             return;
         }
+        [[WKSDK shared].chatManager pullDown:strongSelf.channel startOrderSeq:startOrderSeq limit:(int)pageLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (error || !messages || messages.count == 0) {
+                    if (accumulated.count > 0) {
+                        [weakSelf handleMessages:accumulated insertFirst:YES complete:complete];
+                    } else if (complete) {
+                        complete(NO);
+                    }
+                    return;
+                }
 
-        NSArray<WKMessageModel*> *models = [weakSelf messagesToMessageModels:messages];
-        for (WKMessageModel *model in models) {
-            if (![existingIds containsObject:model.clientMsgNo]) {
-                [existingIds addObject:model.clientMsgNo];
-                [accumulated addObject:model];
-            }
-        }
+                NSArray<WKMessageModel*> *models = [weakSelf messagesToMessageModels:messages];
+                for (WKMessageModel *model in models) {
+                    if (![existingIds containsObject:model.clientMsgNo]) {
+                        [existingIds addObject:model.clientMsgNo];
+                        [accumulated addObject:model];
+                    }
+                }
 
-        BOOL rawHasMore = messages.count >= pageLimit;
+                BOOL rawHasMore = messages.count >= pageLimit;
 
-        if ([weakSelf needsSpaceFiltering] && accumulated.count < pageLimit && rawHasMore) {
-            WKMessage *oldestMsg = messages.lastObject;
-            uint32_t nextSeq = oldestMsg.orderSeq;
-            if (nextSeq > 0) {
-                [weakSelf pullDownRecursive:nextSeq accumulated:accumulated existingIds:existingIds complete:complete];
-                return;
-            }
-        }
+                if ([weakSelf needsSpaceFiltering] && accumulated.count < pageLimit && rawHasMore) {
+                    WKMessage *oldestMsg = messages.lastObject;
+                    uint32_t nextSeq = oldestMsg.orderSeq;
+                    if (nextSeq > 0) {
+                        // 递归：再次进入会自己 dispatch 到 ioQueue
+                        [weakSelf pullDownRecursive:nextSeq accumulated:accumulated existingIds:existingIds complete:complete];
+                        return;
+                    }
+                }
 
-        [weakSelf handleMessages:accumulated insertFirst:YES complete:complete];
-    }];
+                [weakSelf handleMessages:accumulated insertFirst:YES complete:complete];
+            });
+        }];
+    });
 }
 
 

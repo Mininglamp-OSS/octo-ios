@@ -19,6 +19,11 @@
 
 @implementation WKUserAvatar
 
+// 诊断开关定义（声明在 .h）：保留为兼容性 no-op。
+// 真正的根因 fix 现在在 WKImageView：默认 autoPlayAnimatedImage=NO + cell 显式控制 start/stop。
+// 这个 flag 即使设 YES 也不会有额外效果（因为 WKImageView 已经默认不自动播放）。
+const BOOL kDisableAvatarAnimation = NO;
+
 - (instancetype)initWithFrame:(CGRect)frame
 {
     self = [super initWithFrame:frame];
@@ -45,6 +50,11 @@
         _avatarImgView = [[WKImageView alloc] initWithFrame:CGRectMake(self.borderWidth/2.0f, self.borderWidth/2.0f, self.frame.size.width -self.borderWidth, self.frame.size.height - self.borderWidth)];
         _avatarImgView.layer.masksToBounds = YES;
         _avatarImgView.layer.cornerRadius = _avatarImgView.frame.size.width*0.5;
+        // 诊断开关：关掉头像动图自动播放。SDAnimatedImageView 默认 autoPlayAnimatedImage=YES，
+        // 群里多个动图头像会各自跑 CADisplayLink，主线程被持续薅 → HANG 100-150ms 周期。
+        if (kDisableAvatarAnimation) {
+            _avatarImgView.autoPlayAnimatedImage = NO;
+        }
     }
     return _avatarImgView;
 }

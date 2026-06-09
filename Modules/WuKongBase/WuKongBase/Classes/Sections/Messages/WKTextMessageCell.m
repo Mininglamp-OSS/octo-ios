@@ -258,6 +258,7 @@ static NSMutableDictionary *_jsTableHeights;
     [self clearSegmentViews];
 }
 
+
 + (CGSize)sizeForMessage:(WKMessageModel *)model {
    CGSize size = [super sizeForMessage:model];
     return size;
@@ -482,6 +483,10 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         [pool removeLastObject];
         wv.frame = CGRectZero;
     } else {
+        // 卡顿诊断：WKWebView pool MISS → 现场新 alloc。WebKit 首次 alloc 200~500ms
+        // (走 WebContent XPC 拉起 + ScreenTime dispatch_once)。如果同一会话里反复 MISS
+        // 说明池容量太小或者 cell 重用没把 webview 还回池。
+        NSLog(@"[CellPerf] webview POOL_MISS: alloc new WKWebView (pool=%lu)", (unsigned long)pool.count);
         wv = [[WKWebView alloc] initWithFrame:CGRectZero configuration:[WKTextMessageCell sharedWebViewConfig]];
     }
     wv.scrollView.scrollEnabled = NO;
@@ -599,7 +604,23 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         return attrStr;
     }
 
+    // 卡顿诊断：textAttrCache MISS。重点关注同一个 key 是否反复 miss。
+    // 反复 miss = key 计算错位 / 缓存被频繁淘汰 / 该消息内容太特殊触发 parse 异常慢。
+    CFAbsoluteTime _parseT0 = CFAbsoluteTimeGetCurrent();
     attrStr = [self getContentAttrStr:message];
+    CGFloat _parseMs = (CFAbsoluteTimeGetCurrent() - _parseT0) * 1000;
+    if (_parseMs > 4.0) {
+        NSString *_preview = @"";
+        if ([rawContent respondsToSelector:@selector(content)]) {
+            NSString *_t = [(id)rawContent content];
+            if ([_t isKindOfClass:[NSString class]]) {
+                _preview = _t.length > 40 ? [_t substringToIndex:40] : _t;
+                _preview = [_preview stringByReplacingOccurrencesOfString:@"\n" withString:@"↵"];
+            }
+        }
+        NSLog(@"[CellPerf] parseAttr MISS: %.1fms key=%@ preview=[%@]", _parseMs, key, _preview);
+    }
+
     if(key) {
         [[self textAttrCache] setCache:attrStr forKey:key];
     }

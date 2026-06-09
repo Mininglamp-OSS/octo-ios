@@ -53,7 +53,7 @@
         // @提醒标识（折叠时显示）
         _mentionLbl = [[UILabel alloc] init];
         _mentionLbl.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
-        _mentionLbl.textColor = [UIColor orangeColor];
+        _mentionLbl.textColor = [UIColor redColor];
         _mentionLbl.hidden = YES;
         [self.contentView addSubview:_mentionLbl];
 

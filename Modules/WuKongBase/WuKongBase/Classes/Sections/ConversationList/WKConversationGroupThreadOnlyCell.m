@@ -219,7 +219,7 @@
     NSString *moreText = [NSString stringWithFormat:@"+%ld %@", (long)moreCount, LLang(@"个子区")];
     if (moreMention) {
         NSMutableAttributedString *attrText = [[NSMutableAttributedString alloc] initWithString:moreText attributes:@{NSForegroundColorAttributeName: [WKApp shared].config.themeColor}];
-        [attrText appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@" %@", LLang(@"[有人@我]")] attributes:@{NSForegroundColorAttributeName: [UIColor orangeColor]}]];
+        [attrText appendAttributedString:[[NSAttributedString alloc] initWithString:[NSString stringWithFormat:@" %@", LLang(@"[有人@我]")] attributes:@{NSForegroundColorAttributeName: [UIColor redColor]}]];
         self.moreLbl.attributedText = attrText;
     } else {
         self.moreLbl.attributedText = nil;

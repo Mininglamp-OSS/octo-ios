@@ -113,37 +113,39 @@ static WKEmoticonService *_instance;
 }
 
 -(NSArray<id<WKMatchToken>>*)parseEmotion:(NSString *)text{
-    
+
+    if (!text || text.length == 0) {
+        return @[];
+    }
+
     NSMutableArray<id<WKMatchToken>> *tokens = [_tokens objectForKey:text];
     if(tokens) {
         return tokens;
     }
-    
-    tokens = [NSMutableArray array];
-    // 日志：检查是否能匹配自定义表情
-    if ([text containsString:@"["] && [text containsString:@"]"]) {
-        NSLog(@"[Emoji] parseEmotion called with bracket text: %@", [text substringToIndex:MIN(text.length, 50)]);
+
+    // Fast-path：自定义表情格式一律是 [xxx]，文本不含 '[' 就肯定没有 emoji，
+    // 直接跳过大 alternation 正则 (face1|face2|...|faceN) —— 这条路径占消息绝大多数，
+    // 进群滑动时大正则在主线程上跑会卡 200~300ms (ANR 2026-06-09 13:56:14/32 路径)。
+    if ([text rangeOfString:@"["].location == NSNotFound) {
+        NSArray<id<WKMatchToken>> *fast = @[ [WKDefaultToken text:text range:NSMakeRange(0, text.length) type:WKatchTokenTypeText] ];
+        [_tokens setObject:[fast mutableCopy] forKey:text];
+        return fast;
     }
+
+    tokens = [NSMutableArray array];
     static NSRegularExpression *exp;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        NSLog(@"[Emoji] creating regex with pattern length: %lu", (unsigned long)self.emojiReg.length);
         NSError *regexError = nil;
         exp = [NSRegularExpression regularExpressionWithPattern:self.emojiReg
                                                         options:NSRegularExpressionCaseInsensitive
                                                           error:&regexError];
         if (regexError) {
             NSLog(@"[Emoji] ERROR creating regex: %@", regexError);
-        } else {
-            NSLog(@"[Emoji] regex created OK");
         }
     });
-    
+
     __block NSInteger index = 0;
-    if ([text containsString:@"["] && [text containsString:@"]"]) {
-        NSInteger matchCount = [exp numberOfMatchesInString:text options:0 range:NSMakeRange(0, text.length)];
-        NSLog(@"[Emoji] regex match count for '%@': %ld, exp=%@", [text substringToIndex:MIN(text.length, 30)], (long)matchCount, exp ? @"OK" : @"NIL");
-    }
     [exp enumerateMatchesInString:text
                           options:0
                             range:NSMakeRange(0, [text length])
@@ -160,12 +162,12 @@ static WKEmoticonService *_instance;
                                    token.text = rangeText;
                                    token.range = result.range;
                                    token.imageName = emotion.faceImageName;
-                                   
+
                                    [tokens addObject:token];
                                    index = result.range.location + result.range.length;
                                }
                            }
-                           
+
                        }];
     
     if (index < [text length])

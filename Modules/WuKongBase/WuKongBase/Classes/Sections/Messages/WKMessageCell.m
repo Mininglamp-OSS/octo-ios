@@ -187,6 +187,9 @@ static NSMutableDictionary *flameNodeCacheDict;
     [self.bubbleBackgroundView addSubview:self.messageContentView];
     // 头像
     self.avatarImgView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, [WKApp shared].config.messageAvatarSize.width, [WKApp shared].config.messageAvatarSize.height)];
+    // 聊天 cell 专属：关掉头像动图自动播放。配合 onWillDisplay/onEndDisplay 的
+    // wk_setDisplayed 实现"只有 visible 区头像才动"，防止离屏 cell 累积 CADisplayLink。
+    self.avatarImgView.avatarImgView.autoPlayAnimatedImage = NO;
     [self.contentView addSubview:self.avatarImgView];
 
     // 消息发送错误
@@ -1116,7 +1119,16 @@ static NSMutableDictionary *flameNodeCacheDict;
 }
 
 - (void)onEndDisplay {
-//    [self.mainContextSourceNode layoutUpdatedForOCWithSize:self.mainContextSourceNode.bounds.size];
+    // cell 滚出 visible → 停掉头像动图，省 CADisplayLink + 解码 + setImage
+    [self.avatarImgView.avatarImgView wk_setDisplayed:NO];
+}
+
+- (void)onWillDisplay {
+    [super onWillDisplay];
+    // cell 滚入 visible → 标记 displayed=YES。
+    // 如果 image 已加载是动图，wk_setDisplayed 内部直接 startAnimating；
+    // 如果 image 还在 SDWebImage 异步加载中，setImage 重写会在 image 到达时再启动。
+    [self.avatarImgView.avatarImgView wk_setDisplayed:YES];
 }
 
 -(void) layoutTrailingView {

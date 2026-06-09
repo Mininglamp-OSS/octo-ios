@@ -97,7 +97,7 @@
         NSString *mentionPrefix = LLang(@"[有人@我]");
         NSString *fullText = lastContent.length > 0 ? [NSString stringWithFormat:@"%@ %@", mentionPrefix, lastContent] : mentionPrefix;
         NSMutableAttributedString *attrText = [[NSMutableAttributedString alloc] initWithString:fullText];
-        [attrText addAttribute:NSForegroundColorAttributeName value:[UIColor orangeColor] range:NSMakeRange(0, mentionPrefix.length)];
+        [attrText addAttribute:NSForegroundColorAttributeName value:[UIColor redColor] range:NSMakeRange(0, mentionPrefix.length)];
         if (fullText.length > mentionPrefix.length) {
             [attrText addAttribute:NSForegroundColorAttributeName value:[UIColor lightGrayColor] range:NSMakeRange(mentionPrefix.length, fullText.length - mentionPrefix.length)];
         }

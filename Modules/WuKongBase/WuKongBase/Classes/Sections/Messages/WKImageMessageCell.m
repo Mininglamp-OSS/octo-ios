@@ -21,7 +21,7 @@
 #define flameImageSize CGSizeMake(150.0f, 150.0f)
 
 @interface WKImageMessageCell ()
-@property(nonatomic,strong) UIImageView *imgView;
+@property(nonatomic,strong) WKImageView *imgView;
 
 
 
@@ -36,6 +36,18 @@
 @end
 
 @implementation WKImageMessageCell
+
+// 接管 imgView 动图 lifecycle（WKImageView autoPlay=NO 后必须显式 setDisplayed）。
+// 没有这一对的话，GIF 图片消息会永远静止——因为根 fix 关掉了 autoPlay。
+- (void)onWillDisplay {
+    [super onWillDisplay];
+    [self.imgView wk_setDisplayed:YES];
+}
+
+- (void)onEndDisplay {
+    [super onEndDisplay];
+    [self.imgView wk_setDisplayed:NO];
+}
 
 + (CGSize)contentSizeForMessage:(WKMessageModel *)model {
     if (![model.content isKindOfClass:[WKImageContent class]]) {
@@ -89,6 +101,9 @@
     CGFloat imageViewRadius = 5.0f;
     
     self.imgView = [[WKImageView alloc] init];
+    // 聊天 cell 专属：关掉图片消息动图自动播放。配合 onWillDisplay/onEndDisplay 的
+    // wk_setDisplayed 实现"只有 visible 区动图才动"。
+    self.imgView.autoPlayAnimatedImage = NO;
     self.imgView.layer.masksToBounds = YES;
     self.imgView.layer.cornerRadius = imageViewRadius;
     self.imgView.clipsToBounds = YES;

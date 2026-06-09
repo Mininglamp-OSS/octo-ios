@@ -192,7 +192,6 @@ typedef enum :NSUInteger {
 -(void) endInBubbleTextSelection;
 
 
-
 @end
 
 @interface WKBubbleBackgroundView : UIImageView

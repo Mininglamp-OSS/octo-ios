@@ -11,10 +11,11 @@
 static UIWindow *_previewWindow = nil;
 static UIWindow *_previousKeyWindow = nil;
 
-@interface WKSafeFilePreviewVC ()
+@interface WKSafeFilePreviewVC ()<WKNavigationDelegate>
 @property (nonatomic, strong) NSURL *fileURL;
 @property (nonatomic, copy) NSString *fileTitle;
 @property (nonatomic, strong) WKWebView *webView;
+@property (nonatomic, strong) UIActivityIndicatorView *loadingIndicator;
 @end
 
 @implementation WKSafeFilePreviewVC
@@ -186,15 +187,20 @@ static UIWindow *_previousKeyWindow = nil;
 #pragma mark - 其他文档 (WKWebView，在独立 Window 中与主导航完全隔离)
 
 - (void)setupWebViewInFrame:(CGRect)frame {
+    NSString *ext = self.fileURL.pathExtension.lowercaseString;
+    BOOL isHTML = [ext isEqualToString:@"html"] || [ext isEqualToString:@"htm"];
+
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     // 远程下载的 markdown / CSV / 纯文本属于不可信内容, 关掉 JS 防御 inline
-    // <img onerror>/javascript: scheme 等 XSS 向量 (PR #32 R5 安全修复)。本 VC
-    // 不挂 bridge, 所以仅是防御性 hardening, 与 WKWebViewVC 的 nextNavigationDisablesJS
-    // 同源策略对齐。
+    // <img onerror>/javascript: scheme 等 XSS 向量 (PR #32 R5 安全修复)。
+    // 例外: HTML 文件需要渲染成真实网页(报表/图表/导出页多依赖 JS), 故对 .html/.htm
+    // 放开 JS。本 VC 不挂任何 JS bridge, 且跑在独立 Window 与主导航完全隔离,
+    // 拿不到原生能力, XSS 影响面可控。
     if (@available(iOS 14.0, *)) {
-        config.defaultWebpagePreferences.allowsContentJavaScript = NO;
+        config.defaultWebpagePreferences.allowsContentJavaScript = isHTML ? YES : NO;
     }
     self.webView = [[WKWebView alloc] initWithFrame:frame configuration:config];
+    self.webView.navigationDelegate = self;
     self.webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.webView.opaque = NO;
     BOOL isDark = [WKApp shared].config.style == WKSystemStyleDark;
@@ -205,7 +211,6 @@ static UIWindow *_previousKeyWindow = nil;
         self.webView.underPageBackgroundColor = bgColor;
     }
 
-    NSString *ext = self.fileURL.pathExtension.lowercaseString;
     BOOL isMarkdown = [ext isEqualToString:@"md"] || [ext isEqualToString:@"markdown"];
     BOOL isCSV = [ext isEqualToString:@"csv"];
     BOOL isPlainText = [ext isEqualToString:@"txt"] || [ext isEqualToString:@"log"] ||
@@ -215,8 +220,7 @@ static UIWindow *_previousKeyWindow = nil;
         [ext isEqualToString:@"conf"] || [ext isEqualToString:@"sh"] ||
         [ext isEqualToString:@"swift"] || [ext isEqualToString:@"java"] ||
         [ext isEqualToString:@"py"] || [ext isEqualToString:@"js"] ||
-        [ext isEqualToString:@"ts"] || [ext isEqualToString:@"css"] ||
-        [ext isEqualToString:@"html"] || [ext isEqualToString:@"htm"];
+        [ext isEqualToString:@"ts"] || [ext isEqualToString:@"css"];
 
     if (isMarkdown) {
         [self loadMarkdownFile];
@@ -225,9 +229,40 @@ static UIWindow *_previousKeyWindow = nil;
     } else if (isPlainText) {
         [self loadPlainTextFile];
     } else {
+        // HTML 及其它可由 WebKit 直接渲染的文件: 按真实网页加载(不转义)。
         [self.webView loadFileURL:self.fileURL allowingReadAccessToURL:self.fileURL.URLByDeletingLastPathComponent];
     }
     [self.view addSubview:self.webView];
+
+    // 加载菊花: 大文件(如 ~10MB HTML)下载后渲染需要时间, 期间居中展示, 渲染完成/失败后隐藏。
+    UIActivityIndicatorViewStyle style;
+    if (@available(iOS 13.0, *)) {
+        style = UIActivityIndicatorViewStyleLarge;
+    } else {
+        style = UIActivityIndicatorViewStyleWhiteLarge;
+    }
+    self.loadingIndicator = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:style];
+    self.loadingIndicator.color = isDark ? [UIColor whiteColor] : [UIColor grayColor];
+    self.loadingIndicator.center = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
+    self.loadingIndicator.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin |
+        UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+    self.loadingIndicator.hidesWhenStopped = YES;
+    [self.loadingIndicator startAnimating];
+    [self.view addSubview:self.loadingIndicator];
+}
+
+#pragma mark - WKNavigationDelegate
+
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    [self.loadingIndicator stopAnimating];
+}
+
+- (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    [self.loadingIndicator stopAnimating];
+}
+
+- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    [self.loadingIndicator stopAnimating];
 }
 
 - (NSString *)markdownCSS {
