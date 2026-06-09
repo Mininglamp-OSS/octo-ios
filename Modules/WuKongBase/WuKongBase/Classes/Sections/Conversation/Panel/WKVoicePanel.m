@@ -255,8 +255,12 @@
     // 过滤文本类型消息
     NSMutableArray<WKMessageModel*> *textMessages = [NSMutableArray array];
     for (WKMessageModel *msg in allMessages) {
-        NSString *content = msg.content.contentDict[@"content"];
-        if (content.length > 0 && (msg.contentType == WK_TEXT || msg.content.contentDict[@"type"])) {
+        // contentDict[@"content"] 不保证是 NSString — 某些消息类型下是 NSArray，
+        // 直接 .length 会触发 -[__NSArrayI length]: unrecognized selector
+        id contentVal = msg.content.contentDict[@"content"];
+        if ([contentVal isKindOfClass:[NSString class]]
+            && [(NSString *)contentVal length] > 0
+            && (msg.contentType == WK_TEXT || msg.content.contentDict[@"type"])) {
             [textMessages addObject:msg];
         }
     }
@@ -267,7 +271,9 @@
 
         NSMutableArray<NSString*> *msgLines = [NSMutableArray array];
         for (WKMessageModel *msg in recentMessages) {
-            NSString *text = msg.content.contentDict[@"content"];
+            id textVal = msg.content.contentDict[@"content"];
+            if (![textVal isKindOfClass:[NSString class]]) continue;
+            NSString *text = (NSString *)textVal;
             NSString *name = nil;
             WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfoOfUser:msg.fromUid];
             if (info) {

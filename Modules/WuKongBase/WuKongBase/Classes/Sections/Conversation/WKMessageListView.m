@@ -125,6 +125,8 @@
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onShareExtensionMessageSent:) name:@"WKShareExtensionMessageSent" object:nil];
     // 多选模式下 cell 圆圈被勾选时刷新 anchor
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onMultipleAnchorDidChange:) name:@"WKMessageMultipleAnchorDidChange" object:nil];
+    // 回前台对账：修后台收消息离屏 insert 致最新消息行空白（见 onAppDidBecomeActiveReconcile:）
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppDidBecomeActiveReconcile:) name:UIApplicationDidBecomeActiveNotification object:nil];
 }
 
 -(void) removeDelegates {
@@ -137,6 +139,7 @@
     [[WKReminderManager shared] removeDelegate:self];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKShareExtensionMessageSent" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKMessageMultipleAnchorDidChange" object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidBecomeActiveNotification object:nil];
 }
 
 /// 外部分享的消息发送后，插入消息到当前聊天页面
@@ -187,6 +190,9 @@
     // 当消息含 markdown 表格时，cellForRow 会实例化 WKWebView 加载 HTML 表格，
     // 在布局回调中会走 WebKit 主线程 spin 嵌套 RunLoop，触发 UITableView 重入校验异常
     [self precacheHeightForMessage:message];
+
+    // 异源 typing 残留预清理：见 evictStaleTypingForIncomingMessage: 注释
+    [self evictStaleTypingForIncomingMessage:message];
 
     // Bugly: pulldown/pullup 把新消息写进 dataProvider 但 tableView 还没 reloadData 的窗口里，
     // 这里如果仍按 dataProvider 旧值算增量，insertRowsAtIndexPaths 的 count 和 tableView 实际行数
@@ -710,7 +716,14 @@
     [self pullup:nil];
 }
 
+// pullup dedup 重试的硬上限：见下方 dedup-skip 分支注释。
+static const NSInteger kMaxPullupDedupRetry = 3;
+
 -(void) pullup:(void(^)(bool more))complete {
+    [self pullup:complete dedupRetry:0];
+}
+
+-(void) pullup:(void(^)(bool more))complete dedupRetry:(NSInteger)dedupRetry {
     __weak typeof(self) weakSelf = self;
     NSLog(@"[PullDebug] pullup START, mj_footer.state=%ld", (long)self.tableView.mj_footer.state);
 
@@ -814,12 +827,24 @@
             [weakSelf.tableView.mj_footer endRefreshing];
             NSLog(@"[PullDebug] pullup: COMPLETE (noData path), hasMore=%d, mj_footer.state=%ld", hasMore, (long)weakSelf.tableView.mj_footer.state);
 
-            // 去重跳过后重试
+            // 去重跳过后重试：仅在有限次数内重试。
+            // baseOrderSeq = dataProvider 尾部 orderSeq；newMsgs==0 时尾部未推进，
+            // 下次拉取游标不变 → SDK 返回同一页 → 若不封顶就是主队列无界自我重入，
+            // 打满 CPU 触发 iOS 热降频(全局 15fps + 发热)、主线程饥饿致气泡空白。
+            // 唯一可能推进的是并发 recv 改了尾部，故保留 kMaxPullupDedupRetry 次容忍后停止；
+            // 到顶后用户继续滚动会重新触发 footer pullup(深度归 0)，不丢分页功能。
             if(hasMore && newMsgs.count == 0) {
-                NSLog(@"[PullDebug] pullup: retrying (dedup skip)");
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [weakSelf pullup:complete];
-                });
+                if (dedupRetry < kMaxPullupDedupRetry) {
+                    NSLog(@"[PullDebug] pullup: retrying (dedup skip) %ld/%ld", (long)(dedupRetry + 1), (long)kMaxPullupDedupRetry);
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [weakSelf pullup:complete dedupRetry:dedupRetry + 1];
+                    });
+                    return;
+                }
+                NSLog(@"[PullDebug] pullup: dedup-skip retry capped at %ld, stop", (long)kMaxPullupDedupRetry);
+                if(complete) {
+                    complete(hasMore);
+                }
                 return;
             }
 
@@ -1135,16 +1160,27 @@
 
 
 -(void) scrollToIndex:(NSIndexPath*)indexPath animated:(BOOL)animated{
-    if (index >= 0) {
+    if (indexPath) {
         [self scrollToIndex:indexPath animated:animated atScrollPosition:UITableViewScrollPositionTop];
    }
 }
 -(void) scrollToIndex:(NSIndexPath*)indexPath animated:(BOOL)animated atScrollPosition:(UITableViewScrollPosition)atScrollPosition{
-    if (indexPath) {
-        [self.tableView beginUpdates];
-        [self.tableView scrollToRowAtIndexPath:indexPath atScrollPosition:atScrollPosition animated:animated];
-        [self.tableView endUpdates];
-   }
+    if (!indexPath) return;
+    // dataProvider 的 orderSeq→indexPath 索引和 UITableView dataSource 在
+    // 增量更新窗口里会短暂不一致：indexPathAtOrderSeq 已能定位到刚 append
+    // 的行，但 tableView 还没拿到 numberOfRows 的新值；此时直接
+    // scrollToRowAtIndexPath 会抛 NSRangeException
+    // ("Attempted to scroll to out-of-bounds row N when there are only N rows").
+    // 这里用 tableView 当下真实尺寸做边界检查，越界就静默丢弃这次滚动 ——
+    // 真正"定位到刚到达的消息"的需求由 keepPosition / browseToOrderSeq
+    // 配合 reloadData 之后的二次 scroll 兜底，不会丢交互。
+    NSInteger sectionCount = [self.tableView numberOfSections];
+    if (indexPath.section < 0 || indexPath.section >= sectionCount) return;
+    NSInteger rowCount = [self.tableView numberOfRowsInSection:indexPath.section];
+    if (indexPath.row < 0 || indexPath.row >= rowCount) return;
+    [self.tableView beginUpdates];
+    [self.tableView scrollToRowAtIndexPath:indexPath atScrollPosition:atScrollPosition animated:animated];
+    [self.tableView endUpdates];
 }
 
 
@@ -1495,12 +1531,16 @@
 }
 
 -(void) locateMessageCellWithMessageSeq:(uint32_t )messageSeq {
-   
+    [self locateMessageCellWithMessageSeq:messageSeq allowServerFallback:YES];
+}
+
+-(void) locateMessageCellWithMessageSeq:(uint32_t )messageSeq allowServerFallback:(BOOL)allowServerFallback {
+
 
     BOOL visible = false; // 消息是否在可见
     NSIndexPath *locatMessagePath; // 定位到的消息下表
     WKMessageModel *locatMessageModel; // 定位到的消息对象
-    
+
     locatMessagePath = [self.dataProvider indexPathAtOrderSeq:[WKSDK.shared.chatManager getOrderSeq:messageSeq]];
     if(locatMessagePath) {
         locatMessageModel = [self.dataProvider messageAtIndexPath:locatMessagePath];
@@ -1508,13 +1548,13 @@
     if(locatMessageModel!=nil) {
         visible = [self cellIsVisible:[self.tableView rectForRowAtIndexPath:locatMessagePath]];
     }
-    
+
     if(visible) { // 如果消息在可见范围内 则直接播提醒动画
         locatMessageModel.reminderAnimation = YES;
         [self.tableView reloadRowsAtIndexPaths:@[locatMessagePath] withRowAnimation:UITableViewRowAnimationNone];
         return;
     }
-    
+
     if(locatMessageModel) {
         __weak typeof(self) weakSelf = self;
         [self scrollToIndex:locatMessagePath animated:YES atScrollPosition:UITableViewScrollPositionMiddle];
@@ -1524,14 +1564,40 @@
             [weakSelf.tableView reloadRowsAtIndexPaths:@[locatMessagePath] withRowAnimation:UITableViewRowAnimationNone];
             [weakSelf.tableView endUpdates];
         });
-       
+
         return;
     }
-    
+
     // 查DB确认消息是否存在且可用（未删除、未撤回），不可用则直接提示
     WKMessage *targetMsg = [[WKMessageDB shared] getMessage:self.channel messageSeq:messageSeq];
-    if(!targetMsg || targetMsg.isDeleted || targetMsg.remoteExtra.revoke) {
+    if(targetMsg && (targetMsg.isDeleted || targetMsg.remoteExtra.revoke)) {
         [self.tableView showHUDWithHide:LLang(@"原消息不存在")];
+        return;
+    }
+    if(!targetMsg) {
+        // 本地 DB 没有命中：常见于"推送 APNs 先于 socket 消息到达"——服务端先把通知推到 APNs,
+        // 但 IM 通道的 onRecvMessages 还没把消息落到本地 DB。此时直接报"原消息不存在"是误报。
+        // 允许 fallback 时先走服务端 pullAround 拉一窗口(SDK 会写本地 DB),拿到后递归再走一遍定位;
+        // 仍然没有(allowServerFallback=NO)才真正提示。
+        if(!allowServerFallback) {
+            [self.tableView showHUDWithHide:LLang(@"原消息不存在")];
+            return;
+        }
+        __weak typeof(self) weakSelf = self;
+        [[WKSDK shared].chatManager pullAround:self.channel
+                                       orderSeq:0
+                                  maxMessageSeq:messageSeq
+                                          limit:[WKApp shared].config.eachPageMsgLimit
+                                       complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
+            void(^next)(void) = ^{
+                [weakSelf locateMessageCellWithMessageSeq:messageSeq allowServerFallback:NO];
+            };
+            if (![NSThread isMainThread]) {
+                dispatch_async(dispatch_get_main_queue(), next);
+            } else {
+                next();
+            }
+        }];
         return;
     }
 
@@ -1626,6 +1692,39 @@
     return [msgSpaceId isEqualToString:currentSpaceId];
 }
 
+// 异源 typing 残留预清理：多 bot 同时 typing 时,WKTypingManager 字典按 channel 单坑覆盖,
+// UI 端的 typing model 仍是首个 bot 的(因为后续 typing 不触发 typingAdd 回调)。
+// 此时若另一 bot 发来真实消息：
+//   - WKMessageList.addMessage 检测到末尾是 typing 但 fromUid 不同 → 走 `_insertMessage at row=count-1`
+//     把真实消息插到 typing 之前,typing 仍占末尾。
+//   - 但 handleRecvMessage/sendMessage 的增量 UI 更新假设新行追加到末尾,
+//     `insertRowsAtIndexPaths` 落在末尾索引上,tableView 取到的是 typing model(数据末尾仍是 typing),
+//     真实消息的行(在中间)从未被 tableView 感知 → 现象就是"页面卡住不刷新,真实消息隐形"。
+// 修复：在 addMessage 之前,若末尾 typing 与新消息 fromUid 不同,先把 UI 端 typing 删掉,
+// 再统一走"追加到末尾"路径。同时清掉 WKTypingManager 字典,让下一次 typing keepalive
+// 能重新走 typingAdd 把 typing 加回来(不影响后续 typing 动画)。
+-(void) evictStaleTypingForIncomingMessage:(WKMessageModel*)newMessageModel {
+    if (!newMessageModel || newMessageModel.contentType == WK_TYPING) {
+        return;
+    }
+    WKMessageModel *lastMsg = [self.dataProvider lastMessage];
+    if (!lastMsg || lastMsg.contentType != WK_TYPING) {
+        return;
+    }
+    // 同源会被 WKMessageList.replaceMessageLast 干净替换,不需要预清理
+    if ([lastMsg.fromUid isEqualToString:newMessageModel.fromUid]) {
+        return;
+    }
+    // 删除 UI 端 typing(deleteMessageUI 用 clientMsgNo 查 indexPath,内部已有越界保护)
+    if (lastMsg.message) {
+        [self deleteMessageUI:lastMsg.message];
+    }
+    // 同步清掉 manager 字典,让下次 typing 重新走 typingAdd 加回 UI(否则字典残留会让 typingAdd 静默)
+    if ([[WKTypingManager shared] hasTyping:self.channel]) {
+        [[WKTypingManager shared] removeTypingByChannel:self.channel newMessage:nil];
+    }
+}
+
 -(void) handleRecvMessage:(WKMessage*) message  {
     if(message.isDeleted) { // 已删除的消息不处理
         return;
@@ -1654,6 +1753,25 @@
 
         // 预缓存高度（触发 markdown 渲染），避免在 UITableView 布局回调中首次渲染
         [self precacheHeightForMessage:messageModel];
+
+        // 异源 typing 残留预清理：见 evictStaleTypingForIncomingMessage: 注释
+        [self evictStaleTypingForIncomingMessage:messageModel];
+
+        // 后台收消息走 reloadData，不走离屏增量 insert（回归修复）：
+        //   App 在后台/锁屏时 tableView 不在可见 window，insertRowsAtIndexPaths 只更新
+        //   行簿记和 contentSize（precache 已写入高度缓存），但 UIKit 不会回调 willDisplayCell:，
+        //   cell 内容填充(refresh:)永不执行；回前台后 UIKit 认为这些行"已布局"，不再重渲染，
+        //   表现为"最新消息行空白、下滑是空区域"。同时 updateLastMsgIfNeed 已把 self.lastMessage
+        //   推进到这条新消息，导致 onConversationSyncFinished / onConnectStatus 的 last-message
+        //   相等判断提前 return，永远不会补一次 reloadData。reloadData 是惰性的，回前台下次
+        //   layout 会重查 numberOfRows 并重新 willDisplayCell:，自愈（对齐 git-init 的原行为）。
+        if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
+            [self.dataProvider addMessage:messageModel];
+            [self.tableView reloadData];
+            if (self.positionAtBottom) { [self scrollToBottom:NO]; }
+            else if ([message isSend]) { [self scrollToBottom:NO]; }
+            return;
+        }
 
         // Bugly #3054 兜底（另一路径 crash：before=31/after=32/inserted=0/deleted=0）：
         //   handleRecvMessage 可能在 dp 已经和 tv 漂移的状态下被调用（前一次 insert 抛异常被吞掉、
@@ -2431,6 +2549,54 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     }
 }
 
+// 回前台对账：兜住"后台收消息离屏 insert 致最新消息行空白"的回归。
+//   不依赖 self.lastMessage == dbLastMsg 这种"anchor 相等 ⇒ UI 正确"的判断
+//   (那正是 handleRecvMessage 在后台把 anchor 提前推进后、让 onConversationSyncFinished
+//    误判跳过补刷的根因)。这里只问一个问题：底部那一行到底有没有被真正渲染出来。
+//   positionAtBottom 时底部行本应是已显示的 cell，cellForRowAtIndexPath: 返回 nil 说明它是
+//   被离屏 insert 进来、从未走过 willDisplayCell:/refresh: 的空白壳 —— 本 bug 的精确签名。
+//   只发 reloadData(安全 sink，重查 numberOfRows，不要求行数一致)，所有检查均为纯查询。
+- (void)onAppDidBecomeActiveReconcile:(NSNotification *)note {
+    if (!self.channel) {
+        return;
+    }
+    if (self.isPulldownInProgress) { // 不和进行中的 pulldown 抢 tableView
+        return;
+    }
+    if ([self pullupHasMore]) { // 用户上滑在看历史，reload 会跳位，放过
+        return;
+    }
+    WKMessageModel *dpLast = [self.dataProvider lastMessage];
+    if (!dpLast) {
+        return;
+    }
+
+    BOOL needsReload = NO;
+    if (![self isTableViewRowCountInSyncWithDataProvider]) {
+        needsReload = YES; // 行数已漂移 → reloadData 收敛
+    } else {
+        NSInteger sections = [self.tableView numberOfSections];
+        if (sections > 0) {
+            NSInteger lastSection = sections - 1;
+            NSInteger rows = [self.tableView numberOfRowsInSection:lastSection];
+            if (rows > 0) {
+                NSIndexPath *lastPath = [NSIndexPath indexPathForRow:rows - 1 inSection:lastSection];
+                UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:lastPath];
+                if (self.positionAtBottom && cell == nil) {
+                    needsReload = YES; // 在底部却没有底部 cell → 离屏 insert 漏渲染
+                }
+            }
+        }
+    }
+
+    if (needsReload) {
+        [self.tableView reloadData];
+        if (self.positionAtBottom) {
+            [self scrollToBottom:NO];
+        }
+    }
+}
+
 #pragma mark - WKConversationManagerDelegate
 
 // conversation-sync 完成后(SDK 已 merge 进 DB)的全量补刷钩子，对齐 Android 的
@@ -2460,6 +2626,9 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     if([self pullupHasMore]) {
         // 下方还有未加载的历史分页，整页 reloadData 会破坏分页锚点，
         // 这里只更新最后一条预览引用，让 pullup/滚动时再增量补齐。
+        // 注：UI 是否真正显示到最新，现由回前台对账(onAppDidBecomeActiveReconcile:)裁决，
+        // 不再依赖此处/下方的 last-message 相等判断；故此分支刻意保持原样，避免重蹈
+        // 910709e 的 scroll-jump / 首屏不显示回归。
         [self updateLastMsgIfNeed:[[WKMessageModel alloc] initWithMessage:dbLastMsg]];
         return;
     }

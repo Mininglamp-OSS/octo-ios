@@ -677,6 +677,12 @@
     if(user.realnameVerifiedAt > 0) {
         info.extra[@"realname_verified_at"] = @(user.realnameVerifiedAt);
     }
+    // Bot 创建者 uid 回写 person 缓存的 extra：撤回菜单据此判定「自己创建的 Bot 消息可
+    // 撤回」(对齐 web orgData.bot_creator_uid)。channels/{id}/{type} 接口不下发该字段，
+    // 只有 /users/<uid> 顶层有，故必须在这里回写，否则长按 Bot 消息永远拿不到 creator。
+    if(user.botCreatorUid.length > 0) {
+        info.extra[@"bot_creator_uid"] = user.botCreatorUid;
+    }
     return info;
 }
 
