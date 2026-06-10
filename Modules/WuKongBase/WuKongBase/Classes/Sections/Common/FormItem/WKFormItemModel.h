@@ -30,6 +30,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 
 /**
+ 底部线右边距离（默认 0，即延伸至 cell 右边缘）
+ */
+@property(nonatomic,strong) NSNumber *bottomRightSpace;
+
+
+/**
  点击事件
  */
 @property(nonatomic,copy) void(^onClick)(WKFormItemModel *model,NSIndexPath *indexPath);

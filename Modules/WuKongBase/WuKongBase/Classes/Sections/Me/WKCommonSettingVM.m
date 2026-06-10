@@ -15,6 +15,7 @@
 #import "WKDestroyAccountVC.h"
 #import "WKRealnameVerifyManager.h"
 #import "WKNavigationManager.h"
+#import "WKWebViewVC.h"
 
 @interface WKCommonSettingVM ()
 
@@ -34,6 +35,17 @@
         });
     }
     return self;
+}
+
+#pragma mark - 行样式辅助
+
+// 通用行：12px row 高度 52，左右 inset 17 的底部分隔线，可选 showBottomLine
+- (NSMutableDictionary *)rowBase {
+    return [NSMutableDictionary dictionaryWithDictionary:@{
+        @"cellHeight":@(52.0f),
+        @"bottomLeftSpace":@(17.0f),
+        @"bottomRightSpace":@(17.0f),
+    }];
 }
 
 -(void) registerItems {
@@ -76,164 +88,139 @@
             };
         }
 
+        NSMutableDictionary *item = @{
+            @"class":WKLabelItemModel.class,
+            @"label":LLang(@"实名认证"),
+            @"value":valueText,
+            @"showArrow":@(!verified),
+            @"onClick":onClick,
+        }.mutableCopy;
+        [item addEntriesFromDictionary:@{
+            @"cellHeight":@(52.0f),
+            @"bottomLeftSpace":@(17.0f),
+            @"bottomRightSpace":@(17.0f),
+        }];
+
         return  @{
             @"height":WKSectionHeight,
-            @"items":@[
-                @{
-                    @"class":WKLabelItemModel.class,
-                    @"label":LLang(@"实名认证"),
-                    @"value":valueText,
-                    @"showArrow":@(!verified),
-                    @"onClick":onClick,
-                },
-            ],
+            @"items":@[ item ],
         };
     } category:WKPOINT_CATEGORY_COMMONSETTING sort:99000];
 
-    // 深色模式
+    // 深色模式 —— 已搬到「我的」页，此处不再展示
     [[WKApp shared] setMethod:@"commonsetting.notify" handler:^id _Nullable(id  _Nonnull param) {
-        BOOL supportDarkMode = NO;
-        if (@available(iOS 13.0, *)) {
-            supportDarkMode = YES;
-        }
-        NSString *darkDesc = LLang(@"打开");
-        if([WKApp shared].config.darkModeWithSystem) {
-            darkDesc = LLang(@"跟随系统");
-        }else {
-            darkDesc = WKApp.shared.config.style == WKSystemStyleDark?LLang(@"打开"):LLang(@"关闭");
-        }
-        return  @{
-            @"height":WKSectionHeight,
-            @"items":@[
-                @{
-                    @"class":WKLabelItemModel.class,
-                    @"label":LLang(@"深色模式"),
-                    @"value": darkDesc?:@"",
-                    @"hidden":@(!supportDarkMode),
-                    @"onClick":^{
-                        
-                        WKDarkModeVC *vc = [WKDarkModeVC new];
-                        [[WKNavigationManager shared] pushViewController:vc animated:YES];
-                        
-                    }
-                },
-               ]
-
-        };
+        return nil;
     } category:WKPOINT_CATEGORY_COMMONSETTING sort:90000];
-    
-    // 清除缓存
+
+    // 语言 / 存储空间 / 隐私 —— 合并为一个 card
     [[WKApp shared] setMethod:@"commonsetting.clearcache" handler:^id _Nullable(NSMutableDictionary   *param) {
         void(^reloadData)(void)  = param[@"reloadData"];
-      
+
         BOOL cacheLoaded = false;
         NSUInteger cacheSize = 0;
         if(param[@"cacheLoaded"] && [param[@"cacheLoaded"] boolValue]) {
             cacheLoaded =  true;
             cacheSize = [ param[@"cacheSize"] intValue];
         }
-        
+
         if(!cacheLoaded) {
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
-                
+
                 NSUInteger cacheSize = [[SDImageCache sharedImageCache] totalDiskSize];
                 NSError *err;
                 unsigned long long videoCacheSize =  [WKApp.shared calculateVideoCachedSizeWithError:&err];
                 cacheSize += videoCacheSize;
-                
+
                 cacheSize += [[WKSDK shared].mediaManager messageCacheSize];
-                
+
                 param[@"cacheSize"] = @(cacheSize);
                 param[@"cacheLoaded"]=@(true);
                 dispatch_async(dispatch_get_main_queue(), ^{
                     reloadData();
                 });
-                
+
             });
         }
-        
-        return  @{
-            @"height":@(0.0f),
-            @"items":@[
-                @{
-                    @"class":WKLabelItemModel.class,
-                    @"label":LLang(@"清空图片/视频缓存"),
-                    @"value": [self fileSizeWithInterge:cacheSize],
-                    @"onClick":^{
-                        WKActionSheetView2 *actionSheetView = [WKActionSheetView2 initWithTip:LLang(@"是否清除缓存")];
-                        [actionSheetView addItem:[WKActionSheetButtonItem2 initWithAlertTitle:LLang(@"清空缓存") onClick:^{
-                            [WKApp.shared cleanVideoCache]; // 清空视频缓存
-                            
-                            [[WKSDK shared].mediaManager cleanMessageCache]; // 消息缓存
-                            // 清空图片缓存
-                            [[SDImageCache sharedImageCache] clearDiskOnCompletion:^{
-                                param[@"cacheLoaded"]=@(false);
-                                reloadData();
-                            }];
-                           
-                        }]];
-                        [actionSheetView show];
-                    }
-                },
-               ]
 
+        // 当前语言
+        NSString *langKey = [WKApp shared].config.langue;
+        NSString *langDisplay = [langKey isEqualToString:@"en"] ? @"English" : @"简体中文";
+
+        NSDictionary *langItem = @{
+            @"class":WKLabelItemModel.class,
+            @"label":LLang(@"语言"),
+            @"value":langDisplay,
+            @"cellHeight":@(52.0f),
+            @"bottomLeftSpace":@(17.0f),
+            @"bottomRightSpace":@(17.0f),
+            @"showBottomLine":@(YES),
+            @"onClick":^{
+                WKLanguageVC *vc = [WKLanguageVC new];
+                [[WKNavigationManager shared] pushViewController:vc animated:YES];
+            }
+        };
+
+        NSString *cacheText;
+        if(cacheSize <= 0) {
+            cacheText = @"";
+        } else if(cacheSize < 1024) {
+            cacheText = [NSString stringWithFormat:@"%luB", (unsigned long)cacheSize];
+        } else if(cacheSize < 1024 * 1024) {
+            cacheText = [NSString stringWithFormat:@"%.0fK", cacheSize/1024.0];
+        } else if(cacheSize < 1024 * 1024 * 1024) {
+            cacheText = [NSString stringWithFormat:@"%.1fM", cacheSize/(1024.0*1024.0)];
+        } else {
+            cacheText = [NSString stringWithFormat:@"%.1fG", cacheSize/(1024.0*1024.0*1024.0)];
+        }
+        NSDictionary *storageItem = @{
+            @"class":WKLabelItemModel.class,
+            @"label":LLang(@"存储空间"),
+            @"value":cacheText,
+            @"cellHeight":@(52.0f),
+            @"bottomLeftSpace":@(17.0f),
+            @"bottomRightSpace":@(17.0f),
+            @"showBottomLine":@(YES),
+            @"onClick":^{
+                WKActionSheetView2 *actionSheetView = [WKActionSheetView2 initWithTip:LLang(@"是否清除缓存")];
+                [actionSheetView addItem:[WKActionSheetButtonItem2 initWithAlertTitle:LLang(@"清空缓存") onClick:^{
+                    [WKApp.shared cleanVideoCache];
+                    [[WKSDK shared].mediaManager cleanMessageCache];
+                    [[SDImageCache sharedImageCache] clearDiskOnCompletion:^{
+                        param[@"cacheLoaded"]=@(false);
+                        reloadData();
+                    }];
+                }]];
+                [actionSheetView show];
+            }
+        };
+
+        NSDictionary *privacyItem = @{
+            @"class":WKLabelItemModel.class,
+            @"label":LLang(@"隐私"),
+            @"cellHeight":@(52.0f),
+            @"bottomLeftSpace":@(17.0f),
+            @"bottomRightSpace":@(17.0f),
+            @"onClick":^{
+                // 与登录页一致，走 CDN 上的隐私政策 PDF（避免走 config.privacyAgreementUrl
+                // 那个 server 自服务 URL —— 部分部署已被 Aegis SSO 接管，会跳登录）。
+                NSString *urlStr = @"https://cdn.example.com/legal-agreement/octo-privacy.pdf";
+                WKWebViewVC *vc = [WKWebViewVC new];
+                vc.url = [NSURL URLWithString:urlStr];
+                [[WKNavigationManager shared] pushViewController:vc animated:YES];
+            }
+        };
+
+        return  @{
+            @"height":@(12.0f),
+            @"items":@[ langItem, storageItem, privacyItem ],
         };
     } category:WKPOINT_CATEGORY_COMMONSETTING sort:80000];
-    
-    // 聊天备份和恢复
-//    [[WKApp shared] setMethod:@"commonsetting.chatbackup" handler:^id _Nullable(id  _Nonnull param) {
-//        
-//        return  @{
-//            @"height":WKSectionHeight,
-//            @"items":@[
-//                    @{
-//                        @"class":WKLabelItemModel.class,
-//                        @"label":LLang(@"聊天记录备份"),
-//                        @"onClick":^{
-//                            WKChatBackupVC *vc = [[WKChatBackupVC alloc] init];
-//                            [WKNavigationManager.shared pushViewController:vc animated:YES];
-//                        }
-//                    },
-//                    @{
-//                        @"class":WKLabelItemModel.class,
-//                        @"label":LLang(@"聊天记录恢复"),
-//                        @"onClick":^{
-//                            WKChatRecoverVC *vc = [[WKChatRecoverVC alloc] init];
-//                            [WKNavigationManager.shared pushViewController:vc animated:YES];
-//                        }
-//                    },
-//            ],
-//        };
-//    } category:WKPOINT_CATEGORY_COMMONSETTING sort:79000];
-    
-    // 多语言
+
+    // 多语言 —— 已并入上方 commonsetting.clearcache
     [[WKApp shared] setMethod:@"commonsetting.lang" handler:^id _Nullable(id  _Nonnull param) {
-        BOOL supportDarkMode = NO;
-        if (@available(iOS 13.0, *)) {
-            supportDarkMode = YES;
-        }
-        NSString *darkDesc = LLang(@"打开");
-        if([WKApp shared].config.darkModeWithSystem) {
-            darkDesc = LLang(@"跟随系统");
-        }else {
-            darkDesc = WKApp.shared.config.style == WKSystemStyleDark?LLang(@"打开"):LLang(@"关闭");
-        }
-        
-        return  @{
-            @"height":WKSectionHeight,
-            @"items":@[
-                    @{
-                        @"class":WKLabelItemModel.class,
-                        @"label":LLang(@"多语言"),
-                        @"onClick":^{
-                            WKLanguageVC *vc = [WKLanguageVC new];
-                            [[WKNavigationManager shared] pushViewController:vc animated:YES];
-                        }
-                    },
-            ],
-        };
+        return nil;
     } category:WKPOINT_CATEGORY_COMMONSETTING sort:70000];
-    
+
     // 模块（已隐藏）
 //    [[WKApp shared] setMethod:@"commonsetting.modules" handler:^id _Nullable(id  _Nonnull param) {
 //
@@ -251,21 +238,24 @@
 //            ],
 //        };
 //    } category:WKPOINT_CATEGORY_COMMONSETTING sort:69000];
-    
-    // 版本信息
+
+    // 关于（原"版本信息"）
     [[WKApp shared] setMethod:@"commonsetting.version" handler:^id _Nullable(id  _Nonnull param) {
         NSDictionary *infoDictionary = [[NSBundle mainBundle] infoDictionary];
         NSString *appVersion = [infoDictionary objectForKey:@"CFBundleShortVersionString"];
         NSString *buildNumber = [infoDictionary objectForKey:@"CFBundleVersion"];
-        NSString *versionDisplay = [NSString stringWithFormat:@"%@（%@）", appVersion ?: @"", buildNumber ?: @""];
+        NSString *versionDisplay = [NSString stringWithFormat:@"v%@（%@）", appVersion ?: @"", buildNumber ?: @""];
 
         return @{
-            @"height":WKSectionHeight,
+            @"height":@(12.0f),
             @"items":@[
                     @{
                         @"class":WKLabelItemModel.class,
-                        @"label":LLang(@"版本信息"),
+                        @"label":LLang(@"关于"),
                         @"value":versionDisplay,
+                        @"cellHeight":@(52.0f),
+                        @"bottomLeftSpace":@(17.0f),
+                        @"bottomRightSpace":@(17.0f),
                         @"onClick":^{
                             WKAboutVC *vc = [WKAboutVC new];
                             [[WKNavigationManager shared] pushViewController:vc animated:YES];
@@ -274,16 +264,19 @@
             ],
         };
     } category:WKPOINT_CATEGORY_COMMONSETTING sort:60000];
-    
-    
+
+
     // 注销账号
     [[WKApp shared] setMethod:@"commonsetting.destroyaccount" handler:^id _Nullable(id  _Nonnull param) {
         return  @{
-            @"height":WKSectionHeight,
+            @"height":@(12.0f),
             @"items":@[
                     @{
                         @"class":WKLabelItemModel.class,
                         @"label":LLang(@"注销账号"),
+                        @"cellHeight":@(52.0f),
+                        @"bottomLeftSpace":@(17.0f),
+                        @"bottomRightSpace":@(17.0f),
                         @"onClick":^{
                             WKDestroyAccountVC *vc = [WKDestroyAccountVC new];
                             [[WKNavigationManager shared] pushViewController:vc animated:YES];
@@ -293,15 +286,18 @@
         };
     } category:WKPOINT_CATEGORY_COMMONSETTING sort:150];
 
-    // 退出登陆
+    // 退出登录（红色描边按钮）
     [[WKApp shared] setMethod:@"commonsetting.logout" handler:^id _Nullable(id  _Nonnull param) {
         __weak typeof(self) weakSelf = self;
+        UIColor *brandRed = [UIColor colorWithRed:0xF6/255.0 green:0x5E/255.0 blue:0x58/255.0 alpha:1.0];
         return  @{
-            @"height":WKSectionHeight,
+            @"height":@(16.0f),
             @"items":@[
                     @{
                         @"class":WKButtonItemModel.class,
                         @"title":LLang(@"退出登录"),
+                        @"color":brandRed,
+                        @"cellHeight":@(48.0f),
                         @"onClick":^{
                             WKActionSheetView2 *actionSheetView = [WKActionSheetView2 initWithTip:LLangW(@"退出后不会删除任何历史数据，下次登录依然可以使用本账号。",weakSelf)];
                             [actionSheetView addItem:[WKActionSheetButtonItem2 initWithAlertTitle:LLangW(@"退出登录",weakSelf) onClick:^{
@@ -323,9 +319,9 @@
             [weakSelf reloadData];
         } }];
     }
-   
+
     return  [WKApp.shared invokes:WKPOINT_CATEGORY_COMMONSETTING param:self.param];
-    
+
 }
 
 //计算出大小

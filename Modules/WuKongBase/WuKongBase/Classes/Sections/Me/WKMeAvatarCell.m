@@ -22,19 +22,21 @@
 @implementation WKMeAvatarCell
 
 +(CGSize) sizeForModel:(WKFormItemModel*)model{
-    return CGSizeMake(WKScreenWidth, 84.0f);
+    CGFloat h = model.cellHeight > 0 ? model.cellHeight : 52.0f;
+    return CGSizeMake(WKScreenWidth, h);
 }
 
 - (void)setupUI {
     [super setupUI];
-    
+
+    self.avatarImgView.layer.cornerRadius = 8.0f;
+    self.avatarImgView.layer.masksToBounds = YES;
     [self.valueView addSubview:self.avatarImgView];
-    
 }
 
 - (WKUserAvatar *)avatarImgView {
     if(!_avatarImgView) {
-        _avatarImgView = [[WKUserAvatar alloc] init];
+        _avatarImgView = [[WKUserAvatar alloc] initWithFrame:CGRectMake(0, 0, 32.0f, 32.0f)];
     }
     return _avatarImgView;
 }

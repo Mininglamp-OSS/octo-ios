@@ -125,19 +125,20 @@
     _title = title;
     self.titleLabel.text = title;
     [self.titleLabel sizeToFit];
-    
+
     if(self.titleLabel.lim_width>titleMaxWidth) {
         self.titleLabel.lim_width = titleMaxWidth;
     }
     if(self.largeTitle) {
-        self.titleLabel.lim_left = 20.0f;
+        // largeTitle 左对齐，但若已显示返回按钮，需让位避免重叠
+        self.titleLabel.lim_left = self.showBackButton ? 60.0f : 20.0f;
     }else {
         self.titleLabel.lim_left = self.lim_width/2.0f - self.titleLabel.lim_width/2.0f;
     }
     CGFloat statusHeight = [UIApplication sharedApplication].statusBarFrame.size.height;
     self.titleLabel.lim_top = (self.lim_height - statusHeight)/2.0f - self.titleLabel.lim_height/2.0f + statusHeight;
-    
-    
+
+
 }
 
 - (void)setLeftView:(UIView *)leftView {
@@ -194,10 +195,17 @@
     _showBackButton = showBackButton;
     if(showBackButton) {
         [self addSubview:self.backButton];
+        // largeTitle 模式下标题左对齐 x=20，与返回按钮(x=15,w=44)重叠，需让位
+        if(self.largeTitle && self.titleLabel.lim_left < 60.0f) {
+            self.titleLabel.lim_left = 60.0f;
+        }
     }else {
         [self.backButton removeFromSuperview];
+        if(self.largeTitle) {
+            self.titleLabel.lim_left = 20.0f;
+        }
     }
-    
+
 }
 
 -(UIImage*) getImageWithName:(NSString*)name {

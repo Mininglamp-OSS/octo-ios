@@ -15,6 +15,8 @@
 #import "WKBotListVC.h"
 #import "WKBotPlazaVC.h"
 #import "WKAllGroupListVC.h"
+#import "WKContactsVC.h"
+#import "WKMeItem.h"
 @WKModule(WKContactsModule)
 
 @interface WKContactsModule ()<WKChannelManagerDelegate>
@@ -106,6 +108,13 @@
         item.gradientKind = @"ai";
         return item;
     } category:WKPOINT_CATEGORY_CONTACTSITEM sort:8000];
+
+    // 「我的」页通讯录入口（在 WuKongContacts 注册，避免 WuKongBase 反向依赖）
+    [[WKApp shared] setMethod:@"me.contacts" handler:^id _Nullable(id  _Nonnull param) {
+        return [WKMeItem initWithTitle:LLangW(@"通讯录",weakSelf) icon:nil nextSectionHeight:12.0f onClick:^{
+            [[WKNavigationManager shared] pushViewController:[WKContactsVC new] animated:YES];
+        }];
+    } category:WKPOINT_CATEGORY_ME sort:19000];
 
 
 }
