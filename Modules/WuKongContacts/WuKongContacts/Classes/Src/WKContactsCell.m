@@ -24,7 +24,7 @@
 @property(nonatomic,strong) UILabel *nameLbl;
 @property(nonatomic,strong) WKContactsCellModel *contactModel;
 @property(nonatomic,strong) UIView *onlineDot;
-@property(nonatomic,strong) UILabel *aiBadgeLbl;
+@property(nonatomic,strong) UIImageView *aiBadgeLbl;
 @property(nonatomic,strong) WKOfficialTag *officialTag;
 // / Phase A —— 通讯录 cell 实名 ✓ 徽章
 @property(nonatomic,strong) UIImageView *realnameVerifiedImgView;
@@ -52,13 +52,9 @@
     [_nameLbl setFont:[[WKApp shared].config appFontOfSize:15.0f]];
     [self.contentView addSubview:_nameLbl];
 
-    _aiBadgeLbl = [[UILabel alloc] init];
-    _aiBadgeLbl.text = @"AI";
-    _aiBadgeLbl.font = [UIFont systemFontOfSize:9.0f weight:UIFontWeightBold];
-    _aiBadgeLbl.textColor = [UIColor whiteColor];
-    _aiBadgeLbl.textAlignment = NSTextAlignmentCenter;
-    _aiBadgeLbl.layer.cornerRadius = 7.0f;
-    _aiBadgeLbl.layer.masksToBounds = YES;
+    _aiBadgeLbl = [[UIImageView alloc] init];
+    _aiBadgeLbl.image = [WKApp.shared loadImage:@"Common/Index/IconAIBadge" moduleID:@"WuKongBase"];
+    _aiBadgeLbl.contentMode = UIViewContentModeScaleAspectFit;
     _aiBadgeLbl.hidden = YES;
     [self.contentView addSubview:_aiBadgeLbl];
 
@@ -121,11 +117,14 @@
     // AI badge
     self.aiBadgeLbl.hidden = !_contactModel.robot;
     if (_contactModel.robot) {
-        _aiBadgeLbl.backgroundColor = WKApp.shared.config.themeColor;
-        [self.aiBadgeLbl sizeToFit];
+        CGFloat h = 14.0f;
+        CGFloat w = h;
+        UIImage *img = self.aiBadgeLbl.image;
+        if (img && img.size.height > 0.0f) {
+            w = h * img.size.width / img.size.height;
+        }
         CGRect frame = self.aiBadgeLbl.frame;
-        frame.size.width = MAX(frame.size.width + 8.0f, 28.0f);
-        frame.size.height = 14.0f;
+        frame.size = CGSizeMake(w, h);
         self.aiBadgeLbl.frame = frame;
     }
 

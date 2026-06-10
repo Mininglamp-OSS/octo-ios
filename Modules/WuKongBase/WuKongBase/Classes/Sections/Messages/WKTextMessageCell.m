@@ -2027,6 +2027,7 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
 
 -(void) layoutName {
     WKBubblePostion position = [[self class] bubblePosition:self.messageModel];
+    CGFloat nameMaxW = self.messageContentView.lim_width;
     if(!self.nameLbl.hidden) {
         if(position == WKBubblePostionFirst || position == WKBubblePostionSingle) {
             self.nameLbl.lim_left =  WK_CONTENT_INSETS.left+WKLastBubbleOffsetSpace;
@@ -2036,26 +2037,15 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
 
         self.nameLbl.lim_top =  WK_CONTENT_INSETS.top;
         // 收缩nameLbl宽度为文字实际宽度
-        CGSize fitSize = [self.nameLbl sizeThatFits:CGSizeMake(self.messageContentView.lim_width, WK_NICKNAME_HEIGHT)];
-        self.nameLbl.lim_width = MIN(fitSize.width, self.messageContentView.lim_width);
+        CGSize fitSize = [self.nameLbl sizeThatFits:CGSizeMake(nameMaxW, WK_NICKNAME_HEIGHT)];
+        self.nameLbl.lim_width = MIN(fitSize.width, nameMaxW);
     } else {
-        self.nameLbl.lim_width = self.messageContentView.lim_width;
+        self.nameLbl.lim_width = nameMaxW;
     }
 
-    // 实名 ✓ 徽章 + Bot 标识：紧跟 nameLbl 右侧，realname → bot 串行。
-    // 父类 layoutName 在 WKTextMessageCell 这里被完全覆写，必须在子类显式排
-    // realnameVerifiedImgView，否则它会停留在 initUI 时的 (0,0,12,12) 旧 frame
-    // —— 表现为「徽章卡在气泡左上角」（P1-1 同型坑）。
-    CGFloat afterNameRight = self.nameLbl.lim_left + self.nameLbl.lim_width;
-    if (!self.realnameVerifiedImgView.hidden) {
-        self.realnameVerifiedImgView.lim_width = 12.0f;
-        self.realnameVerifiedImgView.lim_height = 12.0f;
-        self.realnameVerifiedImgView.lim_left = afterNameRight + 6.0f;
-        self.realnameVerifiedImgView.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.realnameVerifiedImgView.lim_height) / 2.0f;
-        afterNameRight = self.realnameVerifiedImgView.lim_left + self.realnameVerifiedImgView.lim_width;
-    }
-    self.botBadgeLbl.lim_left = afterNameRight + 6.0f;
-    self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
+    // 实名 ✓ + Bot(AI) 徽章统一布局：长昵称压缩文本给徽章让位、按真实文本宽定位，
+    // 避免首帧重叠（父类共享实现）。
+    [self layoutNameRowBadgesWithMaxRowWidth:(self.nameLbl.hidden ? 0.0f : nameMaxW)];
 }
 
 +(UIEdgeInsets) contentEdgeInsets:(WKMessageModel*)model {

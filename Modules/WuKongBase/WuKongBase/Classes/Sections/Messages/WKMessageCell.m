@@ -242,17 +242,10 @@ static NSMutableDictionary *flameNodeCacheDict;
     self.realnameVerifiedImgView.hidden = YES;
     [self.bubbleBackgroundView addSubview:self.realnameVerifiedImgView];
 
-    // Bot标识
-    self.botBadgeLbl = [[UILabel alloc] init];
-    self.botBadgeLbl.text = @"AI";
-    self.botBadgeLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
-    self.botBadgeLbl.textColor = [UIColor whiteColor];
-    self.botBadgeLbl.backgroundColor = [UIColor colorWithRed:136.0f/255.0f green:84.0f/255.0f blue:208.0f/255.0f alpha:1.0f];
-    self.botBadgeLbl.textAlignment = NSTextAlignmentCenter;
-    self.botBadgeLbl.layer.cornerRadius = 4.0f;
-    self.botBadgeLbl.layer.masksToBounds = YES;
-    self.botBadgeLbl.layer.shouldRasterize = YES;
-    self.botBadgeLbl.layer.rasterizationScale = [UIScreen mainScreen].scale;
+    // Bot标识（AI 图标）
+    self.botBadgeLbl = [[UIImageView alloc] init];
+    self.botBadgeLbl.image = [self getImageNameForBaseModule:@"Common/Index/IconAIBadge"];
+    self.botBadgeLbl.contentMode = UIViewContentModeScaleAspectFit;
     self.botBadgeLbl.hidden = YES;
     [self.bubbleBackgroundView addSubview:self.botBadgeLbl];
 
@@ -562,13 +555,6 @@ static NSMutableDictionary *flameNodeCacheDict;
     }
     BOOL badgeWasHidden = self.botBadgeLbl.hidden;
     self.botBadgeLbl.hidden = !isBot || self.nameLbl.hidden;
-    if (!self.botBadgeLbl.hidden) {
-        [self.botBadgeLbl sizeToFit];
-        CGRect badgeFrame = self.botBadgeLbl.frame;
-        badgeFrame.size.width += 8.0f;
-        badgeFrame.size.height += 4.0f;
-        self.botBadgeLbl.frame = badgeFrame;
-    }
     // 仅在 badge 显隐状态真正改变时触发 layout（channel info 异步加载场景）
     // 无条件 setNeedsLayout 会经 layoutMainContextSourceNode→AsyncDisplayKit→takeView
     // 形成无限回调循环，导致长按菜单卡死
@@ -836,13 +822,27 @@ static NSMutableDictionary *flameNodeCacheDict;
         isBot = YES;
     }
     if(isBot) {
-        // AI标识: "AI"文本(10pt字体) + 8pt内边距 + 6pt间距
-        UIFont *badgeFont = [[WKApp shared].config appFontOfSize:10.0f];
-        CGSize badgeTextSize = [@"AI" sizeWithAttributes:@{NSFontAttributeName: badgeFont}];
-        CGFloat badgeWidth = badgeTextSize.width + 8.0f; // sizeToFit + 8pt padding
-        totalWidth += 6.0f + badgeWidth; // 6pt gap + badge
+        // AI标识图标: 图标显示宽(按真实宽高比) + 6pt间距
+        totalWidth += 6.0f + [self botBadgeDisplayWidth];
     }
     return totalWidth;
+}
+
+// Bot(AI) 图标按真实宽高比换算到 WK_BOT_BADGE_HEIGHT 高度后的显示宽度。
+// 取图标 image 的宽高比；image 尚未加载到（首帧/资源缺失）时退回正方形兜底，
+// 避免气泡宽度算成 0 导致图标被裁。
++(CGFloat) botBadgeDisplayWidth {
+    static CGFloat cachedWidth = 0.0f;
+    if(cachedWidth > 0.0f) {
+        return cachedWidth;
+    }
+    UIImage *img = [[WKApp shared] loadImage:@"Common/Index/IconAIBadge" moduleID:@"WuKongBase"];
+    CGFloat width = WK_BOT_BADGE_HEIGHT; // 兜底：正方形
+    if(img && img.size.height > 0.0f) {
+        width = WK_BOT_BADGE_HEIGHT * img.size.width / img.size.height;
+        cachedWidth = width; // 只缓存真实拿到 image 后的结果
+    }
+    return width;
 }
 
 
@@ -1242,32 +1242,64 @@ static NSMutableDictionary<NSString*, UIImage*> *_bubbleImageCache;
         nicknameMaxW = MIN(nicknameMaxW, [WKApp shared].config.messageContentMaxWidth);
         CGSize fitSize = [self.nameLbl sizeThatFits:CGSizeMake(nicknameMaxW, WK_NICKNAME_HEIGHT)];
         self.nameLbl.lim_width = MIN(fitSize.width, nicknameMaxW);
+        [self layoutNameRowBadgesWithMaxRowWidth:nicknameMaxW];
+    } else {
+        [self layoutNameRowBadgesWithMaxRowWidth:0.0f];
+    }
+}
+
+// 昵称行 实名 ✓ / Bot(AI) 徽章统一布局，详见头文件说明。
+-(void) layoutNameRowBadgesWithMaxRowWidth:(CGFloat)maxRowWidth {
+    BOOL showRealname = !self.realnameVerifiedImgView.hidden;
+    BOOL showBot = !self.botBadgeLbl.hidden;
+
+    // 先把可见徽章的目标尺寸定下来（Bot 图标按真实宽高比换算）。
+    CGFloat realnameW = showRealname ? 12.0f : 0.0f;
+    CGFloat botW = showBot ? [[self class] botBadgeDisplayWidth] : 0.0f;
+    if (showBot) {
+        self.botBadgeLbl.lim_width = botW;
+        self.botBadgeLbl.lim_height = WK_BOT_BADGE_HEIGHT;
     }
 
-    // Bot标识布局：在 layoutName 中计算尺寸再定位，避免 channel info 异步加载时
-    // refreshModel: 已设 hidden=NO 但 layoutSubviews 尚未执行导致 lim_height=0 的时序问题
-    if (!self.botBadgeLbl.hidden) {
-        [self.botBadgeLbl sizeToFit];
-        CGRect badgeFrame = self.botBadgeLbl.frame;
-        badgeFrame.size.width += 8.0f;
-        badgeFrame.size.height += 4.0f;
-        self.botBadgeLbl.frame = badgeFrame;
+    // 徽章总占用宽度（含与前一元素 6pt 间距）。
+    CGFloat badgesWidth = 0.0f;
+    if (showRealname) badgesWidth += 6.0f + realnameW;
+    if (showBot)      badgesWidth += 6.0f + botW;
+
+    // 长昵称（含 @SpaceName 后缀）场景：压缩 nameLbl 文本宽度给徽章让位，
+    // UILabel 自带 truncation 会 ... 截断，保证徽章始终可见、不被裁剪。
+    if (!self.nameLbl.hidden && maxRowWidth > 0.0f && badgesWidth > 0.0f) {
+        CGFloat maxNameW = maxRowWidth - badgesWidth;
+        if (maxNameW < 0.0f) maxNameW = 0.0f;
+        if (self.nameLbl.lim_width > maxNameW) {
+            self.nameLbl.lim_width = maxNameW;
+        }
     }
 
-    // 实名认证 ✓ 徽章布局（）
-    // 与 botBadge 同 row，紧贴在 nameLbl 右侧，间距 6pt（对齐 AI 文字徽章节奏）。
-    // 用 imgView 自身 lim_height 算垂直居中，避免和 botBadge 公式不一致。
-    CGFloat afterNameRight = self.nameLbl.lim_left + self.nameLbl.lim_width;
-    if (!self.realnameVerifiedImgView.hidden) {
-        self.realnameVerifiedImgView.lim_width = 12.0f;
+    // 徽章锚点用「真实文本宽度」而非 lim_width，避免首帧 lim_width 尚未刷新（=0/stale）
+    // 时 afterNameRight 退到 nameLbl 起点，导致徽章压到昵称上方重叠。
+    CGFloat textWidth = 0.0f;
+    if (self.nameLbl.attributedText.length > 0) {
+        textWidth = [self.nameLbl.attributedText size].width;
+    } else if (self.nameLbl.text.length > 0 && self.nameLbl.font) {
+        textWidth = [self.nameLbl.text sizeWithAttributes:@{NSFontAttributeName: self.nameLbl.font}].width;
+    }
+    CGFloat nameRight = self.nameLbl.hidden ? self.nameLbl.lim_left
+                                            : self.nameLbl.lim_left + MIN(textWidth, self.nameLbl.lim_width);
+    CGFloat afterNameRight = nameRight;
+
+    if (showRealname) {
+        self.realnameVerifiedImgView.lim_width = realnameW;
         self.realnameVerifiedImgView.lim_height = 12.0f;
         self.realnameVerifiedImgView.lim_left = afterNameRight + 6.0f;
         self.realnameVerifiedImgView.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.realnameVerifiedImgView.lim_height) / 2.0f;
         afterNameRight = self.realnameVerifiedImgView.lim_left + self.realnameVerifiedImgView.lim_width;
     }
 
-    self.botBadgeLbl.lim_left = afterNameRight + 6.0f;
-    self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
+    if (showBot) {
+        self.botBadgeLbl.lim_left = afterNameRight + 6.0f;
+        self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
+    }
 }
 
 

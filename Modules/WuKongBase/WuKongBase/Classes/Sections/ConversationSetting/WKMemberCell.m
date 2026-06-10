@@ -21,7 +21,7 @@
 
 @property(nonatomic,strong) WKOnlineBadgeView *onlineBadgeView;
 
-@property(nonatomic,strong) UILabel *botBadgeLbl; // AI标识
+@property(nonatomic,strong) UIImageView *botBadgeLbl; // AI标识（AI 图标）
 
 // 实名认证 ✓ 迷你徽章（/ Phase A）
 // 12×12 pt 蓝勾，显示在昵称右侧 padding.left = 2pt；未实名隐藏，不加任何灰标。
@@ -102,10 +102,14 @@
     // AI标识
     self.botBadgeLbl.hidden = !member.robot;
     if(member.robot) {
-        [self.botBadgeLbl sizeToFit];
+        CGFloat h = 16.0f;
+        CGFloat w = h;
+        UIImage *img = self.botBadgeLbl.image;
+        if(img && img.size.height > 0.0f) {
+            w = h * img.size.width / img.size.height;
+        }
         CGRect frame = self.botBadgeLbl.frame;
-        frame.size.width += 8.0f;
-        frame.size.height += 4.0f;
+        frame.size = CGSizeMake(w, h);
         self.botBadgeLbl.frame = frame;
     }
 
@@ -258,16 +262,11 @@
     return _nameLbl;
 }
 
-- (UILabel *)botBadgeLbl {
+- (UIImageView *)botBadgeLbl {
     if(!_botBadgeLbl) {
-        _botBadgeLbl = [[UILabel alloc] init];
-        _botBadgeLbl.text = @"AI";
-        _botBadgeLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
-        _botBadgeLbl.textColor = [UIColor whiteColor];
-        _botBadgeLbl.backgroundColor = [UIColor colorWithRed:136.0f/255.0f green:84.0f/255.0f blue:208.0f/255.0f alpha:1.0f];
-        _botBadgeLbl.textAlignment = NSTextAlignmentCenter;
-        _botBadgeLbl.layer.cornerRadius = 4.0f;
-        _botBadgeLbl.layer.masksToBounds = YES;
+        _botBadgeLbl = [[UIImageView alloc] init];
+        _botBadgeLbl.image = [[WKApp shared] loadImage:@"Common/Index/IconAIBadge" moduleID:@"WuKongBase"];
+        _botBadgeLbl.contentMode = UIViewContentModeScaleAspectFit;
         _botBadgeLbl.hidden = YES;
     }
     return _botBadgeLbl;

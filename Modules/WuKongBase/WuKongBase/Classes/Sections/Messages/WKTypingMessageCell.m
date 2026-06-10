@@ -47,6 +47,7 @@
 // 参考 WKTextMessageCell：将昵称定位到气泡内部（正值 lim_top），而不是父类的负值
 -(void) layoutName {
     WKBubblePostion position = [[self class] bubblePosition:self.messageModel];
+    CGFloat nameMaxW = self.messageContentView.lim_width;
     if(!self.nameLbl.hidden) {
         if(position == WKBubblePostionFirst || position == WKBubblePostionSingle) {
             self.nameLbl.lim_left = WK_CONTENT_INSETS.left + WKLastBubbleOffsetSpace;
@@ -55,23 +56,14 @@
         }
 
         self.nameLbl.lim_top = WK_CONTENT_INSETS.top;
-        CGSize fitSize = [self.nameLbl sizeThatFits:CGSizeMake(self.messageContentView.lim_width, WK_NICKNAME_HEIGHT)];
-        self.nameLbl.lim_width = MIN(fitSize.width, self.messageContentView.lim_width);
+        CGSize fitSize = [self.nameLbl sizeThatFits:CGSizeMake(nameMaxW, WK_NICKNAME_HEIGHT)];
+        self.nameLbl.lim_width = MIN(fitSize.width, nameMaxW);
     } else {
-        self.nameLbl.lim_width = self.messageContentView.lim_width;
+        self.nameLbl.lim_width = nameMaxW;
     }
 
-    // 实名 ✓ 徽章 + Bot 标识：与 WKTextMessageCell 一致的 realname → bot 串行布局。
-    CGFloat afterNameRight = self.nameLbl.lim_left + self.nameLbl.lim_width;
-    if (!self.realnameVerifiedImgView.hidden) {
-        self.realnameVerifiedImgView.lim_width = 12.0f;
-        self.realnameVerifiedImgView.lim_height = 12.0f;
-        self.realnameVerifiedImgView.lim_left = afterNameRight + 6.0f;
-        self.realnameVerifiedImgView.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.realnameVerifiedImgView.lim_height) / 2.0f;
-        afterNameRight = self.realnameVerifiedImgView.lim_left + self.realnameVerifiedImgView.lim_width;
-    }
-    self.botBadgeLbl.lim_left = afterNameRight + 6.0f;
-    self.botBadgeLbl.lim_top = self.nameLbl.lim_top + (self.nameLbl.lim_height - self.botBadgeLbl.lim_height) / 2.0f;
+    // 实名 ✓ + Bot(AI) 徽章统一布局（父类共享实现）。
+    [self layoutNameRowBadgesWithMaxRowWidth:(self.nameLbl.hidden ? 0.0f : nameMaxW)];
 }
 
 - (void)initUI {
