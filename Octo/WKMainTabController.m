@@ -25,33 +25,30 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.delegate = self;
-    [self updateTabBarAppearance];
-    self.tabBar.tintColor = [WKApp shared].config.themeColor;
     // 监听 viewConfigChange 通知（WKBaseVC 的 traitCollectionDidChange 会发这个）
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onStyleChange) name:@"WK_NOTIFY_STYLE_CHANGE" object:nil];
     // 切语言时 tabbar item title 不会自动刷新, 必须监听 WKNOTIFY_LANG_CHANGE 重新走 LLang
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onLangChange) name:WKNOTIFY_LANG_CHANGE object:nil];
 
-    UIColor *normalColor = [UIColor colorWithWhite:0.55 alpha:1.0];
-    UIColor *selectedColor = [WKApp shared].config.themeColor;
-
     [self setupChildVC:WKConversationListVC.class title:LLang(@"消息")
-                 image:[self drawMessageIconWithColor:normalColor filled:NO]
-         selectedImage:[self drawMessageIconWithColor:selectedColor filled:YES]];
+                 image:[UIImage imageNamed:@"消息"]
+         selectedImage:[UIImage imageNamed:@"消息1"]];
 
-    [self setupChildVC:WKContactsVC.class title:LLang(@"通讯录")
-                 image:[self drawContactsIconWithColor:normalColor filled:NO]
-         selectedImage:[self drawContactsIconWithColor:selectedColor filled:YES]];
+    [self setupChildVC:WKContactsVC.class title:LLang(@"上下文")
+                 image:[UIImage imageNamed:@"上下文"]
+         selectedImage:[UIImage imageNamed:@"上下文1"]];
 
     [self setupChildVC:WKMeVC.class title:LLang(@"我")
-                 image:[self drawMeIconWithColor:normalColor filled:NO]
-         selectedImage:[self drawMeIconWithColor:selectedColor filled:YES]];
+                 image:[UIImage imageNamed:@"我的"]
+         selectedImage:[UIImage imageNamed:@"我的1"]];
 
+    // 必须在 setupChildVC 之后，applySelectedTitleColor 要遍历 self.viewControllers
+    [self updateTabBarAppearance];
 }
 
 - (void)onLangChange {
-    // tab item 顺序 = setupChildVC 顺序: 消息 / 通讯录 / 我
-    NSArray<NSString *> *titleKeys = @[@"消息", @"通讯录", @"我"];
+    // tab item 顺序 = setupChildVC 顺序: 消息 / 上下文 / 我
+    NSArray<NSString *> *titleKeys = @[@"消息", @"上下文", @"我"];
     [self.viewControllers enumerateObjectsUsingBlock:^(UIViewController *vc, NSUInteger idx, BOOL *stop) {
         if (idx < titleKeys.count) {
             vc.tabBarItem.title = LLang(titleKeys[idx]);
@@ -68,93 +65,6 @@
     [self addChildViewController:vcInstall];
 }
 
-#pragma mark - Tab Bar Icon Drawing
-
-- (UIImage *)drawMessageIconWithColor:(UIColor *)color filled:(BOOL)filled {
-    CGSize size = CGSizeMake(26, 26);
-    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
-    CGContextRef ctx = UIGraphicsGetCurrentContext();
-
-    UIBezierPath *bubble = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(2, 3, 22, 16) cornerRadius:4];
-    // 小尾巴
-    UIBezierPath *tail = [UIBezierPath bezierPath];
-    [tail moveToPoint:CGPointMake(7, 19)];
-    [tail addLineToPoint:CGPointMake(5, 23)];
-    [tail addLineToPoint:CGPointMake(12, 19)];
-    [bubble appendPath:tail];
-
-    if (filled) {
-        CGContextSetFillColorWithColor(ctx, color.CGColor);
-        [bubble fill];
-    } else {
-        CGContextSetStrokeColorWithColor(ctx, color.CGColor);
-        CGContextSetLineWidth(ctx, 1.5);
-        [bubble stroke];
-    }
-
-    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return image;
-}
-
-- (UIImage *)drawContactsIconWithColor:(UIColor *)color filled:(BOOL)filled {
-    CGSize size = CGSizeMake(28, 26);
-    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
-    CGContextRef ctx = UIGraphicsGetCurrentContext();
-    CGContextSetLineWidth(ctx, 1.5);
-    CGContextSetLineCap(ctx, kCGLineCapRound);
-    CGContextSetLineJoin(ctx, kCGLineJoinRound);
-
-    if (filled) {
-        CGContextSetFillColorWithColor(ctx, color.CGColor);
-        // 前面的人（左）
-        CGContextFillEllipseInRect(ctx, CGRectMake(6, 4, 9, 9));
-        UIBezierPath *body1 = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(2, 17, 17, 8) cornerRadius:4];
-        [body1 fill];
-        // 后面的人（右）
-        CGContextFillEllipseInRect(ctx, CGRectMake(16, 5, 7.5, 7.5));
-        UIBezierPath *body2 = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(14, 16, 13, 7) cornerRadius:3.5];
-        [body2 fill];
-    } else {
-        CGContextSetStrokeColorWithColor(ctx, color.CGColor);
-        // 前面的人（左）
-        CGContextStrokeEllipseInRect(ctx, CGRectMake(6, 4, 9, 9));
-        UIBezierPath *body1 = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(2, 17, 17, 8) cornerRadius:4];
-        [body1 stroke];
-        // 后面的人（右）
-        CGContextStrokeEllipseInRect(ctx, CGRectMake(16, 5, 7.5, 7.5));
-        UIBezierPath *body2 = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(14, 16, 13, 7) cornerRadius:3.5];
-        [body2 stroke];
-    }
-
-    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return image;
-}
-
-- (UIImage *)drawMeIconWithColor:(UIColor *)color filled:(BOOL)filled {
-    CGSize size = CGSizeMake(26, 26);
-    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
-    CGContextRef ctx = UIGraphicsGetCurrentContext();
-    CGContextSetLineWidth(ctx, 1.5);
-
-    if (filled) {
-        CGContextSetFillColorWithColor(ctx, color.CGColor);
-        CGContextFillEllipseInRect(ctx, CGRectMake(7.5, 3, 11, 11));
-        UIBezierPath *body = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(3, 17, 20, 8) cornerRadius:4];
-        [body fill];
-    } else {
-        CGContextSetStrokeColorWithColor(ctx, color.CGColor);
-        CGContextStrokeEllipseInRect(ctx, CGRectMake(7.5, 3, 11, 11));
-        UIBezierPath *body = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(3, 17, 20, 8) cornerRadius:4];
-        [body stroke];
-    }
-
-    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return image;
-}
-
 - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
     [super traitCollectionDidChange:previousTraitCollection];
     [self onStyleChange];
@@ -169,17 +79,43 @@
 }
 
 - (void)updateTabBarAppearance {
+    // iOS 26+ 想要 Liquid Glass，关键是 *不要* 自定义 UITabBarAppearance，
+    // 否则系统不会再渲染那层玻璃材质 → 只剩你设的背景板。
+    // 选中文字颜色走 per-item 的 titleTextAttributes，不需要走 appearance。
+    if (@available(iOS 26.0, *)) {
+        self.tabBar.standardAppearance = [[UITabBarAppearance alloc] init]; // 全默认，让系统接管 Liquid Glass
+        if (@available(iOS 15.0, *)) {
+            self.tabBar.scrollEdgeAppearance = nil; // 不要 override，避免压住玻璃
+        }
+        UIColor *selectedTextColor = [UIColor colorWithRed:28.0/255.0 green:28.0/255.0 blue:35.0/255.0 alpha:1.0];
+        [self applySelectedTitleColor:selectedTextColor];
+        return;
+    }
+
     if (@available(iOS 13.0, *)) {
         UITabBarAppearance *appearance = [[UITabBarAppearance alloc] init];
-        [appearance configureWithOpaqueBackground];
-        appearance.backgroundColor = [UIColor systemBackgroundColor];
+        [appearance configureWithDefaultBackground];
         appearance.shadowColor = [UIColor clearColor];
+
+        UIColor *selectedTextColor = [UIColor colorWithRed:28.0/255.0 green:28.0/255.0 blue:35.0/255.0 alpha:1.0];
+        NSDictionary *selectedAttrs = @{ NSForegroundColorAttributeName: selectedTextColor };
+        appearance.stackedLayoutAppearance.selected.titleTextAttributes = selectedAttrs;
+        appearance.inlineLayoutAppearance.selected.titleTextAttributes = selectedAttrs;
+        appearance.compactInlineLayoutAppearance.selected.titleTextAttributes = selectedAttrs;
+
         self.tabBar.standardAppearance = appearance;
         if (@available(iOS 15.0, *)) {
             self.tabBar.scrollEdgeAppearance = appearance;
         }
     }
-    self.tabBar.translucent = NO;
+    self.tabBar.translucent = YES;
+}
+
+- (void)applySelectedTitleColor:(UIColor *)color {
+    NSDictionary *selectedAttrs = @{ NSForegroundColorAttributeName: color };
+    for (UIViewController *vc in self.viewControllers) {
+        [vc.tabBarItem setTitleTextAttributes:selectedAttrs forState:UIControlStateSelected];
+    }
 }
 
 
