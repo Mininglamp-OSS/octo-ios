@@ -2,6 +2,7 @@
 #import <PDFKit/PDFKit.h>
 #import <WebKit/WebKit.h>
 #import "WKApp.h"
+#import "WuKongBase.h"
 #import "WKNavigationManager.h"
 #import "WKRootNavigationController.h"
 #import "WKCSVRenderer.h"
@@ -33,11 +34,20 @@ static UIWindow *_previousKeyWindow = nil;
 
 #pragma mark - 用独立 Window 展示，隔离 WebKit RunLoop
 
++ (BOOL)isShowing {
+    return _previewWindow != nil;
+}
+
 + (void)showFilePreview:(NSURL *)fileURL title:(NSString *)title {
     if (_previewWindow) return;
-
     WKSafeFilePreviewVC *vc = [[WKSafeFilePreviewVC alloc] initWithFileURL:fileURL title:title];
-    WKRootNavigationController *nav = [[WKRootNavigationController alloc] initWithRootViewController:vc];
+    [self showRootViewController:vc];
+}
+
++ (void)showRootViewController:(UIViewController *)rootVC {
+    if (_previewWindow || !rootVC) return;
+
+    WKRootNavigationController *nav = [[WKRootNavigationController alloc] initWithRootViewController:rootVC];
 
     UIWindowScene *scene = nil;
     for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
@@ -115,7 +125,10 @@ static UIWindow *_previousKeyWindow = nil;
     NSString *ext = self.fileURL.pathExtension.lowercaseString;
     CGRect contentFrame = [self visibleRect];
 
-    if ([ext isEqualToString:@"pdf"]) {
+    if (![WKSafeFilePreviewVC canPreviewExtension:ext]) {
+        // 压缩包/二进制等 App 内无法渲染的格式: 显示占位页, 避免白屏。
+        [self setupUnsupportedViewInFrame:contentFrame];
+    } else if ([ext isEqualToString:@"pdf"]) {
         [self setupPDFViewInFrame:contentFrame];
     } else {
         [self setupWebViewInFrame:contentFrame];
@@ -160,7 +173,16 @@ static UIWindow *_previousKeyWindow = nil;
 }
 
 - (void)backPressed {
-    [WKSafeFilePreviewVC dismissPreview];
+    // 多级导航(如 zip 浏览器 push 进来的预览): 栈深 >1 则 pop 回上一页, 否则关掉整个窗口。
+    // 单文件预览(showFilePreview:)栈深恒为 1, 行为与原先一致。
+    if (self.navigationController.viewControllers.count > 1) {
+        [self.webView stopLoading];
+        [self.webView removeFromSuperview];
+        self.webView = nil;
+        [self.navigationController popViewControllerAnimated:YES];
+    } else {
+        [WKSafeFilePreviewVC dismissPreview];
+    }
 }
 
 - (void)shareTapped {
@@ -169,6 +191,79 @@ static UIWindow *_previousKeyWindow = nil;
         avc.popoverPresentationController.sourceView = self.navigationBar.rightView;
     }
     [self presentViewController:avc animated:YES completion:nil];
+}
+
+#pragma mark - 可预览白名单 / 占位页
+
+// 白名单: 只有显式支持的格式才在 App 内渲染, 其余(压缩包/二进制等)走占位页, 避免白屏。
+// 与 setupWebViewInFrame: 里的 markdown/csv/纯文本分支保持一致。
++ (BOOL)canPreviewExtension:(NSString *)ext {
+    static NSSet *previewable;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        previewable = [NSSet setWithArray:@[
+            @"pdf",
+            // 图片 (WebKit 直接渲染)
+            @"png", @"jpg", @"jpeg", @"gif", @"bmp", @"webp", @"heic", @"heif", @"tiff", @"tif", @"svg", @"ico",
+            // Office (WebKit 可渲染)
+            @"doc", @"docx", @"xls", @"xlsx", @"ppt", @"pptx",
+            // 文本 / 代码 (走 loadPlainTextFile)
+            @"txt", @"log", @"json", @"xml", @"yml", @"yaml", @"ini", @"conf",
+            @"sh", @"swift", @"java", @"py", @"js", @"ts", @"css",
+            // 富文本渲染
+            @"md", @"markdown", @"csv", @"html", @"htm",
+        ]];
+    });
+    return [previewable containsObject:ext.lowercaseString];
+}
+
+- (void)setupUnsupportedViewInFrame:(CGRect)frame {
+    BOOL isDark = [WKApp shared].config.style == WKSystemStyleDark;
+    UIColor *bgColor = isDark ? [UIColor colorWithRed:0.11 green:0.11 blue:0.12 alpha:1] : [UIColor whiteColor];
+    UIColor *titleColor = isDark ? [UIColor colorWithWhite:0.9 alpha:1] : [UIColor colorWithWhite:0.2 alpha:1];
+    UIColor *subColor = isDark ? [UIColor colorWithWhite:0.55 alpha:1] : [UIColor colorWithWhite:0.6 alpha:1];
+
+    UIView *container = [[UIView alloc] initWithFrame:frame];
+    container.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    container.backgroundColor = bgColor;
+
+    // 居中竖排: 图标 + 「暂时无法预览」+ 副标题
+    UIImageView *iconView = [[UIImageView alloc] init];
+    iconView.contentMode = UIViewContentModeScaleAspectFit;
+    iconView.tintColor = subColor;
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:64 weight:UIImageSymbolWeightLight];
+        iconView.image = [UIImage systemImageNamed:@"doc.fill" withConfiguration:cfg];
+    }
+
+    UILabel *titleLbl = [[UILabel alloc] init];
+    titleLbl.text = LLang(@"暂时无法预览");
+    titleLbl.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+    titleLbl.textColor = titleColor;
+    titleLbl.textAlignment = NSTextAlignmentCenter;
+
+    UILabel *subLbl = [[UILabel alloc] init];
+    subLbl.text = LLang(@"可点击右上角用其它应用打开");
+    subLbl.font = [UIFont systemFontOfSize:13];
+    subLbl.textColor = subColor;
+    subLbl.textAlignment = NSTextAlignmentCenter;
+    subLbl.numberOfLines = 0;
+
+    CGFloat cx = CGRectGetWidth(frame) * 0.5;
+    CGFloat cy = CGRectGetHeight(frame) * 0.5;
+    iconView.frame = CGRectMake(cx - 40, cy - 90, 80, 80);
+    titleLbl.frame = CGRectMake(20, CGRectGetMaxY(iconView.frame) + 16, CGRectGetWidth(frame) - 40, 24);
+    subLbl.frame = CGRectMake(20, CGRectGetMaxY(titleLbl.frame) + 8, CGRectGetWidth(frame) - 40, 40);
+    UIViewAutoresizing centerMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin |
+        UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+    iconView.autoresizingMask = centerMask;
+    titleLbl.autoresizingMask = centerMask;
+    subLbl.autoresizingMask = centerMask;
+
+    [container addSubview:iconView];
+    [container addSubview:titleLbl];
+    [container addSubview:subLbl];
+    [self.view addSubview:container];
 }
 
 #pragma mark - PDF (PDFKit, 完全无 WebKit)

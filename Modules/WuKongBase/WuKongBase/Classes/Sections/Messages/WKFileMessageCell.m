@@ -12,6 +12,7 @@
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKNavigationManager.h"
 #import "WKSafeFilePreviewVC.h"
+#import "WKZipBrowserVC.h"
 #import <QuickLook/QuickLook.h>
 
 #define WKFileCellWidth 250.0f
@@ -225,6 +226,16 @@
 
 - (void)previewFileAtPath:(NSString *)path {
     WKFileContent *fileContent = (WKFileContent *)self.messageModel.content;
+
+    // .zip → 解压浏览(而非塞进预览器渲染白屏)。rar/7z 等不命中, 仍走下方占位逻辑。
+    NSString *zipExt = [(fileContent.fileExtension ?: [path pathExtension]) lowercaseString];
+    if ([zipExt hasPrefix:@"."]) zipExt = [zipExt substringFromIndex:1];
+    if ([zipExt isEqualToString:@"zip"]) {
+        [WKZipBrowserVC openZipAtPath:path
+                                title:(fileContent.name ?: path.lastPathComponent)
+                          clientMsgNo:self.messageModel.message.clientMsgNo];
+        return;
+    }
 
     // 将文件拷贝到以真实文件名命名的临时路径，解决预览标题显示16进制字符串的问题
     NSString *realName = fileContent.name;
