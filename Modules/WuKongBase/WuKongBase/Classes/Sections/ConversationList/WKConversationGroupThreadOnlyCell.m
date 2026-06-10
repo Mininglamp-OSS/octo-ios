@@ -28,6 +28,7 @@
 @property (nonatomic, strong) WKUserAvatar *avatarView;
 @property (nonatomic, strong) UILabel *titleLbl;
 @property (nonatomic, strong) UILabel *subtitleLbl;
+@property (nonatomic, strong) UILabel *mentionBadge; // 父群行 "@我" 红底白字胶囊（与最近 tab cell 同款）
 @property (nonatomic, strong) WKBadgeView *badgeView;
 @property (nonatomic, strong) UIImageView *muteIcon;
 @property (nonatomic, strong) UIButton *threadToggleBtn;
@@ -52,13 +53,8 @@
 @implementation WKConversationGroupThreadOnlyCell
 
 +(CGFloat) heightForModel:(WKConversationWrapModel *)model {
-    BOOL hasMention = NO;
-    if (model.simpleReminders.count > 0) {
-        for (WKReminder *r in model.simpleReminders) {
-            if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
-        }
-    }
-    CGFloat topH = hasMention ? (TOP_HEIGHT + 10) : TOP_HEIGHT;
+    // 父群行不再因为 @我 增高（@我 现在是右侧 mentionBadge 胶囊，不占行高）。
+    CGFloat topH = TOP_HEIGHT;
     // OnlyCell 物理上不渲染任何 preview 行，previewCount 必须按 0 算（PR review #3 critical）。
     // followedThreadCount > 0 才有 "+N 个子区" 行可显示，与 updateMoreLabel 同口径。
     NSInteger followedThreadCount = [WKConversationGroupThreadCell visibleThreadCountFor:model];
@@ -98,6 +94,19 @@
     self.subtitleLbl.lineBreakMode = NSLineBreakByTruncatingTail;
     self.subtitleLbl.hidden = YES;
     [self.contentView addSubview:self.subtitleLbl];
+
+    // "@我" 胶囊：跟最近 tab cell 同款（红底 #FA5151 白字粗体），父群行有 @我 时显示在右侧
+    self.mentionBadge = [[UILabel alloc] init];
+    self.mentionBadge.text = LLang(@"@我");
+    self.mentionBadge.font = [UIFont boldSystemFontOfSize:11.0f];
+    self.mentionBadge.textColor = [UIColor whiteColor];
+    self.mentionBadge.backgroundColor = WKMentionBadgeBgColor();
+    self.mentionBadge.textAlignment = NSTextAlignmentCenter;
+    self.mentionBadge.layer.cornerRadius = 9.0f;
+    self.mentionBadge.layer.masksToBounds = YES;
+    self.mentionBadge.frame = CGRectMake(0, 0, 36.0f, 18.0f);
+    self.mentionBadge.hidden = YES;
+    [self.contentView addSubview:self.mentionBadge];
 
     self.badgeView = [WKBadgeView viewWithoutBadgeTip];
     [self.contentView addSubview:self.badgeView];
@@ -142,16 +151,9 @@
             if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
         }
     }
-    if (hasMention) {
-        self.subtitleLbl.hidden = NO;
-        NSString *reminderText = @"";
-        for (WKReminder *r in model.simpleReminders) {
-            if (r.type == WKReminderTypeMentionMe) { reminderText = r.text ?: @""; break; }
-        }
-        self.subtitleLbl.text = [NSString stringWithFormat:@"%@ %@", reminderText, model.content ?: @""];
-    } else {
-        self.subtitleLbl.hidden = YES;
-    }
+    // @我 标识改成右侧 mentionBadge 胶囊，subtitleLbl（旧版橙色长行）废弃。
+    self.subtitleLbl.hidden = YES;
+    self.mentionBadge.hidden = !hasMention;
 
     // 红点
     self.badgeView.hidden = YES;
@@ -163,10 +165,15 @@
     // 免打扰
     if (model.mute) {
         self.muteIcon.hidden = (model.unreadCount > 0);
+        // mute 走浅蓝底 + 白字（与 WKConversationListCell mute 分支一致）
         [self.badgeView setBadgeBackgroundColor:[UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f]];
+        [self.badgeView setBadgeTextColor:[UIColor whiteColor]];
     } else {
         self.muteIcon.hidden = YES;
-        [self.badgeView setBadgeBackgroundColor:[UIColor redColor]];
+        // 非静音走 WKUnreadBadge* 共享调色板（浅粉底 + 深红字），与 WKConversationListCell
+        // 在关注 tab 折叠态（未点开展开时）的样式一致，避免折叠 / 展开切换时配色跳变。
+        [self.badgeView setBadgeBackgroundColor:WKUnreadBadgeBgColor()];
+        [self.badgeView setBadgeTextColor:WKUnreadBadgeFgColor()];
     }
 
     // 折叠图标（带指示器，从 VM 缓存读取，无 DB 查询）
@@ -177,12 +184,12 @@
     UIColor *indicatorColor = nil;
     if (threadHasMention) {
         indicatorType = 2;
-        indicatorColor = [UIColor orangeColor];
+        indicatorColor = WKMentionBadgeBgColor();
     } else if (threadUnread > 0) {
         indicatorType = 1;
         indicatorColor = model.mute
             ? [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f]
-            : [UIColor redColor];
+            : WKUnreadBadgeBgColor();
     }
     UIImage *toggleIcon = [WKConversationGroupThreadCell threadToggleIconWithSize:CGSizeMake(28, 28)
                                                                        baseColor:[WKApp shared].config.themeColor
@@ -305,18 +312,12 @@
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGFloat w = self.contentView.lim_width;
-    BOOL showMention = !self.subtitleLbl.hidden;
-    CGFloat topH = showMention ? (TOP_HEIGHT + 10) : TOP_HEIGHT;
+    CGFloat topH = TOP_HEIGHT;
 
-    self.avatarView.frame = CGRectMake(AVATAR_LEFT, showMention ? 8.0f : (topH - AVATAR_SIZE) / 2.0f, AVATAR_SIZE, AVATAR_SIZE);
+    self.avatarView.frame = CGRectMake(AVATAR_LEFT, (topH - AVATAR_SIZE) / 2.0f, AVATAR_SIZE, AVATAR_SIZE);
 
     CGFloat titleRight = w - RIGHT_PADDING - 50.0f;
-    if (showMention) {
-        self.titleLbl.frame = CGRectMake(CONTENT_LEFT, 8.0f, titleRight - CONTENT_LEFT, 20);
-        self.subtitleLbl.frame = CGRectMake(CONTENT_LEFT, self.titleLbl.lim_bottom + 2, titleRight - CONTENT_LEFT, 18);
-    } else {
-        self.titleLbl.frame = CGRectMake(CONTENT_LEFT, (topH - 20) / 2.0f, titleRight - CONTENT_LEFT, 20);
-    }
+    self.titleLbl.frame = CGRectMake(CONTENT_LEFT, (topH - 20) / 2.0f, titleRight - CONTENT_LEFT, 20);
 
     CGFloat rightEdge = w - RIGHT_PADDING;
     self.threadToggleBtn.frame = CGRectMake(rightEdge - 44, (topH - 44) / 2.0f, 44, 44);
@@ -327,6 +328,18 @@
 
     self.muteIcon.lim_left = rightEdge - self.muteIcon.lim_width;
     self.muteIcon.lim_top = (topH - self.muteIcon.lim_height) / 2.0f;
+
+    // @我 胶囊：放在 badge / mute 左侧 4pt，纵向居中。顺序：[toggle][badge or mute][@我][...title]
+    if (!self.mentionBadge.hidden) {
+        CGFloat slotLeft = rightEdge;
+        if (!self.badgeView.hidden) {
+            slotLeft = self.badgeView.lim_left;
+        } else if (!self.muteIcon.hidden) {
+            slotLeft = self.muteIcon.lim_left;
+        }
+        self.mentionBadge.lim_left = slotLeft - 4.0f - self.mentionBadge.lim_width;
+        self.mentionBadge.lim_top = (topH - self.mentionBadge.lim_height) / 2.0f;
+    }
 
     // "+X个子区"
     if (!self.moreLbl.hidden) {
@@ -360,6 +373,7 @@
     self.moreLbl.hidden = YES;
     self.moreBadgeLbl.hidden = YES;
     self.subtitleLbl.hidden = YES;
+    self.mentionBadge.hidden = YES;
     self.onMoreThreadsTap = nil;
     self.onToggleThreadPreview = nil;
 }

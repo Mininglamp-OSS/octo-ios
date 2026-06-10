@@ -6,6 +6,7 @@
 #import "WKConversationTabView.h"
 #import "WKApp.h"
 #import "WuKongBase.h"
+#import "WKBadgeView.h" // 共享调色板 WKUnreadBadge*/WKMentionBadge* 颜色函数
 
 static CGFloat const kTabHeight = 44.0f;
 static CGFloat const kCapsuleHeight = 36.0f;
@@ -20,8 +21,6 @@ static CGFloat const kBadgeSize = 16.0f;
 @property (nonatomic, strong) UIButton *recentBtn;
 @property (nonatomic, strong) UILabel *followBadge;
 @property (nonatomic, strong) UILabel *recentBadge;
-@property (nonatomic, strong) UILabel *followMentionLbl;
-@property (nonatomic, strong) UILabel *recentMentionLbl;
 
 @end
 
@@ -50,8 +49,6 @@ static CGFloat const kBadgeSize = 16.0f;
 - (void)onLangChange {
     [_followBtn setTitle:LLang(@"关注") forState:UIControlStateNormal];
     [_recentBtn setTitle:LLang(@"最近") forState:UIControlStateNormal];
-    _followMentionLbl.text = LLang(@"[有人@我]");
-    _recentMentionLbl.text = LLang(@"[有人@我]");
     [self layoutBadges];
 }
 
@@ -103,30 +100,13 @@ static CGFloat const kBadgeSize = 16.0f;
 
     _recentBadge = [self createBadgeLabel];
     [_capsuleContainer addSubview:_recentBadge];
-
-    _followMentionLbl = [self createMentionLabel];
-    [_capsuleContainer addSubview:_followMentionLbl];
-
-    _recentMentionLbl = [self createMentionLabel];
-    [_capsuleContainer addSubview:_recentMentionLbl];
-}
-
-- (UILabel *)createMentionLabel {
-    UILabel *lbl = [[UILabel alloc] init];
-    // PR review #9 warning：走项目 LLang 取本地化，非中文 locale 才不会回退到硬编码中文
-    lbl.text = LLang(@"[有人@我]");
-    lbl.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
-    lbl.textColor = [UIColor redColor];
-    lbl.textAlignment = NSTextAlignmentCenter;
-    lbl.hidden = YES;
-    return lbl;
 }
 
 - (UILabel *)createBadgeLabel {
     UILabel *badge = [[UILabel alloc] init];
     badge.font = [UIFont systemFontOfSize:10 weight:UIFontWeightMedium];
-    badge.textColor = [UIColor whiteColor];
-    badge.backgroundColor = [UIColor redColor];
+    badge.textColor = WKUnreadBadgeFgColor();
+    badge.backgroundColor = WKUnreadBadgeBgColor();
     badge.textAlignment = NSTextAlignmentCenter;
     badge.layer.cornerRadius = kBadgeSize / 2.0f;
     badge.layer.masksToBounds = YES;
@@ -141,7 +121,6 @@ static CGFloat const kBadgeSize = 16.0f;
     CGFloat capsuleW = w - kCapsuleHPadding * 2;
     CGFloat capsuleY = (kTabHeight - kCapsuleHeight) / 2.0f;
     CGFloat capsuleRadius = kCapsuleHeight / 2.0f;
-    CGFloat inset = 3.0f;
 
     _capsuleContainer.frame = CGRectMake(kCapsuleHPadding, capsuleY, capsuleW, kCapsuleHeight);
     _capsuleContainer.layer.cornerRadius = capsuleRadius;
@@ -153,7 +132,6 @@ static CGFloat const kBadgeSize = 16.0f;
 
     [self layoutSelectedCapsuleAnimated:NO];
     [self layoutBadges];
-    [self layoutMentionLabel];
 }
 
 - (void)layoutSelectedCapsuleAnimated:(BOOL)animated {
@@ -187,65 +165,30 @@ static CGFloat const kBadgeSize = 16.0f;
 }
 
 - (void)layoutBadges {
-    [self layoutFollowContent];
-    [self layoutRecentContent];
+    [self layoutTabButton:_followBtn badge:_followBadge];
+    [self layoutTabButton:_recentBtn badge:_recentBadge];
 }
 
-- (CGFloat)extraWidthForFollow {
-    return [self extraWidthForMention:_followMentionLbl badge:_followBadge];
-}
-
-- (CGFloat)extraWidthForRecent {
-    return [self extraWidthForMention:_recentMentionLbl badge:_recentBadge];
-}
-
-/// 计算 button title 右侧附加内容（mention 标签 + 未读 badge）所需宽度,
-/// 用于 titleEdgeInsets 把整体居中。
-- (CGFloat)extraWidthForMention:(UILabel *)mention badge:(UILabel *)badge {
+- (void)layoutTabButton:(UIButton *)btn badge:(UILabel *)badge {
+    // badge 占用宽度：用于 titleEdgeInsets 把"标题 + badge"整体居中。
     CGFloat extra = 0;
-    if (!mention.hidden) {
-        [mention sizeToFit];
-        extra += 2 + mention.bounds.size.width + 2;
-    }
     if (!badge.hidden) {
         [badge sizeToFit];
-        extra += 2 + MAX(badge.bounds.size.width + 6, kBadgeSize);
+        extra = 2 + MAX(badge.bounds.size.width + 6, kBadgeSize);
     }
-    return extra;
-}
 
-- (void)layoutFollowContent {
-    [self layoutTabButton:_followBtn mention:_followMentionLbl badge:_followBadge extra:[self extraWidthForFollow]];
-}
-
-- (void)layoutRecentContent {
-    [self layoutTabButton:_recentBtn mention:_recentMentionLbl badge:_recentBadge extra:[self extraWidthForRecent]];
-}
-
-- (void)layoutTabButton:(UIButton *)btn
-                mention:(UILabel *)mention
-                  badge:(UILabel *)badge
-                  extra:(CGFloat)extra {
     CGFloat offset = -extra / 2.0f;
     btn.titleEdgeInsets = UIEdgeInsetsMake(0, offset, 0, -offset);
     [btn layoutIfNeeded];
 
-    NSString *title = btn.titleLabel.text ?: @"";
-    UIFont *font = btn.titleLabel.font;
-    CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-    CGFloat titleRight = CGRectGetMidX(btn.frame) + offset + textW / 2.0f;
-    CGFloat btnCenterY = CGRectGetMidY(btn.frame);
-
-    CGFloat x = titleRight;
-    if (!mention.hidden) {
-        CGFloat lblW = mention.bounds.size.width + 2;
-        CGFloat lblH = mention.bounds.size.height;
-        mention.frame = CGRectMake(x + 2, btnCenterY - lblH / 2.0f + 1, lblW, lblH);
-        x += 2 + lblW;
-    }
     if (!badge.hidden) {
+        NSString *title = btn.titleLabel.text ?: @"";
+        UIFont *font = btn.titleLabel.font;
+        CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
+        CGFloat titleRight = CGRectGetMidX(btn.frame) + offset + textW / 2.0f;
+        CGFloat btnCenterY = CGRectGetMidY(btn.frame);
         CGFloat badgeW = MAX(badge.bounds.size.width + 6, kBadgeSize);
-        badge.frame = CGRectMake(x + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
+        badge.frame = CGRectMake(titleRight + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
     }
 }
 
@@ -265,7 +208,6 @@ static CGFloat const kBadgeSize = 16.0f;
     [self updateButtonStyles];
     [self layoutSelectedCapsuleAnimated:animated];
     [self layoutBadges];
-    [self layoutMentionLabel];
     if (self.onTabChanged) {
         self.onTabChanged(index);
     }
@@ -277,7 +219,6 @@ static CGFloat const kBadgeSize = 16.0f;
     [self updateButtonStyles];
     [self layoutSelectedCapsuleAnimated:NO];
     [self layoutBadges];
-    [self layoutMentionLabel];
 }
 
 - (void)updateButtonStyles {
@@ -294,22 +235,6 @@ static CGFloat const kBadgeSize = 16.0f;
 }
 
 #pragma mark - Badge
-
-- (void)layoutMentionLabel {
-    // mention 与 badge 共享同一份布局函数（layoutFollowContent / layoutRecentContent），
-    // 这里直接整体重排两边即可。
-    [self layoutBadges];
-}
-
-- (void)setFollowHasMention:(BOOL)hasMention {
-    _followMentionLbl.hidden = !hasMention;
-    [self layoutMentionLabel];
-}
-
-- (void)setRecentHasMention:(BOOL)hasMention {
-    _recentMentionLbl.hidden = !hasMention;
-    [self layoutMentionLabel];
-}
 
 - (void)setFollowUnreadCount:(NSInteger)count {
     [self updateBadge:_followBadge count:count];

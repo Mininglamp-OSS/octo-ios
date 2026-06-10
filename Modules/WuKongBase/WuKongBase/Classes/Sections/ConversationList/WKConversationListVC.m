@@ -1320,7 +1320,6 @@
         }
         [self refreshTable];
         [self refreshBadge];
-        [self updateGroupMentionBadge];
         // 批量更新后补拉子区数据（网络恢复等场景）
         [self.conversationListVM fetchThreadCountsForGroups];
 
@@ -1386,8 +1385,6 @@
     }
     [self uiAddOrUpdateConversationForOne:conversation];
     [self refreshBadge];
-    // 无论当前在哪个 tab，都更新群聊 tab 的 @提醒标识
-    [self updateGroupMentionBadge];
 }
 /// 过滤不属于当前空间的会话更新（解决跨空间消息产生红点的问题）
 -(NSArray<WKConversation*>*) filterConversationsBySpace:(NSArray<WKConversation*>*)conversations {
@@ -4508,19 +4505,11 @@
     CFAbsoluteTime _t1 = CFAbsoluteTimeGetCurrent();
     [self.tableView reloadData];
     CFAbsoluteTime _t2 = CFAbsoluteTimeGetCurrent();
-    [self updateGroupMentionBadge];
     [self refreshFollowEmptyVisibility];
     CFAbsoluteTime _t3 = CFAbsoluteTimeGetCurrent();
-    NSLog(@"[TabPerf] rebuildGroupDisplayAndReload: buildList=%.1fms reloadData=%.1fms mentionBadge=%.1fms total=%.1fms rows=%lu",
+    NSLog(@"[TabPerf] rebuildGroupDisplayAndReload: buildList=%.1fms reloadData=%.1fms post=%.1fms total=%.1fms rows=%lu",
           (_t1-_t0)*1000, (_t2-_t1)*1000, (_t3-_t2)*1000, (_t3-_t0)*1000,
           (unsigned long)self.groupDisplayList.count);
-}
-
-/// 检查群聊和子区中是否有未处理的@提醒，分别更新关注/最近 tab 上的 [有人@我] 标识。
-/// 直接使用 buildGroupDisplayList 中已计算好的结果，避免重复遍历和 DB 查询。
--(void) updateGroupMentionBadge {
-    [_conversationTabView setFollowHasMention:_conversationListVM.lastBuildFollowHasMention];
-    [_conversationTabView setRecentHasMention:_conversationListVM.lastBuildRecentHasMention];
 }
 
 -(void) showCreateCategoryDialog {

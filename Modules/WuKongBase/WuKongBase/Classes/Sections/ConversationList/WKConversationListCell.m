@@ -43,6 +43,13 @@
 
 @property(nonatomic,strong) WKBadgeView *badgeView;
 
+/// 最近 tab 专用：头像右上角的未读徽章（WeChat 风格）。
+/// 双形态共用一个 UILabel —— 有数字时是红底白字胶囊，静音+未读时 text=nil 退化成 10pt 小圆点。
+/// 其他 tab 保持隐藏，未读仍走右下角 badgeView。
+@property(nonatomic,strong) UILabel *avatarUnreadBadge;
+
+@property(nonatomic,strong) UILabel *mentionBadge; // @我 独立标识（红色胶囊白@），与 badgeView 同侧并排
+
 @property(nonatomic,strong) WKConversationWrapModel *model;
 
 @property(nonatomic,strong) WKOnlineBadgeView *onlineBadgeView;
@@ -75,6 +82,8 @@
 @property(nonatomic,copy) NSString *lastAppliedAvatarURL; // 上一次 applyAvatarURL: 实际下发的 URL —— 复用判定用
 
 @end
+
+// 未读 / @我 配色集中在 WKBadgeView.h（多个消费方共用：cell + 顶部 tab）。
 
 /// 静音判定与 WKConversationListVM.isChannelMuted: 同款：channelInfo.mute（SDK 权威源）优先,
 /// 缺失时回退 WKConversationWrapModel.mute（即 self.c.mute，DB 快照）。
@@ -117,6 +126,33 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         // 红点
         self.badgeView = [WKBadgeView viewWithoutBadgeTip];
         [self.contextContainerView addSubview:self.badgeView];
+        // 最近 tab 专用的头像右上角徽章（双形态：数字胶囊 / 静音小圆点）
+        // bringSubviewToFront 时机：avatar 之后再 add，layoutSubviews 里再保险一次。
+        self.avatarUnreadBadge = [[UILabel alloc] init];
+        self.avatarUnreadBadge.font = [UIFont boldSystemFontOfSize:11.0f];
+        self.avatarUnreadBadge.textColor = [UIColor whiteColor];
+        self.avatarUnreadBadge.backgroundColor = WKMentionBadgeBgColor(); // 复用 #FA5151，和 @我 同款
+        self.avatarUnreadBadge.textAlignment = NSTextAlignmentCenter;
+        self.avatarUnreadBadge.layer.masksToBounds = YES;
+        // 描边色每次 layout 时刷新（CGColor 不跟随 trait 切换）。
+        // 这里只设宽度，颜色到 layoutAvatarUnreadBadgeIfNeeded 里赋。
+        self.avatarUnreadBadge.layer.borderWidth = 2.0f;
+        self.avatarUnreadBadge.hidden = YES;
+        [self.contextContainerView addSubview:self.avatarUnreadBadge];
+        // @我 标识：WeChat 风格红底白字，与未读 badge 的浅粉底独立
+        // mute 时也保持红色（mention 绕过免打扰，与微信行为一致）
+        self.mentionBadge = [[UILabel alloc] init];
+        self.mentionBadge.text = LLang(@"@我");
+        self.mentionBadge.font = [UIFont boldSystemFontOfSize:11.0f];
+        self.mentionBadge.textColor = [UIColor whiteColor];
+        self.mentionBadge.backgroundColor = WKMentionBadgeBgColor();
+        self.mentionBadge.textAlignment = NSTextAlignmentCenter;
+        self.mentionBadge.layer.cornerRadius = 9.0f;
+        self.mentionBadge.layer.masksToBounds = YES;
+        // "@我" 两字符 + 左右各 6pt padding，固定宽 36×18
+        self.mentionBadge.frame = CGRectMake(0, 0, 36.0f, 18.0f);
+        self.mentionBadge.hidden = YES;
+        [self.contextContainerView addSubview:self.mentionBadge];
         // 消息状态
         [self.contextContainerView addSubview:self.statusImgView];
         // 正在输入
@@ -147,12 +183,16 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         self.threadAvatarOverlay.layer.cornerRadius = 11.0f; // size 22 时刚好圆
         self.threadAvatarOverlay.layer.masksToBounds = NO;
         self.threadAvatarOverlay.layer.borderWidth = 1.5f;
+        // backgroundColor 用 UIColor 对象，UIView 会跟随 trait 变化自动更新。
+        // borderColor.CGColor 是值快照不会跟随 —— 不同 cell 在不同 trait 下被
+        // 实例化、复用回来后 border 各自停在出生时的颜色，dark↔light 切换后
+        // 同屏会出现"有的白边、有的黑边"。这里只设 backgroundColor，
+        // borderColor 在 layoutSubviews 末尾的 refreshDynamicLayerColors 里
+        // 每次刷一遍，确保和当前 trait 的 systemBackground 同步。
         if (@available(iOS 13.0, *)) {
             self.threadAvatarOverlay.backgroundColor = [UIColor systemBackgroundColor];
-            self.threadAvatarOverlay.layer.borderColor = [UIColor systemBackgroundColor].CGColor;
         } else {
             self.threadAvatarOverlay.backgroundColor = [UIColor whiteColor];
-            self.threadAvatarOverlay.layer.borderColor = [UIColor whiteColor].CGColor;
         }
         [self.contextContainerView addSubview:self.threadAvatarOverlay];
 
@@ -279,6 +319,8 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     self.lastContentLbl.hidden = NO;
     self.lastMsgTimeLbl.hidden = NO;
     self.externalGroupTagLbl.hidden = YES;
+    self.mentionBadge.hidden = YES;
+    self.avatarUnreadBadge.hidden = YES;
 }
 
 
@@ -318,12 +360,12 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
             UIColor *indicatorColor = nil;
             if (threadHasMention) {
                 indicatorType = 2;
-                indicatorColor = [UIColor orangeColor];
+                indicatorColor = WKMentionBadgeBgColor();
             } else if (threadUnread > 0) {
                 indicatorType = 1;
                 indicatorColor = WKCellIsMuted(model)
                     ? [UIColor colorWithRed:163/255.0f green:214/255.0f blue:237/255.0f alpha:1.0f]
-                    : [UIColor redColor];
+                    : WKUnreadBadgeBgColor();
             }
             UIImage *icon = [WKConversationGroupThreadCell threadToggleIconWithSize:CGSizeMake(28, 28)
                                                                          baseColor:[WKApp shared].config.themeColor
@@ -339,13 +381,10 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
                 if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
             }
         }
-        if (hasMention) {
-            self.lastContentLbl.hidden = NO;
-            self.lastContentLbl.attributedText = [self getLastContent:model];
-            self.lastContentLbl.lineBreakMode = NSLineBreakByTruncatingTail;
-        } else {
-            self.lastContentLbl.hidden = YES;
-        }
+        self.mentionBadge.hidden = !hasMention;
+        // 群聊折叠态（关注 tab group-summary）：@我 仅靠右侧 mentionBadge 胶囊标识，
+        // 不再因 hasMention 把 lastContentLbl 展开（与子区行 / 父群展开行口径一致）。
+        self.lastContentLbl.hidden = YES;
     } else {
         // 私聊：正常显示
         self.hashTagLbl.hidden = YES;
@@ -353,6 +392,14 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         self.threadToggleBtn.hidden = YES;
         self.lastContentLbl.hidden = NO;
         self.lastMsgTimeLbl.hidden = NO;
+        // 私聊也允许 @我（DM 一般不会触发，但群组在最近 tab 走 DM 风格时需要）
+        BOOL hasMentionDM = NO;
+        if (model.simpleReminders && model.simpleReminders.count > 0) {
+            for (WKReminder *r in model.simpleReminders) {
+                if (r.type == WKReminderTypeMentionMe) { hasMentionDM = YES; break; }
+            }
+        }
+        self.mentionBadge.hidden = !hasMentionDM;
         [self refreshAvatar:model];
         // 最后一次消息时间。timestamp == 0 表示当前空间无可显示的最近消息（system bot 跨空间过滤后），
         // 直接清空时间标签，避免 WKTimeTool 把 0 渲染成 "1970..."。
@@ -746,7 +793,13 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
 }
 
 -(void) refreshUnread:(WKConversationWrapModel*)model {
-    // 未读数
+    if (self.recentTabContext) {
+        // 最近 tab：未读走头像右上角徽章（refreshSetting 里根据 mute 决定数字 / 圆点 / 隐藏）。
+        // 旧右下角 badge 一律收起，避免和新徽章双显。
+        self.badgeView.hidden = YES;
+        return;
+    }
+    // 其他 tab：原逻辑。
     self.badgeView.hidden = YES;
     if(model.unreadCount>0) {
         self.badgeView.hidden = NO;
@@ -758,19 +811,50 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
 -(void) refreshSetting:(WKConversationWrapModel*)model {
     // 免打扰
     BOOL muted = WKCellIsMuted(model);
-    if(muted) { // 免打扰
-        if(model.unreadCount<=0) {
-            self.muteIcon.hidden = NO;
+
+    if (self.recentTabContext) {
+        // ====== 最近 tab：WeChat 风格头像右上角徽章 ======
+        // - 非静音 + 未读 → 数字胶囊（>99 → 99+）
+        // - 静音    + 未读 → 小红点（无数字）+ 右下角铃铛
+        // - 无未读        → 徽章隐藏；静音才显示铃铛
+        // 旧 badgeView 已在 refreshUnread 里强制隐藏，这里不再着色。
+        BOOL hasUnread = model.unreadCount > 0;
+        if (hasUnread) {
+            self.avatarUnreadBadge.hidden = NO;
+            self.muteIcon.hidden = !muted; // 静音 + 未读：铃铛保留在右下角槽位
+            if (muted) {
+                // 小红点形态：清掉文字，layoutSubviews 给它 10x10 定圆。
+                self.avatarUnreadBadge.text = nil;
+            } else {
+                NSString *count = (model.unreadCount > 99)
+                    ? @"99+"
+                    : [NSString stringWithFormat:@"%ld", (long)model.unreadCount];
+                self.avatarUnreadBadge.text = count;
+            }
+        } else {
+            self.avatarUnreadBadge.hidden = YES;
+            self.muteIcon.hidden = !muted;
+        }
+    } else {
+        // ====== 关注 / 群 / 子区 / 私聊：保持旧行为 ======
+        self.avatarUnreadBadge.hidden = YES;
+        if(muted) { // 免打扰
+            if(model.unreadCount<=0) {
+                self.muteIcon.hidden = NO;
+            }else {
+                self.muteIcon.hidden = YES;
+            }
+
+            [self.badgeView setBadgeBackgroundColor:[UIColor colorWithRed:163.0f/255.0f green:214.0/255.0f blue:237.0f/255.0f alpha:1.0]];
+            // mute 时仍走原浅蓝底白字（与历史一致），避免把"已读静音"也染成红字风格
+            [self.badgeView setBadgeTextColor:[UIColor whiteColor]];
         }else {
             self.muteIcon.hidden = YES;
+            [self.badgeView setBadgeBackgroundColor:WKUnreadBadgeBgColor()];
+            [self.badgeView setBadgeTextColor:WKUnreadBadgeFgColor()];
         }
-
-        [self.badgeView setBadgeBackgroundColor:[UIColor colorWithRed:163.0f/255.0f green:214.0/255.0f blue:237.0f/255.0f alpha:1.0]];
-    }else {
-        self.muteIcon.hidden = YES;
-        [self.badgeView setBadgeBackgroundColor:[UIColor redColor]];
     }
-    
+
     // 置顶 — 跨 tab 独立：仅最近 tab 显示置顶背景色。关注 tab 即便 model.stick=YES
     // 也保持普通背景（spec §0：关注 tab 不显示置顶概念）
     if(model.stick && self.recentTabContext) {
@@ -778,7 +862,7 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     }else {
         [self setBackgroundColor:[WKApp shared].config.cellBackgroundColor];
     }
-    
+
 }
 
 -(void) refreshStatus:(WKConversationWrapModel*)model {
@@ -909,13 +993,11 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     NSMutableString *reminderStr  = [[NSMutableString alloc] init];
     if(model.simpleReminders && model.simpleReminders.count>0) {
         for (WKReminder *reminder in model.simpleReminders) {
-            // SDK 把 [有人@我] 写死为中文 (WKChatManager.m:792, 不走 LLang),
-            // 这里按 reminder.type 用 LLang 替换, 让英文模式下也显示 [Mention]。
+            // @我 已由独立的 mentionBadge 在 cell 右侧呈现，这里跳过避免预览里再出现 [有人@我] 红色前缀
             if (reminder.type == WKReminderTypeMentionMe) {
-                [reminderStr appendString:LLang(@"[有人@我]")];
-            } else {
-                [reminderStr appendString:reminder.text];
+                continue;
             }
+            [reminderStr appendString:reminder.text];
         }
     }
     NSString *fullContentStr;
@@ -1092,7 +1174,7 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
             self.titleLbl.lim_left = titleLeft;
             self.titleLbl.lim_top = (self.lim_height - self.titleLbl.lim_height) / 2.0f;
         }
-        // 右侧元素从右往左排列：toggle → 红点/免打扰
+        // 右侧元素从右往左排列：toggle → 红点/免打扰 → @我
         CGFloat rightEdge = self.lim_width - rightPadding;
 
         // 子区展开按钮 - 最右侧固定位置
@@ -1105,9 +1187,27 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         self.badgeView.lim_left = rightEdge - self.badgeView.lim_width;
         self.badgeView.lim_top = (self.lim_height - self.badgeView.lim_height) / 2.0f;
 
-        // 免打扰图标
+        // 免打扰图标（与红点占同一槽位，二选一显示）
         self.muteIcon.lim_left = rightEdge - self.muteIcon.lim_width;
         self.muteIcon.lim_top = (self.lim_height - self.muteIcon.lim_height) / 2.0f;
+
+        // @我 标识：放在 badge/mute 左侧，间距 4pt
+        if (!self.mentionBadge.hidden) {
+            CGFloat slotLeft = rightEdge;
+            if (!self.badgeView.hidden) {
+                slotLeft = self.badgeView.lim_left;
+            } else if (!self.muteIcon.hidden) {
+                slotLeft = self.muteIcon.lim_left;
+            }
+            self.mentionBadge.lim_left = slotLeft - 4.0f - self.mentionBadge.lim_width;
+            self.mentionBadge.lim_top = (self.lim_height - self.mentionBadge.lim_height) / 2.0f;
+            // 预览也要让位 mentionBadge 宽度（仅在两行模式下生效）
+            if (!self.lastContentLbl.hidden) {
+                CGFloat shrink = self.mentionBadge.lim_width + 4.0f;
+                CGFloat newW = self.lastContentLbl.lim_width - shrink;
+                if (newW > 0) self.lastContentLbl.lim_width = newW;
+            }
+        }
 
         // 官方标签
         self.officialTag.lim_left = self.titleLbl.lim_right + 4.0f;
@@ -1220,7 +1320,16 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         self.lastContentLbl.lim_width = self.lim_width - self.lastContentLbl.lim_left - 10.0f;
 
         if(self.model.unreadCount>0 || self.model.mute) {
-            self.lastContentLbl.lim_width -= 40.0f;
+            // 最近 tab：未读已挪到头像右上角，preview 不再需要给右下角的旧 badge 让位 ——
+            // 只有静音才在右下角实际占位（铃铛）。非静音 + 未读时 preview 可以延伸到原 badge 区域。
+            BOOL reserveRightSlot = self.recentTabContext ? WKCellIsMuted(self.model) : YES;
+            if (reserveRightSlot) {
+                self.lastContentLbl.lim_width -= 40.0f;
+            }
+        }
+        // mentionBadge 还要再让出 ~26pt（22 宽 + 4 间距）
+        if(!self.mentionBadge.hidden) {
+            self.lastContentLbl.lim_width -= (self.mentionBadge.lim_width + 4.0f);
         }
         self.lastContentLbl.lim_top = self.titleLbl.lim_bottom + 3.0f;
         self.lastContentLbl.lim_height = 24.0f;
@@ -1250,6 +1359,20 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         self.muteIcon.lim_left = self.lim_width - self.muteIcon.lim_width - (self.lim_width-self.lastMsgTimeLbl.lim_left-self.lastMsgTimeLbl.lim_width);
         self.muteIcon.lim_top = self.badgeView.lim_top + 4.0f;
 
+        // @我 标识：放在 badge / mute 槽位左侧，间距 4pt，纵向与预览消息行（lastContentLbl）居中对齐。
+        // 之前用 badgeView.lim_top —— 最近 tab 下 badgeView 被 refreshUnread 强制隐藏，
+        // 它的 frame 还停在上次 layout 残留的"时间行下方 2pt"，会把 mentionBadge 顶到时间附近。
+        if (!self.mentionBadge.hidden) {
+            CGFloat slotLeft = self.lim_width - 15.0f;
+            if (!self.badgeView.hidden) {
+                slotLeft = self.badgeView.lim_left;
+            } else if (!self.muteIcon.hidden) {
+                slotLeft = self.muteIcon.lim_left;
+            }
+            self.mentionBadge.lim_left = slotLeft - 4.0f - self.mentionBadge.lim_width;
+            self.mentionBadge.lim_top = self.lastContentLbl.lim_top + (self.lastContentLbl.lim_height - self.mentionBadge.lim_height) / 2.0f;
+        }
+
         self.officialTag.lim_left = self.titleLbl.lim_right+4.0f;
         self.officialTag.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height/2.0f - self.officialTag.lim_height/2.0f);
         if(self.model.channelInfo && [self.model.channelInfo.category isEqualToString:@"visitor"]) {
@@ -1278,6 +1401,72 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
             self.threadCountLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.threadCountLbl.lim_height) / 2.0f;
         }
     }
+
+    // 头像右上角徽章（最近 tab 专用，refreshSetting 决定是否可见 / 形态）。
+    // 中心点固定锚到头像 right-top 角点，徽章 1/4 盖住头像，3/4 伸出，
+    // 数字胶囊和小圆点都用同一锚点，视觉一致。
+    [self layoutAvatarUnreadBadgeIfNeeded];
+
+    // 刷新所有 layer 上"依赖动态 UIColor 的 CGColor"：
+    // dark↔light 切换后 CGColor 是值快照不会跟随，cell 复用会带来"有的白边、有的黑边"。
+    [self refreshDynamicLayerColors];
+}
+
+- (void)refreshDynamicLayerColors {
+    if (!self.threadAvatarOverlay.hidden) {
+        UIColor *c;
+        if (@available(iOS 13.0, *)) {
+            c = [UIColor systemBackgroundColor];
+        } else {
+            c = [UIColor whiteColor];
+        }
+        self.threadAvatarOverlay.layer.borderColor = c.CGColor;
+    }
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    // dark↔light 切换后 layoutSubviews 不一定立即跑（cell 不一定 reload）。
+    // 主动触发一次 layout 让 refreshDynamicLayerColors 把所有 CGColor 重新取一遍。
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            [self setNeedsLayout];
+        }
+    }
+}
+
+- (void)layoutAvatarUnreadBadgeIfNeeded {
+    if (self.avatarUnreadBadge.hidden || self.avatarImgView.hidden) {
+        return;
+    }
+    CGSize size;
+    if (self.avatarUnreadBadge.text.length == 0) {
+        // 静音小圆点：12x12（红心 ~8pt + 2pt 白边 × 2 侧）
+        size = CGSizeMake(12.0f, 12.0f);
+    } else {
+        // 数字胶囊：高 20（数字区 ~16pt + 2pt 白边 × 2），宽自适应（min 20）
+        CGFloat textW = [self.avatarUnreadBadge.text sizeWithAttributes:@{NSFontAttributeName: self.avatarUnreadBadge.font}].width;
+        CGFloat h = 20.0f;
+        CGFloat w = MAX(h, ceilf(textW) + 12.0f);
+        size = CGSizeMake(w, h);
+    }
+    self.avatarUnreadBadge.layer.cornerRadius = size.height / 2.0f;
+    // 描边色每次刷新：CGColor 是值快照，不会跟随 dynamic UIColor 在 trait 变化时更新。
+    // 用 cellBackgroundColor 让徽章和 cell 底色一致，视觉像"挖了个洞"（light=白边，dark=灰边）。
+    UIColor *borderColor = [WKApp shared].config.cellBackgroundColor ?: [UIColor whiteColor];
+    self.avatarUnreadBadge.layer.borderColor = borderColor.CGColor;
+    // 头像是完全圆形（WKUserAvatar 设 cornerRadius = w/2），矩形右上角在圆弧外
+    // 约 0.293R，徽章若锚在那里会"飘"在头像旁的空白处。
+    // 正确锚点是圆弧 45° 切点 —— 即从矩形右上角各向内偏移 R*(1 - 1/√2)。
+    // 视觉上徽章中心刚好坐在圆弧上，一半盖头像、一半伸出，与微信一致。
+    CGRect avatarFrame = self.avatarImgView.frame;
+    CGFloat inset = (avatarFrame.size.width / 2.0f) * (1.0f - (CGFloat)M_SQRT1_2);
+    CGFloat cx = CGRectGetMaxX(avatarFrame) - inset;
+    CGFloat cy = CGRectGetMinY(avatarFrame) + inset;
+    self.avatarUnreadBadge.frame = CGRectMake(cx - size.width / 2.0f,
+                                              cy - size.height / 2.0f,
+                                              size.width, size.height);
+    [self.contextContainerView bringSubviewToFront:self.avatarUnreadBadge];
 }
 - (UILabel *)hashTagLbl {
     if(!_hashTagLbl) {
