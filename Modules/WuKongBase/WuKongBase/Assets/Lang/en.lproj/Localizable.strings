@@ -390,7 +390,9 @@
 
 // WKCommonSettingVM
 
+"外观"="Appearance";
 "深色模式"="Dark Mode";
+"浅色模式"="Light Mode";
 "跟随系统"="Automatic";
 "打开"="Enabled";
 "关闭"="Disabled";

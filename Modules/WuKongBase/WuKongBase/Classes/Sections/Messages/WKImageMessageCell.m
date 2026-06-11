@@ -22,16 +22,17 @@
 #define flameImageSize CGSizeMake(150.0f, 150.0f)
 
 // 所有图片消息 cell 共享的后台解码队列。
-// concurrent + USER_INITIATED:
-//   - GIF preloadAllFrames 是 CPU-bound,串行会让多张图排队首屏延迟
-//   - 上限并发由系统按 QoS 自动管控,无需手工 semaphore
+// SERIAL + USER_INITIATED:
+//   - 主目标是把 file I/O + ImageIO + preloadAllFrames 从主线程挪走 → 串行已足够。
+//   - concurrent 在快滑大量图片时会把 GCD 线程池打到上限 (≥ 64), 多个 USER_INITIATED
+//     decode 抢 CPU/IO 反而拖累主线程, 与 PR 的反 HANG 目标背道而驰 (review 提示)。
 //   - cell 离屏 / clientSeq 不再匹配时,result 在主线程被 guard 掉,bg 任务自身不强求 cancel
 static dispatch_queue_t WKImageMessageCellDecodeQueue(void) {
     static dispatch_queue_t q;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(
-            DISPATCH_QUEUE_CONCURRENT, QOS_CLASS_USER_INITIATED, 0);
+            DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
         q = dispatch_queue_create("com.octo.imagemsg.decode", attr);
     });
     return q;
@@ -40,10 +41,13 @@ static dispatch_queue_t WKImageMessageCellDecodeQueue(void) {
 // preloadAllFrames 阈值。
 // 超过任一阈值的动图只摸首帧 (避免 OOM),代价是首帧之后的帧仍 on-demand 解码,
 // 可能继续 HANG —— 但相比"超大 GIF 全帧驻留几十 MB"更安全。
-//   - 5MB 是一张全屏 GIF 的典型上限
+//   - 5MB 是一张全屏 GIF 的典型上限 (压缩后)
 //   - 80 帧 ≈ 一般 GIF 8~10s 内容
-static const NSUInteger kWKImagePreloadMaxBytes = 5 * 1024 * 1024;
-static const NSUInteger kWKImagePreloadMaxFrames = 80;
+//   - 32MB 解码后总像素 (w*h*4*frameCount): 编码 5MB 也可能解出 80MB+ (高压缩比 GIF),
+//     单独再卡一道解码内存,防止低端机 (iPhone 8/SE2) jetsam (review 提示)。
+static const NSUInteger kWKImagePreloadMaxBytes        = 5 * 1024 * 1024;
+static const NSUInteger kWKImagePreloadMaxFrames       = 80;
+static const NSUInteger kWKImagePreloadMaxDecodedBytes = 32 * 1024 * 1024;
 
 @interface WKImageMessageCell ()
 @property(nonatomic,strong) WKImageView *imgView;
@@ -226,7 +230,11 @@ static const NSUInteger kWKImagePreloadMaxFrames = 80;
             if ([img isKindOfClass:[SDAnimatedImage class]]) {
                 SDAnimatedImage *animImg = (SDAnimatedImage *)img;
                 NSUInteger frameCount = animImg.animatedImageFrameCount;
-                if (data.length <= kWKImagePreloadMaxBytes && frameCount <= kWKImagePreloadMaxFrames) {
+                CGSize imgSize = animImg.size;
+                NSUInteger decodedBytes = (NSUInteger)(imgSize.width * imgSize.height) * 4 * frameCount;
+                if (data.length <= kWKImagePreloadMaxBytes
+                    && frameCount <= kWKImagePreloadMaxFrames
+                    && decodedBytes <= kWKImagePreloadMaxDecodedBytes) {
                     // 全部帧预解 → frame map 写满,player 取帧零成本,CA::commit 不再现场解码
                     [animImg preloadAllFrames];
                 } else {

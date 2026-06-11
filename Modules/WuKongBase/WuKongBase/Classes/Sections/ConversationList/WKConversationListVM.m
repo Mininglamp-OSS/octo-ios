@@ -1695,13 +1695,12 @@ static WKConversationListVM *_instance;
             // 不会被汇总到群聊 toggle 上 → toggle 显示成普通粉点而非 @ 符号。
             if (!hasMention) {
                 NSArray<WKReminder*> *rems = self.cachedRemindersByChannelId[conv.channel.channelId];
-                // cache 兜底：cachedRemindersByChannelId 在 loadConversationList 时按
-                // DB 查 reminder 建立，但子区 reminder 的 push 路径（applySubzoneRemindersUpdate）
-                // 在 cache rebuild 时会被覆写，且冷启动场景下 DB 可能尚未持久化最新 @我。
-                // 这里直接走 ReminderDB 兜底查询，确保 @我 不被漏报。
-                if (rems.count == 0) {
-                    rems = [[WKReminderDB shared] getWaitDoneReminder:conv.channel];
-                }
+                // 不在 cell render 路径上做 DB 查询 (review 提示):
+                //   cachedRemindersByChannelId 在 loadConversationList 重建 + 子区 reminder
+                //   push 路径 (applySubzoneRemindersUpdate) 维护;且 cache 只存 count > 0
+                //   的条目, 没 @我 的子区永远 cache miss → 之前的 DB 兜底等于每次 cell
+                //   render 都查 N 次 (N = 子区数), 是主线程 jank 源, 与 PR 反 HANG 目标
+                //   矛盾。极窄窗口 (DB 已写但 push 未到) 可能短暂漏报, 下一次 reload 会自愈。
                 for (WKReminder *r in rems) {
                     if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
                 }

@@ -275,7 +275,12 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
              title:(NSString *)title
        clientMsgNo:(NSString *)msgNo {
     // 唯一临时目录: 不同消息互不冲突, 重开同一消息刷新。
-    NSString *folder = msgNo.length > 0 ? msgNo : @(zipPath.hash).stringValue;
+    // msgNo 是远端下发的字段, 直接当路径分量有 path-traversal 风险 (review 提示):
+    // 用 NSUInteger.hash 转成纯数字字符串, 既保留"同一消息复用同目录"的语义, 又消除
+    // 任何 "../" / "/" 越界可能。zipPath 兜底同上。
+    NSString *folder = msgNo.length > 0
+        ? [NSString stringWithFormat:@"%lu", (unsigned long)msgNo.hash]
+        : [NSString stringWithFormat:@"%lu", (unsigned long)zipPath.hash];
     NSString *destDir = [[NSTemporaryDirectory() stringByAppendingPathComponent:@"WKZipPreview"]
                          stringByAppendingPathComponent:folder];
 

