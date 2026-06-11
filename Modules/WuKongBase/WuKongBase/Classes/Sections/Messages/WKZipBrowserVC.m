@@ -408,10 +408,12 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
 // 解压前枚举 zip central directory, 任一条目是 symlink 即返回 YES。
 // Unix host 在 external_fa 高 16 位写 file mode, S_IFLNK = 0xA000。Windows zip 对
 // 应位通常是 0 / DOS 属性, 不会落到 0xA000, 不构成 false positive。
+// fail-closed: unzOpen 失败 (CD 损坏 / 加密 CD / 异常格式) 返回 YES, 让调用方按
+// "不可信" 直接拒预览, 否则恶意 zip 故意把 CD 弄坏即可绕过 symlink 检查。
 + (BOOL)_zipContainsSymlinkAtPath:(NSString *)path {
-    if (path.length == 0) return NO;
+    if (path.length == 0) return YES;
     unzFile zf = unzOpen(path.fileSystemRepresentation);
-    if (!zf) return NO;
+    if (!zf) return YES;
     BOOL hasSymlink = NO;
     if (unzGoToFirstFile(zf) == 0) {
         do {
