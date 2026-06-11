@@ -394,6 +394,22 @@
 "深色模式"="Dark Mode";
 "浅色模式"="Light Mode";
 "跟随系统"="Automatic";
+
+// WKCommonSettingVM (PR #51 Me 模块重做)
+"语言"="Language";
+"存储空间"="Storage";
+"隐私"="Privacy";
+"缓存清理中"="Clearing cache";
+"清理成功"="Cleared";
+"清理失败"="Failed to clear";
+
+// WKMeInfoVC / WKMeInfoVM (PR #51 个人资料页)
+"个人资料"="Profile";
+"姓名"="Name";
+
+// WKConversationListVC (PR #51 新加)
+"新建会话"="New Chat";
+"[草稿]"="[Draft]";
 "打开"="Enabled";
 "关闭"="Disabled";
 "版本信息"="Version";

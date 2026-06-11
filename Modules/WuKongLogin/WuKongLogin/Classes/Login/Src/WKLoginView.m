@@ -27,10 +27,9 @@ typedef NS_ENUM(NSUInteger, WKLoginViewMode) {
     WKLoginViewModeSsoOnly,
 };
 
-// 服务条款 / 隐私协议 PDF 静态 CDN URL。WKWebView 原生支持 PDF 直显, 走 WKWebViewVC
-// 加载即可, 不需要独立 PDF 渲染器。如果将来要按环境切换可改成走 appconfig 下发。
-static NSString * const kOctoTermsURL = @"https://cdn.example.com/legal-agreement/octo-terms.pdf";
-static NSString * const kOctoPrivacyURL = @"https://cdn.example.com/legal-agreement/octo-privacy.pdf";
+// 服务条款 / 隐私协议 PDF 走静态 CDN, WKWebView 原生支持 PDF 直显。
+// 由 OctoConfig.xcconfig 的 OCTO_TERMS_URL / OCTO_PRIVACY_URL 注入,
+// 私有部署可改写, 见 [WKApp shared].config.octoTermsURL / octoPrivacyURL。
 
 @interface WKLoginView() <UITextFieldDelegate> {
 }
@@ -574,11 +573,11 @@ static NSString * const kOctoPrivacyURL = @"https://cdn.example.com/legal-agreem
 
 #pragma mark -- 协议入口跳转
 - (void)termsPressed {
-    [self openWebURL:kOctoTermsURL];
+    [self openWebURL:[WKApp shared].config.octoTermsURL];
 }
 
 - (void)privacyPressed {
-    [self openWebURL:kOctoPrivacyURL];
+    [self openWebURL:[WKApp shared].config.octoPrivacyURL];
 }
 
 - (void)openWebURL:(NSString *)urlString {

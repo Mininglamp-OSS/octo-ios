@@ -211,9 +211,10 @@
             @"bottomLeftSpace":@(17.0f),
             @"bottomRightSpace":@(17.0f),
             @"onClick":^{
-                // 与登录页一致，走 CDN 上的隐私政策 PDF（避免走 config.privacyAgreementUrl
-                // 那个 server 自服务 URL —— 部分部署已被 Aegis SSO 接管，会跳登录）。
-                NSString *urlStr = @"https://cdn.example.com/legal-agreement/octo-privacy.pdf";
+                // 走 [WKApp shared].config.octoPrivacyURL (静态 CDN PDF, 由
+                // OctoConfig.xcconfig 的 OCTO_PRIVACY_URL 注入)。不走 server 端
+                // privacyAgreementUrl —— 部分部署被 Aegis SSO 接管会跳登录。
+                NSString *urlStr = [WKApp shared].config.octoPrivacyURL;
                 WKWebViewVC *vc = [WKWebViewVC new];
                 vc.url = [NSURL URLWithString:urlStr];
                 [[WKNavigationManager shared] pushViewController:vc animated:YES];

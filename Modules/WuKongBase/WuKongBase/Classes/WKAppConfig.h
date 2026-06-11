@@ -63,6 +63,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,copy) NSString *privacyAgreementUrl;
 // 用户协议地址
 @property(nonatomic,copy) NSString *userAgreementUrl;
+
+// 静态 CDN 上的服务条款 / 隐私协议 PDF (不走 server 自服务, 避免被 SSO 接管)。
+// 由 OctoConfig.xcconfig 的 OCTO_TERMS_URL / OCTO_PRIVACY_URL 通过 Info.plist
+// 注入, 缺省 fallback 到 cdn.imocto.cn 默认值。登录页/设置页"隐私"入口都走它,
+// 与 server-side privacyAgreementUrl 区分使用。
+@property(nonatomic,copy,readonly) NSString *octoTermsURL;
+@property(nonatomic,copy,readonly) NSString *octoPrivacyURL;
 // IM连接地址
 @property(nonatomic,copy) NSString *connectURL;
 // 扫码URL前缀，可以根据这个前缀判断是否是自己定义的二维码内容

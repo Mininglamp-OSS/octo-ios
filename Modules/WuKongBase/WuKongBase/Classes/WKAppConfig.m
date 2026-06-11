@@ -19,9 +19,23 @@
 @property(nonatomic,copy) NSString  *innerLangue;
 @property(nonatomic,copy) NSString *innerReportUrl;
 
+// readwrite 重声明: header 暴露成 readonly, 这里在 init 里写。
+@property(nonatomic,copy,readwrite) NSString *octoTermsURL;
+@property(nonatomic,copy,readwrite) NSString *octoPrivacyURL;
+
 @end
 
 @implementation WKAppConfig
+
+// 读 OctoConfig.xcconfig 注入的 Info.plist 字符串值。
+// 拿不到 / 还是 "$(XXX)" 占位 (xcconfig 没注入成功) 时回落到 fallback。
++ (NSString *)octoConfigStringForKey:(NSString *)key fallback:(NSString *)fallback {
+    NSString *v = [[NSBundle mainBundle] objectForInfoDictionaryKey:key];
+    if (v.length == 0 || [v hasPrefix:@"$("]) {
+        return fallback;
+    }
+    return v;
+}
 
 
 -(instancetype) init {
@@ -90,11 +104,16 @@
         // PR #121 round 4 review 🟡: 邀请链接默认指向 OCTO 开源主页, 可通过
         // OctoConfig.xcconfig 的 OCTO_INVITE_URL 注入 Info.plist OCTOInviteURL
         // 覆盖（私有部署通常会指向自己的下载页）。
-        NSString *inviteURL = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"OCTOInviteURL"];
-        if (inviteURL.length == 0 || [inviteURL hasPrefix:@"$("]) {
-            inviteURL = @"https://github.com/Mininglamp-OSS";
-        }
+        NSString *inviteURL = [WKAppConfig octoConfigStringForKey:@"OCTOInviteURL"
+                                                         fallback:@"https://github.com/Mininglamp-OSS"];
         self.inviteMsg = [NSString stringWithFormat:@"我正在使用【%@】app，体验还不错。你也赶快来下载玩玩吧！%@", self.appName, inviteURL];
+
+        // 服务条款 / 隐私协议 PDF 走静态 CDN(避开 server 自服务被 SSO 接管的问题),
+        // 由 OctoConfig.xcconfig 的 OCTO_TERMS_URL / OCTO_PRIVACY_URL 注入。
+        self.octoTermsURL = [WKAppConfig octoConfigStringForKey:@"OCTOTermsURL"
+                                                       fallback:@"https://cdn.imocto.cn/legal-agreement/octo-terms.pdf"];
+        self.octoPrivacyURL = [WKAppConfig octoConfigStringForKey:@"OCTOPrivacyURL"
+                                                         fallback:@"https://cdn.imocto.cn/legal-agreement/octo-privacy.pdf"];
         NSString *tempDir= NSTemporaryDirectory();
         self.videoCacheDir = [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"wukong_video_cache"]];
         [WKFileUtil createDirectoryIfNotExist: self.videoCacheDir];

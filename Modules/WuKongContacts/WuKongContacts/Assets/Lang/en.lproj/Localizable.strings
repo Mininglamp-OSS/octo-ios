@@ -87,3 +87,6 @@
 "设置"="Settings";
 "修改备注"="Edit alias";
 "发送成功！"="Sent";
+
+// PR #51: Me 页"通讯录"入口在 WKContactsModule 注册, 走本模块 bundle 取词
+"通讯录"="Contacts";
