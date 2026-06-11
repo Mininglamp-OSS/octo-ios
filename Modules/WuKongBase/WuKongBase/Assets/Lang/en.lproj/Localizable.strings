@@ -414,6 +414,7 @@
 // WKZipBrowserVC (PR #51)
 "请先关闭当前预览"="Please close the current preview first";
 "压缩包过大,请使用专业解压工具打开"="Archive is too large. Please open with a dedicated extraction app.";
+"压缩包包含符号链接,出于安全考虑无法预览"="Archive contains symbolic links and cannot be previewed for security reasons.";
 "打开"="Enabled";
 "关闭"="Disabled";
 "版本信息"="Version";

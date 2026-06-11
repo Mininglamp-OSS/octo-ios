@@ -13,6 +13,20 @@
 #import "UIView+WKCommon.h"
 #import <SSZipArchive/SSZipArchive.h>
 #import <YBImageBrowser/YBImageBrowser.h>
+
+// 直接 forward-declare minizip 的 C 入口 —— SSZipArchive 把 mz_compat.h 放在 Pod
+// 私有头, 消费方拿不到; 但 _unzOpen / _unzGoToFirstFile / _unzGoToNextFile /
+// _unzGetCurrentFileInfo / _unzClose 在 SSZipArchive.framework 已 export
+// (`nm -gU` 验证), C ABI 十年稳, 直接声明就能 link 到。
+typedef void *unzFile;
+extern unzFile unzOpen(const char *path);
+extern int unzGoToFirstFile(unzFile file);
+extern int unzGoToNextFile(unzFile file);
+extern int unzGetCurrentFileInfo(unzFile file, unz_file_info *pfile_info,
+                                 char *filename, unsigned long filename_size,
+                                 void *extra_field, unsigned long extra_field_size,
+                                 char *comment, unsigned long comment_size);
+extern int unzClose(unzFile file);
 #import <YBImageBrowser/YBIBImageData.h>
 
 #pragma mark - 图片扩展名判定
@@ -292,13 +306,17 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
     MBProgressHUD *hud = [hudHost showHUDWithDim];
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        // ── zip-bomb 预检 ─────────────────────────────────────────────────────
-        // 两道闸, bg 队列上做完再决定要不要解:
+        // ── 解压前预检 ───────────────────────────────────────────────────────
+        // 三道闸, bg 队列上做完再决定要不要解 (destDir 还没建, 命中即拒, 没有清理债):
         //   (1) 压缩后 > 500MB 直接拒 (快路径; 避免对超大文件再读 central dir)。
-        //   (2) 解压后总字节 > 1GB 拒 (zip-bomb: 几 KB 压缩包炸开几 GB 的经典样式)。
+        //   (2) 解压后总字节 > 1GB 拒 (zip-bomb: 几 KB 压缩包炸开几 GB 经典样)。
         //       SSZipArchive +payloadSizeForArchiveAtPath: 只读 central directory
-        //       不实解压, 成本 ~ms 量级。
-        // 命中任一闸即提示用户走专业解压工具 + 清理 (此时 destDir 还没建)。
+        //       不实解压, ms 量级。
+        //   (3) symlink 整包拒: zip 内任一条目是 symlink → 拒 (review 第 4 轮 P1:
+        //       SSZipArchive _sanitizedPath 只过滤条目"路径名", 不校验 symlink target;
+        //       恶意 zip 内 `link -> ../../<沙箱内>` 配合 link/evil 会让库用 POSIX
+        //       symlink() 创建真链, 后续读会跳出 destDir。改用 minizip 直接枚举
+        //       central dir 的 external_fa, S_IFLNK 命中即整包拒, 不再 strip-after。
         static const uint64_t kWKZipMaxCompressedBytes   = 500ULL * 1024 * 1024;
         static const uint64_t kWKZipMaxUncompressedBytes = 1024ULL * 1024 * 1024;
         NSError *attrErr = nil;
@@ -321,6 +339,13 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
             });
             return;
         }
+        if ([self _zipContainsSymlinkAtPath:zipPath]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [hud hideAnimated:YES];
+                [hudHost showMsg:LLang(@"压缩包包含符号链接,出于安全考虑无法预览")];
+            });
+            return;
+        }
         // ─────────────────────────────────────────────────────────────────────
 
         NSFileManager *fm = [NSFileManager defaultManager];
@@ -332,15 +357,6 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
                                       overwrite:YES
                                        password:password
                                           error:&err];
-        if (ok) {
-            // 安全: SSZipArchive 2.2.3 的 _sanitizedPath 只对条目"路径名"做 ../ 过滤,
-            // 不校验 symlink 的 target —— 攻击者构造 zip 内 `link -> ../../<沙箱内>`
-            // 配合 link/evil 条目, 库会用 POSIX symlink() 创建真链, 后续 fetch()/
-            // 文件读会顺着链跳出 destDir 落到 Documents/Library 任意位置 (zip 来自
-            // 不可信 IM 对端 → 真实可利用)。这里解压完递归扫一遍, 把 symlink 条目
-            // 一律删掉, 不依赖库做 target 校验。
-            [self _stripSymlinksUnderDir:destDir];
-        }
         dispatch_async(dispatch_get_main_queue(), ^{
             [hud hideAnimated:YES];
             if (ok) {
@@ -366,23 +382,29 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
     });
 }
 
-// 递归扫 dir, 把所有 symlink 条目删掉。NSDirectoryEnumerator 默认不跟随符号链接,
-// resourceValueForKey:NSURLIsSymbolicLinkKey: 返回的就是 link 自身属性, 不会被
-// resolve 误判。
-+ (void)_stripSymlinksUnderDir:(NSString *)dir {
-    if (dir.length == 0) return;
-    NSURL *rootURL = [NSURL fileURLWithPath:dir isDirectory:YES];
-    NSDirectoryEnumerator<NSURL *> *enumr =
-        [[NSFileManager defaultManager] enumeratorAtURL:rootURL
-                             includingPropertiesForKeys:@[NSURLIsSymbolicLinkKey]
-                                                options:NSDirectoryEnumerationSkipsHiddenFiles
-                                           errorHandler:nil];
-    for (NSURL *url in enumr) {
-        NSNumber *isLink = nil;
-        if ([url getResourceValue:&isLink forKey:NSURLIsSymbolicLinkKey error:nil] && isLink.boolValue) {
-            [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
-        }
+// 解压前枚举 zip central directory, 任一条目是 symlink 即返回 YES。
+// Unix host 在 external_fa 高 16 位写 file mode, S_IFLNK = 0xA000。Windows zip 对
+// 应位通常是 0 / DOS 属性, 不会落到 0xA000, 不构成 false positive。
++ (BOOL)_zipContainsSymlinkAtPath:(NSString *)path {
+    if (path.length == 0) return NO;
+    unzFile zf = unzOpen(path.fileSystemRepresentation);
+    if (!zf) return NO;
+    BOOL hasSymlink = NO;
+    if (unzGoToFirstFile(zf) == 0) {
+        do {
+            unz_file_info info;
+            memset(&info, 0, sizeof(info));
+            if (unzGetCurrentFileInfo(zf, &info, NULL, 0, NULL, 0, NULL, 0) == 0) {
+                uint32_t mode = info.external_fa >> 16;
+                if ((mode & 0xF000) == 0xA000) {  // S_IFLNK
+                    hasSymlink = YES;
+                    break;
+                }
+            }
+        } while (unzGoToNextFile(zf) == 0);
     }
+    unzClose(zf);
+    return hasSymlink;
 }
 
 @end
