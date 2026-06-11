@@ -307,28 +307,33 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         // ── 解压前预检 ───────────────────────────────────────────────────────
-        // 三道闸, bg 队列上做完再决定要不要解 (destDir 还没建, 命中即拒, 没有清理债):
+        // 三道闸 + 一道事后兜底, bg 队列上做完再决定要不要解 / 是否回滚:
         //   (1) 压缩后 > 500MB 直接拒 (快路径; 避免对超大文件再读 central dir)。
         //   (2) 解压后总字节 > 1GB 拒 (zip-bomb: 几 KB 压缩包炸开几 GB 经典样)。
         //       SSZipArchive +payloadSizeForArchiveAtPath: 只读 central directory
-        //       不实解压, ms 量级。
-        //   (3) symlink 整包拒: zip 内任一条目是 symlink → 拒 (review 第 4 轮 P1:
-        //       SSZipArchive _sanitizedPath 只过滤条目"路径名", 不校验 symlink target;
-        //       恶意 zip 内 `link -> ../../<沙箱内>` 配合 link/evil 会让库用 POSIX
-        //       symlink() 创建真链, 后续读会跳出 destDir。改用 minizip 直接枚举
-        //       central dir 的 external_fa, S_IFLNK 命中即整包拒, 不再 strip-after。
+        //       不实解压, ms 量级。**fail closed**: 读不到 (加密 CD / 损坏 / 异常
+        //       格式) 视同越界, 拒。否则恶意 zip 让 payloadSize 报错就能 bypass。
+        //   (3) symlink 整包拒: 任一条目是 symlink → 拒。SSZipArchive _sanitizedPath
+        //       只过滤路径名, 不校验 target, 不在解压前枚举掉等于让 link 落盘后
+        //       再补救, 那是危险窗口。
+        //   (4) 解压后再 walk destDir 实际占用空间, > 1GB 整棵删 + 拒 (CD 中
+        //       uncompressed_size 字段是攻击者可控数据, 完全可以撒谎: 声明 1KB
+        //       实际写出 5GB; payloadSize 读不到真相)。
         static const uint64_t kWKZipMaxCompressedBytes   = 500ULL * 1024 * 1024;
         static const uint64_t kWKZipMaxUncompressedBytes = 1024ULL * 1024 * 1024;
         NSError *attrErr = nil;
         NSDictionary *attr = [[NSFileManager defaultManager] attributesOfItemAtPath:zipPath error:&attrErr];
         uint64_t compressedSize = [attr[NSFileSize] unsignedLongLongValue];
         BOOL tooBig = NO;
-        if (compressedSize > kWKZipMaxCompressedBytes) {
+        if (attrErr != nil || compressedSize > kWKZipMaxCompressedBytes) {
             tooBig = YES;
         } else {
             NSError *payloadErr = nil;
             NSNumber *payload = [SSZipArchive payloadSizeForArchiveAtPath:zipPath error:&payloadErr];
-            if (payloadErr == nil && payload.unsignedLongLongValue > kWKZipMaxUncompressedBytes) {
+            // fail closed: 拿不到解压后大小 → 拒。加密 / 损坏 / 异常 CD 都进这条
+            // 分支, 不让 bypass 上限。
+            if (payloadErr != nil || payload == nil
+                || payload.unsignedLongLongValue > kWKZipMaxUncompressedBytes) {
                 tooBig = YES;
             }
         }
@@ -357,6 +362,24 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
                                       overwrite:YES
                                        password:password
                                           error:&err];
+
+        // ── 事后兜底: 实际占用 vs 声明值 ──────────────────────────────────────
+        // CD 里 uncompressed_size 是攻击者可控字段, 撒谎 (声明 1KB 实际 5GB) 能
+        // bypass 闸 (2)。这里实测 destDir 字节, 真超 1GB 就整棵删 (含已写出文件)
+        // 并按"过大"拒。代价只是一遍 FS walk, 与 zipPath 大小无关。
+        if (ok) {
+            uint64_t actualBytes = [self _totalFileSizeUnderDir:destDir];
+            if (actualBytes > kWKZipMaxUncompressedBytes) {
+                [fm removeItemAtPath:destDir error:nil];
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [hud hideAnimated:YES];
+                    [hudHost showMsg:LLang(@"压缩包过大,请使用专业解压工具打开")];
+                });
+                return;
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         dispatch_async(dispatch_get_main_queue(), ^{
             [hud hideAnimated:YES];
             if (ok) {
@@ -405,6 +428,30 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
     }
     unzClose(zf);
     return hasSymlink;
+}
+
+// 实测 destDir 下所有文件占用字节, 用于事后兜底闸 —— 防 CD 中 uncompressed_size
+// 撒谎绕过 payloadSize 上限。NSDirectoryEnumerator 默认不跟随 symlink, 这里 zip
+// preflight 已挡 symlink, 拿到的是普通文件 size。
++ (uint64_t)_totalFileSizeUnderDir:(NSString *)dir {
+    if (dir.length == 0) return 0;
+    NSURL *rootURL = [NSURL fileURLWithPath:dir isDirectory:YES];
+    NSDirectoryEnumerator<NSURL *> *enumr =
+        [[NSFileManager defaultManager] enumeratorAtURL:rootURL
+                             includingPropertiesForKeys:@[NSURLFileSizeKey, NSURLIsRegularFileKey]
+                                                options:NSDirectoryEnumerationSkipsHiddenFiles
+                                           errorHandler:nil];
+    uint64_t total = 0;
+    for (NSURL *url in enumr) {
+        NSNumber *isFile = nil;
+        if (![url getResourceValue:&isFile forKey:NSURLIsRegularFileKey error:nil]) continue;
+        if (!isFile.boolValue) continue;
+        NSNumber *size = nil;
+        if ([url getResourceValue:&size forKey:NSURLFileSizeKey error:nil]) {
+            total += size.unsignedLongLongValue;
+        }
+    }
+    return total;
 }
 
 @end
