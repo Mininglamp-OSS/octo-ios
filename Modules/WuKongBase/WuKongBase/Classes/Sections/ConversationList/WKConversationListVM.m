@@ -1689,17 +1689,28 @@ static WKConversationListVM *_instance;
         for (WKConversation *conv in topics) {
             if (excluded.count > 0 && [excluded containsObject:conv.channel.channelId]) { nExcluded++; continue; }
             if (store.loaded && ![store isFollowedWithType:WKFollowTargetTypeThread targetId:conv.channel.channelId]) { nUnfollowed++; continue; }
-            // cell 上显示的子区合计 unread 必须过滤静音子区，与 follow / recent tab badge 同款口径,
-            // 否则用户给某个子区设静音后，群聊 cell 上的红点数字仍包含该子区的未读
-            if ([self isConversationMuted:conv]) { nMuted++; continue; }
-            unread += conv.unreadCount;
-            nMatched++;
+
+            // mention 检查穿透 mute：@我 优先级高于静音（与微信一致），
+            // 必须放在静音 continue 之前，否则被静音的子区里 @我 提醒
+            // 不会被汇总到群聊 toggle 上 → toggle 显示成普通粉点而非 @ 符号。
             if (!hasMention) {
                 NSArray<WKReminder*> *rems = self.cachedRemindersByChannelId[conv.channel.channelId];
+                // 不在 cell render 路径上做 DB 查询 (review 提示):
+                //   cachedRemindersByChannelId 在 loadConversationList 重建 + 子区 reminder
+                //   push 路径 (applySubzoneRemindersUpdate) 维护;且 cache 只存 count > 0
+                //   的条目, 没 @我 的子区永远 cache miss → 之前的 DB 兜底等于每次 cell
+                //   render 都查 N 次 (N = 子区数), 是主线程 jank 源, 与 PR 反 HANG 目标
+                //   矛盾。极窄窗口 (DB 已写但 push 未到) 可能短暂漏报, 下一次 reload 会自愈。
                 for (WKReminder *r in rems) {
                     if (r.type == WKReminderTypeMentionMe) { hasMention = YES; break; }
                 }
             }
+
+            // unread 数字过滤静音子区（与 follow / recent tab badge 同款口径），
+            // 否则给某个子区设静音后群聊 cell 上的红点数字仍包含该子区的未读。
+            if ([self isConversationMuted:conv]) { nMuted++; continue; }
+            unread += conv.unreadCount;
+            nMatched++;
         }
     }
     WK_THREAD_BADGE_DBG(@"[ThreadBadgeDbg] indicator group=%@ topics=%lu excluded=%lu storeLoaded=%d → unread=%ld mention=%d (matched=%ld excl=%ld unfollowed=%ld muted=%ld)",
@@ -2111,7 +2122,8 @@ static WKConversationListVM *_instance;
     // 默认分组的会话（这是产品规则，对齐 web）。若用户有未关注的群想看，最近 tab 仍有。
 
     // 顺便计算 Follow / Recent 两个 tab 各自的 hasMention（复用已有的 remindersByChannelId,
-    // 避免 updateGroupMentionBadge 重复查 DB）。
+    // 避免后续单独查 DB）。UI 已下线 tab 上 @我 标识，但 lastBuild*HasMention 留作其他
+    // 诊断/统计入口。
     // 归属口径严格对齐 getFollowUnreadCount / getRecentUnreadCount：
     //   - Follow: WKFollowedKeysStore（DM/Channel/Thread）；store 未加载时一律不算（保守，
     //     与 getFollowUnreadCount 同口径，避免冷启动期把全量 mention 都挂到关注 tab）。

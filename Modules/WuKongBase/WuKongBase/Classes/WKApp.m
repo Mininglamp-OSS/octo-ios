@@ -58,6 +58,7 @@
 #import "WKMeItem.h"
 #import "WKMePushSettingVC.h"
 #import "WKCommonSettingVC.h"
+#import "WKDarkModeVC.h"
 #import "WKNetworkListener.h"
 #import "WKTypingMessageCell.h"
 #import "WKTypingContent.h"
@@ -1776,29 +1777,42 @@ static WKApp *_instance;
     // ---------- 我的  ----------
     // PC端
     [self setMethod:WKPOINT_ME_WEB handler:^id _Nullable(id  _Nonnull param) {
-        return [WKMeItem initWithTitle:LLangW(@"网页端",weakSelf) icon:[weakSelf imageName:@"Me/Index/IconPC"] nextSectionHeight:10.0f onClick:^{
+        return [WKMeItem initWithTitle:LLangW(@"网页端",weakSelf) icon:[weakSelf imageName:@"Me/Index/IconPC"] nextSectionHeight:12.0f onClick:^{
             [[WKNavigationManager shared] pushViewController:[WKWebClientInfoVC new] animated:YES];
         }];
     } category:WKPOINT_CATEGORY_ME sort:18000];
+
+    // 外观（沿用通用页的逻辑，跳转到 WKDarkModeVC）
+    [self setMethod:@"me.appearance" handler:^id _Nullable(id  _Nonnull param) {
+        NSString *desc;
+        if([WKApp shared].config.darkModeWithSystem) {
+            desc = LLangW(@"跟随系统",weakSelf);
+        } else if([WKApp shared].config.style == WKSystemStyleDark) {
+            desc = LLangW(@"深色模式",weakSelf);
+        } else {
+            desc = LLangW(@"浅色模式",weakSelf);
+        }
+        WKMeItem *item = [WKMeItem initWithTitle:LLangW(@"外观",weakSelf) icon:nil onClick:^{
+            [[WKNavigationManager shared] pushViewController:[WKDarkModeVC new] animated:YES];
+        }];
+        item.detail = desc;
+        return item;
+    } category:WKPOINT_CATEGORY_ME sort:9000];
+
     // 新消息通知
     [self setMethod:WKPOINT_ME_NEWMSGNOTICE handler:^id _Nullable(id  _Nonnull param) {
         return [WKMeItem initWithTitle:LLangW(@"新消息通知",weakSelf) icon:[weakSelf imageName:@"Me/Index/IconNotify"] onClick:^{
              [[WKNavigationManager shared] pushViewController:[WKMePushSettingVC new] animated:YES];
         }];
     } category:WKPOINT_CATEGORY_ME sort:8000];
-    
-    // 我的邀请码
+
+    // 我的邀请码 —— HTML 设计中已移除，保留注册结构方便后续恢复
     [self setMethod:WKPOINT_ME_INVITE handler:^id _Nullable(id  _Nonnull param) {
-        if(!WKApp.shared.remoteConfig.registerInviteOn) {
-            return nil;
-        }
-        return [WKMeItem initWithTitle:LLangW(@"我的邀请码",weakSelf) icon:[weakSelf imageName:@"Me/Index/IconInviteCode"] onClick:^{
-             [[WKNavigationManager shared] pushViewController:[WKMyInviteCodeVC new] animated:YES];
-        }];
+        return nil;
     } category:WKPOINT_CATEGORY_ME sort:7900];
-   
-   
-   
+
+
+
     // 通用
     [self setMethod:WKPOINT_ME_COMMON handler:^id _Nullable(id  _Nonnull param) {
         return [WKMeItem initWithTitle:LLangW(@"通用",weakSelf) icon:[weakSelf imageName:@"Me/Index/IconSetting"] onClick:^{

@@ -18,6 +18,51 @@
 #import "WKGlobalSearchResultController.h"
 #import <WuKongBase/WKFollowedKeysStore.h>
 
+#pragma mark - 跨实例联系人快照
+
+// 场景: tab 上的 WKContactsVC 一直常驻, allContactInfos / items / sectionTitleArr
+// 始终是最新的; 但「我」页里点"通讯录"走 [WKContactsVC new] 每次 push 出新实例,
+// 起步全 nil, loadFromDBCacheThenFetchAPI 要等 DB 异步读 + WKChineseSort 异步排序
+// 两条链跑完才有第一帧数据 —— 用户感知就是"明显的网络 loading,看不到缓存"。
+//
+// 这里在 file scope 持一份 in-memory 快照: tab 实例每次 rebuildTableData 完成时
+// 同步刷; 新实例 loadFromDBCacheThenFetchAPI 同步取走,直接挂 items / sectionTitleArr
+// / allContactInfos,首屏立刻有数据,然后照常 requestData 拿增量。
+//
+// 边界:
+//   - 只在 contactsFilter==0 (全部) 状态下写快照。filter==1/2 (AI/人类) 是 UI 局部
+//     状态,新实例默认从 0 起步,套用会显示错的子集。
+//   - spaceId 不一致时不复用 (防跨空间错用)。
+//   - 空间切换路径 (viewWillAppear) 主动清,避免 stale。
+//   - WKContactsCellModel 实例在多个 VC 之间共享指针 —— cellModel 是 UI 数据的镜像,
+//     mutate 它的 name/avatar 等属性恰好让所有打开的实例都跟随刷新,符合预期。
+//     containers (NSMutableArray) 各 VC 持自己的拷贝,perform* 增量不会跨实例污染。
+static NSArray<WKChannelInfo*> *gContactsSnapshotAllInfos = nil;
+static NSArray<NSArray *> *gContactsSnapshotItems = nil;       // 不含 header section
+static NSArray<NSString*> *gContactsSnapshotSectionTitles = nil;
+static NSString *gContactsSnapshotSpaceId = nil;
+
+static void WKContactsClearSharedSnapshot(void) {
+    gContactsSnapshotAllInfos = nil;
+    gContactsSnapshotItems = nil;
+    gContactsSnapshotSectionTitles = nil;
+    gContactsSnapshotSpaceId = nil;
+}
+
+static void WKContactsWriteSharedSnapshot(NSArray<WKChannelInfo*> *allInfos,
+                                          NSArray<NSArray *> *itemsWithoutHeader,
+                                          NSArray<NSString*> *sectionTitles,
+                                          NSString *spaceId) {
+    gContactsSnapshotAllInfos = [allInfos copy];
+    NSMutableArray *deepItems = [NSMutableArray arrayWithCapacity:itemsWithoutHeader.count];
+    for (NSArray *section in itemsWithoutHeader) {
+        [deepItems addObject:[section copy]];
+    }
+    gContactsSnapshotItems = [deepItems copy];
+    gContactsSnapshotSectionTitles = [sectionTitles copy];
+    gContactsSnapshotSpaceId = [spaceId copy] ?: @"";
+}
+
 @interface WKContactsVC ()<UITableViewDataSource,UITableViewDelegate,WKContactsManagerDelegate,WKChannelManagerDelegate>
 @property(nonatomic,strong) UITableView *tableView;
 @property(nonatomic,strong) NSMutableArray *sectionTitleArr; //排序后的出现过的拼音首字母数组
@@ -90,6 +135,38 @@
     // 记录当前空间ID
     self.lastSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"] ?: @"";
 
+    // ★ 优先用跨实例快照同步显示首屏 —— Me 页 push 出来的新 WKContactsVC 不必再走
+    //   DB 异步读 + WKChineseSort 异步排序 两条链,直接拿 tab 那个常驻实例已经排好的
+    //   items / sectionTitleArr 同步挂上,然后 requestData 拉增量。
+    //   只对 contactsFilter==0 (全部) 生效,filter 是 UI 局部状态,套别的子集会错。
+    NSString *currentSpaceId = self.lastSpaceId;
+    if (self.contactsFilter == 0
+        && gContactsSnapshotAllInfos != nil
+        && gContactsSnapshotItems != nil
+        && gContactsSnapshotSpaceId != nil
+        && [gContactsSnapshotSpaceId isEqualToString:currentSpaceId]) {
+        NSArray *headerItems = [self buildHeaderItemsWithCounts];
+        NSMutableArray *newItems = [NSMutableArray arrayWithCapacity:gContactsSnapshotItems.count + 1];
+        [newItems addObject:[NSMutableArray arrayWithArray:headerItems]];
+        for (NSArray *section in gContactsSnapshotItems) {
+            [newItems addObject:[NSMutableArray arrayWithArray:section]];
+        }
+        self.items = newItems;
+        self.sectionTitleArr = [gContactsSnapshotSectionTitles mutableCopy];
+        self.allContactInfos = gContactsSnapshotAllInfos;
+        [self logContactsCounts:@"SET(sharedSnapshot)"];
+        // filter pill 计数 / footer 数字也要立刻刷,免得"列表瞬出 + 头部数字延迟"
+        NSArray<WKChannelInfo*> *filtered = [self filteredContactInfos];
+        NSString *suffix = (self.contactsFilter == 1) ? @" AI" : LLang(@"联系人");
+        self.contactsCountLbl.text = [NSString stringWithFormat:@"%@ %ld %@%@", LLang(@"共"), (long)filtered.count, LLang(@"位"), suffix];
+        [self refreshFilterTabContainer];
+        [self.tableView reloadData];
+        self.dataLoaded = YES;
+        // 仍照常异步拉 API 做增量同步
+        [self requestData];
+        return;
+    }
+
     // 1. 立即构建 header section
     NSArray *headerItems = [self buildHeaderItemsWithCounts];
     if (self.items.count == 0) {
@@ -144,6 +221,9 @@
         self.myBotCount = 0;
         self.lastLoadTime = 0;
         self.isUpdating = NO;
+        // 跨实例快照也作废,新空间从 DB / API 重建。否则 Me 页 push 出来的新 VC
+        // 会拿到上一个空间的 stale 列表。
+        WKContactsClearSharedSnapshot();
         [self loadFromDBCacheThenFetchAPI];
         NSLog(@"[TabPerf] ContactsVC.viewWillAppear SPACE_SWITCH %.1fms", (CFAbsoluteTimeGetCurrent() - _vwaStart) * 1000);
         return;
@@ -379,6 +459,14 @@
         [newItems addObjectsFromArray:sortedObjArr];
         weakSelf.sectionTitleArr = sectionTitleArr;
         weakSelf.items = newItems;
+
+        // 同步跨实例快照: 只在 filter==0 (全部) 状态下写入。filter==1/2 是 UI 局部
+        // 状态,新实例默认 filter==0 起步,套别的子集会显示错;所以只快照"全部"。
+        // sortedObjArr 是 WKChineseSort 返回的已排序字母分组 (不含 header),正好对得上。
+        if (weakSelf.contactsFilter == 0) {
+            NSString *spaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"] ?: @"";
+            WKContactsWriteSharedSnapshot(weakSelf.allContactInfos, sortedObjArr, sectionTitleArr, spaceId);
+        }
 
         // 动画期间延迟 reloadData，避免 layout pass 阻塞 tab 切换动画
         id<UIViewControllerTransitionCoordinator> coordinator = weakSelf.transitionCoordinator;
@@ -842,6 +930,23 @@
         separatorInset.right          = 0;
         _tableView.separatorInset = separatorInset;
         _tableView.backgroundColor=[UIColor clearColor];
+        // iOS 26+ Liquid Glass：禁用系统自动 contentInset，cell 才能滑到 tabbar 之后，
+        // 让 ScrollEdgeEffectView/BackdropView (CABackdropLayer) 采样到 cell 做镂空。
+        // 同时手动留底部 inset。
+        // 注: 浮岛 tabbar 实际占用 = tabBarHeight (76) + windowSafeBottom (~34) +
+        //     kFloatingBottomGap (8); 只算 tabBarHeight 会让最后一行被浮岛遮 (与
+        //     WKConversationListVC 同一道公式, review #3 提示)。
+        if (@available(iOS 26.0, *)) {
+            _tableView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+            CGFloat tabBarHeight = self.tabBarController.tabBar.frame.size.height ?: 64;
+            UIWindow *win = self.view.window
+                            ?: [UIApplication sharedApplication].windows.firstObject;
+            CGFloat windowSafeBottom = win.safeAreaInsets.bottom > 0 ? win.safeAreaInsets.bottom : 34;
+            static const CGFloat kFloatingBottomGap = 8;
+            static const CGFloat kVisualGap         = 12;
+            _tableView.contentInset = UIEdgeInsetsMake(0, 0,
+                tabBarHeight + windowSafeBottom + kFloatingBottomGap + kVisualGap, 0);
+        }
 
         _tableView.sectionIndexBackgroundColor = [UIColor clearColor];
 //        _tableView.tableFooterView = [[UIView alloc] init];
@@ -852,9 +957,14 @@
         _tableView.sectionFooterHeight = 0.0f;
         _tableView.sectionIndexColor = WKApp.shared.config.themeColor;
         _tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
-        // tabbar高度 + 额外边距，确保最后一行完整显示
-        CGFloat tabBarHeight = self.tabBarController.tabBar.frame.size.height ?: 49;
-        _tableView.contentInset = UIEdgeInsetsMake(0, 0, tabBarHeight + 10, 0);
+        // iOS 26+ Liquid Glass 下，自动 contentInset 接管，手动 inset 会漏 VC 灰底
+        if (@available(iOS 26.0, *)) {
+            // 让系统接管
+        } else {
+            // tabbar高度 + 额外边距，确保最后一行完整显示
+            CGFloat tabBarHeight = self.tabBarController.tabBar.frame.size.height ?: 49;
+            _tableView.contentInset = UIEdgeInsetsMake(0, 0, tabBarHeight + 10, 0);
+        }
         [_tableView registerClass:WKContactsCell.class forCellReuseIdentifier:[WKContactsCell cellId]];
         [_tableView registerClass:WKContactsHeaderItemCell.class forCellReuseIdentifier:[WKContactsHeaderItemCell cellId]];
 
@@ -1609,6 +1719,26 @@
 
     NSLog(@"[Contacts] 增量更新: insert=%lu, update=%lu, delete=%lu",
           (unsigned long)toInsert.count, (unsigned long)toUpdate.count, (unsigned long)toDelete.count);
+
+    // 兜底: rebuildTableData 在 tab 转场动画里会 DEFER reloadData 到动画结束
+    //   (WKContactsVC.m:383-390 "避免 layout pass 阻塞 tab 切换动画"),这段窗口
+    //   self.items / self.sectionTitleArr 已是新状态,tableView 自己缓存的 pre-update
+    //   快照还停在旧值 (典型: 旧空表 numberOfSections=1)。任何增量 API
+    //   (deleteRows/insertRows/reloadRows) 都会拿当前 items 的 indexPath 去碰旧
+    //   tableView 快照,触发
+    //     'attempt to delete row N from section M, but there are only 1 sections before the update'
+    //   原 stack: -[WKContactsVC performBatchDeletes:needsFullRebuild:] WKContactsVC.m:1802。
+    //
+    //   reloadData 会同步刷新 numberOfSections / numberOfRowsInSection 的查询结果
+    //   (cellForRow 才是异步的),先强制同步,后续 perform* 才有正确的 pre-update 快照。
+    //   addOrUpdateContactsWithChannelInfo 路径早已用 isTableViewInSyncWithItems 兜过
+    //   (WKContactsVC.m:1339, 1369),applyIncrementalUpdate 路径之前漏了。
+    //
+    //   代价: 命中 OOS 时一次 reloadData 落在 tab 转场动画期间,可能有微小卡顿,但
+    //   优于直接崩溃。稳态 (无转场 / reloadData 已跑) 下此分支为 no-op。
+    if (self.tableView && (NSInteger)self.items.count != [self.tableView numberOfSections]) {
+        [self.tableView reloadData];
+    }
 
     BOOL needsFullRebuild = NO;
 

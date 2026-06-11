@@ -51,14 +51,22 @@
                     @{
                         @"class":WKMeAvatarModel.class,
                         @"label":LLang(@"头像"),
+                        @"showBottomLine":@(YES),
+                        @"bottomLeftSpace":@(17.0f),
+                        @"bottomRightSpace":@(17.0f),
+                        @"cellHeight":@(52.0f),
                         @"onClick":^{
                             [[WKNavigationManager shared] pushViewController:[WKMeAvatarVC new] animated:YES];
                         }
                     },
                     @{
                         @"class":WKLabelItemModel.class,
-                        @"label":LLang(@"名字"),
+                        @"label":LLang(@"姓名"),
                         @"value":loginInfo.displayName?:@"",
+                        @"showBottomLine":@(YES),
+                        @"bottomLeftSpace":@(17.0f),
+                        @"bottomRightSpace":@(17.0f),
+                        @"cellHeight":@(52.0f),
                         @"onClick":^{
                             if(weakSelf.delegate && [weakSelf.delegate respondsToSelector:@selector(meInfoVMUpdateName:)]) {
                                 [weakSelf.delegate meInfoVMUpdateName:weakSelf];
@@ -71,14 +79,19 @@
                         @"value":loginInfo.extra[@"short_no"]?:@"",
                         @"valueCopy":@(true),
                         @"showArrow":@(canSettingShortNo),
+                        @"showBottomLine":@(YES),
+                        @"bottomLeftSpace":@(17.0f),
+                        @"bottomRightSpace":@(17.0f),
+                        @"cellHeight":@(52.0f),
                         @"onClick":onShortNoClick,
                     },
                     @{
                          @"class":WKIconItemModel.class,
                          @"label":LLang(@"我的二维码"),
                          @"icon":[self imageName:@"Me/Index/Qrcode"],
-                         @"width":@(24.0f),
-                         @"height":@(24.0f),
+                         @"width":@(16.0f),
+                         @"height":@(16.0f),
+                         @"cellHeight":@(52.0f),
                          @"onClick":^{
                              [[WKNavigationManager shared] pushViewController:[WKMeQRCodeVC new] animated:YES];
                          }
@@ -86,12 +99,13 @@
             ],
         },
         @{
-            @"height":@(10.0f),
+            @"height":@(12.0f),
             @"items":@[
                     @{
                         @"class":WKLabelItemModel.class,
                         @"label":LLang(@"性别"),
                         @"value":sexName,
+                        @"cellHeight":@(52.0f),
                         @"onClick":^{
                             if(weakSelf.delegate && [weakSelf.delegate respondsToSelector:@selector(meInfoVMUpdateSex:)]) {
                                  [weakSelf.delegate meInfoVMUpdateSex:weakSelf];

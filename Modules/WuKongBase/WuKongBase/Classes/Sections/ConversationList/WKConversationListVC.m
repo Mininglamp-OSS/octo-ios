@@ -1009,11 +1009,37 @@
         separatorInset.right          = 0;
         _tableView.separatorInset = separatorInset;
         _tableView.backgroundColor=[UIColor clearColor];
+        // iOS 26+: tabbar 走 WKMainTabController 自绘的浮岛胶囊 (Liquid Glass 已通过
+        // UIDesignRequiresCompatibility 关掉, backdrop 采样需求消失)。
+        // tableView 不再依赖系统 safeArea (走 Never), 自己反推:
+        //   contentInset.bottom = tabBar 高度 + 距 view 底部的偏移 (= bottomSafe + bottomGap) + 视觉余量
+        // 否则系统只算 tabBar.height, 滑到底时浮岛会压住最后一行。
+        // (Never 是为了和老版本一致, 也避开自动 inset 在 floating bar 下的不可预期值。)
+        if (@available(iOS 26.0, *)) {
+            _tableView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+            CGFloat tabBarHeight = self.tabBarController.tabBar.frame.size.height ?: 64;
+            UIWindow *win = self.view.window
+                            ?: [UIApplication sharedApplication].windows.firstObject;
+            // home indicator 设备上 ~34, 其余 0; init 时 win 可能尚未取到 → 兜底 34 (iOS 26 设备基本都有 home indicator)
+            CGFloat windowSafeBottom = win.safeAreaInsets.bottom > 0 ? win.safeAreaInsets.bottom : 34;
+            static const CGFloat kFloatingBottomGap = 8;   // 与 WKMainTabController kWKCapsuleBottomGap 对齐
+            static const CGFloat kVisualGap         = 12;  // 最后一行距浮岛上沿的呼吸
+            _tableView.contentInset = UIEdgeInsetsMake(0, 0,
+                tabBarHeight + windowSafeBottom + kFloatingBottomGap + kVisualGap, 0);
+        }
         _tableView.sectionIndexBackgroundColor = [UIColor clearColor];
         _tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
-        // tabbar高度 + 额外边距，确保最后一行完整显示
-        CGFloat tabBarHeight = self.tabBarController.tabBar.frame.size.height ?: 49;
-        _tableView.contentInset = UIEdgeInsetsMake(0, 0, tabBarHeight + 10, 0);
+        // iOS 26+ Liquid Glass：浮岛 tabbar 不再占据底部全宽，系统会自动给 scroll view
+        // 加 contentInset 让最后一行可滑出。这里再手动留 tabBarHeight 反而会暴露
+        // VC.view 的浅灰背景（透过 tableView.clearColor 漏出来），形成一条假的灰带。
+        // 老系统继续走原逻辑保最后一行不被压住。
+        if (@available(iOS 26.0, *)) {
+            // 不动，让系统接管
+        } else {
+            // tabbar高度 + 额外边距，确保最后一行完整显示
+            CGFloat tabBarHeight = self.tabBarController.tabBar.frame.size.height ?: 49;
+            _tableView.contentInset = UIEdgeInsetsMake(0, 0, tabBarHeight + 10, 0);
+        }
         _tableView.scrollIndicatorInsets = UIEdgeInsetsMake(-0.1f, 0.0f, 0.0f, 0.0f);
         _tableView.tableFooterView = [[UIView alloc] init];
         _tableView.estimatedRowHeight = 0;
@@ -1320,7 +1346,6 @@
         }
         [self refreshTable];
         [self refreshBadge];
-        [self updateGroupMentionBadge];
         // 批量更新后补拉子区数据（网络恢复等场景）
         [self.conversationListVM fetchThreadCountsForGroups];
 
@@ -1386,8 +1411,6 @@
     }
     [self uiAddOrUpdateConversationForOne:conversation];
     [self refreshBadge];
-    // 无论当前在哪个 tab，都更新群聊 tab 的 @提醒标识
-    [self updateGroupMentionBadge];
 }
 /// 过滤不属于当前空间的会话更新（解决跨空间消息产生红点的问题）
 -(NSArray<WKConversation*>*) filterConversationsBySpace:(NSArray<WKConversation*>*)conversations {
@@ -4508,19 +4531,11 @@
     CFAbsoluteTime _t1 = CFAbsoluteTimeGetCurrent();
     [self.tableView reloadData];
     CFAbsoluteTime _t2 = CFAbsoluteTimeGetCurrent();
-    [self updateGroupMentionBadge];
     [self refreshFollowEmptyVisibility];
     CFAbsoluteTime _t3 = CFAbsoluteTimeGetCurrent();
-    NSLog(@"[TabPerf] rebuildGroupDisplayAndReload: buildList=%.1fms reloadData=%.1fms mentionBadge=%.1fms total=%.1fms rows=%lu",
+    NSLog(@"[TabPerf] rebuildGroupDisplayAndReload: buildList=%.1fms reloadData=%.1fms post=%.1fms total=%.1fms rows=%lu",
           (_t1-_t0)*1000, (_t2-_t1)*1000, (_t3-_t2)*1000, (_t3-_t0)*1000,
           (unsigned long)self.groupDisplayList.count);
-}
-
-/// 检查群聊和子区中是否有未处理的@提醒，分别更新关注/最近 tab 上的 [有人@我] 标识。
-/// 直接使用 buildGroupDisplayList 中已计算好的结果，避免重复遍历和 DB 查询。
--(void) updateGroupMentionBadge {
-    [_conversationTabView setFollowHasMention:_conversationListVM.lastBuildFollowHasMention];
-    [_conversationTabView setRecentHasMention:_conversationListVM.lastBuildRecentHasMention];
 }
 
 -(void) showCreateCategoryDialog {

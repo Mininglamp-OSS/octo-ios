@@ -24,6 +24,9 @@ NS_ASSUME_NONNULL_BEGIN
 #define WK_NICKNAME_MAX_WIDTH 100.0f
 #define WK_NICKNAME_FONT  [[WKApp shared].config appFontOfSize:14.0f]
 
+// Bot(AI) 标识图标显示高度，宽度按图片真实宽高比动态计算
+#define WK_BOT_BADGE_HEIGHT 16.0f
+
 
 #define WK_CONTENT_INSETS  UIEdgeInsetsMake(8.0f, 12.0f, 8.0f, 12.0f) // 正文边距
 
@@ -55,8 +58,8 @@ typedef enum :NSUInteger {
 
 // 名字
 @property(nonatomic,strong) UILabel *nameLbl;
-// Bot标识
-@property(nonatomic,strong) UILabel *botBadgeLbl;
+// Bot标识（AI 图标）
+@property(nonatomic,strong) UIImageView *botBadgeLbl;
 // 实名认证 ✓ 迷你徽章（12×12pt 蓝勾）
 // / Phase A — 聊天气泡作者名旁的实名徽章。
 // 仅在群聊 + 作者已实名 (orgData.realname_verified) 时显示；hidden 由 refreshModel 控制。
@@ -132,6 +135,16 @@ typedef enum :NSUInteger {
  */
 -(void) layoutName;
 
+// 昵称行的实名 ✓ / Bot(AI) 徽章统一布局：
+// 子类 layoutName 把 nameLbl 定好 lim_left/lim_top/lim_height 后调用本方法。
+// 内部会在 maxRowWidth 内为可见徽章预留宽度并压缩 nameLbl 文本宽度（保证长昵称
+// + @SpaceName 后缀场景徽章不被裁剪），再按真实文本宽定位徽章，避免首帧 lim_width
+// 尚未刷新时徽章压到昵称上方重叠。
+-(void) layoutNameRowBadgesWithMaxRowWidth:(CGFloat)maxRowWidth;
+
+// Bot(AI) 图标按真实宽高比换算到 WK_BOT_BADGE_HEIGHT 高度后的显示宽度。
++(CGFloat) botBadgeDisplayWidth;
+
 +(BOOL) isShowName:(WKMessageModel*)model;
 
 
@@ -190,7 +203,6 @@ typedef enum :NSUInteger {
 -(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems;
 /// 退出气泡文字选择模式，恢复正常显示
 -(void) endInBubbleTextSelection;
-
 
 
 @end

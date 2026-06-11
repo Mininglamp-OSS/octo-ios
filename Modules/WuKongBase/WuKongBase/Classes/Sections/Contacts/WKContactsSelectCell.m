@@ -18,7 +18,7 @@
 
 @interface WKContactsSelectCell()<WKCheckBoxDelegate>
 
-@property(nonatomic,strong) UILabel *botBadgeLbl;
+@property(nonatomic,strong) UIImageView *botBadgeLbl;
 // / Phase A —— 选人列表实名 ✓ 徽章（拉人 / 新建群）
 @property(nonatomic,strong) UIImageView *realnameVerifiedImgView;
 
@@ -49,14 +49,9 @@
     self.checkBox.delegate = self;
     [self addSubview:self.checkBox];
 
-    _botBadgeLbl = [[UILabel alloc] init];
-    _botBadgeLbl.text = @"AI";
-    _botBadgeLbl.font = [[WKApp shared].config appFontOfSize:10.0f];
-    _botBadgeLbl.textColor = [UIColor whiteColor];
-    _botBadgeLbl.backgroundColor = [UIColor colorWithRed:136.0f/255.0f green:84.0f/255.0f blue:208.0f/255.0f alpha:1.0f];
-    _botBadgeLbl.textAlignment = NSTextAlignmentCenter;
-    _botBadgeLbl.layer.cornerRadius = 4.0f;
-    _botBadgeLbl.layer.masksToBounds = YES;
+    _botBadgeLbl = [[UIImageView alloc] init];
+    _botBadgeLbl.image = [WKApp.shared loadImage:@"Common/Index/IconAIBadge" moduleID:@"WuKongBase"];
+    _botBadgeLbl.contentMode = UIViewContentModeScaleAspectFit;
     _botBadgeLbl.hidden = YES;
     [self.contentView addSubview:_botBadgeLbl];
 
@@ -84,10 +79,14 @@
 
     self.botBadgeLbl.hidden = !_contactSelectModel.robot;
     if(_contactSelectModel.robot) {
-        [self.botBadgeLbl sizeToFit];
+        CGFloat h = 16.0f;
+        CGFloat w = h;
+        UIImage *img = self.botBadgeLbl.image;
+        if(img && img.size.height > 0.0f) {
+            w = h * img.size.width / img.size.height;
+        }
         CGRect frame = self.botBadgeLbl.frame;
-        frame.size.width += 8.0f;
-        frame.size.height += 4.0f;
+        frame.size = CGSizeMake(w, h);
         self.botBadgeLbl.frame = frame;
     }
 

@@ -30,6 +30,8 @@
 // 数据源：viewModel.channelInfo.extra[@"realname_verified"]（loadPersonChannelInfo
 // 后由 WKUserInfoVM.channelInfoFromUser 写入，对齐 web orgData.realname_verified）。
 @property(nonatomic,strong) UIImageView *realnameVerifiedImgView;
+// Bot(AI) 标识图标：bot 用户名片在名字旁展示，高度 16pt，宽度按图比例。
+@property(nonatomic,strong) UIImageView *botBadgeImgView;
 @property(nonatomic,strong) WKCopyLabel *nameLbl; // 用户名称（如果有备注就是备注没有就是昵称,最大的名字）
 @property(nonatomic,strong) WKUserFieldView *nicknameField; // 用户昵称(如果有备注则隐藏昵称)
 @property(nonatomic,strong) WKUserFieldView *shortNoField; // 用户短编号
@@ -78,6 +80,7 @@
     [self.userHeader addSubview:self.userAvatarView];
     [self.userHeader addSubview:self.sexImgView];
     [self.userHeader addSubview:self.realnameVerifiedImgView];
+    [self.userHeader addSubview:self.botBadgeImgView];
 
     [self.userHeader addSubview:self.userInfoBoxView];
     
@@ -209,6 +212,8 @@
     // 已把后端顶层 realname_verified 写进来，与 web `orgData.realname_verified` 对齐。
     NSNumber *verifiedFlag = [WKChannelUtil isRealnameVerifiedFromExtra:self.viewModel.channelInfo.extra];
     self.realnameVerifiedImgView.hidden = !verifiedFlag.boolValue;
+    // Bot(AI) 标识：bot 用户名片在名字旁展示图标。
+    self.botBadgeImgView.hidden = !self.viewModel.channelInfo.robot;
     self.sendBtn.hidden = NO;
     self.addFriendBtn.hidden = YES;
     self.externalHintLbl.hidden = YES;
@@ -399,6 +404,20 @@
         self.realnameVerifiedImgView.lim_top = boxTop + self.nameLbl.lim_top + (self.nameLbl.lim_height - badgeH) / 2.0f;
         afterNameRight = self.realnameVerifiedImgView.lim_right;
     }
+    // Bot(AI) 标识：紧跟在 nameLbl / 实名徽章右侧，高度 16pt，宽按图比例。
+    if (!self.botBadgeImgView.hidden) {
+        CGFloat botH = 16.0f;
+        CGFloat botW = botH;
+        UIImage *botImg = self.botBadgeImgView.image;
+        if (botImg && botImg.size.height > 0.0f) {
+            botW = botH * botImg.size.width / botImg.size.height;
+        }
+        self.botBadgeImgView.lim_width = botW;
+        self.botBadgeImgView.lim_height = botH;
+        self.botBadgeImgView.lim_left = afterNameRight + 6.0f;
+        self.botBadgeImgView.lim_top = boxTop + self.nameLbl.lim_top + (self.nameLbl.lim_height - botH) / 2.0f;
+        afterNameRight = self.botBadgeImgView.lim_right;
+    }
     self.sexImgView.lim_left = afterNameRight + 5.0f;
     self.sexImgView.lim_top = boxTop + self.nameLbl.lim_top + 4.0f;
     if(preView) {
@@ -489,6 +508,16 @@
         _realnameVerifiedImgView.hidden = YES;
     }
     return _realnameVerifiedImgView;
+}
+
+- (UIImageView *)botBadgeImgView {
+    if(!_botBadgeImgView) {
+        _botBadgeImgView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 16.0f, 16.0f)];
+        _botBadgeImgView.contentMode = UIViewContentModeScaleAspectFit;
+        _botBadgeImgView.image = [[WKApp shared] loadImage:@"Common/Index/IconAIBadge" moduleID:@"WuKongBase"];
+        _botBadgeImgView.hidden = YES;
+    }
+    return _botBadgeImgView;
 }
 
 - (WKCopyLabel *)nameLbl {

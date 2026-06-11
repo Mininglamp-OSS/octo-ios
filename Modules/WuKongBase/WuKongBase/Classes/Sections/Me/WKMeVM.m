@@ -22,33 +22,17 @@
     NSMutableArray *sections = [NSMutableArray array];
     NSMutableArray *currentGroup = [NSMutableArray array];
 
-    BOOL isDark = (WKApp.shared.config.style == WKSystemStyleDark);
-    NSDictionary *darkModeItem = @{
-        @"class": WKSwitchItemModel.class,
-        @"label": LLang(@"深色模式"),
-        @"on": @(isDark),
-        @"bottomLeftSpace":@(0.0f),
-        @"showBottomLine":@(NO),
-        @"showTopLine":@(NO),
-        @"onSwitch":^(BOOL on){
-            if(on) {
-                WKApp.shared.config.style = WKSystemStyleDark;
-            } else {
-                WKApp.shared.config.style = WKSystemStyleLight;
-            }
-            WKApp.shared.config.darkModeWithSystem = NO;
-        }
-    };
-    [currentGroup addObject:darkModeItem];
-
     for (NSInteger i = 0; i < itemModels.count; i++) {
         WKMeItem *meItem = itemModels[i];
+        BOOL isPCRow = [meItem.title isEqualToString:LLang(@"网页端")];
+        BOOL pcOnline = [WKOnlineStatusManager shared].pcOnline;
+
         NSMutableDictionary *itemDict = [NSMutableDictionary dictionaryWithDictionary:@{
             @"class":WKMeItemModel.class,
             @"title":meItem.title?:@"",
-            @"bottomLeftSpace":@(0.0f),
-            @"showBottomLine":@(NO),
-            @"showTopLine":@(NO),
+            @"cellHeight":@(52.0f),
+            @"bottomLeftSpace":@(17.0f),
+            @"bottomRightSpace":@(17.0f),
             @"onClick":^(BOOL on){
                 if(meItem.onClick) {
                     meItem.onClick();
@@ -58,16 +42,27 @@
         if(meItem.icon) {
             itemDict[@"icon"] = meItem.icon;
         }
-        if([meItem.title isEqualToString:LLang(@"网页端")]) {
-            BOOL pcOnline = [WKOnlineStatusManager shared].pcOnline;
+        if(isPCRow) {
             itemDict[@"detail"] = pcOnline ? LLang(@"已连接") : @"";
+            // 网页端：HTML 设计无 chevron，仅显示状态文字
+            itemDict[@"showArrow"] = @(NO);
+        } else if(meItem.detail.length > 0) {
+            itemDict[@"detail"] = meItem.detail;
         }
+
         [currentGroup addObject:itemDict];
         BOOL isLast = (i == itemModels.count - 1);
         BOOL hasGroupBreak = (meItem.nextSectionHeight > 0);
+
+        // 分组内最后一行不画底部分隔线
         if(hasGroupBreak || isLast) {
+            // 应用到 currentGroup 的所有行：前 n-1 行 showBottomLine=YES，最后一行 NO
+            for (NSInteger r = 0; r < currentGroup.count; r++) {
+                NSMutableDictionary *rowDict = currentGroup[r];
+                rowDict[@"showBottomLine"] = @(r < currentGroup.count - 1);
+            }
             [sections addObject:@{
-                @"height":@(10.0f),
+                @"height":@(12.0f),
                 @"items":[currentGroup copy]
             }];
             currentGroup = [NSMutableArray array];

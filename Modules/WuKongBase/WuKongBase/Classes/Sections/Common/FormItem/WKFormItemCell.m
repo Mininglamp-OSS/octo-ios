@@ -46,9 +46,10 @@
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGFloat bottomleftSpace = self.model.bottomLeftSpace?[self.model.bottomLeftSpace floatValue]:0.0f;
+    CGFloat bottomRightSpace = self.model.bottomRightSpace?[self.model.bottomRightSpace floatValue]:0.0f;
     self.bottomLineView.lim_left = bottomleftSpace;
-    self.bottomLineView.lim_width = self.lim_width - bottomleftSpace;
-    
+    self.bottomLineView.lim_width = self.lim_width - bottomleftSpace - bottomRightSpace;
+
     CGFloat arrowRight = 10.0f;
     self.arrowImgView.lim_left = self.lim_width - arrowRight - self.arrowImgView.lim_width;
     self.arrowImgView.lim_top = self.lim_height/2.0f - self.arrowImgView.lim_height/2.0f;

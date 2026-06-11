@@ -12,8 +12,6 @@
 
 
 
-@property (strong) UIColor *badgeTextColor;
-
 @property (nonatomic) UIFont *badgeTextFont;
 
 @property (nonatomic) CGFloat badgeTopPadding; //数字顶部到红圈的距离
@@ -104,50 +102,24 @@
 
 #pragma mark - Private
 - (void)drawWithContent:(CGRect)rect context:(CGContextRef)context{
-    // CGRect bodyFrame = self.bounds;
     CGRect bkgFrame = CGRectInset(self.bounds, self.circleWidth, self.circleWidth);
     CGRect badgeSize = CGRectInset(self.bounds, self.circleWidth + self.badgeLeftPadding, self.circleWidth + self.badgeTopPadding);
-    if ([self badgeBackgroundColor]) {//外白色描边
-        //        CGContextSetFillColorWithColor(context, [[UIColor whiteColor] CGColor]);
-        //        if ([self badgeValue].integerValue > 9) {
-        //            CGFloat circleWith = bodyFrame.size.height;
-        //            CGFloat totalWidth = bodyFrame.size.width;
-        //            CGFloat diffWidth = totalWidth - circleWith;
-        //            CGPoint originPoint = bodyFrame.origin;
-        //            CGRect leftCicleFrame = CGRectMake(originPoint.x, originPoint.y, circleWith, circleWith);
-        //            CGRect centerFrame = CGRectMake(originPoint.x +circleWith/2, originPoint.y, diffWidth, circleWith);
-        //            CGRect rightCicleFrame = CGRectMake(originPoint.x +(totalWidth - circleWith), originPoint.y, circleWith, circleWith);
-        //            CGContextFillEllipseInRect(context, leftCicleFrame);
-        //            CGContextFillRect(context, centerFrame);
-        //            CGContextFillEllipseInRect(context, rightCicleFrame);
-        //
-        //        }else{
-        //            CGContextFillEllipseInRect(context, bodyFrame);
-        //        }
-        // badge背景色
+    if ([self badgeBackgroundColor]) {
+        // 单一胶囊 (cornerRadius = height/2)：避免原"左圆+中矩形+右圆"在半透明背景色下
+        // 因为重叠区两次填充而出现"两个深圆"视觉假象（同样适用于单位数情况）。
         CGContextSetFillColorWithColor(context, [[self badgeBackgroundColor] CGColor]);
-        if ([self badgeValue].integerValue > 9) {
-            CGFloat circleWith = bkgFrame.size.height;
-            CGFloat totalWidth = bkgFrame.size.width;
-            CGFloat diffWidth = totalWidth - circleWith;
-            CGPoint originPoint = bkgFrame.origin;
-            CGRect leftCicleFrame = CGRectMake(originPoint.x, originPoint.y, circleWith, circleWith);
-            CGRect centerFrame = CGRectMake(originPoint.x +circleWith/2, originPoint.y, diffWidth, circleWith);
-            CGRect rightCicleFrame = CGRectMake(originPoint.x +(totalWidth - circleWith), originPoint.y, circleWith, circleWith);
-            CGContextFillEllipseInRect(context, leftCicleFrame);
-            CGContextFillRect(context, centerFrame);
-            CGContextFillEllipseInRect(context, rightCicleFrame);
-        }else{
-            CGContextFillEllipseInRect(context, bkgFrame);
-        }
+        CGFloat radius = bkgFrame.size.height / 2.0f;
+        UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:bkgFrame cornerRadius:radius];
+        CGContextAddPath(context, path.CGPath);
+        CGContextFillPath(context);
     }
-    
+
     CGContextSetFillColorWithColor(context, [[self badgeTextColor] CGColor]);
     NSMutableParagraphStyle *badgeTextStyle = [[NSMutableParagraphStyle defaultParagraphStyle] mutableCopy];
     [badgeTextStyle setLineBreakMode:NSLineBreakByWordWrapping];
     [badgeTextStyle setAlignment:NSTextAlignmentCenter];
-    
-    
+
+
     NSDictionary *badgeTextAttributes = @{
                                           NSFontAttributeName: [self badgeTextFont],
                                           NSForegroundColorAttributeName: [self badgeTextColor],

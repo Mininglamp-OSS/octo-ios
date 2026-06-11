@@ -14,73 +14,46 @@
 
 
 - (NSArray<NSDictionary *> *)tableSectionMaps {
-
     BOOL newMsgNotice = [WKMySettingManager shared].newMsgNotice; // 新消息通知
-    if(newMsgNotice == NO) {
-        return @[
-            [self newMsgItem:newMsgNotice],
-        ];
-    }
     BOOL msgShowDetail = [WKMySettingManager shared].msgShowDetail; // 通知是否显示详情
     BOOL voiceOn = [WKMySettingManager shared].voiceOn; // 声音开启
     BOOL shockOn = [WKMySettingManager shared].shockOn; // 震动开启
-    
+    BOOL depDisabled = !newMsgNotice; // 主开关关闭时，子项禁用
+
+    __weak typeof(self) weakSelf = self;
     return @[
-            [self newMsgItem:newMsgNotice],
-              @{
-                  @"height":@(15.0f),
-                  @"items":@[
-                          @{
-                              @"class":WKSwitchItemModel.class,
-                              @"label":LLang(@"通知显示消息详情"),
-                              @"on":@(msgShowDetail),
-                              @"onSwitch":^(BOOL on){
-                                   [[WKMySettingManager shared] msgShowDetail:on];
-                              }
-                          },
-                  ],
-              },
-              @{
-                  @"height":@(15.0f),
-                  @"remark": [NSString stringWithFormat:LLang(@"在%@运行时，您可以设置是否需要声音或震动"),[WKApp shared].config.appName],
-                  @"items":@[
-                          @{
-                              @"class":WKSwitchItemModel.class,
-                              @"label":LLang(@"声音"),
-                              @"on":@(voiceOn),
-                              @"onSwitch":^(BOOL on){
-                                  [[WKMySettingManager shared] voiceOn:on];
-                              }
-                          },
-                          @{
-                              @"class":WKSwitchItemModel.class,
-                              @"label":LLang(@"震动"),
-                              @"on":@(shockOn),
-                              @"onSwitch":^(BOOL on){
-                                  [[WKMySettingManager shared] shockOn:on];
-                              }
-                          },
-                  ],
-              },
-          ];
+        @{
+            @"height":@(0.0f),
+            @"items":@[
+                [self switchItem:LLang(@"新消息通知") on:newMsgNotice disabled:NO showBottom:YES onSwitch:^(BOOL on){
+                    [[WKMySettingManager shared] newMsgNotice:on];
+                    [weakSelf reloadData];
+                }],
+                [self switchItem:LLang(@"通知显示消息详情") on:msgShowDetail disabled:depDisabled showBottom:YES onSwitch:^(BOOL on){
+                    [[WKMySettingManager shared] msgShowDetail:on];
+                }],
+                [self switchItem:LLang(@"声音") on:voiceOn disabled:depDisabled showBottom:YES onSwitch:^(BOOL on){
+                    [[WKMySettingManager shared] voiceOn:on];
+                }],
+                [self switchItem:LLang(@"震动") on:shockOn disabled:depDisabled showBottom:NO onSwitch:^(BOOL on){
+                    [[WKMySettingManager shared] shockOn:on];
+                }],
+            ],
+        },
+    ];
 }
 
--(NSDictionary*) newMsgItem:(BOOL) newMsgNotice{
-    __weak typeof(self) weakSelf = self;
+- (NSDictionary *)switchItem:(NSString *)label on:(BOOL)on disabled:(BOOL)disabled showBottom:(BOOL)showBottom onSwitch:(void(^)(BOOL))handler {
     return @{
-        @"height":@(15.0f),
-        @"remark": LLang(@"关闭后，手机将不再收到新消息通知"),
-        @"items":@[
-                @{
-                    @"class":WKSwitchItemModel.class,
-                    @"label":LLang(@"新消息通知"),
-                    @"on":@(newMsgNotice),
-                    @"onSwitch":^(BOOL on){
-                        [[WKMySettingManager shared] newMsgNotice:on];
-                        [weakSelf reloadData];
-                    }
-                },
-        ],
+        @"class":WKSwitchItemModel.class,
+        @"label":label,
+        @"on":@(on),
+        @"disable":@(disabled),
+        @"showBottomLine":@(showBottom),
+        @"bottomLeftSpace":@(17.0f),
+        @"bottomRightSpace":@(17.0f),
+        @"cellHeight":@(52.0f),
+        @"onSwitch":handler ?: ^(BOOL on){},
     };
 }
 

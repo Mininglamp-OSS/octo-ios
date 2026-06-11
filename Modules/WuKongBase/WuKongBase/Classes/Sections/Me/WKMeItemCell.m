@@ -59,6 +59,13 @@
     } else {
         self.detailLbl.hidden = YES;
     }
+
+    // 默认显示箭头；model.showArrow = @(NO) 时隐藏
+    if(cellModel.showArrow != nil) {
+        self.arrowImgView.hidden = ![cellModel.showArrow boolValue];
+    } else {
+        self.arrowImgView.hidden = NO;
+    }
 }
 
 - (void)layoutSubviews {
@@ -69,11 +76,17 @@
     self.titleLbl.lim_width = self.lim_width - padding * 2 - 20.0f;
     self.titleLbl.lim_height = self.lim_height;
 
-    self.arrowImgView.lim_left = self.lim_width - padding - self.arrowImgView.lim_width;
-    self.arrowImgView.lim_top = self.lim_height/2.0f - self.arrowImgView.lim_height/2.0f;
+    CGFloat rightEdge = self.lim_width - padding;
+    if(self.arrowImgView.hidden) {
+        // 隐藏箭头时 detail 右端贴 padding
+    } else {
+        self.arrowImgView.lim_left = rightEdge - self.arrowImgView.lim_width;
+        self.arrowImgView.lim_top = self.lim_height/2.0f - self.arrowImgView.lim_height/2.0f;
+        rightEdge = self.arrowImgView.lim_left - 6.0f;
+    }
 
     if(!self.detailLbl.hidden) {
-        self.detailLbl.lim_left = self.arrowImgView.lim_left - self.detailLbl.lim_width - 6.0f;
+        self.detailLbl.lim_left = rightEdge - self.detailLbl.lim_width;
         self.detailLbl.lim_top = self.lim_height/2.0f - self.detailLbl.lim_height/2.0f;
     }
 }

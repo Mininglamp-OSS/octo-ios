@@ -22,6 +22,45 @@
 #import "WKMessageCell.h"
 #import "WKMultipleSelectToHereButton.h"
 #import <SDWebImage/SDWebImage.h>
+
+// ============================================================================
+// 卡顿诊断开关：定位"首次进群滑动期间持续卡顿"问题
+// 排查完置 NO 即可。所有埋点统一前缀 [CellPerf]，且都带阈值过滤，平时安静。
+// ============================================================================
+// 排查完置 NO,合规 CLAUDE.md "调试工具的生命周期" 要求 (合入 release 前关闭)。
+// CADisplayLink fps 监视 + 全部 [CellPerf]/[PullDebug]/[Perf] NSLog 一并失活
+// (NSLog 走全局锁, 在主线程已经被压住的时候打日志会再加塞,反而放大卡顿)。
+static const BOOL WKCellPerfLog = NO;
+#define WK_PERF_LOG(...) do { if (WKCellPerfLog) { NSLog(__VA_ARGS__); } } while (0)
+static const CFTimeInterval kCellPerfHeightMissMs = 4.0;    // heightForRow 缓存miss >4ms 才打
+static const CFTimeInterval kCellPerfRefreshSlowMs = 8.0;   // willDisplay 内 refresh 总耗时 >8ms 才打
+
+// 增量 pulldown 开关：YES = 走 insertSections/insertRows + 手动 setContentOffset 路径，
+// NO = 走老的 reloadData + rectForRowAtIndexPath + setContentOffset 路径（跟 git 原版完全一致）。
+// 关掉的原因：增量路径在并发场景下，pull #1 capture 的 targetCopy 基于 #1 自己的 newSectionsAdded，
+// 但 ioQueue async 期间 pull #2 已经把 dataProvider 改了，导致 #1 reload 时 targetCopy 指向错误 cell
+// → 视觉"跳到下一页数据顶部"。reloadData 路径每次都用当前 dataProvider 全量重建，对并发友好。
+static const BOOL kIncrementalPulldown = NO;
+
+// CADisplayLink 用的 weak target wrapper：避免 self ↔ link 循环引用导致 dealloc 永不触发
+@interface WKMessageListPerfWeakProxy : NSProxy
+@property(nonatomic,weak) id target;
++ (instancetype)proxyWithTarget:(id)target;
+@end
+@implementation WKMessageListPerfWeakProxy
++ (instancetype)proxyWithTarget:(id)target {
+    WKMessageListPerfWeakProxy *p = [WKMessageListPerfWeakProxy alloc];
+    p.target = target;
+    return p;
+}
+- (NSMethodSignature *)methodSignatureForSelector:(SEL)sel {
+    return [self.target methodSignatureForSelector:sel] ?: [NSMethodSignature signatureWithObjCTypes:"v@:"];
+}
+- (void)forwardInvocation:(NSInvocation *)invocation {
+    if (self.target) [invocation invokeWithTarget:self.target];
+}
+@end
+
 @interface WKMessageListView ()<UITableViewDelegate,UITableViewDataSource,WKConversationTableViewDelegate,WKChannelManagerDelegate,WKChatManagerDelegate,WKReactionManagerDelegate,WKConnectionManagerDelegate,WKTypingManagerDelegate,WKReminderManagerDelegate,WKConversationManagerDelegate>
 
 @property(nonatomic,strong) UIViewPropertyAnimator *headerViewsAnimator;
@@ -47,6 +86,15 @@
 @property(nonatomic,assign) BOOL isPulldownInProgress;
 @property(nonatomic,strong) NSMutableArray<WKMessage*> *pendingRecvMessages;
 
+// FPS 监控：CADisplayLink 每帧 +1，每秒结算一次，<50 才打日志。
+// 用于诊断"停留不动也波动"问题。排查完关 WKCellPerfLog 即可。
+@property(nonatomic,strong) CADisplayLink *fpsLink;
+@property(nonatomic,assign) NSInteger fpsFrameCount;
+@property(nonatomic,assign) CFTimeInterval fpsLastSampleAt;
+// HANG 检测：CADisplayLink 应每帧 fire（60Hz=16.7ms）。两次 fire 间隔 > 100ms 说明
+// 主线程被某段同步代码占住了，记录这段卡顿时长 + 当时是否在滚动。用于定位"停留不动 FPS=12"幽灵卡顿。
+@property(nonatomic,assign) CFTimeInterval fpsLastTickTime;
+
 @end
 
 @implementation WKMessageListView
@@ -56,8 +104,52 @@
     self = [super initWithFrame:frame];
     if (self) {
         self.scrollEnabled  =YES;
+        if (WKCellPerfLog) {
+            [self startFpsMonitor];
+        }
     }
     return self;
+}
+
+// FPS 监控：CADisplayLink 每帧 +1，每秒结算一次，仅 fps<50 时打日志（带是否在滚动）。
+-(void) startFpsMonitor {
+    if (_fpsLink) return;
+    _fpsFrameCount = 0;
+    _fpsLastSampleAt = CACurrentMediaTime();
+    // weak proxy 避免循环引用，否则 self ↔ link ↔ runloop 三方持有，dealloc 永不触发
+    _fpsLink = [CADisplayLink displayLinkWithTarget:[WKMessageListPerfWeakProxy proxyWithTarget:self] selector:@selector(_fpsTick:)];
+    [_fpsLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+}
+
+-(void) stopFpsMonitor {
+    [_fpsLink invalidate];
+    _fpsLink = nil;
+}
+
+-(void) _fpsTick:(CADisplayLink *)link {
+    CFTimeInterval now = link.timestamp;
+    // HANG 检测：两次 tick 间隔 > 100ms 说明主线程被卡 > 100ms。打日志，带是否在滚动。
+    // 跟之前的 FPS=N 互补：FPS=N 是 1s 窗口平均，HANG 是单次具体卡顿事件，带时间戳便于跟其他日志对账
+    if (_fpsLastTickTime > 0) {
+        CFTimeInterval gap = (now - _fpsLastTickTime) * 1000.0;
+        if (gap > 100.0) {
+            BOOL scrolling = self.tableView.isDragging || self.tableView.isDecelerating;
+            NSLog(@"[CellPerf] HANG=%.0fms scrolling=%@", gap, scrolling ? @"YES" : @"NO");
+        }
+    }
+    _fpsLastTickTime = now;
+
+    _fpsFrameCount++;
+    CFTimeInterval elapsed = now - _fpsLastSampleAt;
+    if (elapsed >= 1.0) {
+        CGFloat fps = _fpsFrameCount / elapsed;
+        if (fps < 50.0) {
+            BOOL scrolling = self.tableView.isDragging || self.tableView.isDecelerating;
+            NSLog(@"[CellPerf] FPS=%.0f scrolling=%@", fps, scrolling ? @"YES" : @"NO");
+        }
+        _fpsFrameCount = 0;
+        _fpsLastSampleAt = now;
+    }
 }
 
 -(void) setupUI {
@@ -356,6 +448,37 @@
         });
         return;
     }
+
+    // 首次进群：先 bg 预热 cellHeightCache + textAttrCache，再回 main 走 reloadData。
+    // 原来这里直接 reloadData，可视区每条 cell 第一次都在 main 上 parse（15~25ms × N 条），
+    // 是"首次进入某个群聊加载某些气泡后开始卡顿"的根因。pullup/pulldown 路径已有这一步
+    // (line 671-704 / 770-823)，pullFirst 缺失，这里补上。
+    if (firstLoad && self.dataProvider.dates.count > 0) {
+        NSMutableArray<WKMessageModel *> *allMsgs = [NSMutableArray array];
+        for (NSString *date in self.dataProvider.dates) {
+            NSArray<WKMessageModel *> *msgs = [self.dataProvider messagesAtDate:date];
+            if (msgs.count > 0) [allMsgs addObjectsFromArray:msgs];
+        }
+        if (allMsgs.count > 0) {
+            __weak typeof(self) weakSelf = self;
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                CFAbsoluteTime _t0 = CFAbsoluteTimeGetCurrent();
+                for (WKMessageModel *msg in allMsgs) {
+                    [weakSelf precacheHeightForMessage:msg];
+                }
+                CGFloat _ms = (CFAbsoluteTimeGetCurrent() - _t0) * 1000;
+                WK_PERF_LOG(@"[Perf] pullFirst precache: %lu msgs in %.1fms (bg)", (unsigned long)allMsgs.count, _ms);
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [weakSelf _handleLoadMessagesAfterPrecache:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
+                });
+            });
+            return;
+        }
+    }
+    [self _handleLoadMessagesAfterPrecache:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
+}
+
+-(void) _handleLoadMessagesAfterPrecache:(BOOL)animation firstLoad:(BOOL)firstLoad hasMore:(bool)hasMore complete:(void(^)(void))complete {
     if (!self.tableView) return; // 防止 view 已释放后继续操作
     if(!hasMore) {
         [self pullupFinished];
@@ -367,7 +490,7 @@
         [self pullupFinished];
     }
     [self updateOrInsertHistoryMsgSplitIfNeed]; // 插入历史消息风格线
-    
+
     if(firstLoad) {
         WKMessage *typingMessage =  [[WKTypingManager shared] getTypingMessage:self.channel];
          if(typingMessage) {
@@ -375,7 +498,7 @@
          }
     }
     [self.tableView reloadData];
-    
+
     if(!self.keepPosition) {
         [self scrollToBottom:animation];
     }else {
@@ -473,6 +596,7 @@
 
 - (void)dealloc {
     WKLogDebug(@"%s",__func__);
+    [self stopFpsMonitor];
     [self removeDelegates];
 }
 
@@ -595,8 +719,15 @@
 }
 
 -(void) pulldown {
+    // 防重入：如果上一次 pulldown 还在跑（ioQueue bg + main 渲染未完成），
+    // 直接静默 return，不调 endRefreshing（否则破坏 MJRefresh 状态机会导致跳顶/视觉抖动）。
+    // MJRefresh 状态由那次"正在跑的 pulldown"负责复位。
+    if (self.isPulldownInProgress) {
+        return;
+    }
+
     __weak typeof(self) weakSelf = self;
-    NSLog(@"[PullDebug] pulldown START, mj_header.state=%ld, isPulldownInProgress=%d", (long)self.tableView.mj_header.state, self.isPulldownInProgress);
+    WK_PERF_LOG(@"[PullDebug] pulldown START, mj_header.state=%ld, isPulldownInProgress=%d", (long)self.tableView.mj_header.state, self.isPulldownInProgress);
 
     // 标记 pulldown 进行中，阻止新消息并发修改 tableView
     self.isPulldownInProgress = YES;
@@ -609,7 +740,7 @@
     }
 
     [self.dataProvider pulldown:^(bool hasMore) {
-        NSLog(@"[PullDebug] pulldown callback: hasMore=%d", hasMore);
+        WK_PERF_LOG(@"[PullDebug] pulldown callback: hasMore=%d", hasMore);
         if(!hasMore) {
             [weakSelf pulldownFinished];
         }
@@ -625,7 +756,7 @@
         }
 
         BOOL hasInsertions = (newSectionsAdded > 0 || newRowsInOldFirstSection > 0);
-        NSLog(@"[PullDebug] pulldown: hasInsertions=%d newSections=%ld newRows=%ld", hasInsertions, (long)newSectionsAdded, (long)newRowsInOldFirstSection);
+        WK_PERF_LOG(@"[PullDebug] pulldown: hasInsertions=%d newSections=%ld newRows=%ld", hasInsertions, (long)newSectionsAdded, (long)newRowsInOldFirstSection);
 
         if (hasInsertions) {
             // 记录当前可见位置
@@ -671,41 +802,107 @@
             // 后台线程预计算高度，完成后回主线程刷新 UI
             NSIndexPath *targetCopy = targetAfterReload;
             CGFloat offsetCopy = cellOffsetInView;
-            NSLog(@"[PullDebug] pulldown: dispatching precache for %lu msgs", (unsigned long)newMsgs.count);
+            NSInteger newSectionsAddedCopy = newSectionsAdded;
+            NSInteger newRowsInOldFirstSectionCopy = newRowsInOldFirstSection;
+            WK_PERF_LOG(@"[PullDebug] pulldown: dispatching precache for %lu msgs", (unsigned long)newMsgs.count);
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                 CFAbsoluteTime t_precache = CFAbsoluteTimeGetCurrent();
                 for (WKMessageModel *msg in newMsgs) {
                     [weakSelf precacheHeightForMessage:msg];
                 }
                 CGFloat precacheMs = (CFAbsoluteTimeGetCurrent() - t_precache) * 1000;
-                NSLog(@"[PullDebug] pulldown: precache done %.1fms, dispatching to main", precacheMs);
+                WK_PERF_LOG(@"[PullDebug] pulldown: precache done %.1fms, dispatching to main", precacheMs);
 
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    CFAbsoluteTime t_reload = CFAbsoluteTimeGetCurrent();
-                    [UIView performWithoutAnimation:^{
-                        [weakSelf.tableView reloadData];
-                        [weakSelf.tableView layoutIfNeeded];
-                    }];
+                    CFAbsoluteTime t_apply = CFAbsoluteTimeGetCurrent();
+                    BOOL didIncremental = NO;
 
-                    if (targetCopy) {
-                        [UIView performWithoutAnimation:^{
-                            CGRect targetRect = [weakSelf.tableView rectForRowAtIndexPath:targetCopy];
-                            weakSelf.tableView.contentOffset = CGPointMake(0, targetRect.origin.y - offsetCopy);
-                        }];
+                    if (kIncrementalPulldown && weakSelf && weakSelf.tableView) {
+                        @try {
+                            // 关键修法：跟老 reloadData 路径同源 —— 用 layoutIfNeeded +
+                            // rectForRowAtIndexPath:targetCopy 拿 anchor 真实新位置，再调 contentOffset。
+                            // 之前用 contentSize.height delta 不准：endUpdates 返回时大批量插入下
+                            // contentSize 还未稳定（异步），delta 偏小导致 anchor 视觉偏低 200-300pt。
+                            // insertSections 跟老 reloadData 的本质区别：不重建 visible cells（reloadData
+                            // 会把所有 cell 释放回 reuse pool 强制重新 cellForRow + refresh）。
+                            [UIView performWithoutAnimation:^{
+                                [CATransaction begin];
+                                [CATransaction setDisableActions:YES];
+
+                                [weakSelf.tableView beginUpdates];
+
+                                if (newRowsInOldFirstSectionCopy > 0) {
+                                    NSMutableArray<NSIndexPath*> *rowPaths = [NSMutableArray array];
+                                    for (NSInteger r = 0; r < newRowsInOldFirstSectionCopy; r++) {
+                                        [rowPaths addObject:[NSIndexPath indexPathForRow:r inSection:newSectionsAddedCopy]];
+                                    }
+                                    [weakSelf.tableView insertRowsAtIndexPaths:rowPaths withRowAnimation:UITableViewRowAnimationNone];
+                                }
+                                if (newSectionsAddedCopy > 0) {
+                                    NSIndexSet *sectionSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, newSectionsAddedCopy)];
+                                    [weakSelf.tableView insertSections:sectionSet withRowAnimation:UITableViewRowAnimationNone];
+                                }
+
+                                [weakSelf.tableView endUpdates];
+                                // 强制完成 layout，rectForRowAtIndexPath 才能返回最终坐标
+                                [weakSelf.tableView layoutIfNeeded];
+
+                                // 用 anchor 真实新位置调 contentOffset，跟老 reloadData 路径完全同源
+                                if (targetCopy) {
+                                    CGRect targetRect = [weakSelf.tableView rectForRowAtIndexPath:targetCopy];
+                                    weakSelf.tableView.contentOffset = CGPointMake(0, targetRect.origin.y - offsetCopy);
+                                }
+
+                                [CATransaction commit];
+                            }];
+
+                            didIncremental = YES;
+
+                            // 视觉对账：DIFF 现在应该 ~ 0（跟 reloadData 路径同源所以精度也同等）
+                            if (targetCopy && WKCellPerfLog) {
+                                CGRect actualRect = [weakSelf.tableView rectForRowAtIndexPath:targetCopy];
+                                CGFloat actualOffset = actualRect.origin.y - weakSelf.tableView.contentOffset.y;
+                                CGFloat diff = actualOffset - offsetCopy;
+                                if (fabs(diff) > 0.5) {
+                                    NSLog(@"[CellPerf] pulldown incremental DIFF: %.2fpt (actualOffsetInView=%.1f expected=%.1f)",
+                                          diff, actualOffset, offsetCopy);
+                                }
+                            }
+                        } @catch (NSException *ex) {
+                            NSLog(@"[CellPerf] pulldown incremental FAILED: %@, falling back to reloadData", ex);
+                            didIncremental = NO;
+                        }
                     }
-                    CGFloat reloadMs = (CFAbsoluteTimeGetCurrent() - t_reload) * 1000;
-                    NSLog(@"[Perf] pulldown: %lu msgs | precache=%.1fms(bg) reload=%.1fms(main)", (unsigned long)newMsgs.count, precacheMs, reloadMs);
+
+                    if (!didIncremental) {
+                        // 老路径：reloadData + setContentOffset 一步到位（贵但稳）
+                        [UIView performWithoutAnimation:^{
+                            [weakSelf.tableView reloadData];
+                            [weakSelf.tableView layoutIfNeeded];
+                        }];
+                        if (targetCopy) {
+                            [UIView performWithoutAnimation:^{
+                                CGRect targetRect = [weakSelf.tableView rectForRowAtIndexPath:targetCopy];
+                                weakSelf.tableView.contentOffset = CGPointMake(0, targetRect.origin.y - offsetCopy);
+                            }];
+                        }
+                    }
+
+                    CGFloat applyMs = (CFAbsoluteTimeGetCurrent() - t_apply) * 1000;
+                    WK_PERF_LOG(@"[Perf] pulldown: %lu msgs | precache=%.1fms(bg) apply=%.1fms(main) path=%@",
+                          (unsigned long)newMsgs.count, precacheMs, applyMs,
+                          didIncremental ? @"INCREMENTAL" : @"RELOAD");
 
                     [weakSelf.tableView.mj_header endRefreshing];
                     weakSelf.isPulldownInProgress = NO;
-                    NSLog(@"[PullDebug] pulldown: COMPLETE (hasInsertions path), mj_header.state=%ld", (long)weakSelf.tableView.mj_header.state);
+                    WK_PERF_LOG(@"[PullDebug] pulldown: COMPLETE (hasInsertions path), mj_header.state=%ld", (long)weakSelf.tableView.mj_header.state);
                     [weakSelf processPendingRecvMessages];
                 });
             });
         } else {
             [weakSelf.tableView.mj_header endRefreshing];
             weakSelf.isPulldownInProgress = NO;
-            NSLog(@"[PullDebug] pulldown: COMPLETE (no insertions), mj_header.state=%ld", (long)weakSelf.tableView.mj_header.state);
+            WK_PERF_LOG(@"[PullDebug] pulldown: COMPLETE (no insertions), mj_header.state=%ld", (long)weakSelf.tableView.mj_header.state);
             [weakSelf processPendingRecvMessages];
         }
     }];
@@ -724,8 +921,9 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 }
 
 -(void) pullup:(void(^)(bool more))complete dedupRetry:(NSInteger)dedupRetry {
+
     __weak typeof(self) weakSelf = self;
-    NSLog(@"[PullDebug] pullup START, mj_footer.state=%ld", (long)self.tableView.mj_footer.state);
+    WK_PERF_LOG(@"[PullDebug] pullup START, mj_footer.state=%ld", (long)self.tableView.mj_footer.state);
 
     NSInteger oldSectionCount = [self.dataProvider dateCount];
     NSInteger oldLastSectionRowCount = 0;
@@ -734,7 +932,7 @@ static const NSInteger kMaxPullupDedupRetry = 3;
     }
 
     [self.dataProvider pullup:^(bool hasMore) {
-        NSLog(@"[PullDebug] pullup callback: hasMore=%d", hasMore);
+        WK_PERF_LOG(@"[PullDebug] pullup callback: hasMore=%d", hasMore);
         if(!hasMore) {
             [weakSelf pullupFinished];
         }else {
@@ -762,7 +960,7 @@ static const NSInteger kMaxPullupDedupRetry = 3;
             }
         }
 
-        NSLog(@"[PullDebug] pullup: newMsgs=%lu newSections=%ld", (unsigned long)newMsgs.count, (long)newSectionsAdded);
+        WK_PERF_LOG(@"[PullDebug] pullup: newMsgs=%lu newSections=%ld", (unsigned long)newMsgs.count, (long)newSectionsAdded);
         if (newMsgs.count > 0) {
             // 后台预计算高度，完成后回主线程插入行
             NSInteger newSectionsAddedCopy = newSectionsAdded;
@@ -814,10 +1012,10 @@ static const NSInteger kMaxPullupDedupRetry = 3;
                         }
                     }];
                     CGFloat insertMs = (CFAbsoluteTimeGetCurrent() - t_insert) * 1000;
-                    NSLog(@"[Perf] pullup: %lu msgs | precache=%.1fms(bg) insert=%.1fms(main)", (unsigned long)newMsgs.count, precacheMs, insertMs);
+                    WK_PERF_LOG(@"[Perf] pullup: %lu msgs | precache=%.1fms(bg) insert=%.1fms(main)", (unsigned long)newMsgs.count, precacheMs, insertMs);
 
                     [weakSelf.tableView.mj_footer endRefreshing];
-                    NSLog(@"[PullDebug] pullup: COMPLETE (hasData path), mj_footer.state=%ld", (long)weakSelf.tableView.mj_footer.state);
+                    WK_PERF_LOG(@"[PullDebug] pullup: COMPLETE (hasData path), mj_footer.state=%ld", (long)weakSelf.tableView.mj_footer.state);
                     if(complete) {
                         complete(hasMore);
                     }
@@ -825,7 +1023,7 @@ static const NSInteger kMaxPullupDedupRetry = 3;
             });
         } else {
             [weakSelf.tableView.mj_footer endRefreshing];
-            NSLog(@"[PullDebug] pullup: COMPLETE (noData path), hasMore=%d, mj_footer.state=%ld", hasMore, (long)weakSelf.tableView.mj_footer.state);
+            WK_PERF_LOG(@"[PullDebug] pullup: COMPLETE (noData path), hasMore=%d, mj_footer.state=%ld", hasMore, (long)weakSelf.tableView.mj_footer.state);
 
             // 去重跳过后重试：仅在有限次数内重试。
             // baseOrderSeq = dataProvider 尾部 orderSeq；newMsgs==0 时尾部未推进，
@@ -835,13 +1033,13 @@ static const NSInteger kMaxPullupDedupRetry = 3;
             // 到顶后用户继续滚动会重新触发 footer pullup(深度归 0)，不丢分页功能。
             if(hasMore && newMsgs.count == 0) {
                 if (dedupRetry < kMaxPullupDedupRetry) {
-                    NSLog(@"[PullDebug] pullup: retrying (dedup skip) %ld/%ld", (long)(dedupRetry + 1), (long)kMaxPullupDedupRetry);
+                    WK_PERF_LOG(@"[PullDebug] pullup: retrying (dedup skip) %ld/%ld", (long)(dedupRetry + 1), (long)kMaxPullupDedupRetry);
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [weakSelf pullup:complete dedupRetry:dedupRetry + 1];
                     });
                     return;
                 }
-                NSLog(@"[PullDebug] pullup: dedup-skip retry capped at %ld, stop", (long)kMaxPullupDedupRetry);
+                WK_PERF_LOG(@"[PullDebug] pullup: dedup-skip retry capped at %ld, stop", (long)kMaxPullupDedupRetry);
                 if(complete) {
                     complete(hasMore);
                 }
@@ -1973,10 +2171,48 @@ static const NSInteger kMaxPullupDedupRetry = 3;
     }
     WKMessageBaseCell *cell = [self.tableView dequeueReusableCellWithIdentifier:identifier];
     // 复用池中的 cell 类型可能与当前消息不匹配（reloadData 期间数据源变化），重新创建
+    BOOL didAlloc = NO;
     if(!cell || ![cell isKindOfClass:messageCellClass]) {
         cell = [[messageCellClass alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:identifier];
+        didAlloc = YES;
+    }
+    if (WKCellPerfLog && didAlloc) {
+        // ALLOC = 没复用上。table 含表格的 cell 每条都唯一 identifier，alloc 一次是预期；
+        // 但如果某个普通 identifier 反复 ALLOC，说明 dequeue 一直拿不到旧的，可能是 cell 类型混用 / reuse pool 失效
+        NSLog(@"[CellPerf] cellForRow ALLOC: id=%@ msgNo=%@ section=%ld row=%ld",
+              identifier, messageModel.clientMsgNo, (long)indexPath.section, (long)indexPath.row);
     }
     return cell;
+}
+
+// 增量 pulldown 路径用：从 cellHeightCache 取已缓存高度，miss 时同步算（理论上 pulldown
+// 之前 bg 已经 precache 全了，这里不应该 miss；miss 了打 warn 但仍返回正确值，保证算出来的
+// insertedHeight 不会偏）。
+-(CGFloat) _cachedHeightForMessage:(WKMessageModel *)msg {
+    if (!msg || msg.clientMsgNo.length == 0) return 0;
+    @try {
+        Class cellClass = [self getMessageCellClass:msg];
+        NSInteger bubblePos = 0;
+        if ([cellClass respondsToSelector:@selector(bubblePosition:)]) {
+            bubblePos = [cellClass bubblePosition:msg];
+        }
+        NSString *heightKey = [NSString stringWithFormat:@"%@-bp%ld", msg.clientMsgNo, (long)bubblePos];
+        if (msg.remoteExtra.contentEdit) {
+            heightKey = [NSString stringWithFormat:@"%@-e%lu", heightKey, (unsigned long)msg.remoteExtra.editedAt];
+        }
+        NSNumber *cached = [[WKMessageListView cellHeightCache] objectForKey:heightKey];
+        if (cached) return cached.floatValue;
+        if (WKCellPerfLog) {
+            NSLog(@"[CellPerf] _cachedHeightForMessage MISS key=%@ — will compute on main", heightKey);
+        }
+        CGSize size = [cellClass sizeForMessage:msg];
+        CGFloat h = MAX(size.height, 0.1f);
+        [[WKMessageListView cellHeightCache] setObject:@(h) forKey:heightKey];
+        return h;
+    } @catch (NSException *ex) {
+        NSLog(@"[CellPerf] _cachedHeightForMessage exception: %@", ex);
+        return 44.0; // fallback，跟 heightForRowAtIndexPath 默认值一致
+    }
 }
 
 // 预计算消息高度并写入 cellHeightCache，确保 reloadData 时高度正确
@@ -2012,7 +2248,7 @@ static const NSInteger kMaxPullupDedupRetry = 3;
                     preview = [preview stringByReplacingOccurrencesOfString:@"\n" withString:@"↵"];
                 }
             }
-            NSLog(@"[Perf] precache SLOW: %.1fms type=%ld len=%lu key=%@ content=[%@]",
+            WK_PERF_LOG(@"[Perf] precache SLOW: %.1fms type=%ld len=%lu key=%@ content=[%@]",
                   ms, (long)msg.contentType,
                   (unsigned long)(msg.contentType == 1 ? [(NSString*)[(id)msg.content content] length] : 0),
                   heightKey, preview);
@@ -2026,14 +2262,17 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 // 使用 NSCache 替代 NSMutableDictionary：
 //   1. countLimit=2000 防止跨会话无限积累（原方案无上限，活跃用户可达数万条）
 //   2. 系统内存压力时自动淘汰，无需手动清理
-//   3. NSCache 本身线程安全，无需外部加锁
+//   3. NSCache 本身线程安全，无需外部加锁 (但 _cellHeightCache 这个静态指针的 lazy init
+//      不是, 必须 dispatch_once —— 主线程 heightForRowAtIndexPath 与 bg precache
+//      路径并发调用过这里, review 提示)
 static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 +(NSCache<NSString*, NSNumber*>*) cellHeightCache {
-    if (!_cellHeightCache) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
         _cellHeightCache = [[NSCache alloc] init];
         _cellHeightCache.countLimit = 2000;
         _cellHeightCache.name = @"WKMessageListViewCellHeightCache";
-    }
+    });
     return _cellHeightCache;
 }
 
@@ -2061,6 +2300,7 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     }
 
     CGFloat height = 44.0f; // 默认高度兜底
+    CFAbsoluteTime _heightT0 = WKCellPerfLog ? CFAbsoluteTimeGetCurrent() : 0;
     @try {
         Class messageCellClass = [self getMessageCellClass:messageModel];
         CGSize cellSize = [messageCellClass sizeForMessage:messageModel];
@@ -2072,6 +2312,23 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     if (heightKey) {
         [[WKMessageListView cellHeightCache] setObject:@(height) forKey:heightKey];
     }
+
+    if (WKCellPerfLog) {
+        CGFloat _heightMs = (CFAbsoluteTimeGetCurrent() - _heightT0) * 1000;
+        if (_heightMs > kCellPerfHeightMissMs) {
+            // 关注点：同一个 msgNo 反复出现 = cache key 算错或者 NSCache 在反复淘汰
+            NSString *_typeName = NSStringFromClass([self getMessageCellClass:messageModel]);
+            NSInteger _contentLen = 0;
+            if (messageModel.contentType == WK_TEXT && [messageModel.content respondsToSelector:@selector(content)]) {
+                NSString *_t = [(id)messageModel.content content];
+                if ([_t isKindOfClass:[NSString class]]) _contentLen = _t.length;
+            }
+            NSLog(@"[CellPerf] height MISS: %.1fms type=%@ contentType=%ld len=%ld msgNo=%@ key=%@",
+                  _heightMs, _typeName, (long)messageModel.contentType, (long)_contentLen,
+                  messageModel.clientMsgNo, heightKey ?: @"(nil)");
+        }
+    }
+
     return height;
 }
 
@@ -2085,7 +2342,22 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         ((WKMessageCell*)baseCell).showNavigateToMessage = self.showNavigateToMessage;
     }
     @try {
+        CFAbsoluteTime _refreshT0 = WKCellPerfLog ? CFAbsoluteTimeGetCurrent() : 0;
         [baseCell refresh:messageModel];
+        if (WKCellPerfLog) {
+            CGFloat _refreshMs = (CFAbsoluteTimeGetCurrent() - _refreshT0) * 1000;
+            if (_refreshMs > kCellPerfRefreshSlowMs) {
+                // 关注点：refresh 慢 = textAttrCache miss / WKWebView 创建 / markdown 分段重建 等
+                NSInteger _contentLen = 0;
+                if (messageModel.contentType == WK_TEXT && [messageModel.content respondsToSelector:@selector(content)]) {
+                    NSString *_t = [(id)messageModel.content content];
+                    if ([_t isKindOfClass:[NSString class]]) _contentLen = _t.length;
+                }
+                NSLog(@"[CellPerf] refresh SLOW: %.1fms cls=%@ contentType=%ld len=%ld msgNo=%@",
+                      _refreshMs, NSStringFromClass([baseCell class]),
+                      (long)messageModel.contentType, (long)_contentLen, messageModel.clientMsgNo);
+            }
+        }
     } @catch (NSException *exception) {
         // 竞态下 cell class 与消息 content 类型不匹配时不崩溃
         NSLog(@"[MessageList] refresh exception at %@: %@", indexPath, exception);

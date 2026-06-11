@@ -165,6 +165,7 @@ TODO: Add long description of the pod here.
   # pod 自带的 confetti.mp3 资产（爆裂声），粒子系统是 WKConfettiView 自写
   # CAEmitterLayer，不走该库的粒子实现。
   s.dependency 'SwiftConfettiView', '~> 2.0'      # MIT, ugurethemaydin
+  s.dependency 'SSZipArchive', '~> 2.2.3'         # MIT(+ minizip/zlib), 用于 .zip 文件消息解压浏览
   # Bugly 静态 framework 链接策略（修复 objc duplicate class 警告 — 2026-06）
   #
   # 历史问题：Bugly 是腾讯发布的**静态** framework。CocoaPods 看到

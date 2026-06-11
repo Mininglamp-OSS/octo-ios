@@ -9,7 +9,7 @@
 
 @implementation WKClassyVideoEffect
 
-// 资源文件名（HEVC hvc1 / 720x1280 / 5.07s / ~573KB，放在 WuKongBase/Assets/Other/）
+// 资源文件名（HEVC / 1036x1920 / 5.07s，放在 WuKongBase/Assets/Other/）
 static NSString * const kClassyVideoName = @"classy_celebrate";
 static NSString * const kClassyVideoExt  = @"mp4";
 
@@ -29,14 +29,12 @@ static NSString * const kClassyVideoExt  = @"mp4";
     static const NSTimeInterval kFadeOut = 0.6;
 
     WKLumaKeyVideoView *videoView = [[WKLumaKeyVideoView alloc] initWithVideoURL:url];
-    // view frame 按视频原比例(9:16)摆，宽度 = effectView 宽（即屏宽）。
-    // 这样 view 比例与视频帧比例完全一致，WKLumaKeyVideoView 内部 aspect-fill
-    // 退化成 1:1 映射，左右两边不再被裁；高度按比例算后居中（iPhone 上上下会留透明边）。
-    static const CGFloat kVideoAspect = 720.0 / 1280.0;  // = 0.5625
-    CGFloat w = CGRectGetWidth(effectView.bounds);
-    CGFloat h = w / kVideoAspect;
-    CGFloat y = (CGRectGetHeight(effectView.bounds) - h) * 0.5;
-    videoView.frame = CGRectMake(0, y, w, h);
+    // 直接铺满整屏：手机全屏比例（≈1:2.16）与视频比例（1036:1920≈1:1.85）并不一致，
+    // 不再用视频比例去反算高度（那样上下会留透明边）。让 videoView == effectView 全屏，
+    // 由 WKLumaKeyVideoView 内部 aspect-fill 缩放——视频比屏幕"矮"，会按高度填满、
+    // 左右各裁掉约 9%（主体居中，裁掉的是边缘近黑区，观感是沉浸式全屏特效）。
+    videoView.frame = effectView.bounds;
+    videoView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     videoView.alpha = 0.0;
     // 黑底视频，直接复用 Dark 模式（默认）+ action_celebrate 同款参数：
     // 主体（黄脸/蓝紫电路/酒杯/"有品位"文字 luma 0.25~0.75）远超过阈值，完整保留；

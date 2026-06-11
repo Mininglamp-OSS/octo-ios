@@ -8,6 +8,7 @@
 #import "WKMeInfoVC.h"
 #import "WKInputVC.h"
 #import "WKActionSheetView2.h"
+#import "WKMeCardStyle.h"
 @interface WKMeInfoVC ()<WKMeInfoDelegate,WKChannelManagerDelegate>
 
 @end
@@ -27,15 +28,31 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
 
+    self.view.backgroundColor = [WKApp shared].config.backgroundColor;
+    self.tableView.backgroundColor = [UIColor clearColor];
+    self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
+    if (@available(iOS 15.0, *)) {
+        self.tableView.sectionHeaderTopPadding = 0;
+    }
+
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(avatarUpdate:) name:WKNOTIFY_USER_AVATAR_UPDATE object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(realnameUpdated:) name:WKNOTIFY_REALNAME_VERIFIED object:nil];
 
     [WKSDK.shared.channelManager addDelegate:self];
 }
 
+- (UITableViewStyle)tableViewStyle {
+    return UITableViewStyleInsetGrouped;
+}
+
+- (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
+    [super tableView:tableView willDisplayCell:cell forRowAtIndexPath:indexPath];
+    [cell wk_applyMeCardStyleAtIndexPath:indexPath inTableView:tableView];
+}
+
 
 - (NSString *)langTitle {
-    return LLang(@"个人信息");
+    return LLang(@"个人资料");
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -142,7 +159,7 @@
     inputVC.placeholder = [NSString stringWithFormat:LLang(@"%@号只允许修改一次"),[WKApp shared].config.appName];
     [inputVC setOnFinish:^(NSString * _Nonnull value) {
         [weakSelf updateShortNo:value];
-       
+
     }];
     [[WKNavigationManager shared] pushViewController:inputVC animated:YES];
 }

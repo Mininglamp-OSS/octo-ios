@@ -390,8 +390,31 @@
 
 // WKCommonSettingVM
 
+"外观"="Appearance";
 "深色模式"="Dark Mode";
+"浅色模式"="Light Mode";
 "跟随系统"="Automatic";
+
+// WKCommonSettingVM (PR #51 Me 模块重做)
+"语言"="Language";
+"存储空间"="Storage";
+"隐私"="Privacy";
+"缓存清理中"="Clearing cache";
+"清理成功"="Cleared";
+"清理失败"="Failed to clear";
+
+// WKMeInfoVC / WKMeInfoVM (PR #51 个人资料页)
+"个人资料"="Profile";
+"姓名"="Name";
+
+// WKConversationListVC (PR #51 新加)
+"新建会话"="New Chat";
+"[草稿]"="[Draft]";
+
+// WKZipBrowserVC (PR #51)
+"请先关闭当前预览"="Please close the current preview first";
+"压缩包过大,请使用专业解压工具打开"="Archive is too large. Please open with a dedicated extraction app.";
+"压缩包包含符号链接,出于安全考虑无法预览"="Archive contains symbolic links and cannot be previewed for security reasons.";
 "打开"="Enabled";
 "关闭"="Disabled";
 "版本信息"="Version";
@@ -638,7 +661,8 @@
 // ============================================================
 
 // 会话/列表通用
-"[有人@我]"="[Mention]";
+"[有人@我]"="[@me]";
+"@我"="@me";
 "%@%@已经登录"="%@ %@ logged in";
 "外部"="External";
 "社区"="Community";
@@ -975,3 +999,9 @@
 "说点什么…"="Say something…";
 "[不支持的消息类型，或许可升级版本后查看]"="[Unsupported message type. Please try upgrading the app.]";
 "[消息无法解密，因为双方密钥有发送变更]"="[Message could not be decrypted because the keys changed.]";
+"暂时无法预览"="Preview not available";
+"可点击右上角用其它应用打开"="Tap the top-right button to open in another app";
+"请输入解压密码"="Enter archive password";
+"密码错误，请重新输入"="Wrong password, try again";
+"密码"="Password";
+"解压失败"="Failed to extract";

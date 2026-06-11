@@ -56,7 +56,7 @@ typedef NS_ENUM(NSInteger, WKDirItemType) {
 @interface WKDirCell : UITableViewCell
 @property (nonatomic, strong) WKUserAvatar *avatarView;
 @property (nonatomic, strong) UILabel *nameLbl;
-@property (nonatomic, strong) UILabel *botBadge;
+@property (nonatomic, strong) UIImageView *botBadge;
 @end
 
 @implementation WKDirCell
@@ -75,14 +75,9 @@ typedef NS_ENUM(NSInteger, WKDirItemType) {
         _nameLbl.lineBreakMode = NSLineBreakByTruncatingTail;
         [self.contentView addSubview:_nameLbl];
 
-        _botBadge = [[UILabel alloc] init];
-        _botBadge.text = @"AI";
-        _botBadge.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
-        _botBadge.textColor = [UIColor whiteColor];
-        _botBadge.backgroundColor = [WKApp shared].config.themeColor;
-        _botBadge.textAlignment = NSTextAlignmentCenter;
-        _botBadge.layer.cornerRadius = 4;
-        _botBadge.layer.masksToBounds = YES;
+        _botBadge = [[UIImageView alloc] init];
+        _botBadge.image = [WKApp.shared loadImage:@"Common/Index/IconAIBadge" moduleID:@"WuKongBase"];
+        _botBadge.contentMode = UIViewContentModeScaleAspectFit;
         _botBadge.hidden = YES;
         [self.contentView addSubview:_botBadge];
     }
@@ -107,12 +102,17 @@ typedef NS_ENUM(NSInteger, WKDirItemType) {
     if (_botBadge.hidden) {
         _nameLbl.frame = CGRectMake(nameLeft, 0, w - nameLeft - 15, h);
     } else {
-        // 给 AI 角标留出固定宽度
-        CGFloat badgeW = 22;
+        // 给 AI 角标按真实宽高比留出宽度
+        CGFloat badgeH = 16;
+        CGFloat badgeW = badgeH;
+        UIImage *img = _botBadge.image;
+        if (img && img.size.height > 0.0f) {
+            badgeW = badgeH * img.size.width / img.size.height;
+        }
         CGSize nameSize = [_nameLbl sizeThatFits:CGSizeMake(w - nameLeft - badgeW - 12 - 15, h)];
         CGFloat nameW = MIN(nameSize.width, w - nameLeft - badgeW - 12 - 15);
         _nameLbl.frame = CGRectMake(nameLeft, 0, nameW, h);
-        _botBadge.frame = CGRectMake(nameLeft + nameW + 6, (h - 16) / 2, badgeW, 16);
+        _botBadge.frame = CGRectMake(nameLeft + nameW + 6, (h - badgeH) / 2, badgeW, badgeH);
     }
 }
 

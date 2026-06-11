@@ -44,8 +44,22 @@
     [self.imgView setSd_imageIndicator:SDWebImageActivityIndicator.grayIndicator];
     self.imgView.layer.masksToBounds = YES;
     self.imgView.layer.cornerRadius = 5.0f;
+    // 与 WKImageMessageCell 同一套策略: 关掉自动播放, 由 onWillDisplay/onEndDisplay
+    // 通过 wk_setDisplayed: 控制可见性 —— 否则 cell 滚出屏后 CADisplayLink 仍在跑,
+    // 主线程会持续被踩, 正是 PR 在 WKImageMessageCell 修过的同一个 HANG。
+    self.imgView.autoPlayAnimatedImage = NO;
     [self.messageContentView addSubview:self.imgView];
     [self.messageContentView sendSubviewToBack:self.imgView];
+}
+
+- (void)onWillDisplay {
+    [super onWillDisplay];
+    [self.imgView wk_setDisplayed:YES];
+}
+
+- (void)onEndDisplay {
+    [super onEndDisplay];
+    [self.imgView wk_setDisplayed:NO];
 }
 
 - (void)refresh:(WKMessageModel *)model {

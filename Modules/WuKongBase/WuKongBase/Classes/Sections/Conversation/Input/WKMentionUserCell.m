@@ -117,6 +117,15 @@
     self.nameLbl.lim_left = self.avatarImgView.lim_right + 10.0f;
     self.nameLbl.lim_centerY_parent = self;
     
+    // AI 图标按真实宽高比换算宽度（高度固定 16pt），避免被压成正方形拉伸。
+    CGFloat botH = 16.0f;
+    CGFloat botW = botH;
+    UIImage *botImg = self.robotIdentityImgView.image;
+    if (botImg && botImg.size.height > 0.0f) {
+        botW = botH * botImg.size.width / botImg.size.height;
+    }
+    self.robotIdentityImgView.lim_width = botW;
+    self.robotIdentityImgView.lim_height = botH;
     self.robotIdentityImgView.lim_left = self.nameLbl.lim_right + 5.0f;
     self.robotIdentityImgView.lim_centerY_parent = self;
 }
@@ -132,10 +141,8 @@
 - (UIImageView *)robotIdentityImgView {
     if(!_robotIdentityImgView) {
         _robotIdentityImgView = [[UIImageView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, 16.0f, 16.0f)];
-        _robotIdentityImgView.image = [self imageName:@"Common/Index/IconRobot"];
-        _robotIdentityImgView.image = [_robotIdentityImgView.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        
-        [_robotIdentityImgView setTintColor:[WKApp shared].config.themeColor];
+        _robotIdentityImgView.image = [self imageName:@"Common/Index/IconAIBadge"];
+        _robotIdentityImgView.contentMode = UIViewContentModeScaleAspectFit;
     }
     return _robotIdentityImgView;
 }

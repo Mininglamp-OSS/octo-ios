@@ -69,24 +69,30 @@
     self.navigationBar.rightView = self.moreBtn;
     
     self.webViewService.channel = self.channel;
-    
+
     NSString *url = self.url.absoluteString;
-    
+
     url = [url stringByRemovingPercentEncoding];
-    
+
     if(url && ![url hasPrefix:@"http"]) {
         url = [NSString stringWithFormat:@"http://%@",url];
     }
-    
+
     self.currentUrl = [NSURL URLWithString:url];
-    
-    
+
+    if (url.length == 0 || self.currentUrl == nil) {
+        // url 为空 / 解析失败时, loadRequest with nil URL 会得到一个空白 webview
+        // (没有 didFailNavigation 回调, 只是静默白屏) —— 是 "blank page" 的常见根因。
+        // 提前 return 留个守卫, 让上游修复, 不要静默白屏。
+        return;
+    }
+
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]
         cachePolicy:NSURLRequestReloadIgnoringCacheData
     timeoutInterval:(NSTimeInterval)10.0];
-    
+
     [request setValue:[WKApp shared].config.langue forHTTPHeaderField:@"Accept-Language"];
-    
+
     [self.webView loadRequest:request];
     [self.view addSubview:self.bottomView];
     
@@ -370,7 +376,7 @@
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     [self checkGoAndGobackBtn];
-    
+
     __weak typeof(self) weakSelf = self;
     if(!self.title || [self.title isEqualToString:@""]) {
         [webView evaluateJavaScript:@"document.title" completionHandler:^(id _Nullable resultStr, NSError * _Nullable error) {
@@ -380,6 +386,13 @@
 }
 
 - (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    [self checkGoAndGobackBtn];
+}
+
+// didFailProvisionalNavigation 是 TLS / DNS / 证书 / URL 非法等失败的入口
+// (didFailNavigation 是已开始 commit 之后再 fail)。这里目前只复用 nav 按钮刷新, 静默
+// fail; 真要追排可临时打开 NSLog。
+- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     [self checkGoAndGobackBtn];
 }
 

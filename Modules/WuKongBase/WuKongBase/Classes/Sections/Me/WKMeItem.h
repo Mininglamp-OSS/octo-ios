@@ -12,6 +12,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface WKMeItem : NSObject
 
 @property(nonatomic,copy) NSString *title;
+@property(nonatomic,copy,nullable) NSString *detail; // 右侧灰色说明文字（可选）
 
 @property(nonatomic,strong) UIImage *icon;
 @property(nonatomic,assign) CGFloat sectionHeight;
