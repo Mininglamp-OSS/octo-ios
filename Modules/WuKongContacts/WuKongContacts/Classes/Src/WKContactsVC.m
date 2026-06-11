@@ -932,11 +932,20 @@ static void WKContactsWriteSharedSnapshot(NSArray<WKChannelInfo*> *allInfos,
         _tableView.backgroundColor=[UIColor clearColor];
         // iOS 26+ Liquid Glass：禁用系统自动 contentInset，cell 才能滑到 tabbar 之后，
         // 让 ScrollEdgeEffectView/BackdropView (CABackdropLayer) 采样到 cell 做镂空。
-        // 同时手动留底部 inset = tabBar 高度，让滚到底时最后一行能滑出浮岛遮挡。
+        // 同时手动留底部 inset。
+        // 注: 浮岛 tabbar 实际占用 = tabBarHeight (76) + windowSafeBottom (~34) +
+        //     kFloatingBottomGap (8); 只算 tabBarHeight 会让最后一行被浮岛遮 (与
+        //     WKConversationListVC 同一道公式, review #3 提示)。
         if (@available(iOS 26.0, *)) {
             _tableView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
-            CGFloat tbH = self.tabBarController.tabBar.frame.size.height ?: 83;
-            _tableView.contentInset = UIEdgeInsetsMake(0, 0, tbH, 0);
+            CGFloat tabBarHeight = self.tabBarController.tabBar.frame.size.height ?: 64;
+            UIWindow *win = self.view.window
+                            ?: [UIApplication sharedApplication].windows.firstObject;
+            CGFloat windowSafeBottom = win.safeAreaInsets.bottom > 0 ? win.safeAreaInsets.bottom : 34;
+            static const CGFloat kFloatingBottomGap = 8;
+            static const CGFloat kVisualGap         = 12;
+            _tableView.contentInset = UIEdgeInsetsMake(0, 0,
+                tabBarHeight + windowSafeBottom + kFloatingBottomGap + kVisualGap, 0);
         }
 
         _tableView.sectionIndexBackgroundColor = [UIColor clearColor];

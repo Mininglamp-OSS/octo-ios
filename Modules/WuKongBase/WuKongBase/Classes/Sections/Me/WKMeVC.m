@@ -34,10 +34,19 @@
     }else{
       self.automaticallyAdjustsScrollViewInsets = NO;
     }
-    // iOS 26+ Liquid Glass：底部留 tabbar 高度，最后一行可滑出浮岛遮挡
+    // iOS 26+ Liquid Glass：底部留浮岛全占用, 最后一行可滑出浮岛遮挡。
+    // 注: tabBarHeight (76) + windowSafeBottom (~34) + kFloatingBottomGap (8) +
+    //     kVisualGap (12) ≈ 130; 只算 tabBarHeight 会漏 ~50pt → 最后一行被浮岛
+    //     压住 (与 WKConversationListVC 同一道公式, review #3 提示)。
     if (@available(iOS 26.0, *)) {
-        CGFloat tbH = self.tabBarController.tabBar.frame.size.height ?: 83;
-        self.tableView.contentInset = UIEdgeInsetsMake(0, 0, tbH, 0);
+        CGFloat tabBarHeight = self.tabBarController.tabBar.frame.size.height ?: 64;
+        UIWindow *win = self.view.window
+                        ?: [UIApplication sharedApplication].windows.firstObject;
+        CGFloat windowSafeBottom = win.safeAreaInsets.bottom > 0 ? win.safeAreaInsets.bottom : 34;
+        static const CGFloat kFloatingBottomGap = 8;
+        static const CGFloat kVisualGap         = 12;
+        self.tableView.contentInset = UIEdgeInsetsMake(0, 0,
+            tabBarHeight + windowSafeBottom + kFloatingBottomGap + kVisualGap, 0);
     }
     self.view.backgroundColor = [WKApp shared].config.backgroundColor;
     self.tableView.backgroundColor = [UIColor clearColor];
