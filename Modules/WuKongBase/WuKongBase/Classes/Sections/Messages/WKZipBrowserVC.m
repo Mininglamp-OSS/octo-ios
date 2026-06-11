@@ -274,13 +274,17 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
           password:(NSString *)password
              title:(NSString *)title
        clientMsgNo:(NSString *)msgNo {
-    // 唯一临时目录: 不同消息互不冲突, 重开同一消息刷新。
-    // msgNo 是远端下发的字段, 直接当路径分量有 path-traversal 风险 (review 提示):
-    // 用 NSUInteger.hash 转成纯数字字符串, 既保留"同一消息复用同目录"的语义, 又消除
-    // 任何 "../" / "/" 越界可能。zipPath 兜底同上。
-    NSString *folder = msgNo.length > 0
+    // 唯一临时目录: 每次 extract 用 UUID 后缀彻底独占, 不再"同消息复用同目录"。
+    // —— 同路径复用会与 backPressed 的 dispatch_after 0.4s 延迟删形成 race:
+    //   关掉刚看的 zip → 立刻重开同一条 → 重 extract 走 removeItemAtPath +
+    //   重解压同路径; 上一次 pending 的 0.4s 删触发, 删掉刚重建的目录 → 新浏览器
+    //   读到空路径 (review 多家 ground-verify)。
+    // 改成 UUID 后缀后, 每次 extract 各自独立目录, 旧 timer 删的是没人用的旧目录,
+    // 不再覆盖到新解压结果。msgNo 保留前缀只为日志可读。
+    NSString *prefix = msgNo.length > 0
         ? [NSString stringWithFormat:@"%lu", (unsigned long)msgNo.hash]
         : [NSString stringWithFormat:@"%lu", (unsigned long)zipPath.hash];
+    NSString *folder = [NSString stringWithFormat:@"%@-%@", prefix, [NSUUID UUID].UUIDString];
     NSString *destDir = [[NSTemporaryDirectory() stringByAppendingPathComponent:@"WKZipPreview"]
                          stringByAppendingPathComponent:folder];
 
@@ -300,6 +304,15 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
         dispatch_async(dispatch_get_main_queue(), ^{
             [hud hideAnimated:YES];
             if (ok) {
+                // 守卫: 已有 preview 窗口在跑 (上一次还没 dismiss), showRootViewController:
+                // 会静默 return → 新建的 destDir 没 VC 接管, backPressed 兜底也走不到 →
+                // 整棵解压树永久泄露在 NSTemporaryDirectory (review 提示)。这里就地删掉,
+                // 提示用户。
+                if ([WKSafeFilePreviewVC isShowing]) {
+                    [[NSFileManager defaultManager] removeItemAtPath:destDir error:nil];
+                    [hudHost showMsg:LLang(@"请先关闭当前预览")];
+                    return;
+                }
                 WKZipBrowserVC *vc = [[WKZipBrowserVC alloc] initWithExtractedRoot:destDir displayTitle:title];
                 [WKSafeFilePreviewVC showRootViewController:vc];
             } else {

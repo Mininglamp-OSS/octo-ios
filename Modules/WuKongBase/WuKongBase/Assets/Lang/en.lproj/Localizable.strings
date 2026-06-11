@@ -410,6 +410,9 @@
 // WKConversationListVC (PR #51 新加)
 "新建会话"="New Chat";
 "[草稿]"="[Draft]";
+
+// WKZipBrowserVC (PR #51)
+"请先关闭当前预览"="Please close the current preview first";
 "打开"="Enabled";
 "关闭"="Disabled";
 "版本信息"="Version";
