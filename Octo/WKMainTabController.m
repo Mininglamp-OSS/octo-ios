@@ -79,14 +79,25 @@
 }
 
 - (void)updateTabBarAppearance {
-    // iOS 26+ 想要 Liquid Glass，关键是 *不要* 自定义 UITabBarAppearance，
-    // 否则系统不会再渲染那层玻璃材质 → 只剩你设的背景板。
-    // 选中文字颜色走 per-item 的 titleTextAttributes，不需要走 appearance。
+    // iOS 26+ Liquid Glass：浮岛玻璃由系统在 tabbar 上方独立渲染。
+    // 我们要做的是把底层 UITabBar 自身的"背景板"完全抹掉（透明），
+    // 否则会看到一条贯穿全宽的浅灰色（默认 material）压在 Liquid Glass 之下。
     if (@available(iOS 26.0, *)) {
-        self.tabBar.standardAppearance = [[UITabBarAppearance alloc] init]; // 全默认，让系统接管 Liquid Glass
+        UITabBarAppearance *appearance = [[UITabBarAppearance alloc] init];
+        [appearance configureWithTransparentBackground];
+        appearance.backgroundColor = [UIColor clearColor];
+        appearance.shadowColor = [UIColor clearColor];
+        appearance.backgroundImage = [UIImage new];
+        appearance.shadowImage = [UIImage new];
+        self.tabBar.standardAppearance = appearance;
         if (@available(iOS 15.0, *)) {
-            self.tabBar.scrollEdgeAppearance = nil; // 不要 override，避免压住玻璃
+            self.tabBar.scrollEdgeAppearance = appearance;
         }
+        // 老 API 也清一遍，防止系统某些路径回退
+        self.tabBar.barTintColor = [UIColor clearColor];
+        self.tabBar.backgroundImage = [UIImage new];
+        self.tabBar.shadowImage = [UIImage new];
+
         UIColor *selectedTextColor = [UIColor colorWithRed:28.0/255.0 green:28.0/255.0 blue:35.0/255.0 alpha:1.0];
         [self applySelectedTitleColor:selectedTextColor];
         return;
