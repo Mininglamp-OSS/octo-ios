@@ -28,9 +28,10 @@
 // 排查完置 NO 即可。所有埋点统一前缀 [CellPerf]，且都带阈值过滤，平时安静。
 // ============================================================================
 // 排查完置 NO,合规 CLAUDE.md "调试工具的生命周期" 要求 (合入 release 前关闭)。
-// CADisplayLink fps 监视 + 全部 [CellPerf]/[PullDebug] NSLog 一并失活 (NSLog 走全局
-// 锁, 在主线程已经被压住的时候打日志会再加塞,反而放大卡顿)。
+// CADisplayLink fps 监视 + 全部 [CellPerf]/[PullDebug]/[Perf] NSLog 一并失活
+// (NSLog 走全局锁, 在主线程已经被压住的时候打日志会再加塞,反而放大卡顿)。
 static const BOOL WKCellPerfLog = NO;
+#define WK_PERF_LOG(...) do { if (WKCellPerfLog) { NSLog(__VA_ARGS__); } } while (0)
 static const CFTimeInterval kCellPerfHeightMissMs = 4.0;    // heightForRow 缓存miss >4ms 才打
 static const CFTimeInterval kCellPerfRefreshSlowMs = 8.0;   // willDisplay 内 refresh 总耗时 >8ms 才打
 
@@ -466,7 +467,7 @@ static const BOOL kIncrementalPulldown = NO;
                     [weakSelf precacheHeightForMessage:msg];
                 }
                 CGFloat _ms = (CFAbsoluteTimeGetCurrent() - _t0) * 1000;
-                NSLog(@"[Perf] pullFirst precache: %lu msgs in %.1fms (bg)", (unsigned long)allMsgs.count, _ms);
+                WK_PERF_LOG(@"[Perf] pullFirst precache: %lu msgs in %.1fms (bg)", (unsigned long)allMsgs.count, _ms);
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [weakSelf _handleLoadMessagesAfterPrecache:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
                 });
@@ -726,7 +727,7 @@ static const BOOL kIncrementalPulldown = NO;
     }
 
     __weak typeof(self) weakSelf = self;
-    NSLog(@"[PullDebug] pulldown START, mj_header.state=%ld, isPulldownInProgress=%d", (long)self.tableView.mj_header.state, self.isPulldownInProgress);
+    WK_PERF_LOG(@"[PullDebug] pulldown START, mj_header.state=%ld, isPulldownInProgress=%d", (long)self.tableView.mj_header.state, self.isPulldownInProgress);
 
     // 标记 pulldown 进行中，阻止新消息并发修改 tableView
     self.isPulldownInProgress = YES;
@@ -739,7 +740,7 @@ static const BOOL kIncrementalPulldown = NO;
     }
 
     [self.dataProvider pulldown:^(bool hasMore) {
-        NSLog(@"[PullDebug] pulldown callback: hasMore=%d", hasMore);
+        WK_PERF_LOG(@"[PullDebug] pulldown callback: hasMore=%d", hasMore);
         if(!hasMore) {
             [weakSelf pulldownFinished];
         }
@@ -755,7 +756,7 @@ static const BOOL kIncrementalPulldown = NO;
         }
 
         BOOL hasInsertions = (newSectionsAdded > 0 || newRowsInOldFirstSection > 0);
-        NSLog(@"[PullDebug] pulldown: hasInsertions=%d newSections=%ld newRows=%ld", hasInsertions, (long)newSectionsAdded, (long)newRowsInOldFirstSection);
+        WK_PERF_LOG(@"[PullDebug] pulldown: hasInsertions=%d newSections=%ld newRows=%ld", hasInsertions, (long)newSectionsAdded, (long)newRowsInOldFirstSection);
 
         if (hasInsertions) {
             // 记录当前可见位置
@@ -803,14 +804,14 @@ static const BOOL kIncrementalPulldown = NO;
             CGFloat offsetCopy = cellOffsetInView;
             NSInteger newSectionsAddedCopy = newSectionsAdded;
             NSInteger newRowsInOldFirstSectionCopy = newRowsInOldFirstSection;
-            NSLog(@"[PullDebug] pulldown: dispatching precache for %lu msgs", (unsigned long)newMsgs.count);
+            WK_PERF_LOG(@"[PullDebug] pulldown: dispatching precache for %lu msgs", (unsigned long)newMsgs.count);
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
                 CFAbsoluteTime t_precache = CFAbsoluteTimeGetCurrent();
                 for (WKMessageModel *msg in newMsgs) {
                     [weakSelf precacheHeightForMessage:msg];
                 }
                 CGFloat precacheMs = (CFAbsoluteTimeGetCurrent() - t_precache) * 1000;
-                NSLog(@"[PullDebug] pulldown: precache done %.1fms, dispatching to main", precacheMs);
+                WK_PERF_LOG(@"[PullDebug] pulldown: precache done %.1fms, dispatching to main", precacheMs);
 
                 dispatch_async(dispatch_get_main_queue(), ^{
                     CFAbsoluteTime t_apply = CFAbsoluteTimeGetCurrent();
@@ -888,20 +889,20 @@ static const BOOL kIncrementalPulldown = NO;
                     }
 
                     CGFloat applyMs = (CFAbsoluteTimeGetCurrent() - t_apply) * 1000;
-                    NSLog(@"[Perf] pulldown: %lu msgs | precache=%.1fms(bg) apply=%.1fms(main) path=%@",
+                    WK_PERF_LOG(@"[Perf] pulldown: %lu msgs | precache=%.1fms(bg) apply=%.1fms(main) path=%@",
                           (unsigned long)newMsgs.count, precacheMs, applyMs,
                           didIncremental ? @"INCREMENTAL" : @"RELOAD");
 
                     [weakSelf.tableView.mj_header endRefreshing];
                     weakSelf.isPulldownInProgress = NO;
-                    NSLog(@"[PullDebug] pulldown: COMPLETE (hasInsertions path), mj_header.state=%ld", (long)weakSelf.tableView.mj_header.state);
+                    WK_PERF_LOG(@"[PullDebug] pulldown: COMPLETE (hasInsertions path), mj_header.state=%ld", (long)weakSelf.tableView.mj_header.state);
                     [weakSelf processPendingRecvMessages];
                 });
             });
         } else {
             [weakSelf.tableView.mj_header endRefreshing];
             weakSelf.isPulldownInProgress = NO;
-            NSLog(@"[PullDebug] pulldown: COMPLETE (no insertions), mj_header.state=%ld", (long)weakSelf.tableView.mj_header.state);
+            WK_PERF_LOG(@"[PullDebug] pulldown: COMPLETE (no insertions), mj_header.state=%ld", (long)weakSelf.tableView.mj_header.state);
             [weakSelf processPendingRecvMessages];
         }
     }];
@@ -922,7 +923,7 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 -(void) pullup:(void(^)(bool more))complete dedupRetry:(NSInteger)dedupRetry {
 
     __weak typeof(self) weakSelf = self;
-    NSLog(@"[PullDebug] pullup START, mj_footer.state=%ld", (long)self.tableView.mj_footer.state);
+    WK_PERF_LOG(@"[PullDebug] pullup START, mj_footer.state=%ld", (long)self.tableView.mj_footer.state);
 
     NSInteger oldSectionCount = [self.dataProvider dateCount];
     NSInteger oldLastSectionRowCount = 0;
@@ -931,7 +932,7 @@ static const NSInteger kMaxPullupDedupRetry = 3;
     }
 
     [self.dataProvider pullup:^(bool hasMore) {
-        NSLog(@"[PullDebug] pullup callback: hasMore=%d", hasMore);
+        WK_PERF_LOG(@"[PullDebug] pullup callback: hasMore=%d", hasMore);
         if(!hasMore) {
             [weakSelf pullupFinished];
         }else {
@@ -959,7 +960,7 @@ static const NSInteger kMaxPullupDedupRetry = 3;
             }
         }
 
-        NSLog(@"[PullDebug] pullup: newMsgs=%lu newSections=%ld", (unsigned long)newMsgs.count, (long)newSectionsAdded);
+        WK_PERF_LOG(@"[PullDebug] pullup: newMsgs=%lu newSections=%ld", (unsigned long)newMsgs.count, (long)newSectionsAdded);
         if (newMsgs.count > 0) {
             // 后台预计算高度，完成后回主线程插入行
             NSInteger newSectionsAddedCopy = newSectionsAdded;
@@ -1011,10 +1012,10 @@ static const NSInteger kMaxPullupDedupRetry = 3;
                         }
                     }];
                     CGFloat insertMs = (CFAbsoluteTimeGetCurrent() - t_insert) * 1000;
-                    NSLog(@"[Perf] pullup: %lu msgs | precache=%.1fms(bg) insert=%.1fms(main)", (unsigned long)newMsgs.count, precacheMs, insertMs);
+                    WK_PERF_LOG(@"[Perf] pullup: %lu msgs | precache=%.1fms(bg) insert=%.1fms(main)", (unsigned long)newMsgs.count, precacheMs, insertMs);
 
                     [weakSelf.tableView.mj_footer endRefreshing];
-                    NSLog(@"[PullDebug] pullup: COMPLETE (hasData path), mj_footer.state=%ld", (long)weakSelf.tableView.mj_footer.state);
+                    WK_PERF_LOG(@"[PullDebug] pullup: COMPLETE (hasData path), mj_footer.state=%ld", (long)weakSelf.tableView.mj_footer.state);
                     if(complete) {
                         complete(hasMore);
                     }
@@ -1022,7 +1023,7 @@ static const NSInteger kMaxPullupDedupRetry = 3;
             });
         } else {
             [weakSelf.tableView.mj_footer endRefreshing];
-            NSLog(@"[PullDebug] pullup: COMPLETE (noData path), hasMore=%d, mj_footer.state=%ld", hasMore, (long)weakSelf.tableView.mj_footer.state);
+            WK_PERF_LOG(@"[PullDebug] pullup: COMPLETE (noData path), hasMore=%d, mj_footer.state=%ld", hasMore, (long)weakSelf.tableView.mj_footer.state);
 
             // 去重跳过后重试：仅在有限次数内重试。
             // baseOrderSeq = dataProvider 尾部 orderSeq；newMsgs==0 时尾部未推进，
@@ -1032,13 +1033,13 @@ static const NSInteger kMaxPullupDedupRetry = 3;
             // 到顶后用户继续滚动会重新触发 footer pullup(深度归 0)，不丢分页功能。
             if(hasMore && newMsgs.count == 0) {
                 if (dedupRetry < kMaxPullupDedupRetry) {
-                    NSLog(@"[PullDebug] pullup: retrying (dedup skip) %ld/%ld", (long)(dedupRetry + 1), (long)kMaxPullupDedupRetry);
+                    WK_PERF_LOG(@"[PullDebug] pullup: retrying (dedup skip) %ld/%ld", (long)(dedupRetry + 1), (long)kMaxPullupDedupRetry);
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [weakSelf pullup:complete dedupRetry:dedupRetry + 1];
                     });
                     return;
                 }
-                NSLog(@"[PullDebug] pullup: dedup-skip retry capped at %ld, stop", (long)kMaxPullupDedupRetry);
+                WK_PERF_LOG(@"[PullDebug] pullup: dedup-skip retry capped at %ld, stop", (long)kMaxPullupDedupRetry);
                 if(complete) {
                     complete(hasMore);
                 }
@@ -2247,7 +2248,7 @@ static const NSInteger kMaxPullupDedupRetry = 3;
                     preview = [preview stringByReplacingOccurrencesOfString:@"\n" withString:@"↵"];
                 }
             }
-            NSLog(@"[Perf] precache SLOW: %.1fms type=%ld len=%lu key=%@ content=[%@]",
+            WK_PERF_LOG(@"[Perf] precache SLOW: %.1fms type=%ld len=%lu key=%@ content=[%@]",
                   ms, (long)msg.contentType,
                   (unsigned long)(msg.contentType == 1 ? [(NSString*)[(id)msg.content content] length] : 0),
                   heightKey, preview);

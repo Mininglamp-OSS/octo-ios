@@ -486,7 +486,9 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         // 卡顿诊断：WKWebView pool MISS → 现场新 alloc。WebKit 首次 alloc 200~500ms
         // (走 WebContent XPC 拉起 + ScreenTime dispatch_once)。如果同一会话里反复 MISS
         // 说明池容量太小或者 cell 重用没把 webview 还回池。
+#if DEBUG
         NSLog(@"[CellPerf] webview POOL_MISS: alloc new WKWebView (pool=%lu)", (unsigned long)pool.count);
+#endif
         wv = [[WKWebView alloc] initWithFrame:CGRectZero configuration:[WKTextMessageCell sharedWebViewConfig]];
     }
     wv.scrollView.scrollEnabled = NO;
@@ -618,7 +620,11 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                 _preview = [_preview stringByReplacingOccurrencesOfString:@"\n" withString:@"↵"];
             }
         }
+#if DEBUG
+        // 含用户消息 preview, 仅 DEBUG 打 (合规 CLAUDE.md "调试工具的生命周期";
+        // 释放包不上隐私 console)。
         NSLog(@"[CellPerf] parseAttr MISS: %.1fms key=%@ preview=[%@]", _parseMs, key, _preview);
+#endif
     }
 
     if(key) {

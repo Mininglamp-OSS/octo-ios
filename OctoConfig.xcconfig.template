@@ -119,6 +119,19 @@ OCTO_APP_GROUP = group.com.example.octo
 // ── 邀请链接 ─────────────────────────────────────────────────────────────
 // 用户在 App 内点 "邀请好友" 时拼到分享文案后的 URL。
 // 默认指向 OCTO 开源主页；私有部署通常会指向自己的下载页。
+//
+// ⚠️ xcconfig 把 `//` 当作行注释 → URL 不能写成 `https://xxx`, 会被截断成 `https:`。
+//    这里只写 host+path（不带 scheme），运行时由 WKAppConfig 统一拼 https://。
 
-OCTO_INVITE_URL = https://github.com/Mininglamp-OSS
+OCTO_INVITE_URL = github.com/Mininglamp-OSS
+
+
+// ── 法律协议 PDF（静态 CDN） ─────────────────────────────────────────────
+// 服务条款 / 隐私协议入口（登录页 + 我的→隐私）走的静态 CDN PDF, 不走 server
+// 自服务（避免被 SSO 接管时跳登录）。私有部署改写成自己的 CDN 即可。
+//
+// 同样：只写 host+path, 不要带 https://（xcconfig 注释规则)。
+
+OCTO_TERMS_URL   = cdn.imocto.cn/legal-agreement/octo-terms.pdf
+OCTO_PRIVACY_URL = cdn.imocto.cn/legal-agreement/octo-privacy.pdf
 

@@ -301,6 +301,15 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
                                       overwrite:YES
                                        password:password
                                           error:&err];
+        if (ok) {
+            // 安全: SSZipArchive 2.2.3 的 _sanitizedPath 只对条目"路径名"做 ../ 过滤,
+            // 不校验 symlink 的 target —— 攻击者构造 zip 内 `link -> ../../<沙箱内>`
+            // 配合 link/evil 条目, 库会用 POSIX symlink() 创建真链, 后续 fetch()/
+            // 文件读会顺着链跳出 destDir 落到 Documents/Library 任意位置 (zip 来自
+            // 不可信 IM 对端 → 真实可利用)。这里解压完递归扫一遍, 把 symlink 条目
+            // 一律删掉, 不依赖库做 target 校验。
+            [self _stripSymlinksUnderDir:destDir];
+        }
         dispatch_async(dispatch_get_main_queue(), ^{
             [hud hideAnimated:YES];
             if (ok) {
@@ -324,6 +333,25 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
             }
         });
     });
+}
+
+// 递归扫 dir, 把所有 symlink 条目删掉。NSDirectoryEnumerator 默认不跟随符号链接,
+// resourceValueForKey:NSURLIsSymbolicLinkKey: 返回的就是 link 自身属性, 不会被
+// resolve 误判。
++ (void)_stripSymlinksUnderDir:(NSString *)dir {
+    if (dir.length == 0) return;
+    NSURL *rootURL = [NSURL fileURLWithPath:dir isDirectory:YES];
+    NSDirectoryEnumerator<NSURL *> *enumr =
+        [[NSFileManager defaultManager] enumeratorAtURL:rootURL
+                             includingPropertiesForKeys:@[NSURLIsSymbolicLinkKey]
+                                                options:NSDirectoryEnumerationSkipsHiddenFiles
+                                           errorHandler:nil];
+    for (NSURL *url in enumr) {
+        NSNumber *isLink = nil;
+        if ([url getResourceValue:&isLink forKey:NSURLIsSymbolicLinkKey error:nil] && isLink.boolValue) {
+            [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
+        }
+    }
 }
 
 @end
