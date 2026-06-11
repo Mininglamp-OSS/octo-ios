@@ -298,6 +298,10 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
                 WKZipBrowserVC *vc = [[WKZipBrowserVC alloc] initWithExtractedRoot:destDir displayTitle:title];
                 [WKSafeFilePreviewVC showRootViewController:vc];
             } else {
+                // 解压失败时 destDir 已被 createDirectory 创建 (上面 :288),
+                // 这里没有 root VC 接管 → backPressed 兜底清理也走不到, 必须就地删掉,
+                // 否则每次失败都会在 NSTemporaryDirectory 残留一个空目录。
+                [[NSFileManager defaultManager] removeItemAtPath:destDir error:nil];
                 [hudHost showMsg:LLang(@"解压失败")];
             }
         });

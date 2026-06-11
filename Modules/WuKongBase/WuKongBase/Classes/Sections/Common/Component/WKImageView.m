@@ -111,7 +111,11 @@ static const void *kWKDisplayedKey = &kWKDisplayedKey;
 //   - WKImageMessageCell.imgView        URL 路径的图片消息 (本地文件路径仍走
 //                                       refresh: 内的 bg-decode + WKChatAnimatedImage)
 //   - WKGIFMessageCell.imgView          动图消息
-//   - WKStickerImageView.stickerImgView 贴纸 (WKImageView 的间接消费方)
+//
+// 不覆盖: WKStickerImageView.stickerImgView 是 SDAnimatedImageView 直接子类,走
+// SDAnimatedImageView 自己的 funnel (会强制覆为 SDAnimatedImage),本注入对它无效。
+// 贴纸 autoPlay=NO + clearBufferWhenStopped=YES, 且只在主动 startAnimating 时跑,
+// 影响面较小, 暂未单独治理。
 - (void)sd_setImageWithURL:(nullable NSURL *)url
           placeholderImage:(nullable UIImage *)placeholder
                    options:(SDWebImageOptions)options

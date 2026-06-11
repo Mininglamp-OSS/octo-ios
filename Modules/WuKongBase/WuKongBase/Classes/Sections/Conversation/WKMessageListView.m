@@ -27,7 +27,10 @@
 // 卡顿诊断开关：定位"首次进群滑动期间持续卡顿"问题
 // 排查完置 NO 即可。所有埋点统一前缀 [CellPerf]，且都带阈值过滤，平时安静。
 // ============================================================================
-static const BOOL WKCellPerfLog = YES;
+// 排查完置 NO,合规 CLAUDE.md "调试工具的生命周期" 要求 (合入 release 前关闭)。
+// CADisplayLink fps 监视 + 全部 [CellPerf]/[PullDebug] NSLog 一并失活 (NSLog 走全局
+// 锁, 在主线程已经被压住的时候打日志会再加塞,反而放大卡顿)。
+static const BOOL WKCellPerfLog = NO;
 static const CFTimeInterval kCellPerfHeightMissMs = 4.0;    // heightForRow 缓存miss >4ms 才打
 static const CFTimeInterval kCellPerfRefreshSlowMs = 8.0;   // willDisplay 内 refresh 总耗时 >8ms 才打
 

@@ -25,8 +25,15 @@
 //    1) WKImageMessageCell.refresh: 本地 bg-decode 路径直接 [WKChatAnimatedImage imageWithData:]
 //    2) WKImageView 覆盖 sd_setImageWithURL: 的 funnel,通过
 //       SDWebImageContextAnimatedImageClass 让 SDWebImage 解码出来的动图都是这个子类
-//       —— 覆盖 WKUserAvatar (头像) / WKStickerImageView (贴纸) / WKGIFMessageCell
-//       (动图消息) / WKImageMessageCell URL 路径。
+//       —— 覆盖 WKUserAvatar (头像) / WKGIFMessageCell (动图消息) /
+//       WKImageMessageCell URL 路径。
+//
+//    注: WKStickerImageView 的内部 stickerImgView 是 SDAnimatedImageView 直接子类
+//    (不是 WKImageView),走 SDAnimatedImageView 自己的 sd_setImageWithURL: funnel,
+//    第一行就把 SDWebImageContextAnimatedImageClass 强制覆为 [SDAnimatedImage class],
+//    本注入对它无效。但贴纸默认 autoPlayAnimatedImage=NO + clearBufferWhenStopped=YES,
+//    且只在用户主动操作时 startAnimating, 不像消息列表会持续可见,影响面比动图消息小,
+//    暂未单独治理。
 //
 //  内存:
 //    重画产物比 lazy CGImage 多约 1× 像素 (decodedRGBA = w*h*4)。preloadAllFrames
