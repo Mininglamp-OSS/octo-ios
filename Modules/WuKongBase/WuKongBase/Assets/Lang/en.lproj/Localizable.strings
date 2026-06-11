@@ -413,6 +413,7 @@
 
 // WKZipBrowserVC (PR #51)
 "请先关闭当前预览"="Please close the current preview first";
+"压缩包过大,请使用专业解压工具打开"="Archive is too large. Please open with a dedicated extraction app.";
 "打开"="Enabled";
 "关闭"="Disabled";
 "版本信息"="Version";

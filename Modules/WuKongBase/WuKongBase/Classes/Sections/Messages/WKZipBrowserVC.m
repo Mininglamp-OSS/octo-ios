@@ -292,6 +292,37 @@ static NSString * const kZipEntryCellID = @"WKZipEntryCell";
     MBProgressHUD *hud = [hudHost showHUDWithDim];
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        // ── zip-bomb 预检 ─────────────────────────────────────────────────────
+        // 两道闸, bg 队列上做完再决定要不要解:
+        //   (1) 压缩后 > 500MB 直接拒 (快路径; 避免对超大文件再读 central dir)。
+        //   (2) 解压后总字节 > 1GB 拒 (zip-bomb: 几 KB 压缩包炸开几 GB 的经典样式)。
+        //       SSZipArchive +payloadSizeForArchiveAtPath: 只读 central directory
+        //       不实解压, 成本 ~ms 量级。
+        // 命中任一闸即提示用户走专业解压工具 + 清理 (此时 destDir 还没建)。
+        static const uint64_t kWKZipMaxCompressedBytes   = 500ULL * 1024 * 1024;
+        static const uint64_t kWKZipMaxUncompressedBytes = 1024ULL * 1024 * 1024;
+        NSError *attrErr = nil;
+        NSDictionary *attr = [[NSFileManager defaultManager] attributesOfItemAtPath:zipPath error:&attrErr];
+        uint64_t compressedSize = [attr[NSFileSize] unsignedLongLongValue];
+        BOOL tooBig = NO;
+        if (compressedSize > kWKZipMaxCompressedBytes) {
+            tooBig = YES;
+        } else {
+            NSError *payloadErr = nil;
+            NSNumber *payload = [SSZipArchive payloadSizeForArchiveAtPath:zipPath error:&payloadErr];
+            if (payloadErr == nil && payload.unsignedLongLongValue > kWKZipMaxUncompressedBytes) {
+                tooBig = YES;
+            }
+        }
+        if (tooBig) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [hud hideAnimated:YES];
+                [hudHost showMsg:LLang(@"压缩包过大,请使用专业解压工具打开")];
+            });
+            return;
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         NSFileManager *fm = [NSFileManager defaultManager];
         [fm removeItemAtPath:destDir error:nil];
         [fm createDirectoryAtPath:destDir withIntermediateDirectories:YES attributes:nil error:nil];
