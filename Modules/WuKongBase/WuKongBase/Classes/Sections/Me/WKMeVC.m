@@ -34,6 +34,11 @@
     }else{
       self.automaticallyAdjustsScrollViewInsets = NO;
     }
+    // iOS 26+ Liquid Glass：底部留 tabbar 高度，最后一行可滑出浮岛遮挡
+    if (@available(iOS 26.0, *)) {
+        CGFloat tbH = self.tabBarController.tabBar.frame.size.height ?: 83;
+        self.tableView.contentInset = UIEdgeInsetsMake(0, 0, tbH, 0);
+    }
     self.view.backgroundColor = [WKApp shared].config.backgroundColor;
     self.tableView.backgroundColor = [UIColor clearColor];
     self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
@@ -228,7 +233,20 @@
 
     self.cardView.backgroundColor = [WKApp shared].config.cellBackgroundColor;
     self.nameLbl.textColor = [WKApp shared].config.defaultTextColor;
-    UIColor *tipColor = [UIColor colorWithRed:0x1C/255.0 green:0x1C/255.0 blue:0x23/255.0 alpha:0.4];
+    // 浅色: 在白底卡片上的弱文本 (#1C1C23 α 0.4 = 设计稿同款)
+    // 深色: 在 secondarySystemBackground 卡片上的弱文本, 用 defaultTextColor 同色系
+    //       的浅灰 (#D0D1D2) 同样 α 0.4 避免黑压黑读不出。
+    UIColor *tipColor;
+    if (@available(iOS 13.0, *)) {
+        tipColor = [UIColor colorWithDynamicProvider:^UIColor * _Nonnull(UITraitCollection * _Nonnull tc) {
+            if (tc.userInterfaceStyle == UIUserInterfaceStyleDark || [WKApp shared].config.style == WKSystemStyleDark) {
+                return [UIColor colorWithRed:0xD0/255.0 green:0xD1/255.0 blue:0xD2/255.0 alpha:0.6];
+            }
+            return [UIColor colorWithRed:0x1C/255.0 green:0x1C/255.0 blue:0x23/255.0 alpha:0.4];
+        }];
+    } else {
+        tipColor = [UIColor colorWithRed:0x1C/255.0 green:0x1C/255.0 blue:0x23/255.0 alpha:0.4];
+    }
     self.shortNoLbl.textColor = tipColor;
 
     NSString *displayName = [WKApp shared].loginInfo.displayName;

@@ -16,6 +16,7 @@
 #import "WKRealnameVerifyManager.h"
 #import "WKNavigationManager.h"
 #import "WKWebViewVC.h"
+#import "UIView+WKCommon.h"
 
 @interface WKCommonSettingVM ()
 
@@ -161,8 +162,10 @@
         };
 
         NSString *cacheText;
-        if(cacheSize <= 0) {
-            cacheText = @"";
+        if(!cacheLoaded) {
+            cacheText = @"";          // 仍在异步计算中，留空
+        } else if(cacheSize <= 0) {
+            cacheText = @"0KB";       // 已计算完成且无缓存，显示 0KB
         } else if(cacheSize < 1024) {
             cacheText = [NSString stringWithFormat:@"%luB", (unsigned long)cacheSize];
         } else if(cacheSize < 1024 * 1024) {
@@ -183,12 +186,19 @@
             @"onClick":^{
                 WKActionSheetView2 *actionSheetView = [WKActionSheetView2 initWithTip:LLang(@"是否清除缓存")];
                 [actionSheetView addItem:[WKActionSheetButtonItem2 initWithAlertTitle:LLang(@"清空缓存") onClick:^{
-                    [WKApp.shared cleanVideoCache];
-                    [[WKSDK shared].mediaManager cleanMessageCache];
-                    [[SDImageCache sharedImageCache] clearDiskOnCompletion:^{
-                        param[@"cacheLoaded"]=@(false);
-                        reloadData();
-                    }];
+                    UIView *topView = [WKNavigationManager shared].topViewController.view;
+                    [topView showHUD:LLang(@"缓存清理中")];
+                    @try {
+                        [WKApp.shared cleanVideoCache];
+                        [[WKSDK shared].mediaManager cleanMessageCache];
+                        [[SDImageCache sharedImageCache] clearDiskOnCompletion:^{
+                            param[@"cacheLoaded"]=@(false);
+                            reloadData();
+                            [topView switchHUDSuccess:LLang(@"清理成功")];
+                        }];
+                    } @catch (NSException *exception) {
+                        [topView switchHUDError:LLang(@"清理失败")];
+                    }
                 }]];
                 [actionSheetView show];
             }

@@ -17,6 +17,7 @@
 #import <YYImage/YYImage.h>
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKKeyboardService.h"
+#import "WKChatAnimatedImage.h"
 
 #define flameImageSize CGSizeMake(150.0f, 150.0f)
 
@@ -219,7 +220,9 @@ static const NSUInteger kWKImagePreloadMaxFrames = 80;
                 return;
             }
             // 优先按动图解;非动图 (PNG/JPEG/单帧 GIF) imageWithData: 返回 nil,回退普通 UIImage
-            UIImage *img = [SDAnimatedImage imageWithData:data];
+            // 用 WKChatAnimatedImage (SDAnimatedImage 子类) 让每帧通过 CGImageCreateDecoded
+            // 重画到位图,杜绝 layer.contents 在 CA::commit 阶段反向触发 IIO 现场解码。
+            UIImage *img = [WKChatAnimatedImage imageWithData:data];
             if ([img isKindOfClass:[SDAnimatedImage class]]) {
                 SDAnimatedImage *animImg = (SDAnimatedImage *)img;
                 NSUInteger frameCount = animImg.animatedImageFrameCount;
