@@ -37,6 +37,23 @@
     return v;
 }
 
+// URL 专用读取: xcconfig 的 `//` 会被当注释截断, 所以约定 xcconfig 里只写 host+path
+// (例 `cdn.imocto.cn/foo.pdf`), 这里统一拼 `https://`。
+// 兼容三种异常输入:
+//   - 空 / `$(...)` 占位 → fallback (走 octoConfigStringForKey:)
+//   - 单纯 `https:` / `http:` (用户在 xcconfig 错填了 https://, `//...` 段被截断后剩下的) → fallback
+//   - 已有 scheme 前缀 → 原样返回 (Info.plist 直填 / fallback 自身就是全 URL)
++ (NSString *)octoConfigURLForKey:(NSString *)key fallback:(NSString *)fallback {
+    NSString *raw = [WKAppConfig octoConfigStringForKey:key fallback:fallback];
+    if ([raw isEqualToString:@"https:"] || [raw isEqualToString:@"http:"]) {
+        raw = fallback;
+    }
+    if ([raw hasPrefix:@"http://"] || [raw hasPrefix:@"https://"]) {
+        return raw;
+    }
+    return [@"https://" stringByAppendingString:raw];
+}
+
 
 -(instancetype) init {
     self = [super init];
@@ -104,16 +121,17 @@
         // PR #121 round 4 review 🟡: 邀请链接默认指向 OCTO 开源主页, 可通过
         // OctoConfig.xcconfig 的 OCTO_INVITE_URL 注入 Info.plist OCTOInviteURL
         // 覆盖（私有部署通常会指向自己的下载页）。
-        NSString *inviteURL = [WKAppConfig octoConfigStringForKey:@"OCTOInviteURL"
-                                                         fallback:@"https://github.com/Mininglamp-OSS"];
+        // 注: 走 URL 专用 helper, xcconfig 里只写 host+path (不带 https://)。
+        NSString *inviteURL = [WKAppConfig octoConfigURLForKey:@"OCTOInviteURL"
+                                                      fallback:@"https://github.com/Mininglamp-OSS"];
         self.inviteMsg = [NSString stringWithFormat:@"我正在使用【%@】app，体验还不错。你也赶快来下载玩玩吧！%@", self.appName, inviteURL];
 
         // 服务条款 / 隐私协议 PDF 走静态 CDN(避开 server 自服务被 SSO 接管的问题),
         // 由 OctoConfig.xcconfig 的 OCTO_TERMS_URL / OCTO_PRIVACY_URL 注入。
-        self.octoTermsURL = [WKAppConfig octoConfigStringForKey:@"OCTOTermsURL"
-                                                       fallback:@"https://cdn.imocto.cn/legal-agreement/octo-terms.pdf"];
-        self.octoPrivacyURL = [WKAppConfig octoConfigStringForKey:@"OCTOPrivacyURL"
-                                                         fallback:@"https://cdn.imocto.cn/legal-agreement/octo-privacy.pdf"];
+        self.octoTermsURL = [WKAppConfig octoConfigURLForKey:@"OCTOTermsURL"
+                                                    fallback:@"https://cdn.imocto.cn/legal-agreement/octo-terms.pdf"];
+        self.octoPrivacyURL = [WKAppConfig octoConfigURLForKey:@"OCTOPrivacyURL"
+                                                      fallback:@"https://cdn.imocto.cn/legal-agreement/octo-privacy.pdf"];
         NSString *tempDir= NSTemporaryDirectory();
         self.videoCacheDir = [tempDir stringByAppendingPathComponent:[NSString stringWithFormat:@"wukong_video_cache"]];
         [WKFileUtil createDirectoryIfNotExist: self.videoCacheDir];

@@ -215,8 +215,10 @@
                 // OctoConfig.xcconfig 的 OCTO_PRIVACY_URL 注入)。不走 server 端
                 // privacyAgreementUrl —— 部分部署被 Aegis SSO 接管会跳登录。
                 NSString *urlStr = [WKApp shared].config.octoPrivacyURL;
+                NSURL *u = [NSURL URLWithString:urlStr];
+                if (!u) return;
                 WKWebViewVC *vc = [WKWebViewVC new];
-                vc.url = [NSURL URLWithString:urlStr];
+                vc.url = u;
                 [[WKNavigationManager shared] pushViewController:vc animated:YES];
             }
         };
