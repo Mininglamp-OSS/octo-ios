@@ -15,7 +15,6 @@
 @property(nonatomic,strong) UILabel *avatarLabel;
 @property(nonatomic,strong) UILabel *nameLabel;
 @property(nonatomic,strong) UILabel *checkLabel;
-@property(nonatomic,strong) UIButton *linkButton;
 
 @end
 
@@ -52,16 +51,10 @@
         _checkLabel.hidden = YES;
         [self.contentView addSubview:_checkLabel];
 
-        // 链接按钮
-        _linkButton = [UIButton buttonWithType:UIButtonTypeCustom];
-        [_linkButton setImage:[self createLinkIcon] forState:UIControlStateNormal];
-        [self.contentView addSubview:_linkButton];
-
         // 使用 autoresizing 和手动布局
         _avatarLabel.translatesAutoresizingMaskIntoConstraints = NO;
         _nameLabel.translatesAutoresizingMaskIntoConstraints = NO;
         _checkLabel.translatesAutoresizingMaskIntoConstraints = NO;
-        _linkButton.translatesAutoresizingMaskIntoConstraints = NO;
 
         [NSLayoutConstraint activateConstraints:@[
             [_avatarLabel.leftAnchor constraintEqualToAnchor:self.contentView.leftAnchor constant:8],
@@ -73,38 +66,13 @@
             [_nameLabel.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
             [_nameLabel.rightAnchor constraintEqualToAnchor:_checkLabel.leftAnchor constant:-8],
 
-            [_checkLabel.rightAnchor constraintEqualToAnchor:_linkButton.leftAnchor constant:-8],
+            [_checkLabel.rightAnchor constraintEqualToAnchor:self.contentView.rightAnchor constant:-12],
             [_checkLabel.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
             [_checkLabel.widthAnchor constraintEqualToConstant:18],
-            [_checkLabel.heightAnchor constraintEqualToConstant:18],
-
-            [_linkButton.rightAnchor constraintEqualToAnchor:self.contentView.rightAnchor constant:-8],
-            [_linkButton.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
-            [_linkButton.widthAnchor constraintEqualToConstant:24],
-            [_linkButton.heightAnchor constraintEqualToConstant:24]
+            [_checkLabel.heightAnchor constraintEqualToConstant:18]
         ]];
     }
     return self;
-}
-
-- (UIImage *)createLinkIcon {
-    // 使用文本渲染🔗符号作为图标
-    CGSize size = CGSizeMake(24, 24);
-    UIGraphicsBeginImageContextWithOptions(size, NO, 0);
-
-    NSString *linkEmoji = @"🔗";
-    NSDictionary *attributes = @{
-        NSFontAttributeName: [UIFont systemFontOfSize:16],
-        NSForegroundColorAttributeName: [UIColor colorWithRed:103/255.0 green:106/255.0 blue:111/255.0 alpha:1.0]
-    };
-
-    CGSize textSize = [linkEmoji sizeWithAttributes:attributes];
-    CGPoint textPoint = CGPointMake((size.width - textSize.width) / 2, (size.height - textSize.height) / 2);
-    [linkEmoji drawAtPoint:textPoint withAttributes:attributes];
-
-    UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return image;
 }
 
 @end
@@ -214,8 +182,7 @@
 
 - (void)createFooterButtons {
     NSArray *items = @[
-        @{@"title": LLang(@"加入Space"), @"action": @"joinSpace", @"icon": @"🔍"},
-        @{@"title": LLang(@"显示全部"), @"action": @"showAll", @"icon": @""}
+        @{@"title": LLang(@"加入Space"), @"action": @"joinSpace", @"icon": @"🔍"}
     ];
 
     UIView *lastView = nil;
@@ -267,9 +234,6 @@
     switch (sender.tag) {
         case 0: // 加入空间
             [self showJoinSpaceDialog];
-            break;
-        case 1: // 显示全部
-            [self loadSpaces];
             break;
     }
 }
@@ -471,63 +435,7 @@
     BOOL isSelected = [space.space_id isEqualToString:self.currentSpaceId];
     cell.checkLabel.hidden = !isSelected;
 
-    // 链接按钮点击事件
-    __weak typeof(self) weakSelf = self;
-    [cell.linkButton removeTarget:nil action:NULL forControlEvents:UIControlEventAllEvents];
-    [cell.linkButton addTarget:self action:@selector(linkButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
-    cell.linkButton.tag = indexPath.row;
-
     return cell;
-}
-
-- (void)linkButtonTapped:(UIButton *)sender {
-    // 边界检查
-    if (sender.tag >= self.spaces.count) {
-        NSLog(@"⚠️ linkButton tag (%ld) 超出spaces数组范围 (%lu)", (long)sender.tag, (unsigned long)self.spaces.count);
-        return;
-    }
-
-    WKSpaceEntity *space = self.spaces[sender.tag];
-    if (!space) {
-        NSLog(@"⚠️ space对象为nil at tag %ld", (long)sender.tag);
-        return;
-    }
-
-    UIWindow *window = [UIApplication sharedApplication].keyWindow;
-    if (!window) {
-        window = [[UIApplication sharedApplication].windows firstObject];
-    }
-
-    [window showHUD:LLang(@"获取中...")];
-    // 与 Web 端一致：通过 GET /space/{id} 获取空间详情中已有的 invite_code
-    NSString *path = [NSString stringWithFormat:@"space/%@", space.space_id];
-    [[WKAPIClient sharedClient] GET:path parameters:nil].then(^(NSDictionary *detail){
-        dispatch_async(dispatch_get_main_queue(), ^{
-            UIWindow *win = [UIApplication sharedApplication].keyWindow;
-            if (!win) {
-                win = [[UIApplication sharedApplication].windows firstObject];
-            }
-            [win hideHud];
-
-            NSString *inviteCode = detail[@"invite_code"];
-            if (inviteCode && inviteCode.length > 0) {
-                UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
-                pasteboard.string = inviteCode;
-                [win showMsg:LLang(@"邀请码已复制")];
-            } else {
-                [win showMsg:LLang(@"该空间暂无邀请码")];
-            }
-        });
-    }).catch(^(NSError *error){
-        dispatch_async(dispatch_get_main_queue(), ^{
-            UIWindow *win = [UIApplication sharedApplication].keyWindow;
-            if (!win) {
-                win = [[UIApplication sharedApplication].windows firstObject];
-            }
-            [win hideHud];
-            [win showMsg:error.localizedDescription ?: LLang(@"获取邀请码失败")];
-        });
-    });
 }
 
 #pragma mark - UITableViewDelegate
