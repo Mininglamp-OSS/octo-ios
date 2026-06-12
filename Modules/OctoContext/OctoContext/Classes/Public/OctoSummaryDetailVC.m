@@ -434,13 +434,13 @@
     tv.selectable = NO;          // 禁用系统文字选择, 修首次点击 "激活跳动"
     tv.scrollEnabled = NO;
     tv.backgroundColor = [UIColor clearColor];
-    tv.textContainerInset = UIEdgeInsetsZero;
+    // 顶/底各留 4pt 让 markdown 标题(更大字号 → 更高 ascender)不被 frame 顶边裁掉。
+    // 之前用 UIEdgeInsetsZero 把 padding 完全抹掉, 第一行 # 标题的 cap-height 超出 y=0
+    // 直接被 frame 切掉一半 (用户报"顶部标题文本少显示了一半")。
+    tv.textContainerInset = UIEdgeInsetsMake(4, 0, 4, 0);
     tv.textContainer.lineFragmentPadding = 0;
     tv.allowsEditingTextAttributes = NO;
-    // 强制 TextKit 1: iOS 16+ 默认 TK2, 首次 tap 才懒加载 TK1, UITextView 内部 layout
-    // 路径热切换 → "首次点击文本会跳一下"。提前读 layoutManager 触发即时切换 TK1
-    // (与 WKMessageTextView 同源思路 / Apple UITextView.h 文档行为)。
-    (void)tv.layoutManager;
+    (void)tv.layoutManager;          // 强制 TextKit 1, 修首次点击布局抖动
     if (@available(iOS 16.0, *)) {
         tv.findInteractionEnabled = NO;
     }
@@ -530,22 +530,30 @@
                                               inTextContainer:tv.textContainer
                      fractionOfDistanceBetweenInsertionPoints:nil];
     if (idx >= tv.attributedText.length) return;
-    NSNumber *citationIdx = [tv.attributedText attribute:OctoCitationIndexAttrKey
+    // 优先取 group 数组 (合并徽章): [1,2,3]; 没有就退化为单 index, 包成单元素数组
+    NSArray<NSNumber *> *groupIndices = [tv.attributedText attribute:OctoCitationGroupAttrKey
+                                                              atIndex:idx
+                                                       effectiveRange:NULL];
+    if (groupIndices.count == 0) {
+        NSNumber *single = [tv.attributedText attribute:OctoCitationIndexAttrKey
                                                   atIndex:idx
                                            effectiveRange:NULL];
-    if (!citationIdx) return;
-    [self openCitationByIndex:citationIdx.integerValue];
+        if (!single) return;
+        groupIndices = @[single];
+    }
+    [self openCitationsByIndices:groupIndices];
 }
 
-- (void)openCitationByIndex:(NSInteger)citationIndex {
-    OctoCitationItem *match = nil;
-    for (OctoCitationItem *c in self.detail.result.citations) {
-        if (c.index == citationIndex) { match = c; break; }
-    }
-    if (!match) return;
+- (void)openCitationsByIndices:(NSArray<NSNumber *> *)indices {
+    if (indices.count == 0) return;
     [OctoRelatedChatSheet presentInVC:self
                             citations:self.detail.result.citations
-                          activeIndex:match.index];
+                        activeIndices:indices];
+}
+
+/// 旧入口保留: 表格里的 octo-cit:// 单 index 链路 + 任何遗留单点调用。
+- (void)openCitationByIndex:(NSInteger)citationIndex {
+    [self openCitationsByIndices:@[@(citationIndex)]];
 }
 
 #pragma mark - WKNavigationDelegate (table 内 citation 点击 + 高度自适应)

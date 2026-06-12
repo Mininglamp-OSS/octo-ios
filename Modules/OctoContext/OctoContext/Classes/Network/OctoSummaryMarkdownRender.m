@@ -83,21 +83,73 @@
     NSError *err = nil;
     NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"\\[(\\d+)\\]" options:0 error:&err];
     if (!re) return;
-    NSArray<NSTextCheckingResult *> *matches = [[re matchesInString:str.string options:0 range:NSMakeRange(0, str.length)] reverseObjectEnumerator].allObjects;
+    NSArray<NSTextCheckingResult *> *matches = [re matchesInString:str.string options:0 range:NSMakeRange(0, str.length)];
+    if (matches.count == 0) return;
+
+    // 把"紧贴在一起"的 [N][M][...] 合成一组(中间无任何字符) —— 与 web CitationText.tsx
+    // 的 isAdjacent 判断同源思路。每组只渲染一颗徽章, 文字按 count == 1 / 连续区间 / 离散
+    // 三种格式: "1" / "1-3" / "1,3,5"。点击时把整组 indices 一并下放, sheet 一次性展示。
+    NSMutableArray<NSDictionary *> *groups = [NSMutableArray array];
+    NSRange curRange = NSMakeRange(NSNotFound, 0);
+    NSMutableArray<NSNumber *> *curIdx = [NSMutableArray array];
+    NSString *string = str.string;
     for (NSTextCheckingResult *m in matches) {
-        NSRange num = [m rangeAtIndex:1];
-        if (num.location == NSNotFound) continue;
-        NSInteger idx = [[str.string substringWithRange:num] integerValue];
-        UIImage *badge = [OctoCitationBadgeView imageForBadgeText:[NSString stringWithFormat:@"%ld", (long)idx]
-                                                            height:fontSize + 4];
+        NSRange numR = [m rangeAtIndex:1];
+        if (numR.location == NSNotFound) continue;
+        NSInteger n = [[string substringWithRange:numR] integerValue];
+        if (curRange.location == NSNotFound) {
+            curRange = m.range;
+            [curIdx addObject:@(n)];
+            continue;
+        }
+        NSUInteger prevEnd = curRange.location + curRange.length;
+        if (m.range.location == prevEnd) {
+            curRange.length = (m.range.location + m.range.length) - curRange.location;
+            [curIdx addObject:@(n)];
+        } else {
+            [groups addObject:@{@"range": [NSValue valueWithRange:curRange], @"idx": [curIdx copy]}];
+            curRange = m.range;
+            curIdx = [@[@(n)] mutableCopy];
+        }
+    }
+    if (curRange.location != NSNotFound) {
+        [groups addObject:@{@"range": [NSValue valueWithRange:curRange], @"idx": [curIdx copy]}];
+    }
+
+    // 反向替换, 不破坏前面 group 的 range
+    for (NSDictionary *g in [groups reverseObjectEnumerator]) {
+        NSRange r = [g[@"range"] rangeValue];
+        NSArray<NSNumber *> *indices = g[@"idx"];
+        NSString *badgeText = [self badgeTextFromIndices:indices];
+        UIImage *badge = [OctoCitationBadgeView imageForBadgeText:badgeText height:fontSize + 4];
         NSTextAttachment *att = [NSTextAttachment new];
         att.image = badge;
         att.bounds = CGRectMake(0, -2, badge.size.width, badge.size.height);
         NSAttributedString *attStr = [NSAttributedString attributedStringWithAttachment:att];
         NSMutableAttributedString *wrap = [attStr mutableCopy];
-        [wrap addAttribute:OctoCitationIndexAttrKey value:@(idx) range:NSMakeRange(0, wrap.length)];
-        [str replaceCharactersInRange:m.range withAttributedString:wrap];
+        // 单 idx 兼容老 key (legacy 路径仍能拿到首个 index); 新路径读 group key 拿全数组
+        [wrap addAttribute:OctoCitationIndexAttrKey value:indices.firstObject range:NSMakeRange(0, wrap.length)];
+        [wrap addAttribute:OctoCitationGroupAttrKey value:indices range:NSMakeRange(0, wrap.length)];
+        [str replaceCharactersInRange:r withAttributedString:wrap];
     }
+}
+
+/// indices → 徽章文字: 1 个 "N"; 严格连续 "首-尾"; 否则逗号拼。
++ (NSString *)badgeTextFromIndices:(NSArray<NSNumber *> *)indices {
+    if (indices.count == 0) return @"";
+    if (indices.count == 1) return [indices.firstObject stringValue];
+    BOOL consecutive = YES;
+    for (NSInteger i = 1; i < indices.count; i++) {
+        if (indices[i].integerValue != indices[i-1].integerValue + 1) {
+            consecutive = NO; break;
+        }
+    }
+    if (consecutive) {
+        return [NSString stringWithFormat:@"%@-%@", indices.firstObject, indices.lastObject];
+    }
+    NSMutableArray *out = [NSMutableArray array];
+    for (NSNumber *n in indices) [out addObject:[n stringValue]];
+    return [out componentsJoinedByString:@","];
 }
 
 @end

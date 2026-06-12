@@ -25,15 +25,16 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
 @implementation OctoChatRow @end
 
 @interface OctoRelatedChatSheet () <UITableViewDataSource, UITableViewDelegate>
-@property(nonatomic, strong) NSArray<OctoCitationItem *> *citations;
-@property(nonatomic, assign) NSInteger activeIndex;     // 当前 active citation 的 .index 值
+@property(nonatomic, strong) NSArray<OctoCitationItem *> *citations;       // 原始全集 (透传)
+@property(nonatomic, strong) NSArray<OctoCitationItem *> *relevantCitations; // 命中 activeIndices 后过滤的子集
+@property(nonatomic, copy, nullable) NSString *activeChannelId;            // 多 channel 时当前展示的 channel
 @property(nonatomic, strong) UIView *handle;
 @property(nonatomic, strong) UILabel *titleLabel;
 @property(nonatomic, strong) UIButton *closeBtn;
 @property(nonatomic, strong) UILabel *sourceLabel;
 @property(nonatomic, strong) UIScrollView *channelChips;
 @property(nonatomic, strong) UITableView *tableView;
-@property(nonatomic, strong) NSArray<NSString *> *channelIdsInUse;     // 多 channel 时的 chip
+@property(nonatomic, strong) NSArray<NSString *> *channelIdsInUse;
 @property(nonatomic, strong) NSMutableArray<OctoChatRow *> *rows;
 @end
 
@@ -41,10 +42,20 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
 
 + (void)presentInVC:(UIViewController *)host
           citations:(NSArray<OctoCitationItem *> *)citations
-        activeIndex:(NSInteger)activeCitationIndex {
+      activeIndices:(NSArray<NSNumber *> *)activeIndices {
     OctoRelatedChatSheet *vc = [OctoRelatedChatSheet new];
     vc.citations = citations ?: @[];
-    vc.activeIndex = activeCitationIndex;
+    // scope: 只保留 activeIndices 命中的 citations, 顶部 channel 切换器与下方 rows 都
+    // 基于这个子集计算 —— 用户点 [1-3] 的徽章, 只看到 1/2/3 这三条引用相关的内容,
+    // 不再被总结里其它 channel 的无关 citations 干扰。
+    NSSet *idxSet = [NSSet setWithArray:activeIndices ?: @[]];
+    NSMutableArray<OctoCitationItem *> *relevant = [NSMutableArray array];
+    for (OctoCitationItem *c in vc.citations) {
+        if ([idxSet containsObject:@(c.index)]) [relevant addObject:c];
+    }
+    vc.relevantCitations = relevant;
+    vc.activeChannelId = relevant.firstObject.channelId;
+
     vc.modalPresentationStyle = UIModalPresentationPageSheet;
     if (@available(iOS 15.0, *)) {
         UISheetPresentationController *sheet = vc.sheetPresentationController;
@@ -54,6 +65,13 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
         sheet.preferredCornerRadius = 16;
     }
     [host presentViewController:vc animated:YES completion:nil];
+}
+
+/// 兼容入口: 单 citation 包成单元素数组转发。
++ (void)presentInVC:(UIViewController *)host
+          citations:(NSArray<OctoCitationItem *> *)citations
+        activeIndex:(NSInteger)activeCitationIndex {
+    [self presentInVC:host citations:citations activeIndices:@[@(activeCitationIndex)]];
 }
 
 - (void)viewDidLoad {
@@ -98,7 +116,7 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
     [self.view addSubview:self.tableView];
 
     [self computeChannelChips];
-    [self computeRowsForActiveIndex];
+    [self rebuildRows];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -115,11 +133,11 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
                                       self.view.bounds.size.height - CGRectGetMaxY(self.channelChips.frame));
 }
 
-#pragma mark - Channels chips
+#pragma mark - Channels chips (基于 relevantCitations 计算, 不再扫全 citations)
 
 - (void)computeChannelChips {
     NSMutableOrderedSet *uniq = [NSMutableOrderedSet orderedSet];
-    for (OctoCitationItem *c in self.citations) {
+    for (OctoCitationItem *c in self.relevantCitations) {
         if (c.channelId.length > 0) [uniq addObject:c.channelId];
     }
     self.channelIdsInUse = uniq.array;
@@ -128,21 +146,18 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
 - (void)layoutChannelChips {
     for (UIView *v in self.channelChips.subviews) [v removeFromSuperview];
     if (self.channelIdsInUse.count <= 1) {
+        // 单 channel: 整组 citation 都在同一聊天里, 切换器无意义, 整段隐藏。
         self.channelChips.hidden = YES;
         self.channelChips.frame = CGRectMake(0, 84, self.view.bounds.size.width, 0);
         return;
     }
     self.channelChips.hidden = NO;
     CGFloat x = 16;
-    NSInteger activeChannelChipIdx = -1;
-    OctoCitationItem *activeC = [self currentActive];
     for (NSInteger i = 0; i < self.channelIdsInUse.count; i++) {
         NSString *cid = self.channelIdsInUse[i];
-        BOOL active = (activeC && [activeC.channelId isEqualToString:cid]);
-        if (active) activeChannelChipIdx = i;
+        BOOL active = [cid isEqualToString:self.activeChannelId];
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-        NSString *displayName = [self channelDisplayNameFor:cid];
-        [b setTitle:displayName forState:UIControlStateNormal];
+        [b setTitle:[self channelDisplayNameFor:cid] forState:UIControlStateNormal];
         b.titleLabel.font = [UIFont systemFontOfSize:13];
         [b setTitleColor:active ? [UIColor whiteColor] : [UIColor labelColor] forState:UIControlStateNormal];
         b.backgroundColor = active
@@ -158,66 +173,64 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
         [self.channelChips addSubview:b];
     }
     self.channelChips.contentSize = CGSizeMake(x + 16, 36);
-    (void)activeChannelChipIdx;
 }
 
 - (NSString *)channelDisplayNameFor:(NSString *)channelId {
-    for (OctoCitationItem *c in self.citations) {
+    for (OctoCitationItem *c in self.relevantCitations) {
         if ([c.channelId isEqualToString:channelId] && c.source.length > 0) return c.source;
     }
     return channelId.length > 0 ? channelId : LLang(@"未知聊天");
 }
 
 - (void)onChannelChip:(UIButton *)b {
-    NSString *cid = self.channelIdsInUse[b.tag];
-    // 切换到该 channel 的第一条 citation
-    for (OctoCitationItem *c in self.citations) {
-        if ([c.channelId isEqualToString:cid]) {
-            self.activeIndex = c.index;
-            break;
-        }
-    }
-    [self computeRowsForActiveIndex];
+    self.activeChannelId = self.channelIdsInUse[b.tag];
+    [self rebuildRows];
     [self layoutChannelChips];
     [self.tableView reloadData];
 }
 
 #pragma mark - Rows
 
-- (OctoCitationItem *)currentActive {
-    for (OctoCitationItem *c in self.citations) {
-        if (c.index == self.activeIndex) return c;
-    }
-    return self.citations.firstObject;
-}
-
-- (void)computeRowsForActiveIndex {
+/// 把 activeChannelId 范围内 (单 channel 时即整个 relevantCitations) 的所有命中 citation
+/// 平铺成行: 每条 citation = contextBefore[] + 命中 hit + contextAfter[]。
+- (void)rebuildRows {
     self.rows = [NSMutableArray array];
-    OctoCitationItem *active = [self currentActive];
-    if (!active) return;
+    NSArray<OctoCitationItem *> *list = self.relevantCitations;
+    if (list.count == 0) return;
 
-    self.sourceLabel.text = active.source.length > 0 ? active.source : @"";
-
-    for (OctoCitationContextMessage *m in active.contextBefore) {
-        OctoChatRow *r = [OctoChatRow new];
-        r.kind = OctoChatRowKindContextBefore;
-        r.sender = m.sender; r.content = m.content; r.sentAt = m.sentAt; r.messageSeq = m.messageSeq;
-        r.channelId = active.channelId; r.channelType = active.channelType;
-        [self.rows addObject:r];
+    NSMutableArray<OctoCitationItem *> *forActive = [NSMutableArray array];
+    if (self.channelIdsInUse.count > 1 && self.activeChannelId.length > 0) {
+        for (OctoCitationItem *c in list) {
+            if ([c.channelId isEqualToString:self.activeChannelId]) [forActive addObject:c];
+        }
+    } else {
+        [forActive addObjectsFromArray:list];
     }
-    OctoChatRow *hit = [OctoChatRow new];
-    hit.kind = OctoChatRowKindHit;
-    hit.sender = active.sender; hit.content = active.content; hit.sentAt = active.sentAt;
-    hit.messageSeq = active.messageSeq;
-    hit.channelId = active.channelId; hit.channelType = active.channelType;
-    [self.rows addObject:hit];
 
-    for (OctoCitationContextMessage *m in active.contextAfter) {
-        OctoChatRow *r = [OctoChatRow new];
-        r.kind = OctoChatRowKindContextAfter;
-        r.sender = m.sender; r.content = m.content; r.sentAt = m.sentAt; r.messageSeq = m.messageSeq;
-        r.channelId = active.channelId; r.channelType = active.channelType;
-        [self.rows addObject:r];
+    OctoCitationItem *first = forActive.firstObject ?: list.firstObject;
+    self.sourceLabel.text = first.source.length > 0 ? first.source : @"";
+
+    for (OctoCitationItem *c in forActive) {
+        for (OctoCitationContextMessage *m in c.contextBefore) {
+            OctoChatRow *r = [OctoChatRow new];
+            r.kind = OctoChatRowKindContextBefore;
+            r.sender = m.sender; r.content = m.content; r.sentAt = m.sentAt; r.messageSeq = m.messageSeq;
+            r.channelId = c.channelId; r.channelType = c.channelType;
+            [self.rows addObject:r];
+        }
+        OctoChatRow *hit = [OctoChatRow new];
+        hit.kind = OctoChatRowKindHit;
+        hit.sender = c.sender; hit.content = c.content; hit.sentAt = c.sentAt;
+        hit.messageSeq = c.messageSeq;
+        hit.channelId = c.channelId; hit.channelType = c.channelType;
+        [self.rows addObject:hit];
+        for (OctoCitationContextMessage *m in c.contextAfter) {
+            OctoChatRow *r = [OctoChatRow new];
+            r.kind = OctoChatRowKindContextAfter;
+            r.sender = m.sender; r.content = m.content; r.sentAt = m.sentAt; r.messageSeq = m.messageSeq;
+            r.channelId = c.channelId; r.channelType = c.channelType;
+            [self.rows addObject:r];
+        }
     }
 }
 
