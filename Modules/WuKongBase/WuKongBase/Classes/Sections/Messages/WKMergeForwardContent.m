@@ -44,6 +44,13 @@
     NSArray<NSDictionary*> *msgDicts = contentDic[@"msgs"];
     NSMutableArray<WKMessage*> *messages = [NSMutableArray array];
     if(msgDicts && [msgDicts isKindOfClass:[NSArray class]] && msgDicts.count>0) {
+        // self.currentDb: 当本条 MergeForward 由 WKMessageDB.toMessage:db: → decodeContent:data:db:
+        // 链路一路带 db 进来时, 这里非 nil; 透给嵌套消息解码, 嵌套 decodeReply 查 ChannelInfo
+        // 走 -queryChannelInfo:db: 复用同一连接, 避免再次 [FMDatabaseQueue inDatabase:]
+        // 触发 FMDB 反重入断言 SIGABRT (Bugly: handleSyncConversation: → replaceMessages:
+        // inTransaction: 内). 协议层/UI 层调用 (DataSourceModule / WKReplyView) 时 currentDb
+        // 为 nil, +toMessage:db: 内部走与旧 +toMessage: 完全等价的路径.
+        FMDatabase *txDb = [self currentDb];
         for (id msgItem in msgDicts) {
             if(![msgItem isKindOfClass:[NSDictionary class]]) {
                 // 单条 dict 类型异常：保住条目数 + 把异常原因展示出来
@@ -53,7 +60,7 @@
             WKMessage *msg = nil;
             NSString *failReason = nil;
             @try {
-                msg = [WKMessageUtil toMessage:msgItem];
+                msg = [WKMessageUtil toMessage:msgItem db:txDb];
             } @catch (NSException *exception) {
                 failReason = [NSString stringWithFormat:@"%@: %@", exception.name ?: @"NSException", exception.reason ?: @"unknown"];
                 NSLog(@"[MergeForward] decode message exception: %@", exception);
