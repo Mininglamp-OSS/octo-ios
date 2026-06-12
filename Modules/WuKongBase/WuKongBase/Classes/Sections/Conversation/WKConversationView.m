@@ -382,28 +382,83 @@
 }
 
 -(void) calcKeepPositionAndBrowseToOrderSeq {
-    
+
     if(!self.currentConversation) {
         return;
     }
-    
+
     NSInteger keepOffSetY = 0;
     uint32_t keepOrderSeq = 0;
     NSInteger newMsgCount = self.currentConversation.unreadCount;
     WKMessage *conversationLastMessage = self.currentConversation.lastMessage;
-    if(newMsgCount>0) { // 有新消息，则定位到新消息第一条
-        uint32_t lastMessageSeq = [[WKSDK shared].chatManager getOrNearbyMessageSeq:conversationLastMessage.orderSeq];
-        if(lastMessageSeq>newMsgCount) {
-            self.messageListView.browseToOrderSeq= [[WKSDK shared].chatManager getOrderSeq:lastMessageSeq - (uint32_t)newMsgCount];
-            keepOrderSeq = self.messageListView.browseToOrderSeq;
-            keepOffSetY = -120.0f;
+    // 微信式打开会话定位"首条未读"。优先用 WKUnreadStore.lastReadSeq + 1 作锚点
+    // (精确, 不受撤回/删除/推送 race 影响); 兜底 lastMessageSeq - unreadCount
+    // (新会话 lastReadSeq=0 或 lastReadSeq 异常时用)。
+    //
+    // 为何不再单纯依赖 unreadCount: 群里有撤回/删除时 seq 不连续, last - unread
+    // 可能落到已删除消息 seq → getOrderSeq 返 0 → keepPosition 失效退化到最底部;
+    // 子区/远端 reconcile race 也可能让 unreadCount 偏小, 同样退化。
+    if(newMsgCount > 0 && conversationLastMessage) {
+        uint32_t lastReadSeq = [[WKUnreadStore shared] lastReadSeqForChannel:self.channel];
+        uint32_t lastMsgSeq = [[WKSDK shared].chatManager getOrNearbyMessageSeq:conversationLastMessage.orderSeq];
+        // 关键: count-axis 和 anchor-axis 必须解耦, 之前一版 (#33 R1) 把两者绑到
+        // 同一个变量 (browseToOrderSeq=keepOrderSeq=lastReadSeq) 引入了红点偏离
+        // bug (PR #33 R6 yujiawei P1-1):
+        //   refreshNewMsgCount 用 lastMsgSeq - browseToMessageSeq 算红点,
+        //   browseToOrderSeq = getOrderSeq(lastReadSeq) → 红点 = lastMsgSeq - lastReadSeq
+        //   而 server unreadCount 算的是真未读数, 任何 own message / 撤回 / 删除
+        //   落在 (lastReadSeq, lastMsgSeq] 都会让 seq gap > 真 unreadCount → 红点偏大
+        //   并写回会话列表 model.unreadCount 推错值。
+        // 修法:
+        //   - browseToOrderSeq 回归原算法 getOrderSeq(lastMsgSeq - newMsgCount)
+        //     count-axis 与 server unreadCount 自洽, refreshNewMsgCount 算出来的
+        //     红点 = lastMsgSeq - (lastMsgSeq - newMsgCount) = newMsgCount, 一致
+        //   - keepOrderSeq (滚动锚点) 用 lastReadSeq, anchor 鲁棒, 已读消息肯定
+        //     loaded, 即便首条未读 (lastReadSeq+1) 被撤回 indexPath 拿不到, 仍能
+        //     命中 lastReadSeq 完成定位, 不退化到 scrollToBottom (这是 #33 引入
+        //     lastReadSeq 的本意)
+        //   - 两个 axis 独立, fallback (lastReadSeq=0) 时 keepOrderSeq 退到 count
+        //     一致的 readBoundary, 行为不变。
+        if (lastMsgSeq > newMsgCount) {
+            // count-axis: refreshNewMsgCount 用 browseToOrderSeq 算红点
+            uint32_t countBoundarySeq = (uint32_t)(lastMsgSeq - newMsgCount);
+            uint32_t countBoundaryOrderSeq = [[WKSDK shared].chatManager getOrderSeq:countBoundarySeq];
+            if (countBoundaryOrderSeq > 0) {
+                self.messageListView.browseToOrderSeq = countBoundaryOrderSeq;
+            }
         }
-        
+        // anchor-axis: keepPosition 锚到 lastReadSeq (已读消息必 loaded);
+        // 没 lastReadSeq 时 fallback 到 count-axis 的 readBoundary (与原行为一致)。
+        uint32_t anchorSeq = 0;
+        if (lastReadSeq > 0 && lastMsgSeq > lastReadSeq) {
+            anchorSeq = lastReadSeq;
+        } else if (lastMsgSeq > newMsgCount) {
+            anchorSeq = (uint32_t)(lastMsgSeq - newMsgCount);
+        }
+        if (anchorSeq > 0) {
+            uint32_t anchorOrderSeq = [[WKSDK shared].chatManager getOrderSeq:anchorSeq];
+            if (anchorOrderSeq > 0) {
+                // 视口下推一行让首条未读 (anchorSeq+1) 自然出现在视口顶部。
+                keepOrderSeq = anchorOrderSeq;
+                keepOffSetY = -120.0f;
+            }
+        }
     }
     BOOL useKeep = false; // 是否使用保持的位置
     if(self.currentConversation.remoteExtra.keepMessageSeq>0) { // 有保持位置
         uint32_t kpOrderSeq = [[WKSDK shared].chatManager getOrderSeq:self.currentConversation.remoteExtra.keepMessageSeq];
-        if(keepOrderSeq == 0 || kpOrderSeq < keepOrderSeq) {
+        // remoteExtra.keepMessageSeq 是"上次离开时滚动条所在位置", 用户可能在
+        // 读完最新消息后又往上翻到老消息位置才退出, remoteExtra 落在那条老消息上。
+        // 微信式 UX: 再进会话应回到"上次读到的位置"(= lastReadSeq → 通常即最新
+        // 消息位置), 而不是"上次翻看历史的停留位置"。
+        // 收紧 remoteExtra 兜底条件:
+        //   - 有未读 + readBoundary OK: 上面已锚定首条未读, 不用 remoteExtra
+        //   - 有未读 + readBoundary 失败 (lastReadSeq=0 又算不出兜底): 用
+        //     remoteExtra 避免 scrollToBottom 把未读划过去
+        //   - 无未读: 让 scrollToBottom 默认显示最新消息 (= 上次读到的位置),
+        //     不再用 remoteExtra "上次停留位置"覆盖 (用户反馈)。
+        BOOL canUseRemoteExtra = (newMsgCount > 0 && keepOrderSeq == 0);
+        if(canUseRemoteExtra) {
             keepOrderSeq = kpOrderSeq;
             keepOffSetY = self.currentConversation.remoteExtra.keepOffsetY;
             useKeep = true;
@@ -418,7 +473,7 @@
     if(keepOrderSeq>0) {
         self.messageListView.keepPosition =  [WKConversationPosition orderSeq:keepOrderSeq offset:(int)keepOffSetY];
     }
-    
+
     if(self.locationAtOrderSeq!=0) { // 传过来的定位orderSeq最优先
         CGFloat offset = -self.input.lim_height - 40.0f;
         self.messageListView.needPositionReminder = true;
