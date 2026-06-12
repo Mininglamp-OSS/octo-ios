@@ -509,9 +509,15 @@ static const BOOL kIncrementalPulldown = NO;
             CGRect indexRect = [self.tableView rectForRowAtIndexPath:indexPath];
             [self setContentOffsetYSafely:indexRect.origin.y+self.keepPosition.offset - self.tableView.contentInset.top];
             if(self.needPositionReminder) {
-                WKMessageBaseCell *cell =  (WKMessageBaseCell*) [self.tableView cellForRowAtIndexPath:indexPath];
-                if(cell && [cell isKindOfClass:[WKMessageCell class]]) {
-                    [(WKMessageCell*)cell startReminderAnimation];
+                // 不能直接 cellForRowAtIndexPath: 拿 cell —— setContentOffsetYSafely 后还没走 layout pass,
+                // 目标 cell 大概率还没被 dequeue, 返回 nil 时高亮被静默丢掉 (即"首次打开聊天跳转高亮
+                // 时有时无"的根因)。改成与 locateMessageCellWithMessageSeq: 一致的写法: 把 reminder
+                // 标记打到 model 上, reloadRow 触发 cell 的 setMessageModel: 时由 cell 自己消费这个
+                // 标记并启动动画 (WKMessageCell.m:591)。这样无论 cell 是否已 dequeue 都能正常播。
+                WKMessageModel *targetModel = [self.dataProvider messageAtIndexPath:indexPath];
+                if(targetModel) {
+                    targetModel.reminderAnimation = YES;
+                    [self.tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
                 }
                 self.needPositionReminder = false;
             }

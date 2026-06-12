@@ -73,6 +73,13 @@ PODS:
   - Masonry (1.1.0)
   - MBProgressHUD (1.1.0)
   - MJRefresh (3.7.9)
+  - OctoContext (0.1.0):
+    - AFNetworking
+    - Masonry
+    - MJRefresh
+    - SDWebImage
+    - WuKongBase
+    - WuKongIMSDK
   - PromiseKit/CorePromise (6.18.1)
   - ReactiveObjC (3.1.1)
   - RiveRuntime (6.20.2)
@@ -170,6 +177,7 @@ DEPENDENCIES:
   - DoraemonKit/WithGPS (~> 3.1.2)
   - libcmark_gfm
   - librlottie (~> 0.2.1)
+  - OctoContext (from `./Modules/OctoContext`)
   - ReactiveObjC
   - Socket.IO-Client-Swift
   - SocketRocket
@@ -227,6 +235,8 @@ EXTERNAL SOURCES:
   AsyncDisplayKit:
     :commit: 3f2a0b8f5069ddefd53cf4796da22eec105c5c7c
     :git: https://github.com/tangtaoit/AsyncDisplayKit.git
+  OctoContext:
+    :path: "./Modules/OctoContext"
   WuKongBase:
     :path: "./Modules/WuKongBase"
   WuKongContacts:
@@ -278,6 +288,7 @@ SPEC CHECKSUMS:
   Masonry: 678fab65091a9290e40e2832a55e7ab731aad201
   MBProgressHUD: e7baa36a220447d8aeb12769bf0585582f3866d9
   MJRefresh: ff9e531227924c84ce459338414550a05d2aea78
+  OctoContext: 185c8bf8bcc8fbe8ab38dc66009a9c0bf3d85f9d
   PromiseKit: 49d70c53d5d20e346beaea4b276b5dd2ab446bb4
   ReactiveObjC: 011caa393aa0383245f2dcf9bf02e86b80b36040
   RiveRuntime: 1ebd6b5f43d53e62639ebb7c4c66f3071630de53
@@ -303,6 +314,6 @@ SPEC CHECKSUMS:
   ZLImageEditor: ee86f044fb7c5dec6b5de49eb7bb6fd42286f2ae
   ZLPhotoBrowser: 6fb0eff03c8269001e29ef233e7bdab0691e05fe
 
-PODFILE CHECKSUM: 299145a1768791969e0c7a82793047aca1ef8f4f
+PODFILE CHECKSUM: ef03efc1b730bac92e3350b298b933dacaef6b06
 
 COCOAPODS: 1.16.2

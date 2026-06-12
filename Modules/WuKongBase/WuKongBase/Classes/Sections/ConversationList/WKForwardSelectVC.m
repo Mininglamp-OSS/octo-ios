@@ -274,6 +274,17 @@ typedef NS_ENUM(NSInteger, FWItemType) {
     _checkedIds = [NSMutableSet set];
     _checkedChannels = [NSMutableDictionary dictionary];
 
+    // 预选: 把外部传进来的 channels 直接打勾, 用户就是来 "二次编辑" 的, 不用全选一遍。
+    // 与 cell 的 isChecked 同步靠 reload(loadData → reloadData), 这里只填 backing store。
+    if (self.preselectedChannels.count > 0) {
+        for (WKChannel *ch in self.preselectedChannels) {
+            if (ch.channelId.length == 0) continue;
+            NSString *key = [NSString stringWithFormat:@"%@_%d", ch.channelId, ch.channelType];
+            [_checkedIds addObject:key];
+            _checkedChannels[key] = ch;
+        }
+    }
+
     [self setupNavBar];
     [self setupSearchBar];
     [self setupNewSessionEntry];
@@ -287,6 +298,12 @@ typedef NS_ENUM(NSInteger, FWItemType) {
                                              selector:@selector(onFollowedKeysStoreDidUpdate)
                                                  name:kWKFollowedKeysStoreDidUpdateNotification
                                                object:nil];
+
+    // preselect 已经填充 _checkedIds, 立刻把右上 "确定(N)" 显出来,
+    // 不必等用户再勾一下才看到当前选中数量。
+    if (_checkedIds.count > 0) {
+        [self updateConfirmBtn];
+    }
 }
 
 - (void)dealloc {
@@ -953,6 +970,13 @@ typedef NS_ENUM(NSInteger, FWItemType) {
         _confirmBtn.hidden = NO;
         [_confirmBtn setTitle:[NSString stringWithFormat:@"%@(%ld)", LLang(@"确定"), (long)count] forState:UIControlStateNormal];
         [_confirmBtn sizeToFit];
+        // sizeToFit 只更新 bounds.size, 不动 frame.origin —— 父 WKNavigationBar.setRightView:
+        // 在 view 安装时按当时宽度算了 lim_left, 之后 title 加长(数量上去)就会撞到屏幕右边缘
+        // (用户报"按钮太靠近右侧"的根因)。这里手动按新宽度重锚回 20pt 右边距。
+        UIView *parent = _confirmBtn.superview;
+        if (parent.lim_width > 0) {
+            _confirmBtn.lim_left = parent.lim_width - _confirmBtn.lim_width - 20.0;
+        }
     } else {
         _confirmBtn.hidden = YES;
     }

@@ -12,7 +12,7 @@
 #import <WuKongBase/WuKongBase.h>
 #import <Lottie/Lottie.h>
 #import "WKConversationListVC.h"
-#import "WKContactsVC.h"
+#import "OctoContextEntryVC.h"
 #import "WKMeVC.h"
 @interface WKMainTabController ()<UITabBarControllerDelegate>
 
@@ -41,7 +41,7 @@
                  image:[UIImage imageNamed:@"消息"]
          selectedImage:[UIImage imageNamed:@"消息1"]];
 
-    [self setupChildVC:WKContactsVC.class title:LLang(@"上下文")
+    [self setupChildVC:OctoContextEntryVC.class title:LLang(@"上下文")
                  image:[UIImage imageNamed:@"上下文"]
          selectedImage:[UIImage imageNamed:@"上下文1"]];
 
@@ -101,7 +101,9 @@
     // - 选中胶囊用 self.pillIndicator (灰色圆角 view) 滑动定位, 不依赖系统 selectionIndicatorImage。
     //
     // 颜色全部走 dynamic UIColor,trait 变化时系统自动 resolve。
-    // 浅色: selected = #1C1C23, normal = #BBBBBD (设计稿原色)
+    // 浅色: selected = #1C1C23, normal = rgb(140, 140, 145) —— 比 rgba(28,28,35,0.3)
+    //   合成的 #BBBBBD 深一档,在浮岛白底上视觉对比清晰、又明显弱于 selected。
+    //   接近原生 UITabBar 的 inactive (rgba(0,0,0,0.45)) 视觉。
     // 深色: selected = 白, normal = 白 α 0.55
     UIColor *selectedTextColor;
     UIColor *normalTextColor;
@@ -118,11 +120,11 @@
                           || ([WKApp shared].config.style == WKSystemStyleDark);
             return isDark
                 ? [UIColor colorWithWhite:1.0 alpha:0.55]
-                : [UIColor colorWithRed:187.0/255.0 green:187.0/255.0 blue:189.0/255.0 alpha:1.0];
+                : [UIColor colorWithRed:140.0/255.0 green:140.0/255.0 blue:145.0/255.0 alpha:1.0];
         }];
     } else {
         selectedTextColor = [UIColor colorWithRed:28.0/255.0 green:28.0/255.0 blue:35.0/255.0 alpha:1.0];
-        normalTextColor   = [UIColor colorWithRed:187.0/255.0 green:187.0/255.0 blue:189.0/255.0 alpha:1.0];
+        normalTextColor   = [UIColor colorWithRed:140.0/255.0 green:140.0/255.0 blue:145.0/255.0 alpha:1.0];
     }
     NSDictionary *normalAttrs   = @{ NSForegroundColorAttributeName: normalTextColor,
                                      NSFontAttributeName: [UIFont systemFontOfSize:10] };
