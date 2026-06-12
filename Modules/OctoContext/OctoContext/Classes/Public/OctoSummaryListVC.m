@@ -14,7 +14,12 @@
 #import <MJRefresh/MJRefresh.h>
 #import <WuKongIMSDK/WuKongIMSDK.h>
 
-@interface OctoSummaryListVC () <UITableViewDataSource, UITableViewDelegate>
+@interface OctoSummaryListVC () <UITableViewDataSource, UITableViewDelegate, UITextFieldDelegate>
+@property(nonatomic, strong) UIView *searchBarBg;          // 灰底胶囊容器, 视觉对齐 WKSearchbarView
+@property(nonatomic, strong) UITextField *searchField;
+@property(nonatomic, strong) UIImageView *searchIcon;
+@property(nonatomic, copy) NSString *keyword;              // 已生效的搜索词 (debounce 后)
+@property(nonatomic, copy) NSString *pendingKeyword;       // 输入框当前文本, debounce 待应用
 @property(nonatomic, strong) OctoSummaryFilterTabsView *filterBar;
 @property(nonatomic, strong) UITableView *tableView;
 @property(nonatomic, strong) NSMutableArray<OctoSummaryListItem *> *items;
@@ -22,7 +27,11 @@
 @property(nonatomic, assign) NSInteger page;
 @property(nonatomic, assign) BOOL loading;
 @property(nonatomic, assign) BOOL hasMore;
-@property(nonatomic, strong) UILabel *emptyLabel;
+@property(nonatomic, strong) UILabel *emptyLabel;       // 搜索无结果时一行文案
+@property(nonatomic, strong) UIView *emptyStateView;    // 列表真正为空时的图文引导 (icon + 标题 + 副标题)
+@property(nonatomic, strong) UIImageView *emptyStateIcon;
+@property(nonatomic, strong) UILabel *emptyStateTitle;
+@property(nonatomic, strong) UILabel *emptyStateSubtitle;
 
 // 底部悬浮 FAB —— 黑色胶囊 + sparkle + "发起总结",随滚动方向显隐。
 // 直接用 UIControl + UIImageView + UILabel 手工布局,避免 UIButton image+title
@@ -54,19 +63,17 @@
     self.navigationBar.title = LLang(@"智能总结");
     self.view.backgroundColor = [UIColor colorWithRed:0xF5/255.0 green:0xF6/255.0 blue:0xF7/255.0 alpha:1.0];
 
-    // 右上仅保留搜索 (PR8 实装)。"发起总结" 入口移到底部悬浮 FAB,见 self.createFAB。
-    UIButton *searchBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [searchBtn setImage:[UIImage systemImageNamed:@"magnifyingglass"] forState:UIControlStateNormal];
-    searchBtn.tintColor = [UIColor.labelColor colorWithAlphaComponent:0.4];
-    searchBtn.frame = CGRectMake(0, 0, 32, 32);
-    self.navigationBar.rightView = searchBtn;
-
+    // 老的右上角放大镜入口已下线 —— 改为下方 fixed inline 搜索条 (self.searchField),
+    // 因为 web /summaries 已经支持 keyword + status 联合过滤(useSummaryList.ts), 直接
+    // 在当前页就地输入比再推一个独立搜索页更短路径; 全局搜索仍走会话列表的 WKSearchbarView。
     self.items = [NSMutableArray array];
     self.page = 1;
     self.hasMore = YES;
     self.previewCache = [NSMutableDictionary dictionary];
     self.previewInFlight = [NSMutableSet set];
     [self resolveCurrentUserName];
+
+    [self buildSearchBar];
 
     self.filterBar = [[OctoSummaryFilterTabsView alloc] initWithFrame:CGRectZero];
     __weak typeof(self) weakSelf = self;
@@ -95,6 +102,8 @@
     self.emptyLabel.text = LLang(@"暂无总结");
     self.emptyLabel.hidden = YES;
     [self.view addSubview:self.emptyLabel];
+
+    [self buildEmptyStateView];
 
     [self setupCreateFAB];
 
@@ -191,7 +200,15 @@
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGFloat top = CGRectGetMaxY(self.navigationBar.frame);
-    self.filterBar.frame = CGRectMake(0, top, self.view.bounds.size.width, 44);
+    // 搜索条: navbar 下 8pt 起, 36pt 高, 两侧各 16pt margin。视觉与 WKSearchbarView 一致。
+    CGFloat sbY = top + 8;
+    CGFloat sbH = 36;
+    self.searchBarBg.frame = CGRectMake(16, sbY, self.view.bounds.size.width - 32, sbH);
+    self.searchBarBg.layer.cornerRadius = sbH / 2.0;
+    self.searchIcon.frame = CGRectMake(12, (sbH - 16) / 2.0, 16, 16);
+    self.searchField.frame = CGRectMake(36, 0, self.searchBarBg.bounds.size.width - 44, sbH);
+
+    self.filterBar.frame = CGRectMake(0, sbY + sbH + 4, self.view.bounds.size.width, 44);
     // 列表与筛选 tab 之间留 12pt 视觉间距 —— 用 contentInset.top, 这样
     // 第一行卡片不被筛选条压住,同时下拉刷新触发位置仍保持自然。
     CGFloat ty = CGRectGetMaxY(self.filterBar.frame);
@@ -201,7 +218,155 @@
     self.tableView.contentInset = UIEdgeInsetsMake(12, 0, 0, 0);
     self.tableView.scrollIndicatorInsets = UIEdgeInsetsMake(12, 0, 0, 0);
     self.emptyLabel.frame = CGRectMake(0, ty + 100, self.view.bounds.size.width, 24);
+    [self layoutEmptyStateInTableArea:CGRectMake(0, ty,
+                                                 self.view.bounds.size.width,
+                                                 self.view.bounds.size.height - ty)];
     [self layoutCreateFAB];
+}
+
+#pragma mark - Search bar
+
+/// 灰底胶囊 + 放大镜 + UITextField, 视觉对齐 WKSearchbarView 但内核是真输入框。
+/// 用 [WKApp shared].config.cellBackgroundColor 跟随主题, 暗色模式下也是协调的灰。
+- (void)buildSearchBar {
+    self.searchBarBg = [UIView new];
+    self.searchBarBg.backgroundColor = [WKApp shared].config.cellBackgroundColor
+        ?: [UIColor colorWithWhite:0.93 alpha:1.0];
+    self.searchBarBg.clipsToBounds = YES;
+    [self.view addSubview:self.searchBarBg];
+
+    self.searchIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"magnifyingglass"]];
+    self.searchIcon.tintColor = [UIColor.labelColor colorWithAlphaComponent:0.45];
+    self.searchIcon.contentMode = UIViewContentModeScaleAspectFit;
+    [self.searchBarBg addSubview:self.searchIcon];
+
+    self.searchField = [UITextField new];
+    self.searchField.font = [UIFont systemFontOfSize:14];
+    self.searchField.textColor = [UIColor labelColor];
+    self.searchField.tintColor = [UIColor colorWithRed:0x7F/255.0 green:0x3B/255.0 blue:0xF5/255.0 alpha:1.0];
+    self.searchField.delegate = self;
+    self.searchField.placeholder = LLang(@"搜索总结");
+    self.searchField.returnKeyType = UIReturnKeySearch;
+    self.searchField.clearButtonMode = UITextFieldViewModeWhileEditing;
+    self.searchField.autocorrectionType = UITextAutocorrectionTypeNo;
+    self.searchField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    [self.searchField addTarget:self action:@selector(onSearchChanged:) forControlEvents:UIControlEventEditingChanged];
+    [self.searchBarBg addSubview:self.searchField];
+}
+
+/// debounce 300ms (与 web MemberSelectorModal 同节奏): 输入停顿后才走 reload,
+/// 避免每按一键都打一次 list 请求。
+- (void)onSearchChanged:(UITextField *)tf {
+    self.pendingKeyword = tf.text ?: @"";
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(applyKeyword) object:nil];
+    [self performSelector:@selector(applyKeyword) withObject:nil afterDelay:0.3];
+}
+
+- (void)applyKeyword {
+    NSString *trimmed = [self.pendingKeyword stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
+    if (self.keyword == nil ? trimmed.length == 0 : [trimmed isEqualToString:self.keyword]) return;
+    self.keyword = trimmed;
+    [self reload];
+}
+
+/// Search 键: 立即 flush + 收键盘, 不等 debounce。
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(applyKeyword) object:nil];
+    [self applyKeyword];
+    [textField resignFirstResponder];
+    return YES;
+}
+
+/// 切语言时刷 placeholder + empty 文案 (后者由下次 reload 自然带入, 这里仅刷可见控件)。
+- (void)viewConfigChange:(WKViewConfigChangeType)type {
+    [super viewConfigChange:type];
+    if (type != WKViewConfigChangeTypeLang) return;
+    self.searchField.placeholder = LLang(@"搜索总结");
+    self.emptyLabel.text = (self.keyword.length > 0) ? LLang(@"没有找到相关总结") : LLang(@"暂无总结");
+    self.emptyStateTitle.text = LLang(@"还没有总结记录");
+    self.emptyStateSubtitle.attributedText = [self emptyStateSubtitleAttr];
+    [self.view setNeedsLayout];
+}
+
+#pragma mark - Empty state (rich, first-launch / 真正空时)
+
+/// 空态视觉: 84pt 极淡灰 doc.text.fill 图标 + 17pt semibold 标题 + 14pt 副标题。
+/// 对齐 web smart-summary "暂无总结记录" 引导, 但移动端文案更紧凑, 去掉
+/// 与图标语义重复的 "快速生成", 突出 "让 AI 梳理"。
+- (void)buildEmptyStateView {
+    UIView *container = [UIView new];
+    container.hidden = YES;
+    [self.view addSubview:container];
+
+    UIImageView *icon = [UIImageView new];
+    UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:84
+                                                                                     weight:UIImageSymbolWeightLight];
+    icon.image = [UIImage systemImageNamed:@"doc.text.fill" withConfiguration:cfg];
+    icon.tintColor = [UIColor.labelColor colorWithAlphaComponent:0.18];
+    icon.contentMode = UIViewContentModeScaleAspectFit;
+    [container addSubview:icon];
+
+    UILabel *title = [UILabel new];
+    title.text = LLang(@"还没有总结记录");
+    title.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    title.textColor = [UIColor labelColor];
+    title.textAlignment = NSTextAlignmentCenter;
+    [container addSubview:title];
+
+    UILabel *subtitle = [UILabel new];
+    subtitle.font = [UIFont systemFontOfSize:14];
+    subtitle.textColor = [UIColor secondaryLabelColor];
+    subtitle.textAlignment = NSTextAlignmentCenter;
+    subtitle.numberOfLines = 0;
+    [container addSubview:subtitle];
+
+    self.emptyStateView = container;
+    self.emptyStateIcon = icon;
+    self.emptyStateTitle = title;
+    self.emptyStateSubtitle = subtitle;
+    self.emptyStateSubtitle.attributedText = [self emptyStateSubtitleAttr];
+}
+
+/// 副标题用 attributedString 是为了控行距 (默认 14pt 系统字两行行距偏紧, +4pt 看起来呼吸)。
+- (NSAttributedString *)emptyStateSubtitleAttr {
+    NSString *text = LLang(@"让 AI 帮你梳理群聊和工作中的关键信息");
+    NSMutableParagraphStyle *p = [NSMutableParagraphStyle new];
+    p.alignment = NSTextAlignmentCenter;
+    p.lineSpacing = 4;
+    return [[NSAttributedString alloc] initWithString:text
+                                           attributes:@{NSParagraphStyleAttributeName: p,
+                                                        NSFontAttributeName: [UIFont systemFontOfSize:14],
+                                                        NSForegroundColorAttributeName: [UIColor secondaryLabelColor]}];
+}
+
+- (void)layoutEmptyStateInTableArea:(CGRect)tableArea {
+    if (self.emptyStateView.hidden) return;
+    CGFloat w = self.view.bounds.size.width;
+    CGFloat iconSize = 84;
+    CGFloat titleH = 24;
+    CGFloat gapIconTitle = 20;
+    CGFloat gapTitleSubtitle = 8;
+    CGSize subtitleSize = [self.emptyStateSubtitle sizeThatFits:CGSizeMake(w - 64, CGFLOAT_MAX)];
+    CGFloat totalH = iconSize + gapIconTitle + titleH + gapTitleSubtitle + subtitleSize.height;
+    // 不让画面 dead-center: 上偏 40pt 让底部 FAB 视觉权重更稳, 也更接近 web 的视觉重心。
+    CGFloat top = tableArea.origin.y + (tableArea.size.height - totalH) / 2.0 - 40;
+    if (top < tableArea.origin.y + 16) top = tableArea.origin.y + 16;
+
+    self.emptyStateView.frame = CGRectMake(0, top, w, totalH);
+    self.emptyStateIcon.frame     = CGRectMake((w - iconSize) / 2.0, 0, iconSize, iconSize);
+    self.emptyStateTitle.frame    = CGRectMake(0, iconSize + gapIconTitle, w, titleH);
+    self.emptyStateSubtitle.frame = CGRectMake(32, iconSize + gapIconTitle + titleH + gapTitleSubtitle,
+                                               w - 64, subtitleSize.height);
+}
+
+- (void)refreshEmptyStateVisibility {
+    BOOL listEmpty = (self.items.count == 0);
+    BOOL isSearch = self.keyword.length > 0;
+    self.emptyLabel.hidden = !(listEmpty && isSearch);
+    self.emptyStateView.hidden = !(listEmpty && !isSearch);
+    // 真空态时, FAB 是用户唯一的行动指引, 强制可见, 关掉 scroll-direction 隐藏。
+    if (listEmpty && !isSearch) [self setFabVisible:YES];
+    [self.view setNeedsLayout];
 }
 
 #pragma mark - Create FAB
@@ -276,7 +441,15 @@
 
 #pragma mark - UIScrollViewDelegate (FAB scroll-aware)
 
+- (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
+    // 拖列表 = 收键盘, 与微信会话页一致的手感; 同时让 textField 失焦, 输入态视觉退出。
+    if ([self.searchField isFirstResponder]) [self.searchField resignFirstResponder];
+}
+
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+    // 列表真空 (无 keyword 也无数据) 时, FAB 是用户唯一的行动入口, 不参与 scroll-direction
+    // 隐藏判断, 永远显示。
+    if (self.items.count == 0 && self.keyword.length == 0) return;
     CGFloat dy = scrollView.contentOffset.y - self.lastContentOffsetY;
     self.lastContentOffsetY = scrollView.contentOffset.y;
     // 只在用户主动拖动时响应,避免 contentInset 调整 / setContentOffset 引起误判
@@ -306,6 +479,8 @@
     p[@"page_size"] = @(20);
     NSInteger st = [OctoSummaryFilterTabsView taskStatusForFilter:self.filterBar.selectedIndex];
     if (st >= 0) p[@"status"] = @(st);
+    // keyword 与 status 服务端联合过滤 (对齐 web useSummaryList.ts 的传参)。空串不传。
+    if (self.keyword.length > 0) p[@"keyword"] = self.keyword;
     return p;
 }
 
@@ -327,7 +502,9 @@
         [weakSelf hydratePreview];
         weakSelf.hasMore = (items.count >= 20);
         [weakSelf.tableView reloadData];
-        weakSelf.emptyLabel.hidden = (weakSelf.items.count > 0);
+        // 关键词搜索结果空 vs 整体空, 用不同文案; 自然语言下两条都需要 LLang 路径。
+        weakSelf.emptyLabel.text = (weakSelf.keyword.length > 0) ? LLang(@"没有找到相关总结") : LLang(@"暂无总结");
+        [weakSelf refreshEmptyStateVisibility];
         [weakSelf refreshPoller];
         // 没有更多数据时直接 endRefreshing(回到 idle 状态), 而不是切到 NoMoreData
         // 触发 "已全部加载完毕" 文案. automaticallyHidden + title 全空时, idle
@@ -481,6 +658,7 @@
     OctoSummaryCardCell *cell = [tableView dequeueReusableCellWithIdentifier:@"OctoSummaryCardCell" forIndexPath:indexPath];
     OctoSummaryListItem *it = self.items[indexPath.row];
     cell.currentUserName = self.currentUserName;
+    cell.keyword = self.keyword;
     [cell bindItem:it];
     __weak typeof(self) weakSelf = self;
     cell.onAction = ^(NSInteger actionType, OctoSummaryListItem *item) {
@@ -616,7 +794,7 @@
             [self.items removeObject:item];
             [self.tableView reloadData];
             [self refreshPoller];
-            self.emptyLabel.hidden = (self.items.count > 0);
+            [self refreshEmptyStateVisibility];
         }];
     }]];
     [self presentViewController:alert animated:YES completion:nil];

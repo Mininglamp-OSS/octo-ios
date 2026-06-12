@@ -325,6 +325,7 @@ static const CGFloat kBodyLineSpacing   = 3;
 
     y += kInitiatorH + kRowGap;
     self.titleLabel.frame = CGRectMake(kCardInnerPadding, y, innerW, kTitleH);
+    [self applyHighlightedTitleForWidth:innerW];
     y += kTitleH + kRowGap;
 
     if (!self.summaryText.hidden) {
@@ -338,6 +339,60 @@ static const CGFloat kBodyLineSpacing   = 3;
         self.footerTime.frame = CGRectMake(kCardInnerPadding, footerY, innerW - 30, kFooterH);
     }
     self.moreBtn.frame = CGRectMake(cardW - kCardInnerPadding - 24, footerY - 2, 28, 28);
+}
+
+#pragma mark - Title highlight
+
+/// 关键词命中时,标题用主色紫 + semibold 加重命中范围;若整段标题超过可用宽度且
+/// 命中位置太靠后,在前面截一个 "…<前文片段>" 的窗口让命中点上移到可视区, 命中
+/// 之后的尾部还是交给 UILabel.NSLineBreakByTruncatingTail 自然 …。
+///
+/// 设计思路:
+///  - 命中前若有 ≤6 个字符就不动 (短标题 / 命中很靠前的情况, 直接全显);
+///  - 命中前 >6 字符且整段宽度装不下, 才前置 "…" + 命中前 6 字符 + 命中 + 后续, 再让尾部 …;
+///  - 6 字符 ≈ 70pt @15pt 系统字, 留 200+pt 给命中字 + 后续, 各种屏宽都够。
+///  - 6 字符的窗口选取是近似而非按像素逐字测量 —— 命中开头不会被遮挡, 这就够了,
+///    避免 boundingRect 二分搜索每行带来的开销。
+- (void)applyHighlightedTitleForWidth:(CGFloat)width {
+    NSString *raw = self.item.title.length > 0 ? self.item.title : LLang(@"(无标题)");
+    NSString *kw = self.keyword ?: @"";
+    UIFont *font = self.titleLabel.font;
+    UIColor *normal = [UIColor labelColor];
+    UIColor *purple = [UIColor colorWithRed:0x7F/255.0 green:0x3B/255.0 blue:0xF5/255.0 alpha:1.0];
+
+    NSRange match = kw.length > 0
+        ? [raw rangeOfString:kw options:NSCaseInsensitiveSearch]
+        : NSMakeRange(NSNotFound, 0);
+    if (match.location == NSNotFound) {
+        // 没命中或没关键词 → 退回普通 text。setText: 会把上一次留下来的 attributedText 清掉。
+        self.titleLabel.text = raw;
+        return;
+    }
+
+    NSString *display = raw;
+    NSRange displayMatch = match;
+
+    NSDictionary *measureAttrs = @{NSFontAttributeName: font};
+    CGFloat fullW = [raw sizeWithAttributes:measureAttrs].width;
+    if (fullW > width) {
+        const NSInteger ctxBefore = 6;
+        if ((NSInteger)match.location > ctxBefore) {
+            NSInteger startIdx = match.location - ctxBefore;
+            display = [@"…" stringByAppendingString:[raw substringFromIndex:startIdx]];
+            displayMatch = NSMakeRange(1 + ctxBefore, match.length); // +1 是前置的 "…"
+        }
+    }
+
+    NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:display
+                                                                              attributes:@{NSFontAttributeName: font,
+                                                                                           NSForegroundColorAttributeName: normal}];
+    if (NSMaxRange(displayMatch) <= display.length) {
+        UIFont *boldFont = [UIFont systemFontOfSize:font.pointSize weight:UIFontWeightSemibold];
+        [attr addAttributes:@{NSForegroundColorAttributeName: purple,
+                              NSFontAttributeName: boldFont}
+                      range:displayMatch];
+    }
+    self.titleLabel.attributedText = attr;
 }
 
 #pragma mark - Height

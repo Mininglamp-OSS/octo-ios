@@ -101,7 +101,15 @@
 
     // processing
     self.processingView = [UIView new];
-    self.processingView.backgroundColor = [UIColor colorWithRed:0xFC/255.0 green:0xF3/255.0 blue:0xFF/255.0 alpha:1.0];
+    // 浅色: #FCF3FF (品牌紫的极淡铺底); 深色: 用深紫调与黑底分层, 又与品牌紫 spinner
+    // 视觉一致, 不会出现 "白底白字看不见" 的问题。两态都和 contentContainer 的
+    // systemBackgroundColor 形成层级对比。
+    self.processingView.backgroundColor = [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *tc) {
+        if (tc.userInterfaceStyle == UIUserInterfaceStyleDark) {
+            return [UIColor colorWithRed:0x2A/255.0 green:0x1A/255.0 blue:0x38/255.0 alpha:1.0];
+        }
+        return [UIColor colorWithRed:0xFC/255.0 green:0xF3/255.0 blue:0xFF/255.0 alpha:1.0];
+    }];
     self.processingView.layer.cornerRadius = 16;
     self.processingView.hidden = YES;
     [self.scroll addSubview:self.processingView];

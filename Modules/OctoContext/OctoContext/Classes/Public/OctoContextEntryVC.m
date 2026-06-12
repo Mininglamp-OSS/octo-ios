@@ -62,6 +62,18 @@
                                            self.view.bounds.size.height - top);
 }
 
+// 切语言时:
+//  - super 走 self.title = [self langTitle], 把 nav title 刷成新语言.
+//  - reload 让 grid cell 重新跑 LLang(item.titleKey), 图标下文字 (智能总结 等) 跟着切.
+//  items 数组里存的是 titleKey 而不是已本地化的字符串, 所以不用重建 items.
+- (NSString *)langTitle { return LLang(@"上下文"); }
+
+- (void)viewConfigChange:(WKViewConfigChangeType)type {
+    [super viewConfigChange:type];
+    if (type != WKViewConfigChangeTypeLang) return;
+    [self.collectionView reloadData];
+}
+
 - (NSArray<OctoContextEntryItem *> *)buildItems {
     OctoContextEntryItem *summary = [OctoContextEntryItem new];
     summary.itemId = @"smart_summary";

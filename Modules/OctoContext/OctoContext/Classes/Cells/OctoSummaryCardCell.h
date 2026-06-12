@@ -23,6 +23,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// 缺失/空时退化为 "你发起"。
 @property(nonatomic, copy, nullable) NSString *currentUserName;
 
+/// 列表搜索关键词。VC 在 cellForRowAtIndexPath: 里把当前 search keyword 透下来,
+/// 命中标题时用主色紫高亮 + 必要时把命中点附近的片段窗口化前置 (避免被尾部 …
+/// 截断后看不到命中)。
+@property(nonatomic, copy, nullable) NSString *keyword;
+
 - (void)bindItem:(OctoSummaryListItem *)item;
 
 + (CGFloat)heightForItem:(OctoSummaryListItem *)item width:(CGFloat)width;

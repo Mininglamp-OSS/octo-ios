@@ -142,3 +142,9 @@
 /* Related chat sheet */
 "关联聊天记录" = "Related chat";
 "原消息 →" = "Open original →";
+
+/* Search & empty state */
+"搜索总结" = "Search summaries";
+"没有找到相关总结" = "No matching summaries";
+"还没有总结记录" = "No summaries yet";
+"让 AI 帮你梳理群聊和工作中的关键信息" = "Let AI distill key points from your chats and work";
