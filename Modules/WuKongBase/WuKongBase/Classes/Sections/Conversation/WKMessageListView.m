@@ -2953,8 +2953,10 @@ static const NSInteger kMaxRehydratePages = 35;
     // capped HUD 也只在仍属活跃显示页时弹, 避免 VC 已被 push 盖住但还没 detach
     // (e.g. push 资料页期间 watchdog 触发) 时把 HUD 弹到无关页面。
     if (capped && self.window) {
+        // 与 OctoContext 的所有 toast 同口径走 showMsg: (CSToast 轻量, 与会话列表
+        // "添加到关注" 一致), 不再用 showHUDWithHide: 的居中暗色 MBProgressHUD。
         UIView *topView = [WKNavigationManager shared].topViewController.view ?: self;
-        [topView showHUDWithHide:LLang(@"消息很多，下拉刷新查看更早")];
+        [topView showMsg:LLang(@"消息很多，下拉刷新查看更早")];
     }
 }
 

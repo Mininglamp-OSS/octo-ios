@@ -125,9 +125,9 @@
         if (error) {
             NSInteger st = [error.userInfo[@"_httpStatus"] integerValue];
             if (st == 409) {
-                [weakSelf.view showHUDWithHide:LLang(@"内容已被他人更新,请返回刷新")];
+                [weakSelf.view showMsg:LLang(@"内容已被他人更新,请返回刷新")];
             } else {
-                [weakSelf.view showHUDWithHide:error.localizedDescription ?: LLang(@"保存失败")];
+                [weakSelf.view showMsg:error.localizedDescription ?: LLang(@"保存失败")];
             }
             return;
         }

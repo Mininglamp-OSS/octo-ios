@@ -502,7 +502,7 @@
         weakSelf.loading = NO;
         [weakSelf.tableView.mj_header endRefreshing];
         if (error) {
-            [weakSelf.view showHUDWithHide:LLang(@"网络异常")];
+            [weakSelf.view showMsg:LLang(@"网络异常")];
             return;
         }
         NSDictionary *r = result;
@@ -540,7 +540,7 @@
         [weakSelf.tableView.mj_footer endRefreshing];
         if (error) {
             weakSelf.page--;
-            [weakSelf.view showHUDWithHide:LLang(@"网络异常")];
+            [weakSelf.view showMsg:LLang(@"网络异常")];
             return;
         }
         NSArray *items = ((NSDictionary *)result)[@"items"] ?: @[];
@@ -732,10 +732,10 @@
         if (error) {
             item.status = original;
             [ws reloadRowForTaskId:item.taskId];
-            [ws.view showHUDWithHide:LLang(@"取消失败")];
+            [ws.view showMsg:LLang(@"取消失败")];
             return;
         }
-        [ws.view showHUDWithHide:LLang(@"已取消")];
+        [ws.view showMsg:LLang(@"已取消")];
     }];
 }
 
@@ -754,7 +754,7 @@
         if (error) {
             item.status = original;
             [ws reloadRowForTaskId:origTaskId];
-            [ws.view showHUDWithHide:LLang(@"重新生成失败")];
+            [ws.view showMsg:LLang(@"重新生成失败")];
             return;
         }
         // 后端返回新 task_id, 切到新 id 让后续 poller / detail 走新任务
@@ -765,7 +765,7 @@
                 [ws refreshPoller];
             }
         }
-        [ws.view showHUDWithHide:LLang(@"已开始重新生成")];
+        [ws.view showMsg:LLang(@"已开始重新生成")];
     }];
 }
 
@@ -801,7 +801,7 @@
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"删除") style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull action) {
         [[OctoSummaryAPI shared] deleteSummary:item.taskId callback:^(id _Nullable result, NSError * _Nullable error) {
             if (error) {
-                [self.view showHUDWithHide:LLang(@"删除失败")];
+                [self.view showMsg:LLang(@"删除失败")];
                 return;
             }
             [self.items removeObject:item];

@@ -101,13 +101,13 @@
         if ([self.checkedSourceKeys containsObject:key]) [picked addObject:s];
     }
     if (picked.count == 0) {
-        [self.view showHUDWithHide:LLang(@"请至少选一个来源")];
+        [self.view showMsg:LLang(@"请至少选一个来源")];
         return;
     }
     [[OctoSummaryAPI shared] confirmParticipation:self.detail.taskId sources:picked
         callback:^(id _Nullable result, NSError * _Nullable error) {
-            if (error) { [self.view showHUDWithHide:LLang(@"提交失败")]; return; }
-            [self.view showHUDWithHide:LLang(@"已确认参与")];
+            if (error) { [self.view showMsg:LLang(@"提交失败")]; return; }
+            [self.view showMsg:LLang(@"已确认参与")];
             [self.navigationController popViewControllerAnimated:YES];
         }];
 }

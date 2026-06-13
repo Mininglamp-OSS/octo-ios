@@ -288,7 +288,7 @@
     __weak typeof(self) weakSelf = self;
     [[OctoSummaryAPI shared] getSummaryDetail:tid callback:^(id _Nullable result, NSError * _Nullable error) {
         if (error || ![result isKindOfClass:OctoSummaryDetail.class]) {
-            [weakSelf.view showHUDWithHide:LLang(@"加载失败")];
+            [weakSelf.view showMsg:LLang(@"加载失败")];
             return;
         }
         weakSelf.detail = result;
@@ -696,16 +696,16 @@
 
 - (void)performCancel {
     [[OctoSummaryAPI shared] cancelSummary:self.detail.taskId callback:^(id _Nullable result, NSError * _Nullable error) {
-        if (error) { [self.view showHUDWithHide:LLang(@"取消失败")]; return; }
-        [self.view showHUDWithHide:LLang(@"已取消")];
+        if (error) { [self.view showMsg:LLang(@"取消失败")]; return; }
+        [self.view showMsg:LLang(@"已取消")];
         [self loadDetail];
     }];
 }
 
 - (void)performRegenerate {
     [[OctoSummaryAPI shared] regenerateSummary:self.detail.taskId topic:nil callback:^(id _Nullable result, NSError * _Nullable error) {
-        if (error) { [self.view showHUDWithHide:LLang(@"重新生成失败")]; return; }
-        [self.view showHUDWithHide:LLang(@"已开始重新生成")];
+        if (error) { [self.view showMsg:LLang(@"重新生成失败")]; return; }
+        [self.view showMsg:LLang(@"已开始重新生成")];
         // regenerate API 返回 { task_id: <new id> } —— 与 ListVC.performRegenerate 同口径,
         // 切到新 taskId 后再 loadDetail, 才能拉到/轮询新一轮任务; 不切的话页面永远卡在
         // 旧 completed/failed 任务上, 用户看不到新进度。
@@ -726,7 +726,7 @@
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"删除") style:UIAlertActionStyleDestructive handler:^(UIAlertAction * _Nonnull a) {
         [[OctoSummaryAPI shared] deleteSummary:self.detail.taskId callback:^(id _Nullable result, NSError * _Nullable error) {
-            if (error) { [self.view showHUDWithHide:LLang(@"删除失败")]; return; }
+            if (error) { [self.view showMsg:LLang(@"删除失败")]; return; }
             [[WKNavigationManager shared] popViewControllerAnimated:YES];
         }];
     }]];
@@ -749,7 +749,7 @@
 - (void)forwardToChat {
     NSString *content = self.detail.result.content;
     if (content.length == 0) {
-        [self.view showHUDWithHide:LLang(@"暂无可转发内容")];
+        [self.view showMsg:LLang(@"暂无可转发内容")];
         return;
     }
     Class fwdCls = NSClassFromString(@"WKForwardSelectVC");
@@ -775,7 +775,7 @@
     NSString *msg;
     if (failCount == 0) msg = [NSString stringWithFormat:LLang(@"已转发到 %ld 个聊天"), (long)okCount];
     else                msg = [NSString stringWithFormat:LLang(@"成功 %ld / 失败 %ld"), (long)okCount, (long)failCount];
-    [self.view showHUDWithHide:msg];
+    [self.view showMsg:msg];
 }
 
 - (void)onWaitingAction {
