@@ -236,21 +236,21 @@
     self.scroll.contentInset = UIEdgeInsetsMake(0, 0,
                                                  (self.bottomBar.hidden ? 0 : bottomBarH + bottomSafe + 12),
                                                  0);
-    // detaching 期间不要再驱动 content 段重排, 避免与 transition driver 抢 layout。
-    // relayoutContent 内部也有 detaching 闸, 这里早退一次省掉栈深一层。
-    if (!self.contentDetaching) {
+    // 过渡期统一 defer (sheet present/dismiss / nav pop / detaching), 不再驱动
+    // content 段重排, 避免与 transition driver 抢 layout。relayoutContent 内部也
+    // 有同样闸, 这里早退一次省掉栈深一层。
+    if (![self shouldDeferLayoutWork]) {
         [self relayoutContent];
     }
 }
 
 - (void)relayoutContent {
-    // 重入 + transition 闸: viewDidLayoutSubviews 内部就在调 relayoutContent,
-    // relayoutContent 自己又改子 frame / scroll.contentSize 触发 layoutSubviews 回环。
-    // 平时子 frame 不变能自然收敛, 但当 webview 异步 frame 写入和 transition driver
-    // 同时拨 layout 时会重入, 与 tracking runloop 撞车死循环。两道闸:
-    //   1. detaching: 右滑返回期间彻底不再做布局变更, 让 transition 安静走完
-    //   2. relayoutInFlight: 重入直接早退, 一次 layout pass 内只让一条链跑到底
-    if (self.contentDetaching) return;
+    // 重入 + 过渡闸: viewDidLayoutSubviews 内调 relayoutContent, relayoutContent 自己
+    // 又改子 frame / scroll.contentSize 触发 layoutSubviews 回环。两道闸:
+    //   1. shouldDeferLayoutWork: 过渡期 (sheet present/dismiss / nav pop / detaching)
+    //      统一 no-op, 让 transition 走完再说
+    //   2. relayoutInFlight: 重入早退, 一次 layout pass 内只让一条链跑到底
+    if ([self shouldDeferLayoutWork]) return;
     if (self.relayoutInFlight) return;
     self.relayoutInFlight = YES;
 
@@ -693,6 +693,13 @@
     // 拦截 octo-cit://N 或 octo-cit://N_M_K → 打开关联聊天 sheet。
     // 单索引 host = "1" 仍然成立; 聚合 host = "1_3_5" 时按 _ 拆开成 indices 数组。
     if ([url.scheme isEqualToString:@"octo-cit"]) {
+        // 过渡期 (sheet present/dismiss / nav pop) 收到 citation 点击, 立即 present 新
+        // sheet 等于 sheet 套 sheet 套 pop, 易触发 layout 重入死循环。这种情况直接吞掉
+        // 这次点击 (用户在过渡期间不太可能精确点中 citation, 多半是误触或残留事件)。
+        if ([self shouldDeferLayoutWork]) {
+            handler(WKNavigationActionPolicyCancel);
+            return;
+        }
         NSString *host = url.host ?: @"";
         NSMutableArray<NSNumber *> *indices = [NSMutableArray array];
         for (NSString *part in [host componentsSeparatedByString:@"_"]) {
@@ -714,41 +721,114 @@
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-    // 异步取实际内容高度并应用到 webview frame, 完成后触发 relayoutContent。
-    if (self.contentDetaching) return;
+    // 整条链路: didFinishNavigation → JS scrollHeight → 改 frame → relayoutContent →
+    //          layoutSubviews → relayoutContent ... 与 transition driver 抢 layout 必死循环。
+    // 防御策略: 任何"过渡进行中" (sheet present/dismiss / nav pop / detaching) 都
+    //          走 deferWebviewHeightSync, 等过渡完成后再 apply。
+    if ([self shouldDeferLayoutWork]) {
+        [self deferWebviewHeightSync:webView];
+        return;
+    }
     __weak typeof(self) ws = self;
     __weak WKWebView *wweb = webView;
     [webView evaluateJavaScript:@"document.body.scrollHeight"
               completionHandler:^(id _Nullable result, NSError * _Nullable error) {
         // completionHandler 是 block 直接持有, 不走 delegate, navigationDelegate=nil /
-        // stopLoading 都拦不住已经在飞的 callback —— 所以这里要亲自查 detaching 闸。
-        // 见 viewWillDisappear: 注释。
+        // stopLoading 都拦不住已经在飞的 callback —— 所以这里要亲自查闸。
         typeof(ws) strong = ws;
-        if (!strong || strong.contentDetaching) return;
-        if (!strong.isViewLoaded || !strong.view.window) return;
+        if (!strong) return;
         WKWebView *wv = wweb;
         if (!wv || ![strong.contentSegments containsObject:wv]) return;
-        CGFloat h = [result respondsToSelector:@selector(floatValue)]
-            ? MAX(20, [result floatValue]) : 80;
-        CGRect f = wv.frame;
-        if (fabs(f.size.height - h) < 0.5) return;
-        // 退出当前 runloop 一拍再改 frame: WebKit 的 completionHandler 有时会在
-        // CA::Transaction commit 内同步 dispatch 到 main, 立刻改 frame 等于在 layout pass
-        // 中间又触发新 layout, 与 transition driver 撞车。dispatch_async 让本次 commit
-        // 走完, 下一拍再 apply, 给系统留收敛窗口。
-        dispatch_async(dispatch_get_main_queue(), ^{
-            typeof(ws) strong2 = ws;
-            if (!strong2 || strong2.contentDetaching) return;
-            if (!strong2.isViewLoaded || !strong2.view.window) return;
+        if (![result respondsToSelector:@selector(floatValue)]) return;
+        CGFloat h = MAX(20, [result floatValue]);
+        [strong applyWebviewHeight:h to:wv];
+    }];
+}
+
+/// 真正去改 webview.frame 的唯一入口: 把 "现在能不能改 layout" 的判断收敛在这。
+/// 过渡期检测到时, 借 transitionCoordinator.animateAlongsideTransition:completion:
+/// 把 frame apply 推迟到过渡完成后, 而不是 dispatch_async 简单一拍 (那个还在
+/// tracking runloop 内, 和 transition driver 仍会撞)。没拿到 coordinator 时退到
+/// 主队列一拍兜底, 下次会被 deferWebviewHeightSync 接住继续等。
+- (void)applyWebviewHeight:(CGFloat)h to:(WKWebView *)wv {
+    if (!wv || ![self.contentSegments containsObject:wv]) return;
+    if (!self.isViewLoaded || !self.view.window) return;
+    CGRect f = wv.frame;
+    if (fabs(f.size.height - h) < 0.5) return;
+
+    if ([self shouldDeferLayoutWork]) {
+        id<UIViewControllerTransitionCoordinator> coord = [self activeTransitionCoordinator];
+        __weak typeof(self) ws = self;
+        __weak WKWebView *wweb = wv;
+        void (^apply)(void) = ^{
+            typeof(ws) strong = ws;
+            if (!strong) return;
+            // 过渡完成的那一刻可能又触发了新过渡, 完整闸再走一遍
+            if ([strong shouldDeferLayoutWork]) { [strong deferWebviewHeightSync:wweb]; return; }
             WKWebView *wv2 = wweb;
-            if (!wv2 || ![strong2.contentSegments containsObject:wv2]) return;
+            if (!wv2 || ![strong.contentSegments containsObject:wv2]) return;
             CGRect f2 = wv2.frame;
             if (fabs(f2.size.height - h) < 0.5) return;
             f2.size.height = h;
             wv2.frame = f2;
-            [strong2 relayoutContent];
-        });
-    }];
+            [strong relayoutContent];
+        };
+        if (coord) {
+            [coord animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> _) {
+                apply();
+            }];
+        } else {
+            dispatch_async(dispatch_get_main_queue(), apply);
+        }
+        return;
+    }
+
+    f.size.height = h;
+    wv.frame = f;
+    [self relayoutContent];
+}
+
+/// "现在改 layout 是否危险" 综合判定, 覆盖三类过渡:
+///   1. self.transitionCoordinator —— nav push/pop / 自身被 modal present
+///   2. self.presentedViewController —— 我把别人 (sheet) present 在身上;
+///      sheet 还在 dismiss 动画时这个属性仍非空, 直到动画结束 → 这条是
+///      page sheet 路径不走 will/didDisappear 但仍处过渡期的兜底依据
+///   3. self.contentDetaching —— viewWillDisappear 显式设的旧闸 (兜底)
+///   4. !self.view.window —— 已彻底离屏, 任何 layout 都没意义
+- (BOOL)shouldDeferLayoutWork {
+    if (self.contentDetaching) return YES;
+    if (!self.isViewLoaded || !self.view.window) return YES;
+    if (self.transitionCoordinator) return YES;
+    if (self.presentedViewController) return YES;
+    return NO;
+}
+
+- (id<UIViewControllerTransitionCoordinator>)activeTransitionCoordinator {
+    if (self.transitionCoordinator) return self.transitionCoordinator;
+    if (self.presentedViewController.transitionCoordinator) return self.presentedViewController.transitionCoordinator;
+    return nil;
+}
+
+/// 过渡期间不发起 JS 评估; dispatch_async 把"再试一次"挂到主队列。下次执行时若
+/// 仍处于过渡, 继续 defer; 直到 shouldDeferLayoutWork == NO 才真正 apply。
+/// 用 scrollView.contentSize 同步取高度 (WebKit 内部 layout 大概率已完成),
+/// 避免反复发 JS, 也消掉了 evaluateJavaScript 与 main runloop 的耦合。
+- (void)deferWebviewHeightSync:(WKWebView *)wv {
+    if (!wv) return;
+    __weak typeof(self) ws = self;
+    __weak WKWebView *wweb = wv;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        typeof(ws) strong = ws;
+        if (!strong) return;
+        WKWebView *wv2 = wweb;
+        if (!wv2 || ![strong.contentSegments containsObject:wv2]) return;
+        CGFloat h = wv2.scrollView.contentSize.height;
+        if (h > 20) {
+            [strong applyWebviewHeight:h to:wv2];
+        } else {
+            [strong deferWebviewHeightSync:wv2];
+        }
+    });
 }
 
 #pragma mark - More menu (WKFloatingMenu, 与列表 cell 同款风格)
