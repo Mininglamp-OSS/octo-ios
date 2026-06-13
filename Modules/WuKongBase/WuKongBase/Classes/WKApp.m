@@ -110,7 +110,6 @@
 #endif
 #import "WKMyInviteCodeVC.h"
 #import "WKProhibitwordsService.h"
-// #import "WKANRWatchdog.h"  // Disabled: 调试期完成使命，见 CLAUDE.md
 
 @import FPSCounter.Swift;
 //#import <PINRemoteImage/PINImageView+PINRemoteImage.h>
@@ -372,8 +371,6 @@ static WKApp *_instance;
     [[WKNetworkListener shared] addDelegate:self];
     // 开启网络监听
     [[WKNetworkListener shared] start];
-    // Disabled: ANR 主线程卡死检测 (调试工具，见 CLAUDE.md)
-    // [[WKANRWatchdog shared] startWithThreshold:3.0];
     // 初始化日志
     [WKLogsManager setup:nil];
     
