@@ -44,6 +44,10 @@
 #define BBOOL(k)  [OctoSummaryModelHelper boolFromValue:dict[k]]
 #define STR(k)    [OctoSummaryModelHelper stringFromValue:dict[k]]
 #define NSTR(k)   [OctoSummaryModelHelper nullableStringFromValue:dict[k]]
+// ARR: 服务端可能给 null / 缺字段 / 类型错位时, NSJSONSerialization 解出 NSNull 或非数组,
+// 直接 for-in 走 countByEnumeratingWithState: 会立刻 unrecognized selector 崩。
+// 守卫 NSArray 类型, 不是数组就当空数组, parse 路径不再因可选数组字段缺失而崩。
+#define ARR(k)    ({ id _v = dict[k]; [_v isKindOfClass:NSArray.class] ? (NSArray *)_v : (NSArray *)@[]; })
 
 #pragma mark - SourceItem
 
@@ -107,7 +111,7 @@
     m.channelType = IINT(@"channel_type");
 
     NSMutableArray *bef = [NSMutableArray array];
-    for (NSDictionary *d in dict[@"context_before"]) {
+    for (NSDictionary *d in ARR(@"context_before")) {
         if ([d isKindOfClass:NSDictionary.class]) {
             OctoCitationContextMessage *cm = [OctoCitationContextMessage modelFromDict:d];
             if (cm) [bef addObject:cm];
@@ -116,7 +120,7 @@
     m.contextBefore = bef;
 
     NSMutableArray *aft = [NSMutableArray array];
-    for (NSDictionary *d in dict[@"context_after"]) {
+    for (NSDictionary *d in ARR(@"context_after")) {
         if ([d isKindOfClass:NSDictionary.class]) {
             OctoCitationContextMessage *cm = [OctoCitationContextMessage modelFromDict:d];
             if (cm) [aft addObject:cm];
@@ -140,7 +144,7 @@
     m.version        = IINT(@"version");
     m.generatedAt    = NSTR(@"generated_at");
     NSMutableArray *cs = [NSMutableArray array];
-    for (NSDictionary *d in dict[@"citations"]) {
+    for (NSDictionary *d in ARR(@"citations")) {
         if ([d isKindOfClass:NSDictionary.class]) {
             OctoCitationItem *c = [OctoCitationItem modelFromDict:d];
             if (c) [cs addObject:c];
@@ -161,7 +165,7 @@
     m.generatedAt  = NSTR(@"generated_at");
     m.msgCount     = IINT(@"msg_count");
     NSMutableArray *cs = [NSMutableArray array];
-    for (NSDictionary *d in dict[@"citations"]) {
+    for (NSDictionary *d in ARR(@"citations")) {
         if ([d isKindOfClass:NSDictionary.class]) {
             OctoCitationItem *c = [OctoCitationItem modelFromDict:d];
             if (c) [cs addObject:c];
@@ -182,7 +186,7 @@
     m.submittedAt = NSTR(@"submitted_at");
     m.content     = NSTR(@"content");
     NSMutableArray *cs = [NSMutableArray array];
-    for (NSDictionary *d in dict[@"citations"]) {
+    for (NSDictionary *d in ARR(@"citations")) {
         if ([d isKindOfClass:NSDictionary.class]) {
             OctoCitationItem *c = [OctoCitationItem modelFromDict:d];
             if (c) [cs addObject:c];
@@ -197,7 +201,7 @@
 
 static NSArray<OctoSourceItem *> *parseSources(NSDictionary *dict) {
     NSMutableArray *arr = [NSMutableArray array];
-    for (NSDictionary *d in dict[@"sources"]) {
+    for (NSDictionary *d in ARR(@"sources")) {
         if ([d isKindOfClass:NSDictionary.class]) {
             OctoSourceItem *s = [OctoSourceItem modelFromDict:d];
             if (s) [arr addObject:s];
@@ -208,7 +212,7 @@ static NSArray<OctoSourceItem *> *parseSources(NSDictionary *dict) {
 
 static NSArray<OctoParticipant *> *parseParticipants(NSDictionary *dict) {
     NSMutableArray *arr = [NSMutableArray array];
-    for (NSDictionary *d in dict[@"participants"]) {
+    for (NSDictionary *d in ARR(@"participants")) {
         if ([d isKindOfClass:NSDictionary.class]) {
             OctoParticipant *p = [OctoParticipant modelFromDict:d];
             if (p) [arr addObject:p];
@@ -350,7 +354,7 @@ static NSArray<OctoParticipant *> *parseParticipants(NSDictionary *dict) {
     m.type       = STR(@"type");
     m.pattern    = STR(@"pattern");
     NSMutableArray *ps = [NSMutableArray array];
-    for (NSDictionary *d in dict[@"placeholders"]) {
+    for (NSDictionary *d in ARR(@"placeholders")) {
         if ([d isKindOfClass:NSDictionary.class]) {
             OctoTopicTemplatePlaceholder *p = [OctoTopicTemplatePlaceholder modelFromDict:d];
             if (p) [ps addObject:p];

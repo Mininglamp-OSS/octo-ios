@@ -706,6 +706,15 @@
     [[OctoSummaryAPI shared] regenerateSummary:self.detail.taskId topic:nil callback:^(id _Nullable result, NSError * _Nullable error) {
         if (error) { [self.view showHUDWithHide:LLang(@"重新生成失败")]; return; }
         [self.view showHUDWithHide:LLang(@"已开始重新生成")];
+        // regenerate API 返回 { task_id: <new id> } —— 与 ListVC.performRegenerate 同口径,
+        // 切到新 taskId 后再 loadDetail, 才能拉到/轮询新一轮任务; 不切的话页面永远卡在
+        // 旧 completed/failed 任务上, 用户看不到新进度。
+        if ([result isKindOfClass:NSDictionary.class]) {
+            int64_t newId = [((NSDictionary *)result)[@"task_id"] longLongValue];
+            if (newId > 0 && newId != self.detail.taskId) {
+                self.taskId = @(newId);
+            }
+        }
         [self loadDetail];
     }];
 }

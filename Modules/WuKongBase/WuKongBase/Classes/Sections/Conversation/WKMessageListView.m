@@ -89,6 +89,9 @@ static const BOOL kIncrementalPulldown = NO;
 // rehydrate (重连补齐) 期间也复用 pendingRecvMessages 通道把 live push 缓起来,
 // 等多页 pullup 全部跑完 + reloadData 后再批量回放, 避免在 dp/tableView 漂移期间插行。
 @property(nonatomic,assign) BOOL isRehydrating;
+// rehydrate 进入时的 "在底部" 快照: watchdog 触发的 forceFinish 路径下也要拿得到,
+// 否则 watchdog 走 wasAtBottom:NO 把原本贴底的用户也不滚到底, 体验出现一次性偏移。
+@property(nonatomic,assign) BOOL rehydrateEnteredAtBottom;
 // 跟踪上一次连接状态: 只在 (非 Connected → Connected) 跳变时触发 rehydrate,
 // 否则连续 ping/pong 都会重复跑。
 @property(nonatomic,assign) WKConnectStatus prevConnectStatus;
@@ -2859,12 +2862,13 @@ static const NSInteger kMaxRehydratePages = 35;
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(forceFinishRehydrateOnTimeout) object:nil];
     [self performSelector:@selector(forceFinishRehydrateOnTimeout) withObject:nil afterDelay:30.0];
     BOOL wasAtBottom = self.positionAtBottom;
+    self.rehydrateEnteredAtBottom = wasAtBottom;
     [self rehydrateNextPage:0 wasAtBottom:wasAtBottom];
 }
 
 -(void) forceFinishRehydrateOnTimeout {
     if (!self.isRehydrating) return;
-    [self finishRehydrateCapped:YES wasAtBottom:NO];
+    [self finishRehydrateCapped:YES wasAtBottom:self.rehydrateEnteredAtBottom];
 }
 
 // pullup 一页 → 看 hasMore + 页计数 → 递归。
