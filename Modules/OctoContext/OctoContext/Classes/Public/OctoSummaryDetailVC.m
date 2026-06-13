@@ -17,6 +17,7 @@
 #import <WuKongIMSDK/WKTextContent.h>
 #import <WuKongBase/WuKongBase-Swift.h>           // WKMarkdownRenderer (Swift)
 #import <WebKit/WebKit.h>
+#import <objc/runtime.h>
 
 @interface OctoSummaryDetailVC () <UITextViewDelegate, WKNavigationDelegate>
 @property(nonatomic, strong) UIScrollView *scroll;
@@ -57,6 +58,11 @@
 /// 状态记下来, restore 时只在我们关过的情况下才恢复, 避免覆盖其它 VC /
 /// WKRootNavigationController 自己的逻辑。
 @property(nonatomic, assign) BOOL disabledInteractivePopForTable;
+
+/// 关闭手势前捕获的原 enabled 值。多窗口快速 push/pop 时不能假设"恢复=YES",
+/// 例如根 nav stack 只有 1 个 VC 时 WKRootNavigationController 自己也会关右滑,
+/// 这种状态下我们的 restore 不能把它强制开成 YES, 否则与根 nav 抢状态。
+@property(nonatomic, assign) BOOL gestureOriginalEnabled;
 
 /// 还没渲染稳定的表格 webview 集合。webview 加载是完全异步的:
 ///   T0    loadHTMLString → WebKit 渲染
@@ -218,6 +224,11 @@
     // 必须在 completionHandler 体内显式查 detaching 才稳。
     self.contentDetaching = YES;
     [self disarmTableWebviews];
+    // 用户既然要走, 没必要再追踪 pending: 清空集合 + 同步手势状态。否则老 VC 的
+    // 5s 兜底 timeout / 异步 didFinishNavigation 还在飞, 在 dealloc 前的某个时刻
+    // 触发 syncInteractivePopGestureWithWebviewState 改新 VC 的 gesture 状态, 出
+    // 多窗口快速切换时的 race。disarmTableWebviews 内部已经清过一次, 这里幂等。
+    [self.pendingTableWebviews removeAllObjects];
     // 离开详情时恢复全局右滑手势, 不影响其他页面 (用户可能从这里回到列表后再
     // 进别的页面)。WKRootNavigationController 的 didShowViewController: 也会基于
     // 栈深做最终调整, 这里只是早一拍恢复。
@@ -226,8 +237,11 @@
 
 - (void)viewDidDisappear:(BOOL)animated {
     [super viewDidDisappear:animated];
-    // 真的 pop 走了: 彻底清掉, dealloc 兜底, 但这里更早一拍。
+    // 真的 pop 走了: 彻底清掉, dealloc 兜底, 但这里更早一拍。所有清理路径全做幂等
+    // 处理 (disarm 用 associated object 标记 / pendingTableWebviews removeAllObjects /
+    // restore 检 disabledInteractivePopForTable 标志), 重复调用安全。
     [self disarmTableWebviews];
+    [self.pendingTableWebviews removeAllObjects];
     [self restoreInteractivePopGestureFromTableContent];
 }
 
@@ -235,20 +249,24 @@
 
 /// 调用时机: 任何会改变 pendingTableWebviews 的地方 + viewWillAppear。
 /// 集合非空 → 关右滑 (webview 在飞, 用户右滑必撞 race);
-/// 集合为空 → 开右滑 (所有 frame 都已写入, 不再有迟到的异步链路)。
+/// 集合为空 → 恢复到原值 (不一定是 YES, 见 gestureOriginalEnabled 注释)。
 - (void)syncInteractivePopGestureWithWebviewState {
     if (!self.isViewLoaded || !self.view.window) return;
     UIGestureRecognizer *gr = self.navigationController.interactivePopGestureRecognizer;
     if (!gr) return;
     BOOL hasPending = self.pendingTableWebviews.count > 0;
     if (hasPending) {
-        if (gr.isEnabled) {
-            gr.enabled = NO;
+        if (!self.disabledInteractivePopForTable) {
+            // 第一次关: 先记下原 enabled 值, restore 时按这个值恢复, 避免与
+            // WKRootNavigationController.didShowViewController 的 "栈深=1 强制关右滑"
+            // 逻辑抢状态。
+            self.gestureOriginalEnabled = gr.isEnabled;
             self.disabledInteractivePopForTable = YES;
         }
+        if (gr.isEnabled) gr.enabled = NO;
     } else {
         if (self.disabledInteractivePopForTable) {
-            gr.enabled = YES;
+            gr.enabled = self.gestureOriginalEnabled;
             self.disabledInteractivePopForTable = NO;
         }
     }
@@ -257,17 +275,29 @@
 /// VC 离开时一定要还原, 避免我们的 disabled 状态污染下一个 VC / 根 nav 的策略。
 - (void)restoreInteractivePopGestureFromTableContent {
     if (!self.disabledInteractivePopForTable) return;
-    self.navigationController.interactivePopGestureRecognizer.enabled = YES;
+    UIGestureRecognizer *gr = self.navigationController.interactivePopGestureRecognizer;
+    if (gr) gr.enabled = self.gestureOriginalEnabled;
     self.disabledInteractivePopForTable = NO;
 }
 
 - (void)disarmTableWebviews {
     for (UIView *seg in self.contentSegments) {
-        if ([seg isKindOfClass:[WKWebView class]]) {
-            WKWebView *wv = (WKWebView *)seg;
-            wv.navigationDelegate = nil;
-            [wv stopLoading];
-        }
+        if (![seg isKindOfClass:[WKWebView class]]) continue;
+        WKWebView *wv = (WKWebView *)seg;
+        // 幂等: 同一 webview 被多次 disarm (viewWillDisappear → viewDidDisappear →
+        // dealloc, 还有 clearContentSegments 等) 是常态。重复 stopLoading 在新版
+        // iOS 容忍, 但老版本 (iOS 14/15) 会累积无效 IPC; 而且第二次以后再走
+        // delegate=nil 已经是 nil → nil 也无意义。associated object 打标后跳过。
+        static const void *kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
+        if ([objc_getAssociatedObject(wv, kOctoWebviewDisarmedKey) boolValue]) continue;
+        objc_setAssociatedObject(wv, kOctoWebviewDisarmedKey, @YES,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        // Apple 推荐顺序: stopLoading 在前, navigationDelegate=nil 在后。
+        // 反过来 (旧代码) 的问题: stopLoading 触发 didFail 时 delegate 已经 nil,
+        // WebKit 内部状态机收不到 ack, IPC 链路可能挂着等回, 主线程在某些场景被
+        // 同步等待 → 偶发卡死的潜在源头之一。
+        [wv stopLoading];
+        wv.navigationDelegate = nil;
     }
     // disarm 后的 webview 不会再回调 didFinishNavigation, 也就永远不会到 markWebviewSettled.
     // pending 集合里若还残留这些 webview, 就永远开不了右滑了 → 强制清空。
@@ -572,13 +602,17 @@
             [self syncInteractivePopGestureWithWebviewState];
             // 兜底: 5s 超时仍没 settle 就强制移出, 避免 webview 异常情况下永远不开右滑。
             // 5s 远超表格 HTML 渲染正常耗时 (一般 50-300ms), 触发说明 webview 真出问题了。
+            // 多重身份校验: weakSelf nil-guard + isViewLoaded + view.window 非空, VC 已
+            // dealloc / 已离屏的情况下任何 gesture 状态修改都没意义还可能与新 VC 抢状态。
             __weak typeof(self) ws = self;
             __weak WKWebView *wweb = wv;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 typeof(ws) strong = ws;
+                if (!strong) return;
+                if (!strong.isViewLoaded || !strong.view.window) return;
                 WKWebView *wv2 = wweb;
-                if (!strong || !wv2) return;
+                if (!wv2) return;
                 if ([strong.pendingTableWebviews containsObject:wv2]) {
                     [strong.pendingTableWebviews removeObject:wv2];
                     [strong syncInteractivePopGestureWithWebviewState];
