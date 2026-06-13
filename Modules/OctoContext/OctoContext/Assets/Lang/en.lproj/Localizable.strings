@@ -148,3 +148,11 @@
 "没有找到相关总结" = "No matching summaries";
 "还没有总结记录" = "No summaries yet";
 "让 AI 帮你梳理群聊和工作中的关键信息" = "Let AI distill key points from your chats and work";
+
+/* Action toast */
+"查看" = "View";
+
+/* Related chat sheet header type suffix */
+"(私聊)" = " (DM)";
+"(群聊)" = " (Group)";
+"(子区)" = " (Thread)";

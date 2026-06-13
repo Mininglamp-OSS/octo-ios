@@ -113,6 +113,11 @@ typedef enum :NSUInteger {
 /// 是否隐藏气泡
 + (BOOL) hiddenBubble;
 
+/// 子类 override 钩子: 调整 trailing (右下角时间/状态/编辑标记) 的位置。基类按
+/// hiddenBubble = YES/NO 给两套默认偏移; 子类如需在自己的视觉里再调整, override
+/// 后调用 [super layoutTrailingView] 再修改 self.trailingView.lim_top/lim_left。
+-(void) layoutTrailingView;
+
 /// 隐藏阅后即焚的进度条
 -(BOOL) hiddenFlameProgress;
 

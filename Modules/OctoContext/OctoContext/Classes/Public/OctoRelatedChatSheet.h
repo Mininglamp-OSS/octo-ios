@@ -20,7 +20,15 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface OctoRelatedChatSheet : UIViewController
 
-/// 新入口: 展开一组(可能含多个) citation 的关联聊天。indices 是 OctoCitationItem.index 列表。
+/// 主入口: 展开一组(可能含多个) citation 的关联聊天。indices 是 OctoCitationItem.index 列表。
+/// sources 是 detail 里的 source 列表 (本地写入的 sourceName, DM 场景比服务端返回的
+/// "私聊-<hex>" 兜底字符串可读得多), 顶部标题/chip 优先用它, 强烈建议传。
++ (void)presentInVC:(UIViewController *)host
+          citations:(NSArray<OctoCitationItem *> *)citations
+            sources:(nullable NSArray<OctoSourceItem *> *)sources
+      activeIndices:(NSArray<NSNumber *> *)activeIndices;
+
+/// 兼容入口: 不带 sources 的版本, 内部按 nil 转发。新代码请用上面带 sources 的版本。
 + (void)presentInVC:(UIViewController *)host
           citations:(NSArray<OctoCitationItem *> *)citations
       activeIndices:(NSArray<NSNumber *> *)activeIndices;

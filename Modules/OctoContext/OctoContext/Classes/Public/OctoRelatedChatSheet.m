@@ -27,6 +27,8 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
 @interface OctoRelatedChatSheet () <UITableViewDataSource, UITableViewDelegate>
 @property(nonatomic, strong) NSArray<OctoCitationItem *> *citations;       // 原始全集 (透传)
 @property(nonatomic, strong) NSArray<OctoCitationItem *> *relevantCitations; // 命中 activeIndices 后过滤的子集
+@property(nonatomic, strong, nullable) NSArray<OctoSourceItem *> *sources;   // detail 的 source 列表, 提供本地名兜底
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *displayNameCache; // channelId → 解析后显示名, viewDidLoad 一次性算完
 @property(nonatomic, copy, nullable) NSString *activeChannelId;            // 多 channel 时当前展示的 channel
 @property(nonatomic, strong) UIView *handle;
 @property(nonatomic, strong) UILabel *titleLabel;
@@ -42,9 +44,11 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
 
 + (void)presentInVC:(UIViewController *)host
           citations:(NSArray<OctoCitationItem *> *)citations
+            sources:(NSArray<OctoSourceItem *> *)sources
       activeIndices:(NSArray<NSNumber *> *)activeIndices {
     OctoRelatedChatSheet *vc = [OctoRelatedChatSheet new];
     vc.citations = citations ?: @[];
+    vc.sources = sources;
     // scope: 只保留 activeIndices 命中的 citations, 顶部 channel 切换器与下方 rows 都
     // 基于这个子集计算 —— 用户点 [1-3] 的徽章, 只看到 1/2/3 这三条引用相关的内容,
     // 不再被总结里其它 channel 的无关 citations 干扰。
@@ -67,11 +71,17 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
     [host presentViewController:vc animated:YES completion:nil];
 }
 
++ (void)presentInVC:(UIViewController *)host
+          citations:(NSArray<OctoCitationItem *> *)citations
+      activeIndices:(NSArray<NSNumber *> *)activeIndices {
+    [self presentInVC:host citations:citations sources:nil activeIndices:activeIndices];
+}
+
 /// 兼容入口: 单 citation 包成单元素数组转发。
 + (void)presentInVC:(UIViewController *)host
           citations:(NSArray<OctoCitationItem *> *)citations
         activeIndex:(NSInteger)activeCitationIndex {
-    [self presentInVC:host citations:citations activeIndices:@[@(activeCitationIndex)]];
+    [self presentInVC:host citations:citations sources:nil activeIndices:@[@(activeCitationIndex)]];
 }
 
 - (void)viewDidLoad {
@@ -115,6 +125,7 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
     [self.tableView registerClass:UITableViewCell.class forCellReuseIdentifier:@"row"];
     [self.view addSubview:self.tableView];
 
+    [self buildDisplayNameCache];
     [self computeChannelChips];
     [self rebuildRows];
 }
@@ -176,10 +187,171 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
 }
 
 - (NSString *)channelDisplayNameFor:(NSString *)channelId {
+    if (channelId.length == 0) return LLang(@"未知聊天");
+    NSString *cached = self.displayNameCache[channelId];
+    if (cached.length > 0) return cached;
+    return channelId;
+}
+
+/// 一次性把所有相关 channelId 的显示名解析好缓存起来。displayNameForCitation: 是
+/// 个 ~10 行 NSLog + 多轮 SDK 查找的重活, 之前每次 layoutChannelChips / sourceLabel
+/// 重置都会重跑, dismiss 动画期间 viewDidLayoutSubviews 反复触发就把主线程刷死了。
+- (void)buildDisplayNameCache {
+    self.displayNameCache = [NSMutableDictionary dictionary];
+    NSMutableSet<NSString *> *visited = [NSMutableSet set];
     for (OctoCitationItem *c in self.relevantCitations) {
-        if ([c.channelId isEqualToString:channelId] && c.source.length > 0) return c.source;
+        if (c.channelId.length == 0) continue;
+        if ([visited containsObject:c.channelId]) continue;
+        [visited addObject:c.channelId];
+        self.displayNameCache[c.channelId] = [self resolveDisplayNameForCitation:c];
     }
-    return channelId.length > 0 ? channelId : LLang(@"未知聊天");
+    NSLog(@"[OctoRelatedChatSheet] displayNameCache built: %@", self.displayNameCache);
+}
+
+/// citation 顶部标题 / channel chip 显示名解析。viewDidLoad 跑一次, 结果缓存。
+/// 层级 (从最可信到最兜底):
+///   1. src.sourceName  —— 创建总结时本地写入, DM 已带 "(私聊)"; 最稳定
+///   2. SDK channelInfo.displayName/name —— remark 优先
+///   3. citation.source —— 服务端字段, 过滤掉 "私聊-<hex>" 这种 hex 串
+///   4. channelId / "未知聊天"
+/// 取到 base 名后, 按 sourceType (src 缺失时按 SDK channelType 反推) 追加
+/// 类型后缀 "(群聊)" / "(子区)" / "(私聊)"。
+- (NSString *)resolveDisplayNameForCitation:(OctoCitationItem *)c {
+    OctoSourceItem *src = [self matchingSourceFor:c.channelId];
+    NSInteger preferred = [self sdkChannelTypeFromSource:src];
+
+    NSString *base = nil;
+    if (src.sourceName.length > 0) {
+        base = src.sourceName;
+    }
+    if (base.length == 0) {
+        // 候选 channelId: DM 场景 c.channelId 是复合 <myUid>@<peerUid>, SDK channelInfo
+        // 按 peer uid 缓存, 直接用复合必 miss。把 src.sourceId 和 "@"-拆开两段都补进候选。
+        NSArray<NSString *> *cidCandidates = [self channelIdCandidatesForCitation:c source:src];
+        base = [self resolveSDKNameForCandidates:cidCandidates
+                                   preferredType:preferred
+                                      serverType:c.channelType];
+    }
+    if (base.length == 0 && c.source.length > 0 && ![self looksLikeServerFallbackName:c.source]) {
+        base = c.source;
+    }
+    if (base.length == 0) {
+        base = c.channelId.length > 0 ? c.channelId : LLang(@"未知聊天");
+    }
+
+    NSString *suffix = [self typeSuffixFor:src serverType:c.channelType];
+    if (suffix.length > 0 && ![self name:base alreadyHasTypeSuffix:suffix]) {
+        return [base stringByAppendingString:suffix];
+    }
+    return base;
+}
+
+- (OctoSourceItem *)matchingSourceFor:(NSString *)channelId {
+    if (channelId.length == 0) return nil;
+    // 第一遍: 精确匹配 (groups / threads 走这条)
+    for (OctoSourceItem *s in self.sources) {
+        if ([s.sourceId isEqualToString:channelId]) return s;
+    }
+    // 第二遍: 复合 channelId 包含 sourceId 作为 "@" 切分的某一段 (DM 场景:
+    // citation.channelId = "<myUid>@<peerUid>", source.sourceId = "<peerUid>")
+    NSArray<NSString *> *parts = [channelId componentsSeparatedByString:@"@"];
+    if (parts.count > 1) {
+        for (OctoSourceItem *s in self.sources) {
+            if (s.sourceId.length > 0 && [parts containsObject:s.sourceId]) return s;
+        }
+    }
+    return nil;
+}
+
+- (NSArray<NSString *> *)channelIdCandidatesForCitation:(OctoCitationItem *)c
+                                                 source:(OctoSourceItem *)src {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    void (^add)(NSString *) = ^(NSString *s) {
+        if (s.length > 0 && ![out containsObject:s]) [out addObject:s];
+    };
+    add(c.channelId);
+    add(src.sourceId);
+    NSArray<NSString *> *parts = [c.channelId componentsSeparatedByString:@"@"];
+    if (parts.count > 1) {
+        for (NSString *p in parts) add(p);
+    }
+    return out;
+}
+
+- (NSString *)typeSuffixFor:(OctoSourceItem *)src serverType:(NSInteger)serverType {
+    OctoSourceType t = src ? src.sourceType : 0;
+    if (t == 0) {
+        if (serverType == WK_PERSON)               t = OctoSourceDirectMessage;
+        else if (serverType == WK_COMMUNITY_TOPIC) t = OctoSourceThread;
+        else if (serverType == WK_GROUP)           t = OctoSourceGroupChat;
+    }
+    switch (t) {
+        case OctoSourceDirectMessage: return LLang(@"(私聊)");
+        case OctoSourceThread:        return LLang(@"(子区)");
+        case OctoSourceGroupChat:     return LLang(@"(群聊)");
+        default:                      return @"";
+    }
+}
+
+/// 检测 base 是否已经带了类型后缀 —— 中英文所有变体都查一遍, 避免英文 locale 下
+/// 把中文 "张乾(私聊)" 又拼出 " (DM)" 的双后缀。注意 trim 末尾空白, 以兼容
+/// "张乾(私聊) " 或 "张乾 (DM)" 这种拼写差异。
+- (BOOL)name:(NSString *)base alreadyHasTypeSuffix:(NSString *)expectedSuffix {
+    if (base.length == 0) return NO;
+    NSString *trimmed = [base stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    static NSArray<NSString *> *known;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        known = @[ @"(私聊)", @"(群聊)", @"(子区)",
+                   @"(DM)", @"(Group)", @"(Thread)" ];
+    });
+    for (NSString *s in known) {
+        if ([trimmed hasSuffix:s]) return YES;
+    }
+    if ([trimmed hasSuffix:expectedSuffix]) return YES;
+    return NO;
+}
+
+- (NSString *)resolveSDKNameForCandidates:(NSArray<NSString *> *)cids
+                            preferredType:(NSInteger)preferredType
+                               serverType:(NSInteger)serverType {
+    NSMutableArray<NSNumber *> *types = [NSMutableArray array];
+    if (preferredType > 0) [types addObject:@(preferredType)];
+    if (serverType > 0) {
+        NSNumber *st = @(serverType);
+        if (![types containsObject:st]) [types addObject:st];
+    }
+    for (NSNumber *t in @[ @(WK_PERSON), @(WK_GROUP), @(WK_COMMUNITY_TOPIC) ]) {
+        if (![types containsObject:t]) [types addObject:t];
+    }
+    for (NSString *cid in cids) {
+        for (NSNumber *t in types) {
+            WKChannel *ch = [WKChannel channelID:cid channelType:(uint8_t)t.integerValue];
+            WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:ch];
+            if (info.displayName.length > 0) return info.displayName;
+            if (info.name.length > 0) return info.name;
+        }
+    }
+    return nil;
+}
+
+- (NSInteger)sdkChannelTypeFromSource:(OctoSourceItem *)s {
+    if (!s) return 0;
+    switch (s.sourceType) {
+        case OctoSourceDirectMessage: return WK_PERSON;          // 1
+        case OctoSourceThread:        return WK_COMMUNITY_TOPIC; // 5
+        default:                      return WK_GROUP;           // 2
+    }
+}
+
+/// 服务端在拿不到本地用户/频道名时的兜底字串:
+///   "私聊-<hex>" (中文 zh) / "Direct Message-<hex>" (英文 en) 之类。
+/// 不能直接显示给用户, 当作"无值"处理走更后面的兜底。
+- (BOOL)looksLikeServerFallbackName:(NSString *)s {
+    if (s.length == 0) return NO;
+    return [s hasPrefix:@"私聊-"]            || [s hasPrefix:@"私聊 -"]
+        || [s hasPrefix:@"DirectMessage-"]   || [s hasPrefix:@"Direct Message-"]
+        || [s hasPrefix:@"DM-"];
 }
 
 - (void)onChannelChip:(UIButton *)b {
@@ -208,7 +380,7 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
     }
 
     OctoCitationItem *first = forActive.firstObject ?: list.firstObject;
-    self.sourceLabel.text = first.source.length > 0 ? first.source : @"";
+    self.sourceLabel.text = first ? [self channelDisplayNameFor:first.channelId] : @"";
 
     for (OctoCitationItem *c in forActive) {
         for (OctoCitationContextMessage *m in c.contextBefore) {

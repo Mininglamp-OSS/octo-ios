@@ -85,6 +85,14 @@
     return YES;
 }
 
+- (void)layoutTrailingView {
+    [super layoutTrailingView];
+    // 与 WKImageMessageCell 同口径: 时间胶囊离图片右下沿太近, 各再推 10pt / 5pt 留出
+    // 明显呼吸 (底部 ~15pt 内缩, 右沿 ~10pt 内缩), 横/竖动图都更耐看。
+    self.trailingView.lim_top  -= 10.0f;
+    self.trailingView.lim_left -= 5.0f;
+}
+
 
 -(UIImage*) imageName:(NSString*)name {
     return [WKApp.shared loadImage:name moduleID:@"WuKongBase"];

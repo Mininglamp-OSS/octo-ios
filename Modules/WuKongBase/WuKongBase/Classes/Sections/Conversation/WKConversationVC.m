@@ -455,9 +455,9 @@
     // 这条入口的 origin 字段都是 0/空, 服务端拿不到来源链路。
     [vc setValue:self.channel.channelId forKey:@"originChannelId"];
     [vc setValue:@(self.channel.channelType) forKey:@"originChannelType"];
-    // 聊天页星星入口: 提交后给一条引导式 HUD, 告诉用户去哪查看进度。
-    // 列表 FAB 入口不会走这里, 仍保持简短的 "已创建总结任务"。
-    [vc setValue:LLang(@"已开始生成总结，可到 智能总结 查看进度") forKey:@"submitSuccessHUDText"];
+    // 聊天页星星入口: 提交后给一条带 "查看" 动作的 toast (OctoActionToast),
+    // 点击直接 push 智能总结列表。文案保持简短, "查看" 由 toast 自己提供。
+    [vc setValue:LLang(@"已开始生成总结") forKey:@"submitSuccessHUDText"];
     vc.hidesBottomBarWhenPushed = YES;
     [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }

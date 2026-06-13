@@ -41,6 +41,18 @@
 @property(nonatomic, strong) OctoSummaryDetail *detail;
 @property(nonatomic, strong) NSTimer *pollTimer;
 
+/// YES 表示 VC 进入"消失中"状态 (viewWillDisappear → viewDidDisappear 之间, 或者
+/// 用户在做交互式右滑 pop)。期间所有"会改变 layout 的异步回调"都必须 no-op,
+/// 否则会和 UIKit 的 transition driver 抢 layout 触发死循环。viewWillAppear 重置
+/// (用户取消右滑回到详情页时)。
+@property(nonatomic, assign) BOOL contentDetaching;
+
+/// relayoutContent 重入闸: viewDidLayoutSubviews 内调 relayoutContent, 而
+/// relayoutContent 自身改子 frame / scroll.contentSize 又会触发 layoutSubviews
+/// 回环。正常情况下子 frame 不变能自然收敛, 但 webview 高度回填和 transition
+/// driver 同时拨 layout 时会重入 → 死循环。整套链路下我们手动闸住。
+@property(nonatomic, assign) BOOL relayoutInFlight;
+
 // 底部悬浮 footer (转发到聊天 + 编辑), 只在 completed 时出现
 @property(nonatomic, strong) UIView *bottomBar;
 @property(nonatomic, strong) UIButton *footerForwardBtn;
@@ -149,12 +161,59 @@
     [self loadDetail];
 }
 
-- (void)dealloc { [self.pollTimer invalidate]; }
+- (void)dealloc {
+    [self.pollTimer invalidate];
+    // 最后一道兜底: VC 真正销毁时确保所有 webview 不再回调任何东西。视图层级已经
+    // 不存在了, 异步在飞的 completion handler 触到 weakSelf=nil 自然 no-op, 这里
+    // 兜底也防一些极端时序 (比如 webview 还在排队 IPC 时 VC 整体 dealloc)。
+    for (UIView *seg in self.contentSegments) {
+        if ([seg isKindOfClass:[WKWebView class]]) {
+            WKWebView *wv = (WKWebView *)seg;
+            wv.navigationDelegate = nil;
+            [wv stopLoading];
+        }
+    }
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    // 取消右滑 pop 回到详情页时, 恢复 detaching=NO 让后续 webview 高度回填等异步
+    // 链路重新生效。第一次进入时也会走这里, 不影响初始 NO。
+    self.contentDetaching = NO;
+}
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
     [self.pollTimer invalidate];
     self.pollTimer = nil;
+    // 整个链路最关键的闸: detaching=YES 让所有异步 layout 回调 (didFinishNavigation 内
+    // evaluateJavaScript 的 completionHandler, 还有任何后续 dispatch_async 进来的) 全部
+    // no-op。原因: 右滑返回时 UIKit 在 tracking runloop mode 下做交互过渡, layout 节奏
+    // 由 transition driver 拨动; 这时 webview 异步把 frame 高度回填 + 触发父 layout +
+    // viewDidLayoutSubviews → relayoutContent → 改子 frame → layout 再来一轮, 与 driver
+    // 抢 runloop 重入死循环。
+    //
+    // 单 disarm (delegate=nil + stopLoading) 不够: completionHandler 是 block 直接持有的
+    // 回调, 不走 delegate; stopLoading 也只取消导航, JS 引擎已开跑的语句仍会回来。所以
+    // 必须在 completionHandler 体内显式查 detaching 才稳。
+    self.contentDetaching = YES;
+    [self disarmTableWebviews];
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    // 真的 pop 走了: 彻底清掉, dealloc 兜底, 但这里更早一拍。
+    [self disarmTableWebviews];
+}
+
+- (void)disarmTableWebviews {
+    for (UIView *seg in self.contentSegments) {
+        if ([seg isKindOfClass:[WKWebView class]]) {
+            WKWebView *wv = (WKWebView *)seg;
+            wv.navigationDelegate = nil;
+            [wv stopLoading];
+        }
+    }
 }
 
 - (void)viewDidLayoutSubviews {
@@ -177,10 +236,24 @@
     self.scroll.contentInset = UIEdgeInsetsMake(0, 0,
                                                  (self.bottomBar.hidden ? 0 : bottomBarH + bottomSafe + 12),
                                                  0);
-    [self relayoutContent];
+    // detaching 期间不要再驱动 content 段重排, 避免与 transition driver 抢 layout。
+    // relayoutContent 内部也有 detaching 闸, 这里早退一次省掉栈深一层。
+    if (!self.contentDetaching) {
+        [self relayoutContent];
+    }
 }
 
 - (void)relayoutContent {
+    // 重入 + transition 闸: viewDidLayoutSubviews 内部就在调 relayoutContent,
+    // relayoutContent 自己又改子 frame / scroll.contentSize 触发 layoutSubviews 回环。
+    // 平时子 frame 不变能自然收敛, 但当 webview 异步 frame 写入和 transition driver
+    // 同时拨 layout 时会重入, 与 tracking runloop 撞车死循环。两道闸:
+    //   1. detaching: 右滑返回期间彻底不再做布局变更, 让 transition 安静走完
+    //   2. relayoutInFlight: 重入直接早退, 一次 layout pass 内只让一条链跑到底
+    if (self.contentDetaching) return;
+    if (self.relayoutInFlight) return;
+    self.relayoutInFlight = YES;
+
     CGFloat w = self.view.bounds.size.width - 32;
     CGFloat y = 12;
 
@@ -234,6 +307,7 @@
         y += containerH + 12;
     }
     self.scroll.contentSize = CGSizeMake(self.view.bounds.size.width, y);
+    self.relayoutInFlight = NO;
 }
 
 #pragma mark - Bottom bar (转发到聊天 + 编辑)
@@ -364,6 +438,9 @@
 #pragma mark - Content segments (text + table 混排)
 
 - (void)clearContentSegments {
+    // 把要被 remove 的 webview 先 disarm, 否则旧 webview 在 removeFromSuperview 后
+    // 仍可能跑 didFinishNavigation 异步回调, 拿弱引用 self / 已废弃的 segment 改 frame。
+    [self disarmTableWebviews];
     for (UIView *v in self.contentSegments) [v removeFromSuperview];
     [self.contentSegments removeAllObjects];
 }
@@ -598,6 +675,7 @@
     if (indices.count == 0) return;
     [OctoRelatedChatSheet presentInVC:self
                             citations:self.detail.result.citations
+                              sources:self.detail.sources
                         activeIndices:indices];
 }
 
@@ -637,18 +715,39 @@
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
     // 异步取实际内容高度并应用到 webview frame, 完成后触发 relayoutContent。
-    // 异步链路 + 主线程回到 main 队列, 不会阻塞 runloop, 也不会 deadlock。
+    if (self.contentDetaching) return;
     __weak typeof(self) ws = self;
+    __weak WKWebView *wweb = webView;
     [webView evaluateJavaScript:@"document.body.scrollHeight"
               completionHandler:^(id _Nullable result, NSError * _Nullable error) {
-        if (!ws) return;
+        // completionHandler 是 block 直接持有, 不走 delegate, navigationDelegate=nil /
+        // stopLoading 都拦不住已经在飞的 callback —— 所以这里要亲自查 detaching 闸。
+        // 见 viewWillDisappear: 注释。
+        typeof(ws) strong = ws;
+        if (!strong || strong.contentDetaching) return;
+        if (!strong.isViewLoaded || !strong.view.window) return;
+        WKWebView *wv = wweb;
+        if (!wv || ![strong.contentSegments containsObject:wv]) return;
         CGFloat h = [result respondsToSelector:@selector(floatValue)]
             ? MAX(20, [result floatValue]) : 80;
-        CGRect f = webView.frame;
+        CGRect f = wv.frame;
         if (fabs(f.size.height - h) < 0.5) return;
-        f.size.height = h;
-        webView.frame = f;
-        [ws relayoutContent];
+        // 退出当前 runloop 一拍再改 frame: WebKit 的 completionHandler 有时会在
+        // CA::Transaction commit 内同步 dispatch 到 main, 立刻改 frame 等于在 layout pass
+        // 中间又触发新 layout, 与 transition driver 撞车。dispatch_async 让本次 commit
+        // 走完, 下一拍再 apply, 给系统留收敛窗口。
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(ws) strong2 = ws;
+            if (!strong2 || strong2.contentDetaching) return;
+            if (!strong2.isViewLoaded || !strong2.view.window) return;
+            WKWebView *wv2 = wweb;
+            if (!wv2 || ![strong2.contentSegments containsObject:wv2]) return;
+            CGRect f2 = wv2.frame;
+            if (fabs(f2.size.height - h) < 0.5) return;
+            f2.size.height = h;
+            wv2.frame = f2;
+            [strong2 relayoutContent];
+        });
     }];
 }
 
