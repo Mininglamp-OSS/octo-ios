@@ -23,6 +23,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, nullable) NSString *prefilledTopic;
 @property(nonatomic, copy, nullable) NSArray<OctoSourceItem *> *prefilledSources;
 
+/// 提交成功时 HUD 文案。默认 "已创建总结任务" (从智能总结列表 FAB 进入时, 用户
+/// 已经在列表页, 简短确认即可)。从聊天详情星星入口进入时, 调用方可改成
+/// "已开始生成总结，可到 智能总结 查看进度" 这种引导式文案。
+@property(nonatomic, copy, nullable) NSString *submitSuccessHUDText;
+
 @end
 
 NS_ASSUME_NONNULL_END

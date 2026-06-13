@@ -7,6 +7,8 @@
 #import "OctoSummaryAPI.h"
 #import "OctoSelectedSourcesView.h"
 #import <WuKongBase/WuKongBase.h>
+#import <WuKongBase/WKThreadService.h>
+#import <WuKongBase/WKThreadModel.h>
 #import <WuKongIMSDK/WuKongIMSDK.h>
 
 #pragma mark - Constants
@@ -75,6 +77,19 @@ static const CGFloat kSourceCardMinH   = 78;    // "选择聊天" 卡最小高�
     if (self.prefilledSources.count > 0) {
         [self.selectedSources removeAllObjects];
         [self.selectedSources addObjectsFromArray:self.prefilledSources];
+        self.sourcesPills.items = self.selectedSources;
+        // 子区 sourceName 兜底: 上游 (聊天详情入口 / 列表编辑回流) 没拿到子区真名,
+        // 给的是空字符串或 channelId (含 "____"), 这里统一按 sourceType==Thread 走
+        // WKThreadService 异步回填, 与 picker 路径同口径。
+        for (OctoSourceItem *s in self.selectedSources) {
+            if (s.sourceType != OctoSourceThread) continue;
+            BOOL looksHex = [s.sourceName rangeOfString:@"____"].location != NSNotFound
+                          || [s.sourceName isEqualToString:s.sourceId];
+            if (s.sourceName.length > 0 && !looksHex) continue;
+            s.sourceName = LLang(@"子区");
+            WKChannel *ch = [WKChannel channelID:s.sourceId channelType:WK_COMMUNITY_TOPIC];
+            [self resolveThreadName:s forChannel:ch];
+        }
         self.sourcesPills.items = self.selectedSources;
         [self.view setNeedsLayout];
     }
@@ -478,12 +493,44 @@ static const CGFloat kSourceCardMinH   = 78;    // "选择聊天" 卡最小高�
             s.sourceType = OctoSourceGroupChat;
         }
         WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:ch];
-        s.sourceName = info.name.length > 0 ? info.name : ch.channelId;
+        NSString *name = info.name.length > 0 ? info.name : nil;
+        // 子区的 ChannelInfo.name 经常为空 (WKSDK channelManager 不缓存 thread 名),
+        // 直接退到 channelId (groupNo____shortId) 看起来像 16 进制串。改用 WKThreadService
+        // 异步查 thread 名回填; 之前先用 LLang(@"子区") 占位, 不让用户看到 hex。
+        if (s.sourceType == OctoSourceThread && name.length == 0) {
+            s.sourceName = LLang(@"子区");
+            [self resolveThreadName:s forChannel:ch];
+        } else {
+            s.sourceName = name.length > 0 ? name : ch.channelId;
+        }
         [self.selectedSources addObject:s];
     }
     self.sourcesPills.items = self.selectedSources;
     [self updateSubmitState];
     [self.view setNeedsLayout];
+}
+
+/// 子区名异步回填: 解析 channelId 为 (groupNo, shortId), 从 WKThreadService 拉到
+/// 子区详情后把 sourceName 替换成真实名字, 同时刷一遍 pill 视图。promise reject 静默,
+/// 占位 "子区" 仍然比 hex channelId 友好。
+- (void)resolveThreadName:(OctoSourceItem *)source forChannel:(WKChannel *)ch {
+    NSArray *parts = [ch.channelId componentsSeparatedByString:@"____"];
+    if (parts.count < 2) return;
+    NSString *groupNo = parts[0];
+    NSString *shortId = parts[1];
+    if (groupNo.length == 0 || shortId.length == 0) return;
+    __weak typeof(self) weakSelf = self;
+    [[WKThreadService shared] getThread:groupNo shortId:shortId].then(^(WKThreadModel *t) {
+        __strong typeof(weakSelf) ws = weakSelf;
+        if (!ws || t.name.length == 0) return;
+        // 选源数组在用户编辑时可能已变, 用 channelId+sourceType 反查避免改错对象。
+        NSInteger idx = [ws.selectedSources indexOfObjectPassingTest:^BOOL(OctoSourceItem *it, NSUInteger i, BOOL *stop) {
+            return it.sourceType == OctoSourceThread && [it.sourceId isEqualToString:source.sourceId];
+        }];
+        if (idx == NSNotFound) return;
+        ws.selectedSources[idx].sourceName = t.name;
+        ws.sourcesPills.items = ws.selectedSources;
+    }).catch(^(NSError *e) {});
 }
 
 - (void)removeSource:(OctoSourceItem *)src {
@@ -517,10 +564,21 @@ static const CGFloat kSourceCardMinH   = 78;    // "选择聊天" 卡最小高�
             [weakSelf.view showHUDWithHide:error.localizedDescription ?: LLang(@"创建失败")];
             return;
         }
-        [weakSelf.view showHUDWithHide:LLang(@"已创建总结任务")];
+        NSString *successText = weakSelf.submitSuccessHUDText.length > 0
+            ? weakSelf.submitSuccessHUDText
+            : LLang(@"已创建总结任务");
         // 通知列表页刷新, 让新任务立刻出现在列表顶部 (用户报"返回到列表后看不到新建的总结")。
         [[NSNotificationCenter defaultCenter] postNotificationName:@"OctoSummaryDidCreateNotification" object:nil];
         [[WKNavigationManager shared] popViewControllerAnimated:YES];
+        // HUD 必须放在 pop 之后, 且挂在 pop 后的 topViewController.view (列表页 / 聊天详情页)
+        // 上 —— 之前挂在 weakSelf.view, pop 把 createVC 的视图层级即刻拆掉, HUD 还没动画
+        // 完就跟着销毁, 用户什么也看不到。dispatch_async 一格让 nav stack 切完再取 top,
+        // 避免拿到尚未切换的旧 top。
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIViewController *top = [WKNavigationManager shared].topViewController;
+            UIView *target = top.view ?: UIApplication.sharedApplication.keyWindow;
+            [target showHUDWithHide:successText];
+        });
     }];
 }
 

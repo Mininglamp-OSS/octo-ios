@@ -86,6 +86,13 @@ static const BOOL kIncrementalPulldown = NO;
 @property(nonatomic,assign) BOOL isPulldownInProgress;
 @property(nonatomic,strong) NSMutableArray<WKMessage*> *pendingRecvMessages;
 
+// rehydrate (重连补齐) 期间也复用 pendingRecvMessages 通道把 live push 缓起来,
+// 等多页 pullup 全部跑完 + reloadData 后再批量回放, 避免在 dp/tableView 漂移期间插行。
+@property(nonatomic,assign) BOOL isRehydrating;
+// 跟踪上一次连接状态: 只在 (非 Connected → Connected) 跳变时触发 rehydrate,
+// 否则连续 ping/pong 都会重复跑。
+@property(nonatomic,assign) WKConnectStatus prevConnectStatus;
+
 // FPS 监控：CADisplayLink 每帧 +1，每秒结算一次，<50 才打日志。
 // 用于诊断"停留不动也波动"问题。排查完关 WKCellPerfLog 即可。
 @property(nonatomic,strong) CADisplayLink *fpsLink;
@@ -229,6 +236,10 @@ static const BOOL kIncrementalPulldown = NO;
     [[WKSDK shared].conversationManager removeDelegate:self];
     [[WKTypingManager shared] removeDelegate:self];
     [[WKReminderManager shared] removeDelegate:self];
+    // 取消任何挂在 runloop 上的 rehydrate 触发: 切换 channel / 退出页面后
+    // 不应再让上一次的 0.5s debounce 真的跑起来 (performSelector 持有 self 强引用,
+    // 不取消会延迟 dealloc + 在 detached 视图上做无意义 reload)。
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(beginRehydrate) object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKShareExtensionMessageSent" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKMessageMultipleAnchorDidChange" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidBecomeActiveNotification object:nil];
@@ -1934,8 +1945,10 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         return;
     }
 
-    // pulldown 进行中，暂存新消息避免并发修改 tableView 导致布局错乱
-    if(self.isPulldownInProgress) {
+    // pulldown / rehydrate 进行中，暂存新消息避免并发修改 tableView 导致布局错乱。
+    // pulldown 跑完会在 endPulldown 路径里 drain; rehydrate 跑完在 finishRehydrate
+    // 里 drain。两条路径共用同一个 pendingRecvMessages 缓冲区, 不会冲突。
+    if(self.isPulldownInProgress || self.isRehydrating) {
         if(!self.pendingRecvMessages) {
             self.pendingRecvMessages = [NSMutableArray array];
         }
@@ -2802,28 +2815,121 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 #pragma mark -- WKConnectionManagerDelegate
 
 
+// 弱/断网恢复后, 给当前打开的会话页跑一次 "rehydrate":
+//   - 多页 pullup 把 DB 已落但 UI 未感知的消息追上 (gap fill, 上限 35 页 ≈ 1050 条)
+//   - 期间 live push 进 pendingRecvMessages 缓冲, 完成后批量回放
+//   - 末尾 reloadData 收敛 insertRows 路径残留的漂移
+//   - 命中上限再加一条 HUD 提示, 让用户知道还有更多, 继续滚动加载
+// 与 onAppDidBecomeActiveReconcile / onConversationSyncFinished 是平行的三条兜底路径,
+// 各自处理 (回前台 / 会话级 sync 完成 / 传输层重连) 三种 trigger。
+//
+// debounce 500ms: 抖动网络下 disconnect→connecting→connected 反复抖动时只触发一次,
+// 避免 rehydrate 被打散成多次小循环和现有 pullup 抢 ioQueue。
 -(void) onConnectStatus:(WKConnectStatus)status reasonCode:(WKReason)reasonCode {
-    if(status == WKConnected) { // 如果已连接，则重新请求消息
-        __weak typeof(self) weakSelf = self;
-        [self pullup:^(bool more) {
-            // 重连/回前台拉取消息后，若当前 channel 仍残留 typing（后台期间 bot 回复经
-            // conversation-sync 直写 DB 绕过了 onRecvMessages 的清除路径），显式清掉。
-            if([[WKTypingManager shared] hasTyping:weakSelf.channel]) {
-                [[WKTypingManager shared] removeTypingByChannel:weakSelf.channel newMessage:nil];
-            }
-            WKMessageModel *localLastMsg = [weakSelf.dataProvider lastMessage];
-            if(!localLastMsg) {
-                return;
-            }
-            if(weakSelf.lastMessage && [weakSelf.lastMessage.clientMsgNo isEqualToString:localLastMsg.clientMsgNo]) {
-                return;
-            }
-            WKMessage *newLastMsg = [[WKSDK shared].chatManager getLastMessage:weakSelf.channel];
-            
-            if(newLastMsg) {
-                [weakSelf updateLastMsgIfNeed:[[WKMessageModel alloc] initWithMessage:newLastMsg]];
-            }
-        }];
+    WKConnectStatus prev = self.prevConnectStatus;
+    self.prevConnectStatus = status;
+    if (status != WKConnected) return;
+    if (prev == WKConnected) return; // ping/pong 之类的无 transition, 不重复触发
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(beginRehydrate) object:nil];
+    [self performSelector:@selector(beginRehydrate) withObject:nil afterDelay:0.5];
+}
+
+// rehydrate 多页 pullup 上限: 35 × eachPageMsgLimit(默认 30) ≈ 1050 条。
+// 和 user agree: 超过这个量级时, 不再无限拉, 提示用户"消息很多, 下拉刷新查看更早"。
+// 选 35 是兼顾 "多数断网场景能一次追完" + "极端断网几小时内不至于把内存拉爆" 的
+// 平衡点; eachPageMsgLimit 若 app 配置改大, 实际上限按比例放大。
+static const NSInteger kMaxRehydratePages = 35;
+
+-(void) beginRehydrate {
+    if (!self.channel) return;
+    if ([WKSDK shared].connectionManager.connectStatus != WKConnected) return;
+    if (self.isRehydrating) return;
+    if (self.isPulldownInProgress) return; // 让 pulldown 自己跑完, 它的 drain 会接住 pending push
+    self.isRehydrating = YES;
+    BOOL wasAtBottom = self.positionAtBottom;
+    [self rehydrateNextPage:0 wasAtBottom:wasAtBottom];
+}
+
+// pullup 一页 → 看 hasMore + 页计数 → 递归。
+// 复用 [self pullup:] 的好处: 它已经处理 dedup 重试 / section-row 增量 insert /
+// @try @catch 失败回退 reloadData, 不需要在这里再重新走一遍。
+// dedup-stuck 兜底: 若 pullup 跑完一轮后 dp.lastMessage.clientMsgNo 没推进, 说明 SDK
+// 这一页全是已存在的消息 (内部 3 次 retry 也没救回来), 再继续递归只是在原地空转 ——
+// 直接当成 "拉不动了" 收尾 + capped HUD, 比把 35 页全空跑一遍代价小得多。
+-(void) rehydrateNextPage:(NSInteger)pageIndex wasAtBottom:(BOOL)wasAtBottom {
+    if (![self pullupHasMore]) {
+        [self finishRehydrateCapped:NO wasAtBottom:wasAtBottom];
+        return;
+    }
+    if (pageIndex >= kMaxRehydratePages) {
+        [self finishRehydrateCapped:YES wasAtBottom:wasAtBottom];
+        return;
+    }
+    NSString *anchorBefore = @"";
+    WKMessageModel *beforeLast = [self.dataProvider lastMessage];
+    if (beforeLast.clientMsgNo.length > 0) anchorBefore = beforeLast.clientMsgNo;
+    __weak typeof(self) weakSelf = self;
+    [self pullup:^(bool more) {
+        __strong typeof(weakSelf) ss = weakSelf;
+        if (!ss) return;
+        WKMessageModel *afterLast = [ss.dataProvider lastMessage];
+        BOOL madeProgress = afterLast && ![afterLast.clientMsgNo isEqualToString:anchorBefore];
+        if (!more) {
+            [ss finishRehydrateCapped:NO wasAtBottom:wasAtBottom];
+            return;
+        }
+        if (!madeProgress) {
+            [ss finishRehydrateCapped:YES wasAtBottom:wasAtBottom];
+            return;
+        }
+        [ss rehydrateNextPage:pageIndex + 1 wasAtBottom:wasAtBottom];
+    }];
+}
+
+-(void) finishRehydrateCapped:(BOOL)capped wasAtBottom:(BOOL)wasAtBottom {
+    self.isRehydrating = NO;
+
+    // typing 残留清掉 —— 后台/断网期间 bot 回复经 conversation-sync 直写 DB,
+    // 绕过了 onRecvMessages 的清除路径, 这里统一兜底。
+    if ([[WKTypingManager shared] hasTyping:self.channel]) {
+        [[WKTypingManager shared] removeTypingByChannel:self.channel newMessage:nil];
+    }
+
+    // anchor 对账 (沿用原 onConnectStatus 的 last-message refresh 语义)
+    WKMessageModel *dpLast = [self.dataProvider lastMessage];
+    if (dpLast && (!self.lastMessage || ![self.lastMessage.clientMsgNo isEqualToString:dpLast.clientMsgNo])) {
+        WKMessage *newLastMsg = [[WKSDK shared].chatManager getLastMessage:self.channel];
+        if (newLastMsg) {
+            [self updateLastMsgIfNeed:[[WKMessageModel alloc] initWithMessage:newLastMsg]];
+        }
+    }
+
+    // 渲染收尾: 一次性 reloadData 收敛 insertRows 路径里可能残留的 dp/tableView 漂移。
+    // 这是治 "scroll 上滑很多气泡空白" 的关键 —— rehydrate 等于把表的状态机拨回零。
+    // 用户原本贴底就再贴一次, 否则保留 contentOffset (UITableView reloadData 默认行为)。
+    [self.tableView reloadData];
+    if (wasAtBottom) {
+        [self scrollToBottom:NO];
+    }
+
+    // 期间 buffer 的 live push 批量回放。pulldown 不在跑时由本方法 drain;
+    // pulldown 在跑时让它自己的 endPulldown 路径接管, 避免重复回放。
+    if (!self.isPulldownInProgress) {
+        [self drainPendingRecvMessagesAfterRehydrate];
+    }
+
+    if (capped) {
+        UIView *topView = [WKNavigationManager shared].topViewController.view ?: self;
+        [topView showHUDWithHide:LLang(@"消息很多，下拉刷新查看更早")];
+    }
+}
+
+-(void) drainPendingRecvMessagesAfterRehydrate {
+    if (!self.pendingRecvMessages || self.pendingRecvMessages.count == 0) return;
+    NSArray<WKMessage*> *pending = [self.pendingRecvMessages copy];
+    [self.pendingRecvMessages removeAllObjects];
+    for (WKMessage *m in pending) {
+        [self handleRecvMessage:m];
     }
 }
 

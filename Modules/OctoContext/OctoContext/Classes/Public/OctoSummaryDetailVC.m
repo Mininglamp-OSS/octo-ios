@@ -469,18 +469,54 @@
     return wv;
 }
 
+/// 表格里的 citation 聚合: 连续相邻的 [N][M]... 合成单条 markdown link, 与正文段
+/// (OctoSummaryMarkdownRender.applyCitationsTo:) 同口径; URL host 用下划线连接索引,
+/// label 走 OctoSummaryMarkdownRender.badgeTextFromIndices:。点击时 navigation
+/// delegate 把 host 拆回 indices 数组下放给 RelatedChatSheet。
 - (NSString *)injectCitationLinks:(NSString *)content {
     NSError *err = nil;
-    // 不命中已是链接形式的 [N](...);仅处理裸 [N] (N 必须是数字)
-    NSRegularExpression *re = [NSRegularExpression
-        regularExpressionWithPattern:@"(?<!\\]\\()\\[(\\d+)\\](?!\\()"
+    // 一连串紧贴的 [N][M]... 视为一组 (中间无字符);
+    // 已是 markdown 链接形式 [N](...) 的不动 (negative lookahead/-behind)。
+    NSRegularExpression *runRe = [NSRegularExpression
+        regularExpressionWithPattern:@"(?<!\\]\\()(?:\\[\\d+\\])+(?!\\()"
                              options:0
                                error:&err];
-    if (!re) return content;
-    return [re stringByReplacingMatchesInString:content
-                                        options:0
-                                          range:NSMakeRange(0, content.length)
-                                   withTemplate:@"[$1](octo-cit://$1)"];
+    if (!runRe) return content;
+    NSArray<NSTextCheckingResult *> *runs = [runRe matchesInString:content
+                                                            options:0
+                                                              range:NSMakeRange(0, content.length)];
+    if (runs.count == 0) return content;
+
+    NSRegularExpression *digitRe = [NSRegularExpression regularExpressionWithPattern:@"\\d+" options:0 error:nil];
+    NSMutableString *out = [NSMutableString string];
+    NSUInteger cursor = 0;
+    for (NSTextCheckingResult *m in runs) {
+        if (m.range.location > cursor) {
+            [out appendString:[content substringWithRange:NSMakeRange(cursor, m.range.location - cursor)]];
+        }
+        NSString *runText = [content substringWithRange:m.range];   // e.g. "[1][2][3]"
+        NSMutableArray<NSNumber *> *indices = [NSMutableArray array];
+        NSMutableArray<NSString *> *idStrs = [NSMutableArray array];
+        for (NSTextCheckingResult *dm in [digitRe matchesInString:runText options:0 range:NSMakeRange(0, runText.length)]) {
+            NSString *s = [runText substringWithRange:dm.range];
+            [indices addObject:@([s integerValue])];
+            [idStrs addObject:s];
+        }
+        if (indices.count == 0) {
+            [out appendString:runText];
+        } else {
+            NSString *label = [OctoSummaryMarkdownRender badgeTextFromIndices:indices];
+            // 用下划线串而不是逗号: NSURL host 对逗号不友好, integerValue 解 "1,2,3"
+            // 也只会拿到 1 丢掉后面的; 下划线 host (如 "1_3_5") 解析完整且 NSURL 接受。
+            NSString *host = [idStrs componentsJoinedByString:@"_"];
+            [out appendFormat:@"[%@](octo-cit://%@)", label, host];
+        }
+        cursor = NSMaxRange(m.range);
+    }
+    if (cursor < content.length) {
+        [out appendString:[content substringFromIndex:cursor]];
+    }
+    return out;
 }
 
 /// 给 extractTableHTML 输出的 HTML 注入: ① 横向滚动容器(用户报"无法左右滑动")
@@ -570,11 +606,16 @@
         decidePolicyForNavigationAction:(WKNavigationAction *)action
                         decisionHandler:(void (^)(WKNavigationActionPolicy))handler {
     NSURL *url = action.request.URL;
-    // 拦截 octo-cit://N → 打开关联聊天 sheet
+    // 拦截 octo-cit://N 或 octo-cit://N_M_K → 打开关联聊天 sheet。
+    // 单索引 host = "1" 仍然成立; 聚合 host = "1_3_5" 时按 _ 拆开成 indices 数组。
     if ([url.scheme isEqualToString:@"octo-cit"]) {
-        // host = "N" (citation index)
-        NSInteger idx = [url.host integerValue];
-        if (idx > 0) [self openCitationByIndex:idx];
+        NSString *host = url.host ?: @"";
+        NSMutableArray<NSNumber *> *indices = [NSMutableArray array];
+        for (NSString *part in [host componentsSeparatedByString:@"_"]) {
+            NSInteger v = [part integerValue];
+            if (v > 0) [indices addObject:@(v)];
+        }
+        if (indices.count > 0) [self openCitationsByIndices:indices];
         handler(WKNavigationActionPolicyCancel);
         return;
     }

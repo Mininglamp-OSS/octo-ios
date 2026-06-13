@@ -276,12 +276,28 @@ typedef NS_ENUM(NSInteger, FWItemType) {
 
     // 预选: 把外部传进来的 channels 直接打勾, 用户就是来 "二次编辑" 的, 不用全选一遍。
     // 与 cell 的 isChecked 同步靠 reload(loadData → reloadData), 这里只填 backing store。
+    //
+    // 关键: _checkedIds 的 key 格式必须与 FWDisplayItem.uniqueKey 完全一致,
+    // 否则 applyCheckedState: 用 uniqueKey 反查时根本对不上, cell 永远不打勾。
+    // FWDisplayItem.uniqueKey 对 FWItemThread 返回的是 "纯 channelId" (不带 "_5"),
+    // 对 FWItemConversation 才返回 "channelId_channelType"。这里走相同口径。
     if (self.preselectedChannels.count > 0) {
         for (WKChannel *ch in self.preselectedChannels) {
             if (ch.channelId.length == 0) continue;
-            NSString *key = [NSString stringWithFormat:@"%@_%d", ch.channelId, ch.channelType];
+            NSString *key = (ch.channelType == WK_COMMUNITY_TOPIC)
+                ? ch.channelId
+                : [NSString stringWithFormat:@"%@_%d", ch.channelId, ch.channelType];
             [_checkedIds addObject:key];
             _checkedChannels[key] = ch;
+            // 子区: 解析出父群 groupNo (channelId 形如 "groupNo____shortId"), 加进展开集合,
+            // 否则父群默认折叠, 用户看不见已勾选的子区还以为没选上。
+            if (ch.channelType == WK_COMMUNITY_TOPIC) {
+                NSArray *parts = [ch.channelId componentsSeparatedByString:@"____"];
+                if (parts.count >= 2) {
+                    NSString *groupNo = parts[0];
+                    if (groupNo.length > 0) [_expandedThreadGroups addObject:groupNo];
+                }
+            }
         }
     }
 

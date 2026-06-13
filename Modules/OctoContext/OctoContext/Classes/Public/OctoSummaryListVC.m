@@ -454,8 +454,14 @@
     self.lastContentOffsetY = scrollView.contentOffset.y;
     // 只在用户主动拖动时响应,避免 contentInset 调整 / setContentOffset 引起误判
     if (!scrollView.isDragging && !scrollView.isDecelerating) return;
-    if (dy > 4) [self setFabVisible:NO];           // 向下滑(内容上移): 隐藏
-    else if (dy < -4) [self setFabVisible:YES];    // 向上滑: 立即显
+    // contentInset.top 抵消后, 真正"在内容区上方"的判定用 effectiveOffset 计算。
+    // pull-to-refresh 阶段 effectiveOffset 是负的 (用户在过顶 overscroll), 之后 MJRefresh
+    // 把 inset 还原会造成一段 dy>4 的"伪向下滑"动画 —— 不过滤就会把 FAB 误隐藏掉,
+    // 用户报"下拉刷新后按钮消失"就是这条路径。仅在确实滑出顶部 (effectiveOffset > 0) 时
+    // 才允许 hide; 留下 show 逻辑不动, 顶部继续向上滑(已经在顶) 不会再触发 show 但也无副作用。
+    CGFloat effectiveOffset = scrollView.contentOffset.y + scrollView.contentInset.top;
+    if (dy > 4 && effectiveOffset > 0) [self setFabVisible:NO];   // 向下滑(内容上移)且过顶: 隐藏
+    else if (dy < -4) [self setFabVisible:YES];                   // 向上滑: 立即显
 }
 
 - (void)setFabVisible:(BOOL)visible {
@@ -506,6 +512,10 @@
         weakSelf.emptyLabel.text = (weakSelf.keyword.length > 0) ? LLang(@"没有找到相关总结") : LLang(@"暂无总结");
         [weakSelf refreshEmptyStateVisibility];
         [weakSelf refreshPoller];
+        // 兜底: 任何 reload 完成后强制 FAB 可见 —— 不依赖 scrollViewDidScroll
+        // 在 inset 还原阶段判断对方向, 用户报"下拉刷新后按钮消失"的回归签名。
+        // refreshEmptyStateVisibility 已经在真空态走过这一步, 此处覆盖非空态。
+        [weakSelf setFabVisible:YES];
         // 没有更多数据时直接 endRefreshing(回到 idle 状态), 而不是切到 NoMoreData
         // 触发 "已全部加载完毕" 文案. automaticallyHidden + title 全空时, idle
         // 态视觉上完全不可见。

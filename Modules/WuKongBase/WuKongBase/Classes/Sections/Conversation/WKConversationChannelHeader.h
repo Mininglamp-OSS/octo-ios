@@ -18,6 +18,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,strong) UIButton *moreDotsBtn; // 三个点按钮（打开群组设置）
 
+@property(nonatomic,strong) UIButton *summaryBtn; // 智能总结入口 (sparkle), 群/私/子区都显示
+
 @property(nonatomic,assign) NSInteger memberCount; // 成员数量
 
 @property(nonatomic,strong) WKChannelInfo *channelInfo; // 频道信息
@@ -28,6 +30,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,copy) void(^onVoiceCall)(void); // 拨打语音
 @property(nonatomic,copy) void(^onVideoCall)(void); // 拨打视频
+@property(nonatomic,copy) void(^onSummary)(void);   // 发起智能总结
 
 - (void)viewConfigChange:(WKViewConfigChangeType)type;
 

@@ -24,6 +24,10 @@ NS_ASSUME_NONNULL_BEGIN
                                     citations:(NSArray<OctoCitationItem *> *)citations
                                      fontSize:(CGFloat)fontSize;
 
+/// indices → 徽章文字: 1 个 "N"; 严格连续 "首-尾"; 否则逗号拼。
+/// 暴露给表格 preprocess 路径复用, 让表格里的合并徽章 label 与正文保持完全一致。
++ (NSString *)badgeTextFromIndices:(NSArray<NSNumber *> *)indices;
+
 @end
 
 NS_ASSUME_NONNULL_END
