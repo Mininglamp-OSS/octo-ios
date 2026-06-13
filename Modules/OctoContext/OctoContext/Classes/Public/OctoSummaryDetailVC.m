@@ -53,6 +53,22 @@
 /// driver 同时拨 layout 时会重入 → 死循环。整套链路下我们手动闸住。
 @property(nonatomic, assign) BOOL relayoutInFlight;
 
+/// 是否因 "当前详情含 WKWebView 渲染表格" 而临时关掉了 nav 的交互式右滑返回手势。
+/// 状态记下来, restore 时只在我们关过的情况下才恢复, 避免覆盖其它 VC /
+/// WKRootNavigationController 自己的逻辑。
+@property(nonatomic, assign) BOOL disabledInteractivePopForTable;
+
+/// 还没渲染稳定的表格 webview 集合。webview 加载是完全异步的:
+///   T0    loadHTMLString → WebKit 渲染
+///   T0+x  didFinishNavigation 异步回调 (~50-300ms)
+///   T0+y  evaluateJavaScript scrollHeight 完成
+///   T0+z  我方 applyWebviewHeight 写入 frame + relayoutContent
+/// 这个 T0~T0+z 窗口内, 用户右滑返回就会和 WebKit 内部 IPC + transition driver
+/// 撞 layout 死循环 (WebContent 进程 ↔ 主线程同步通信链路是 app 层管不到的)。
+/// 实现 "稳定后才允许右滑": webview 创建即加进集合 + 关右滑, 每个 webview 完成
+/// applyWebviewHeight 后从集合移除; 集合空 → 重新开右滑。
+@property(nonatomic, strong) NSMutableSet<WKWebView *> *pendingTableWebviews;
+
 // 底部悬浮 footer (转发到聊天 + 编辑), 只在 completed 时出现
 @property(nonatomic, strong) UIView *bottomBar;
 @property(nonatomic, strong) UIButton *footerForwardBtn;
@@ -110,6 +126,7 @@
     self.contentContainer.hidden = YES;
     [self.scroll addSubview:self.contentContainer];
     self.contentSegments = [NSMutableArray array];
+    self.pendingTableWebviews = [NSMutableSet set];
 
     // processing
     self.processingView = [UIView new];
@@ -180,6 +197,9 @@
     // 取消右滑 pop 回到详情页时, 恢复 detaching=NO 让后续 webview 高度回填等异步
     // 链路重新生效。第一次进入时也会走这里, 不影响初始 NO。
     self.contentDetaching = NO;
+    // webview 是否已稳定, 决定右滑手势开关。pendingTableWebviews 由 makeTableSegment
+    // 加入 / applyWebviewHeight 完成时移除, 这里基于当前集合状态同步一次。
+    [self syncInteractivePopGestureWithWebviewState];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -198,12 +218,47 @@
     // 必须在 completionHandler 体内显式查 detaching 才稳。
     self.contentDetaching = YES;
     [self disarmTableWebviews];
+    // 离开详情时恢复全局右滑手势, 不影响其他页面 (用户可能从这里回到列表后再
+    // 进别的页面)。WKRootNavigationController 的 didShowViewController: 也会基于
+    // 栈深做最终调整, 这里只是早一拍恢复。
+    [self restoreInteractivePopGestureFromTableContent];
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
     [super viewDidDisappear:animated];
     // 真的 pop 走了: 彻底清掉, dealloc 兜底, 但这里更早一拍。
     [self disarmTableWebviews];
+    [self restoreInteractivePopGestureFromTableContent];
+}
+
+#pragma mark - Interactive pop gesture toggle (webview 稳定后才开启)
+
+/// 调用时机: 任何会改变 pendingTableWebviews 的地方 + viewWillAppear。
+/// 集合非空 → 关右滑 (webview 在飞, 用户右滑必撞 race);
+/// 集合为空 → 开右滑 (所有 frame 都已写入, 不再有迟到的异步链路)。
+- (void)syncInteractivePopGestureWithWebviewState {
+    if (!self.isViewLoaded || !self.view.window) return;
+    UIGestureRecognizer *gr = self.navigationController.interactivePopGestureRecognizer;
+    if (!gr) return;
+    BOOL hasPending = self.pendingTableWebviews.count > 0;
+    if (hasPending) {
+        if (gr.isEnabled) {
+            gr.enabled = NO;
+            self.disabledInteractivePopForTable = YES;
+        }
+    } else {
+        if (self.disabledInteractivePopForTable) {
+            gr.enabled = YES;
+            self.disabledInteractivePopForTable = NO;
+        }
+    }
+}
+
+/// VC 离开时一定要还原, 避免我们的 disabled 状态污染下一个 VC / 根 nav 的策略。
+- (void)restoreInteractivePopGestureFromTableContent {
+    if (!self.disabledInteractivePopForTable) return;
+    self.navigationController.interactivePopGestureRecognizer.enabled = YES;
+    self.disabledInteractivePopForTable = NO;
 }
 
 - (void)disarmTableWebviews {
@@ -214,6 +269,10 @@
             [wv stopLoading];
         }
     }
+    // disarm 后的 webview 不会再回调 didFinishNavigation, 也就永远不会到 markWebviewSettled.
+    // pending 集合里若还残留这些 webview, 就永远开不了右滑了 → 强制清空。
+    [self.pendingTableWebviews removeAllObjects];
+    [self syncInteractivePopGestureWithWebviewState];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -508,6 +567,23 @@
             [wv loadHTMLString:html baseURL:nil];
             [self.contentContainer addSubview:wv];
             [self.contentSegments addObject:wv];
+            // 加入 pending 集合 → 关右滑直到该 webview applyWebviewHeight 完成
+            [self.pendingTableWebviews addObject:wv];
+            [self syncInteractivePopGestureWithWebviewState];
+            // 兜底: 5s 超时仍没 settle 就强制移出, 避免 webview 异常情况下永远不开右滑。
+            // 5s 远超表格 HTML 渲染正常耗时 (一般 50-300ms), 触发说明 webview 真出问题了。
+            __weak typeof(self) ws = self;
+            __weak WKWebView *wweb = wv;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                typeof(ws) strong = ws;
+                WKWebView *wv2 = wweb;
+                if (!strong || !wv2) return;
+                if ([strong.pendingTableWebviews containsObject:wv2]) {
+                    [strong.pendingTableWebviews removeObject:wv2];
+                    [strong syncInteractivePopGestureWithWebviewState];
+                }
+            });
         }
     }
     [self relayoutContent];
@@ -772,6 +848,8 @@
             f2.size.height = h;
             wv2.frame = f2;
             [strong relayoutContent];
+            // 过渡完成后才 apply 的路径: 这里也算 settled, 可以开右滑了。
+            [strong markWebviewSettled:wv2];
         };
         if (coord) {
             [coord animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> _) {
@@ -786,20 +864,41 @@
     f.size.height = h;
     wv.frame = f;
     [self relayoutContent];
+    // 标准路径: frame 写完即 settled。第一次到达 settled 状态的 webview 会触发
+    // syncInteractivePopGestureWithWebviewState 重新打开右滑。
+    [self markWebviewSettled:wv];
 }
 
-/// "现在改 layout 是否危险" 综合判定, 覆盖三类过渡:
-///   1. self.transitionCoordinator —— nav push/pop / 自身被 modal present
-///   2. self.presentedViewController —— 我把别人 (sheet) present 在身上;
-///      sheet 还在 dismiss 动画时这个属性仍非空, 直到动画结束 → 这条是
-///      page sheet 路径不走 will/didDisappear 但仍处过渡期的兜底依据
-///   3. self.contentDetaching —— viewWillDisappear 显式设的旧闸 (兜底)
-///   4. !self.view.window —— 已彻底离屏, 任何 layout 都没意义
+/// 标记某个 webview 已稳定 (frame 写完 + relayoutContent 跑过)。从 pending 集合
+/// 移除并同步右滑手势状态; 集合空时自动开启右滑。idempotent: 多次调用安全。
+- (void)markWebviewSettled:(WKWebView *)wv {
+    if (!wv) return;
+    if (![self.pendingTableWebviews containsObject:wv]) return;
+    [self.pendingTableWebviews removeObject:wv];
+    [self syncInteractivePopGestureWithWebviewState];
+}
+
+/// "现在改 layout 是否危险" 综合判定。区分 "appearing" 与 "disappearing":
+///   - appearing (push 进来 / 首次显示): transitionCoordinator 也 != nil, 但这是
+///     VC 被 SHOW 出来的过渡, 改 frame 完全安全 (没有 transition driver 反向拨
+///     layout 的对抗局面)。这种情况不 defer, 否则用户会看到详情已显示但表格
+///     区空白 1-2 秒。
+///   - disappearing (pop 出去 / 被 dismissed): VC 被 HIDE, 此时 transition driver
+///     在 tracking runloop 推动 layout, 我方再去改 frame 必撞死循环, 必须 defer。
+/// 三个 disappearing 信号:
+///   1. contentDetaching            viewWillDisappear 显式设
+///   2. isMovingFromParentViewController  nav pop 中 (含交互式右滑)
+///   3. isBeingDismissed            modal dismiss 中
+/// 此外:
+///   - presentedViewController != nil  自己 present 了 sheet (含 dismiss 动画期);
+///                                     这段改 frame 风险大 (sheet 套 layout 套 pop)
+///   - !view.window                    已彻底离屏
 - (BOOL)shouldDeferLayoutWork {
     if (self.contentDetaching) return YES;
     if (!self.isViewLoaded || !self.view.window) return YES;
-    if (self.transitionCoordinator) return YES;
     if (self.presentedViewController) return YES;
+    if (self.isMovingFromParentViewController) return YES;
+    if (self.isBeingDismissed) return YES;
     return NO;
 }
 
