@@ -2878,6 +2878,12 @@ static const NSInteger kMaxRehydratePages = 35;
 // 这一页全是已存在的消息 (内部 3 次 retry 也没救回来), 再继续递归只是在原地空转 ——
 // 直接当成 "拉不动了" 收尾 + capped HUD, 比把 35 页全空跑一遍代价小得多。
 -(void) rehydrateNextPage:(NSInteger)pageIndex wasAtBottom:(BOOL)wasAtBottom {
+    // 重入闸: 30s watchdog 可能已经把 isRehydrating 置 NO + drain + reload, 而某个
+    // pullup: completion 仍在飞 (SDK 网络请求 watchdog 拦不掉)。迟到 completion 回来
+    // 不该再启动下一页, 否则形成 watchdog finish + late-completion 重复 finish 的状态机
+    // 重入 (重复 reloadData / 二次 HUD / 二次 buffer drain)。这里和 completion 体内
+    // 双闸, 只要 isRehydrating==NO 一律早出。
+    if (!self.isRehydrating) return;
     if (![self pullupHasMore]) {
         [self finishRehydrateCapped:NO wasAtBottom:wasAtBottom];
         return;
@@ -2893,6 +2899,8 @@ static const NSInteger kMaxRehydratePages = 35;
     [self pullup:^(bool more) {
         __strong typeof(weakSelf) ss = weakSelf;
         if (!ss) return;
+        // 同一只闸: watchdog 已经走完, 这里就当无事发生 (drain/reload 已被 finish 做过)
+        if (!ss.isRehydrating) return;
         WKMessageModel *afterLast = [ss.dataProvider lastMessage];
         BOOL madeProgress = afterLast && ![afterLast.clientMsgNo isEqualToString:anchorBefore];
         if (!more) {
