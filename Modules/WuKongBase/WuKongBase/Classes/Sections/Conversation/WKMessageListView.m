@@ -238,8 +238,9 @@ static const BOOL kIncrementalPulldown = NO;
     [[WKReminderManager shared] removeDelegate:self];
     // 取消任何挂在 runloop 上的 rehydrate 触发: 切换 channel / 退出页面后
     // 不应再让上一次的 0.5s debounce 真的跑起来 (performSelector 持有 self 强引用,
-    // 不取消会延迟 dealloc + 在 detached 视图上做无意义 reload)。
+    // 不取消会延迟 dealloc + 在 detached 视图上做无意义 reload)。watchdog 同理取消。
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(beginRehydrate) object:nil];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(forceFinishRehydrateOnTimeout) object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKShareExtensionMessageSent" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKMessageMultipleAnchorDidChange" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidBecomeActiveNotification object:nil];
@@ -2842,12 +2843,28 @@ static const NSInteger kMaxRehydratePages = 35;
 
 -(void) beginRehydrate {
     if (!self.channel) return;
+    // 不在窗口里 = VC 已经被另一层 push 盖住 (资料/相册/设置), 此时跑 rehydrate 会:
+    //   - capped HUD 弹到当前实际所在的无关页 ([WKNavigationManager].topViewController.view);
+    //   - 多页 pullup 跟前台会话页的首屏加载抢 ioQueue。
+    // 先要求 self.window 非 nil, 等 VC 重新 attach 时再触发 (重连后 onConnectStatus
+    // 仍会经过 prevConnectStatus 状态机重算)。
+    if (!self.window) return;
     if ([WKSDK shared].connectionManager.connectStatus != WKConnected) return;
     if (self.isRehydrating) return;
     if (self.isPulldownInProgress) return; // 让 pulldown 自己跑完, 它的 drain 会接住 pending push
     self.isRehydrating = YES;
+    // watchdog: SDK pullup 假死 (网络硬挂 / 服务端不响应) 时, isRehydrating 永远不会落,
+    // live push 全被 buffer 不渲染。30s 是 HTTP 默认超时的一半, 比单页 pullup 真实耗时大
+    // 一个数量级; 到点强制 finish (capped 路径 + drain), 至少不会让用户陷在静默状态。
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(forceFinishRehydrateOnTimeout) object:nil];
+    [self performSelector:@selector(forceFinishRehydrateOnTimeout) withObject:nil afterDelay:30.0];
     BOOL wasAtBottom = self.positionAtBottom;
     [self rehydrateNextPage:0 wasAtBottom:wasAtBottom];
+}
+
+-(void) forceFinishRehydrateOnTimeout {
+    if (!self.isRehydrating) return;
+    [self finishRehydrateCapped:YES wasAtBottom:NO];
 }
 
 // pullup 一页 → 看 hasMore + 页计数 → 递归。
@@ -2888,6 +2905,7 @@ static const NSInteger kMaxRehydratePages = 35;
 
 -(void) finishRehydrateCapped:(BOOL)capped wasAtBottom:(BOOL)wasAtBottom {
     self.isRehydrating = NO;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(forceFinishRehydrateOnTimeout) object:nil];
 
     // typing 残留清掉 —— 后台/断网期间 bot 回复经 conversation-sync 直写 DB,
     // 绕过了 onRecvMessages 的清除路径, 这里统一兜底。
@@ -2906,9 +2924,11 @@ static const NSInteger kMaxRehydratePages = 35;
 
     // 渲染收尾: 一次性 reloadData 收敛 insertRows 路径里可能残留的 dp/tableView 漂移。
     // 这是治 "scroll 上滑很多气泡空白" 的关键 —— rehydrate 等于把表的状态机拨回零。
-    // 用户原本贴底就再贴一次, 否则保留 contentOffset (UITableView reloadData 默认行为)。
+    // wasAtBottom 是进入 rehydrate 时的快照, 多页 pullup + watchdog 路径下 rehydrate
+    // 可能跑十几秒, 用户中途上滑读历史; 二次判定一次 positionAtBottom, 只在用户"进入时
+    // 在底 && 现在仍在底"才 scroll-to-bottom, 避免把读历史的用户拽回去。
     [self.tableView reloadData];
-    if (wasAtBottom) {
+    if (wasAtBottom && self.positionAtBottom) {
         [self scrollToBottom:NO];
     }
 
@@ -2918,7 +2938,9 @@ static const NSInteger kMaxRehydratePages = 35;
         [self drainPendingRecvMessagesAfterRehydrate];
     }
 
-    if (capped) {
+    // capped HUD 也只在仍属活跃显示页时弹, 避免 VC 已被 push 盖住但还没 detach
+    // (e.g. push 资料页期间 watchdog 触发) 时把 HUD 弹到无关页面。
+    if (capped && self.window) {
         UIView *topView = [WKNavigationManager shared].topViewController.view ?: self;
         [topView showHUDWithHide:LLang(@"消息很多，下拉刷新查看更早")];
     }

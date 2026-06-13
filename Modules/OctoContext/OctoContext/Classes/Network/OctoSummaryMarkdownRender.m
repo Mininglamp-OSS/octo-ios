@@ -37,28 +37,28 @@
     NSArray<NSString *> *lines = [workingContent componentsSeparatedByString:@"\n"];
     UIColor *body = [UIColor labelColor];
     UIColor *muted = [UIColor.labelColor colorWithAlphaComponent:0.85];
-    // 横线匹配 (commonmark spec): 行内只允许 -/*/_ 三种, ≥3 个, 中间允许空格。
-    // 命中后整行替成一条灰色细线, 而不是字面 "---"。
-    NSRegularExpression *hrRe = [NSRegularExpression regularExpressionWithPattern:@"^[-*_\\s]*(?:[-*_]\\s*){3,}$"
-                                                                          options:0
-                                                                            error:nil];
     for (NSString *raw in lines) {
         NSString *line = raw;
         UIFont *font = [UIFont systemFontOfSize:fontSize];
         UIColor *color = body;
         BOOL bullet = NO;
+        // 横线匹配 (commonmark spec): 整行只允许 -/*/_ 三种之一 + 可选空白, ≥3 个符号。
+        // 之前用了 NSRegularExpression `^[-*_\s]*(?:[-*_]\s*){3,}$`, 字符类重叠会触发
+        // 灾难性回溯; 服务端 AI 内容里偶发的 16k 字符 "- "*n 会让主线程冻结。改成线性扫
+        // 一遍同时校验 "纯字符" 和 "≥3 个", 没有正则就没有 ReDoS 风险。
         NSString *trimmed = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         BOOL isHr = NO;
-        if (trimmed.length > 0 && [hrRe numberOfMatchesInString:trimmed options:0 range:NSMakeRange(0, trimmed.length)] > 0) {
-            // 限定: 只识别全是同一种符号 (避免 "*-*-*" 这种被误判)
+        if (trimmed.length >= 3) {
             unichar c0 = [trimmed characterAtIndex:0];
             if (c0 == '-' || c0 == '*' || c0 == '_') {
                 BOOL pure = YES;
-                for (NSUInteger i = 1; i < trimmed.length; i++) {
+                NSUInteger symCount = 0;
+                for (NSUInteger i = 0; i < trimmed.length; i++) {
                     unichar ci = [trimmed characterAtIndex:i];
-                    if (ci != c0 && ci != ' ' && ci != '\t') { pure = NO; break; }
+                    if (ci == c0) { symCount++; }
+                    else if (ci != ' ' && ci != '\t') { pure = NO; break; }
                 }
-                isHr = pure;
+                isHr = pure && symCount >= 3;
             }
         }
         if (isHr) {

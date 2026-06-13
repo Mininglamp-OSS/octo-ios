@@ -137,6 +137,9 @@
 }
 
 - (void)dealloc {
+    // 搜索 debounce 用 performSelector:afterDelay: 持 self 强引用, 离开页面前一定要 cancel,
+    // 否则 dealloc 之后还会跑一次 applyKeyword (走废 view + 触发 reload 网络请求)。
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(applyKeyword) object:nil];
     [self.poller stop];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }

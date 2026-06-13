@@ -532,7 +532,13 @@
 /// 无需重新 loadHTMLString。
 - (NSString *)wrapTableHTML:(NSString *)html {
     if (html.length == 0) return html;
+    // CSP 兜底: WKMarkdownRenderer.escapeHTML 不转义 `"`, 服务端 markdown 表格 cell 里
+    // 如果有 `[x](" onmouseover=...)` 形式可以闭合 href 引号注入事件属性。这里在 webview
+    // 顶部声明 `script-src 'none'` + 关掉 inline event handler / data: 之外的源, 同时把
+    // 按钮链接 scheme 限定到 octo-cit (nav policy 已 cancel 其它), 双层关闭 XSS sink。
+    // 该 CSP 只影响本表格 webview, 共享 markdown 渲染器不动, 避免影响消息 cell 路径。
     NSString *injectedCSS =
+        @"<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'self' data:; script-src 'none'; style-src 'unsafe-inline';\">"
         @"<style>"
         @"a[href^='octo-cit']{display:inline-block;padding:0 6px;margin:0 1px;"
         @"background:rgba(127,59,245,0.16);color:#7F3BF5;border-radius:7px;"

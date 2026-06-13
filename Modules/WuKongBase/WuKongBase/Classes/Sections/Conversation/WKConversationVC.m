@@ -450,6 +450,11 @@
 
     UIViewController *vc = [createCls new];
     [vc setValue:@[source] forKey:@"prefilledSources"];
+    // 透传 origin: 服务端按 origin_channel_id/type 区分总结发起来源 (chat header 入口
+    // vs 列表 FAB 入口)。值跟 sources 里的同一 channel 对齐。原本只设了 prefilledSources,
+    // 这条入口的 origin 字段都是 0/空, 服务端拿不到来源链路。
+    [vc setValue:self.channel.channelId forKey:@"originChannelId"];
+    [vc setValue:@(self.channel.channelType) forKey:@"originChannelType"];
     // 聊天页星星入口: 提交后给一条引导式 HUD, 告诉用户去哪查看进度。
     // 列表 FAB 入口不会走这里, 仍保持简短的 "已创建总结任务"。
     [vc setValue:LLang(@"已开始生成总结，可到 智能总结 查看进度") forKey:@"submitSuccessHUDText"];

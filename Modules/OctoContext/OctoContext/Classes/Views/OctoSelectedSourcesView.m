@@ -134,7 +134,14 @@ static const CGFloat kInnerGap    = 6;
 
 - (void)loadAvatarIntoPill:(OctoSourcePillView *)pill forSource:(OctoSourceItem *)src {
     // 用 SDK channel info 拿头像 url。WKChannelInfo.logo 是头像字段; 无 url 时画首字母色块。
-    NSInteger ct = (src.sourceType == OctoSourceDirectMessage) ? WK_PERSON : WK_GROUP;
+    // 三态映射: DM→WK_PERSON, 子区→WK_COMMUNITY_TOPIC, 其余→WK_GROUP。之前缺子区分支
+    // 把 OctoSourceThread 当 WK_GROUP 反查头像查不到, 永远落到首字母色块兜底。
+    NSInteger ct;
+    switch (src.sourceType) {
+        case OctoSourceDirectMessage: ct = WK_PERSON; break;
+        case OctoSourceThread:        ct = WK_COMMUNITY_TOPIC; break;
+        default:                      ct = WK_GROUP; break;
+    }
     WKChannel *ch = [WKChannel channelID:src.sourceId channelType:ct];
     WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:ch];
     NSString *url = info.logo;
