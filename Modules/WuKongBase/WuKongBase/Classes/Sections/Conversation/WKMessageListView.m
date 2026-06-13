@@ -1790,7 +1790,7 @@ static const NSInteger kMaxPullupDedupRetry = 3;
     // 查DB确认消息是否存在且可用（未删除、未撤回），不可用则直接提示
     WKMessage *targetMsg = [[WKMessageDB shared] getMessage:self.channel messageSeq:messageSeq];
     if(targetMsg && (targetMsg.isDeleted || targetMsg.remoteExtra.revoke)) {
-        [self.tableView showHUDWithHide:LLang(@"原消息不存在")];
+        [self.tableView showMsg:LLang(@"原消息不存在")];
         return;
     }
     if(!targetMsg) {
@@ -1799,7 +1799,7 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         // 允许 fallback 时先走服务端 pullAround 拉一窗口(SDK 会写本地 DB),拿到后递归再走一遍定位;
         // 仍然没有(allowServerFallback=NO)才真正提示。
         if(!allowServerFallback) {
-            [self.tableView showHUDWithHide:LLang(@"原消息不存在")];
+            [self.tableView showMsg:LLang(@"原消息不存在")];
             return;
         }
         __weak typeof(self) weakSelf = self;
