@@ -1,0 +1,150 @@
+/*
+  Localizable.strings (en)
+  OctoContext
+
+  Mirrors octo-web/packages/dmworksummary/src/i18n/en-US.json.
+*/
+
+/* Entry */
+"上下文" = "Context";
+"智能总结" = "Smart Summary";
+"智能总结列表 (PR2)" = "Smart Summary list (PR2)";
+
+/* Common */
+"取消" = "Cancel";
+"完成" = "Done";
+"删除" = "Delete";
+"保存" = "Save";
+"网络异常" = "Network error";
+"加载失败" = "Failed to load";
+"加载中" = "Loading…";
+"刷新中" = "Refreshing…";
+"松开刷新" = "Release to refresh";
+"暂无总结" = "No summaries yet";
+"未知聊天" = "Unknown chat";
+"未知错误" = "Unknown error";
+"(无标题)" = "(Untitled)";
+
+/* List */
+"查看详情" = "View details";
+"确认删除" = "Confirm deletion";
+"删除后将无法恢复" = "This cannot be undone.";
+"删除失败" = "Failed to delete";
+"全部" = "All";
+"等待中" = "Pending";
+"等待参与者" = "Waiting for participants";
+"生成中" = "Generating";
+"已完成" = "Completed";
+"失败" = "Failed";
+
+/* Card */
+"你发起" = "Created by you";
+"%@发起" = "Created by %@";
+"来自 %@" = "From %@";
+"来自 %@ 等 %lu 个 %@" = "From %@ and %lu more %@";
+"聊天" = "chat";
+"AI正在分析聊天记录..." = "AI is analyzing chat history...";
+"等待参与者确认..." = "Waiting for participants to confirm...";
+"生成失败" = "Generation failed";
+"任务已取消" = "Task cancelled";
+
+/* Relative time */
+"刚刚" = "Just now";
+"%ld分钟前" = "%ld min ago";
+"%ld小时前" = "%ld h ago";
+"%ld天前" = "%ld d ago";
+
+/* Create */
+"创建总结" = "New summary";
+"发起总结" = "New summary";
+"开始总结" = "Start summary";
+"请输入你想总结的主题" = "Enter a topic to summarize";
+"选择聊天" = "Select chats";
+"请选择" = "Select";
+"已选 %lu 个聊天" = "%lu chats selected";
+"已创建总结任务" = "Summary task created";
+"创建失败" = "Failed to create";
+"团队周报" = "Team weekly";
+"总结聊天" = "Summarize chat";
+"项目进展" = "Project status";
+"跟踪进度" = "Track progress";
+"总结本周工作汇报" = "Summarize this week's work report";
+"总结这个聊天的关键内容" = "Summarize key content in this chat";
+"总结项目进展" = "Summarize project progress";
+"总结任务进度" = "Summarize task progress";
+"总结{project_name}的项目进展" = "Summarize the progress of {project_name}";
+"总结{task_name}的进度" = "Summarize the status of {task_name}";
+"项目名称" = "Project name";
+"任务名称" = "Task name";
+
+/* Chat selector */
+"搜索群或联系人" = "Search groups or contacts";
+"群聊" = "Group chat";
+"子区" = "Thread";
+"私聊" = "Direct message";
+"%@ 人" = "%@ members";
+
+/* Detail */
+"总结详情" = "Summary details";
+"任务号 %@" = "Task ID: %@";
+"创建于 %@" = "Created %@";
+"创建于：%@" = "Created: %@";
+"生成于 %@" = "Generated %@";
+"可能需要一会儿时间,请稍候" = "This may take a moment. Please wait.";
+"等待参与者确认\n所有参与者确认后开始生成" = "Waiting for participant confirmation\nGeneration starts after all confirm.";
+"查看确认状态" = "View confirmation status";
+"生成失败:\n" = "Generation failed:\n";
+
+/* Detail menu */
+"编辑" = "Edit";
+"转发到聊天" = "Forward to chat";
+"重新生成" = "Regenerate";
+"取消任务" = "Cancel task";
+"提交我的" = "Submit mine";
+"重试" = "Retry";
+"编辑主题" = "Edit topic";
+"修改后将以新主题重新生成总结" = "The summary will be regenerated with the new topic.";
+"主题不能为空" = "Topic cannot be empty";
+"已开始重新生成" = "Regeneration started";
+"已取消" = "Cancelled";
+"重新生成失败" = "Failed to regenerate";
+"取消失败" = "Failed to cancel";
+"暂无可转发内容" = "No content to forward";
+"已转发到 %ld 个聊天" = "Forwarded to %ld chats";
+"成功 %ld / 失败 %ld" = "Succeeded %ld / Failed %ld";
+"转发失败(%ld)" = "Forward failed (%ld)";
+"已提交" = "Submitted";
+
+/* Edit */
+"编辑总结" = "Edit summary";
+"内容已被他人更新,请返回刷新" = "Content has changed. Please refresh.";
+"保存失败" = "Failed to save";
+"放弃修改?" = "Discard changes?";
+"未保存的修改将丢失" = "Unsaved changes will be lost.";
+"继续编辑" = "Keep editing";
+"放弃" = "Discard";
+
+/* Confirm */
+"参与确认" = "Participant confirmation";
+"参与者" = "Participants";
+"来源" = "Sources";
+"已确认" = "Confirmed";
+"已拒绝" = "Declined";
+"确认参与" = "Confirm participation";
+"请至少选一个来源" = "Select at least one source";
+"已确认参与" = "Participation confirmed";
+"提交失败" = "Failed to submit";
+
+/* BY_PERSON members */
+"成员状态" = "Member status";
+"已接受" = "Accepted";
+
+/* Related chat sheet */
+"关联聊天记录" = "Related chat";
+"原消息 →" = "Open original →";
+
+/* Search & empty state */
+"搜索总结" = "Search summaries";
+"没有找到相关总结" = "No matching summaries";
+"还没有总结记录" = "No summaries yet";
+"让 AI 帮你梳理群聊和工作中的关键信息" = "Let AI distill key points from your chats and work";

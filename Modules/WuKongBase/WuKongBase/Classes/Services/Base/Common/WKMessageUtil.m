@@ -15,6 +15,15 @@
 
 
 +(WKMessageContent*) decodeMessageContent:(NSDictionary*)payloadDict contentType:(NSNumber**)contentType{
+    return [self decodeMessageContent:payloadDict contentType:contentType db:nil];
+}
+
+// db != nil 时给嵌套 content 走 -decode:data:db: 透传连接, 让 decodeReply 内部
+// queryChannelInfo:db: 复用同一 FMDatabase, 不再 [FMDatabaseQueue inDatabase:] 重入触发
+// FMDB 反重入 assert 导致 SIGABRT (Bugly: WKConversationManager handleSyncConversation:
+// → WKMessageDB replaceMessages: inTransaction: 内合并转发解码栈).
+// db == nil 时与旧路径完全等价, 外部调用方原样不变.
++(WKMessageContent*) decodeMessageContent:(NSDictionary*)payloadDict contentType:(NSNumber**)contentType db:(FMDatabase * _Nullable)db{
     if(!payloadDict || ![payloadDict isKindOfClass:[NSDictionary class]]) {
         payloadDict = @{@"type":@(WK_UNKNOWN)};
     }
@@ -22,7 +31,7 @@
     if(!contentTpe) {
         contentTpe = @(WK_UNKNOWN);
     }
-    
+
     WKMessageContent *messageContent;
     if(!contentTpe) {
         messageContent = [[WKUnknownContent alloc] init];
@@ -33,10 +42,14 @@
 
     NSData *contentData = [NSJSONSerialization dataWithJSONObject:payloadDict options:kNilOptions error:nil];
     // 解码正文内容
-    [messageContent decode:contentData];
-   
+    if(db) {
+        [messageContent decode:contentData db:db];
+    } else {
+        [messageContent decode:contentData];
+    }
+
     *contentType = contentTpe;
-    
+
     return messageContent;
 }
 
@@ -63,21 +76,30 @@
 }
 
 +(WKMessage*) toMessage:(NSDictionary*)messageDict {
+    return [self toMessage:messageDict db:nil];
+}
+
+// db != nil 时只影响一个点: 主 content 的 decodeMessageContent 走 db 透传变体,
+// 嵌套消息 (合并转发 msgs / reply.content) 拿得到当前事务连接, 不会再 inDatabase: 重入.
+// streams / messageExtra 的 content 解码当前不在事务-合并转发的崩溃栈里, 暂保留旧路径
+// 减少一次性触面; 后续若再出类似栈再单独处理.
+// db == nil 时全程与旧 +toMessage: 等价.
++(WKMessage*) toMessage:(NSDictionary*)messageDict db:(FMDatabase * _Nullable)db {
     WKMessage *message = [[WKMessage alloc] init];
    NSDictionary *headerDict =  messageDict[@"header"];
     if(headerDict) {
         message.header.showUnread = headerDict[@"red_dot"]?[headerDict[@"red_dot"] integerValue]:0;
         message.header.noPersist = headerDict[@"no_persist"]?[headerDict[@"no_persist"] integerValue]:0;
     }
-    
+
     if(messageDict[@"setting"]) {
         message.setting =   [WKSetting fromUint8:[messageDict[@"setting"] intValue]];
     }
-    
+
     if(messageDict[@"message_id"] && [messageDict[@"message_id"]  isKindOfClass:[NSString class]]) {
         NSDecimalNumber* formatter = [[NSDecimalNumber alloc] initWithString:messageDict[@"message_id"] ];
         message.messageId = formatter.unsignedLongLongValue;
-        
+
     }else{
         message.messageId = [messageDict[@"message_id"] unsignedLongLongValue];
     }
@@ -86,7 +108,7 @@
     }
     message.clientMsgNo = messageDict[@"client_msg_no"]?:@"";
     message.streamNo = messageDict[@"stream_no"]?:@"";
-    
+
     message.timestamp =messageDict[@"timestamp"]?[messageDict[@"timestamp"] integerValue]:0;
     message.fromUid = messageDict[@"from_uid"]?:@"";
     message.toUid = messageDict[@"to_uid"]?:@"";
@@ -101,7 +123,7 @@
         message.channel = [[WKChannel alloc] initWith:message.fromUid channelType:channelType];
     }
     message.status = WK_MESSAGE_SUCCESS;
-    
+
     NSDictionary *messageExtraDict = messageDict[@"message_extra"];
     if(messageExtraDict) {
         WKMessageExtra *messageExtra =  [WKMessageUtil toMessageExtra:messageExtraDict channel:message.channel];
@@ -109,11 +131,11 @@
         message.remoteExtra = messageExtra;
     }
 
-    
+
     NSData *planPayloadData;
     BOOL signalFail = false;
     NSDictionary *payloadDict;
-    
+
     if(!messageDict[@"payload"] ||  messageDict[@"payload"] == [NSNull null] ) {
         payloadDict = nil;
     }else {
@@ -127,19 +149,19 @@
             planPayloadData = [NSJSONSerialization dataWithJSONObject:payloadDict options:kNilOptions error:nil];
         }
     }
-    
+
     NSNumber *contentType;
     WKMessageContent *messageContent;
     if(signalFail) {
         messageContent = [WKSignalErrorContent new];
         contentType = @(WK_SIGNAL_ERROR);
     }else {
-         messageContent = [self decodeMessageContent:payloadDict contentType:&contentType];
+         messageContent = [self decodeMessageContent:payloadDict contentType:&contentType db:db];
     }
     message.contentData = planPayloadData;
     message.content = messageContent;
     message.contentType = contentType.integerValue;
-    
+
     if(!message.fromUid || [message.fromUid isEqualToString:@""]) { // 如果协议层没有给fromUID 则如果content层有则填充上去
         message.fromUid = messageContent.senderUserInfo?messageContent.senderUserInfo.uid:@"";
     }
@@ -196,7 +218,7 @@
             message.reactions = reactions;
         }
     }
-    
+
     // 流
     if(messageDict[@"streams"]) {
         NSArray<NSDictionary*> *streamDicts = messageDict[@"streams"];
@@ -207,10 +229,10 @@
                 [streams addObject:stream];
             }
             message.streams = [NSMutableArray arrayWithArray:streams];
-            
+
         }
     }
-    
+
     return message;
 }
 

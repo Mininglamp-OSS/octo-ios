@@ -57,12 +57,14 @@
     [self addSubview:self.voiceCallBtn];
     [self addSubview:self.videoCallBtn];
     [self addSubview:self.moreDotsBtn];
+    [self addSubview:self.summaryBtn];
     [self.avatarImgView addSubview:self.autoDeleteView];
 
     [self.infoBoxBtn addTarget:self action:@selector(infoPressed) forControlEvents:UIControlEventTouchUpInside];
     [self.voiceCallBtn addTarget:self action:@selector(voiceCallPressed) forControlEvents:UIControlEventTouchUpInside];
     [self.videoCallBtn addTarget:self action:@selector(videoCallPressed) forControlEvents:UIControlEventTouchUpInside];
     [self.moreDotsBtn addTarget:self action:@selector(moreDotsPressed) forControlEvents:UIControlEventTouchUpInside];
+    [self.summaryBtn addTarget:self action:@selector(summaryPressed) forControlEvents:UIControlEventTouchUpInside];
     
     [WKApp.shared addChannelAvatarUpdateNotify:self selector:@selector(channelAvatarUpdate:)];
     
@@ -100,6 +102,12 @@
     }
 }
 
+-(void) summaryPressed {
+    if(self.onSummary) {
+        self.onSummary();
+    }
+}
+
 - (void)layoutSubviews {
     [super layoutSubviews];
 
@@ -124,13 +132,27 @@
         self.voiceCallBtn.lim_centerY_parent = self;
     }
 
-    self.infoBoxBtn.lim_height = self.lim_height;
-    if(self.voiceCallBtn.hidden) {
-        CGFloat infoRight = self.moreDotsBtn.hidden ? (self.lim_width - 10.0f) : (self.moreDotsBtn.lim_left - 8.0f);
-        self.infoBoxBtn.lim_width = infoRight;
-    }else{
-        self.infoBoxBtn.lim_width = self.voiceCallBtn.lim_left;
+    // summaryBtn 紧贴左侧, 三种 channel type 都显示。其右侧 anchor 取当前可见的最近一个按钮:
+    //   - voiceCallBtn 可见 → 跟在它左侧
+    //   - 否则 videoCallBtn 可见 → 跟在它左侧
+    //   - 都不可见 (子区) → 跟在 moreDotsBtn 左侧, 即贴 rightEdge
+    if(!self.summaryBtn.hidden) {
+        CGFloat summaryRight = rightEdge;
+        if(!self.voiceCallBtn.hidden)      summaryRight = self.voiceCallBtn.lim_left - 15.0f;
+        else if(!self.videoCallBtn.hidden) summaryRight = self.videoCallBtn.lim_left - 15.0f;
+        self.summaryBtn.lim_left = summaryRight - self.summaryBtn.lim_width;
+        self.summaryBtn.lim_centerY_parent = self;
     }
+
+    self.infoBoxBtn.lim_height = self.lim_height;
+    // infoBoxBtn 右边界改为最左侧可见按钮的左边: summaryBtn → voiceCallBtn → videoCallBtn → moreDotsBtn → 整宽。
+    CGFloat leftmostRight;
+    if(!self.summaryBtn.hidden)        leftmostRight = self.summaryBtn.lim_left;
+    else if(!self.voiceCallBtn.hidden) leftmostRight = self.voiceCallBtn.lim_left;
+    else if(!self.videoCallBtn.hidden) leftmostRight = self.videoCallBtn.lim_left;
+    else if(!self.moreDotsBtn.hidden)  leftmostRight = self.moreDotsBtn.lim_left - 8.0f;
+    else                               leftmostRight = self.lim_width - 10.0f;
+    self.infoBoxBtn.lim_width = leftmostRight;
    
     CGFloat avatarRightSpace = 5.0f;
     
@@ -379,7 +401,7 @@
         UIImage *img;
         if (@available(iOS 13.0, *)) {
             img =  [[self imageName:@"Conversation/Index/VoiceCall"] imageWithTintColor:[WKApp shared].config.navBarButtonColor renderingMode:UIImageRenderingModeAlwaysTemplate];
-           
+
         } else {
             img = [[self imageName:@"Conversation/Index/VoiceCall"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
         }
@@ -387,6 +409,87 @@
         [_voiceCallBtn setTintColor:[WKApp shared].config.navBarButtonColor];
     }
     return _voiceCallBtn;
+}
+
+/// 智能总结入口按钮: 用 lucide-sparkle 图标 (与上下文 tab 入口同一份视觉, 但用矢量
+/// 描线渲染避免 raster 模板染色后的颗粒感), 颜色取 navBarButtonColor —— 与同一栏
+/// 顶左侧返回箭头 / voiceCallBtn / videoCallBtn 同色, 视觉上属于 nav 控件家族,
+/// 不再用品牌紫做"AI 强调", 整条 header 色板更安静。
+/// 路径由 octoSparkleImage 函数手算 lucide 24×24 viewBox 路径 (4 个圆角尖 + 4 个圆角凹),
+/// stroke-width 2 (按 viewBox), round cap/join。
+- (UIButton *)summaryBtn {
+    if(!_summaryBtn) {
+        _summaryBtn = [[UIButton alloc] initWithFrame:CGRectMake(0.0f, 0.0f, 32.0f, 32.0f)];
+        UIColor *tint = [WKApp shared].config.navBarButtonColor;
+        // 描线宽 2 / 24 viewBox, 渲染到 22pt → stroke ≈ 1.83pt; 22pt 在 32×32 button 中央留 5pt 内边距,
+        // 与 voiceCallBtn 的视觉重量基本一致。
+        UIImage *img = [WKConversationChannelHeader octoSparkleImageWithSize:22.0f color:tint];
+        [_summaryBtn setImage:img forState:UIControlStateNormal];
+        [_summaryBtn setTintColor:tint];
+    }
+    return _summaryBtn;
+}
+
+/// 渲染 lucide-sparkle 路径到 UIImage。
+/// SVG 原坐标 (24x24 viewBox): 4 个外尖 (上下左右), 4 个内凹 (右上 / 右下 / 左下 / 左上),
+/// 每段直线 + 圆弧拼接。圆弧用 SVG arc 语义换算成中心 + 半径 + 起止角:
+///   - 外尖 r=1, sweep=1 (视觉顺时针, UIKit 翻转坐标系下 clockwise=YES, 数学角度递增)
+///   - 内凹 r=2, sweep=0 (视觉逆时针, clockwise=NO, 数学角度递减)
++ (UIImage *)octoSparkleImageWithSize:(CGFloat)size color:(UIColor *)color {
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size)];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull ctx) {
+        CGFloat s = size / 24.0;
+        // 把 path scale 到目标 size; 中心 (12,12) 对齐到 (size/2, size/2)。
+        UIBezierPath *path = [UIBezierPath bezierPath];
+        #define WK_SP_PT(x, y) CGPointMake((x) * s, (y) * s)
+        [path moveToPoint:WK_SP_PT(11.017, 2.814)];
+        [self appendSparkleArc:path to:WK_SP_PT(12.983, 2.814) radius:1.0 * s sweepCW:YES];
+        [path addLineToPoint:WK_SP_PT(14.034, 8.372)];
+        [self appendSparkleArc:path to:WK_SP_PT(15.628, 9.966) radius:2.0 * s sweepCW:NO];
+        [path addLineToPoint:WK_SP_PT(21.186, 11.017)];
+        [self appendSparkleArc:path to:WK_SP_PT(21.186, 12.983) radius:1.0 * s sweepCW:YES];
+        [path addLineToPoint:WK_SP_PT(15.628, 14.034)];
+        [self appendSparkleArc:path to:WK_SP_PT(14.034, 15.628) radius:2.0 * s sweepCW:NO];
+        [path addLineToPoint:WK_SP_PT(12.983, 21.186)];
+        [self appendSparkleArc:path to:WK_SP_PT(11.017, 21.186) radius:1.0 * s sweepCW:YES];
+        [path addLineToPoint:WK_SP_PT(9.966, 15.628)];
+        [self appendSparkleArc:path to:WK_SP_PT(8.372, 14.034) radius:2.0 * s sweepCW:NO];
+        [path addLineToPoint:WK_SP_PT(2.814, 12.983)];
+        [self appendSparkleArc:path to:WK_SP_PT(2.814, 11.017) radius:1.0 * s sweepCW:YES];
+        [path addLineToPoint:WK_SP_PT(8.372, 9.966)];
+        [self appendSparkleArc:path to:WK_SP_PT(9.966, 8.372) radius:2.0 * s sweepCW:NO];
+        [path closePath];
+        #undef WK_SP_PT
+
+        path.lineWidth = 2.0 * s;
+        path.lineCapStyle = kCGLineCapRound;
+        path.lineJoinStyle = kCGLineJoinRound;
+        [color setStroke];
+        [path stroke];
+    }];
+}
+
+/// SVG arc-to (rx ry 0 0 sweep dx dy) 转 UIBezierPath addArcWithCenter:。
+///   - 圆心 = chord 中点 ± perpendicular * sqrt(r² - halfChord²);
+///     UIKit y-down 下 sweep=1 的中心在 perpendicular 正向 (-dy, dx) 上 (sign=+1),
+///     sweep=0 在反向 (sign=-1)。
+///   - clockwise = sweepCW (因为 UIKit 翻转坐标系下 visually CW 对应 clockwise=YES)。
++ (void)appendSparkleArc:(UIBezierPath *)path to:(CGPoint)p2 radius:(CGFloat)r sweepCW:(BOOL)sweepCW {
+    CGPoint p1 = path.currentPoint;
+    CGFloat dx = p2.x - p1.x, dy = p2.y - p1.y;
+    CGFloat dist = hypot(dx, dy);
+    if (dist < 1e-6) return;
+    CGFloat halfChord = dist / 2.0;
+    if (halfChord > r) halfChord = r;
+    CGFloat perpDist = sqrt(MAX(0, r * r - halfChord * halfChord));
+    CGFloat ux = -dy / dist, uy = dx / dist;
+    CGPoint mid = CGPointMake((p1.x + p2.x) / 2.0, (p1.y + p2.y) / 2.0);
+    CGFloat sign = sweepCW ? 1.0 : -1.0;
+    CGPoint center = CGPointMake(mid.x + sign * perpDist * ux,
+                                  mid.y + sign * perpDist * uy);
+    CGFloat startA = atan2(p1.y - center.y, p1.x - center.x);
+    CGFloat endA   = atan2(p2.y - center.y, p2.x - center.x);
+    [path addArcWithCenter:center radius:r startAngle:startA endAngle:endA clockwise:sweepCW];
 }
 
 - (WKAutoDeleteView *)autoDeleteView {

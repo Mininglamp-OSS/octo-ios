@@ -12,7 +12,7 @@
 #import "WKMySettingManager.h"
 #import "WuKongBase.h"
 #import "WKConversationListVM.h"
-#import "WKConversationVC.h"
+#import "WKConversationRouter.h"
 @implementation WKLocalNotificationManager
 
 static WKLocalNotificationManager *_instance = nil;
@@ -290,52 +290,11 @@ static WKLocalNotificationManager *_instance = nil;
     }
 
     if (channelId.length > 0 && channelType) {
-        [self navigateToChannel:channelId channelType:channelType messageSeq:messageSeq retryCount:0];
+        [WKConversationRouter openChannelId:channelId
+                                channelType:channelType.integerValue
+                                 messageSeq:(messageSeq ? messageSeq.unsignedIntValue : 0)];
     }
     completionHandler();
-}
-
-// 跳转到聊天窗口，冷启动时导航栈未就绪则延迟重试
--(void) navigateToChannel:(NSString *)channelId channelType:(NSNumber *)channelType messageSeq:(NSNumber *)messageSeq retryCount:(NSInteger)retryCount {
-    // 检查是否已登录且导航栈就绪（冷启动时需要等登录+主页加载完成）
-    BOOL isReady = [WKNavigationManager shared].topViewController != nil
-                && [WKApp shared].loginInfo.uid.length > 0
-                && [WKApp shared].loginInfo.token.length > 0;
-
-    if (!isReady) {
-        if (retryCount >= 20) return; // 最多重试 20 次（10 秒）
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [self navigateToChannel:channelId channelType:channelType messageSeq:messageSeq retryCount:retryCount + 1];
-        });
-        return;
-    }
-    dispatch_async(dispatch_get_main_queue(), ^{
-        WKChannel *channel = [WKChannel channelID:channelId channelType:channelType.integerValue];
-
-        // 如果当前已经在相同 channel 的聊天窗口，直接定位消息，不再 push 新页面
-        UIViewController *topVC = [WKNavigationManager shared].topViewController;
-        if ([topVC isKindOfClass:[WKConversationVC class]]) {
-            WKConversationVC *existingVC = (WKConversationVC *)topVC;
-            if ([existingVC.channel.channelId isEqualToString:channel.channelId]
-                && existingVC.channel.channelType == channel.channelType) {
-                if (messageSeq && messageSeq.unsignedIntValue > 0) {
-                    [existingVC locateToMessageSeq:messageSeq.unsignedIntValue];
-                }
-                return;
-            }
-        }
-
-        WKConversationVC *vc = [WKConversationVC new];
-        vc.channel = channel;
-        if (messageSeq && messageSeq.unsignedIntValue > 0) {
-            uint32_t orderSeq = [[WKSDK shared].chatManager getOrderSeq:messageSeq.unsignedIntValue];
-            if (orderSeq == 0) {
-                orderSeq = messageSeq.unsignedIntValue;
-            }
-            vc.locationAtOrderSeq = orderSeq;
-        }
-        [[WKNavigationManager shared] pushViewController:vc animated:YES];
-    });
 }
 
 // 前台收到通知时仍然显示横幅

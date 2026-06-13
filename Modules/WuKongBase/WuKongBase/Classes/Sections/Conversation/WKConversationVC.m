@@ -417,9 +417,49 @@
         [_channelHeader setOnVideoCall:^{
             weakSelf.videocallInvoke(weakSelf.channel,WKCallTypeVideo);
         }];
+
+        // 智能总结入口: 点击直接打开 OctoSummaryCreateVC, 把当前 channel 注入预选 sources,
+        // 用户进去就只需要敲主题 / 选模板。所有 channel type (群 / 私 / 子区) 都启用。
+        // 跨 module 引用: NSClassFromString + setValue:forKey: 避免 WuKongBase 硬依赖 OctoContext。
+        [_channelHeader setOnSummary:^{
+            [weakSelf openSummaryCreateForCurrentChannel];
+        }];
 //        [_channelHeader setBackgroundColor:[UIColor redColor]];
     }
     return _channelHeader;
+}
+
+/// 把当前 channel 转成 OctoSourceItem (sourceType 与 OctoSourceType enum 对齐:
+/// 1=群聊, 2=子区, 3=私聊), 注入 prefilledSources 推 OctoSummaryCreateVC。
+/// 名字优先取 channelInfo.name (头部已显示的那个), 缺省退到 channelId。
+- (void)openSummaryCreateForCurrentChannel {
+    Class createCls = NSClassFromString(@"OctoSummaryCreateVC");
+    Class sourceCls = NSClassFromString(@"OctoSourceItem");
+    if (!createCls || !sourceCls) return;
+
+    NSInteger srcType = 1;
+    if (self.channel.channelType == WK_PERSON)              srcType = 3;
+    else if (self.channel.channelType == WK_COMMUNITY_TOPIC) srcType = 2;
+
+    id source = [sourceCls new];
+    [source setValue:self.channel.channelId forKey:@"sourceId"];
+    [source setValue:@(srcType) forKey:@"sourceType"];
+    NSString *name = self.channelInfo.name;
+    if (name.length == 0) name = self.channel.channelId;
+    [source setValue:name forKey:@"sourceName"];
+
+    UIViewController *vc = [createCls new];
+    [vc setValue:@[source] forKey:@"prefilledSources"];
+    // 透传 origin: 服务端按 origin_channel_id/type 区分总结发起来源 (chat header 入口
+    // vs 列表 FAB 入口)。值跟 sources 里的同一 channel 对齐。原本只设了 prefilledSources,
+    // 这条入口的 origin 字段都是 0/空, 服务端拿不到来源链路。
+    [vc setValue:self.channel.channelId forKey:@"originChannelId"];
+    [vc setValue:@(self.channel.channelType) forKey:@"originChannelType"];
+    // 聊天页星星入口: 提交后给一条引导式 HUD, 告诉用户去哪查看进度。
+    // 列表 FAB 入口不会走这里, 仍保持简短的 "已创建总结任务"。
+    [vc setValue:LLang(@"已开始生成总结，可到 智能总结 查看进度") forKey:@"submitSuccessHUDText"];
+    vc.hidesBottomBarWhenPushed = YES;
+    [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
 
 -(void) showVideoCall:(BOOL) show {

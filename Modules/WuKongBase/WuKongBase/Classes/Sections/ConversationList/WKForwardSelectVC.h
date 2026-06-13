@@ -27,6 +27,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// 单选确认回调（channel + 用户输入的附带文本）
 @property (nonatomic, copy, nullable) void(^onSingleConfirm)(WKChannel *channel, NSString * _Nullable extraText);
 
+/// 多选模式预选: 进入页面时这些 channel 默认已勾选, 用户可二次编辑(增/减)。
+/// 可空。channelType + channelId 用于命中 cell, 命中不到的(数据未加载到当前 tab)
+/// 也保留在内部 _checkedChannels, 提交时一并回调。
+@property (nonatomic, copy, nullable) NSArray<WKChannel *> *preselectedChannels;
+
 @end
 
 NS_ASSUME_NONNULL_END

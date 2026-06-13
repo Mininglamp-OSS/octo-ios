@@ -459,6 +459,7 @@ abstract_target 'OctoiOSBase' do
   pod 'WuKongBase',  :path => './Modules/WuKongBase'   ## WuKongBase 基础工具包
   pod 'WuKongLogin', :path => './Modules/WuKongLogin'  ##  登录模块
   pod 'WuKongContacts', :path => './Modules/WuKongContacts'  ## 联系人模块
+  pod 'OctoContext', :path => './Modules/OctoContext'  ## 上下文 tab —— 智能总结等基于 IM 上下文的 AI 能力
   pod 'WuKongDataSource', :path => './Modules/WuKongDataSource'  ## 数据源
 # pod 'Bugly'  ## 通过 WuKongBase vendored_frameworks 手动集成
 

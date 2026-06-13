@@ -151,6 +151,10 @@ NSString * const WKEntityTypeRobotCommand = @"bot_command";
     [self decode:data];
 }
 
+- (FMDatabase *)currentDb {
+    return self.db;
+}
+
 - (void)decode:(NSData *)data {
     @try {
         __autoreleasing NSError *error = nil;

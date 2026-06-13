@@ -165,6 +165,14 @@ typedef NS_ENUM(NSUInteger, WKMentionedType) {
 // TODO: 解码消息只供DB使用（为了兼容MOS的@消息，因为@消息有DB操作 如果直接调用DB会与外面的DB发生冲突）
 - (void)decode:(NSData *)data db:(FMDatabase*)db;
 
+/**
+ 当前正被事务内解码的 FMDatabase（对应 -decode:data:db: 传入的那个），事务外解码时为 nil。
+ 子类（如 WKMergeForwardContent）解嵌套消息时透传给 +[WKMessageUtil toMessage:db:]，
+ 嵌套 decodeReply 的 channel info 查询就能复用同一连接，避免再开 [FMDatabaseQueue inDatabase:]
+ 触发 FMDB 同队列重入断言（"inDatabase: was called reentrantly..."）。
+ */
+- (FMDatabase * _Nullable)currentDb;
+
 
 
 
