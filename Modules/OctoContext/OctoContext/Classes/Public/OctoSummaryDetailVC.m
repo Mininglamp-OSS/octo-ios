@@ -212,6 +212,16 @@
     [super viewWillDisappear:animated];
     [self.pollTimer invalidate];
     self.pollTimer = nil;
+    // 漏掉的并发路径: A 顶着 sheet (RelatedChatSheet) 时被 swipe-back pop —— UIKit
+    // 把 "sheet 强 dismiss" 和 "nav pop 转场" 两段并发跑在 tracking runloop 上,
+    // 与本 VC 内 webview 异步回填一起重入触发 layout 死锁; 即使 A 当前 webview 已
+    // 稳定, 进程级 (WebContent IPC / 视图栈) 残余状态会拖到下一个 detail VC 的 pop
+    // 时撞死。先 animated:NO 同步摘掉 sheet, 再继续 pop, 让两段串行。
+    // 仅在确实正在被 pop 时做 (isMovingFromParentViewController), 避免误伤
+    // "我们正在 present 别的 VC, 自己暂时被覆盖" 的合法路径。
+    if (self.presentedViewController && self.isMovingFromParentViewController) {
+        [self dismissViewControllerAnimated:NO completion:nil];
+    }
     // 整个链路最关键的闸: detaching=YES 让所有异步 layout 回调 (didFinishNavigation 内
     // evaluateJavaScript 的 completionHandler, 还有任何后续 dispatch_async 进来的) 全部
     // no-op。原因: 右滑返回时 UIKit 在 tracking runloop mode 下做交互过渡, layout 节奏
@@ -783,6 +793,11 @@
 
 - (void)openCitationsByIndices:(NSArray<NSNumber *> *)indices {
     if (indices.count == 0) return;
+    // 文本段 tap 入口也走这: 与 webview decidePolicyForNavigationAction 同口径,
+    // 过渡期 (sheet present/dismiss / nav pop / detaching) 直接吞掉, 防止此时再
+    // present 新 sheet 跟 in-flight 转场撞 layout 重入。webview 那条路径之前已经加
+    // 过类似闸, 这里把文本 tap 路径补齐。
+    if ([self shouldDeferLayoutWork]) return;
     [OctoRelatedChatSheet presentInVC:self
                             citations:self.detail.result.citations
                               sources:self.detail.sources
