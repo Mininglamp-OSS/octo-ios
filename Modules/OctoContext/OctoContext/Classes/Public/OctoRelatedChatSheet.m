@@ -541,12 +541,33 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
     NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
     inv.target = router;
     inv.selector = sel;
-    NSString *cid = r.channelId; NSInteger ctype = r.channelType; uint32_t seq = r.messageSeq;
+    // DM 场景服务端返回的 citation.channel_id 是 "<myUid>@<peerUid>" 复合串,
+    // 但 SDK WKChannel(WK_PERSON) 是按 peerUid 单值建索引的, 直接喂复合串会
+    // 让 WKConversationVC 的本地拉消息全 miss (resolveDisplayName / matchingSource
+    // 已经按 "@" 拆过, 跳转这条路径之前漏了)。
+    NSString *cid = [self resolvedChannelIdForJump:r];
+    NSInteger ctype = r.channelType; uint32_t seq = r.messageSeq;
     [inv setArgument:&cid atIndex:2];
     [inv setArgument:&ctype atIndex:3];
     [inv setArgument:&seq atIndex:4];
     [inv invoke];
     [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (NSString *)resolvedChannelIdForJump:(OctoChatRow *)r {
+    NSString *cid = r.channelId;
+    if (cid.length == 0) return cid;
+    if (r.channelType != WK_PERSON) return cid;
+    if ([cid rangeOfString:@"@"].location == NSNotFound) return cid;
+    NSArray<NSString *> *parts = [cid componentsSeparatedByString:@"@"];
+    NSString *myUid = [WKApp shared].loginInfo.uid;
+    NSString *peer = nil;
+    for (NSString *p in parts) {
+        if (p.length == 0) continue;
+        if (myUid.length > 0 && [p isEqualToString:myUid]) continue;
+        peer = p; break;
+    }
+    return peer.length > 0 ? peer : cid;
 }
 
 - (void)onClose { [self dismissViewControllerAnimated:YES completion:nil]; }
