@@ -1043,6 +1043,10 @@
             }
         }
         [self loadDetail];
+        // 通知列表同步: 否则用户从详情发起"重新生成"后返回,
+        // 列表仍卡在旧的 completed 状态,看不到"正在重新总结"。
+        // 复用 CreateVC 的口径——后端层面 regenerate 就是发起一条新 task_id。
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"OctoSummaryDidCreateNotification" object:nil];
     }];
 }
 
