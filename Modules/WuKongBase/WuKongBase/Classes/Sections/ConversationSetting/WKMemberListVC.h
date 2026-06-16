@@ -22,6 +22,7 @@ typedef void (^MembersFinishedSelect)(NSArray<NSString*>* uids);
 @property(nonatomic,strong) WKChannel *channel;
 
 @property(nonatomic,assign) BOOL edit; // 是否开启编辑模式
+@property(nonatomic,assign) BOOL singleSelect; // 单选模式：勾选新成员会清空旧选择
 
 @property(nonatomic,strong) NSArray<NSString*> *disableUsers; // 被禁止选择的用户
 @property(nonatomic,strong) NSArray<NSString*> *hiddenUsers; // 不显示的用户

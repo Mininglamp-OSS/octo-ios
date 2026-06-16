@@ -112,6 +112,12 @@ static NSString *WKGroupAttrKeyName = @"name";
 -(void) groupManager:(WKGroupManager*)manager groupNo:(NSString*)groupNo removeBotAdmin:(NSString*)uid complete:(void(^__nullable)(NSError * __nullable error))complete;
 
 
+/// 转让群主
+/// @param groupNo 群编号
+/// @param toUID 新群主 uid
+-(void) groupManager:(WKGroupManager*)manager groupNo:(NSString*)groupNo transferOwner:(NSString*)toUID complete:(void(^__nullable)(NSError * __nullable error))complete;
+
+
 /**
  同步群信息
 
@@ -301,6 +307,12 @@ static NSString *WKGroupAttrKeyName = @"name";
 /// @param groupNo 群编号
 /// @param uid 机器人 uid
 -(void) groupNo:(NSString*)groupNo removeBotAdmin:(NSString*)uid complete:(void(^__nullable)(NSError * __nullable error))complete;
+
+
+/// 转让群主
+/// @param groupNo 群编号
+/// @param toUID 新群主 uid
+-(void) groupNo:(NSString*)groupNo transferOwner:(NSString*)toUID complete:(void(^__nullable)(NSError * __nullable error))complete;
 
 
 /**

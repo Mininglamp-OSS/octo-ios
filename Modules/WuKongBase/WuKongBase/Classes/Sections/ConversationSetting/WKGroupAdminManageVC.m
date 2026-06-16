@@ -16,10 +16,12 @@
 @interface WKGroupAdminMemberCell : UITableViewCell
 @property(nonatomic, strong) WKUserAvatar *avatar;
 @property(nonatomic, strong) UILabel *nameLbl;
-@property(nonatomic, strong) UILabel *roleTagLbl; // 群主 / 管理员 / 机器人
+@property(nonatomic, strong) UILabel *roleTagLbl;       // 群主 / 管理员 文字标签
+@property(nonatomic, strong) UIImageView *aiBadgeView;  // Bot 行的 AI 图标（与通讯录一致）
 @property(nonatomic, strong) UIImageView *removeIconView;
 @property(nonatomic, assign) BOOL canRemove;
 - (void)refreshWithMember:(WKChannelMember *)member roleText:(NSString *)roleText roleColor:(UIColor *)roleColor canRemove:(BOOL)canRemove;
+- (void)refreshWithBotMember:(WKChannelMember *)member canRemove:(BOOL)canRemove;
 @end
 
 @implementation WKGroupAdminMemberCell
@@ -39,10 +41,17 @@
         _roleTagLbl = [UILabel new];
         _roleTagLbl.font = [[WKApp shared].config appFontOfSize:11.0f];
         _roleTagLbl.textAlignment = NSTextAlignmentCenter;
+        _roleTagLbl.baselineAdjustment = UIBaselineAdjustmentAlignCenters;
         _roleTagLbl.layer.cornerRadius = 4.0f;
         _roleTagLbl.layer.masksToBounds = YES;
         _roleTagLbl.hidden = YES;
         [self.contentView addSubview:_roleTagLbl];
+
+        _aiBadgeView = [[UIImageView alloc] init];
+        _aiBadgeView.image = [WKApp.shared loadImage:@"Common/Index/IconAIBadge" moduleID:@"WuKongBase"];
+        _aiBadgeView.contentMode = UIViewContentModeScaleAspectFit;
+        _aiBadgeView.hidden = YES;
+        [self.contentView addSubview:_aiBadgeView];
 
         _removeIconView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 22, 22)];
         _removeIconView.image = [[WKApp shared] loadImage:@"Conversation/Setting/MemberDelete" moduleID:@"WuKongBase"];
@@ -57,9 +66,10 @@
     self.avatar.url = [WKApp.shared getImageFullUrl:member.memberAvatar].absoluteString;
     self.nameLbl.text = member.memberRemark.length > 0 ? member.memberRemark : member.memberName;
 
+    self.aiBadgeView.hidden = YES;
     if (roleText.length > 0) {
         self.roleTagLbl.hidden = NO;
-        self.roleTagLbl.text = [NSString stringWithFormat:@" %@ ", roleText];
+        self.roleTagLbl.text = roleText;
         self.roleTagLbl.textColor = [UIColor whiteColor];
         self.roleTagLbl.backgroundColor = roleColor;
     } else {
@@ -67,6 +77,17 @@
     }
     self.canRemove = canRemove;
     self.removeIconView.hidden = !canRemove;
+    [self setNeedsLayout];
+}
+
+- (void)refreshWithBotMember:(WKChannelMember *)member canRemove:(BOOL)canRemove {
+    self.avatar.url = [WKApp.shared getImageFullUrl:member.memberAvatar].absoluteString;
+    self.nameLbl.text = member.memberRemark.length > 0 ? member.memberRemark : member.memberName;
+    self.roleTagLbl.hidden = YES;
+    self.aiBadgeView.hidden = (self.aiBadgeView.image == nil);
+    self.canRemove = canRemove;
+    self.removeIconView.hidden = !canRemove;
+    [self setNeedsLayout];
 }
 
 - (void)layoutSubviews {
@@ -83,20 +104,37 @@
 
     CGFloat nameLeft = self.avatar.lim_right + 12;
     CGFloat nameAvailable = removeRight - nameLeft;
+    CGFloat nameHeight = ceil(self.nameLbl.font.lineHeight);
 
     [self.nameLbl sizeToFit];
     CGFloat nameW = MIN(self.nameLbl.lim_width, nameAvailable);
+
+    // 角色文字标签：用真实文本尺寸 + 对称内边距，避免靠空格凑边距导致视觉偏移。
     if (!self.roleTagLbl.hidden) {
-        [self.roleTagLbl sizeToFit];
-        CGFloat tagW = self.roleTagLbl.lim_width + 4;
-        if (tagW > 60) tagW = 60;
-        self.roleTagLbl.frame = CGRectMake(0, 0, tagW, 18);
-        nameW = MIN(nameW, nameAvailable - tagW - 6);
-        if (nameW < 0) nameW = 0;
-        self.nameLbl.frame = CGRectMake(nameLeft, (self.contentView.lim_height - 22) / 2.0f, nameW, 22);
-        self.roleTagLbl.frame = CGRectMake(self.nameLbl.lim_right + 6, (self.contentView.lim_height - 18) / 2.0f, tagW, 18);
+        CGFloat tagH = 18.0f;
+        CGFloat hPad = 6.0f;
+        CGSize textSize = [self.roleTagLbl.text sizeWithAttributes:@{NSFontAttributeName: self.roleTagLbl.font}];
+        CGFloat tagW = ceil(textSize.width) + hPad * 2;
+        nameW = MAX(0, MIN(nameW, nameAvailable - tagW - 6));
+        self.nameLbl.frame = CGRectMake(nameLeft, (self.contentView.lim_height - nameHeight) / 2.0f, nameW, nameHeight);
+        self.roleTagLbl.frame = CGRectMake(self.nameLbl.lim_right + 6,
+                                           (self.contentView.lim_height - tagH) / 2.0f,
+                                           tagW, tagH);
+    } else if (!self.aiBadgeView.hidden) {
+        // Bot AI 图标，与通讯录页一致：高 14，按图比例算宽。
+        CGFloat badgeH = 14.0f;
+        CGFloat badgeW = badgeH;
+        UIImage *img = self.aiBadgeView.image;
+        if (img && img.size.height > 0.0f) {
+            badgeW = badgeH * img.size.width / img.size.height;
+        }
+        nameW = MAX(0, MIN(nameW, nameAvailable - badgeW - 6));
+        self.nameLbl.frame = CGRectMake(nameLeft, (self.contentView.lim_height - nameHeight) / 2.0f, nameW, nameHeight);
+        self.aiBadgeView.frame = CGRectMake(self.nameLbl.lim_right + 6,
+                                            self.nameLbl.lim_top + (self.nameLbl.lim_height - badgeH) / 2.0f,
+                                            badgeW, badgeH);
     } else {
-        self.nameLbl.frame = CGRectMake(nameLeft, (self.contentView.lim_height - 22) / 2.0f, nameW, 22);
+        self.nameLbl.frame = CGRectMake(nameLeft, (self.contentView.lim_height - nameHeight) / 2.0f, nameW, nameHeight);
     }
 }
 
@@ -311,8 +349,7 @@ static CGFloat const kHeaderHeight = 38.0f;
         }
         WKChannelMember *bot = self.viewModel.botAdmins[indexPath.row];
         WKGroupAdminMemberCell *cell = [tableView dequeueReusableCellWithIdentifier:kMemberCellId];
-        UIColor *botColor = [UIColor colorWithRed:0x10/255.0 green:0xB9/255.0 blue:0x81/255.0 alpha:1.0]; // 绿
-        [cell refreshWithMember:bot roleText:LLang(@"Bot") roleColor:botColor canRemove:self.isCreator];
+        [cell refreshWithBotMember:bot canRemove:self.isCreator];
         return cell;
     }
     return [UITableViewCell new];

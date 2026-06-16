@@ -1008,3 +1008,9 @@
 "消息很多，下拉刷新查看更早"="Lots of messages — pull down to load older";
 "已开始生成总结，可到 智能总结 查看进度"="Summary started — track progress in Smart Summary";
 "已开始生成总结"="Summary started";
+// 转让群主
+"转让群主"="Transfer Owner";
+"选择新群主"="Select New Owner";
+"确定将群主转让给 %@ 吗？转让后你将成为普通成员。"="Transfer group ownership to %@? You will become a regular member after the transfer.";
+"群主已转让"="Owner transferred";
+"转让群主失败"="Failed to transfer owner";

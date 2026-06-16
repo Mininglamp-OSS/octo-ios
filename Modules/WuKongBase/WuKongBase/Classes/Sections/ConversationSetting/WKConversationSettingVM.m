@@ -24,10 +24,15 @@
 #import "WKThreadService.h"
 #import "WKGroupMdVC.h"
 #import "WKGroupAdminManageVC.h"
+#import "WKMemberListVC.h"
+#import "WKActionSheetView2.h"
+#import "WKActionSheetItem2.h"
 
 @interface WKConversationSettingVM ()<WKChannelManagerDelegate>
 
 @property(nonatomic,strong) WKChannelInfo *_channelInfo;
+
+- (void)presentTransferOwnerPicker;
 
 @end
 
@@ -354,6 +359,28 @@
         };
     } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89625];
 
+    // 转让群主（仅群主可见，与 web 端 module.tsx 行为一致）
+    [[WKApp shared] setMethod:@"channelsetting.transferowner" handler:^id _Nullable(id  _Nonnull param) {
+        WKChannel *channel = param[@"channel"];
+        if(channel.channelType != WK_GROUP || ![weakSelf isCreatorForMe]) {
+            return nil;
+        }
+        return @{
+            @"height":@(0.0f),
+            @"items": @[
+                @{
+                    @"class": WKLabelItemModel.class,
+                    @"label": LLang(@"转让群主"),
+                    @"showBottomLine":@(NO),
+                    @"bottomLeftSpace":@(0.0f),
+                    @"onClick":^{
+                        [weakSelf presentTransferOwnerPicker];
+                    }
+                }
+            ]
+        };
+    } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89620];
+
     [[WKApp shared] setMethod:@"channelsetting.hsitory" handler:^id _Nullable(id  _Nonnull param) {
         return @{
             @"height":WKSectionHeight,
@@ -604,6 +631,59 @@
 
 -(AnyPromise*) requestGroupMemberInvite:(NSArray<NSString*>*)uids remark:(NSString*)remark {
    return [[WKAPIClient sharedClient] POST:[NSString stringWithFormat:@"groups/%@/member/invite",self.channel.channelId] parameters:@{@"uids":uids?:@[],@"remark":remark?:@""}];
+}
+
+#pragma mark - 转让群主
+
+- (void)presentTransferOwnerPicker {
+    __weak typeof(self) weakSelf = self;
+    WKMemberListVC *vc = [WKMemberListVC new];
+    vc.title = LLang(@"选择新群主");
+    vc.channel = self.channel;
+    vc.edit = YES;
+    vc.singleSelect = YES;
+
+    NSMutableArray<NSString*> *hidden = [NSMutableArray array];
+    if ([WKApp shared].loginInfo.uid) {
+        [hidden addObject:[WKApp shared].loginInfo.uid];
+    }
+    NSArray<WKChannelMember*> *allMembers = [[WKSDK shared].channelManager getMembersWithChannel:self.channel];
+    for (WKChannelMember *m in allMembers) {
+        if (m.robot && m.memberUid) {
+            [hidden addObject:m.memberUid];
+        }
+    }
+    vc.hiddenUsers = hidden;
+
+    vc.onFinishedSelect = ^(NSArray<NSString *> *uids) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || uids.count == 0) return;
+        NSString *toUID = uids.firstObject;
+        WKChannelMember *target = [[WKSDK shared].channelManager getMember:strongSelf.channel uid:toUID];
+        NSString *name = target.memberRemark.length > 0 ? target.memberRemark : (target.memberName.length > 0 ? target.memberName : toUID);
+        NSString *tip = [NSString stringWithFormat:LLang(@"确定将群主转让给 %@ 吗？转让后你将成为普通成员。"), name];
+
+        WKActionSheetView2 *sheet = [WKActionSheetView2 initWithTip:tip cancel:LLang(@"取消")];
+        [sheet addItem:[WKActionSheetButtonItem2 initWithAlertTitle:LLang(@"转让群主") onClick:^{
+            [[WKNavigationManager shared].topViewController.view showHUD];
+            [[WKGroupManager shared] groupNo:strongSelf.channel.channelId transferOwner:toUID complete:^(NSError *error) {
+                [[WKNavigationManager shared].topViewController.view hideHud];
+                if (error) {
+                    NSString *msg = error.domain.length > 0 ? error.domain : LLang(@"转让群主失败");
+                    [[WKNavigationManager shared].topViewController.view showMsg:msg];
+                    return;
+                }
+                [[WKNavigationManager shared] popViewControllerAnimated:YES];
+                [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"群主已转让")];
+                // 同步角色与群信息；设置页通过通知/Delegate 自动 reload
+                [[WKGroupManager shared] syncMemebers:strongSelf.channel.channelId];
+                [[WKSDK shared].channelManager fetchChannelInfo:strongSelf.channel];
+            }];
+        }]];
+        [sheet show];
+    };
+
+    [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
 
 #pragma mark - WKChannelManagerDelegate
