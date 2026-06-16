@@ -34,4 +34,18 @@
     return [[WKAPIClient sharedClient] POST:[NSString stringWithFormat:@"space/%@/invite",spaceId] parameters:@{}];
 }
 
++ (NSDictionary *)pickJoinedSpace:(NSArray *)spaces {
+    if (![spaces isKindOfClass:[NSArray class]] || spaces.count == 0) return nil;
+    for (id item in spaces) {
+        if (![item isKindOfClass:[NSDictionary class]]) continue;
+        NSDictionary *s = (NSDictionary *)item;
+        NSInteger role = [s[@"role"] integerValue];
+        NSString *spaceId = s[@"space_id"];
+        if (role > 0 && [spaceId isKindOfClass:[NSString class]] && spaceId.length > 0) {
+            return s;
+        }
+    }
+    return nil;
+}
+
 @end

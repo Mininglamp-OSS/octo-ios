@@ -129,13 +129,13 @@ static NSInteger countdown; // 倒计时
             } else {
                 WKSpaceGateVM *spaceVM = [WKSpaceGateVM new];
                 [spaceVM getMySpaces].then(^(NSArray *spaces){
-                    if (spaces && spaces.count > 0) {
-                        NSDictionary *firstSpace = spaces[0];
-                        NSString *spaceId = firstSpace[@"space_id"];
-                        if (spaceId && ![spaceId isEqualToString:@""]) {
-                            [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
-                            [[NSUserDefaults standardUserDefaults] synchronize];
-                        }
+                    // 必须挑 role>0 的（成员）。spaces[0] 可能命中 role=0 的非成员
+                    // Space，后续接口全 403。
+                    NSDictionary *joinedSpace = [WKSpaceGateVM pickJoinedSpace:spaces];
+                    if (joinedSpace) {
+                        NSString *spaceId = joinedSpace[@"space_id"];
+                        [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+                        [[NSUserDefaults standardUserDefaults] synchronize];
                         [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
                     } else {
                         WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];

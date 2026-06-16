@@ -66,14 +66,15 @@
     }
     WKSpaceGateVM *spaceVM = [WKSpaceGateVM new];
     [spaceVM getMySpaces].then(^(NSArray *spaces){
-        if (spaces && spaces.count > 0) {
-            NSDictionary *firstSpace = spaces[0];
-            NSString *spaceId = firstSpace[@"space_id"];
-            if (spaceId && ![spaceId isEqualToString:@""]) {
-                [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
-                [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
-                [[NSUserDefaults standardUserDefaults] synchronize];
-            }
+        // 必须挑 role>0 的（成员）。直接取 spaces[0] 会踩到 role=0 的非成员
+        // Space，后续 IM 接口全 403。aegis 切账号场景的回归，见 WKSpaceGateVM
+        // pickJoinedSpace: 的注释。
+        NSDictionary *joinedSpace = [WKSpaceGateVM pickJoinedSpace:spaces];
+        if (joinedSpace) {
+            NSString *spaceId = joinedSpace[@"space_id"];
+            [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+            [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
+            [[NSUserDefaults standardUserDefaults] synchronize];
             [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
         } else {
             WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];

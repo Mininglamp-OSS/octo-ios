@@ -479,6 +479,10 @@ static WKApp *_instance;
         // 清除 Space 相关数据
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"currentSpaceId"];
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"WKSpaceGateCompleted"];
+        // WKLastLoadedSpaceId 是 WKConversationListVC 用来判断"上一次活跃的 Space
+        // 是否变了、要不要清本地会话"的提示位。跨账号不清的话，下个账号登录后
+        // loadCurrentSpace 看到的 lastSpaceId 是前一账号的，路径分支误判。
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"WKLastLoadedSpaceId"];
         [[NSUserDefaults standardUserDefaults] synchronize];
         [[WKSpaceModel shared] invalidateCache];
 

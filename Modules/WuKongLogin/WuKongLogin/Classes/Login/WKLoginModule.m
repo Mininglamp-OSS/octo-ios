@@ -124,18 +124,18 @@
         [keyWindow switchHUDSuccess:LLang(@"已成功加入空间")];
         // 获取空间列表并切换到新空间
         [vm getMySpaces].then(^(NSArray *spaces) {
-            if (spaces && spaces.count > 0) {
-                // 找到最新加入的空间（取第一个）
-                NSDictionary *firstSpace = spaces[0];
-                NSString *spaceId = firstSpace[@"space_id"];
-                if (spaceId && spaceId.length > 0) {
-                    NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
-                    if (![spaceId isEqualToString:currentSpaceId]) {
-                        [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
-                        [[NSUserDefaults standardUserDefaults] synchronize];
-                        // 通知刷新，重新进入主界面以切换空间
-                        [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
-                    }
+            // 仅在 role>0 的成员 Space 里挑。joinSpace 成功后用户必定是新加入
+            // 空间的成员，所以应能命中；命中不到说明服务端列表还没刷新，保持
+            // 当前 currentSpaceId 不动即可。
+            NSDictionary *joinedSpace = [WKSpaceGateVM pickJoinedSpace:spaces];
+            if (joinedSpace) {
+                NSString *spaceId = joinedSpace[@"space_id"];
+                NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+                if (![spaceId isEqualToString:currentSpaceId]) {
+                    [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+                    [[NSUserDefaults standardUserDefaults] synchronize];
+                    // 通知刷新，重新进入主界面以切换空间
+                    [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
                 }
             }
         });
