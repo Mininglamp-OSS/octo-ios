@@ -2583,6 +2583,15 @@
         if (indexPath.row >= (NSInteger)self.groupDisplayList.count) return;
         WKConversationDisplayItem *item = self.groupDisplayList[indexPath.row];
         if (item.isSectionHeader) {
+            // 新用户注册后跳回主页时会话同步会高频触发 reloadData，UIKit 的
+            // numberOfRows / cellForRow / willDisplay 不是原子序列，期间
+            // self.groupDisplayList / filterType 可能切到不同的快照 —— 出现过
+            // cellForRow 这拍发了 WKConversationListCell，下一拍 willDisplay 拿到
+            // isSectionHeader=YES 强转 WKCategorySectionCell 调 setSectionId: 直接崩。
+            // 类型不匹配时静默跳过；下一帧 reloadData 会用对的 cell 重新走一次。
+            if (![cell isKindOfClass:[WKCategorySectionCell class]]) {
+                return;
+            }
             WKCategorySectionCell *sectionCell = (WKCategorySectionCell *)cell;
             sectionCell.sectionId = item.sectionId;
             sectionCell.sectionTitle = item.sectionTitle;
@@ -2607,6 +2616,13 @@
         }
         WKConversationWrapModel *conversationModel = item.conversation;
         if (!conversationModel) return;
+        // 同上：会话行也可能在 cellForRow / willDisplay 之间被切换到 section header
+        // 形态（或反过来）。任何强转前先校验 cell 类型，类型不匹配的静默跳过。
+        if (![cell isKindOfClass:[WKConversationListCell class]]
+            && ![cell isKindOfClass:[WKConversationGroupThreadCell class]]
+            && ![cell isKindOfClass:[WKConversationGroupThreadOnlyCell class]]) {
+            return;
+        }
         __weak typeof(self) weakSelf = self;
         if ([cell isKindOfClass:[WKConversationGroupThreadCell class]]) {
             WKConversationGroupThreadCell *threadCell = (WKConversationGroupThreadCell *)cell;
@@ -2659,6 +2675,12 @@
     // 私聊 tab
     WKConversationWrapModel *conversationModel = [_conversationListVM conversationAtIndex:indexPath.row];
     if (!conversationModel) return;
+    // 同步流式刷新期间 filterType 可能从 Follow 切到 Recent（反之亦然），
+    // 上一拍 cellForRow 发了 WKCategorySectionCell / GroupThreadCell，这一拍
+    // 走到私聊分支强转 WKConversationListCell 会直接 crash。先做类型校验。
+    if (![cell isKindOfClass:[WKConversationListCell class]]) {
+        return;
+    }
     WKConversationListCell *conversationListCell = (WKConversationListCell *)cell;
     conversationListCell.recentTabContext = (_conversationListVM.filterType == WKConversationFilterRecent);
     [conversationListCell refreshWithModel:conversationModel];
