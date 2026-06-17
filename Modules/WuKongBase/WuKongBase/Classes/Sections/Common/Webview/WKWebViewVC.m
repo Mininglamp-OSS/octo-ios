@@ -72,22 +72,31 @@
 
     NSString *url = self.url.absoluteString;
 
-    url = [url stringByRemovingPercentEncoding];
-
-    if(url && ![url hasPrefix:@"http"]) {
-        url = [NSString stringWithFormat:@"http://%@",url];
+    // 修复 (2026-06): 老 iOS 14/15 WKWebView 加载 OIDC authorize URL 白屏的根因。
+    // 之前这里调 stringByRemovingPercentEncoding 把已正确百分号编码的 URL 反解 ——
+    // OIDC 链路里 device_name (含中文) / device_model="iPad Air 2" (含空格) 被反解为
+    // 裸 UTF-8 / 裸空格, 整个 URL 不再是合法 ASCII。
+    // 老 iOS (<17) 的 [NSURL URLWithString:] 对非 ASCII URL 严格按 RFC 3986 返回 nil,
+    // 触发下面 guard 静默 return → 不发起 loadRequest → WebView 全程白屏, 且没有任何
+    // 导航回调 (didStartProvisional / didFail* 都不触发, 极难定位)。
+    // iOS 17+ 切到 WHATWG URL Standard 后宽容了非 ASCII, 所以新系统看不出来。
+    // 解法: 优先信任上游传入的 self.url (已经是 NSURL, 上游构造时走 NSURLQueryItem
+    // 已正确编码); 仅当上游传的是裸 host (无 scheme) 时, 再走加 http:// 默认 scheme
+    // 的兼容路径。
+    NSURL *targetURL = self.url;
+    if (url.length > 0 && ![url hasPrefix:@"http"]) {
+        targetURL = [NSURL URLWithString:[NSString stringWithFormat:@"http://%@", url]];
     }
+    self.currentUrl = targetURL;
 
-    self.currentUrl = [NSURL URLWithString:url];
-
-    if (url.length == 0 || self.currentUrl == nil) {
+    if (url.length == 0 || targetURL == nil) {
         // url 为空 / 解析失败时, loadRequest with nil URL 会得到一个空白 webview
         // (没有 didFailNavigation 回调, 只是静默白屏) —— 是 "blank page" 的常见根因。
         // 提前 return 留个守卫, 让上游修复, 不要静默白屏。
         return;
     }
 
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:targetURL
         cachePolicy:NSURLRequestReloadIgnoringCacheData
     timeoutInterval:(NSTimeInterval)10.0];
 
