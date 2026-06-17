@@ -24,6 +24,8 @@
 #import "WKThreadService.h"
 #import "WKGroupMdVC.h"
 #import "WKGroupAdminManageVC.h"
+#import "WKChannelWebhookVC.h"
+#import "WKIncomingWebhookManager.h"
 #import "WKMemberListVC.h"
 #import "WKActionSheetView2.h"
 #import "WKActionSheetItem2.h"
@@ -333,6 +335,70 @@
         };
     } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89650];
 
+    // 群消息推送（入站 Webhook）：与 web 端「群消息推送」入口顺序一致 —— 在 GROUP.md
+    // 之下、群管理之上。全员可见可点；列表内部按权限矩阵（群主/管理员 / 自己创建）
+    // 控制操作。副标题策略：
+    //   - 没有缓存（首次进群信息页）→ 静默后台 fetch 一次写回 channelInfo.extra；
+    //     副标题暂留空，fetch 完会触发 channelInfoUpdate: → reloadData → 入口
+    //     handler 再跑一次拿到数字。
+    //   - 命中缓存 → 直接显示「已配置 N 个」/「未配置」。
+    [[WKApp shared] setMethod:@"channelsetting.incomingwebhook" handler:^id _Nullable(id  _Nonnull param) {
+        WKChannel *channel = param[@"channel"];
+        if(channel.channelType != WK_GROUP) {
+            return nil;
+        }
+        NSNumber *cachedCount = nil;
+        if (self.channelInfo && [self.channelInfo.extra[@"incoming_webhook_count"] isKindOfClass:[NSNumber class]]) {
+            cachedCount = self.channelInfo.extra[@"incoming_webhook_count"];
+        }
+        NSString *subtitle;
+        if (!cachedCount) {
+            // 触发一次惰性预取（按 group 去重，避免 reloadData 反复触发）
+            static NSMutableSet<NSString *> *inFlightGroups;
+            static dispatch_once_t once;
+            dispatch_once(&once, ^{ inFlightGroups = [NSMutableSet set]; });
+            NSString *gno = channel.channelId ?: @"";
+            if (gno.length > 0 && ![inFlightGroups containsObject:gno]) {
+                [inFlightGroups addObject:gno];
+                [[WKIncomingWebhookManager shared] listWebhooksOfGroup:gno complete:^(NSArray<WKIncomingWebhook *> *items, NSError * _Nullable error) {
+                    [inFlightGroups removeObject:gno];
+                    if (error) {
+                        // 失败时不写 cache —— 下次进群信息页还会再试一次。
+                        return;
+                    }
+                    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:channel];
+                    if (!info) return;
+                    info.extra[@"incoming_webhook_count"] = @(items.count);
+                    [[WKSDK shared].channelManager updateChannelInfo:info];
+                }];
+            }
+            // fetch 在飞 / 失败 都先留空字符串，不要显示"查看 ›"那种容易被误读的占位
+            subtitle = @"";
+        } else if (cachedCount.integerValue <= 0) {
+            subtitle = LLang(@"未配置");
+        } else {
+            subtitle = [NSString stringWithFormat:LLang(@"已配置 %ld 个"), (long)cachedCount.integerValue];
+        }
+        BOOL isCreatorOrManager = [param[@"is_creator_or_manager"] boolValue];
+        return @{
+            @"height":@(0.0f),
+            @"items": @[
+                @{
+                    @"class": WKLabelItemModel.class,
+                    @"label": LLang(@"群消息推送"),
+                    @"value": subtitle,
+                    @"showBottomLine":@(NO),
+                    @"onClick":^{
+                        WKChannelWebhookVC *vc = [WKChannelWebhookVC new];
+                        vc.channel = weakSelf.channel;
+                        vc.isManagerOrCreator = isCreatorOrManager;
+                        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+                    }
+                }
+            ]
+        };
+    } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89640];
+
     // 群管理（仅群主和管理员可见，与 web 端 module.tsx 行为一致）
     [[WKApp shared] setMethod:@"channelsetting.groupmanage" handler:^id _Nullable(id  _Nonnull param) {
         WKChannel *channel = param[@"channel"];
@@ -379,7 +445,7 @@
                 }
             ]
         };
-    } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89620];
+    } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89660];
 
     [[WKApp shared] setMethod:@"channelsetting.hsitory" handler:^id _Nullable(id  _Nonnull param) {
         return @{
