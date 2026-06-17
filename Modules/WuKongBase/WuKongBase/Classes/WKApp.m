@@ -76,6 +76,7 @@
 #import "WKThreadService.h"
 #import "WKThreadModel.h"
 #import "WKThreadSettingVC.h"
+#import "WKThreadCreatePopupView.h"
 #import "WKConversationAddItem.h"
 #import "WKConversationContext.h"
 #import <SDWebImageWebPCoder/SDWebImageWebPCoder.h>
@@ -1628,53 +1629,49 @@ static WKApp *_instance;
     // 创建子区
     [self setMethod:WKPOINT_LONGMENUS_THREAD handler:^id _Nullable(id  _Nonnull param) {
         WKMessageModel *message = param[@"message"];
-        // 仅群聊 + 非系统消息 + threadOn 开关 + 未创建过子区
+        // 仅群聊 + 非系统消息 + threadOn 开关。
+        // 注：合并消息 (WK_MERGEFORWARD / "[聊天记录]") 同样走该入口 —— digest 会被
+        // 渲染成 [聊天记录]，弹窗里也能看到完整聊天记录预览气泡。
+        // 不要为了"防御"加 contentType==WK_MERGEFORWARD 的排除分支。
         if(message.channel.channelType != WK_GROUP) return nil;
         if([[WKSDK shared] isSystemMessage:message.contentType]) return nil;
         if(![WKApp shared].remoteConfig.threadOn) return nil;
-        // 该消息已创建过子区，不再显示
+
+        // 已建过子区的消息，菜单里把"创建子区"换成"进入子区「XX」"，让用户
+        // 能直接跳进去 —— 而不是简单 return nil（之前那种行为下，菜单里少一项，
+        // 用户会感觉"位置变了选项就消失"，找不到入口）。
+        // sourceMessageThreadMap 与 sourceMessageIdSet 在 WKThreadCreatedContent.decodeWithJSON
+        // 同一处填充，二者应同步；以 map 命中为准（拿得到 thread 元信息才能跳）。
         NSString *msgIdStr = [NSString stringWithFormat:@"%llu", message.message.messageId];
+        WKThreadCreatedContent *existingThread = [[WKThreadCreatedContent sourceMessageThreadMap] objectForKey:msgIdStr];
+        if (existingThread && existingThread.threadChannelId.length > 0) {
+            NSString *threadName = existingThread.threadName ?: @"";
+            if (threadName.length > 12) {
+                threadName = [NSString stringWithFormat:@"%@…", [threadName substringToIndex:11]];
+            }
+            NSString *enterTitle = [NSString stringWithFormat:LLangW(@"进入子区「%@」", weakSelf), threadName];
+            UIImage *enterIcon = [GenerateImageUtils generateTintedImgWithImage:[weakSelf imageName:@"Conversation/ContextMenu/Forward"] color:weakSelf.config.contextMenu.primaryColor backgroundColor:nil];
+            return [WKMessageLongMenusItem initWithTitle:enterTitle icon:enterIcon onTap:^(id<WKConversationContext> context){
+                WKChannel *channel = [WKChannel channelID:existingThread.threadChannelId
+                                              channelType:existingThread.threadChannelType];
+                [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:channel];
+            }];
+        }
+        // 兜底：set 命中但 map 没拿到 thread 元信息（理论上 decode 同步填充，二者不该
+        // 不一致；若极端情况下出现就保持原 by-design 行为，菜单里这一项隐藏）。
         if([[WKThreadCreatedContent sourceMessageIdSet] containsObject:msgIdStr]) return nil;
+
         UIImage *icon = [GenerateImageUtils generateTintedImgWithImage:[weakSelf imageName:@"Conversation/ContextMenu/Forward"] color:weakSelf.config.contextMenu.primaryColor backgroundColor:nil];
         return [WKMessageLongMenusItem initWithTitle:LLangW(@"创建子区", weakSelf) icon:icon onTap:^(id<WKConversationContext> context){
-            // 弹出创建子区对话框
-            UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLangW(@"创建子区", weakSelf)
-                                                                          message:nil
-                                                                   preferredStyle:UIAlertControllerStyleAlert];
-            [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
-                tf.placeholder = LLangW(@"子区名称 (最多50字)", weakSelf);
-                // 默认取消息前10个字符
-                NSString *digest = [message.content conversationDigest];
-                if(digest.length > 10) {
-                    digest = [digest substringToIndex:10];
-                }
-                tf.text = digest;
+            // 默认子区名 = 消息 digest 前 10 字（合并消息会得到 "[聊天记录]"）。
+            NSString *digest = [message.content conversationDigest];
+            if(digest.length > 10) digest = [digest substringToIndex:10];
+            [WKThreadCreatePopupView showWithGroupNo:message.channel.channelId
+                                       sourceMessage:message
+                                         defaultName:digest
+                                           onCreated:^(WKThreadModel *thread) {
+                [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:[thread toChannel]];
             }];
-            UIAlertAction *createAction = [UIAlertAction actionWithTitle:LLangW(@"创建", weakSelf) style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-                NSString *name = alert.textFields.firstObject.text;
-                if(name.length == 0) return;
-                if(name.length > 50) name = [name substringToIndex:50];
-                NSString *msgId = [NSString stringWithFormat:@"%llu", message.message.messageId];
-                // 构建消息正文 payload（与 web 端一致）
-                NSMutableDictionary *payload = [NSMutableDictionary dictionary];
-                if (message.content.contentDict) {
-                    [payload addEntriesFromDictionary:message.content.contentDict];
-                }
-                payload[@"type"] = @(message.contentType);
-                [[WKThreadService shared] createThread:message.channel.channelId name:name sourceMessageId:msgId sourceMessagePayload:payload].then(^(WKThreadModel *thread) {
-                    [[WKThreadService shared] joinThread:thread.shortId].then(^(id result) {
-                        [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:[thread toChannel]];
-                    }).catch(^(NSError *error) {
-                        [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:[thread toChannel]];
-                    });
-                }).catch(^(NSError *error) {
-                    [[[WKNavigationManager shared] topViewController].view showMsg:error.domain];
-                });
-            }];
-            UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:LLangW(@"取消", weakSelf) style:UIAlertActionStyleCancel handler:nil];
-            [alert addAction:cancelAction];
-            [alert addAction:createAction];
-            [[[WKNavigationManager shared] topViewController] presentViewController:alert animated:YES completion:nil];
         }];
     } category:WKPOINT_CATEGORY_MESSAGE_LONGMENUS sort:970];
 

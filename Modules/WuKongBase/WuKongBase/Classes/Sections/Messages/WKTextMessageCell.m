@@ -25,6 +25,8 @@
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKExternalViewerResolver.h"
 #import "WKMessageListView.h"
+#import "WKThreadCreatePopupView.h"
+#import "WKThreadModel.h"
 #import "WKReply+ExternalGroup.h"
 
 #define replyNameFontSize    13.0f
@@ -3101,6 +3103,8 @@ static const NSInteger kSelectionPopupTag = 0x574B5350;
             }
         }];
         // 创建子区
+        // 选区状态下走自定义弹窗：把选中文字作为子区名默认值（前 50 字），跳过
+        // 长按菜单原 onTap（它的 default 是 digest 前 10 字），避免覆盖用户选区。
         NSString *capturedSelText = @"";
         if (selRange.length > 0 && NSMaxRange(selRange) <= self.textLbl.text.length) {
             capturedSelText = [self.textLbl.text substringWithRange:selRange];
@@ -3108,22 +3112,25 @@ static const NSInteger kSelectionPopupTag = 0x574B5350;
         if (capturedSelText.length > 50) capturedSelText = [capturedSelText substringToIndex:50];
         for (WKMessageLongMenusItem *item in menuItems) {
             if ([item.title isEqualToString:LLang(@"创建子区")]) {
-                WKMessageLongMenusItem *captured = item;
                 NSString *threadName = [capturedSelText copy];
+                WKMessageModel *captured = weakSelf.messageModel;
                 [btns addObject:@{
                     @"title": item.title,
                     @"icon": item.icon ?: [NSNull null],
                     @"action": ^{
-                        if (captured.onTap) captured.onTap(weakSelf.conversationContext);
-                        if (threadName.length > 0) {
-                            dispatch_async(dispatch_get_main_queue(), ^{
-                                UIViewController *presented = [[WKNavigationManager shared] topViewController].presentedViewController;
-                                if ([presented isKindOfClass:[UIAlertController class]]) {
-                                    UIAlertController *alert = (UIAlertController *)presented;
-                                    if (alert.textFields.count > 0) alert.textFields.firstObject.text = threadName;
-                                }
-                            });
+                        if (!captured) return;
+                        // 选区有内容用选区，没有则回退到 digest（保持与长按菜单 onTap 一致）。
+                        NSString *defaultName = threadName;
+                        if (defaultName.length == 0) {
+                            defaultName = [captured.content conversationDigest];
+                            if (defaultName.length > 10) defaultName = [defaultName substringToIndex:10];
                         }
+                        [WKThreadCreatePopupView showWithGroupNo:captured.channel.channelId
+                                                   sourceMessage:captured
+                                                     defaultName:defaultName
+                                                       onCreated:^(WKThreadModel *thread) {
+                            [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:[thread toChannel]];
+                        }];
                     }
                 }];
                 break;

@@ -7,6 +7,7 @@
 #import "WKThreadListCell.h"
 #import "WKThreadModel.h"
 #import "WKThreadService.h"
+#import "WKThreadCreatePopupView.h"
 #import "WKNavigationManager.h"
 #import "WKConversationVC.h"
 #import "UIView+WKCommon.h"
@@ -251,49 +252,18 @@ static const NSInteger kPageSize = 15;
 }
 
 - (void)onCreateThread {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:LLang(@"创建子区")
-                                                                  message:nil
-                                                           preferredStyle:UIAlertControllerStyleAlert];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
-        tf.placeholder = LLang(@"子区名称 (最多50字)");
-    }];
-
+    // 改走自定义弹窗，与消息长按入口视觉一致；列表页入口无引用消息，不展示预览。
     __weak typeof(self) weakSelf = self;
-    UIAlertAction *createAction = [UIAlertAction actionWithTitle:LLang(@"创建") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        NSString *name = alert.textFields.firstObject.text;
-        if (name.length == 0) return;
-        if (name.length > 50) {
-            name = [name substringToIndex:50];
-        }
-        [weakSelf doCreateThread:name sourceMessageId:nil];
+    [WKThreadCreatePopupView showWithGroupNo:self.groupNo
+                               sourceMessage:nil
+                                 defaultName:nil
+                                   onCreated:^(WKThreadModel *thread) {
+        // popup 已尝试 join；这里乐观置 isMember=YES（即便底层 join 失败，进入
+        // 详情后刷新会自动纠正状态，而比早先 alert 流程对用户更顺滑）。
+        thread.isMember = YES;
+        [weakSelf appendCreatedThreadIfAbsent:thread];
+        [weakSelf openThread:thread];
     }];
-    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil];
-
-    [alert addAction:cancelAction];
-    [alert addAction:createAction];
-    [self presentViewController:alert animated:YES completion:nil];
-}
-
-- (void)doCreateThread:(NSString *)name sourceMessageId:(NSString *)sourceMessageId {
-    __weak typeof(self) weakSelf = self;
-    [[WKThreadService shared] createThread:self.groupNo name:name sourceMessageId:sourceMessageId sourceMessagePayload:nil].then(^(WKThreadModel *thread) {
-        [[WKThreadService shared] joinThread:thread.shortId].then(^(id result) {
-            // 写回本地 model：viewWillAppear 不再 loadThreads（避免列表跳回顶部 +
-            // 丢分页），从详情返回时只 reloadData，必须在跳详情前把新建的 thread
-            // append 到 allLoadedThreads，否则用户回到这一页看不到刚创建的子区
-            // （PR review #4 critical）。
-            thread.isMember = YES;
-            [weakSelf appendCreatedThreadIfAbsent:thread];
-            [weakSelf openThread:thread];
-        }).catch(^(NSError *error) {
-            // join 失败也插入：thread 创建已成功，列表里得有它；isMember 保持 NO
-            // 让用户从详情回来时还能再点一次加入
-            [weakSelf appendCreatedThreadIfAbsent:thread];
-            [weakSelf openThread:thread];
-        });
-    }).catch(^(NSError *error) {
-        [weakSelf.view showMsg:error.domain];
-    });
 }
 
 /// 把新建的 thread 插入 allLoadedThreads 顶部并触发刷新；shortId 已存在则跳过
