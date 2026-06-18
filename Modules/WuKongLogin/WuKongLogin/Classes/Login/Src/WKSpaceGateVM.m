@@ -37,8 +37,8 @@
 + (NSDictionary *)pickJoinedSpace:(NSArray *)spaces {
     if (![spaces isKindOfClass:[NSArray class]] || spaces.count == 0) return nil;
 
-    // 优先尝试匹配「当前 uid 上次所处的 Space」（仅在 role>0 仍是成员时命中），
-    // 否则回落到原有「首个成员 Space」语义。
+    // 优先尝试匹配「当前 uid 上次所处的 Space」(命中即返回，不看 role)；
+    // 不命中再走 fallback：原有「首个 role>0 的成员 Space」语义。
     // WKLastSpaceIdByUid_<uid> 由 WKApp.m 的 WKPOINT_LOGIN_LOGOUT handler 在
     // 清 currentSpaceId 前快照写入；handleLoginData: 在 getMySpaces 之前已写好
     // loginInfo.uid，所以这里读 uid 是有效的。
@@ -52,18 +52,31 @@
     WKLogDebug(@"[pickJoinedSpace] uid=%@ snapKey=%@ preferredId=%@ spaces.count=%zd",
                uid, snapKey, preferredId, spaces.count);
 
+    // preferred 命中：放宽 role 过滤。currentSpaceId 能落盘说明用户之前就在
+    // 该空间活动过，必是成员；且后端给的 role 语义在不同空间不一致（明略默认
+    // 空间 role=0 也是成员，与 WKSpaceEntity.h 注释对齐，与 aegis 历史
+    // role==0=非成员的注释相反）。fallback 仍走 role>0 保守语义，避免 aegis
+    // 切账号场景回归（详见类注释 + WKSpaceGateVM.h:54）。
     NSDictionary *fallback = nil;
+    NSDictionary *preferredHit = nil;
     for (id item in spaces) {
         if (![item isKindOfClass:[NSDictionary class]]) continue;
         NSDictionary *s = (NSDictionary *)item;
         NSInteger role = [s[@"role"] integerValue];
         NSString *spaceId = s[@"space_id"];
-        if (role <= 0 || ![spaceId isKindOfClass:[NSString class]] || spaceId.length == 0) continue;
-        if (preferredId.length > 0 && [spaceId isEqualToString:preferredId]) {
-            WKLogDebug(@"[pickJoinedSpace] hit preferred spaceId=%@ name=%@", spaceId, s[@"name"]);
-            return s;
+        WKLogDebug(@"[pickJoinedSpace] item space_id=%@ name=%@ role=%zd allKeys=%@",
+                   spaceId, s[@"name"], role, [s.allKeys componentsJoinedByString:@","]);
+        if (![spaceId isKindOfClass:[NSString class]] || spaceId.length == 0) continue;
+        if (preferredId.length > 0 && !preferredHit && [spaceId isEqualToString:preferredId]) {
+            preferredHit = s;
+            continue;
         }
-        if (!fallback) fallback = s;
+        if (role > 0 && !fallback) fallback = s;
+    }
+    if (preferredHit) {
+        WKLogDebug(@"[pickJoinedSpace] hit preferred spaceId=%@ name=%@ role=%@",
+                   preferredHit[@"space_id"], preferredHit[@"name"], preferredHit[@"role"]);
+        return preferredHit;
     }
     if (fallback) {
         WKLogDebug(@"[pickJoinedSpace] fallback spaceId=%@ name=%@ (preferred=%@)",
