@@ -477,6 +477,19 @@ static WKApp *_instance;
         // 断开IM连接
         [[WKSDK shared].connectionManager logout];
 
+        // 在清 currentSpaceId 之前按 uid 维度快照「上次所处的 Space」，
+        // 下次同账号登录时由 +[WKSpaceGateVM pickJoinedSpace:] 优先匹配回去。
+        // clearMainData 只清 token/imToken 不动 uid，所以这里读 uid 仍有效。
+        NSString *prevUid = [WKApp shared].loginInfo.uid;
+        NSString *prevSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+        if (prevUid.length > 0 && prevSpaceId.length > 0) {
+            NSString *snapKey = [NSString stringWithFormat:@"WKLastSpaceIdByUid_%@", prevUid];
+            [[NSUserDefaults standardUserDefaults] setObject:prevSpaceId forKey:snapKey];
+            WKLogDebug(@"[logout] snapshot last-space uid=%@ spaceId=%@ key=%@", prevUid, prevSpaceId, snapKey);
+        } else {
+            WKLogDebug(@"[logout] skip snapshot uid=%@ spaceId=%@", prevUid, prevSpaceId);
+        }
+
         // 清除 Space 相关数据
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"currentSpaceId"];
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"WKSpaceGateCompleted"];
