@@ -2612,18 +2612,12 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
         NSString *fullRawText = [[self class] getRawContent:self.messageModel];
         if (fullRawText.length > 0) {
             objc_setAssociatedObject(self, "kSelHadSegments", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            objc_setAssociatedObject(self, "kSelOrigSegAttrText", [self.textLbl.attributedText copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            objc_setAssociatedObject(self, "kSelOrigSegSize", [NSValue valueWithCGSize:self.textLbl.lim_size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            // 保存进入 selection 之前的 bubble / messageContentView 完整 frame
-            // （含 lim_left）。后面手动把它们撑大成 raw-text 尺寸时，原始 frame 是
-            // 唯一的 ground truth ——
-            //   - sent 气泡是右锚的（lim_left = self.lim_width - bubbleW - rightInset），
-            //     start 时只改 size 不改 lim_left，bubble 的右边会跟着撑出屏幕；
-            //   - end 流程依赖 [super layoutSubviews] 通过 begin/endUpdates +
-            //     setNeedsLayout 隐式重置位置，时序敏感，sent 上很容易留下
-            //     "bubble 缩回 compact 但 textLbl 还在 wider 位置"的 stale 几何，
-            //     视觉上就是文本溢出气泡右边。
-            // 直接快照→直接 restore，绕开对 layoutSubviews 时序的依赖。
+            // 仅快照 bubble / messageContentView 完整 frame —— end 路径不再走 textLbl
+            // 局部恢复（UITextView TK1/TK2 切换路径下 setAttributedText 偶发不刷新
+            // textStorage，导致 textLbl 残留 fullRawText、其它 segmentViews 不可见），
+            // 改为整体 invalidateSegments + refresh: 重建。frame 快照仍保留，给 refresh:
+            // 之前先把锚位拨回 selection 之前，避免 sent 气泡（右锚）在重建中间帧
+            // 越出屏幕。
             objc_setAssociatedObject(self, "kSelOrigBubbleFrame", [NSValue valueWithCGRect:self.bubbleBackgroundView.frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             objc_setAssociatedObject(self, "kSelOrigContentFrame", [NSValue valueWithCGRect:self.messageContentView.frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
@@ -2654,17 +2648,38 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
             CGFloat newCellHeight = fullSize.height + contentInsets.top + contentInsets.bottom + bubbleInsets.top + bubbleInsets.bottom;
 
             NSNumber *origH = [[WKMessageListView cellHeightCache] objectForKey:heightKey];
-            NSLog(@"[SelDebug] key=%@ origHeight=%@ newHeight=%.1f", heightKey, origH, newCellHeight);
+            // 关键决策：raw-text 高度是否大于当前渲染（含表格 JS 实测高度）的高度。
+            // 带大表格的 markdown 消息上，rendered 通常 > raw（表格 WebView 撑开很大），
+            // 老逻辑无脑把 cellHeightCache 写成 raw 高度 → cell 突然缩小一大段，
+            // tableView 在 begin/endUpdates 里产生剧烈的内容偏移（contentOffset 不动
+            // 但 contentSize 变了），用户视觉上看到「位置突跳 + 菜单显示在屏外
+            // + 卡死在选区模式」。不过 raw > rendered 的场景（短消息纯文本类）仍
+            // 然需要撑大让 textLbl 完整可见，所以这里只在「raw 比当前更大」时才
+            // 撑大；raw <= rendered 时保持几何不动，textLbl 在原 bubble 内部留空
+            // 即可，视觉无副作用。
+            BOOL needsInflate = (!origH) || (origH.floatValue + 0.5f < newCellHeight);
+            NSLog(@"[SelDebug] key=%@ origHeight=%@ newHeight=%.1f needsInflate=%d",
+                  heightKey, origH, newCellHeight, needsInflate);
+
             objc_setAssociatedObject(self, "kSelOrigHeight", origH, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             objc_setAssociatedObject(self, "kSelHeightKey", heightKey, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            [[WKMessageListView cellHeightCache] setObject:@(newCellHeight) forKey:heightKey];
+            // needsInflate 让 end 路径也知道当前态：YES → 我们改了缓存 + 几何，end 必须
+            // remove 缓存键并恢复 frame；NO → 什么都没动，end 也不必清缓存（清了反而
+            // 让 heightForRow 重算一次，无效但无害）。
+            objc_setAssociatedObject(self, "kSelDidInflate", @(needsInflate), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-            // 更新气泡大小
-            self.messageContentView.lim_size = fullSize;
-            self.bubbleBackgroundView.lim_size = CGSizeMake(
-                fullSize.width + contentInsets.left + contentInsets.right,
-                fullSize.height + contentInsets.top + contentInsets.bottom
-            );
+            if (needsInflate) {
+                [[WKMessageListView cellHeightCache] setObject:@(newCellHeight) forKey:heightKey];
+
+                // 更新气泡大小
+                self.messageContentView.lim_size = fullSize;
+                self.bubbleBackgroundView.lim_size = CGSizeMake(
+                    fullSize.width + contentInsets.left + contentInsets.right,
+                    fullSize.height + contentInsets.top + contentInsets.bottom
+                );
+            }
+            // 不论是否 inflate，textLbl 都应按 raw 文本尺寸放置（在不 inflate 的情况
+            // 下，textLbl 完整内容 < bubble 高度，下方留空，bubble 背景可见，OK）。
 
             NSLog(@"[SelDebug] BEFORE tableView update: cell.frame=%@ bubble=%@ contentView=%@ textLbl=%@",
                   NSStringFromCGRect(self.frame),
@@ -2680,32 +2695,37 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
             objc_setAssociatedObject(self, &kSelRangeLocKey, @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             objc_setAssociatedObject(self, &kSelRangeLenKey, @(textLen), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-            // 触发 tableView 更新高度
-            UIView *v = self.superview;
-            while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
-            if ([v isKindOfClass:[UITableView class]]) {
-                UITableView *tv = (UITableView *)v;
-                [UIView performWithoutAnimation:^{
-                    [tv beginUpdates];
-                    [tv endUpdates];
-                }];
+            // 仅 inflate 路径需要 begin/endUpdates；不 inflate 时 cell 高度无变化，
+            // 没必要让 tableView 走一次重新布局，省掉位置突跳的几率。
+            if (needsInflate) {
+                UIView *v = self.superview;
+                while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
+                if ([v isKindOfClass:[UITableView class]]) {
+                    UITableView *tv = (UITableView *)v;
+                    [UIView performWithoutAnimation:^{
+                        [tv beginUpdates];
+                        [tv endUpdates];
+                    }];
 
-                // beginUpdates/endUpdates 期间 layoutSubviews 可能被触发并覆盖气泡大小
-                // 重新强制设置正确的尺寸
-                self.textLbl.lim_size = fullSize;
-                self.messageContentView.lim_size = fullSize;
-                self.bubbleBackgroundView.lim_size = CGSizeMake(
-                    fullSize.width + contentInsets.left + contentInsets.right,
-                    fullSize.height + contentInsets.top + contentInsets.bottom
-                );
+                    // beginUpdates/endUpdates 期间 layoutSubviews 可能被触发并覆盖气泡大小
+                    // 重新强制设置正确的尺寸
+                    self.textLbl.lim_size = fullSize;
+                    self.messageContentView.lim_size = fullSize;
+                    self.bubbleBackgroundView.lim_size = CGSizeMake(
+                        fullSize.width + contentInsets.left + contentInsets.right,
+                        fullSize.height + contentInsets.top + contentInsets.bottom
+                    );
 
-                NSLog(@"[SelDebug] AFTER fix: cell.frame=%@ bubble=%@ contentView=%@ textLbl=%@",
-                      NSStringFromCGRect(self.frame),
-                      NSStringFromCGSize(self.bubbleBackgroundView.lim_size),
-                      NSStringFromCGSize(self.messageContentView.lim_size),
-                      NSStringFromCGSize(self.textLbl.lim_size));
+                    NSLog(@"[SelDebug] AFTER fix: cell.frame=%@ bubble=%@ contentView=%@ textLbl=%@",
+                          NSStringFromCGRect(self.frame),
+                          NSStringFromCGSize(self.bubbleBackgroundView.lim_size),
+                          NSStringFromCGSize(self.messageContentView.lim_size),
+                          NSStringFromCGSize(self.textLbl.lim_size));
+                } else {
+                    NSLog(@"[SelDebug] ERROR: tableView not found in superview chain");
+                }
             } else {
-                NSLog(@"[SelDebug] ERROR: tableView not found in superview chain");
+                NSLog(@"[SelDebug] no inflate (raw fits in rendered cell). Skipping tableView update.");
             }
         }
     }
@@ -2861,105 +2881,72 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     objc_setAssociatedObject(self, &kSelRangeLocKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelRangeLenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 恢复分段视图和高度
+    // 恢复分段视图和高度 ——
+    // 历史方案是「逐项 setter 局部恢复」（textLbl.text=nil → attrText=nil →
+    // attrText=origAttr，segmentViews unhide，bubble/contentView frame snapshot
+    // 拨回 compact），但 UITextView 在 TK1/TK2 切换路径下 setAttributedText 偶发
+    // 不刷新 textStorage，结果 textLbl 残留 fullRawText、其它 segmentViews 不可
+    // 见 / 显示异常。
+    // 改为「整体重建」：清掉 segmentsBuilt + clearSegmentViews + refresh:，让
+    // refresh 走和首次渲染完全一致的路径重建。代价是关闭选区时 ~50–150ms 的
+    // segmentViews 重建（WebView 走 pool，HTML 重 load），收益是状态保证一致，
+    // 不再依赖 textLbl 局部 setter 是否生效。
     BOOL hadSegments = [objc_getAssociatedObject(self, "kSelHadSegments") boolValue];
     if (hadSegments) {
-        // 恢复 textLbl 原始内容和大小
-        // 关键：先把 textLbl 的 text/attributedText 整个清空，再写入 first-segment
-        // 内容。此前 selection start 通过 `textLbl.text = fullRawText` 把
-        // UITextView 的 textStorage 灌成了整段 raw markdown；如果直接
-        // setAttributedText: 到 first-segment 而不先清，UITextView 的 textStorage
-        // 在某些 TK1/TK2 切换路径下保留旧 layout（用户实测在 sent 消息上稳定复
-        // 现：表格 cancel 后 textLbl 还显示整段 raw，加上 segmentViews 里渲染好
-        // 的 table+second 段，气泡里出现"raw + 渲染"两份重复，撑爆气泡）。
-        // 经过一次 nil 让 textStorage 落到空态，再写入 first-segment，确保
-        // textLbl 真正只显示 first-segment 内容。
-        NSAttributedString *origAttr = objc_getAssociatedObject(self, "kSelOrigSegAttrText");
-        self.textLbl.text = nil;
-        self.textLbl.attributedText = nil;
-        if (origAttr.length > 0) {
-            self.textLbl.attributedText = origAttr;
-        } else {
-            // 兜底：origAttr 不可用（极端情况下 first-segment 渲染回退到 .text 路径
-            // 时 attributedText 可能为空），就地 re-render first text segment，
-            // 不让 textLbl 永远空白或残留 fullRawText。
-            NSString *raw = [[self class] getRawContent:self.messageModel];
-            NSArray *segments = [WKMarkdownRenderer splitContentSegments:raw];
-            for (NSDictionary *seg in segments) {
-                if ([seg[@"type"] isEqualToString:@"text"]) {
-                    NSString *content = seg[@"content"];
-                    UIColor *textColor = self.messageModel.isSend
-                        ? [WKApp shared].config.messageSendTextColor
-                        : [WKApp shared].config.messageRecvTextColor;
-                    NSString *colorHex = [textColor toHexRGB];
-                    @try {
-                        NSAttributedString *mdAttr = [WKMarkdownRenderer render:content
-                                                                       fontSize:[WKApp shared].config.messageTextFontSize
-                                                                  textColorHex:colorHex
-                                                              dynamicTextColor:textColor];
-                        if (mdAttr.length > 0) {
-                            self.textLbl.attributedText = mdAttr;
-                        } else {
-                            self.textLbl.text = content;
-                        }
-                    } @catch (NSException *e) {
-                        self.textLbl.text = content;
-                    }
-                    break;
-                }
-            }
-        }
-        NSValue *origSizeVal = objc_getAssociatedObject(self, "kSelOrigSegSize");
-        if (origSizeVal) self.textLbl.lim_size = [origSizeVal CGSizeValue];
-
-        // 显示分段视图
-        for (UIView *v in self.segmentViews) { v.hidden = NO; }
-        for (UIScrollView *o in self.tableOverlays) { o.hidden = NO; }
-
-        // 直接把 bubble / messageContentView 的 frame 拨回 selection 之前的快照，
-        // 不依赖 layoutSubviews 时序触发 reset。
-        // 修 sent 消息长按取消后文本溢出气泡右边的 bug：
-        // - sent 气泡是右锚的 (lim_left = self.lim_width - bubbleW - rightInset)，
-        //   selection start 只 setSize 不动 lim_left，bubble 在 selection 期间已经
-        //   越出右边；
-        // - end 流程靠 begin/endUpdates + setNeedsLayout 让 [super layoutSubviews]
-        //   重新算 lim_left，时序敏感，sent 上偶发观察到 bubble 已经缩回 compact
-        //   尺寸但 textLbl 仍在 wider 位置（或反过来 bubble 没缩回但 textLbl 已经
-        //   是 compact），视觉上文本超出气泡右边。
-        // received 气泡是左锚的 (lim_left = avatar.right + leftInset)，同样的
-        // stale 几何不会"超出右边"，所以只在 sent 上肉眼可见。
+        WKMessageModel *capturedModel = self.messageModel;
         NSValue *origBubbleVal = objc_getAssociatedObject(self, "kSelOrigBubbleFrame");
         NSValue *origContentVal = objc_getAssociatedObject(self, "kSelOrigContentFrame");
+        NSString *heightKey = objc_getAssociatedObject(self, "kSelHeightKey");
+        BOOL didInflate = [objc_getAssociatedObject(self, "kSelDidInflate") boolValue];
+
+        NSLog(@"[SelDebug][end] begin restore msgNo=%@ heightKey=%@ didInflate=%d origBubble=%@ origContent=%@ "
+              @"selBubble=%@ selContent=%@ textLblLen=%lu segmentsBuilt=%d segCount=%lu",
+              capturedModel.clientMsgNo, heightKey, didInflate,
+              origBubbleVal ? NSStringFromCGRect([origBubbleVal CGRectValue]) : @"(nil)",
+              origContentVal ? NSStringFromCGRect([origContentVal CGRectValue]) : @"(nil)",
+              NSStringFromCGRect(self.bubbleBackgroundView.frame),
+              NSStringFromCGRect(self.messageContentView.frame),
+              (unsigned long)self.textLbl.text.length,
+              (int)self.segmentsBuilt,
+              (unsigned long)self.segmentViews.count);
+
+        // 1) 把 bubble / messageContentView 拨回 selection 之前的几何 ——
+        //    refresh: 内部不动这两个 frame，重建中间帧若不先 restore，sent 气泡
+        //    （右锚）会在 layoutSubviews 之前短暂越出屏幕。
         if (origBubbleVal) self.bubbleBackgroundView.frame = [origBubbleVal CGRectValue];
         if (origContentVal) self.messageContentView.frame = [origContentVal CGRectValue];
 
-        // 恢复高度缓存（用保存的完整 key）
-        // 关键修复：之前 `if (origHeight) restore else nothing` 的写法存在缓存留脏：
-        // - origHeight 是 selection start 那一刻从缓存抓的值，但这个值可能：
-        //   (a) NSCache 在 selection 期间因为内存压力被驱逐，origH 抓到 nil；
-        //   (b) selection 期间收到新消息使该消息 bubblePosition 翻了
-        //       （Last → Middle / Single → Last），heightKey 跟着变，老 key 上有
-        //       值，selection start 取新 key 时拿到的是 nil；
-        //   (c) JS WebView 异步报回表格实际高度后写过新值（见 jsTableHeights 流程
-        //       2410-2424），origH 变成"过期值"。
-        // 这三种情况下"恢复"反而是错的或没生效，inflated 的 raw-text 高度残留在
-        // cellHeightCache 里，导致 endUpdates 后 heightForRow 命中脏值，气泡视觉
-        // 已经压回表格态但行高不变，下方留空白。
-        // 直接 remove 让 beginUpdates/endUpdates 走 +sizeForMessage: 重算，
-        // segmentedContentHeightForMessage: 内的 segHeightCache 仍带 JS 实测值，
-        // 拿到的就是当前正确的表格态高度。
-        NSString *heightKey = objc_getAssociatedObject(self, "kSelHeightKey");
-        if (heightKey.length > 0) {
+        // 2) 清空 textLbl —— refresh: 在 hasTable 路径下不再覆写 textLbl（因为
+        //    segmentsBuilt=YES 在 refresh 之前已被清成 NO，但接着进入 segments
+        //    构建分支，第一段文本会复用 textLbl 并重写 attributedText，所以这里
+        //    单纯保险一下，避免 refresh 中间帧短暂闪现 fullRawText）。
+        self.textLbl.text = nil;
+        self.textLbl.attributedText = nil;
+
+        // 3) 整体 invalidate + refresh，rebuild 出和首次渲染同一份 segmentViews。
+        self.segmentsBuilt = NO;
+        [self clearSegmentViews];
+        if (capturedModel) {
+            @try {
+                [self refresh:capturedModel];
+            } @catch (NSException *e) {
+                NSLog(@"[SelDebug][end] refresh: exception msgNo=%@ ex=%@", capturedModel.clientMsgNo, e);
+            }
+        } else {
+            NSLog(@"[SelDebug][end] capturedModel nil, skipping refresh:");
+        }
+
+        // 4) 高度缓存清掉，让 beginUpdates/endUpdates 走 +sizeForMessage: 重算
+        //    （selection start 期间写入的是 inflated raw-text 高度，不能留下）。
+        //    didInflate=NO 时 cache 没被改过，无需清；省掉一次大消息的高度重算。
+        if (didInflate && heightKey.length > 0) {
             [[WKMessageListView cellHeightCache] removeObjectForKey:heightKey];
         }
 
-        // 先做一次 layout pass 让 segment layout 把 textLbl / 其它分段重新摆好
-        // （此时 bubble/messageContentView 几何已 restore 为 compact，segment 会
-        // 在 contentW = compact 下被正确摆放）。然后再让 tableView 同步行高。
         [self setNeedsLayout];
         [self layoutIfNeeded];
 
-        // 触发 tableView 恢复高度
+        // 5) 触发 tableView 同步行高
         UIView *v = self.superview;
         while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
         if ([v isKindOfClass:[UITableView class]]) {
@@ -2968,18 +2955,29 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
                 [tv beginUpdates];
                 [tv endUpdates];
             }];
+        } else {
+            NSLog(@"[SelDebug][end] tableView not found in superview chain msgNo=%@", capturedModel.clientMsgNo);
         }
 
         [self setNeedsLayout];
         [self layoutIfNeeded];
+
+        NSLog(@"[SelDebug][end] done restore msgNo=%@ bubble=%@ content=%@ "
+              @"textLblLen=%lu segmentsBuilt=%d segCount=%lu cellH=%.1f",
+              capturedModel.clientMsgNo,
+              NSStringFromCGRect(self.bubbleBackgroundView.frame),
+              NSStringFromCGRect(self.messageContentView.frame),
+              (unsigned long)self.textLbl.text.length,
+              (int)self.segmentsBuilt,
+              (unsigned long)self.segmentViews.count,
+              self.frame.size.height);
     }
     objc_setAssociatedObject(self, "kSelHadSegments", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, "kSelOrigSegAttrText", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, "kSelOrigSegSize", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, "kSelOrigBubbleFrame", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, "kSelOrigContentFrame", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, "kSelOrigHeight", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, "kSelHeightKey", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, "kSelDidInflate", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
 }
 
