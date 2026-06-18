@@ -38,6 +38,12 @@ NSString * const WKThreadMessageCountUpdatedNotification = @"WKThreadMessageCoun
     return _sourceMessageThreadMap;
 }
 
++ (void)markThreadClosedForSourceMessageId:(NSString *)sourceMessageId {
+    if (sourceMessageId.length == 0) return;
+    [[self sourceMessageIdSet] removeObject:sourceMessageId];
+    [[self sourceMessageThreadMap] removeObjectForKey:sourceMessageId];
+}
+
 + (NSNumber *)contentType {
     return @(WK_THREAD_CREATED);
 }

@@ -8,6 +8,7 @@
 #import "WKThreadModel.h"
 #import "WKThreadService.h"
 #import "WKThreadCreatePopupView.h"
+#import "WKThreadCreatedContent.h"
 #import "WKNavigationManager.h"
 #import "WKConversationVC.h"
 #import "UIView+WKCommon.h"
@@ -358,6 +359,8 @@ static const NSInteger kPageSize = 15;
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"删除") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         [[WKThreadService shared] deleteThread:weakSelf.groupNo shortId:thread.shortId].then(^(id result) {
+            // 删除成功后清掉源消息映射，让源消息长按菜单从"进入子区"切回"创建子区"。
+            [WKThreadCreatedContent markThreadClosedForSourceMessageId:thread.sourceMessageId];
             [weakSelf loadThreads];
         }).catch(^(NSError *error) {
             [weakSelf.view showMsg:error.domain];

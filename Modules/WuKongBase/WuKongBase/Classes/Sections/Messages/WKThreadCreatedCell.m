@@ -261,9 +261,17 @@
     NSString *shortId = [content.threadChannelId substringFromIndex:sep.location + sep.length];
 
     // 先查询子区状态，防止打开已关闭的子区
+    // 与 web 对齐 (octo-web Messages/ThreadCreated/index.tsx:handleClick):
+    //   .then  + status==Deleted / is_deleted → 弹"已关闭"
+    //   .catch (404 / 4xx / 网络错误) 一律视作"已关闭或不存在"，不再降级打开
+    // ——历史上 catch 用 [errMsg containsString:@"deleted"|@"已关闭"] 做识别，
+    //    但服务端返回 404 或换文案 ("thread not found" / "记录不存在") 时不命中，
+    //    会回退到"直接打开"路径 → 已关闭子区仍能进入（回归 bug）。
+    NSString *sourceMessageId = content.sourceMessageId;
     [[WKThreadService shared] getThread:groupNo shortId:shortId].then(^(WKThreadModel *thread) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (thread.isDeleted || thread.status == WKThreadStatusDeleted) {
+                [WKThreadCreatedContent markThreadClosedForSourceMessageId:sourceMessageId];
                 [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"该子区已被关闭")];
             } else {
                 WKChannel *channel = [WKChannel channelID:content.threadChannelId channelType:content.threadChannelType];
@@ -272,14 +280,8 @@
         });
     }).catch(^(NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            NSString *errMsg = error.domain ?: @"";
-            if ([errMsg containsString:@"deleted"] || [errMsg containsString:@"已关闭"]) {
-                [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"该子区已被关闭")];
-            } else {
-                // 其他网络错误降级直接打开
-                WKChannel *channel = [WKChannel channelID:content.threadChannelId channelType:content.threadChannelType];
-                [[WKApp shared] invoke:WKPOINT_CONVERSATION_SHOW param:channel];
-            }
+            [WKThreadCreatedContent markThreadClosedForSourceMessageId:sourceMessageId];
+            [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"该子区已被关闭")];
         });
     });
 }

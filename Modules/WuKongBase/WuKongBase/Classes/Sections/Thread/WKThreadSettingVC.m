@@ -6,6 +6,7 @@
 #import "WKThreadSettingVC.h"
 #import "WKThreadService.h"
 #import "WKThreadModel.h"
+#import "WKThreadCreatedContent.h"
 #import "WKSettingMemberGridView.h"
 #import "WKThreadMemberListVC.h"
 #import "WKNavigationManager.h"
@@ -409,6 +410,8 @@
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"关闭") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         [[WKThreadService shared] deleteThread:weakSelf.groupNo shortId:weakSelf.shortId].then(^(id result) {
+            // 关闭成功后清掉源消息映射，让源消息长按菜单从"进入子区"切回"创建子区"。
+            [WKThreadCreatedContent markThreadClosedForSourceMessageId:weakSelf.thread.sourceMessageId];
             UINavigationController *nav = [WKNavigationManager shared].topViewController.navigationController;
             NSArray *vcs = nav.viewControllers;
             if (vcs.count >= 3) {
