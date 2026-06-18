@@ -24,6 +24,9 @@
 // 主按钮
 @property(nonatomic,strong) UIButton *showInviteInputBtn; // 显示邀请码输入按钮
 
+// 退出登录按钮（无 Space 引导期的逃生口，避免新用户被卡死在本页无法切账号）
+@property(nonatomic,strong) UIButton *logoutBtn;
+
 @property(nonatomic,assign) BOOL showInviteInput; // 是否显示邀请码输入
 @property(nonatomic,assign) BOOL isJoining; // 是否正在加入
 
@@ -63,8 +66,31 @@
     // 添加主按钮
     [self.containerView addSubview:self.showInviteInputBtn];
 
+    // 退出登录按钮（始终可见，避免无 Space 用户被卡死在本页）
+    [self.containerView addSubview:self.logoutBtn];
+
+    // 初始按折叠态把 logoutBtn 贴到 showInviteInputBtn 下方，并把 container 高度收到刚好。
+    [self relayoutLogoutAndContainer];
+
     // 检查是否有 DeepLink 暂存的邀请码
     [self checkPendingInviteCode];
+}
+
+/// 让 logoutBtn 永远紧贴当前可见的底部按钮（折叠态：showInviteInputBtn；
+/// 展开态：inviteInputView），并同步收缩 containerView 高度，避免大段空白。
+- (void)relayoutLogoutAndContainer {
+    UIView *anchor = self.inviteInputView.hidden ? (UIView *)self.showInviteInputBtn : self.inviteInputView;
+    CGRect logoutFrame = self.logoutBtn.frame;
+    logoutFrame.origin.y = anchor.lim_bottom + 16;
+    self.logoutBtn.frame = logoutFrame;
+
+    CGFloat newHeight = CGRectGetMaxY(self.logoutBtn.frame) + 16;
+    CGRect cFrame = self.containerView.frame;
+    if (fabs(cFrame.size.height - newHeight) > 0.5) {
+        cFrame.size.height = newHeight;
+        cFrame.origin.y = (WKScreenHeight - newHeight) / 2.0f;
+        self.containerView.frame = cFrame;
+    }
 }
 
 - (void)setupGradientBackground {
@@ -193,7 +219,9 @@
 - (UIView *)containerView {
     if(!_containerView) {
         CGFloat width = MIN(420, WKScreenWidth - 40);
-        CGFloat height = 400;
+        // 默认按折叠态自然高度起步（emoji+标题+副标题 + 主按钮 + 退出按钮 + 上下边距）。
+        // -relayoutLogoutAndContainer 会在切换展开/折叠时即时调整为内容高度，避免空白。
+        CGFloat height = 306;
         _containerView = [[UIView alloc] initWithFrame:CGRectMake((WKScreenWidth - width)/2.0f, (WKScreenHeight - height)/2.0f, width, height)];
         _containerView.backgroundColor = [UIColor whiteColor];
         _containerView.layer.cornerRadius = 16;
@@ -293,12 +321,28 @@
     return _showInviteInputBtn;
 }
 
+- (UIButton *)logoutBtn {
+    if(!_logoutBtn) {
+        CGFloat width = self.containerView.lim_width - 80;
+        _logoutBtn = [[UIButton alloc] initWithFrame:CGRectMake(40, self.containerView.lim_height - 16 - 44, width, 44)];
+        [_logoutBtn setTitle:LLang(@"退出登录") forState:UIControlStateNormal];
+        [_logoutBtn setTitleColor:[UIColor colorWithWhite:0.4 alpha:1.0] forState:UIControlStateNormal];
+        _logoutBtn.titleLabel.font = [UIFont systemFontOfSize:14];
+        _logoutBtn.layer.cornerRadius = 4;
+        _logoutBtn.layer.borderWidth = 1;
+        _logoutBtn.layer.borderColor = [UIColor colorWithWhite:0.85 alpha:1.0].CGColor;
+        [_logoutBtn addTarget:self action:@selector(logoutPressed) forControlEvents:UIControlEventTouchUpInside];
+    }
+    return _logoutBtn;
+}
+
 #pragma mark - Actions
 
 - (void)showInviteInputPressed {
     self.showInviteInput = YES;
     self.inviteInputView.hidden = NO;
     self.showInviteInputBtn.hidden = YES;
+    [self relayoutLogoutAndContainer];
 }
 
 - (void)backPressed {
@@ -306,6 +350,7 @@
     self.inviteInputView.hidden = YES;
     self.showInviteInputBtn.hidden = NO;
     self.inviteCodeTextField.text = @"";
+    [self relayoutLogoutAndContainer];
 }
 
 - (void)joinSpacePressed {
@@ -334,6 +379,16 @@
             [weakSelf.view switchHUDError:LLang(@"邀请码无效或已过期")];
         }
     });
+}
+
+- (void)logoutPressed {
+    [self.view endEditing:YES];
+    WKActionSheetView2 *sheet = [WKActionSheetView2 initWithTip:LLang(@"退出后不会删除任何历史数据，下次登录依然可以使用本账号。")];
+    [sheet addItem:[WKActionSheetButtonItem2 initWithAlertTitle:LLang(@"退出登录") onClick:^{
+        [sheet hide];
+        [[WKApp shared] logout];
+    }]];
+    [sheet show];
 }
 
 #pragma mark - UITextFieldDelegate
