@@ -51,14 +51,34 @@ static NSTimeInterval _lastShowTime = 0;
 
     [self dismissCurrent];
 
-    CGFloat tabBarH = 49.0f;
-    CGFloat safeBottom = 0;
-    if (@available(iOS 11.0, *)) {
-        safeBottom = parentView.safeAreaInsets.bottom;
+    // 早先按 49(系统标准 tabBar 高) + safeBottom 算位置，然后再 +16 把 hint
+    // 往下推。在浮岛胶囊 tabbar(高 76、距 safeArea 底 8，详见 WKMainTabController
+    // kWKCapsuleHeight)下，hint 底边比胶囊顶边低 ~50pt，整个下半截被遮住。
+    // 改成沿响应链找 tabBarController.tabBar 的真实位置，按它的顶边再留 8pt
+    // 呼吸；找不到时回退到旧算法（嵌入在非 tabbar 容器里的兜底）。
+    CGFloat parentH = parentView.bounds.size.height;
+    CGFloat tabTopY = 0;
+    UITabBar *tabBar = nil;
+    UIResponder *r = parentView.nextResponder;
+    while (r) {
+        if ([r isKindOfClass:[UIViewController class]]) {
+            tabBar = ((UIViewController *)r).tabBarController.tabBar;
+            break;
+        }
+        r = r.nextResponder;
+    }
+    if (tabBar && tabBar.window) {
+        CGRect inParent = [parentView convertRect:tabBar.bounds fromView:tabBar];
+        tabTopY = CGRectGetMinY(inParent);
+    } else {
+        // fallback：旧算法
+        CGFloat safeBottom = 0;
+        if (@available(iOS 11.0, *)) safeBottom = parentView.safeAreaInsets.bottom;
+        tabTopY = parentH - safeBottom - 49.0f;
     }
     CGFloat centerX = parentView.bounds.size.width / 2.0f;
-    CGFloat targetY = parentView.bounds.size.height - safeBottom - tabBarH - kHintHeight + 16.0f;
-    CGFloat startY = parentView.bounds.size.height;
+    CGFloat targetY = tabTopY - kHintHeight - 8.0f;
+    CGFloat startY = parentH;
 
     WKPixelParticleHint *hint = [[WKPixelParticleHint alloc] initWithFrame:
         CGRectMake(centerX - kHintWidth / 2.0f, startY, kHintWidth, kHintHeight)];
