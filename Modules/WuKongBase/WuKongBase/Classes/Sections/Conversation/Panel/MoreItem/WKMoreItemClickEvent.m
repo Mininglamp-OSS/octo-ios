@@ -21,7 +21,6 @@
 #import "NSData+ImageFormat.h"
 #import "UIImage+Compression.h"
 #import "WKPhotoBrowser.h"
-#import "WKRichTextCaptionViewController.h"
 #import "WKInputMentionCache.h"
 #import <WuKongIMSDK/WKFileContent.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -113,99 +112,27 @@ static WKMoreItemClickEvent *_instance;
 
     __block NSInteger handleCount = 0;
     [[WKPhotoBrowser shared] showPreviewWithSender:[context targetVC] selectCompressImageBlock:^(NSArray<NSData *> * _Nonnull images, NSArray<PHAsset *> * _Nonnull assets, BOOL isOriginal) {
-        // Phase 2（方案1）：相册选图全为图片 → 发送前弹 caption 确认页（微信/TG 标准款），
-        // 这是主聊天「图文混排」的权威入口。用户可在确认页补一段描述（caption），点发送把
-        // 「图 + caption」打成单条 RichText(=14)（复用 #19 的发送能力，走 [context sendMessage:]
-        // 保留全部会话语义）；不写 caption 则纯图发送，wire 零回归。
-        // 草稿不丢（硬约束 2「选图/打字任意顺序都不丢草稿」）：进确认页前把输入框已有文本预填
-        // 进 caption 框并清空输入框；取消 / 发送失败都把这段文本恢复回输入框（与期间新输入合并）。
+        // Phase 3：相册选图全为图片 → 直接塞入聊天页输入框上方的「待发送图片栏」（取代旧的全屏 caption 编辑页）。
+        // 用户在主聊天 textView 内继续打字 / @ 人 / 删图 / + 加图，点发送时由 input panel
+        // 内部按 [WKApp shouldAggregateAlbumImagesWithText:...] 决定走 RichText=14 聚合
+        // 还是纯图路径。draft 不丢：textView 文本始终未被本路径触碰。
         // 含视频/其它（allImages=NO）：RichText=14 仅支持图文，走原逐条发送路径，零回归。
         BOOL allImages = assets.count > 0;
         for (PHAsset *a in assets) {
             if (a.mediaType != PHAssetMediaTypeImage) { allImages = NO; break; }
         }
         if (allImages) {
-            NSUInteger assetCount = assets.count;
-            // 线程安全（lml2468 P0）：selectCompressImageBlock 可能在 GIF 压缩后台线程回调触发，
-            // 而读写输入框（inputText/inputSetText:）+ present caption 控制器全是 UIKit，off-main
-            // 操作 UIKit 是未定义行为/崩溃。这里统一 hop 到主线程；上传/发送本身仍可 off-main。
-            dispatch_block_t presentCaption = ^{
-                NSString *pendingText = [weakContext inputText] ?: @"";
-                [weakContext inputSetText:@""]; // 草稿移入 caption 框，先清空输入框避免重复。
-
-                // 草稿恢复（取消 / 纯图发送 / 发送失败共用）：把原草稿前置拼到当前输入前，期间
-                // 用户新输入的内容也不丢。pendingText 为空则无需恢复。
-                void (^restoreDraft)(NSString *) = ^(NSString *draft) {
-                    if (draft.length == 0) return;
-                    NSString *current = [weakContext inputText] ?: @"";
-                    NSString *restored = current.length == 0 ? draft : [NSString stringWithFormat:@"%@%@", draft, current];
-                    [weakContext inputSetText:restored];
-                };
-
-                WKRichTextCaptionViewController *captionVC =
-                    [[WKRichTextCaptionViewController alloc] initWithImageDatas:images
-                                                                 initialCaption:pendingText
-                                                                        channel:weakContext.channel];
-                captionVC.onSend = ^(NSArray<NSData *> *finalImages, NSString *caption, NSArray<WKInputMentionItem *> *mentions) {
-                    // 删图 → 全删 + 有文字：降级走纯文本 sendTextMessage（保留 @ entities）。
-                    // 主路径：finalImages 非空 + caption 非空白 → 走 RichText(=14) 聚合，
-                    // mentions 注入 mentionedInfo + entities（含 sentinel uid → humans/ais flag）。
-                    // 没图也没文字理论上 caption VC 自己拦截走 onCancel，这里再做一次防御兜底。
-                    NSString *trimmed = [caption stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-                    if (finalImages.count == 0 && trimmed.length == 0) {
-                        restoreDraft(pendingText);
-                        return;
-                    }
-                    // 把 mentions 装进临时 mentionCache 喂给 context，得到 entities + mentionedInfo。
-                    WKInputMentionCache *cache = [WKInputMentionCache new];
-                    for (WKInputMentionItem *m in mentions) {
-                        [cache addMentionItem:m];
-                    }
-                    NSArray<WKMessageEntity *> *entities = [weakContext entities:caption mentionCache:cache];
-                    WKMentionedInfo *mentionedInfo = [weakContext mentionedInfo:caption mentionCache:cache];
-
-                    if (finalImages.count == 0) {
-                        // 纯文本降级路径：caption 已经把 mentions 推进 context.mentionCache
-                        // (line 171-173), sendTextMessage:entities:robotID: sink (line 423,
-                        // 493) 会从 self.mentionCache 重算 mentionedInfo 并 append entities;
-                        // 这里 entities 参数必须传 nil — 否则 ① 我们预算的 entities + ②
-                        // sink append 的同 cache 算出的 entities 会重复序列化 mention 范围
-                        // (同 uid 同 range 出现两次), 多端 RichText 渲染高亮重复 / cell 高度
-                        // 出错 (PR #32 R12 review: Jerry-Xin / lml2468)。sink 内 mentionedInfo
-                        // 也由 cache 重算, 不需要外部传入。
-                        if (mentions.count > 0 && [weakContext respondsToSelector:@selector(addMentionItems:)]) {
-                            [weakContext addMentionItems:mentions];
-                        }
-                        [weakContext sendTextMessage:caption entities:nil robotID:nil];
-                        return;
-                    }
-                    if ([WKApp shouldAggregateAlbumImagesWithText:YES assetCount:finalImages.count pendingText:caption]) {
-                        // 图 + caption 聚合成单条 RichText(=14)。失败把 caption 恢复回输入框（文字绝不丢）。
-                        [[WKApp shared] sendRichTextMixedImageDatas:finalImages
-                                                          assetCount:finalImages.count
-                                                           extraText:caption
-                                                            mentions:mentions
-                                                            entities:entities
-                                                       mentionedInfo:mentionedInfo
-                                                           inContext:weakContext
-                                                           onFailure:^{
-                            restoreDraft(caption);
-                        }];
-                    } else {
-                        // caption 全空白（用户删干净又点发送）：恢复原草稿，纯图发送（与 #22 路径对齐）。
-                        restoreDraft(pendingText);
-                        [weakSelf sendAlbumImageDatas:finalImages assetCount:finalImages.count context:weakContext];
-                    }
-                };
-                captionVC.onCancel = ^{
-                    restoreDraft(pendingText);
-                };
-                [[WKNavigationManager shared].topViewController presentViewController:captionVC animated:YES completion:nil];
+            // 线程安全：selectCompressImageBlock 可能在 GIF 压缩后台线程触发，UIKit 操作必须主线程。
+            dispatch_block_t pushIntoBar = ^{
+                id<WKConversationContext> ctx = weakContext;
+                if (!ctx) return;
+                [ctx appendPendingImageDatas:images];
+                [ctx inputBecomeFirstResponder];
             };
             if ([NSThread isMainThread]) {
-                presentCaption();
+                pushIntoBar();
             } else {
-                dispatch_async(dispatch_get_main_queue(), presentCaption);
+                dispatch_async(dispatch_get_main_queue(), pushIntoBar);
             }
             return;
         }
@@ -320,6 +247,43 @@ static WKMoreItemClickEvent *_instance;
         UIImage *image = [[UIImage alloc] initWithData:data];
         [self sendImageMessageOfData:data full:NO targetSize:image.size context:context];
     }
+}
+
+// 待发送图片栏「+」按钮：再次拉相册（全屏库；不走 sheet 预览，匹配微信加图体验），
+// 不允许选视频，maxSelectCount=remaining；选完通过 appendBlock 回到 input panel。
+-(void) addMorePendingImagesForContext:(id<WKConversationContext>)context
+                             remaining:(NSInteger)remaining
+                           appendBlock:(void(^)(NSArray<NSData *> *images))appendBlock {
+    if (context == nil || appendBlock == nil) return;
+    if (remaining <= 0) return;
+    UIViewController *senderVC = [context targetVC];
+    if (!senderVC) return;
+    [[WKPhotoBrowser shared] showPhotoLibraryWithSender:senderVC
+                               selectCompressImageBlock:^(NSArray<NSData *> * _Nonnull images,
+                                                          NSArray<PHAsset *> * _Nonnull assets,
+                                                          BOOL isOriginal) {
+        // 防御：相册理论上已经按 maxSelectCount=remaining + allowSelectVideo=NO 过滤，但是
+        // 兜底再校验一次：剔除非 image 资产对应的 NSData，再 clamp remaining。
+        NSMutableArray<NSData *> *filtered = [NSMutableArray arrayWithCapacity:images.count];
+        for (NSInteger i = 0; i < (NSInteger)images.count && i < (NSInteger)assets.count; i++) {
+            PHAsset *a = assets[i];
+            if (a.mediaType == PHAssetMediaTypeImage) {
+                [filtered addObject:images[i]];
+            }
+        }
+        NSUInteger take = MIN(filtered.count, (NSUInteger)remaining);
+        NSArray<NSData *> *out = take > 0
+            ? [filtered subarrayWithRange:NSMakeRange(0, take)]
+            : @[];
+        // selectCompressImageBlock 可能在压缩线程触发，UIKit 操作主线程 hop。
+        if ([NSThread isMainThread]) {
+            appendBlock(out);
+        } else {
+            dispatch_async(dispatch_get_main_queue(), ^{ appendBlock(out); });
+        }
+    }
+                                         maxSelectCount:remaining
+                                       allowSelectVideo:NO];
 }
 
 -(void) onCameraIPressed:(id<WKConversationContext>)context {

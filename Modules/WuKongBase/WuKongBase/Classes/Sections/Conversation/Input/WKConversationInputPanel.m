@@ -29,6 +29,11 @@
 #import "WKHoldToTalkManager.h"
 #import <WuKongIMSDK/WKChannelMemberDB.h>
 #import "WKMessageModel.h"
+#import "WKConversationPendingImageBar.h"
+#import "WKMoreItemClickEvent.h"
+#import "WKImageBrowser.h"
+#import "WKNavigationManager.h"
+#import <YBImageBrowser/YBImageBrowser.h>
 #define  WKiPhoneX (WKScreenWidth == 375.f && WKScreenHeight == 812.f ? YES : NO)
 
 #define WKConversationInputHeight 36.0f // 输入框高度
@@ -76,6 +81,11 @@
 @property(nonatomic,strong) NSArray<NSDictionary *> *cmdSuggestData; // @{@"cmd":..., @"desc":...}
 @property(nonatomic,strong) NSArray<NSDictionary *> *cmdSuggestFiltered;
 
+// 待发送图片栏（取代旧的全屏 caption 编辑页）。imageCount==0 时 lim_height=0 不占位。
+@property(nonatomic,strong) WKConversationPendingImageBar *pendingImageBar;
+// 防重入：图文聚合 send 进行中（onFailure 未回调）禁止再次发送 / 删图 / 加图。
+@property(nonatomic,assign) BOOL inFlightPendingSend;
+
 @end
 
 @implementation WKConversationInputPanel
@@ -113,9 +123,11 @@
     _contentViewMinHeight = WKConversationInputHeight + WKConversationFuncGroupViewHeight +10.0f;
     
     [self addSubview:self.contentView];
-    
+
     [self.contentView addSubview:self.messageToolBar];
-    
+    // 待发送图片栏：放在 messageToolBar 之上（layoutContentView 中按 imageCount 决定占位）。
+    [self.contentView addSubview:self.pendingImageBar];
+
     [self addSubview:self.conversationPanel];
     
     [self.messageToolBar addSubview:self.menusBtn];
@@ -234,12 +246,17 @@ CGFloat itemSpace = 10.0f;
     self.contentView.lim_width = self.lim_width;
     self.contentView.lim_height = contentHeight;
 
+    // 待发送图片栏：在 topView 之下、messageToolBar 之上。imageCount==0 时收起占位。
+    CGFloat topY = self.topView ? self.topView.lim_bottom : 0.0f;
+    CGFloat barH = (self.pendingImageBar.imageCount > 0) ? [WKConversationPendingImageBar preferredHeight] : 0.0f;
+    self.pendingImageBar.lim_left = 0.0f;
+    self.pendingImageBar.lim_top = topY;
+    self.pendingImageBar.lim_width = self.lim_width;
+    self.pendingImageBar.lim_height = barH;
+    self.pendingImageBar.hidden = (barH <= 0.0f);
+
     self.messageToolBar.lim_size = self.contentView.lim_size;
-    if(self.topView) {
-        self.messageToolBar.lim_top = self.topView.lim_bottom;
-    }else {
-        self.messageToolBar.lim_top = 0.0f;
-    }
+    self.messageToolBar.lim_top = topY + barH;
 
     // voiceToggleBtn
     CGFloat voiceToggleBtnLeft = leftSpace;
@@ -498,8 +515,9 @@ CGFloat itemSpace = 10.0f;
     if(self.topView) {
         topViewBottom = self.topView.lim_bottom;
     }
+    CGFloat barH = (self.pendingImageBar.imageCount > 0) ? [WKConversationPendingImageBar preferredHeight] : 0.0f;
     CGFloat height = MAX(self.currentInputHeight + WKConversationFuncGroupViewHeight +10.0f,_contentViewMinHeight);
-    return height+topViewBottom;
+    return height + topViewBottom + barH;
 }
 // 当前面板的高度
 -(CGFloat) currentPanelHeight{
@@ -663,6 +681,12 @@ CGFloat itemSpace = 10.0f;
 
 -(void) inputSendFinished {
     NSString *content = self.textView.text;
+    // 有待发送图片：textView 内文本作 caption，按聚合/纯图分发；不再走纯文本 delegate。
+    if ([self hasPendingImages]) {
+        if (self.inFlightPendingSend) return;
+        [self _commitPendingWithCaption:content];
+        return;
+    }
     if([WKApp shared].config.messageTextMaxBytes !=0) {
         if(content && [self convertToByte:content]>[WKApp shared].config.messageTextMaxBytes) {
             [self showTextToFileAlert:content];
@@ -816,8 +840,9 @@ CGFloat itemSpace = 10.0f;
 -(void) handleTextViewContentDidChange {
     NSString *text = self.textView.text;
     BOOL hasText = ![[text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:@""];
-    self.sendButton.show = hasText;
-    self.sendButton.hidden = !hasText || self.isVoiceMode;
+    BOOL hasContent = hasText || [self hasPendingImages];
+    self.sendButton.show = hasContent;
+    self.sendButton.hidden = !hasContent || self.isVoiceMode;
     [self animateInputPanelChange];
     
     if(self.delegate && [self.delegate respondsToSelector:@selector(inputPanelTyping:)]) {
@@ -1059,7 +1084,208 @@ CGFloat itemSpace = 10.0f;
             animateBlock();
         }
     }];
-    
+
+}
+
+#pragma mark - 待发送图片栏
+
+- (WKConversationPendingImageBar *)pendingImageBar {
+    if (!_pendingImageBar) {
+        _pendingImageBar = [[WKConversationPendingImageBar alloc] initWithFrame:CGRectZero];
+        __weak typeof(self) weakSelf = self;
+        _pendingImageBar.onAddTapped = ^{
+            __strong typeof(weakSelf) self_ = weakSelf;
+            if (!self_ || self_.inFlightPendingSend) return;
+            NSInteger remaining = 9 - (NSInteger)[self_ pendingImageCount];
+            if (remaining <= 0) return;
+            id<WKConversationContext> ctx = self_.conversationContext;
+            if (!ctx) return;
+            [[WKMoreItemClickEvent shared] addMorePendingImagesForContext:ctx
+                                                                remaining:remaining
+                                                              appendBlock:^(NSArray<NSData *> *imgs) {
+                __strong typeof(weakSelf) self2 = weakSelf;
+                if (!self2 || imgs.count == 0) return;
+                [self2.pendingImageBar appendImageDatas:imgs];
+            }];
+        };
+        _pendingImageBar.onPreviewAtIndex = ^(NSInteger index) {
+            __strong typeof(weakSelf) self_ = weakSelf;
+            if (!self_) return;
+            [self_ presentImageBrowserAtIndex:index];
+        };
+        _pendingImageBar.onContentSizeChanged = ^{
+            __strong typeof(weakSelf) self_ = weakSelf;
+            if (!self_) return;
+            [self_ handleTextViewContentDidChange]; // 同步 send 按钮可见性
+            [self_ animateInputPanelChange];
+            [self_ layoutCmdSuggestView];
+        };
+    }
+    return _pendingImageBar;
+}
+
+- (void)appendPendingImageDatas:(NSArray<NSData *> *)datas {
+    if (datas.count == 0) return;
+    [self.pendingImageBar appendImageDatas:datas];
+}
+
+- (NSUInteger)pendingImageCount {
+    return _pendingImageBar ? _pendingImageBar.imageCount : 0;
+}
+
+- (BOOL)hasPendingImages {
+    return [self pendingImageCount] > 0;
+}
+
+- (void)presentImageBrowserAtIndex:(NSInteger)index {
+    NSArray<NSData *> *snapshot = [self.pendingImageBar.imageDatas copy];
+    if (snapshot.count == 0) return;
+    if (index < 0 || index >= (NSInteger)snapshot.count) index = 0;
+
+    // 收键盘，让 browser 占满屏。dismiss 后键盘不会自动回弹（与微信选图预览一致）。
+    [self.textView endEditing:YES];
+
+    NSMutableArray<YBIBImageData *> *dataSource = [NSMutableArray arrayWithCapacity:snapshot.count];
+    for (NSData *d in snapshot) {
+        YBIBImageData *item = [YBIBImageData new];
+        // image 用 block 形式按需 decode；引用住 NSData 确保浏览器期间数据不释放。
+        item.image = ^UIImage *_Nullable{
+            return [UIImage imageWithData:d];
+        };
+        [dataSource addObject:item];
+    }
+
+    WKImageBrowser *browser = [[WKImageBrowser alloc] init];
+    browser.dataSourceArray = dataSource;
+    browser.currentPage = index;
+
+    // Bug fix: 1 张图时 browser 内部 collection view 只有 1 cell，无翻页消费横向手势 →
+    // 屏幕左缘右滑落到聊天页所在 nav controller 的 interactivePopGestureRecognizer，
+    // 整个聊天页被 pop 回会话列表。多张图最左/最右页边界同样存在该问题。
+    //
+    // 仅 popGR.enabled=NO 在本工程实测不够稳——`WKRootNavigationController` 在
+    // `didShowViewController:` 会主动把 popGR 重新打开（line 79），其它路径也可能重置。
+    // 复用 WKRichTextCell 已验证过的模式：走 responder chain 找到 nav，把 nav.view 上
+    // 所有 UIPanGestureRecognizer（含 interactivePopGesture 及任何自定义全屏 pop pan）
+    // 在 browser 在屏期间一律 enabled=NO，dealloc 时按原状还原。
+    UINavigationController *navHit = nil;
+    UIResponder *responder = self;
+    while (responder) {
+        if ([responder isKindOfClass:[UIViewController class]]) {
+            UINavigationController *nav = ((UIViewController *)responder).navigationController;
+            if (nav) { navHit = nav; break; }
+        }
+        responder = [responder nextResponder];
+    }
+    NSMutableArray<UIPanGestureRecognizer *> *disabledPans = [NSMutableArray array];
+    if (navHit) {
+        for (UIGestureRecognizer *gr in navHit.view.gestureRecognizers) {
+            if ([gr isKindOfClass:[UIPanGestureRecognizer class]] && gr.enabled) {
+                gr.enabled = NO;
+                [disabledPans addObject:(UIPanGestureRecognizer *)gr];
+            }
+        }
+    }
+    browser.onDealloc = ^{
+        for (UIPanGestureRecognizer *gr in disabledPans) {
+            gr.enabled = YES;
+        }
+    };
+
+    UIView *host = [WKNavigationManager shared].topViewController.view ?: self.window;
+    [browser showToView:host];
+
+    // 强制单张图也显示「1/1」页码（YBIBTopView 默认 totalPage<=1 时藏 label）：
+    // 让单张和多张体验一致，与微信对齐。两次延迟兜底是因 YB 内部布局/页码刷新可能在
+    // showToView 之后的下一个 runloop 才把默认 handler 的 topView 打底完成，第一次
+    // 设的 hidden=NO 会被 setPage:totalPage: 覆盖。attributedText 复刻多张时的阴影样式。
+    dispatch_block_t patchPageLabel = ^{
+        YBIBTopView *topV = browser.defaultToolViewHandler.topView;
+        if (!topV) return;
+        NSInteger total = MAX((NSInteger)dataSource.count, 1);
+        NSInteger page = MIN(MAX(index, 0), total - 1);
+        NSString *text = [NSString stringWithFormat:@"%ld/%ld", (long)(page + 1), (long)total];
+        NSShadow *shadow = [NSShadow new];
+        shadow.shadowBlurRadius = 4;
+        shadow.shadowOffset = CGSizeMake(0, 1);
+        shadow.shadowColor = UIColor.darkGrayColor;
+        topV.pageLabel.attributedText = [[NSAttributedString alloc] initWithString:text
+                                                                        attributes:@{NSShadowAttributeName: shadow}];
+        topV.pageLabel.hidden = NO;
+    };
+    dispatch_async(dispatch_get_main_queue(), patchPageLabel);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), patchPageLabel);
+}
+
+#pragma mark - 待发送图片栏：发送分发
+
+// inputSendFinished 在有 pending 图时把 textView 文本作 caption 走这条；
+// 也被 hold-to-talk STT 路径复用（语音识别成的文本作 caption）。
+- (void)_commitPendingWithCaption:(NSString *)caption {
+    if (self.inFlightPendingSend) return;
+    NSArray<NSData *> *images = [self.pendingImageBar.imageDatas copy];
+    if (images.count == 0) return; // 防御：调用方应已 gate
+
+    NSString *captionRaw = caption ?: @"";
+    id<WKConversationContext> ctx = self.conversationContext;
+    if (!ctx) return;
+
+    // 同步成功路径：清 textView + 清 bar；失败 onFailure 异步回调按规则尝试恢复。
+    self.textView.text = @"";
+    self.sendButton.show = NO;
+    self.sendButton.hidden = YES;
+    [self.pendingImageBar clear];
+    [self resetInputHeight];
+
+    if ([WKApp shouldAggregateAlbumImagesWithText:YES assetCount:images.count pendingText:captionRaw]) {
+        // 图文聚合（RichText=14）。entities/mentionedInfo 用 ctx 自己的 mentionCache，
+        // textView 里输入 @ 时已通过原 mention 链路写入。
+        NSArray<WKMessageEntity *> *entities = [ctx entities:captionRaw];
+        WKMentionedInfo *mentionedInfo = [ctx mentionedInfo:captionRaw];
+        // 防重入只覆盖「同步触发期」：textView/bar 在上面已经清空，调用方此时再 tap send
+        // 也不会有 pending 图，hasPendingImages 自然为 NO；用户接下来选新图、打新字应当不被
+        // 上一条发送阻挡（sendRichTextMixedImageDatas: 无 success 回调，等 onFailure 才
+        // reset 等于成功后永远 stuck → 发送 / + 全部失灵）。
+        self.inFlightPendingSend = YES;
+        __weak typeof(self) weakSelf = self;
+        [[WKApp shared] sendRichTextMixedImageDatas:images
+                                          assetCount:images.count
+                                           extraText:captionRaw
+                                            mentions:nil
+                                            entities:entities
+                                       mentionedInfo:mentionedInfo
+                                           inContext:ctx
+                                           onFailure:^{
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __strong typeof(weakSelf) self_ = weakSelf;
+                if (!self_) return;
+                BOOL canRestoreText = (self_.textView.text.length == 0);
+                BOOL canRestoreImages = ([self_ pendingImageCount] == 0);
+                if (canRestoreText) {
+                    [self_.textView setText:captionRaw];
+                }
+                if (canRestoreImages) {
+                    [self_.pendingImageBar setImageDatas:images];
+                }
+                [self_ handleTextViewContentDidChange];
+                [self_ animateInputPanelChange];
+                if (!canRestoreText || !canRestoreImages) {
+                    [[WKNavigationManager shared].topViewController.view
+                        showHUDWithHide:LLang(@"发送失败,内容已保留")];
+                }
+            });
+        }];
+        // 启动 = fire-and-forget；同步 reset，让用户继续选图/打字/发送下一条不被卡。
+        self.inFlightPendingSend = NO;
+    } else {
+        // 无 caption / 全空白 → 纯图（已含 count==assetCount 闸门）。
+        [[WKMoreItemClickEvent shared] sendAlbumImageDatas:images
+                                                assetCount:images.count
+                                                   context:ctx];
+    }
+
+    [self animateInputPanelChange];
 }
 
 
@@ -1176,11 +1402,12 @@ CGFloat itemSpace = 10.0f;
         [self.voiceToggleBtn setImage:voiceImg forState:UIControlStateNormal];
         self.textView.hidden = NO;
         self.holdToTalkBtn.hidden = YES;
-        // 恢复发送按钮状态
+        // 恢复发送按钮状态：文本 OR 待发送图片任一非空都应显示发送按钮。
         NSString *text = self.textView.text;
         BOOL hasText = text && ![[text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:@""];
-        self.sendButton.show = hasText;
-        self.sendButton.hidden = !hasText;
+        BOOL hasContent = hasText || [self hasPendingImages];
+        self.sendButton.show = hasContent;
+        self.sendButton.hidden = !hasContent;
         // 恢复文本模式下输入框高度
         [self resetCurrentInputHeight];
         [self.holdToTalkManager cancelIfRecording];
@@ -1211,6 +1438,19 @@ CGFloat itemSpace = 10.0f;
     if ([self.conversationContext respondsToSelector:@selector(sendMessage:)]) {
         [self.conversationContext sendMessage:[WKVoiceContent initWithData:data second:(int)seconds waveform:waveformData]];
     }
+    // 兼容「语音模式下也可贴图」：语音消息发出后，若图片栏还有图，按纯图路径逐张发出。
+    // RichText=14 不承载语音，因此分两条消息送达；UX 上仍是「一起发送」。
+    if ([self hasPendingImages]) {
+        NSArray<NSData *> *images = [self.pendingImageBar.imageDatas copy];
+        [self.pendingImageBar clear];
+        if (self.conversationContext) {
+            [[WKMoreItemClickEvent shared] sendAlbumImageDatas:images
+                                                    assetCount:images.count
+                                                       context:self.conversationContext];
+        }
+        [self handleTextViewContentDidChange];
+        [self animateInputPanelChange];
+    }
 }
 
 - (NSData *)convertWaveformToData:(NSArray<NSNumber *> *)waveform {
@@ -1230,6 +1470,11 @@ CGFloat itemSpace = 10.0f;
 }
 
 - (void)holdToTalkManager:(WKHoldToTalkManager *)manager sendText:(NSString *)text {
+    // 有 pending 图：STT 文本作 caption，与图聚合（或 caption 全空时纯图）。
+    if ([self hasPendingImages]) {
+        [self _commitPendingWithCaption:text];
+        return;
+    }
     if (self.delegate && [self.delegate respondsToSelector:@selector(inputPanelSend:text:)]) {
         [self.delegate inputPanelSend:self text:text];
     }
@@ -1239,6 +1484,11 @@ CGFloat itemSpace = 10.0f;
     // 先写入 mentionCache
     if (mentions.count > 0 && [self.conversationContext respondsToSelector:@selector(addMentionItems:)]) {
         [self.conversationContext addMentionItems:mentions];
+    }
+    // 有 pending 图：STT 文本 + mentions 作 caption 与图聚合。
+    if ([self hasPendingImages]) {
+        [self _commitPendingWithCaption:text];
+        return;
     }
     // 再走正常发送流程（sendTextMessage 会从 mentionCache 生成 entity）
     if (self.delegate && [self.delegate respondsToSelector:@selector(inputPanelSend:text:)]) {

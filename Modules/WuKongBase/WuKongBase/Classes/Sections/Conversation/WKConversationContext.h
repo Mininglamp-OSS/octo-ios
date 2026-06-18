@@ -193,6 +193,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 -(void) inputBecomeFirstResponder;
 
+/// 把已选图片二进制塞进输入框上方的待发送图片栏（取代旧的全屏 caption 编辑页）。
+/// 线程安全：实现内部 main hop。
+-(void) appendPendingImageDatas:(NSArray<NSData *> *)datas;
+
 /// 结束输入
 -(void) endEditing;
 

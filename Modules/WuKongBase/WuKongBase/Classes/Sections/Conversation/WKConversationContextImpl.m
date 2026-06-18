@@ -209,6 +209,12 @@
     [self.conversationView.input becomeFirstResponder];
 }
 
+-(void) appendPendingImageDatas:(NSArray<NSData *> *)datas {
+    if (datas.count == 0) return;
+    // 输入面板内部 main hop，这里直接转发即可。
+    [self.conversationView.input appendPendingImageDatas:datas];
+}
+
 -(void) endEditing {
     [self.conversationView.input endEditing];
 }
