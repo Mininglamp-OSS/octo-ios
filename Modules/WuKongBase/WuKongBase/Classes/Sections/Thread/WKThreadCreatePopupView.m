@@ -157,7 +157,9 @@
         _previewScroll = [[UIScrollView alloc] init];
         _previewScroll.showsVerticalScrollIndicator = NO;
         _previewScroll.showsHorizontalScrollIndicator = NO;
-        _previewScroll.bounces = YES;
+        // 关掉边界回弹 —— 预览只是静态展示，碰到边界时再继续拖会"软橡皮筋"反弹一下，
+        // 在小卡片里观感很怪；超出范围也不需要"还有内容"的暗示。
+        _previewScroll.bounces = NO;
         _previewScroll.alwaysBounceVertical = NO;
         _previewScroll.alwaysBounceHorizontal = NO;
         [_previewContainer addSubview:_previewScroll];
