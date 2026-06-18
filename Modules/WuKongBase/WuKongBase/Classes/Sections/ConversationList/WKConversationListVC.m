@@ -2229,18 +2229,24 @@
     [self.conversationTabView setFollowUnreadCount:follow];
     [self.conversationTabView setRecentUnreadCount:recent];
 
-    // 底部 tabbar"消息" item 角标：取 follow / recent 两个 sub-tab 的较大值。
-    // 用 MAX 而非求和，避免一个会话同时命中关注 + 最近被算两遍；语义上"红点
-    // 显示的数字 ≤ 用户在任意 sub-tab 看到的最大未读"，不会出现"红点 8 进去
-    // 只见 5"的违和。channelInfo 后台预热 + 150ms coalesce 已经把冷启动 99+
-    // 闪烁吸收掉，这里直接写最终值即可（详见 kickoffChannelInfoWarmup）。
+    // 底部 tabbar"消息" item icon 右上角自绘角标：取 follow / recent 较大值，
+    // 用 MAX 而非求和，避免一个会话同时命中关注 + 最近被算两次；语义上"红点
+    // ≤ 用户在任意 sub-tab 看到的最大未读"，不会出现"红点 8 进去只见 5"。
+    // 系统 tabBarItem.badgeValue 不能定制配色 → 走宿主 WKMainTabController
+    // 的 setMessageUnreadCount: 自绘 WKBadgeView（与会话列表 cell 同源
+    // 粉底红字，详见 WKUnreadBadge*Color）。WKConversationListVC 在
+    // WuKongBase 模块、WKMainTabController 在 Octo 主工程，按响应链拿、
+    // 用 SEL 弱耦合调用，避免模块反向依赖。
     NSInteger total = MAX(follow, recent);
-    if (total <= 0) {
-        self.tabBarItem.badgeValue = nil;
-    } else if (total > 99) {
-        self.tabBarItem.badgeValue = @"99+";
-    } else {
-        self.tabBarItem.badgeValue = [NSString stringWithFormat:@"%ld", (long)total];
+    UITabBarController *tbc = self.tabBarController;
+    SEL setSel = NSSelectorFromString(@"setMessageUnreadCount:");
+    if ([tbc respondsToSelector:setSel]) {
+        NSMethodSignature *sig = [tbc methodSignatureForSelector:setSel];
+        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+        inv.target = tbc;
+        inv.selector = setSel;
+        [inv setArgument:&total atIndex:2];
+        [inv invoke];
     }
 }
 

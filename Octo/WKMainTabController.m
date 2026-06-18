@@ -25,6 +25,12 @@
 // 选中态的灰色胶囊 pill, 滑动到当前选中 item 后面。在 capsuleBackground 之上、tabBar 之下。
 @property(nonatomic,strong) UIView *pillIndicator;
 
+// 「消息」item icon 右上角的未读角标。系统 tabBarItem.badgeValue 不能定制配色,
+// 而设计要求与会话列表 cell 同款（粉色背景 + 红色文字, WKUnreadBadge*Color),
+// 所以自绘一个 WKBadgeView 浮在 icon 上。位置在 _layoutMessageTabBadge 里
+// 按 tabBar 内 button view → image view 的实测 frame 计算,不写死 item 索引外的常量。
+@property(nonatomic,strong) WKBadgeView *messageTabBadge;
+
 @end
 
 @implementation WKMainTabController
@@ -294,6 +300,83 @@ static const CGFloat kWKPillHorizontalInset  = 14;   // 左右各 14pt: 让 pill
             vc.additionalSafeAreaInsets = desired;
         }
     }
+
+    // 「消息」item icon 右上角的未读角标位置 — tabBar 每次 layout 都重定位,
+    // 屏幕旋转 / Dynamic Type 切换 / iPad split 都会重排。
+    [self _layoutMessageTabBadge];
+}
+
+#pragma mark - Message Tab Badge
+
+-(void) setMessageUnreadCount:(NSInteger)count {
+    if (count <= 0) {
+        // 不存在 badge 实例时无需懒加载 — 直接 return,避免 0 → hidden 也分配一个 view
+        if (!_messageTabBadge) return;
+        _messageTabBadge.hidden = YES;
+        return;
+    }
+    WKBadgeView *badge = self.messageTabBadge;
+    badge.hidden = NO;
+    badge.badgeValue = count > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)count];
+    [self _layoutMessageTabBadge];
+}
+
+- (WKBadgeView *)messageTabBadge {
+    if (!_messageTabBadge) {
+        _messageTabBadge = [WKBadgeView viewWithoutBadgeTip];
+        _messageTabBadge.userInteractionEnabled = NO; // 不能挡住 tab item 点击
+        // 与会话列表 cell 同源配色（WKUnreadBadge*Color：粉色背景 + 红色文字）
+        [_messageTabBadge setBadgeBackgroundColor:WKUnreadBadgeBgColor()];
+        [_messageTabBadge setBadgeTextColor:WKUnreadBadgeFgColor()];
+        // tabBar 已 masksToBounds=NO（见 _applyCapsuleStyleToTabBar），badge 溢出 icon 右上角不会被裁
+        [self.tabBar addSubview:_messageTabBadge];
+    }
+    return _messageTabBadge;
+}
+
+- (void)_layoutMessageTabBadge {
+    if (!_messageTabBadge || _messageTabBadge.hidden) return;
+    UIView *iconView = [self _iconViewForTabIndex:0];
+    if (!iconView || !iconView.window) return; // tabBar 还没真正上屏，下次 layout 再试
+    // 把 icon frame 转换到 tabBar 坐标系（badge 加在 tabBar 上）
+    CGRect iconInTab = [self.tabBar convertRect:iconView.bounds fromView:iconView];
+    CGSize size = _messageTabBadge.bounds.size;
+    if (size.width <= 0 || size.height <= 0) return; // setBadgeValue 还没 setNeedsDisplay
+    // badge 中心 ≈ icon 右上角再向外推一点（让 badge 一半溢出 icon 框，与微信 / Telegram 风格一致）
+    CGFloat x = CGRectGetMaxX(iconInTab) - size.width * 0.35f;
+    CGFloat y = CGRectGetMinY(iconInTab) - size.height * 0.35f;
+    CGRect target = CGRectMake(x, y, size.width, size.height);
+    if (!CGRectEqualToRect(_messageTabBadge.frame, target)) {
+        _messageTabBadge.frame = target;
+    }
+}
+
+/// 找到 tab item 在 tabBar 内的 icon UIImageView。系统给 tab item 渲染的容器
+/// 是私有类 UITabBarButton，里面装一个 UITabBarSwappableImageView（UIImageView 子类）。
+/// 不直接判类名 — 类名可能随 iOS 版本变。按 frame 排序找第 N 个 button-like 子视图,
+/// 再在 button 子视图里找第一个 UIImageView 即可（label 是 UITabBarButtonLabel，
+/// 不是 UIImageView）。找不到时返回 nil，layout 跳过等下一拍。
+- (UIView *)_iconViewForTabIndex:(NSInteger)index {
+    if (index < 0) return nil;
+    NSMutableArray<UIView *> *itemViews = [NSMutableArray array];
+    for (UIView *v in self.tabBar.subviews) {
+        // tabBar.subviews 含 _UIBarBackground 等装饰视图 — 用尺寸 / 是否含 imageView 子视图过滤
+        if (v.bounds.size.width <= 0 || v.bounds.size.height <= 0) continue;
+        BOOL hasImage = NO;
+        for (UIView *sub in v.subviews) {
+            if ([sub isKindOfClass:[UIImageView class]]) { hasImage = YES; break; }
+        }
+        if (hasImage) [itemViews addObject:v];
+    }
+    if (itemViews.count <= (NSUInteger)index) return nil;
+    [itemViews sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
+        return [@(a.frame.origin.x) compare:@(b.frame.origin.x)];
+    }];
+    UIView *button = itemViews[index];
+    for (UIView *sub in button.subviews) {
+        if ([sub isKindOfClass:[UIImageView class]]) return sub;
+    }
+    return nil;
 }
 
 - (CGRect)_pillFrameForIndex:(NSInteger)index {

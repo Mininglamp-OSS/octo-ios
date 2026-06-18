@@ -55,6 +55,7 @@
 #import "WKConversationAddItem.h"
 #import "UIImageView+WK.h"
 #import "WKAutoDeleteView.h"
+#import "WKBadgeView.h"
 
 #import "UIColor+WK.h"
 #import "WKUserColorUtil.h"
