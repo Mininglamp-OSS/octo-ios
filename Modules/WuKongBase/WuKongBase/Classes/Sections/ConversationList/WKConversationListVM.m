@@ -1349,6 +1349,24 @@ static WKConversationListVM *_instance;
     return self.conversationWrapModels ?: @[];
 }
 
+-(NSArray<WKChannel*> *) allKnownChannelsForWarmup {
+    NSMutableArray<WKChannel*> *result = [NSMutableArray array];
+    NSMutableSet<NSString*> *seen = [NSMutableSet set];
+    void (^addChannel)(WKChannel *) = ^(WKChannel *ch) {
+        if (!ch || !ch.channelId) return;
+        NSString *key = [NSString stringWithFormat:@"%@-%d", ch.channelId, ch.channelType];
+        if ([seen containsObject:key]) return;
+        [seen addObject:key];
+        [result addObject:ch];
+    };
+    for (WKConversationWrapModel *m in self.conversationWrapModels) addChannel(m.channel);
+    for (WKConversationWrapModel *t in self.threadWrapModels) addChannel(t.channel);
+    [self.cachedTopicsByGroup enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSArray<WKConversation*> *topics, BOOL *stop) {
+        for (WKConversation *conv in topics) addChannel(conv.channel);
+    }];
+    return result;
+}
+
 -(NSInteger) conversationCount {
     return self.filteredConversations.count;
 }
