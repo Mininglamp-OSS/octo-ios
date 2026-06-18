@@ -2614,6 +2614,18 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
             objc_setAssociatedObject(self, "kSelHadSegments", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             objc_setAssociatedObject(self, "kSelOrigSegAttrText", [self.textLbl.attributedText copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             objc_setAssociatedObject(self, "kSelOrigSegSize", [NSValue valueWithCGSize:self.textLbl.lim_size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            // 保存进入 selection 之前的 bubble / messageContentView 完整 frame
+            // （含 lim_left）。后面手动把它们撑大成 raw-text 尺寸时，原始 frame 是
+            // 唯一的 ground truth ——
+            //   - sent 气泡是右锚的（lim_left = self.lim_width - bubbleW - rightInset），
+            //     start 时只改 size 不改 lim_left，bubble 的右边会跟着撑出屏幕；
+            //   - end 流程依赖 [super layoutSubviews] 通过 begin/endUpdates +
+            //     setNeedsLayout 隐式重置位置，时序敏感，sent 上很容易留下
+            //     "bubble 缩回 compact 但 textLbl 还在 wider 位置"的 stale 几何，
+            //     视觉上就是文本溢出气泡右边。
+            // 直接快照→直接 restore，绕开对 layoutSubviews 时序的依赖。
+            objc_setAssociatedObject(self, "kSelOrigBubbleFrame", [NSValue valueWithCGRect:self.bubbleBackgroundView.frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(self, "kSelOrigContentFrame", [NSValue valueWithCGRect:self.messageContentView.frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
             // 隐藏分段视图
             for (UIView *v in self.segmentViews) {
@@ -2791,8 +2803,20 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     objc_setAssociatedObject(self, &kSelEndHandleKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     // 恢复原始 attributedText（去除高亮）
-    NSAttributedString *orig = objc_getAssociatedObject(self, &kSelOrigAttrTextKey);
-    if (orig) self.textLbl.attributedText = orig;
+    // 注意：segmented 路径下 kSelOrigAttrTextKey 是 selection start REPLACEMENT 之后
+    // 保存的（即 fullRawText 推导出的 attributedText，见 startInBubbleTextSelection
+    // 行 2624-2629 + 2726），如果在这里把它设回 textLbl，就把 textLbl 推回了
+    // 「全文 raw」状态。后面 hadSegments 块再 setAttributedText 到 first-segment
+    // 紧接两次 setter，UITextView 的 textStorage 在某些路径下不会真正刷新到第二
+    // 次的内容，结果 textLbl 残留 fullRawText、其它 segmentViews 又显示渲染版本，
+    // 用户看到「raw 文本 + 渲染版本」两份重复。
+    // segmented 路径下完全交给后面的 hadSegments 块处理，这里只对 NON-segmented
+    // 路径做去高亮恢复。
+    BOOL hadSegmentsAtEntry = [objc_getAssociatedObject(self, "kSelHadSegments") boolValue];
+    if (!hadSegmentsAtEntry) {
+        NSAttributedString *orig = objc_getAssociatedObject(self, &kSelOrigAttrTextKey);
+        if (orig) self.textLbl.attributedText = orig;
+    }
     objc_setAssociatedObject(self, &kSelOrigAttrTextKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     // 移除 window tap
@@ -2841,8 +2865,50 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     BOOL hadSegments = [objc_getAssociatedObject(self, "kSelHadSegments") boolValue];
     if (hadSegments) {
         // 恢复 textLbl 原始内容和大小
+        // 关键：先把 textLbl 的 text/attributedText 整个清空，再写入 first-segment
+        // 内容。此前 selection start 通过 `textLbl.text = fullRawText` 把
+        // UITextView 的 textStorage 灌成了整段 raw markdown；如果直接
+        // setAttributedText: 到 first-segment 而不先清，UITextView 的 textStorage
+        // 在某些 TK1/TK2 切换路径下保留旧 layout（用户实测在 sent 消息上稳定复
+        // 现：表格 cancel 后 textLbl 还显示整段 raw，加上 segmentViews 里渲染好
+        // 的 table+second 段，气泡里出现"raw + 渲染"两份重复，撑爆气泡）。
+        // 经过一次 nil 让 textStorage 落到空态，再写入 first-segment，确保
+        // textLbl 真正只显示 first-segment 内容。
         NSAttributedString *origAttr = objc_getAssociatedObject(self, "kSelOrigSegAttrText");
-        if (origAttr) self.textLbl.attributedText = origAttr;
+        self.textLbl.text = nil;
+        self.textLbl.attributedText = nil;
+        if (origAttr.length > 0) {
+            self.textLbl.attributedText = origAttr;
+        } else {
+            // 兜底：origAttr 不可用（极端情况下 first-segment 渲染回退到 .text 路径
+            // 时 attributedText 可能为空），就地 re-render first text segment，
+            // 不让 textLbl 永远空白或残留 fullRawText。
+            NSString *raw = [[self class] getRawContent:self.messageModel];
+            NSArray *segments = [WKMarkdownRenderer splitContentSegments:raw];
+            for (NSDictionary *seg in segments) {
+                if ([seg[@"type"] isEqualToString:@"text"]) {
+                    NSString *content = seg[@"content"];
+                    UIColor *textColor = self.messageModel.isSend
+                        ? [WKApp shared].config.messageSendTextColor
+                        : [WKApp shared].config.messageRecvTextColor;
+                    NSString *colorHex = [textColor toHexRGB];
+                    @try {
+                        NSAttributedString *mdAttr = [WKMarkdownRenderer render:content
+                                                                       fontSize:[WKApp shared].config.messageTextFontSize
+                                                                  textColorHex:colorHex
+                                                              dynamicTextColor:textColor];
+                        if (mdAttr.length > 0) {
+                            self.textLbl.attributedText = mdAttr;
+                        } else {
+                            self.textLbl.text = content;
+                        }
+                    } @catch (NSException *e) {
+                        self.textLbl.text = content;
+                    }
+                    break;
+                }
+            }
+        }
         NSValue *origSizeVal = objc_getAssociatedObject(self, "kSelOrigSegSize");
         if (origSizeVal) self.textLbl.lim_size = [origSizeVal CGSizeValue];
 
@@ -2850,12 +2916,48 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
         for (UIView *v in self.segmentViews) { v.hidden = NO; }
         for (UIScrollView *o in self.tableOverlays) { o.hidden = NO; }
 
+        // 直接把 bubble / messageContentView 的 frame 拨回 selection 之前的快照，
+        // 不依赖 layoutSubviews 时序触发 reset。
+        // 修 sent 消息长按取消后文本溢出气泡右边的 bug：
+        // - sent 气泡是右锚的 (lim_left = self.lim_width - bubbleW - rightInset)，
+        //   selection start 只 setSize 不动 lim_left，bubble 在 selection 期间已经
+        //   越出右边；
+        // - end 流程靠 begin/endUpdates + setNeedsLayout 让 [super layoutSubviews]
+        //   重新算 lim_left，时序敏感，sent 上偶发观察到 bubble 已经缩回 compact
+        //   尺寸但 textLbl 仍在 wider 位置（或反过来 bubble 没缩回但 textLbl 已经
+        //   是 compact），视觉上文本超出气泡右边。
+        // received 气泡是左锚的 (lim_left = avatar.right + leftInset)，同样的
+        // stale 几何不会"超出右边"，所以只在 sent 上肉眼可见。
+        NSValue *origBubbleVal = objc_getAssociatedObject(self, "kSelOrigBubbleFrame");
+        NSValue *origContentVal = objc_getAssociatedObject(self, "kSelOrigContentFrame");
+        if (origBubbleVal) self.bubbleBackgroundView.frame = [origBubbleVal CGRectValue];
+        if (origContentVal) self.messageContentView.frame = [origContentVal CGRectValue];
+
         // 恢复高度缓存（用保存的完整 key）
+        // 关键修复：之前 `if (origHeight) restore else nothing` 的写法存在缓存留脏：
+        // - origHeight 是 selection start 那一刻从缓存抓的值，但这个值可能：
+        //   (a) NSCache 在 selection 期间因为内存压力被驱逐，origH 抓到 nil；
+        //   (b) selection 期间收到新消息使该消息 bubblePosition 翻了
+        //       （Last → Middle / Single → Last），heightKey 跟着变，老 key 上有
+        //       值，selection start 取新 key 时拿到的是 nil；
+        //   (c) JS WebView 异步报回表格实际高度后写过新值（见 jsTableHeights 流程
+        //       2410-2424），origH 变成"过期值"。
+        // 这三种情况下"恢复"反而是错的或没生效，inflated 的 raw-text 高度残留在
+        // cellHeightCache 里，导致 endUpdates 后 heightForRow 命中脏值，气泡视觉
+        // 已经压回表格态但行高不变，下方留空白。
+        // 直接 remove 让 beginUpdates/endUpdates 走 +sizeForMessage: 重算，
+        // segmentedContentHeightForMessage: 内的 segHeightCache 仍带 JS 实测值，
+        // 拿到的就是当前正确的表格态高度。
         NSString *heightKey = objc_getAssociatedObject(self, "kSelHeightKey");
-        NSNumber *origHeight = objc_getAssociatedObject(self, "kSelOrigHeight");
-        if (heightKey.length > 0 && origHeight) {
-            [[WKMessageListView cellHeightCache] setObject:origHeight forKey:heightKey];
+        if (heightKey.length > 0) {
+            [[WKMessageListView cellHeightCache] removeObjectForKey:heightKey];
         }
+
+        // 先做一次 layout pass 让 segment layout 把 textLbl / 其它分段重新摆好
+        // （此时 bubble/messageContentView 几何已 restore 为 compact，segment 会
+        // 在 contentW = compact 下被正确摆放）。然后再让 tableView 同步行高。
+        [self setNeedsLayout];
+        [self layoutIfNeeded];
 
         // 触发 tableView 恢复高度
         UIView *v = self.superview;
@@ -2874,6 +2976,8 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     objc_setAssociatedObject(self, "kSelHadSegments", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, "kSelOrigSegAttrText", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, "kSelOrigSegSize", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, "kSelOrigBubbleFrame", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, "kSelOrigContentFrame", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, "kSelOrigHeight", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, "kSelHeightKey", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
