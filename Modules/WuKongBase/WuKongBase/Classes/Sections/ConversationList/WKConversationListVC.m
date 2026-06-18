@@ -2224,8 +2224,24 @@
 }
 
 -(void) updateTabUnreadCounts {
-    [self.conversationTabView setFollowUnreadCount:[self.conversationListVM getFollowUnreadCount]];
-    [self.conversationTabView setRecentUnreadCount:[self.conversationListVM getRecentUnreadCount]];
+    NSInteger follow = [self.conversationListVM getFollowUnreadCount];
+    NSInteger recent = [self.conversationListVM getRecentUnreadCount];
+    [self.conversationTabView setFollowUnreadCount:follow];
+    [self.conversationTabView setRecentUnreadCount:recent];
+
+    // 底部 tabbar"消息" item 角标：取 follow / recent 两个 sub-tab 的较大值。
+    // 用 MAX 而非求和，避免一个会话同时命中关注 + 最近被算两遍；语义上"红点
+    // 显示的数字 ≤ 用户在任意 sub-tab 看到的最大未读"，不会出现"红点 8 进去
+    // 只见 5"的违和。channelInfo 后台预热 + 150ms coalesce 已经把冷启动 99+
+    // 闪烁吸收掉，这里直接写最终值即可（详见 kickoffChannelInfoWarmup）。
+    NSInteger total = MAX(follow, recent);
+    if (total <= 0) {
+        self.tabBarItem.badgeValue = nil;
+    } else if (total > 99) {
+        self.tabBarItem.badgeValue = @"99+";
+    } else {
+        self.tabBarItem.badgeValue = [NSString stringWithFormat:@"%ld", (long)total];
+    }
 }
 
 /// refreshBadge 是高频调用 — viewWillAppear / viewDidAppear / loadConversationList completion /
@@ -2249,7 +2265,6 @@
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         strongSelf.refreshBadgePending = NO;
-        strongSelf.tabBarItem.badgeValue = nil;
         [strongSelf updateTabUnreadCounts];
     });
 }
