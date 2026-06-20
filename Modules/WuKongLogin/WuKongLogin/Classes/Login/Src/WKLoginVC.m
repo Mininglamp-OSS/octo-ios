@@ -132,21 +132,19 @@
     }
 
     // 没有缓存，检查服务器上是否有空间
-    __weak typeof(self) weakSelf = self;
     WKSpaceGateVM *spaceVM = [WKSpaceGateVM new];
     [spaceVM getMySpaces].then(^(NSArray *spaces){
-        if(spaces && spaces.count > 0) {
-            // 有空间，保存第一个空间ID并进入
-            NSDictionary *firstSpace = spaces[0];
-            NSString *spaceId = firstSpace[@"space_id"];
-            if(spaceId && ![spaceId isEqualToString:@""]) {
-                [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
-                [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
-                // iOS 12+ 系统会自动调度落盘，去掉主动 synchronize 以避免登录链路上同步阻塞
-            }
+        // 必须挑 role>0 的（成员）。曾经的回落是 spaces[0]，aegis 切账号时会
+        // 选到当前用户其实不是成员的 Space（role=0），导致后续接口全 403。
+        NSDictionary *joinedSpace = [WKSpaceGateVM pickJoinedSpace:spaces];
+        if (joinedSpace) {
+            NSString *spaceId = joinedSpace[@"space_id"];
+            [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+            [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
+            // iOS 12+ 系统会自动调度落盘，去掉主动 synchronize 以避免登录链路上同步阻塞
             [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
         } else {
-            // 没有空间，显示SpaceGate引导页
+            // 用户在任何 Space 里都没有成员身份，显示 SpaceGate 引导页
             WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];
             [[WKNavigationManager shared] pushViewController:spaceGateVC animated:YES];
         }

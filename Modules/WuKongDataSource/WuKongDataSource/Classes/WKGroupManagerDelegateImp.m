@@ -464,6 +464,20 @@
     });
 }
 
+// 转让群主
+- (void)groupManager:(nonnull WKGroupManager *)manager groupNo:(nonnull NSString *)groupNo transferOwner:(nonnull NSString *)toUID complete:(void (^ _Nullable)(NSError * _Nullable))complete {
+    [[WKAPIClient sharedClient] POST:[NSString stringWithFormat:@"groups/%@/transfer/%@",groupNo,toUID] parameters:nil].then(^{
+        if(complete) {
+            complete(nil);
+        }
+    }).catch(^(NSError *error){
+        if(complete) {
+            complete(error);
+        }
+        WKLogError(@"转让群主失败！->%@",error);
+    });
+}
+
 // 群禁言
 - (void)groupManager:(WKGroupManager *)manager group:(NSString *)groupNo forbidden:(BOOL)forbidden complete:(void (^)(NSError * _Nullable))complete {
     [[WKAPIClient sharedClient] POST:[NSString stringWithFormat:@"groups/%@/forbidden/%d",groupNo,forbidden?1:0] parameters:nil].then(^{

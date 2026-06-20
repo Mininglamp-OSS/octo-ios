@@ -92,6 +92,11 @@ static const BOOL kIncrementalPulldown = NO;
 // rehydrate 进入时的 "在底部" 快照: watchdog 触发的 forceFinish 路径下也要拿得到,
 // 否则 watchdog 走 wasAtBottom:NO 把原本贴底的用户也不滚到底, 体验出现一次性偏移。
 @property(nonatomic,assign) BOOL rehydrateEnteredAtBottom;
+// 后台期 (锁屏 / 切后台 / conversation-sync 直写 DB 等) 是否动过状态。回前台 reconcile
+// 路径专用: 命中时即使 numberOfRows 一致, 也强制再走一次 reloadData, 兜住 "后台
+// reloadData + scrollToBottom 触发离屏 layout 但 willDisplayCell: 没回调, refresh: 永不跑
+// → 回前台 cell 内容空白" 的回归。设置点: handleRecvMessage 后台分支 + onConversationSyncFinished。
+@property(nonatomic,assign) BOOL dirtyAfterBackground;
 // 跟踪上一次连接状态: 只在 (非 Connected → Connected) 跳变时触发 rehydrate,
 // 否则连续 ping/pong 都会重复跑。
 @property(nonatomic,assign) WKConnectStatus prevConnectStatus;
@@ -1987,10 +1992,38 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         //   相等判断提前 return，永远不会补一次 reloadData。reloadData 是惰性的，回前台下次
         //   layout 会重查 numberOfRows 并重新 willDisplayCell:，自愈（对齐 git-init 的原行为）。
         if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
+            // R4 fix: 标记 "回前台 reconcile 时即使 numberOfRows 一致也要强制 reloadData 一次",
+            // 治后台 reloadData + scrollToBottom 触发离屏 layout 但 willDisplayCell: 没回调,
+            // 回前台 UIKit 误判 "已布局" 不重渲染、cell 内容空白的回归。消费点:
+            // onAppDidBecomeActiveReconcile:。
+            self.dirtyAfterBackground = YES;
             [self.dataProvider addMessage:messageModel];
             [self.tableView reloadData];
             if (self.positionAtBottom) { [self scrollToBottom:NO]; }
             else if ([message isSend]) { [self scrollToBottom:NO]; }
+            return;
+        }
+
+        // R4 fix (sync gap): conversation-sync 期间会把若干 backlog 消息直写 DB (绕过
+        // onRecvMessages, 见 onConversationSyncFinished 注释), 同时 IM stream 也可能
+        // 抢先派发一条新 live message。这条 live message 的 orderSeq 比 dp 末尾跳了 >1,
+        // 简单 dp.addMessage 会留洞 → 用户上滑/对账永远看不到中间消息, 而后续
+        // self.lastMessage == dbLastMsg 早退路径再也救不回来 (现有 beginRehydrate 的
+        // pullup baseOrderSeq = dp.lastMessage.orderSeq, 加完 live 后 pullup 返回 0)。
+        // 用 SDK pullUp endOrderSeq 变体把 [dpLast.orderSeq, live.orderSeq] 之间的 DB
+        // 消息一次拉回, 含这条 live 一并 dp.addMessage, 一次 reloadData 收敛。
+        // dp 不重置, 用户上滑读到的 history 仍在。
+        WKMessageModel *dpLastBefore = [self.dataProvider lastMessage];
+        if (dpLastBefore && dpLastBefore.orderSeq > 0 &&
+            messageModel.orderSeq > dpLastBefore.orderSeq + 1 &&
+            !self.isRehydrating) {
+#if DEBUG
+            NSLog(@"[GapFill] orderSeq jump detected: dpLast=%u live=%u gap=%u msgNo=%@",
+                  dpLastBefore.orderSeq, messageModel.orderSeq,
+                  messageModel.orderSeq - dpLastBefore.orderSeq - 1,
+                  messageModel.clientMsgNo);
+#endif
+            [self fillOrderSeqGapAndInsert:messageModel previousLast:dpLastBefore];
             return;
         }
 
@@ -2969,6 +3002,86 @@ static const NSInteger kMaxRehydratePages = 35;
     }
 }
 
+// orderSeq 跳号缺口的 DB-范围补刷:
+//   conversation-sync 直写 DB 把 [dpLast+1, live-1] 的 backlog 写入了, 同时 IM stream
+//   先派来这条 live。简单 dp.addMessage(live) 会留洞, 后续 anchor-相等早退路径再也救
+//   不回来 (现有 beginRehydrate 的 pullup baseOrderSeq = dp.lastMessage, 加完 live 之后
+//   pullup 永远返回 0)。这里用 SDK 的 pullUp:startOrderSeq:endOrderSeq:limit: 变体
+//   按 (gapStart, gapEnd] 拉一次, 中间漏的 + 这条 live 一起入 dp。
+//
+// 期间到达的下一条 live push: 复用 isRehydrating 闸 (handleRecvMessage line 1955 的
+// 缓冲分支), 进 pendingRecvMessages, 完成后用现有 drain 路径回放; race-safe。
+//
+// 防卡死: 30s watchdog 触发 forceFinish。SDK pullUp 假死时不让 isRehydrating 永久卡住。
+-(void) fillOrderSeqGapAndInsert:(WKMessageModel*)live previousLast:(WKMessageModel*)dpLastBefore {
+    if (!live || !dpLastBefore) return;
+    if (!self.channel) return;
+    self.isRehydrating = YES;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(forceFinishRehydrateOnTimeout) object:nil];
+    [self performSelector:@selector(forceFinishRehydrateOnTimeout) withObject:nil afterDelay:30.0];
+
+    BOOL wasAtBottom = self.positionAtBottom;
+    uint32_t gapStart = dpLastBefore.orderSeq;
+    uint32_t gapEnd = live.orderSeq;
+    // R4 nit (Octo-Q P1): 限额按 gap 实际宽度拉满, 而不是固定 eachPageMsgLimit (默认 30)。
+    // 锁屏 30 分钟群很活跃可能 60+ 条, 单页 30 条会留中段永久缺口 (后续 anchor-相等
+    // 早退路径 + beginRehydrate 的 forward-only pullup 都救不回来)。上限 500 是兜底,
+    // 防止恶意大 gap (如 orderSeq 服务端跳号) 把单次拉爆 / 服务器超时; 这种极端情况
+    // 退化成单页 + 现有 beginRehydrate / pullup 多页接力,与原行为一致。
+    int defaultLimit = (int)[WKApp shared].config.eachPageMsgLimit;
+    if (defaultLimit <= 0) defaultLimit = 30;
+    uint32_t gapWidth = (gapEnd > gapStart) ? (gapEnd - gapStart) : 0;
+    int limit = MAX(defaultLimit, MIN((int)gapWidth, 500));
+
+    __weak typeof(self) weakSelf = self;
+    [[WKSDK shared].chatManager pullUp:self.channel
+                          startOrderSeq:gapStart
+                            endOrderSeq:gapEnd
+                                  limit:limit
+                               complete:^(NSArray<WKMessage *> * _Nonnull intermediate, NSError * _Nonnull error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) ss = weakSelf;
+            if (!ss) return;
+            if (!ss.isRehydrating) return; // watchdog 已 finish, 迟到回调早出
+            [NSObject cancelPreviousPerformRequestsWithTarget:ss selector:@selector(forceFinishRehydrateOnTimeout) object:nil];
+
+#if DEBUG
+            NSLog(@"[GapFill] complete gapStart=%u gapEnd=%u fetched=%lu err=%@",
+                  gapStart, gapEnd, (unsigned long)intermediate.count, error);
+#endif
+
+            BOOL liveAlreadyIncluded = NO;
+            if (intermediate.count > 0 && !error) {
+                for (WKMessage *m in intermediate) {
+                    if (m.orderSeq <= gapStart) continue; // 防御 SDK 包含端点
+                    if ([m.clientMsgNo isEqualToString:live.clientMsgNo]) {
+                        liveAlreadyIncluded = YES;
+                    }
+                    [ss.dataProvider addMessage:[[WKMessageModel alloc] initWithMessage:m]];
+                }
+            }
+            if (!liveAlreadyIncluded) {
+                [ss.dataProvider addMessage:live];
+            }
+            // 一次 reloadData 收敛: 多条 addMessage 后行/段计数已变, insertRow 增量太脆弱。
+            [ss.tableView reloadData];
+            if (wasAtBottom && ss.positionAtBottom) {
+                [ss scrollToBottom:NO];
+            }
+
+            ss.isRehydrating = NO;
+            // typing 残留清掉 (与 finishRehydrateCapped 同款防御, 见 line 2956-2958)
+            if ([[WKTypingManager shared] hasTyping:ss.channel]) {
+                [[WKTypingManager shared] removeTypingByChannel:ss.channel newMessage:nil];
+            }
+            // 期间 buffer 的 live push 批量回放
+            if (!ss.isPulldownInProgress) {
+                [ss drainPendingRecvMessagesAfterRehydrate];
+            }
+        });
+    }];
+}
+
 // 回前台对账：兜住"后台收消息离屏 insert 致最新消息行空白"的回归。
 //   不依赖 self.lastMessage == dbLastMsg 这种"anchor 相等 ⇒ UI 正确"的判断
 //   (那正是 handleRecvMessage 在后台把 anchor 提前推进后、让 onConversationSyncFinished
@@ -2983,6 +3096,9 @@ static const NSInteger kMaxRehydratePages = 35;
     if (self.isPulldownInProgress) { // 不和进行中的 pulldown 抢 tableView
         return;
     }
+    if (self.isRehydrating) { // 重连补齐 / orderSeq gap fill 在跑, 让它自己收尾
+        return;
+    }
     if ([self pullupHasMore]) { // 用户上滑在看历史，reload 会跳位，放过
         return;
     }
@@ -2990,6 +3106,14 @@ static const NSInteger kMaxRehydratePages = 35;
     if (!dpLast) {
         return;
     }
+
+    // R4 fix: 后台期 (锁屏 / handleRecvMessage 后台分支 / onConversationSyncFinished) 改过状态,
+    // 即便 numberOfRows 一致也得强制 reloadData。原因: 后台 reloadData + scrollToBottom:NO
+    // 会读 contentSize 触发离屏 layout, UIKit 算了 numberOfRows + heightForRow 但 cell
+    // 不在 window, willDisplayCell: 不回调 → refresh: 永不跑。回前台 UIKit 误判 "已布局"
+    // 不再补 willDisplay, cell 内容永久空白 (用户报: 锁屏 30 分钟解锁很多气泡空白)。
+    BOOL dirty = self.dirtyAfterBackground;
+    self.dirtyAfterBackground = NO;
 
     BOOL needsReload = NO;
     if (![self isTableViewRowCountInSyncWithDataProvider]) {
@@ -3007,6 +3131,14 @@ static const NSInteger kMaxRehydratePages = 35;
                 }
             }
         }
+    }
+    // 后台动过状态 + 仍在底 → 强制走一次 reloadData, 重新 willDisplay → refresh:。
+    // 不动 needsReload 上面的判定, 只在非底 / 非 dirty 路径保持原有 cheap-path 行为。
+    if (!needsReload && dirty && self.positionAtBottom) {
+#if DEBUG
+        NSLog(@"[Reconcile] dirtyAfterBackground forces reload (positionAtBottom=YES)");
+#endif
+        needsReload = YES;
     }
 
     if (needsReload) {
@@ -3032,8 +3164,18 @@ static const NSInteger kMaxRehydratePages = 35;
     if(!dbLastMsg) {
         return;
     }
-    // DB 最后一条与 UI 当前最后一条一致 → 无更新，跳过。
-    if(self.lastMessage && [self.lastMessage.clientMsgNo isEqualToString:dbLastMsg.clientMsgNo]) {
+    // R4 nit (Octo-Q P2 #3): 仅在 app 真的不在前台时才置 dirty。foreground sync (发消息触发的
+    // sync / 在线时短重连) 也会回调本方法, 不应让下一次 become-active 多走一次 reloadData。
+    if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
+        self.dirtyAfterBackground = YES;
+    }
+
+    // R4 fix: 早退条件改用 dp.lastMessage (已渲染入 dp 的实际 tail), 不用 self.lastMessage
+    // (会被 handleRecvMessage 的 updateLastMsgIfNeed 提前推到 dbLastMsg, 即使中间有
+    // sync 直写 DB 的消息没进 dp, anchor 仍相等 → 误早退)。Fix 1 (handleRecvMessage 的
+    // orderSeq gap 检测) 已经从源头杜绝 gap, 这里只是 belt-and-suspenders。
+    WKMessageModel *dpLast = [self.dataProvider lastMessage];
+    if(dpLast && [dpLast.clientMsgNo isEqualToString:dbLastMsg.clientMsgNo]) {
         return;
     }
 
@@ -3078,14 +3220,59 @@ static const NSInteger kMaxRehydratePages = 35;
         return;
     }
     WKMessageModel *model = [[WKMessageModel alloc] initWithMessage:message];
-    [self.dataProvider addMessage:model];
-    [self reloadData];
+
+    // 走增量插入而不是 reloadData。reloadData 会让所有 visible cell 经过 didEndDisplayingCell
+    // → prepareForReuse 周期；用户正在长按选区时 prepareForReuse 会 endInBubbleTextSelection，
+    // 导致选区被无端中断。增量 insertRows 只动新行所在 indexPath，其它 cell 维持原状，选区
+    // 也就不会被打断。漂移路径仍兜底走 reloadData。
+    BOOL inSyncBefore = [self isTableViewRowCountInSyncWithDataProvider];
+    if (!inSyncBefore) {
+        [self.dataProvider addMessage:model];
+        [self.tableView reloadData];
+    } else {
+        NSInteger oldSectionCount = [self.dataProvider dateCount];
+        NSInteger oldLastSectionRowCount = (oldSectionCount > 0)
+            ? [self.dataProvider messagesAtSection:oldSectionCount - 1].count : 0;
+
+        [self.dataProvider addMessage:model];
+
+        NSInteger newSectionCount = [self.dataProvider dateCount];
+        BOOL newSectionAdded = (newSectionCount > oldSectionCount);
+        NSInteger newLastSectionRowCount = (newSectionCount > 0)
+            ? [self.dataProvider messagesAtSection:newSectionCount - 1].count : 0;
+
+        if (newSectionAdded) {
+            @try {
+                [UIView performWithoutAnimation:^{
+                    [self.tableView insertSections:[NSIndexSet indexSetWithIndex:newSectionCount - 1]
+                                  withRowAnimation:UITableViewRowAnimationNone];
+                }];
+            } @catch (NSException *ex) {
+                NSLog(@"[WKMessageListView] typingAdd insertSections drift: %@, fallback reloadData", ex);
+                [self.tableView reloadData];
+            }
+        } else if (newLastSectionRowCount > oldLastSectionRowCount) {
+            NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
+            for (NSInteger row = oldLastSectionRowCount; row < newLastSectionRowCount; row++) {
+                [indexPaths addObject:[NSIndexPath indexPathForRow:row inSection:newSectionCount - 1]];
+            }
+            @try {
+                [UIView performWithoutAnimation:^{
+                    [self.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
+                }];
+            } @catch (NSException *ex) {
+                NSLog(@"[WKMessageListView] typingAdd insertRows drift: %@, fallback reloadData", ex);
+                [self.tableView reloadData];
+            }
+        }
+        // 行数不变（typing 替换同源 typing 等）则不动 tableView，dataProvider 的内部替换够了
+    }
+
     if(self.positionAtBottom) {
         [self animateMessageWithBlock:^{
             [self scrollToBottom:NO];
         }];
     }
-    
 }
 
 

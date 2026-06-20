@@ -215,6 +215,18 @@
 /// @param animateBlock <#animateBlock description#>
 - (void)setTopView:(UIView *)topView animateBlock:(void(^)(void))animateBlock;
 
+#pragma mark - 待发送图片栏
+
+/// 把已选图二进制塞进输入框上方的待发送图片栏；超 9 张部分被丢弃 + HUD。
+/// 线程安全：内部 main hop。
+- (void)appendPendingImageDatas:(NSArray<NSData *> *)datas;
+
+/// 当前待发送图片数量（[0..9]）。
+- (NSUInteger)pendingImageCount;
+
+/// pendingImageCount > 0 的便利判定。
+- (BOOL)hasPendingImages;
+
 /**
  取消所有选中的功能项
  */

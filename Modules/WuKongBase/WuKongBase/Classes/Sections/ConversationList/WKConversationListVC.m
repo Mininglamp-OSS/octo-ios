@@ -163,6 +163,20 @@
 @property(nonatomic,assign) BOOL pendingRebuildAfterDrag; // 拖动期间收到的刷新请求暂存，结束时回放
 @property(nonatomic,assign) BOOL refreshBadgePending; // refreshBadge coalesce：批量事件合并到一次重算
 
+// 卸装重装 / 冷启动后绝大多数 channel 没有 channelInfo 缓存 ——
+// `WKConversationListVM.getAllUnreadCount` 走 `isChannelMuted`（VM.m:1594 注释:
+// "channelInfo.mute 权威源；DB 快照可能滞后"），channelInfo 缺失时静音会话被
+// 误算成"未静音"全部计入 tab badge → 红点 99+；用户必须滑到 cell 才会触发
+// `[model startChannelRequest]` 把 channelInfo 拉回来、走 onConvChannelInfoUpdate
+// → refreshBadge 把数字校准。
+//
+// 这里在 loadConversationList completion 后追加一个后台预热：分批让缺失
+// channelInfo 的 wrap model 走完全相同的 startChannelRequest 路径。纯读不写,
+// 失败自然退化为"滑到才拉"的现状，不引入新的 unread / mute 判定路径。
+//
+// 用代际号让 Space 切换后旧批次自动作废（dispatch_after 无 cancel API）。
+@property(nonatomic,assign) NSUInteger warmupGen;
+
 // 关注 tab 空状态引导视图：当前 tab 是 Follow + groupDisplayList 为空时显示
 @property(nonatomic,strong,nullable) UIView *followEmptyView;
 
@@ -262,6 +276,9 @@
         // 触发 rebuild，新关注数据就能在第一次可见时尽快到位。
         weakSelf.lastFollowedKeysReloadAt = [NSDate date].timeIntervalSince1970;
         [[WKFollowedKeysStore shared] reload];
+        // 冷启动后大量 channel 缺 channelInfo → mute 判错 → tab 红点 99+，
+        // 后台分批预热把 channelInfo 慢慢回灌（详见 kickoffChannelInfoWarmup 注释）。
+        [weakSelf kickoffChannelInfoWarmup];
     }];
 
 //    self.refreshTimer = [NSTimer scheduledTimerWithTimeInterval:30 target:self selector:@selector(timerRefreshTable) userInfo:nil repeats:YES];
@@ -454,6 +471,7 @@
     [self.conversationListVM loadConversationList:^{
         [weakSelf rebuildGroupDisplayAndReload];
         [weakSelf refreshBadge];
+        [weakSelf kickoffChannelInfoWarmup];
     }];
 }
 
@@ -1393,6 +1411,10 @@
                 // onFollowedKeysStoreDidUpdate 会触发 rebuild。
                 weakSelf.lastFollowedKeysReloadAt = [NSDate date].timeIntervalSince1970;
                 [[WKFollowedKeysStore shared] reload];
+                // 切 Space 等价于"新空间冷启动" —— 大量 channelInfo 还没缓存,
+                // 同样会让 mute 判错把红点冲到 99+。后台分批预热（gen 已在
+                // kickoff 内自增，前一空间未完成的批次自动作废）。
+                [weakSelf kickoffChannelInfoWarmup];
                 // VM 已被 B 的 sync 数据填好、白名单 snapshot 完成、bot registry
                 // 也已尝试加载 → 闸门可落，恢复正常 fail-open 行为
                 weakSelf.spaceSwitchInProgress = NO;
@@ -2202,8 +2224,30 @@
 }
 
 -(void) updateTabUnreadCounts {
-    [self.conversationTabView setFollowUnreadCount:[self.conversationListVM getFollowUnreadCount]];
-    [self.conversationTabView setRecentUnreadCount:[self.conversationListVM getRecentUnreadCount]];
+    NSInteger follow = [self.conversationListVM getFollowUnreadCount];
+    NSInteger recent = [self.conversationListVM getRecentUnreadCount];
+    [self.conversationTabView setFollowUnreadCount:follow];
+    [self.conversationTabView setRecentUnreadCount:recent];
+
+    // 底部 tabbar"消息" item icon 右上角自绘角标：取 follow / recent 较大值，
+    // 用 MAX 而非求和，避免一个会话同时命中关注 + 最近被算两次；语义上"红点
+    // ≤ 用户在任意 sub-tab 看到的最大未读"，不会出现"红点 8 进去只见 5"。
+    // 系统 tabBarItem.badgeValue 不能定制配色 → 走宿主 WKMainTabController
+    // 的 setMessageUnreadCount: 自绘 WKBadgeView（与会话列表 cell 同源
+    // 粉底红字，详见 WKUnreadBadge*Color）。WKConversationListVC 在
+    // WuKongBase 模块、WKMainTabController 在 Octo 主工程，按响应链拿、
+    // 用 SEL 弱耦合调用，避免模块反向依赖。
+    NSInteger total = MAX(follow, recent);
+    UITabBarController *tbc = self.tabBarController;
+    SEL setSel = NSSelectorFromString(@"setMessageUnreadCount:");
+    if ([tbc respondsToSelector:setSel]) {
+        NSMethodSignature *sig = [tbc methodSignatureForSelector:setSel];
+        NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+        inv.target = tbc;
+        inv.selector = setSel;
+        [inv setArgument:&total atIndex:2];
+        [inv invoke];
+    }
 }
 
 /// refreshBadge 是高频调用 — viewWillAppear / viewDidAppear / loadConversationList completion /
@@ -2227,8 +2271,68 @@
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         strongSelf.refreshBadgePending = NO;
-        strongSelf.tabBarItem.badgeValue = nil;
         [strongSelf updateTabUnreadCounts];
+    });
+}
+
+#pragma mark - ChannelInfo Warmup
+
+/// 卸装重装 / 冷启动后大量 channel 没有 channelInfo 缓存，
+/// `getAllUnreadCount` 走 `isChannelMuted`(VM.m:1301) channelInfo 缺失时虽然
+/// 回退到 model.mute(DB 快照)，但冷启动时 DB 自身可能没有 mute 字段(SDK
+/// conversation/sync 不带 mute) → 静音会话被算成未静音、unread 全部计入 →
+/// 红点 99+。原本只有用户滑到 cell 才会触发 channelInfo 拉取并 onConvChannelInfoUpdate
+/// → refreshBadge 校准。这里在 loadConversationList completion 后追加同款
+/// 后台预热：分批走 channelManager fetchChannelInfo: 把 channelInfo 慢慢回灌。
+///
+/// 关键：必须走 fetchChannelInfo:，不能走 wrap.startChannelRequest —— 后者
+/// 进 WKChannelRequestQueue（有上限、LRU、队尾自动 cancel），是为可视区域
+/// 设计的；后台 push 几百个 channel 进去会被互相挤掉，预热全部被 cancel。
+/// fetchChannelInfo: 直接发请求、不进队列，结果通过 channelInfoUpdate 委托
+/// 回 onConvChannelInfoUpdate → refreshBadge coalesce。失败退化为现状(滑到才拉)。
+-(void) kickoffChannelInfoWarmup {
+    NSString *spaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if (spaceId.length == 0) return;
+    // 关键：除了 conversationWrapModels（PERSON/GROUP）还要包含 threadWrapModels +
+    // cachedTopicsByGroup 的子区频道 —— Follow / Recent badge 都会遍历子区累加 unread,
+    // 子区 channelInfo 缺失同样会让 mute 判错把数字冲到 99+。
+    NSArray<WKChannel*> *allChannels = [self.conversationListVM allKnownChannelsForWarmup];
+    if (allChannels.count == 0) return;
+    NSMutableArray<WKChannel *> *pending = [NSMutableArray arrayWithCapacity:allChannels.count];
+    for (WKChannel *ch in allChannels) {
+        if (![[WKSDK shared].channelManager getChannelInfo:ch]) [pending addObject:ch];
+    }
+    if (pending.count == 0) return;
+    NSLog(@"[ConvListWarmup] kickoff space=%@ allChannels=%lu pending=%lu",
+          spaceId, (unsigned long)allChannels.count, (unsigned long)pending.count);
+    NSUInteger gen = ++self.warmupGen;
+    [self warmupBatchAt:0 channels:pending spaceId:spaceId gen:gen];
+}
+
+/// 一批 8 个 / 间隔 200ms。dispatch_after 没有 cancel API，靠 gen + spaceId 双重兜底:
+/// kickoff 自增 gen 让旧批次失效；Space 切换让 currentSpaceId 不再匹配让旧批次失效。
+/// VC dealloc 时 weak self 为 nil，方法 no-op，链路自然终止。
+-(void) warmupBatchAt:(NSUInteger)offset
+             channels:(NSArray<WKChannel *> *)channels
+              spaceId:(NSString *)spaceId
+                  gen:(NSUInteger)gen {
+    if (gen != self.warmupGen) return;
+    NSString *cur = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+    if (![cur isEqualToString:spaceId]) return;
+
+    static const NSUInteger kBatch = 8;
+    NSUInteger end = MIN(offset + kBatch, channels.count);
+    for (NSUInteger i = offset; i < end; i++) {
+        WKChannel *ch = channels[i];
+        // 这一拍前如果别的路径已经把 channelInfo 填上(滑到 / 推送)，跳过避免重复请求
+        if ([[WKSDK shared].channelManager getChannelInfo:ch]) continue;
+        [[WKSDK shared].channelManager fetchChannelInfo:ch completion:nil];
+    }
+    if (end >= channels.count) return;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf warmupBatchAt:end channels:channels spaceId:spaceId gen:gen];
     });
 }
 
@@ -2583,6 +2687,15 @@
         if (indexPath.row >= (NSInteger)self.groupDisplayList.count) return;
         WKConversationDisplayItem *item = self.groupDisplayList[indexPath.row];
         if (item.isSectionHeader) {
+            // 新用户注册后跳回主页时会话同步会高频触发 reloadData，UIKit 的
+            // numberOfRows / cellForRow / willDisplay 不是原子序列，期间
+            // self.groupDisplayList / filterType 可能切到不同的快照 —— 出现过
+            // cellForRow 这拍发了 WKConversationListCell，下一拍 willDisplay 拿到
+            // isSectionHeader=YES 强转 WKCategorySectionCell 调 setSectionId: 直接崩。
+            // 类型不匹配时静默跳过；下一帧 reloadData 会用对的 cell 重新走一次。
+            if (![cell isKindOfClass:[WKCategorySectionCell class]]) {
+                return;
+            }
             WKCategorySectionCell *sectionCell = (WKCategorySectionCell *)cell;
             sectionCell.sectionId = item.sectionId;
             sectionCell.sectionTitle = item.sectionTitle;
@@ -2607,6 +2720,13 @@
         }
         WKConversationWrapModel *conversationModel = item.conversation;
         if (!conversationModel) return;
+        // 同上：会话行也可能在 cellForRow / willDisplay 之间被切换到 section header
+        // 形态（或反过来）。任何强转前先校验 cell 类型，类型不匹配的静默跳过。
+        if (![cell isKindOfClass:[WKConversationListCell class]]
+            && ![cell isKindOfClass:[WKConversationGroupThreadCell class]]
+            && ![cell isKindOfClass:[WKConversationGroupThreadOnlyCell class]]) {
+            return;
+        }
         __weak typeof(self) weakSelf = self;
         if ([cell isKindOfClass:[WKConversationGroupThreadCell class]]) {
             WKConversationGroupThreadCell *threadCell = (WKConversationGroupThreadCell *)cell;
@@ -2659,6 +2779,12 @@
     // 私聊 tab
     WKConversationWrapModel *conversationModel = [_conversationListVM conversationAtIndex:indexPath.row];
     if (!conversationModel) return;
+    // 同步流式刷新期间 filterType 可能从 Follow 切到 Recent（反之亦然），
+    // 上一拍 cellForRow 发了 WKCategorySectionCell / GroupThreadCell，这一拍
+    // 走到私聊分支强转 WKConversationListCell 会直接 crash。先做类型校验。
+    if (![cell isKindOfClass:[WKConversationListCell class]]) {
+        return;
+    }
     WKConversationListCell *conversationListCell = (WKConversationListCell *)cell;
     conversationListCell.recentTabContext = (_conversationListVM.filterType == WKConversationFilterRecent);
     [conversationListCell refreshWithModel:conversationModel];

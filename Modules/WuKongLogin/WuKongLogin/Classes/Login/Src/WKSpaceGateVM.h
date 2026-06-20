@@ -47,6 +47,18 @@ NS_ASSUME_NONNULL_BEGIN
 /// @param spaceId 空间ID
 -(AnyPromise*) createInvite:(NSString*)spaceId;
 
+/// 从 /api/v1/space/my 的原始返回里挑出"用户实际是成员"的第一个 Space。
+///
+/// 服务端语义：role==0 表示该 Space 仅对当前用户可见/可加入，**不是成员**；
+/// 进一步访问 /space/{id}/members、/conversation/sync?space_id=... 会被服务端 403。
+/// role>0 才是成员（owner/admin/member 任一种角色都行）。
+///
+/// 历史坑：登录回落逻辑曾经直接 spaces[0]，aegis 切账号场景下挑到了 role=0 的
+/// 空间，整个 IM 接口全 403，UI 显示空白。
+/// 注意 WKSpaceEntity.h / WKSpace 类里的 role 注释和服务端实际语义不一致，以
+/// 实际行为为准。
++(nullable NSDictionary*) pickJoinedSpace:(nullable NSArray*)spaces;
+
 @end
 
 NS_ASSUME_NONNULL_END

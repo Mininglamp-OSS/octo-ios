@@ -17,6 +17,7 @@
 #import <WuKongIMSDK/WKTextContent.h>
 #import <WuKongBase/WuKongBase-Swift.h>           // WKMarkdownRenderer (Swift)
 #import <WebKit/WebKit.h>
+#import <objc/runtime.h>
 
 @interface OctoSummaryDetailVC () <UITextViewDelegate, WKNavigationDelegate>
 @property(nonatomic, strong) UIScrollView *scroll;
@@ -41,11 +42,49 @@
 @property(nonatomic, strong) OctoSummaryDetail *detail;
 @property(nonatomic, strong) NSTimer *pollTimer;
 
+/// YES 表示 VC 进入"消失中"状态 (viewWillDisappear → viewDidDisappear 之间, 或者
+/// 用户在做交互式右滑 pop)。期间所有"会改变 layout 的异步回调"都必须 no-op,
+/// 否则会和 UIKit 的 transition driver 抢 layout 触发死循环。viewWillAppear 重置
+/// (用户取消右滑回到详情页时)。
+@property(nonatomic, assign) BOOL contentDetaching;
+
+/// relayoutContent 重入闸: viewDidLayoutSubviews 内调 relayoutContent, 而
+/// relayoutContent 自身改子 frame / scroll.contentSize 又会触发 layoutSubviews
+/// 回环。正常情况下子 frame 不变能自然收敛, 但 webview 高度回填和 transition
+/// driver 同时拨 layout 时会重入 → 死循环。整套链路下我们手动闸住。
+@property(nonatomic, assign) BOOL relayoutInFlight;
+
+/// 是否因 "当前详情含 WKWebView 渲染表格" 而临时关掉了 nav 的交互式右滑返回手势。
+/// 状态记下来, restore 时只在我们关过的情况下才恢复, 避免覆盖其它 VC /
+/// WKRootNavigationController 自己的逻辑。
+@property(nonatomic, assign) BOOL disabledInteractivePopForTable;
+
+/// 关闭手势前捕获的原 enabled 值。多窗口快速 push/pop 时不能假设"恢复=YES",
+/// 例如根 nav stack 只有 1 个 VC 时 WKRootNavigationController 自己也会关右滑,
+/// 这种状态下我们的 restore 不能把它强制开成 YES, 否则与根 nav 抢状态。
+@property(nonatomic, assign) BOOL gestureOriginalEnabled;
+
+/// 还没渲染稳定的表格 webview 集合。webview 加载是完全异步的:
+///   T0    loadHTMLString → WebKit 渲染
+///   T0+x  didFinishNavigation 异步回调 (~50-300ms)
+///   T0+y  evaluateJavaScript scrollHeight 完成
+///   T0+z  我方 applyWebviewHeight 写入 frame + relayoutContent
+/// 这个 T0~T0+z 窗口内, 用户右滑返回就会和 WebKit 内部 IPC + transition driver
+/// 撞 layout 死循环 (WebContent 进程 ↔ 主线程同步通信链路是 app 层管不到的)。
+/// 实现 "稳定后才允许右滑": webview 创建即加进集合 + 关右滑, 每个 webview 完成
+/// applyWebviewHeight 后从集合移除; 集合空 → 重新开右滑。
+@property(nonatomic, strong) NSMutableSet<WKWebView *> *pendingTableWebviews;
+
 // 底部悬浮 footer (转发到聊天 + 编辑), 只在 completed 时出现
 @property(nonatomic, strong) UIView *bottomBar;
 @property(nonatomic, strong) UIButton *footerForwardBtn;
 @property(nonatomic, strong) UIButton *footerEditBtn;
 @end
+
+// disarmTableWebviews / rearmTableWebviewsIfNeeded 共用同一个 associated-object key。
+// 之前定义在 disarmTableWebviews 函数内 (function-static) → 仅本函数可见, 别处只能各自
+// 声明同名静态, 但地址互异, 关联标记跨函数对不上。提到文件级 static 后两处一致。
+static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
 
 @implementation OctoSummaryDetailVC
 
@@ -98,6 +137,7 @@
     self.contentContainer.hidden = YES;
     [self.scroll addSubview:self.contentContainer];
     self.contentSegments = [NSMutableArray array];
+    self.pendingTableWebviews = [NSMutableSet set];
 
     // processing
     self.processingView = [UIView new];
@@ -149,12 +189,169 @@
     [self loadDetail];
 }
 
-- (void)dealloc { [self.pollTimer invalidate]; }
+- (void)dealloc {
+    [self.pollTimer invalidate];
+    // 最后一道兜底: VC 真正销毁时确保所有 webview 不再回调任何东西。视图层级已经
+    // 不存在了, 异步在飞的 completion handler 触到 weakSelf=nil 自然 no-op, 这里
+    // 兜底也防一些极端时序 (比如 webview 还在排队 IPC 时 VC 整体 dealloc)。
+    for (UIView *seg in self.contentSegments) {
+        if ([seg isKindOfClass:[WKWebView class]]) {
+            WKWebView *wv = (WKWebView *)seg;
+            wv.navigationDelegate = nil;
+            [wv stopLoading];
+        }
+    }
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    // 取消右滑 pop 回到详情页时, 恢复 detaching=NO 让后续 webview 高度回填等异步
+    // 链路重新生效。第一次进入时也会走这里, 不影响初始 NO。
+    self.contentDetaching = NO;
+    // R6 fix (Jerry-Xin / lml2468): 取消右滑场景。viewWillDisappear 在右滑刚开始就跑过
+    // 一次 disarm (那时 isMovingFromParentViewController 已 YES), 用户中途松手取消
+    // → viewDidDisappear 不 fire (viewDidDisappear 加的 trulyLeaving 闸救不到这条)
+    // → webview 永久 disarmed (delegate=nil + 关联标记), octo-cit:// 引用点击 +
+    // didFinishNavigation 高度回填都失效, 直到 pop+push 整页才恢复。viewWillAppear
+    // 这里 re-arm: 重设 navigationDelegate + 清关联标记 (与 disarmTableWebviews 互逆)。
+    [self rearmTableWebviewsIfNeeded];
+    // webview 是否已稳定, 决定右滑手势开关。pendingTableWebviews 由 makeTableSegment
+    // 加入 / applyWebviewHeight 完成时移除, 这里基于当前集合状态同步一次。
+    [self syncInteractivePopGestureWithWebviewState];
+}
+
+/// 取消右滑后 viewWillAppear 调用, 与 disarmTableWebviews 配对。idempotent: 没 disarm
+/// 过的 webview 跳过, 避免重置已经在工作中的 delegate。
+- (void)rearmTableWebviewsIfNeeded {
+    for (UIView *seg in self.contentSegments) {
+        if (![seg isKindOfClass:[WKWebView class]]) continue;
+        WKWebView *wv = (WKWebView *)seg;
+        if (![objc_getAssociatedObject(wv, kOctoWebviewDisarmedKey) boolValue]) continue;
+        // 注: 不再 reload —— 已渲染的 HTML 内容仍有效 (UIWebContentProcess 还活)。我们要恢复的
+        // 是 delegate 路径 (octo-cit:// hooks + didFinishNavigation 的 evalJS 高度回填),
+        // 不是重新载入。
+        objc_setAssociatedObject(wv, kOctoWebviewDisarmedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        wv.navigationDelegate = self;
+    }
+}
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
     [self.pollTimer invalidate];
     self.pollTimer = nil;
+
+    // R3 review (yujiawei): 仅在确实正在被 pop / dismiss 时才执行 disarm / detaching / 手势恢复。
+    // push 子页 (转发到聊天 / 查看确认状态) 让本 VC 暂时被覆盖时, 不能动这些状态——
+    // 否则 pop-back 后表格 webview 永久 disarm: octo-cit:// citation 点不响应、表格高度无法回填。
+    BOOL trulyLeaving = self.isMovingFromParentViewController || self.isBeingDismissed;
+    if (!trulyLeaving) return;
+
+    // 漏掉的并发路径: A 顶着 sheet (RelatedChatSheet) 时被 swipe-back pop —— UIKit
+    // 把 "sheet 强 dismiss" 和 "nav pop 转场" 两段并发跑在 tracking runloop 上,
+    // 与本 VC 内 webview 异步回填一起重入触发 layout 死锁; 即使 A 当前 webview 已
+    // 稳定, 进程级 (WebContent IPC / 视图栈) 残余状态会拖到下一个 detail VC 的 pop
+    // 时撞死。先 animated:NO 同步摘掉 sheet, 再继续 pop, 让两段串行。
+    // 仅在确实正在被 pop 时做 (isMovingFromParentViewController), 避免误伤
+    // "我们正在 present 别的 VC, 自己暂时被覆盖" 的合法路径。
+    if (self.presentedViewController && self.isMovingFromParentViewController) {
+        [self dismissViewControllerAnimated:NO completion:nil];
+    }
+    // 整个链路最关键的闸: detaching=YES 让所有异步 layout 回调 (didFinishNavigation 内
+    // evaluateJavaScript 的 completionHandler, 还有任何后续 dispatch_async 进来的) 全部
+    // no-op。原因: 右滑返回时 UIKit 在 tracking runloop mode 下做交互过渡, layout 节奏
+    // 由 transition driver 拨动; 这时 webview 异步把 frame 高度回填 + 触发父 layout +
+    // viewDidLayoutSubviews → relayoutContent → 改子 frame → layout 再来一轮, 与 driver
+    // 抢 runloop 重入死循环。
+    //
+    // 单 disarm (delegate=nil + stopLoading) 不够: completionHandler 是 block 直接持有的
+    // 回调, 不走 delegate; stopLoading 也只取消导航, JS 引擎已开跑的语句仍会回来。所以
+    // 必须在 completionHandler 体内显式查 detaching 才稳。
+    self.contentDetaching = YES;
+    [self disarmTableWebviews];
+    // 用户既然要走, 没必要再追踪 pending: 清空集合 + 同步手势状态。否则老 VC 的
+    // 5s 兜底 timeout / 异步 didFinishNavigation 还在飞, 在 dealloc 前的某个时刻
+    // 触发 syncInteractivePopGestureWithWebviewState 改新 VC 的 gesture 状态, 出
+    // 多窗口快速切换时的 race。disarmTableWebviews 内部已经清过一次, 这里幂等。
+    [self.pendingTableWebviews removeAllObjects];
+    // 离开详情时恢复全局右滑手势, 不影响其他页面 (用户可能从这里回到列表后再
+    // 进别的页面)。WKRootNavigationController 的 didShowViewController: 也会基于
+    // 栈深做最终调整, 这里只是早一拍恢复。
+    [self restoreInteractivePopGestureFromTableContent];
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    // R4 fix (yujiawei #1): 与 viewWillDisappear 对称的 pop-only 闸. push 子页 (转发 / 查看
+    // 确认状态等) 让本 VC 暂时被覆盖时, viewDidDisappear 也不能 disarm webview, 否则
+    // pop-back 后 octo-cit:// citation 点击失效 + 表格高度不回填 (viewWillAppear 不 re-arm)。
+    // viewWillDisappear 已经在真离场时 disarm 过, 这里只是早一拍重复, 不漏路径。
+    BOOL trulyLeaving = self.isMovingFromParentViewController || self.isBeingDismissed;
+    if (!trulyLeaving) return;
+    // 真的 pop 走了: 彻底清掉, dealloc 兜底, 但这里更早一拍。所有清理路径全做幂等
+    // 处理 (disarm 用 associated object 标记 / pendingTableWebviews removeAllObjects /
+    // restore 检 disabledInteractivePopForTable 标志), 重复调用安全。
+    [self disarmTableWebviews];
+    [self.pendingTableWebviews removeAllObjects];
+    [self restoreInteractivePopGestureFromTableContent];
+}
+
+#pragma mark - Interactive pop gesture toggle (webview 稳定后才开启)
+
+/// 调用时机: 任何会改变 pendingTableWebviews 的地方 + viewWillAppear。
+/// 集合非空 → 关右滑 (webview 在飞, 用户右滑必撞 race);
+/// 集合为空 → 恢复到原值 (不一定是 YES, 见 gestureOriginalEnabled 注释)。
+- (void)syncInteractivePopGestureWithWebviewState {
+    if (!self.isViewLoaded || !self.view.window) return;
+    UIGestureRecognizer *gr = self.navigationController.interactivePopGestureRecognizer;
+    if (!gr) return;
+    BOOL hasPending = self.pendingTableWebviews.count > 0;
+    if (hasPending) {
+        if (!self.disabledInteractivePopForTable) {
+            // 第一次关: 先记下原 enabled 值, restore 时按这个值恢复, 避免与
+            // WKRootNavigationController.didShowViewController 的 "栈深=1 强制关右滑"
+            // 逻辑抢状态。
+            self.gestureOriginalEnabled = gr.isEnabled;
+            self.disabledInteractivePopForTable = YES;
+        }
+        if (gr.isEnabled) gr.enabled = NO;
+    } else {
+        if (self.disabledInteractivePopForTable) {
+            gr.enabled = self.gestureOriginalEnabled;
+            self.disabledInteractivePopForTable = NO;
+        }
+    }
+}
+
+/// VC 离开时一定要还原, 避免我们的 disabled 状态污染下一个 VC / 根 nav 的策略。
+- (void)restoreInteractivePopGestureFromTableContent {
+    if (!self.disabledInteractivePopForTable) return;
+    UIGestureRecognizer *gr = self.navigationController.interactivePopGestureRecognizer;
+    if (gr) gr.enabled = self.gestureOriginalEnabled;
+    self.disabledInteractivePopForTable = NO;
+}
+
+- (void)disarmTableWebviews {
+    for (UIView *seg in self.contentSegments) {
+        if (![seg isKindOfClass:[WKWebView class]]) continue;
+        WKWebView *wv = (WKWebView *)seg;
+        // 幂等: 同一 webview 被多次 disarm (viewWillDisappear → viewDidDisappear →
+        // dealloc, 还有 clearContentSegments 等) 是常态。重复 stopLoading 在新版
+        // iOS 容忍, 但老版本 (iOS 14/15) 会累积无效 IPC; 而且第二次以后再走
+        // delegate=nil 已经是 nil → nil 也无意义。associated object 打标后跳过。
+        if ([objc_getAssociatedObject(wv, kOctoWebviewDisarmedKey) boolValue]) continue;
+        objc_setAssociatedObject(wv, kOctoWebviewDisarmedKey, @YES,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        // Apple 推荐顺序: stopLoading 在前, navigationDelegate=nil 在后。
+        // 反过来 (旧代码) 的问题: stopLoading 触发 didFail 时 delegate 已经 nil,
+        // WebKit 内部状态机收不到 ack, IPC 链路可能挂着等回, 主线程在某些场景被
+        // 同步等待 → 偶发卡死的潜在源头之一。
+        [wv stopLoading];
+        wv.navigationDelegate = nil;
+    }
+    // disarm 后的 webview 不会再回调 didFinishNavigation, 也就永远不会到 markWebviewSettled.
+    // pending 集合里若还残留这些 webview, 就永远开不了右滑了 → 强制清空。
+    [self.pendingTableWebviews removeAllObjects];
+    [self syncInteractivePopGestureWithWebviewState];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -177,10 +374,24 @@
     self.scroll.contentInset = UIEdgeInsetsMake(0, 0,
                                                  (self.bottomBar.hidden ? 0 : bottomBarH + bottomSafe + 12),
                                                  0);
-    [self relayoutContent];
+    // 过渡期统一 defer (sheet present/dismiss / nav pop / detaching), 不再驱动
+    // content 段重排, 避免与 transition driver 抢 layout。relayoutContent 内部也
+    // 有同样闸, 这里早退一次省掉栈深一层。
+    if (![self shouldDeferLayoutWork]) {
+        [self relayoutContent];
+    }
 }
 
 - (void)relayoutContent {
+    // 重入 + 过渡闸: viewDidLayoutSubviews 内调 relayoutContent, relayoutContent 自己
+    // 又改子 frame / scroll.contentSize 触发 layoutSubviews 回环。两道闸:
+    //   1. shouldDeferLayoutWork: 过渡期 (sheet present/dismiss / nav pop / detaching)
+    //      统一 no-op, 让 transition 走完再说
+    //   2. relayoutInFlight: 重入早退, 一次 layout pass 内只让一条链跑到底
+    if ([self shouldDeferLayoutWork]) return;
+    if (self.relayoutInFlight) return;
+    self.relayoutInFlight = YES;
+
     CGFloat w = self.view.bounds.size.width - 32;
     CGFloat y = 12;
 
@@ -234,6 +445,7 @@
         y += containerH + 12;
     }
     self.scroll.contentSize = CGSizeMake(self.view.bounds.size.width, y);
+    self.relayoutInFlight = NO;
 }
 
 #pragma mark - Bottom bar (转发到聊天 + 编辑)
@@ -364,6 +576,9 @@
 #pragma mark - Content segments (text + table 混排)
 
 - (void)clearContentSegments {
+    // 把要被 remove 的 webview 先 disarm, 否则旧 webview 在 removeFromSuperview 后
+    // 仍可能跑 didFinishNavigation 异步回调, 拿弱引用 self / 已废弃的 segment 改 frame。
+    [self disarmTableWebviews];
     for (UIView *v in self.contentSegments) [v removeFromSuperview];
     [self.contentSegments removeAllObjects];
 }
@@ -431,6 +646,27 @@
             [wv loadHTMLString:html baseURL:nil];
             [self.contentContainer addSubview:wv];
             [self.contentSegments addObject:wv];
+            // 加入 pending 集合 → 关右滑直到该 webview applyWebviewHeight 完成
+            [self.pendingTableWebviews addObject:wv];
+            [self syncInteractivePopGestureWithWebviewState];
+            // 兜底: 5s 超时仍没 settle 就强制移出, 避免 webview 异常情况下永远不开右滑。
+            // 5s 远超表格 HTML 渲染正常耗时 (一般 50-300ms), 触发说明 webview 真出问题了。
+            // 多重身份校验: weakSelf nil-guard + isViewLoaded + view.window 非空, VC 已
+            // dealloc / 已离屏的情况下任何 gesture 状态修改都没意义还可能与新 VC 抢状态。
+            __weak typeof(self) ws = self;
+            __weak WKWebView *wweb = wv;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                typeof(ws) strong = ws;
+                if (!strong) return;
+                if (!strong.isViewLoaded || !strong.view.window) return;
+                WKWebView *wv2 = wweb;
+                if (!wv2) return;
+                if ([strong.pendingTableWebviews containsObject:wv2]) {
+                    [strong.pendingTableWebviews removeObject:wv2];
+                    [strong syncInteractivePopGestureWithWebviewState];
+                }
+            });
         }
     }
     [self relayoutContent];
@@ -596,8 +832,14 @@
 
 - (void)openCitationsByIndices:(NSArray<NSNumber *> *)indices {
     if (indices.count == 0) return;
+    // 文本段 tap 入口也走这: 与 webview decidePolicyForNavigationAction 同口径,
+    // 过渡期 (sheet present/dismiss / nav pop / detaching) 直接吞掉, 防止此时再
+    // present 新 sheet 跟 in-flight 转场撞 layout 重入。webview 那条路径之前已经加
+    // 过类似闸, 这里把文本 tap 路径补齐。
+    if ([self shouldDeferLayoutWork]) return;
     [OctoRelatedChatSheet presentInVC:self
                             citations:self.detail.result.citations
+                              sources:self.detail.sources
                         activeIndices:indices];
 }
 
@@ -615,6 +857,13 @@
     // 拦截 octo-cit://N 或 octo-cit://N_M_K → 打开关联聊天 sheet。
     // 单索引 host = "1" 仍然成立; 聚合 host = "1_3_5" 时按 _ 拆开成 indices 数组。
     if ([url.scheme isEqualToString:@"octo-cit"]) {
+        // 过渡期 (sheet present/dismiss / nav pop) 收到 citation 点击, 立即 present 新
+        // sheet 等于 sheet 套 sheet 套 pop, 易触发 layout 重入死循环。这种情况直接吞掉
+        // 这次点击 (用户在过渡期间不太可能精确点中 citation, 多半是误触或残留事件)。
+        if ([self shouldDeferLayoutWork]) {
+            handler(WKNavigationActionPolicyCancel);
+            return;
+        }
         NSString *host = url.host ?: @"";
         NSMutableArray<NSNumber *> *indices = [NSMutableArray array];
         for (NSString *part in [host componentsSeparatedByString:@"_"]) {
@@ -636,20 +885,144 @@
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-    // 异步取实际内容高度并应用到 webview frame, 完成后触发 relayoutContent。
-    // 异步链路 + 主线程回到 main 队列, 不会阻塞 runloop, 也不会 deadlock。
+    // 整条链路: didFinishNavigation → JS scrollHeight → 改 frame → relayoutContent →
+    //          layoutSubviews → relayoutContent ... 与 transition driver 抢 layout 必死循环。
+    // 防御策略: 任何"过渡进行中" (sheet present/dismiss / nav pop / detaching) 都
+    //          走 deferWebviewHeightSync, 等过渡完成后再 apply。
+    if ([self shouldDeferLayoutWork]) {
+        [self deferWebviewHeightSync:webView];
+        return;
+    }
     __weak typeof(self) ws = self;
+    __weak WKWebView *wweb = webView;
     [webView evaluateJavaScript:@"document.body.scrollHeight"
               completionHandler:^(id _Nullable result, NSError * _Nullable error) {
-        if (!ws) return;
-        CGFloat h = [result respondsToSelector:@selector(floatValue)]
-            ? MAX(20, [result floatValue]) : 80;
-        CGRect f = webView.frame;
-        if (fabs(f.size.height - h) < 0.5) return;
-        f.size.height = h;
-        webView.frame = f;
-        [ws relayoutContent];
+        // completionHandler 是 block 直接持有, 不走 delegate, navigationDelegate=nil /
+        // stopLoading 都拦不住已经在飞的 callback —— 所以这里要亲自查闸。
+        typeof(ws) strong = ws;
+        if (!strong) return;
+        WKWebView *wv = wweb;
+        if (!wv || ![strong.contentSegments containsObject:wv]) return;
+        if (![result respondsToSelector:@selector(floatValue)]) return;
+        CGFloat h = MAX(20, [result floatValue]);
+        [strong applyWebviewHeight:h to:wv];
     }];
+}
+
+/// 真正去改 webview.frame 的唯一入口: 把 "现在能不能改 layout" 的判断收敛在这。
+/// 过渡期检测到时, 借 transitionCoordinator.animateAlongsideTransition:completion:
+/// 把 frame apply 推迟到过渡完成后, 而不是 dispatch_async 简单一拍 (那个还在
+/// tracking runloop 内, 和 transition driver 仍会撞)。没拿到 coordinator 时退到
+/// 主队列一拍兜底, 下次会被 deferWebviewHeightSync 接住继续等。
+- (void)applyWebviewHeight:(CGFloat)h to:(WKWebView *)wv {
+    if (!wv || ![self.contentSegments containsObject:wv]) return;
+    if (!self.isViewLoaded || !self.view.window) return;
+    CGRect f = wv.frame;
+    if (fabs(f.size.height - h) < 0.5) return;
+
+    if ([self shouldDeferLayoutWork]) {
+        id<UIViewControllerTransitionCoordinator> coord = [self activeTransitionCoordinator];
+        __weak typeof(self) ws = self;
+        __weak WKWebView *wweb = wv;
+        void (^apply)(void) = ^{
+            typeof(ws) strong = ws;
+            if (!strong) return;
+            // 过渡完成的那一刻可能又触发了新过渡, 完整闸再走一遍
+            if ([strong shouldDeferLayoutWork]) { [strong deferWebviewHeightSync:wweb]; return; }
+            WKWebView *wv2 = wweb;
+            if (!wv2 || ![strong.contentSegments containsObject:wv2]) return;
+            CGRect f2 = wv2.frame;
+            if (fabs(f2.size.height - h) < 0.5) return;
+            f2.size.height = h;
+            wv2.frame = f2;
+            [strong relayoutContent];
+            // 过渡完成后才 apply 的路径: 这里也算 settled, 可以开右滑了。
+            [strong markWebviewSettled:wv2];
+        };
+        if (coord) {
+            [coord animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> _) {
+                apply();
+            }];
+        } else {
+            // 没有 coordinator (sheet 稳态展开 / 即将完成的过渡): 退一步, 100ms 后再轮询。
+            // 不要用 dispatch_async 一拍重投——sheet 一直开着时 shouldDeferLayoutWork 永远 YES,
+            // 会形成每个 runloop 周期都在 main queue 投递的轻量轮询, 持续耗 CPU/电。
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), apply);
+        }
+        return;
+    }
+
+    f.size.height = h;
+    wv.frame = f;
+    [self relayoutContent];
+    // 标准路径: frame 写完即 settled。第一次到达 settled 状态的 webview 会触发
+    // syncInteractivePopGestureWithWebviewState 重新打开右滑。
+    [self markWebviewSettled:wv];
+}
+
+/// 标记某个 webview 已稳定 (frame 写完 + relayoutContent 跑过)。从 pending 集合
+/// 移除并同步右滑手势状态; 集合空时自动开启右滑。idempotent: 多次调用安全。
+- (void)markWebviewSettled:(WKWebView *)wv {
+    if (!wv) return;
+    if (![self.pendingTableWebviews containsObject:wv]) return;
+    [self.pendingTableWebviews removeObject:wv];
+    [self syncInteractivePopGestureWithWebviewState];
+}
+
+/// "现在改 layout 是否危险" 综合判定。区分 "appearing" 与 "disappearing":
+///   - appearing (push 进来 / 首次显示): transitionCoordinator 也 != nil, 但这是
+///     VC 被 SHOW 出来的过渡, 改 frame 完全安全 (没有 transition driver 反向拨
+///     layout 的对抗局面)。这种情况不 defer, 否则用户会看到详情已显示但表格
+///     区空白 1-2 秒。
+///   - disappearing (pop 出去 / 被 dismissed): VC 被 HIDE, 此时 transition driver
+///     在 tracking runloop 推动 layout, 我方再去改 frame 必撞死循环, 必须 defer。
+/// 三个 disappearing 信号:
+///   1. contentDetaching            viewWillDisappear 显式设
+///   2. isMovingFromParentViewController  nav pop 中 (含交互式右滑)
+///   3. isBeingDismissed            modal dismiss 中
+/// 此外:
+///   - presentedViewController != nil  自己 present 了 sheet (含 dismiss 动画期);
+///                                     这段改 frame 风险大 (sheet 套 layout 套 pop)
+///   - !view.window                    已彻底离屏
+- (BOOL)shouldDeferLayoutWork {
+    if (self.contentDetaching) return YES;
+    if (!self.isViewLoaded || !self.view.window) return YES;
+    if (self.presentedViewController) return YES;
+    if (self.isMovingFromParentViewController) return YES;
+    if (self.isBeingDismissed) return YES;
+    return NO;
+}
+
+- (id<UIViewControllerTransitionCoordinator>)activeTransitionCoordinator {
+    if (self.transitionCoordinator) return self.transitionCoordinator;
+    if (self.presentedViewController.transitionCoordinator) return self.presentedViewController.transitionCoordinator;
+    return nil;
+}
+
+/// 过渡期间不发起 JS 评估; 100ms 后再来一次, 避免裸 dispatch_async 把"再试一次"
+/// 投到下一个 runloop 周期——sheet 长开 / VC 离屏期间 shouldDeferLayoutWork 一直 YES,
+/// 那种粒度的重投会变成每帧轮询。下次执行时若仍处于过渡, 继续 defer; 直到
+/// shouldDeferLayoutWork == NO 才真正 apply。用 scrollView.contentSize 同步取高度
+/// (WebKit 内部 layout 大概率已完成), 避免反复发 JS, 也消掉了 evaluateJavaScript
+/// 与 main runloop 的耦合。
+- (void)deferWebviewHeightSync:(WKWebView *)wv {
+    if (!wv) return;
+    __weak typeof(self) ws = self;
+    __weak WKWebView *wweb = wv;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        typeof(ws) strong = ws;
+        if (!strong) return;
+        WKWebView *wv2 = wweb;
+        if (!wv2 || ![strong.contentSegments containsObject:wv2]) return;
+        CGFloat h = wv2.scrollView.contentSize.height;
+        if (h > 20) {
+            [strong applyWebviewHeight:h to:wv2];
+        } else {
+            [strong deferWebviewHeightSync:wv2];
+        }
+    });
 }
 
 #pragma mark - More menu (WKFloatingMenu, 与列表 cell 同款风格)
@@ -716,6 +1089,10 @@
             }
         }
         [self loadDetail];
+        // 通知列表同步: 否则用户从详情发起"重新生成"后返回,
+        // 列表仍卡在旧的 completed 状态,看不到"正在重新总结"。
+        // 复用 CreateVC 的口径——后端层面 regenerate 就是发起一条新 task_id。
+        [[NSNotificationCenter defaultCenter] postNotificationName:@"OctoSummaryDidCreateNotification" object:nil];
     }];
 }
 

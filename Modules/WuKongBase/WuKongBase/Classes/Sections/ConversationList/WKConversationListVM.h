@@ -216,6 +216,11 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 全量会话列表（不受 tab 过滤影响，用于跨 tab 检测@提醒等）
 -(NSArray<WKConversationWrapModel*> *) allConversations;
 
+/// 当前 VM 已知的所有需要 channelInfo 的频道（PERSON/GROUP + threadWrapModels + 子区缓存），
+/// 用于 VC 端冷启动后 channelInfo 后台预热（避免 mute 判错把红点冲到 99+）。
+/// 内部按 channel.channelId+channelType 去重；调用方按返回顺序分批 fetchChannelInfo 即可。
+-(NSArray<WKChannel*> *) allKnownChannelsForWarmup;
+
 /// 关注 tab 未读数
 -(NSInteger) getFollowUnreadCount;
 

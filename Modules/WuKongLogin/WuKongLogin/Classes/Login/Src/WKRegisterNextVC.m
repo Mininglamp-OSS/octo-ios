@@ -151,15 +151,14 @@
         // 新注册用户：检查是否有空间，没有则显示 SpaceGate 引导页
         WKSpaceGateVM *spaceVM = [WKSpaceGateVM new];
         [spaceVM getMySpaces].then(^(NSArray *spaces){
-            if (spaces && spaces.count > 0) {
-                // 已有空间（注册时带了邀请码），选择第一个并进入
-                NSDictionary *firstSpace = spaces[0];
-                NSString *spaceId = firstSpace[@"space_id"];
-                if (spaceId && ![spaceId isEqualToString:@""]) {
-                    [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
-                    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
-                    [[NSUserDefaults standardUserDefaults] synchronize];
-                }
+            // 仅认可 role>0 的成员 Space；带邀请码注册成功后服务端会把用户加入该
+            // Space，应能命中。若没匹配上则走 SpaceGate 引导流程。
+            NSDictionary *joinedSpace = [WKSpaceGateVM pickJoinedSpace:spaces];
+            if (joinedSpace) {
+                NSString *spaceId = joinedSpace[@"space_id"];
+                [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+                [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
+                [[NSUserDefaults standardUserDefaults] synchronize];
                 [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
             } else {
                 // 没有空间，显示 SpaceGate 引导页

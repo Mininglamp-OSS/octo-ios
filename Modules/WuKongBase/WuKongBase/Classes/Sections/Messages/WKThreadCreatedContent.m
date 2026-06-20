@@ -12,7 +12,20 @@ static NSMutableDictionary<NSString *, WKThreadCreatedContent *> *_sourceMessage
 
 NSString * const WKThreadMessageCountUpdatedNotification = @"WKThreadMessageCountUpdated";
 
+// R8 fix (yujiawei P1-2): _sourceMessageIdSet / _sourceMessageThreadMap 跨线程读写的
+// 共用锁。decodeWithJSON 跑 socket 解码线程, markThreadClosedForSourceMessageId 跑主线程,
+// 这两条 (write off-main + write main) 是写写冲突, 比 pre-existing 的读写冲突更危险。
+// 新加的 markClosed 入口让冲突类型升级, 必须收。所有访问点统一过这把锁。
+static NSObject *kThreadStaticsLock = nil;
+
 @implementation WKThreadCreatedContent
+
++ (void)load {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        kThreadStaticsLock = [NSObject new];
+    });
+}
 
 + (NSMutableSet<NSString *> *)sourceMessageIdSet {
     static dispatch_once_t onceToken;
@@ -38,6 +51,14 @@ NSString * const WKThreadMessageCountUpdatedNotification = @"WKThreadMessageCoun
     return _sourceMessageThreadMap;
 }
 
++ (void)markThreadClosedForSourceMessageId:(NSString *)sourceMessageId {
+    if (sourceMessageId.length == 0) return;
+    @synchronized (kThreadStaticsLock) {
+        [[self sourceMessageIdSet] removeObject:sourceMessageId];
+        [[self sourceMessageThreadMap] removeObjectForKey:sourceMessageId];
+    }
+}
+
 + (NSNumber *)contentType {
     return @(WK_THREAD_CREATED);
 }
@@ -54,8 +75,10 @@ NSString * const WKThreadMessageCountUpdatedNotification = @"WKThreadMessageCoun
         long long srcId = [contentDic[@"source_message_id"] longLongValue];
         if (srcId > 0) {
             self.sourceMessageId = [NSString stringWithFormat:@"%lld", srcId];
-            [[WKThreadCreatedContent sourceMessageIdSet] addObject:self.sourceMessageId];
-            [[WKThreadCreatedContent sourceMessageThreadMap] setObject:self forKey:self.sourceMessageId];
+            @synchronized (kThreadStaticsLock) {
+                [[WKThreadCreatedContent sourceMessageIdSet] addObject:self.sourceMessageId];
+                [[WKThreadCreatedContent sourceMessageThreadMap] setObject:self forKey:self.sourceMessageId];
+            }
         }
     }
 }

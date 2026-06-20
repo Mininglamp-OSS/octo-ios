@@ -147,6 +147,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// 批量添加 mention 到缓存（不插入文本到输入框）
 -(void) addMentionItems:(NSArray<WKInputMentionItem *> *)items;
 
+/// 清空 mentionCache。正常 sendTextMessage 内部已自动清; 调用 sendRichTextMixedImageDatas
+/// 之类不走 sendTextMessage 的发送路径时, 调用方需在 build entities/mentionedInfo 之后、
+/// 入下一条消息编辑前主动清, 否则缓存里残留的 @ 项 (尤其 "all") 会泄漏到下一条文本消息。
+-(void) cleanMentionCache;
+
 /// 设置多选模式
 /// @param multiple <#multiple description#>
 -(void) setMultipleOn:(BOOL)multiple selectedMessage:(WKMessageModel * _Nullable)messageModel;
@@ -192,6 +197,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 
 -(void) inputBecomeFirstResponder;
+
+/// 把已选图片二进制塞进输入框上方的待发送图片栏（取代旧的全屏 caption 编辑页）。
+/// 线程安全：实现内部 main hop。
+-(void) appendPendingImageDatas:(NSArray<NSData *> *)datas;
 
 /// 结束输入
 -(void) endEditing;

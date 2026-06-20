@@ -91,6 +91,12 @@
 -(void) inputTextToSend {
     NSString *text = self.conversationView.input.textView.text;
     [self.conversationView.input inputSetText:@""];
+#if DEBUG
+    NSLog(@"[CopyDebug] inputTextToSend len=%lu first120=%@ hasNewline=%d",
+          (unsigned long)text.length,
+          [text substringToIndex:MIN(120UL, text.length)],
+          [text rangeOfString:@"\n"].location != NSNotFound);
+#endif
     [self sendTextMessage:text];
 }
 
@@ -207,6 +213,12 @@
 
 -(void) inputBecomeFirstResponder {
     [self.conversationView.input becomeFirstResponder];
+}
+
+-(void) appendPendingImageDatas:(NSArray<NSData *> *)datas {
+    if (datas.count == 0) return;
+    // 输入面板内部 main hop，这里直接转发即可。
+    [self.conversationView.input appendPendingImageDatas:datas];
 }
 
 -(void) endEditing {
@@ -640,7 +652,7 @@
     // WK_RICHTEXT 用原生 UITextView 选区 + UIMenuController 挂自定义菜单项）。
     if (contextMessage.contentType == WK_TEXT || contextMessage.contentType == WK_RICHTEXT) {
         NSArray *capturedMenus = [toolbarMenus copy];
-        [messageCell startInBubbleTextSelectionWithMenuItems:capturedMenus];
+        [messageCell startInBubbleTextSelectionWithMenuItems:capturedMenus atPoint:touchInWindow];
         return;
     }
 
@@ -934,13 +946,19 @@
 
     __weak typeof(self) weakSelf = self;
 
+#if DEBUG
     NSLog(@"[Mention] getMentionUserList channel=%@/%d keyword=%@", self.channel.channelId, self.channel.channelType, keyword);
+#endif
     [[WKGroupManager shared] searchMembers:self.channel keyword:keyword limit:10000 complete:^(WKChannelMemberCacheType cacheType, NSArray<WKChannelMember *> * _Nonnull members) {
+#if DEBUG
         NSLog(@"[Mention] searchMembers returned %lu members, cacheType=%ld", (unsigned long)members.count, (long)cacheType);
+#endif
         WKMemberRole role =  weakSelf.conversationVM.memberRole;
 
         NSArray<WKMentionUserCellModel*>*users = [weakSelf membersToMentionUsers:members role:role keyword:keyword];
+#if DEBUG
         NSLog(@"[Mention] final mention users count=%lu", (unsigned long)users.count);
+#endif
         if(complete) {
             complete(users);
         }
@@ -1130,6 +1148,10 @@
         _mentionCache = [WKInputMentionCache new];
     }
     return _mentionCache;
+}
+
+-(void) cleanMentionCache {
+    [self.mentionCache clean];
 }
 
 - (BOOL)isFuncGroupZooming {

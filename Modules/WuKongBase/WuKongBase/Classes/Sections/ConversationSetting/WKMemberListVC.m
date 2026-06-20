@@ -286,16 +286,25 @@
 }
 
 -(void)makeChecked:(WKChannelMember*)member {
+    if (self.singleSelect && ![self.viewModel isChecked:member]) {
+        // 单选模式：清掉之前的勾选与搜索栏 chips，让新一次选择独占
+        NSArray<WKChannelMember*> *prev = [self.viewModel.selectedMembers allObjects];
+        for (WKChannelMember *m in prev) {
+            WKBarUserSearchModel *rm = [[WKBarUserSearchModel alloc] initWithSid:m.memberUid];
+            [self.searchBar removeModel:rm];
+        }
+        [self.viewModel.selectedMembers removeAllObjects];
+    }
     [self.viewModel makeChecked:member];
     WKBarUserSearchModel *searchModel = [[WKBarUserSearchModel alloc] initWithSid:member.memberUid];
     searchModel.icon = [[WKApp shared] getImageFullUrl:member.memberAvatar].absoluteString;
     if([self.viewModel isChecked:member]) {
-       
+
         [self.searchBar addModel:searchModel];
     }else{
         [self.searchBar removeModel:searchModel];
     }
-    
+
     [self refreshRightItem];
 }
 

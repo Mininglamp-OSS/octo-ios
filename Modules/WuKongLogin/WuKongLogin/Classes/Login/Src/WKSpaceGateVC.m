@@ -24,6 +24,9 @@
 // 主按钮
 @property(nonatomic,strong) UIButton *showInviteInputBtn; // 显示邀请码输入按钮
 
+// 退出登录按钮（无 Space 引导期的逃生口，避免新用户被卡死在本页无法切账号）
+@property(nonatomic,strong) UIButton *logoutBtn;
+
 @property(nonatomic,assign) BOOL showInviteInput; // 是否显示邀请码输入
 @property(nonatomic,assign) BOOL isJoining; // 是否正在加入
 
@@ -63,8 +66,31 @@
     // 添加主按钮
     [self.containerView addSubview:self.showInviteInputBtn];
 
+    // 退出登录按钮（始终可见，避免无 Space 用户被卡死在本页）
+    [self.containerView addSubview:self.logoutBtn];
+
+    // 初始按折叠态把 logoutBtn 贴到 showInviteInputBtn 下方，并把 container 高度收到刚好。
+    [self relayoutLogoutAndContainer];
+
     // 检查是否有 DeepLink 暂存的邀请码
     [self checkPendingInviteCode];
+}
+
+/// 让 logoutBtn 永远紧贴当前可见的底部按钮（折叠态：showInviteInputBtn；
+/// 展开态：inviteInputView），并同步收缩 containerView 高度，避免大段空白。
+- (void)relayoutLogoutAndContainer {
+    UIView *anchor = self.inviteInputView.hidden ? (UIView *)self.showInviteInputBtn : self.inviteInputView;
+    CGRect logoutFrame = self.logoutBtn.frame;
+    logoutFrame.origin.y = anchor.lim_bottom + 16;
+    self.logoutBtn.frame = logoutFrame;
+
+    CGFloat newHeight = CGRectGetMaxY(self.logoutBtn.frame) + 16;
+    CGRect cFrame = self.containerView.frame;
+    if (fabs(cFrame.size.height - newHeight) > 0.5) {
+        cFrame.size.height = newHeight;
+        cFrame.origin.y = (WKScreenHeight - newHeight) / 2.0f;
+        self.containerView.frame = cFrame;
+    }
 }
 
 - (void)setupGradientBackground {
@@ -95,13 +121,22 @@
     __weak typeof(self) weakSelf = self;
     [self.viewModel joinSpace:pendingCode].then(^(id result) {
         [weakSelf.view switchHUDSuccess:LLang(@"已加入空间")];
+        // 抽 joinSpace API response 的 space_id, 让 checkSpaces 命中刚加入的空间, 避免
+        // pickJoinedSpace 的 preferred 快照拽回旧空间 (lml2468 facet A)。
+        NSString *joinedHint = nil;
+        if ([result isKindOfClass:[NSDictionary class]]) {
+            id sid = ((NSDictionary*)result)[@"space_id"];
+            if ([sid isKindOfClass:[NSString class]] && ((NSString*)sid).length > 0) {
+                joinedHint = sid;
+            }
+        }
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [weakSelf checkSpaces];
+            [weakSelf checkSpacesWithJoinedHint:joinedHint];
         });
     }).catch(^(NSError *error) {
         NSString *msg = error.domain ?: @"";
         if ([msg containsString:@"已加入"] || [msg containsString:@"ALREADY_JOINED"] || [msg containsString:@"already"]) {
-            // 已在空间中，直接检查空间并进入
+            // 已在空间中，直接检查空间并进入 (无 join 响应, 走原 picker 兜底)
             [weakSelf.view switchHUDSuccess:LLang(@"已在该空间中")];
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 [weakSelf checkSpaces];
@@ -114,6 +149,13 @@
 }
 
 - (void)checkSpaces {
+    [self checkSpacesWithJoinedHint:nil];
+}
+
+/// 入参 joinedSpaceIdHint 来自 \`joinSpace\` API 响应的 space_id —— 邀请加入路径必须传,
+/// 否则 pickJoinedSpace 的 preferred (上次空间快照) 会赢过本次刚加入的新空间, 用户被
+/// 路回旧空间。与 WKLoginModule.m:128-152 同款逻辑。
+- (void)checkSpacesWithJoinedHint:(NSString *)joinedSpaceIdHint {
     __weak typeof(self) weakSelf = self;
     [self.view showHUD:LLang(@"检查中...")];
 
@@ -121,8 +163,27 @@
         [weakSelf.view hideHud];
         NSLog(@"✅ getMySpaces response: %@", spaces);
         if(spaces && spaces.count > 0) {
-            NSDictionary *lastSpace = spaces.lastObject;
-            NSString *spaceId = [weakSelf extractSpaceId:lastSpace];
+            // R10 fix (lml2468 facet A): 邀请加入新空间后, 优先用 joinSpace API 返回的
+            // space_id 命中, 避免 pickJoinedSpace 的 preferred 快照拽回旧空间。
+            NSDictionary *picked = nil;
+            if (joinedSpaceIdHint.length > 0) {
+                for (id item in spaces) {
+                    if (![item isKindOfClass:[NSDictionary class]]) continue;
+                    NSDictionary *s = (NSDictionary*)item;
+                    if ([s[@"space_id"] isEqualToString:joinedSpaceIdHint]) {
+                        picked = s;
+                        break;
+                    }
+                }
+            }
+            if (!picked) {
+                // 与 LoginVC / LoginPhoneCheckVC / RegisterNextVC 等其它登录入口对齐,
+                // 统一走 pickJoinedSpace —— 历史上这里取 spaces.lastObject 不查 role, 命中 role=0
+                // 非成员空间会让后续 IM/conversation 接口全 403。pickJoinedSpace 内部逻辑:
+                // 优先快照 (preferred)、否则 role>0 fallback、再不命中退到 role>=0 任一成员。
+                picked = [WKSpaceGateVM pickJoinedSpace:spaces];
+            }
+            NSString *spaceId = [weakSelf extractSpaceId:picked];
             if(spaceId && spaceId.length > 0) {
                 [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
                 [[NSUserDefaults standardUserDefaults] synchronize];
@@ -193,7 +254,9 @@
 - (UIView *)containerView {
     if(!_containerView) {
         CGFloat width = MIN(420, WKScreenWidth - 40);
-        CGFloat height = 400;
+        // 默认按折叠态自然高度起步（emoji+标题+副标题 + 主按钮 + 退出按钮 + 上下边距）。
+        // -relayoutLogoutAndContainer 会在切换展开/折叠时即时调整为内容高度，避免空白。
+        CGFloat height = 306;
         _containerView = [[UIView alloc] initWithFrame:CGRectMake((WKScreenWidth - width)/2.0f, (WKScreenHeight - height)/2.0f, width, height)];
         _containerView.backgroundColor = [UIColor whiteColor];
         _containerView.layer.cornerRadius = 16;
@@ -293,12 +356,28 @@
     return _showInviteInputBtn;
 }
 
+- (UIButton *)logoutBtn {
+    if(!_logoutBtn) {
+        CGFloat width = self.containerView.lim_width - 80;
+        _logoutBtn = [[UIButton alloc] initWithFrame:CGRectMake(40, self.containerView.lim_height - 16 - 44, width, 44)];
+        [_logoutBtn setTitle:LLang(@"退出登录") forState:UIControlStateNormal];
+        [_logoutBtn setTitleColor:[UIColor colorWithWhite:0.4 alpha:1.0] forState:UIControlStateNormal];
+        _logoutBtn.titleLabel.font = [UIFont systemFontOfSize:14];
+        _logoutBtn.layer.cornerRadius = 4;
+        _logoutBtn.layer.borderWidth = 1;
+        _logoutBtn.layer.borderColor = [UIColor colorWithWhite:0.85 alpha:1.0].CGColor;
+        [_logoutBtn addTarget:self action:@selector(logoutPressed) forControlEvents:UIControlEventTouchUpInside];
+    }
+    return _logoutBtn;
+}
+
 #pragma mark - Actions
 
 - (void)showInviteInputPressed {
     self.showInviteInput = YES;
     self.inviteInputView.hidden = NO;
     self.showInviteInputBtn.hidden = YES;
+    [self relayoutLogoutAndContainer];
 }
 
 - (void)backPressed {
@@ -306,6 +385,7 @@
     self.inviteInputView.hidden = YES;
     self.showInviteInputBtn.hidden = NO;
     self.inviteCodeTextField.text = @"";
+    [self relayoutLogoutAndContainer];
 }
 
 - (void)joinSpacePressed {
@@ -322,8 +402,16 @@
     __weak typeof(self) weakSelf = self;
     [self.viewModel joinSpace:inviteCode].then(^(id result){
         [weakSelf.view switchHUDSuccess:LLang(@"已加入 Space")];
+        // 抽 joinSpace API response 的 space_id, 命中刚加入的空间避免 preferred 拽回旧。
+        NSString *joinedHint = nil;
+        if ([result isKindOfClass:[NSDictionary class]]) {
+            id sid = ((NSDictionary*)result)[@"space_id"];
+            if ([sid isKindOfClass:[NSString class]] && ((NSString*)sid).length > 0) {
+                joinedHint = sid;
+            }
+        }
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [weakSelf checkSpaces];
+            [weakSelf checkSpacesWithJoinedHint:joinedHint];
         });
     }).catch(^(NSError *error){
         weakSelf.isJoining = NO;
@@ -334,6 +422,16 @@
             [weakSelf.view switchHUDError:LLang(@"邀请码无效或已过期")];
         }
     });
+}
+
+- (void)logoutPressed {
+    [self.view endEditing:YES];
+    WKActionSheetView2 *sheet = [WKActionSheetView2 initWithTip:LLang(@"退出后不会删除任何历史数据，下次登录依然可以使用本账号。")];
+    [sheet addItem:[WKActionSheetButtonItem2 initWithAlertTitle:LLang(@"退出登录") onClick:^{
+        [sheet hide];
+        [[WKApp shared] logout];
+    }]];
+    [sheet show];
 }
 
 #pragma mark - UITextFieldDelegate

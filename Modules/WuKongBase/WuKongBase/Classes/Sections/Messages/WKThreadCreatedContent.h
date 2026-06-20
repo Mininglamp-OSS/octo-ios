@@ -27,6 +27,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// 子区消息数量缓存：threadChannelId -> @(messageCount)
 + (NSMutableDictionary<NSString *, NSNumber *> *)messageCountCache;
 
+/// 子区已关闭/不存在 → 把源消息从 set / map 里清掉。
+/// 长按菜单依赖这两个集合判断"已建过子区 → 进入子区"，清掉后菜单会回到"创建子区"。
+/// sourceMessageId 为空时 no-op。
++ (void)markThreadClosedForSourceMessageId:(nullable NSString *)sourceMessageId;
+
 /// 通知名：子区消息数量更新
 extern NSString * const WKThreadMessageCountUpdatedNotification;
 

@@ -568,13 +568,16 @@ typedef enum : NSUInteger {
         if(inviteCode && ![inviteCode isEqualToString:@""]) {
             WKSpaceGateVM *spaceVM = [WKSpaceGateVM new];
             [spaceVM getMySpaces].then(^(NSArray *spaces){
-                if(spaces && spaces.count > 0) {
-                    NSDictionary *firstSpace = spaces[0];
-                    NSString *spaceId = firstSpace[@"space_id"];
-                    if(spaceId && spaceId.length > 0) {
-                        [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
-                        [[NSUserDefaults standardUserDefaults] synchronize];
-                    }
+                // 仅认可 role>0 的成员 Space。带邀请码注册成功后用户应是新加入
+                // Space 的成员；选不到则回落到 SpaceGate 引导。
+                NSDictionary *joinedSpace = [WKSpaceGateVM pickJoinedSpace:spaces];
+                if (joinedSpace) {
+                    NSString *spaceId = joinedSpace[@"space_id"];
+                    [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+                    // 与 PhoneCheckVC / LoginVC / AuthWebViewVC / RegisterNextVC 对齐: 必须 setBool:YES,
+                    // 否则 WKApp 冷启闸门 (currentSpaceId && spaceGateCompleted) 失败, 用户每次冷启被踢回登录页。
+                    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
+                    [[NSUserDefaults standardUserDefaults] synchronize];
                     [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
                 } else {
                     WKSpaceGateVC *spaceGateVC = [WKSpaceGateVC new];

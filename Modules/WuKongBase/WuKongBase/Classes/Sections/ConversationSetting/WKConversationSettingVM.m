@@ -24,10 +24,17 @@
 #import "WKThreadService.h"
 #import "WKGroupMdVC.h"
 #import "WKGroupAdminManageVC.h"
+#import "WKChannelWebhookVC.h"
+#import "WKIncomingWebhookManager.h"
+#import "WKMemberListVC.h"
+#import "WKActionSheetView2.h"
+#import "WKActionSheetItem2.h"
 
 @interface WKConversationSettingVM ()<WKChannelManagerDelegate>
 
 @property(nonatomic,strong) WKChannelInfo *_channelInfo;
+
+- (void)presentTransferOwnerPicker;
 
 @end
 
@@ -328,6 +335,70 @@
         };
     } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89650];
 
+    // 群消息推送（入站 Webhook）：与 web 端「群消息推送」入口顺序一致 —— 在 GROUP.md
+    // 之下、群管理之上。全员可见可点；列表内部按权限矩阵（群主/管理员 / 自己创建）
+    // 控制操作。副标题策略：
+    //   - 没有缓存（首次进群信息页）→ 静默后台 fetch 一次写回 channelInfo.extra；
+    //     副标题暂留空，fetch 完会触发 channelInfoUpdate: → reloadData → 入口
+    //     handler 再跑一次拿到数字。
+    //   - 命中缓存 → 直接显示「已配置 N 个」/「未配置」。
+    [[WKApp shared] setMethod:@"channelsetting.incomingwebhook" handler:^id _Nullable(id  _Nonnull param) {
+        WKChannel *channel = param[@"channel"];
+        if(channel.channelType != WK_GROUP) {
+            return nil;
+        }
+        NSNumber *cachedCount = nil;
+        if (self.channelInfo && [self.channelInfo.extra[@"incoming_webhook_count"] isKindOfClass:[NSNumber class]]) {
+            cachedCount = self.channelInfo.extra[@"incoming_webhook_count"];
+        }
+        NSString *subtitle;
+        if (!cachedCount) {
+            // 触发一次惰性预取（按 group 去重，避免 reloadData 反复触发）
+            static NSMutableSet<NSString *> *inFlightGroups;
+            static dispatch_once_t once;
+            dispatch_once(&once, ^{ inFlightGroups = [NSMutableSet set]; });
+            NSString *gno = channel.channelId ?: @"";
+            if (gno.length > 0 && ![inFlightGroups containsObject:gno]) {
+                [inFlightGroups addObject:gno];
+                [[WKIncomingWebhookManager shared] listWebhooksOfGroup:gno complete:^(NSArray<WKIncomingWebhook *> *items, NSError * _Nullable error) {
+                    [inFlightGroups removeObject:gno];
+                    if (error) {
+                        // 失败时不写 cache —— 下次进群信息页还会再试一次。
+                        return;
+                    }
+                    WKChannelInfo *info = [[WKSDK shared].channelManager getChannelInfo:channel];
+                    if (!info) return;
+                    info.extra[@"incoming_webhook_count"] = @(items.count);
+                    [[WKSDK shared].channelManager updateChannelInfo:info];
+                }];
+            }
+            // fetch 在飞 / 失败 都先留空字符串，不要显示"查看 ›"那种容易被误读的占位
+            subtitle = @"";
+        } else if (cachedCount.integerValue <= 0) {
+            subtitle = LLang(@"未配置");
+        } else {
+            subtitle = [NSString stringWithFormat:LLang(@"已配置 %ld 个"), (long)cachedCount.integerValue];
+        }
+        BOOL isCreatorOrManager = [param[@"is_creator_or_manager"] boolValue];
+        return @{
+            @"height":@(0.0f),
+            @"items": @[
+                @{
+                    @"class": WKLabelItemModel.class,
+                    @"label": LLang(@"群消息推送"),
+                    @"value": subtitle,
+                    @"showBottomLine":@(NO),
+                    @"onClick":^{
+                        WKChannelWebhookVC *vc = [WKChannelWebhookVC new];
+                        vc.channel = weakSelf.channel;
+                        vc.isManagerOrCreator = isCreatorOrManager;
+                        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+                    }
+                }
+            ]
+        };
+    } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89640];
+
     // 群管理（仅群主和管理员可见，与 web 端 module.tsx 行为一致）
     [[WKApp shared] setMethod:@"channelsetting.groupmanage" handler:^id _Nullable(id  _Nonnull param) {
         WKChannel *channel = param[@"channel"];
@@ -353,6 +424,28 @@
             ]
         };
     } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89625];
+
+    // 转让群主（仅群主可见，与 web 端 module.tsx 行为一致）
+    [[WKApp shared] setMethod:@"channelsetting.transferowner" handler:^id _Nullable(id  _Nonnull param) {
+        WKChannel *channel = param[@"channel"];
+        if(channel.channelType != WK_GROUP || ![weakSelf isCreatorForMe]) {
+            return nil;
+        }
+        return @{
+            @"height":@(0.0f),
+            @"items": @[
+                @{
+                    @"class": WKLabelItemModel.class,
+                    @"label": LLang(@"转让群主"),
+                    @"showBottomLine":@(NO),
+                    @"bottomLeftSpace":@(0.0f),
+                    @"onClick":^{
+                        [weakSelf presentTransferOwnerPicker];
+                    }
+                }
+            ]
+        };
+    } category:WKPOINT_CATEGORY_CHANNELSETTING sort:89660];
 
     [[WKApp shared] setMethod:@"channelsetting.hsitory" handler:^id _Nullable(id  _Nonnull param) {
         return @{
@@ -604,6 +697,59 @@
 
 -(AnyPromise*) requestGroupMemberInvite:(NSArray<NSString*>*)uids remark:(NSString*)remark {
    return [[WKAPIClient sharedClient] POST:[NSString stringWithFormat:@"groups/%@/member/invite",self.channel.channelId] parameters:@{@"uids":uids?:@[],@"remark":remark?:@""}];
+}
+
+#pragma mark - 转让群主
+
+- (void)presentTransferOwnerPicker {
+    __weak typeof(self) weakSelf = self;
+    WKMemberListVC *vc = [WKMemberListVC new];
+    vc.title = LLang(@"选择新群主");
+    vc.channel = self.channel;
+    vc.edit = YES;
+    vc.singleSelect = YES;
+
+    NSMutableArray<NSString*> *hidden = [NSMutableArray array];
+    if ([WKApp shared].loginInfo.uid) {
+        [hidden addObject:[WKApp shared].loginInfo.uid];
+    }
+    NSArray<WKChannelMember*> *allMembers = [[WKSDK shared].channelManager getMembersWithChannel:self.channel];
+    for (WKChannelMember *m in allMembers) {
+        if (m.robot && m.memberUid) {
+            [hidden addObject:m.memberUid];
+        }
+    }
+    vc.hiddenUsers = hidden;
+
+    vc.onFinishedSelect = ^(NSArray<NSString *> *uids) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || uids.count == 0) return;
+        NSString *toUID = uids.firstObject;
+        WKChannelMember *target = [[WKSDK shared].channelManager getMember:strongSelf.channel uid:toUID];
+        NSString *name = target.memberRemark.length > 0 ? target.memberRemark : (target.memberName.length > 0 ? target.memberName : toUID);
+        NSString *tip = [NSString stringWithFormat:LLang(@"确定将群主转让给 %@ 吗？转让后你将成为普通成员。"), name];
+
+        WKActionSheetView2 *sheet = [WKActionSheetView2 initWithTip:tip cancel:LLang(@"取消")];
+        [sheet addItem:[WKActionSheetButtonItem2 initWithAlertTitle:LLang(@"转让群主") onClick:^{
+            [[WKNavigationManager shared].topViewController.view showHUD];
+            [[WKGroupManager shared] groupNo:strongSelf.channel.channelId transferOwner:toUID complete:^(NSError *error) {
+                [[WKNavigationManager shared].topViewController.view hideHud];
+                if (error) {
+                    NSString *msg = error.domain.length > 0 ? error.domain : LLang(@"转让群主失败");
+                    [[WKNavigationManager shared].topViewController.view showMsg:msg];
+                    return;
+                }
+                [[WKNavigationManager shared] popViewControllerAnimated:YES];
+                [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"群主已转让")];
+                // 同步角色与群信息；设置页通过通知/Delegate 自动 reload
+                [[WKGroupManager shared] syncMemebers:strongSelf.channel.channelId];
+                [[WKSDK shared].channelManager fetchChannelInfo:strongSelf.channel];
+            }];
+        }]];
+        [sheet show];
+    };
+
+    [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
 
 #pragma mark - WKChannelManagerDelegate

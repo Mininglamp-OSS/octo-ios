@@ -186,9 +186,11 @@ static CGFloat const kBadgeSize = 16.0f;
         UIFont *font = btn.titleLabel.font;
         CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
         CGFloat titleRight = CGRectGetMidX(btn.frame) + offset + textW / 2.0f;
-        CGFloat btnCenterY = CGRectGetMidY(btn.frame);
+        // badge 纵向跟"关注/最近"文字基线/中心齐平：button.titleLabel.centerY ≈ button.centerY，
+        // 直接以按钮中心为锚，不要再上移，否则视觉上漂在标题上方。
+        CGFloat textCenterY = CGRectGetMidY(btn.frame);
         CGFloat badgeW = MAX(badge.bounds.size.width + 6, kBadgeSize);
-        badge.frame = CGRectMake(titleRight + 2, btnCenterY - kBadgeSize / 2.0f - 4, badgeW, kBadgeSize);
+        badge.frame = CGRectMake(titleRight + 2, textCenterY - kBadgeSize / 2.0f, badgeW, kBadgeSize);
     }
 }
 

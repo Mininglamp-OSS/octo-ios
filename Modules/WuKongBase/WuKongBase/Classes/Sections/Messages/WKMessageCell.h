@@ -113,6 +113,11 @@ typedef enum :NSUInteger {
 /// 是否隐藏气泡
 + (BOOL) hiddenBubble;
 
+/// 子类 override 钩子: 调整 trailing (右下角时间/状态/编辑标记) 的位置。基类按
+/// hiddenBubble = YES/NO 给两套默认偏移; 子类如需在自己的视觉里再调整, override
+/// 后调用 [super layoutTrailingView] 再修改 self.trailingView.lim_top/lim_left。
+-(void) layoutTrailingView;
+
 /// 隐藏阅后即焚的进度条
 -(BOOL) hiddenFlameProgress;
 
@@ -199,8 +204,10 @@ typedef enum :NSUInteger {
 -(void) showLongPressHighlight;
 /// 取消气泡高亮（淡出遮罩层）
 -(void) hideLongPressHighlight;
-/// 在气泡原位启动文字选择模式，menuItems 是长按原始菜单项（全选时显示完整菜单）
--(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems;
+/// 在气泡原位启动文字选择模式，menuItems 是长按原始菜单项（全选时显示完整菜单）。
+/// touchPoint 是长按触发时的 window 坐标，用于命中分段消息中具体被点中的文本段
+/// （多段 markdown + 表格的 cell 在不同段上启动选区时宿主不同；非分段 cell 忽略此点）。
+-(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems atPoint:(CGPoint)touchPoint;
 /// 退出气泡文字选择模式，恢复正常显示
 -(void) endInBubbleTextSelection;
 

@@ -792,13 +792,8 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
 }
 
 -(void) refreshUnread:(WKConversationWrapModel*)model {
-    if (self.recentTabContext) {
-        // 最近 tab：未读走头像右上角徽章（refreshSetting 里根据 mute 决定数字 / 圆点 / 隐藏）。
-        // 旧右下角 badge 一律收起，避免和新徽章双显。
-        self.badgeView.hidden = YES;
-        return;
-    }
-    // 其他 tab：原逻辑。
+    // 所有 tab 统一走右下角 badgeView。最近 tab 之前用头像右上角徽章已下线 —— 红点挪到
+    // 与最后一条消息预览同一水平线，颜色与关注 tab 统一为粉底红字。
     self.badgeView.hidden = YES;
     if(model.unreadCount>0) {
         self.badgeView.hidden = NO;
@@ -811,47 +806,23 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     // 免打扰
     BOOL muted = WKCellIsMuted(model);
 
-    if (self.recentTabContext) {
-        // ====== 最近 tab：WeChat 风格头像右上角徽章 ======
-        // - 非静音 + 未读 → 数字胶囊（>99 → 99+）
-        // - 静音    + 未读 → 小红点（无数字）+ 右下角铃铛
-        // - 无未读        → 徽章隐藏；静音才显示铃铛
-        // 旧 badgeView 已在 refreshUnread 里强制隐藏，这里不再着色。
-        BOOL hasUnread = model.unreadCount > 0;
-        if (hasUnread) {
-            self.avatarUnreadBadge.hidden = NO;
-            self.muteIcon.hidden = !muted; // 静音 + 未读：铃铛保留在右下角槽位
-            if (muted) {
-                // 小红点形态：清掉文字，layoutSubviews 给它 10x10 定圆。
-                self.avatarUnreadBadge.text = nil;
-            } else {
-                NSString *count = (model.unreadCount > 99)
-                    ? @"99+"
-                    : [NSString stringWithFormat:@"%ld", (long)model.unreadCount];
-                self.avatarUnreadBadge.text = count;
-            }
-        } else {
-            self.avatarUnreadBadge.hidden = YES;
-            self.muteIcon.hidden = !muted;
-        }
-    } else {
-        // ====== 关注 / 群 / 子区 / 私聊：保持旧行为 ======
-        self.avatarUnreadBadge.hidden = YES;
-        if(muted) { // 免打扰
-            if(model.unreadCount<=0) {
-                self.muteIcon.hidden = NO;
-            }else {
-                self.muteIcon.hidden = YES;
-            }
+    // 头像右上角徽章已废弃（最近 tab 红点挪到右下角，和关注 tab 统一）。
+    self.avatarUnreadBadge.hidden = YES;
 
-            [self.badgeView setBadgeBackgroundColor:[UIColor colorWithRed:163.0f/255.0f green:214.0/255.0f blue:237.0f/255.0f alpha:1.0]];
-            // mute 时仍走原浅蓝底白字（与历史一致），避免把"已读静音"也染成红字风格
-            [self.badgeView setBadgeTextColor:[UIColor whiteColor]];
+    if(muted) { // 免打扰
+        if(model.unreadCount<=0) {
+            self.muteIcon.hidden = NO;
         }else {
             self.muteIcon.hidden = YES;
-            [self.badgeView setBadgeBackgroundColor:WKUnreadBadgeBgColor()];
-            [self.badgeView setBadgeTextColor:WKUnreadBadgeFgColor()];
         }
+
+        [self.badgeView setBadgeBackgroundColor:[UIColor colorWithRed:163.0f/255.0f green:214.0/255.0f blue:237.0f/255.0f alpha:1.0]];
+        // mute 时仍走原浅蓝底白字（与历史一致），避免把"已读静音"也染成红字风格
+        [self.badgeView setBadgeTextColor:[UIColor whiteColor]];
+    }else {
+        self.muteIcon.hidden = YES;
+        [self.badgeView setBadgeBackgroundColor:WKUnreadBadgeBgColor()];
+        [self.badgeView setBadgeTextColor:WKUnreadBadgeFgColor()];
     }
 
     // 置顶 — 跨 tab 独立：仅最近 tab 显示置顶背景色。关注 tab 即便 model.stick=YES
@@ -1319,12 +1290,9 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         self.lastContentLbl.lim_width = self.lim_width - self.lastContentLbl.lim_left - 10.0f;
 
         if(self.model.unreadCount>0 || self.model.mute) {
-            // 最近 tab：未读已挪到头像右上角，preview 不再需要给右下角的旧 badge 让位 ——
-            // 只有静音才在右下角实际占位（铃铛）。非静音 + 未读时 preview 可以延伸到原 badge 区域。
-            BOOL reserveRightSlot = self.recentTabContext ? WKCellIsMuted(self.model) : YES;
-            if (reserveRightSlot) {
-                self.lastContentLbl.lim_width -= 40.0f;
-            }
+            // 右下角槽位：未读 badge / 静音铃铛会占用 ~40pt，preview 文字让位避免重叠。
+            // 最近 tab 现在与关注 tab 统一走右下角 badgeView，红点出现时同样需要让位。
+            self.lastContentLbl.lim_width -= 40.0f;
         }
         // mentionBadge 还要再让出 ~26pt（22 宽 + 4 间距）
         if(!self.mentionBadge.hidden) {
@@ -1350,13 +1318,15 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         self.statusImgView.lim_left = self.lastMsgTimeLbl.lim_left - self.statusImgView.lim_width - statusRightSpace;
         self.statusImgView.lim_top = self.lastMsgTimeLbl.lim_top+1.0f;
 
-        // 红点
-        self.badgeView.lim_top = self.lastMsgTimeLbl.lim_bottom + 2.0f;
+        // 红点：纵向与预览消息行（lastContentLbl）居中对齐，和 @我 mentionBadge 同一基准，
+        // 避免按时间行 bottom 锚定时整块视觉抬高、与 @我 错开半行。
+        self.badgeView.lim_top = self.lastContentLbl.lim_top + (self.lastContentLbl.lim_height - self.badgeView.lim_height) / 2.0f;
         self.badgeView.lim_left = self.lim_width - 15.0f - self.badgeView.lim_width;
 
-        // 免打扰图标
+        // 免打扰图标：同样以预览行居中为准。muteIcon 之前 anchor 在 badgeView.lim_top —— 当 badge
+        // 隐藏（如静音 + 已读）时它的 lim_top 仍是上次残留值，导致铃铛飘到时间行附近。
         self.muteIcon.lim_left = self.lim_width - self.muteIcon.lim_width - (self.lim_width-self.lastMsgTimeLbl.lim_left-self.lastMsgTimeLbl.lim_width);
-        self.muteIcon.lim_top = self.badgeView.lim_top + 4.0f;
+        self.muteIcon.lim_top = self.lastContentLbl.lim_top + (self.lastContentLbl.lim_height - self.muteIcon.lim_height) / 2.0f;
 
         // @我 标识：放在 badge / mute 槽位左侧，间距 4pt，纵向与预览消息行（lastContentLbl）居中对齐。
         // 之前用 badgeView.lim_top —— 最近 tab 下 badgeView 被 refreshUnread 强制隐藏，

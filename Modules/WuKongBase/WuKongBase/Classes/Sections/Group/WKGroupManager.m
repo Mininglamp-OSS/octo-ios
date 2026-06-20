@@ -331,6 +331,12 @@ static WKGroupManager *_instance;
     }
 }
 
+- (void)groupNo:(NSString *)groupNo transferOwner:(NSString *)toUID complete:(void (^)(NSError * _Nullable))complete {
+    if(_delegate && [_delegate respondsToSelector:@selector(groupManager:groupNo:transferOwner:complete:)]) {
+        [_delegate groupManager:self groupNo:groupNo transferOwner:toUID complete:complete];
+    }
+}
+
 - (void)groupSetting:(NSString *)groupNo settingKey:(WKGroupSettingKey)key on:(BOOL)on {
     if(_delegate && [_delegate respondsToSelector:@selector(groupManagerSetting:groupNo:settingKey:on:)]) {
         [_delegate groupManagerSetting:self groupNo:groupNo settingKey:key on:on];

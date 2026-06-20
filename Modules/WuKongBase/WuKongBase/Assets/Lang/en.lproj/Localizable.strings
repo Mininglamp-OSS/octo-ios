@@ -1007,3 +1007,70 @@
 "解压失败"="Failed to extract";
 "消息很多，下拉刷新查看更早"="Lots of messages — pull down to load older";
 "已开始生成总结，可到 智能总结 查看进度"="Summary started — track progress in Smart Summary";
+"已开始生成总结"="Summary started";
+// 转让群主
+"转让群主"="Transfer Owner";
+"选择新群主"="Select New Owner";
+"确定将群主转让给 %@ 吗？转让后你将成为普通成员。"="Transfer group ownership to %@? You will become a regular member after the transfer.";
+"群主已转让"="Owner transferred";
+"转让群主失败"="Failed to transfer owner";
+
+// 群消息推送 (Incoming Webhook) — 入口/列表/编辑/URL 弹窗
+"群消息推送"="Message Push";
+"通过 Webhook 把外部系统的消息（CI 通知、监控告警、GitHub 事件等）推送到本群。"="Use webhooks to push messages from external systems (CI notifications, monitoring alerts, GitHub events, etc.) into this group.";
+"暂无 Webhook，新建后可推送外部消息到本群"="No webhook yet — create one to push external messages into this group.";
+"新建 Webhook"="New Webhook";
+"编辑 Webhook"="Edit Webhook";
+"已禁用"="Disabled";
+"名称"="Name";
+"头像 URL"="Avatar URL";
+"如「构建通知」「监控告警」（可留空）"="e.g. \"Build notifier\" / \"Monitoring alert\" (optional)";
+"https://example.com/avatar.png"="https://example.com/avatar.png";
+"留空使用默认头像。"="Leave blank to use the default avatar.";
+"普通成员创建的 Webhook 服务端会自动加 `Webhook-` 前缀。"="Webhooks created by regular members are automatically prefixed with `Webhook-` by the server.";
+"由 %@ 创建 · %@"="Created by %@ · %@";
+"创建于 %@"="Created on %@";
+"累计 %ld 次推送，最近 %@"="%ld pushes in total, last at %@";
+// 长按菜单
+"测试发送"="Send test";
+"测试发送（冷却中）"="Send test (cooling down)";
+"启用"="Enable";
+"禁用"="Disable";
+"重置 Token"="Regenerate token";
+"复制名称"="Copy name";
+"已发送测试消息"="Test message sent";
+"请稍候再试"="Please try again in a moment";
+"操作失败"="Operation failed";
+"测试失败"="Test failed";
+"创建失败"="Failed to create";
+"删除失败"="Failed to delete";
+"重置失败"="Failed to regenerate";
+"已删除"="Deleted";
+"重置后旧地址将立即失效，确定要重置「%@」的 Token 吗？"="The old URL will be invalidated immediately. Regenerate token for \"%@\"?";
+"确定要删除「%@」吗？删除后该地址将立即失效。"="Delete \"%@\"? Its URL will be invalidated immediately.";
+// URL 弹窗
+"Webhook 创建成功"="Webhook created";
+"出于安全考虑，以下地址仅此一次完整展示，请立即复制保存；丢失后只能重置。"="For security, this URL is shown in full only once. Copy and save it now — once lost, you can only regenerate.";
+"Webhook 地址"="Webhook URL";
+"调用示例"="Examples";
+"通用 (native)"="Generic (native)";
+"GitHub 事件"="GitHub events";
+"GitHub 仓库事件无需 curl，把下面这个 Payload URL 登记到仓库 Webhook 设置："="GitHub events don't need curl — register the Payload URL below under the repo's Webhook settings:";
+"仓库 → Settings → Webhooks → Add webhook"="Repo → Settings → Webhooks → Add webhook";
+"Payload URL 粘贴上面地址，Content type 选 application/json"="Paste the URL above as the Payload URL; pick application/json for Content type";
+"勾选需要接收的事件（如 push、pull_request），保存"="Pick the events you want (e.g. push, pull_request), then save";
+"企业微信机器人兼容"="Wecom bot compatible";
+"兼容企业微信群机器人格式，可直接迁移现有机器人 URL。"="Compatible with the WeCom group bot format — you can drop in existing bot URLs directly.";
+"content 按 Markdown 渲染。"="content is rendered as Markdown.";
+"**构建成功** ✅ 详情见 [#123](https://example.com/build/123)"="**Build succeeded** ✅ See [#123](https://example.com/build/123)";
+"构建成功 ✅"="Build succeeded ✅";
+"复制"="Copy";
+"复制示例"="Copy example";
+"复制地址"="Copy URL";
+"✓ 已复制"="✓ Copied";
+"我已复制并保存，关闭"="I've copied and saved it — close";
+// 群信息页入口副标题
+"未配置"="Not configured";
+"已配置 %ld 个"="%ld configured";
+"查看 ›"="View ›";
+

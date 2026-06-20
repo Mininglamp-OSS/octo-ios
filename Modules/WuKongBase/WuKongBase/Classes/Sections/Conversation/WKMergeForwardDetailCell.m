@@ -417,6 +417,18 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 @property(nonatomic,strong) NSMutableArray<UIScrollView *> *tableOverlays;
 @property(nonatomic,strong) NSMutableArray<NSString *> *tableRawContents;
 @property(nonatomic,assign) BOOL segmentsBuilt;
+// 已经为哪条消息构建过 segmentViews。WKMergeForwardDetail*Cell 跟普通 Form cell 一样
+// 共享 reuseIdentifier，cell 复用给不同消息时如果只看 segmentsBuilt，分段视图会
+// 沿用前一条消息的内容（高度按新消息算、布局是旧消息）→ 底部留出大块空白。所以
+// 还要按 message.messageId 做一道判等。
+@property(nonatomic,assign) uint64_t lastBuiltMessageId;
+
+// 长按命中的目标 view 和它对应的 raw 文本。
+// 旧实现 menu / copy 都固定在 self.textLbl 上，markdown / 表格分段消息上点复制
+// 经常拿到错的内容；这里改成命中即记，customcopy: 直接用 wk_longPressCopyText。
+@property(nonatomic,weak) UIView *wk_longPressTargetView;
+@property(nonatomic,copy) NSString *wk_longPressCopyText;
+@property(nonatomic,strong) UIColor *wk_longPressOrigBgColor;
 
 @end
 
@@ -442,7 +454,17 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 }
 
 -(void) menuDidHide {
-    [self.textLbl setBackgroundColor:[UIColor clearColor]];
+    // 恢复命中段的原 backgroundColor（不再固定清 textLbl —— 长按命中的可能是
+    // markdownLbl / 某个 segmentView，错的清会留下高亮残留）。
+    if (self.wk_longPressTargetView) {
+        self.wk_longPressTargetView.backgroundColor = self.wk_longPressOrigBgColor ?: [UIColor clearColor];
+    } else {
+        // 兜底：旧路径，如果完全没命中过，也把可能被旧实现染色的 textLbl 复位。
+        [self.textLbl setBackgroundColor:[UIColor clearColor]];
+    }
+    self.wk_longPressTargetView = nil;
+    self.wk_longPressCopyText = nil;
+    self.wk_longPressOrigBgColor = nil;
 }
 
 - (void)clearSegmentViews {
@@ -457,6 +479,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
     [self.tableWebViews removeAllObjects];
     [self.tableRawContents removeAllObjects];
     self.segmentsBuilt = NO;
+    self.lastBuiltMessageId = 0;
 }
 
 - (WKWebView *)createTableWebView {
@@ -562,6 +585,12 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         self.textLbl.hidden = YES;
         self.markdownLbl.hidden = YES;
 
+        // cell 复用：若上次构建的不是这条消息，必须先 clear 再重建，否则
+        // segmentViews 沿用前条消息的内容、高度按当前消息算 → 底部留出大块空白。
+        if (self.lastBuiltMessageId != model.message.messageId) {
+            [self clearSegmentViews];
+        }
+
         if (!self.segmentsBuilt) {
             [self clearSegmentViews];
             NSArray *segments = [WKMarkdownRenderer splitContentSegments:content];
@@ -632,6 +661,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
                 }
             }
             self.segmentsBuilt = YES;
+            self.lastBuiltMessageId = model.message.messageId;
         }
     } else if ([WKMarkdownRenderer containsMarkdown:content]) {
         self.textLbl.hidden = YES;
@@ -878,16 +908,91 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 }
 
 -(void) handleLongPressGesture:(UILongPressGestureRecognizer *)longPressGR {
-    if (longPressGR.state == UIGestureRecognizerStateBegan) {
-        [self becomeFirstResponder];
-        UIMenuItem *copyLink = [[UIMenuItem alloc] initWithTitle:@"复制" action:@selector(customcopy:)];
-        [[UIMenuController sharedMenuController]  setMenuItems:@[copyLink]];
-        [[UIMenuController sharedMenuController] setTargetRect:self.textLbl.frame inView:self.textLbl.superview];
-        [[UIMenuController sharedMenuController] setMenuVisible:YES animated:YES];
-        self.textLbl.backgroundColor = [UIColor colorWithRed:0.0f green:0.0f blue:0.0f alpha:0.2f];
-    }else {
-        
+    if (longPressGR.state != UIGestureRecognizerStateBegan) return;
+
+    // 命中检测：触点位置 → 命中的具体 view + 它对应的 raw 文本。
+    // 旧实现固定锚到 self.textLbl，markdown / 多段表格消息上经常拿到错的内容；
+    // 现在按真实命中决定复制对象，并把高亮也加到命中 view 上让用户知道复制的
+    // 是哪一段。
+    CGPoint pt = [longPressGR locationInView:self.messageContentView];
+    UIView *target = nil;
+    NSString *copyText = nil;
+
+    if (self.segmentViews.count > 0) {
+        // hasTable 路径：命中具体 segmentView。文本段是 M80AttributedLabel，
+        // 表格段是 UIView container。
+        for (NSUInteger i = 0; i < self.segmentViews.count; i++) {
+            UIView *v = self.segmentViews[i];
+            if (!CGRectContainsPoint(v.frame, pt)) continue;
+            target = v;
+            // 推导 raw 文本：用 splitContentSegments 同样按下标取 segments[i].content。
+            // 表格段的 content 是 raw markdown 表格语法（| col | col |），文本段
+            // 是 raw markdown 文本（可能含 # ** | 等）。粘贴回输入框再发送，接收
+            // 端的 markdown 渲染能识别。
+            NSString *raw = [self wk_rawContentForSegmentAtIndex:(NSInteger)i];
+            if (raw.length > 0) copyText = raw;
+            break;
+        }
     }
+    if (!target && !self.markdownLbl.hidden && CGRectContainsPoint(self.markdownLbl.frame, pt)) {
+        target = self.markdownLbl;
+        // 单段 markdown：copy 整条 raw markdown。
+        copyText = [self wk_rawContentOfMessage];
+    }
+    if (!target && !self.textLbl.hidden && CGRectContainsPoint(self.textLbl.frame, pt)) {
+        target = self.textLbl;
+        // 普通文本（无 markdown）：直接复制原始 content（避免 textLbl.text 因
+        // attributedText 处理掉换行/链接等而失真）。
+        copyText = [self wk_rawContentOfMessage];
+        if (copyText.length == 0) copyText = self.textLbl.text;
+    }
+    if (!target) {
+        // 兜底：命中失败但用户长按就要触发菜单，落到当前可见的主显示控件。
+        if (!self.markdownLbl.hidden) {
+            target = self.markdownLbl;
+            copyText = [self wk_rawContentOfMessage];
+        } else if (!self.textLbl.hidden) {
+            target = self.textLbl;
+            copyText = [self wk_rawContentOfMessage] ?: self.textLbl.text;
+        } else if (self.segmentViews.count > 0) {
+            target = self.segmentViews.firstObject;
+            copyText = [self wk_rawContentForSegmentAtIndex:0];
+        }
+    }
+    if (!target) return;
+
+    // 记下命中状态，customcopy: / menuDidHide 用
+    self.wk_longPressTargetView = target;
+    self.wk_longPressCopyText = copyText ?: @"";
+    self.wk_longPressOrigBgColor = target.backgroundColor;
+
+    // 高亮命中段：浅蓝（与 WKTextMessageCell 选区高亮风格一致），不会盖住文字
+    target.backgroundColor = [[UIColor systemBlueColor] colorWithAlphaComponent:0.18];
+
+    [self becomeFirstResponder];
+    UIMenuItem *copyLink = [[UIMenuItem alloc] initWithTitle:@"复制" action:@selector(customcopy:)];
+    [[UIMenuController sharedMenuController] setMenuItems:@[copyLink]];
+    [[UIMenuController sharedMenuController] setTargetRect:target.frame inView:target.superview];
+    [[UIMenuController sharedMenuController] setMenuVisible:YES animated:YES];
+}
+
+// 推导 segmentViews[idx] 对应的原始 markdown 文本（splitContentSegments 拆出来的
+// content 串）。表格段就是 raw 表格 markdown，文本段就是 raw 文本 markdown。
+-(NSString*) wk_rawContentForSegmentAtIndex:(NSInteger)idx {
+    if (idx < 0) return nil;
+    NSString *raw = [self wk_rawContentOfMessage];
+    if (raw.length == 0) return nil;
+    NSArray *segments = [WKMarkdownRenderer splitContentSegments:raw];
+    if (idx >= (NSInteger)segments.count) return nil;
+    NSDictionary *seg = segments[idx];
+    NSString *content = seg[@"content"];
+    return content;
+}
+
+// 当前消息的原始 markdown 文本（WKTextContent.content）。
+-(NSString*) wk_rawContentOfMessage {
+    if (![self.model.message.content isKindOfClass:[WKTextContent class]]) return @"";
+    return ((WKTextContent*)self.model.message.content).content ?: @"";
 }
 
 
@@ -963,17 +1068,27 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         UIColor *textColor = [WKApp shared].config.defaultTextColor;
         NSString *colorHex = [textColor toHexRGB];
         NSAttributedString *mdAttr = [WKMarkdownRenderer render:content fontSize:[WKApp shared].config.messageTextFontSize textColorHex:colorHex];
+        // 必须用 M80AttributedLabel 测高 —— 实际渲染（refresh: 里 self.markdownLbl）
+        // 走的是 M80AttributedLabel/CoreText，旧实现这里用 NSAttributedString 的
+        // boundingRectWithSize（NSStringDrawing/TextKit）测高，两者对同一份 attrText
+        // 的行间距、段落间距、--- 横线段、有序列表段处理不同，长 markdown 上 TextKit
+        // 算出来明显比 CoreText 实渲染高，cell 末尾留出大块空白。hasTable 分支上方
+        // 注释也明确点过这个一致性约束（用 measureLabel sizeThatFits），这里同步。
+        static M80AttributedLabel *mdMeasureLabel;
+        if (!mdMeasureLabel) {
+            mdMeasureLabel = [[M80AttributedLabel alloc] init];
+            mdMeasureLabel.numberOfLines = 0;
+            mdMeasureLabel.lineBreakMode = kCTLineBreakByWordWrapping;
+        }
+        mdMeasureLabel.font = [UIFont systemFontOfSize:[WKApp shared].config.messageTextFontSize];
         if (mdAttr && mdAttr.length > 0) {
-            CGRect rect = [mdAttr boundingRectWithSize:CGSizeMake(maxWidth, CGFLOAT_MAX) options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading context:nil];
-            textSize = CGSizeMake(ceilf(rect.size.width), ceilf(rect.size.height));
+            mdMeasureLabel.attributedText = mdAttr;
+            CGSize fitSize = [mdMeasureLabel sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
+            textSize = CGSizeMake(ceilf(fitSize.width), ceilf(fitSize.height));
         } else {
-            static M80AttributedLabel *plainLbl;
-            if(!plainLbl) {
-                plainLbl = [[M80AttributedLabel alloc] init];
-                [plainLbl setFont:[UIFont systemFontOfSize:[WKApp shared].config.messageTextFontSize]];
-            }
-            [plainLbl lim_setText:content];
-            textSize = [plainLbl sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
+            [mdMeasureLabel lim_setText:content];
+            CGSize fitSize = [mdMeasureLabel sizeThatFits:CGSizeMake(maxWidth, CGFLOAT_MAX)];
+            textSize = CGSizeMake(ceilf(fitSize.width), ceilf(fitSize.height));
         }
     } else {
         static M80AttributedLabel *plainLbl2;
@@ -1009,7 +1124,17 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 
 - (void)customcopy:(id)sender
 {
-    [[UIPasteboard generalPasteboard] setString:self.textLbl.text];
+    // 复用 handleLongPressGesture: 保存的命中文本，而不是固定读 self.textLbl.text。
+    // 否则 markdown 单段（在 markdownLbl 显示）/ 含表格分段消息（在 segmentViews）
+    // 上点复制会拿到 textLbl 的旧值或空串。
+    NSString *toCopy = self.wk_longPressCopyText;
+    if (toCopy.length == 0) {
+        // 兜底：实在没记到（理论不会），用 message 的 raw content。
+        toCopy = [self wk_rawContentOfMessage];
+    }
+    if (toCopy.length > 0) {
+        [[UIPasteboard generalPasteboard] setString:toCopy];
+    }
 }
 
 @end

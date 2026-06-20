@@ -320,12 +320,23 @@ static const NSUInteger kWKImagePreloadMaxDecodedBytes = 32 * 1024 * 1024;
 - (void)layoutSubviews {
     [super layoutSubviews];
      self.progressView.frame = self.messageContentView.bounds;
-    
+
     self.visualEffectView.lim_size = self.messageContentView.lim_size;
-    
+
     self.flameBox.lim_centerX_parent = self.messageContentView;
     self.flameBox.lim_centerY_parent = self.messageContentView;
-    
+
+}
+
+- (void)layoutTrailingView {
+    [super layoutTrailingView];
+    // 基类 hiddenBubble 路径给的是 5pt 底/右内缩, trailingView 自身是 alpha 0.2 黑色胶囊
+    // 紧贴在图片右下, 视觉上时间胶囊几乎贴底贴右. 再各推 10pt / 5pt 留出明显呼吸:
+    //   - 底部: 5 + 10 = 15pt 内缩 → 时间胶囊底沿距图片下沿 ~15pt
+    //   - 右沿: 5 + 5  = 10pt 内缩 → 时间胶囊右沿距图片右沿 ~10pt
+    // 不分横竖图都更耐看, 也不会撞到 flame / progress 居中的视觉中心。
+    self.trailingView.lim_top  -= 10.0f;
+    self.trailingView.lim_left -= 5.0f;
 }
 
 - (BOOL)tailWrap {

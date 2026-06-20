@@ -81,13 +81,27 @@
                                        self.versionLbl.frame.size.height);
 
     // Menu container
+    // 与「我的 / 通用」InsetGrouped + WKMeCardStyle 卡片样式对齐:
+    //   - 侧边距 16pt (InsetGrouped 默认观感)
+    //   - 圆角 16pt + masksToBounds (WKMeCardStyle:62-69)
+    //   - 行高 52pt (与 WKCommonSettingVM cellHeight 一致)
+    //   - 分割线 inset 17pt 左右 (与 WKCommonSettingVM bottomLeft/RightSpace 一致)
+    //   - 分割线色用与卡片同源的 WKMeCardDividerColor 等价值
+    // 之前是手写全宽 UIView (15pt 左 inset / 全屏宽 / 直角 / 配置色 lineColor),
+    // 与父页的卡片视觉割裂。
+    CGFloat menuSideInset = 16.0f;
     CGFloat menuTop = CGRectGetMaxY(self.versionLbl.frame) + 30.0f;
-    CGFloat rowHeight = 50.0f;
-    CGFloat menuWidth = self.view.frame.size.width;
+    CGFloat rowHeight = 52.0f;
+    CGFloat menuWidth = self.view.frame.size.width - menuSideInset * 2;
 
-    self.menuContainer.frame = CGRectMake(0, menuTop, menuWidth, rowHeight * 2 + 0.5f);
+    self.menuContainer.frame = CGRectMake(menuSideInset, menuTop, menuWidth, rowHeight * 2);
+    self.menuContainer.layer.cornerRadius = 16.0f;
+    self.menuContainer.layer.masksToBounds = YES;
+
     self.userAgreementRow.frame = CGRectMake(0, 0, menuWidth, rowHeight);
-    self.privacyPolicyRow.frame = CGRectMake(0, rowHeight + 0.5f, menuWidth, rowHeight);
+    self.privacyPolicyRow.frame = CGRectMake(0, rowHeight, menuWidth, rowHeight);
+    [self layoutMenuRow:self.userAgreementRow showSeparator:YES];
+    [self layoutMenuRow:self.privacyPolicyRow showSeparator:NO];
 }
 
 #pragma mark - Lazy Properties
@@ -140,12 +154,6 @@
         _userAgreementRow = [self createMenuRowWithTitle:LLang(@"用户协议")];
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(userAgreementTapped)];
         [_userAgreementRow addGestureRecognizer:tap];
-
-        // Bottom separator
-        UIView *separator = [[UIView alloc] init];
-        separator.backgroundColor = WKApp.shared.config.lineColor;
-        separator.frame = CGRectMake(15.0f, 49.5f, [UIScreen mainScreen].bounds.size.width - 15.0f, 0.5f);
-        [_userAgreementRow addSubview:separator];
     }
     return _userAgreementRow;
 }
@@ -171,31 +179,72 @@
     titleLabel.text = title;
     titleLabel.font = [UIFont systemFontOfSize:16.0f];
     titleLabel.textColor = WKApp.shared.config.defaultTextColor;
-    titleLabel.frame = CGRectMake(15.0f, 0, 200.0f, 50.0f);
     [row addSubview:titleLabel];
 
-    // Arrow
     UIImageView *arrowView = [[UIImageView alloc] init];
     arrowView.image = [WKApp.shared loadImage:@"Common/Index/ArrowRight" moduleID:@"WuKongBase"];
     arrowView.contentMode = UIViewContentModeScaleAspectFit;
-    CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
-    arrowView.frame = CGRectMake(screenWidth - 30.0f, 17.0f, 16.0f, 16.0f);
+    arrowView.tag = 9002;
     [row addSubview:arrowView];
 
+    UIView *separator = [[UIView alloc] init];
+    separator.tag = 9003;
+    separator.backgroundColor = [WKAboutVC cardDividerColor];
+    [row addSubview:separator];
+
     return row;
+}
+
+/// row 内部子视图布局: 标题 / 箭头 / 底部分割线 —— 都依赖 row.frame.size.width,
+/// 在 layoutUI 拿到 row 真宽后调用一次 (容器 16pt 侧边距让 row 不再等于全屏宽)。
+- (void)layoutMenuRow:(UIView *)row showSeparator:(BOOL)showSeparator {
+    CGFloat w = row.frame.size.width;
+    CGFloat h = row.frame.size.height;
+
+    UILabel *titleLabel = (UILabel *)[row viewWithTag:9001];
+    UIImageView *arrowView = (UIImageView *)[row viewWithTag:9002];
+    UIView *separator = [row viewWithTag:9003];
+
+    titleLabel.frame = CGRectMake(17.0f, 0, w - 17.0f - 30.0f, h);
+    arrowView.frame = CGRectMake(w - 17.0f - 16.0f, (h - 16.0f) / 2.0f, 16.0f, 16.0f);
+    // 分割线左右 inset 17pt, 与 WKCommonSettingVM bottomLeft/RightSpace 对齐;
+    // 最后一行不画分割线 (与 WKMeCardStyle 卡片末行同款)。
+    separator.hidden = !showSeparator;
+    if (showSeparator) {
+        separator.frame = CGRectMake(17.0f, h - 0.5f, w - 34.0f, 0.5f);
+    }
+}
+
+/// 与 WKMeCardStyle.m 内 static WKMeCardDividerColor 同源 —— static 函数没法跨文件
+/// 复用, 这里复刻同一份动态色: 浅色 #F5F5FA, 深色 white α0.06。把 about 页和卡片
+/// 列表分割线视觉拉齐 (之前用全局 lineColor, 与父列表 cell 分割线不一致)。
++ (UIColor *)cardDividerColor {
+    if (@available(iOS 13.0, *)) {
+        return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *tc) {
+            BOOL isDark = (tc.userInterfaceStyle == UIUserInterfaceStyleDark)
+                       || ([WKApp shared].config.style == WKSystemStyleDark);
+            if (isDark) return [UIColor colorWithWhite:1.0 alpha:0.06];
+            return [UIColor colorWithRed:0xF5/255.0 green:0xF5/255.0 blue:0xFA/255.0 alpha:1.0];
+        }];
+    }
+    return [UIColor colorWithRed:0xF5/255.0 green:0xF5/255.0 blue:0xFA/255.0 alpha:1.0];
 }
 
 #pragma mark - Actions
 
 - (void)userAgreementTapped {
+    // 与登录页 (WKLoginView termsPressed) 同源: 走静态 CDN 上的 PDF (octoTermsURL),
+    // 而非 server-side userAgreementUrl。后者会被 SSO 接管, 静态 CDN 这条更稳。
     WKWebViewVC *vc = [[WKWebViewVC alloc] init];
-    vc.url = [NSURL URLWithString:WKApp.shared.config.userAgreementUrl];
+    vc.url = [NSURL URLWithString:[WKApp shared].config.octoTermsURL];
     [WKNavigationManager.shared pushViewController:vc animated:YES];
 }
 
 - (void)privacyPolicyTapped {
+    // 与登录页 (WKLoginView privacyPressed) 同源: octoPrivacyURL (CDN PDF), 不是
+    // server-side privacyAgreementUrl。
     WKWebViewVC *vc = [[WKWebViewVC alloc] init];
-    vc.url = [NSURL URLWithString:WKApp.shared.config.privacyAgreementUrl];
+    vc.url = [NSURL URLWithString:[WKApp shared].config.octoPrivacyURL];
     [WKNavigationManager.shared pushViewController:vc animated:YES];
 }
 
