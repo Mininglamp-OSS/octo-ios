@@ -212,6 +212,13 @@
     [super viewWillDisappear:animated];
     [self.pollTimer invalidate];
     self.pollTimer = nil;
+
+    // R3 review (yujiawei): 仅在确实正在被 pop / dismiss 时才执行 disarm / detaching / 手势恢复。
+    // push 子页 (转发到聊天 / 查看确认状态) 让本 VC 暂时被覆盖时, 不能动这些状态——
+    // 否则 pop-back 后表格 webview 永久 disarm: octo-cit:// citation 点不响应、表格高度无法回填。
+    BOOL trulyLeaving = self.isMovingFromParentViewController || self.isBeingDismissed;
+    if (!trulyLeaving) return;
+
     // 漏掉的并发路径: A 顶着 sheet (RelatedChatSheet) 时被 swipe-back pop —— UIKit
     // 把 "sheet 强 dismiss" 和 "nav pop 转场" 两段并发跑在 tracking runloop 上,
     // 与本 VC 内 webview 异步回填一起重入触发 layout 死锁; 即使 A 当前 webview 已

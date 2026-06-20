@@ -574,6 +574,9 @@ typedef enum : NSUInteger {
                 if (joinedSpace) {
                     NSString *spaceId = joinedSpace[@"space_id"];
                     [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+                    // 与 PhoneCheckVC / LoginVC / AuthWebViewVC / RegisterNextVC 对齐: 必须 setBool:YES,
+                    // 否则 WKApp 冷启闸门 (currentSpaceId && spaceGateCompleted) 失败, 用户每次冷启被踢回登录页。
+                    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
                     [[NSUserDefaults standardUserDefaults] synchronize];
                     [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
                 } else {
