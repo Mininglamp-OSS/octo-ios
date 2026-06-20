@@ -276,6 +276,21 @@ static WKMoreItemClickEvent *_instance;
                                selectCompressImageBlock:^(NSArray<NSData *> * _Nonnull images,
                                                           NSArray<PHAsset *> * _Nonnull assets,
                                                           BOOL isOriginal) {
+        // R7 fix (yujiawei P1): 与初次选图入口 (line 124-138) 同款原子性闸门。
+        // WKPhotoBrowser 在 jl_compressImageSize 返回 nil 时会**静默丢图**, 导致
+        // images.count < assets.count + 索引错位 (images[i] 与 assets[i] 不一定对应)。
+        // 没这条闸的话, 用户「+」选 5 张, 1 张压缩失败 → bar 静默 append 4 张, 后续
+        // _commitPendingWithCaption 用 images.count 当 assetCount, 原子闸形同虚设。
+        // 与直发路径一致: 整条可见失败 + 不入 bar。
+        if (images.count != assets.count) {
+            dispatch_block_t showFail = ^{
+                [[WKNavigationManager shared].topViewController.view
+                    showHUDWithHide:LLang(@"发送失败")];
+            };
+            if ([NSThread isMainThread]) { showFail(); }
+            else { dispatch_async(dispatch_get_main_queue(), showFail); }
+            return;
+        }
         // 防御：相册理论上已经按 maxSelectCount=remaining + allowSelectVideo=NO 过滤，但是
         // 兜底再校验一次：剔除非 image 资产对应的 NSData，再 clamp remaining。
         NSMutableArray<NSData *> *filtered = [NSMutableArray arrayWithCapacity:images.count];
