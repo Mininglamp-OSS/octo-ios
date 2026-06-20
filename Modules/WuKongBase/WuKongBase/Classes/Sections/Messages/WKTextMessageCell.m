@@ -743,10 +743,12 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
     BOOL useMarkdown = NO;
     if (![textContent.format isEqualToString:@"html"]) {
         BOOL containsMd = [WKMarkdownRenderer containsMarkdown:renderContent];
+#if DEBUG
         NSLog(@"[CopyDebug] render decision msgNo=%@ format=%@ contentLen=%lu containsMd=%d hasMath=%d first120=%@",
               message.clientMsgNo, textContent.format ?: @"(nil)",
               (unsigned long)renderContent.length, containsMd, mathSegments != nil,
               [renderContent substringToIndex:MIN(120UL, renderContent.length)]);
+#endif
         if (renderContent.length > 0 && (mathSegments != nil || containsMd)) {
             UIColor *textColor = message.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
             NSString *colorHex = [textColor toHexRGB];
@@ -2085,13 +2087,17 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
             if (idx < 0 || idx >= (NSInteger)self.segmentViews.count) return;
             UIView *seg = self.segmentViews[idx];
             if (seg.frame.size.width <= 0 || seg.frame.size.height <= 0) {
+#if DEBUG
                 NSLog(@"[SelDebug][layout] skip degenerate seg%ld frame=%@",
                       (long)idx, NSStringFromCGRect(seg.frame));
+#endif
                 return;
             }
             if (!CGRectEqualToRect(host.frame, seg.frame)) {
+#if DEBUG
                 NSLog(@"[SelDebug][layout] sync seg%ld oldHost=%@ → newHost=%@",
                       (long)idx, NSStringFromCGRect(host.frame), NSStringFromCGRect(seg.frame));
+#endif
                 host.frame = seg.frame;
                 host.textContainer.size = seg.frame.size;
             }
@@ -2690,8 +2696,10 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
             UIView *v = self.segmentViews[i];
             if (!CGRectContainsPoint(v.frame, pointInMCV)) continue;
             if (![self wk_isTextSegmentAtIndex:(NSInteger)i]) {
+#if DEBUG
                 NSLog(@"[SelDebug][start] hit table segment, skip selection. msgNo=%@ segIdx=%lu",
                       self.messageModel.clientMsgNo, (unsigned long)i);
+#endif
                 return;
             }
             hitSegIdx = (NSInteger)i;
@@ -2768,6 +2776,7 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     // 高亮覆盖整段；首次进入时还会顺手把每段的 origAttrText 快照写到 selectionOrigAttrTexts。
     [self wk_applyMultiSegmentHighlight];
 
+#if DEBUG
     NSLog(@"[SelDebug][start] msgNo=%@ hitHost=%@ hitSegIdx=%ld hitTextLen=%lu range=(%ld,%lu)→(%ld,%lu) bubble=%@ cellH=%.1f segCount=%lu",
           self.messageModel.clientMsgNo, hostKind, (long)hitSegIdx,
           (unsigned long)textLen,
@@ -2793,6 +2802,7 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
               (unsigned long)h.layoutManager.numberOfGlyphs,
               NSStringFromCGSize(h.textContainer.size));
     }];
+#endif
 
     // ── 4) 创建句柄 / KVO / window tap / nav 屏蔽 / 通知 ──
     __weak typeof(self) weakSelf = self;
@@ -2926,11 +2936,13 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     self.selectionTextHosts[@(idx)] = overlay;
     [self wk_logLayerStateForHost:overlay idx:idx tag:@"ensureHost-immediate"];
     [self wk_scheduleDeferredLayerCheckForHost:overlay idx:idx tag:@"ensureHost-50ms"];
+#if DEBUG
     NSLog(@"[SelDebug][ensureHost] idx=%ld kind=overlay labelFrame=%@ overlayFrame=%@ attrLen=%lu containerSize=%@ glyphCount=%lu",
           (long)idx, NSStringFromCGRect(label.frame), NSStringFromCGRect(overlay.frame),
           (unsigned long)overlay.attributedText.length,
           NSStringFromCGSize(overlay.textContainer.size),
           (unsigned long)overlay.layoutManager.numberOfGlyphs);
+#endif
     return overlay;
 }
 
@@ -3015,6 +3027,7 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
 }
 
 -(void) wk_logLayerStateForHost:(UITextView*)host idx:(NSInteger)idx tag:(NSString*)tag {
+#if DEBUG
     if (!host) return;
     NSMutableArray *subInfo = [NSMutableArray array];
     for (UIView *sub in host.subviews) {
@@ -3028,6 +3041,7 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
           NSStringFromCGRect(host.bounds),
           [self wk_describeLayer:host.layer depth:0],
           [subInfo componentsJoinedByString:@" || "]);
+#endif
 }
 
 // 50ms 后再读一次同样的字段。如果 immediate 时 contents=nil，deferred 时变 YES，
@@ -3176,6 +3190,7 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
 -(void) endInBubbleTextSelection {
     if (![self wk_isInSelectionMode]) return;
 
+#if DEBUG
     NSLog(@"[SelDebug][end] msgNo=%@ hostsCount=%lu range=(%ld,%lu)→(%ld,%lu) bubble=%@ cellH=%.1f",
           self.messageModel.clientMsgNo,
           (unsigned long)self.selectionTextHosts.count,
@@ -3183,6 +3198,7 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
           (long)self.selectionEndSegIdx, (unsigned long)self.selectionEndOffset,
           NSStringFromCGRect(self.bubbleBackgroundView.frame),
           self.frame.size.height);
+#endif
 
     // 1) 移除句柄
     WKSelectionHandle *sh = objc_getAssociatedObject(self, &kSelStartHandleKey);
@@ -3359,9 +3375,11 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
                           (unsigned long)host.layoutManager.numberOfGlyphs]];
     }
 
+#if DEBUG
     NSLog(@"[SelDebug][hl] spans=[%@] cleared=%@",
           [spans componentsJoinedByString:@" | "],
           cleared);
+#endif
 }
 
 // 双端句柄定位：start handle 在 startSegIdx 的 host 上，end handle 在 endSegIdx 上。
@@ -3421,12 +3439,14 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     }
     [self wk_normalizeSelectionRange];
 
+#if DEBUG
     NSLog(@"[SelDebug][drag] isStart=%d (%ld,%lu)→(%ld,%lu) anchor=%d range=(%ld,%lu)..(%ld,%lu)",
           isStart, (long)fromSeg, (unsigned long)fromOff,
           (long)targetSeg, (unsigned long)targetOff,
           (int)self.selectionAnchorIsStart,
           (long)self.selectionStartSegIdx, (unsigned long)self.selectionStartOffset,
           (long)self.selectionEndSegIdx, (unsigned long)self.selectionEndOffset);
+#endif
 
     [self wk_applyMultiSegmentHighlight];
     [self wk_updateHandlePositions];
@@ -3567,15 +3587,19 @@ static const NSInteger kSelectionPopupTag = 0x574B5350;
         if (fullyAligned && sIdx >= 0 && sIdx < (NSInteger)segments.count) {
             NSDictionary *seg = segments[sIdx];
             if ([seg[@"type"] isEqualToString:@"text"]) {
+#if DEBUG
                 NSLog(@"[SelDebug][copy] seg%ld(text:raw len=%lu)", (long)sIdx, (unsigned long)((NSString*)seg[@"content"]).length);
+#endif
                 return seg[@"content"] ?: @"";
             }
         }
         // 部分选 → 渲染版子串
         if (startHost && eOff <= startHostLen && eOff >= sOff) {
             NSString *out = [startHost.text substringWithRange:NSMakeRange(sOff, eOff - sOff)];
+#if DEBUG
             NSLog(@"[SelDebug][copy] seg%ld(text:rendered:[%lu..%lu] len=%lu)",
                   (long)sIdx, (unsigned long)sOff, (unsigned long)eOff, (unsigned long)out.length);
+#endif
             return out;
         }
         return @"";
@@ -3626,7 +3650,9 @@ static const NSInteger kSelectionPopupTag = 0x574B5350;
     }
 
     NSString *result = [parts componentsJoinedByString:@"\n\n"];
+#if DEBUG
     NSLog(@"[SelDebug][copy] %@ → totalLen=%lu", [trace componentsJoinedByString:@"+"], (unsigned long)result.length);
+#endif
     return result;
 }
 
@@ -3663,9 +3689,11 @@ static const NSInteger kSelectionPopupTag = 0x574B5350;
             @"action": ^{
                 if (capturedCopyText.length > 0) {
                     [[UIPasteboard generalPasteboard] setString:capturedCopyText];
+#if DEBUG
                     NSLog(@"[CopyDebug] in-bubble copy v2: len=%lu first120=%@",
                           (unsigned long)capturedCopyText.length,
                           [capturedCopyText substringToIndex:MIN(120UL, capturedCopyText.length)]);
+#endif
                 }
             }
         }];

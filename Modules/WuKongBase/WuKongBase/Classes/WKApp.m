@@ -1463,9 +1463,11 @@ static WKApp *_instance;
             }
             UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
             pasteboard.string = newContent;
+#if DEBUG
             NSLog(@"[CopyDebug] long-press copy: contentType=%ld len=%lu first120=%@",
                   (long)message.contentType, (unsigned long)newContent.length,
                   [newContent substringToIndex:MIN(120UL, newContent.length)]);
+#endif
             UIView *topView = [WKNavigationManager shared].topViewController.view;
             [topView showHUDWithHide:LLangW(@"已复制", weakSelf)];
         }];

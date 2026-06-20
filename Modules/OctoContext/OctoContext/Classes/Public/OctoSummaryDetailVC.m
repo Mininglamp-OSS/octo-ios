@@ -905,7 +905,11 @@
                 apply();
             }];
         } else {
-            dispatch_async(dispatch_get_main_queue(), apply);
+            // 没有 coordinator (sheet 稳态展开 / 即将完成的过渡): 退一步, 100ms 后再轮询。
+            // 不要用 dispatch_async 一拍重投——sheet 一直开着时 shouldDeferLayoutWork 永远 YES,
+            // 会形成每个 runloop 周期都在 main queue 投递的轻量轮询, 持续耗 CPU/电。
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), apply);
         }
         return;
     }
@@ -957,15 +961,18 @@
     return nil;
 }
 
-/// 过渡期间不发起 JS 评估; dispatch_async 把"再试一次"挂到主队列。下次执行时若
-/// 仍处于过渡, 继续 defer; 直到 shouldDeferLayoutWork == NO 才真正 apply。
-/// 用 scrollView.contentSize 同步取高度 (WebKit 内部 layout 大概率已完成),
-/// 避免反复发 JS, 也消掉了 evaluateJavaScript 与 main runloop 的耦合。
+/// 过渡期间不发起 JS 评估; 100ms 后再来一次, 避免裸 dispatch_async 把"再试一次"
+/// 投到下一个 runloop 周期——sheet 长开 / VC 离屏期间 shouldDeferLayoutWork 一直 YES,
+/// 那种粒度的重投会变成每帧轮询。下次执行时若仍处于过渡, 继续 defer; 直到
+/// shouldDeferLayoutWork == NO 才真正 apply。用 scrollView.contentSize 同步取高度
+/// (WebKit 内部 layout 大概率已完成), 避免反复发 JS, 也消掉了 evaluateJavaScript
+/// 与 main runloop 的耦合。
 - (void)deferWebviewHeightSync:(WKWebView *)wv {
     if (!wv) return;
     __weak typeof(self) ws = self;
     __weak WKWebView *wweb = wv;
-    dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
         typeof(ws) strong = ws;
         if (!strong) return;
         WKWebView *wv2 = wweb;
