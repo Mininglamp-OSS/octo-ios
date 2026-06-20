@@ -121,13 +121,22 @@
     __weak typeof(self) weakSelf = self;
     [self.viewModel joinSpace:pendingCode].then(^(id result) {
         [weakSelf.view switchHUDSuccess:LLang(@"已加入空间")];
+        // 抽 joinSpace API response 的 space_id, 让 checkSpaces 命中刚加入的空间, 避免
+        // pickJoinedSpace 的 preferred 快照拽回旧空间 (lml2468 facet A)。
+        NSString *joinedHint = nil;
+        if ([result isKindOfClass:[NSDictionary class]]) {
+            id sid = ((NSDictionary*)result)[@"space_id"];
+            if ([sid isKindOfClass:[NSString class]] && ((NSString*)sid).length > 0) {
+                joinedHint = sid;
+            }
+        }
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [weakSelf checkSpaces];
+            [weakSelf checkSpacesWithJoinedHint:joinedHint];
         });
     }).catch(^(NSError *error) {
         NSString *msg = error.domain ?: @"";
         if ([msg containsString:@"已加入"] || [msg containsString:@"ALREADY_JOINED"] || [msg containsString:@"already"]) {
-            // 已在空间中，直接检查空间并进入
+            // 已在空间中，直接检查空间并进入 (无 join 响应, 走原 picker 兜底)
             [weakSelf.view switchHUDSuccess:LLang(@"已在该空间中")];
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 [weakSelf checkSpaces];
@@ -140,6 +149,13 @@
 }
 
 - (void)checkSpaces {
+    [self checkSpacesWithJoinedHint:nil];
+}
+
+/// 入参 joinedSpaceIdHint 来自 \`joinSpace\` API 响应的 space_id —— 邀请加入路径必须传,
+/// 否则 pickJoinedSpace 的 preferred (上次空间快照) 会赢过本次刚加入的新空间, 用户被
+/// 路回旧空间。与 WKLoginModule.m:128-152 同款逻辑。
+- (void)checkSpacesWithJoinedHint:(NSString *)joinedSpaceIdHint {
     __weak typeof(self) weakSelf = self;
     [self.view showHUD:LLang(@"检查中...")];
 
@@ -147,11 +163,26 @@
         [weakSelf.view hideHud];
         NSLog(@"✅ getMySpaces response: %@", spaces);
         if(spaces && spaces.count > 0) {
-            // R4 fix: 与 LoginVC / LoginPhoneCheckVC / RegisterNextVC 等其它登录入口对齐,
-            // 统一走 pickJoinedSpace —— 历史上这里取 spaces.lastObject 不查 role, 命中 role=0
-            // 非成员空间会让后续 IM/conversation 接口全 403。pickJoinedSpace 内部逻辑:
-            // 优先快照 (preferred)、否则 role>0 fallback。
-            NSDictionary *picked = [WKSpaceGateVM pickJoinedSpace:spaces];
+            // R10 fix (lml2468 facet A): 邀请加入新空间后, 优先用 joinSpace API 返回的
+            // space_id 命中, 避免 pickJoinedSpace 的 preferred 快照拽回旧空间。
+            NSDictionary *picked = nil;
+            if (joinedSpaceIdHint.length > 0) {
+                for (id item in spaces) {
+                    if (![item isKindOfClass:[NSDictionary class]]) continue;
+                    NSDictionary *s = (NSDictionary*)item;
+                    if ([s[@"space_id"] isEqualToString:joinedSpaceIdHint]) {
+                        picked = s;
+                        break;
+                    }
+                }
+            }
+            if (!picked) {
+                // 与 LoginVC / LoginPhoneCheckVC / RegisterNextVC 等其它登录入口对齐,
+                // 统一走 pickJoinedSpace —— 历史上这里取 spaces.lastObject 不查 role, 命中 role=0
+                // 非成员空间会让后续 IM/conversation 接口全 403。pickJoinedSpace 内部逻辑:
+                // 优先快照 (preferred)、否则 role>0 fallback、再不命中退到 role>=0 任一成员。
+                picked = [WKSpaceGateVM pickJoinedSpace:spaces];
+            }
             NSString *spaceId = [weakSelf extractSpaceId:picked];
             if(spaceId && spaceId.length > 0) {
                 [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
@@ -371,8 +402,16 @@
     __weak typeof(self) weakSelf = self;
     [self.viewModel joinSpace:inviteCode].then(^(id result){
         [weakSelf.view switchHUDSuccess:LLang(@"已加入 Space")];
+        // 抽 joinSpace API response 的 space_id, 命中刚加入的空间避免 preferred 拽回旧。
+        NSString *joinedHint = nil;
+        if ([result isKindOfClass:[NSDictionary class]]) {
+            id sid = ((NSDictionary*)result)[@"space_id"];
+            if ([sid isKindOfClass:[NSString class]] && ((NSString*)sid).length > 0) {
+                joinedHint = sid;
+            }
+        }
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [weakSelf checkSpaces];
+            [weakSelf checkSpacesWithJoinedHint:joinedHint];
         });
     }).catch(^(NSError *error){
         weakSelf.isJoining = NO;
