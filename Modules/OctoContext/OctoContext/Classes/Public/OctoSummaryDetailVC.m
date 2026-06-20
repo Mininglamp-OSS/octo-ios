@@ -81,6 +81,11 @@
 @property(nonatomic, strong) UIButton *footerEditBtn;
 @end
 
+// disarmTableWebviews / rearmTableWebviewsIfNeeded 共用同一个 associated-object key。
+// 之前定义在 disarmTableWebviews 函数内 (function-static) → 仅本函数可见, 别处只能各自
+// 声明同名静态, 但地址互异, 关联标记跨函数对不上。提到文件级 static 后两处一致。
+static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
+
 @implementation OctoSummaryDetailVC
 
 - (void)viewDidLoad {
@@ -203,9 +208,31 @@
     // 取消右滑 pop 回到详情页时, 恢复 detaching=NO 让后续 webview 高度回填等异步
     // 链路重新生效。第一次进入时也会走这里, 不影响初始 NO。
     self.contentDetaching = NO;
+    // R6 fix (Jerry-Xin / lml2468): 取消右滑场景。viewWillDisappear 在右滑刚开始就跑过
+    // 一次 disarm (那时 isMovingFromParentViewController 已 YES), 用户中途松手取消
+    // → viewDidDisappear 不 fire (viewDidDisappear 加的 trulyLeaving 闸救不到这条)
+    // → webview 永久 disarmed (delegate=nil + 关联标记), octo-cit:// 引用点击 +
+    // didFinishNavigation 高度回填都失效, 直到 pop+push 整页才恢复。viewWillAppear
+    // 这里 re-arm: 重设 navigationDelegate + 清关联标记 (与 disarmTableWebviews 互逆)。
+    [self rearmTableWebviewsIfNeeded];
     // webview 是否已稳定, 决定右滑手势开关。pendingTableWebviews 由 makeTableSegment
     // 加入 / applyWebviewHeight 完成时移除, 这里基于当前集合状态同步一次。
     [self syncInteractivePopGestureWithWebviewState];
+}
+
+/// 取消右滑后 viewWillAppear 调用, 与 disarmTableWebviews 配对。idempotent: 没 disarm
+/// 过的 webview 跳过, 避免重置已经在工作中的 delegate。
+- (void)rearmTableWebviewsIfNeeded {
+    for (UIView *seg in self.contentSegments) {
+        if (![seg isKindOfClass:[WKWebView class]]) continue;
+        WKWebView *wv = (WKWebView *)seg;
+        if (![objc_getAssociatedObject(wv, kOctoWebviewDisarmedKey) boolValue]) continue;
+        // 注: 不再 reload —— 已渲染的 HTML 内容仍有效 (UIWebContentProcess 还活)。我们要恢复的
+        // 是 delegate 路径 (octo-cit:// hooks + didFinishNavigation 的 evalJS 高度回填),
+        // 不是重新载入。
+        objc_setAssociatedObject(wv, kOctoWebviewDisarmedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        wv.navigationDelegate = self;
+    }
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -311,7 +338,6 @@
         // dealloc, 还有 clearContentSegments 等) 是常态。重复 stopLoading 在新版
         // iOS 容忍, 但老版本 (iOS 14/15) 会累积无效 IPC; 而且第二次以后再走
         // delegate=nil 已经是 nil → nil 也无意义。associated object 打标后跳过。
-        static const void *kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
         if ([objc_getAssociatedObject(wv, kOctoWebviewDisarmedKey) boolValue]) continue;
         objc_setAssociatedObject(wv, kOctoWebviewDisarmedKey, @YES,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
