@@ -1267,19 +1267,33 @@ CGFloat itemSpace = 10.0f;
             dispatch_async(dispatch_get_main_queue(), ^{
                 __strong typeof(weakSelf) self_ = weakSelf;
                 if (!self_) return;
-                BOOL canRestoreText = (self_.textView.text.length == 0);
-                BOOL canRestoreImages = ([self_ pendingImageCount] == 0);
-                if (canRestoreText) {
-                    [self_.textView setText:captionRaw];
+                // R6 fix (Jerry-Xin): upload 失败发生在 send-to-DB 之前 (sendRichTextMixedImages
+                // 先把图片传完才装配 RichText 落 sendMessage), 失败的内容**不会以失败 bubble 形式
+                // 留在聊天里** —— onFailure 是唯一恢复路径。旧逻辑 "slot 空才覆盖, 否则跳过"
+                // 在用户已开始新草稿时彻底丢老 caption + 图片。改 "合并" 语义:
+                //   text: slot 空 → 写回; 非空 → captionRaw 前置 + 双换行分隔, 用户能看到老内容回滚
+                //   images: slot 空 → 写回; 非空 → appendImageDatas 自带容量守 (上限 9, 超出自截)
+                // 这样无论用户当前草稿状态, 失败的内容都不静默丢失。
+                NSString *currentText = self_.textView.text ?: @"";
+                BOOL textOverwriteOnly = (currentText.length == 0);
+                BOOL imagesOverwriteOnly = ([self_ pendingImageCount] == 0);
+                if (textOverwriteOnly) {
+                    [self_.textView setText:captionRaw ?: @""];
+                } else if (captionRaw.length > 0) {
+                    [self_.textView setText:[NSString stringWithFormat:@"%@\n\n%@", captionRaw, currentText]];
                 }
-                if (canRestoreImages) {
+                if (imagesOverwriteOnly) {
                     [self_.pendingImageBar setImageDatas:images];
+                } else if (images.count > 0) {
+                    [self_.pendingImageBar appendImageDatas:images];
                 }
                 [self_ handleTextViewContentDidChange];
                 [self_ animateInputPanelChange];
-                if (!canRestoreText || !canRestoreImages) {
+                // 干净覆盖路径不打 HUD (用户没察觉 send 触发, 这条草稿状态恢复了即可)。
+                // 合并路径必须告知, 否则用户看到草稿"自动变长"会困惑。
+                if (!textOverwriteOnly || !imagesOverwriteOnly) {
                     [[WKNavigationManager shared].topViewController.view
-                        showHUDWithHide:LLang(@"发送失败,内容已保留")];
+                        showHUDWithHide:LLang(@"发送失败,内容已合并到当前草稿")];
                 }
             });
         }];
