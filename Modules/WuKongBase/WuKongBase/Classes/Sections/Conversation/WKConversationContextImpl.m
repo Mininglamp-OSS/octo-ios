@@ -946,13 +946,19 @@
 
     __weak typeof(self) weakSelf = self;
 
+#if DEBUG
     NSLog(@"[Mention] getMentionUserList channel=%@/%d keyword=%@", self.channel.channelId, self.channel.channelType, keyword);
+#endif
     [[WKGroupManager shared] searchMembers:self.channel keyword:keyword limit:10000 complete:^(WKChannelMemberCacheType cacheType, NSArray<WKChannelMember *> * _Nonnull members) {
+#if DEBUG
         NSLog(@"[Mention] searchMembers returned %lu members, cacheType=%ld", (unsigned long)members.count, (long)cacheType);
+#endif
         WKMemberRole role =  weakSelf.conversationVM.memberRole;
 
         NSArray<WKMentionUserCellModel*>*users = [weakSelf membersToMentionUsers:members role:role keyword:keyword];
+#if DEBUG
         NSLog(@"[Mention] final mention users count=%lu", (unsigned long)users.count);
+#endif
         if(complete) {
             complete(users);
         }

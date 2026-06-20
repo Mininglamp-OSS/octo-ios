@@ -205,7 +205,9 @@ typedef NS_ENUM(NSInteger, OctoChatRowKind) {
         [visited addObject:c.channelId];
         self.displayNameCache[c.channelId] = [self resolveDisplayNameForCitation:c];
     }
+#if DEBUG
     NSLog(@"[OctoRelatedChatSheet] displayNameCache built: %@", self.displayNameCache);
+#endif
 }
 
 /// citation 顶部标题 / channel chip 显示名解析。viewDidLoad 跑一次, 结果缓存。

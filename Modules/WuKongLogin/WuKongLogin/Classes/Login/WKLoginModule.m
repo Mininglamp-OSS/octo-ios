@@ -122,12 +122,35 @@
 
     [vm joinSpace:inviteCode].then(^(id result) {
         [keyWindow switchHUDSuccess:LLang(@"已成功加入空间")];
+        // R4 fix (Jerry): 抽 joinSpace API 返回的 space_id 当 just-joined intent。pickJoinedSpace
+        // 的 preferred (= 上次空间快照) 在用户已登录、已有 currentSpaceId 时会赢过本次刚加入的
+        // 新空间, 用户被邀请加入后却被路回旧空间。优先用 API 返回的 space_id, 没拿到再回退原 picker。
+        NSString *joinedSpaceIdHint = nil;
+        if ([result isKindOfClass:[NSDictionary class]]) {
+            id sid = ((NSDictionary*)result)[@"space_id"];
+            if ([sid isKindOfClass:[NSString class]] && ((NSString*)sid).length > 0) {
+                joinedSpaceIdHint = sid;
+            }
+        }
         // 获取空间列表并切换到新空间
         [vm getMySpaces].then(^(NSArray *spaces) {
             // 仅在 role>0 的成员 Space 里挑。joinSpace 成功后用户必定是新加入
             // 空间的成员，所以应能命中；命中不到说明服务端列表还没刷新，保持
             // 当前 currentSpaceId 不动即可。
-            NSDictionary *joinedSpace = [WKSpaceGateVM pickJoinedSpace:spaces];
+            NSDictionary *joinedSpace = nil;
+            if (joinedSpaceIdHint.length > 0 && [spaces isKindOfClass:[NSArray class]]) {
+                for (id item in spaces) {
+                    if (![item isKindOfClass:[NSDictionary class]]) continue;
+                    NSDictionary *s = (NSDictionary*)item;
+                    if ([s[@"space_id"] isEqualToString:joinedSpaceIdHint]) {
+                        joinedSpace = s;
+                        break;
+                    }
+                }
+            }
+            if (!joinedSpace) {
+                joinedSpace = [WKSpaceGateVM pickJoinedSpace:spaces];
+            }
             if (joinedSpace) {
                 NSString *spaceId = joinedSpace[@"space_id"];
                 NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];

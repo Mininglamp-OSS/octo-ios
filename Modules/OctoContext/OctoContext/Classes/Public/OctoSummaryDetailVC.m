@@ -254,6 +254,12 @@
 
 - (void)viewDidDisappear:(BOOL)animated {
     [super viewDidDisappear:animated];
+    // R4 fix (yujiawei #1): 与 viewWillDisappear 对称的 pop-only 闸. push 子页 (转发 / 查看
+    // 确认状态等) 让本 VC 暂时被覆盖时, viewDidDisappear 也不能 disarm webview, 否则
+    // pop-back 后 octo-cit:// citation 点击失效 + 表格高度不回填 (viewWillAppear 不 re-arm)。
+    // viewWillDisappear 已经在真离场时 disarm 过, 这里只是早一拍重复, 不漏路径。
+    BOOL trulyLeaving = self.isMovingFromParentViewController || self.isBeingDismissed;
+    if (!trulyLeaving) return;
     // 真的 pop 走了: 彻底清掉, dealloc 兜底, 但这里更早一拍。所有清理路径全做幂等
     // 处理 (disarm 用 associated object 标记 / pendingTableWebviews removeAllObjects /
     // restore 检 disabledInteractivePopForTable 标志), 重复调用安全。

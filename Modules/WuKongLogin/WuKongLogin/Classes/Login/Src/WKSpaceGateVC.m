@@ -147,8 +147,12 @@
         [weakSelf.view hideHud];
         NSLog(@"✅ getMySpaces response: %@", spaces);
         if(spaces && spaces.count > 0) {
-            NSDictionary *lastSpace = spaces.lastObject;
-            NSString *spaceId = [weakSelf extractSpaceId:lastSpace];
+            // R4 fix: 与 LoginVC / LoginPhoneCheckVC / RegisterNextVC 等其它登录入口对齐,
+            // 统一走 pickJoinedSpace —— 历史上这里取 spaces.lastObject 不查 role, 命中 role=0
+            // 非成员空间会让后续 IM/conversation 接口全 403。pickJoinedSpace 内部逻辑:
+            // 优先快照 (preferred)、否则 role>0 fallback。
+            NSDictionary *picked = [WKSpaceGateVM pickJoinedSpace:spaces];
+            NSString *spaceId = [weakSelf extractSpaceId:picked];
             if(spaceId && spaceId.length > 0) {
                 [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
                 [[NSUserDefaults standardUserDefaults] synchronize];

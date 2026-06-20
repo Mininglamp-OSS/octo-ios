@@ -806,22 +806,30 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                 if (message.remoteExtra.contentEdit) {
                     entities = message.remoteExtra.contentEdit.entities;
                 }
+#if DEBUG
                 NSLog(@"[Mention] markdown路径: msgNo=%@ entities=%lu rawLen=%lu mdLen=%lu",
                       message.clientMsgNo, (unsigned long)(entities ? entities.count : 0),
                       (unsigned long)content.length, (unsigned long)mdMutable.string.length);
+#endif
                 if (entities) {
                     NSString *renderedText = mdMutable.string;
                     NSMutableIndexSet *usedRanges = [NSMutableIndexSet indexSet];
                     for (WKMessageEntity *entity in entities) {
+#if DEBUG
                         NSLog(@"[Mention]   entity: type=%@ range=(%lu,%lu) value=%@",
                               entity.type, (unsigned long)entity.range.location, (unsigned long)entity.range.length, entity.value ?: @"(nil)");
+#endif
                         if (![entity.type isEqualToString:WKMentionRichTextStyle]) {
+#if DEBUG
                             NSLog(@"[Mention]     → 跳过(非mention类型)");
+#endif
                             continue;
                         }
                         if (entity.range.location + entity.range.length > content.length) {
+#if DEBUG
                             NSLog(@"[Mention]     → 跳过(range越界: %lu+%lu > %lu)",
                                   (unsigned long)entity.range.location, (unsigned long)entity.range.length, (unsigned long)content.length);
+#endif
                             continue;
                         }
                         NSString *mentionText = [content substringWithRange:entity.range];
@@ -829,7 +837,9 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                             mentionText = [mentionText substringToIndex:mentionText.length - 1];
                         }
                         if (![mentionText hasPrefix:@"@"]) {
+#if DEBUG
                             NSLog(@"[Mention]     → 跳过(非@开头: \"%@\")", mentionText);
+#endif
                             continue;
                         }
                         // 在渲染后的文本中查找这段 @xxx（跳过已使用的位置，避免重复匹配）
@@ -853,9 +863,12 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                             UIColor *mentionColor = message.isSend ? [UIColor whiteColor] : [WKApp shared].config.themeColor;
                             [mdMutable addAttribute:NSForegroundColorAttributeName value:mentionColor range:foundRange];
                             [mdMutable addAttribute:NSUnderlineStyleAttributeName value:@1 range:foundRange];
+#if DEBUG
                             NSLog(@"[Mention]     ✅ 找到: \"%@\" → rendered位置(%lu,%lu) uid=%@",
                                   mentionText, (unsigned long)foundRange.location, (unsigned long)foundRange.length, entity.value ?: @"");
+#endif
                         } else {
+#if DEBUG
                             NSLog(@"[Mention]     ❌ 未找到: \"%@\" 在rendered文本中不存在", mentionText);
                             // 打印渲染文本中所有包含@的位置，帮助排查
                             NSRange atRange = [renderedText rangeOfString:@"@"];
@@ -864,10 +877,13 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                                 NSUInteger end = MIN(start + 20, renderedText.length);
                                 NSLog(@"[Mention]       rendered文本中@附近: \"%@\"", [renderedText substringWithRange:NSMakeRange(start, end - start)]);
                             }
+#endif
                         }
                     }
                 } else {
+#if DEBUG
                     NSLog(@"[Mention]   无entities");
+#endif
                 }
 
                 // 三态 mention：广播 token（@所有人 / @所有AI / @all）在 markdown 渲染后的文本中高亮
@@ -1007,10 +1023,12 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                 if (t.type == WKatchTokenTypeMetion) mentionCount++;
             }
             if ([textForRender containsString:@"@"]) {
+#if DEBUG
                 NSLog(@"[Mention] 非markdown路径: msgNo=%@ entityMentions=%lu autoMentions=%lu totalMentions=%ld text前30=\"%@\"",
                       message.clientMsgNo,
                       (unsigned long)entityTokens.count, (unsigned long)autoMentionTokens.count, (long)mentionCount,
                       textForRender.length > 30 ? [textForRender substringToIndex:30] : textForRender);
+#endif
             }
         }
 
