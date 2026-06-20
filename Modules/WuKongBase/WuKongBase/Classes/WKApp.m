@@ -1451,13 +1451,21 @@ static WKApp *_instance;
                 newContent = plainText.length > 0 ? plainText : (((WKRichTextContent*)message.content).plain ?: @"");
             } else {
                 WKTextContent *textConent =  (WKTextContent*)message.content;
-                NSRegularExpression *regularExpretion=[NSRegularExpression regularExpressionWithPattern:@"<[^>]*>|\n"
+                // 仅剥 HTML 标签，保留换行 ——
+                // 历史正则 @"<[^>]*>|\n" 把 \n 也吃掉，markdown（# 标题 / 表格 /
+                // 列表 / 引用块）都依赖行首和块间空行，没了 \n 之后内容塌成单行
+                // 粘贴发送，接收端 containsMarkdown: 启发式（^#{1,3} 、^\\|.*\\|$
+                // 等行首正则）全部失配，渲染成纯文本。
+                NSRegularExpression *regularExpretion=[NSRegularExpression regularExpressionWithPattern:@"<[^>]*>"
                                                         options:0
                                                          error:nil];
                 newContent=[regularExpretion stringByReplacingMatchesInString:textConent.content options:NSMatchingReportProgress range:NSMakeRange(0, textConent.content.length) withTemplate:@""];
             }
             UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
             pasteboard.string = newContent;
+            NSLog(@"[CopyDebug] long-press copy: contentType=%ld len=%lu first120=%@",
+                  (long)message.contentType, (unsigned long)newContent.length,
+                  [newContent substringToIndex:MIN(120UL, newContent.length)]);
             UIView *topView = [WKNavigationManager shared].topViewController.view;
             [topView showHUDWithHide:LLangW(@"已复制", weakSelf)];
         }];

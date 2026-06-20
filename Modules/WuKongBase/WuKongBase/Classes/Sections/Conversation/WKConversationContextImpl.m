@@ -91,6 +91,10 @@
 -(void) inputTextToSend {
     NSString *text = self.conversationView.input.textView.text;
     [self.conversationView.input inputSetText:@""];
+    NSLog(@"[CopyDebug] inputTextToSend len=%lu first120=%@ hasNewline=%d",
+          (unsigned long)text.length,
+          [text substringToIndex:MIN(120UL, text.length)],
+          [text rangeOfString:@"\n"].location != NSNotFound);
     [self sendTextMessage:text];
 }
 

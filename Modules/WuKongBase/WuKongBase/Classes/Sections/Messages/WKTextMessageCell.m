@@ -82,6 +82,14 @@
 // 让现有的句柄/拖拽/菜单 几何代码直接复用。end 时 removeFromSuperview 但保留实例
 // 给下次复用，避免反复 alloc。
 @property(nonatomic,strong) WKMessageTextView *selectionOverlayTextView;
+// 激活段的 raw markdown 源码（来自 splitContentSegments 中对应段的 content）。
+// host UITextView 的 .text 是 cmark 渲染后剥光语法字符的明文，复制粘贴会丢失
+// markdown 标记导致接收端 containsMarkdown: 失配，所以「全选」复制时改走这条
+// 原始字符串，保证粘贴回输入框再发送时 markdown 仍可渲染。
+// 部分选区由于无法把渲染版 char index 映射回 raw markdown 源（cmark 解析 AST
+// 后没有保留位置映射），仍走 host.text 子串路径 —— v1 限制，v2 跨段连选时
+// 同步重做这个映射。
+@property(nonatomic,copy) NSString *activeSelectionRawContent;
 
 // ---------- 链接卡片 ----------
 @property(nonatomic,strong) UIView *linkCardView;
@@ -723,7 +731,12 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
 
     BOOL useMarkdown = NO;
     if (![textContent.format isEqualToString:@"html"]) {
-        if (renderContent.length > 0 && (mathSegments != nil || [WKMarkdownRenderer containsMarkdown:renderContent])) {
+        BOOL containsMd = [WKMarkdownRenderer containsMarkdown:renderContent];
+        NSLog(@"[CopyDebug] render decision msgNo=%@ format=%@ contentLen=%lu containsMd=%d hasMath=%d first120=%@",
+              message.clientMsgNo, textContent.format ?: @"(nil)",
+              (unsigned long)renderContent.length, containsMd, mathSegments != nil,
+              [renderContent substringToIndex:MIN(120UL, renderContent.length)]);
+        if (renderContent.length > 0 && (mathSegments != nil || containsMd)) {
             UIColor *textColor = message.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
             NSString *colorHex = [textColor toHexRGB];
             NSAttributedString *mdAttr = nil;
@@ -2681,6 +2694,31 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     self.activeSelectionTextView = host;
     self.activeSelectionUnderlyingLabel = underlying;
 
+    // 取激活段的 raw markdown 源码 ——
+    // host.text 是 cmark 渲染后剥光语法的明文（# / ** / |...| 都没了），
+    // 用户全选→复制→粘到输入框→发送，新消息正文里没有任何 markdown 标记，
+    // 接收端 containsMarkdown: 启发式失配，直接当纯文本渲染（v1 已知问题）。
+    // 解法：start 时按 hitSegIdx 从 splitContentSegments 拿到该段原始 raw 串
+    // （segmentViews[i] 与 splitContentSegments[i] 一一对应，refresh: 时按顺
+    // 序构建），在「全选」复制路径里改用 raw。部分选区由于 cmark AST 没保留
+    // rendered char index → raw source 位置映射，仍走 host.text 子串路径，
+    // markdown 会丢失，是 v1 的明确限制。
+    NSString *rawSegContent = nil;
+    if (hasSegments && hitSegIdx >= 0) {
+        NSString *raw = [[self class] getRawContent:self.messageModel];
+        NSArray *segments = [WKMarkdownRenderer splitContentSegments:raw];
+        if ((NSUInteger)hitSegIdx < segments.count) {
+            NSDictionary *seg = segments[hitSegIdx];
+            if ([seg[@"type"] isEqualToString:@"text"]) {
+                rawSegContent = seg[@"content"];
+            }
+        }
+    } else if (!hasSegments) {
+        // 单段（无表格）cell：整条消息的 raw content 就是这一段
+        rawSegContent = [[self class] getRawContent:self.messageModel];
+    }
+    self.activeSelectionRawContent = rawSegContent;
+
     // ── 2) visible area 检查：宿主完全在屏外不进选区 ──
     UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
     CGFloat bottomMargin = 80.0f + window.safeAreaInsets.bottom;
@@ -2693,6 +2731,7 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
         if (host == self.selectionOverlayTextView) [self.selectionOverlayTextView removeFromSuperview];
         self.activeSelectionTextView = nil;
         self.activeSelectionUnderlyingLabel = nil;
+        self.activeSelectionRawContent = nil;
         return;
     }
 
@@ -2815,6 +2854,7 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     }
     self.activeSelectionTextView = nil;
     self.activeSelectionUnderlyingLabel = nil;
+    self.activeSelectionRawContent = nil;
 
     // 4) 移除 window tap
     UITapGestureRecognizer *tap = objc_getAssociatedObject(self, &kSelWindowTapKey);
@@ -3063,16 +3103,31 @@ static const NSInteger kSelectionPopupTag = 0x574B5350;
             }];
         }
     } else {
-        // 复制选中文字（先快照 range 和 text，因为 dismiss 会清除选区）
+        // 复制选中文字（先快照 range / 渲染版正文 / raw 源，因为 dismiss 会清除选区）
+        // 全选 → 用 raw markdown 源（保证粘到输入框再发送时 markdown 仍可渲染）
+        // 部分选区 → 用渲染版子串（cmark 没保留 rendered↔raw 位置映射，partial 映射 v1
+        //           不实现，已知限制）
         NSRange capturedRange = selRange;
         NSString *capturedText = [self.activeSelectionTextView.text copy];
+        NSString *capturedRaw = [self.activeSelectionRawContent copy];
         UIImage *copyIcon = [GenerateImageUtils generateTintedImgWithImage:[[WKApp shared] loadImage:@"Conversation/ContextMenu/Copy" moduleID:@"WuKongBase"] color:iconTintColor backgroundColor:nil];
         [btns addObject:@{
             @"title": LLang(@"复制"),
             @"icon": copyIcon ?: [NSNull null],
             @"action": ^{
-                if (capturedRange.length > 0 && NSMaxRange(capturedRange) <= capturedText.length) {
-                    [[UIPasteboard generalPasteboard] setString:[capturedText substringWithRange:capturedRange]];
+                BOOL isFullSelection = (capturedRange.location == 0 && capturedRange.length == capturedText.length);
+                NSString *output = nil;
+                if (isFullSelection && capturedRaw.length > 0) {
+                    output = capturedRaw;
+                } else if (capturedRange.length > 0 && NSMaxRange(capturedRange) <= capturedText.length) {
+                    output = [capturedText substringWithRange:capturedRange];
+                }
+                if (output) {
+                    [[UIPasteboard generalPasteboard] setString:output];
+                    NSLog(@"[CopyDebug] in-bubble copy: isFullSel=%d rawLen=%lu renderedLen=%lu outputLen=%lu first120=%@",
+                          isFullSelection, (unsigned long)capturedRaw.length,
+                          (unsigned long)capturedText.length, (unsigned long)output.length,
+                          [output substringToIndex:MIN(120UL, output.length)]);
                 }
             }
         }];
