@@ -3023,8 +3023,15 @@ static const NSInteger kMaxRehydratePages = 35;
     BOOL wasAtBottom = self.positionAtBottom;
     uint32_t gapStart = dpLastBefore.orderSeq;
     uint32_t gapEnd = live.orderSeq;
-    int limit = (int)[WKApp shared].config.eachPageMsgLimit;
-    if (limit <= 0) limit = 30;
+    // R4 nit (Octo-Q P1): 限额按 gap 实际宽度拉满, 而不是固定 eachPageMsgLimit (默认 30)。
+    // 锁屏 30 分钟群很活跃可能 60+ 条, 单页 30 条会留中段永久缺口 (后续 anchor-相等
+    // 早退路径 + beginRehydrate 的 forward-only pullup 都救不回来)。上限 500 是兜底,
+    // 防止恶意大 gap (如 orderSeq 服务端跳号) 把单次拉爆 / 服务器超时; 这种极端情况
+    // 退化成单页 + 现有 beginRehydrate / pullup 多页接力,与原行为一致。
+    int defaultLimit = (int)[WKApp shared].config.eachPageMsgLimit;
+    if (defaultLimit <= 0) defaultLimit = 30;
+    uint32_t gapWidth = (gapEnd > gapStart) ? (gapEnd - gapStart) : 0;
+    int limit = MAX(defaultLimit, MIN((int)gapWidth, 500));
 
     __weak typeof(self) weakSelf = self;
     [[WKSDK shared].chatManager pullUp:self.channel
@@ -3157,9 +3164,11 @@ static const NSInteger kMaxRehydratePages = 35;
     if(!dbLastMsg) {
         return;
     }
-    // R4 fix: 标记 dirty。回前台 reconcile 时会用 (即使行数一致也强制走一次 reloadData,
-    // 治后台离屏 layout 后 willDisplayCell 不回调的空气泡)。
-    self.dirtyAfterBackground = YES;
+    // R4 nit (Octo-Q P2 #3): 仅在 app 真的不在前台时才置 dirty。foreground sync (发消息触发的
+    // sync / 在线时短重连) 也会回调本方法, 不应让下一次 become-active 多走一次 reloadData。
+    if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
+        self.dirtyAfterBackground = YES;
+    }
 
     // R4 fix: 早退条件改用 dp.lastMessage (已渲染入 dp 的实际 tail), 不用 self.lastMessage
     // (会被 handleRecvMessage 的 updateLastMsgIfNeed 提前推到 dbLastMsg, 即使中间有
