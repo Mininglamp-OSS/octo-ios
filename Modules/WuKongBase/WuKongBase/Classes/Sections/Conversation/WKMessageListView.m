@@ -3078,14 +3078,59 @@ static const NSInteger kMaxRehydratePages = 35;
         return;
     }
     WKMessageModel *model = [[WKMessageModel alloc] initWithMessage:message];
-    [self.dataProvider addMessage:model];
-    [self reloadData];
+
+    // 走增量插入而不是 reloadData。reloadData 会让所有 visible cell 经过 didEndDisplayingCell
+    // → prepareForReuse 周期；用户正在长按选区时 prepareForReuse 会 endInBubbleTextSelection，
+    // 导致选区被无端中断。增量 insertRows 只动新行所在 indexPath，其它 cell 维持原状，选区
+    // 也就不会被打断。漂移路径仍兜底走 reloadData。
+    BOOL inSyncBefore = [self isTableViewRowCountInSyncWithDataProvider];
+    if (!inSyncBefore) {
+        [self.dataProvider addMessage:model];
+        [self.tableView reloadData];
+    } else {
+        NSInteger oldSectionCount = [self.dataProvider dateCount];
+        NSInteger oldLastSectionRowCount = (oldSectionCount > 0)
+            ? [self.dataProvider messagesAtSection:oldSectionCount - 1].count : 0;
+
+        [self.dataProvider addMessage:model];
+
+        NSInteger newSectionCount = [self.dataProvider dateCount];
+        BOOL newSectionAdded = (newSectionCount > oldSectionCount);
+        NSInteger newLastSectionRowCount = (newSectionCount > 0)
+            ? [self.dataProvider messagesAtSection:newSectionCount - 1].count : 0;
+
+        if (newSectionAdded) {
+            @try {
+                [UIView performWithoutAnimation:^{
+                    [self.tableView insertSections:[NSIndexSet indexSetWithIndex:newSectionCount - 1]
+                                  withRowAnimation:UITableViewRowAnimationNone];
+                }];
+            } @catch (NSException *ex) {
+                NSLog(@"[WKMessageListView] typingAdd insertSections drift: %@, fallback reloadData", ex);
+                [self.tableView reloadData];
+            }
+        } else if (newLastSectionRowCount > oldLastSectionRowCount) {
+            NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
+            for (NSInteger row = oldLastSectionRowCount; row < newLastSectionRowCount; row++) {
+                [indexPaths addObject:[NSIndexPath indexPathForRow:row inSection:newSectionCount - 1]];
+            }
+            @try {
+                [UIView performWithoutAnimation:^{
+                    [self.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
+                }];
+            } @catch (NSException *ex) {
+                NSLog(@"[WKMessageListView] typingAdd insertRows drift: %@, fallback reloadData", ex);
+                [self.tableView reloadData];
+            }
+        }
+        // 行数不变（typing 替换同源 typing 等）则不动 tableView，dataProvider 的内部替换够了
+    }
+
     if(self.positionAtBottom) {
         [self animateMessageWithBlock:^{
             [self scrollToBottom:NO];
         }];
     }
-    
 }
 
 
