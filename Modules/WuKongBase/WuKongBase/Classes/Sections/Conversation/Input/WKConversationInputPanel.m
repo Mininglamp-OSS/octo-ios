@@ -1243,6 +1243,13 @@ CGFloat itemSpace = 10.0f;
         // textView 里输入 @ 时已通过原 mention 链路写入。
         NSArray<WKMessageEntity *> *entities = [ctx entities:captionRaw];
         WKMentionedInfo *mentionedInfo = [ctx mentionedInfo:captionRaw];
+        // 镜像 sendTextMessage 内部 [self.mentionCache clean] 的清理语义 (见
+        // WKConversationContextImpl.m:508)。本路径不走 sendTextMessage,
+        // 不清的话, "@all" 会因 WKInputMentionCache.allMentionUid: 对 name=="all"
+        // 不查 sendText 而 leak 到下一条无 @ 的文本消息, 误通知所有人。
+        if ([ctx respondsToSelector:@selector(cleanMentionCache)]) {
+            [ctx cleanMentionCache];
+        }
         // 防重入只覆盖「同步触发期」：textView/bar 在上面已经清空，调用方此时再 tap send
         // 也不会有 pending 图，hasPendingImages 自然为 NO；用户接下来选新图、打新字应当不被
         // 上一条发送阻挡（sendRichTextMixedImageDatas: 无 success 回调，等 onFailure 才

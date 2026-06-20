@@ -135,6 +135,10 @@ static NSInteger countdown; // 倒计时
                     if (joinedSpace) {
                         NSString *spaceId = joinedSpace[@"space_id"];
                         [[NSUserDefaults standardUserDefaults] setObject:spaceId forKey:@"currentSpaceId"];
+                        // 与 WKLoginVC / WKAuthWebViewVC / WKRegisterNextVC 对齐：必须 setBool:YES,
+                        // 否则 WKApp.m:524 的冷启动闸门 (currentSpaceId && spaceGateCompleted) 失败,
+                        // 用户每次冷启动都被踢回登录页。
+                        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"WKSpaceGateCompleted"];
                         [[NSUserDefaults standardUserDefaults] synchronize];
                         [[WKApp shared] invoke:WKPOINT_LOGIN_SUCCESS param:nil];
                     } else {

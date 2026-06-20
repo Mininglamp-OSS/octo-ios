@@ -122,6 +122,20 @@ static WKMoreItemClickEvent *_instance;
             if (a.mediaType != PHAssetMediaTypeImage) { allImages = NO; break; }
         }
         if (allImages) {
+            // 与 sendAlbumImageDatas: 的原子性闸门保持一致 (WKMoreItemClickEvent.m:239)：
+            // jl_compressImageSize 返回 nil 时 WKPhotoBrowser 会静默丢图, 导致
+            // images.count < assets.count。bar 桥接路径若不查这条, 后续
+            // _commitPendingWithCaption 用 images.count 当 assetCount, 原子性闸门形同虚设——
+            // 用户选了 5 张, 静默发出 4 张。和直发路径对齐: 整条可见失败、不入 bar。
+            if (images.count != assets.count) {
+                dispatch_block_t showFail = ^{
+                    [[WKNavigationManager shared].topViewController.view
+                        showHUDWithHide:LLang(@"发送失败")];
+                };
+                if ([NSThread isMainThread]) { showFail(); }
+                else { dispatch_async(dispatch_get_main_queue(), showFail); }
+                return;
+            }
             // 线程安全：selectCompressImageBlock 可能在 GIF 压缩后台线程触发，UIKit 操作必须主线程。
             dispatch_block_t pushIntoBar = ^{
                 id<WKConversationContext> ctx = weakContext;

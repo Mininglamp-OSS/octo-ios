@@ -1144,6 +1144,10 @@
     return _mentionCache;
 }
 
+-(void) cleanMentionCache {
+    [self.mentionCache clean];
+}
+
 - (BOOL)isFuncGroupZooming {
     return [self.conversationView.input isFuncGroupZooming];
 }
