@@ -69,6 +69,20 @@
 @property(nonatomic,strong) NSMutableArray<NSString*> *tableRawContents; // 表格原始 markdown 内容（供复制用）
 @property(nonatomic,assign) BOOL segmentsBuilt; // 分段视图是否已创建
 
+// ---------- 就地选区（v1：单段，命中哪段就让哪段变可选）----------
+// 选区运行时所有几何/拖拽/高亮/菜单的宿主。命中第一段文本时 = self.textLbl；
+// 命中其它 UILabel 段时 = selectionOverlayTextView（懒加载）。nil 表示未激活。
+// weak：宿主 view 由 segmentViews 强持有（textLbl 是 cell 主层级强持，overlay
+// 由 selectionOverlayTextView strong 持），这里不需要再强持。
+@property(nonatomic,weak) UITextView *activeSelectionTextView;
+// 当宿主是 overlay 时，被遮住的那个原 UILabel 段；end 时反向 unhide。
+// nil 表示宿主直接是 textLbl，不需要遮蔽。
+@property(nonatomic,weak) UILabel *activeSelectionUnderlyingLabel;
+// selection-only overlay：覆盖在某个 UILabel 段上，提供 layoutManager/textContainer
+// 让现有的句柄/拖拽/菜单 几何代码直接复用。end 时 removeFromSuperview 但保留实例
+// 给下次复用，避免反复 alloc。
+@property(nonatomic,strong) WKMessageTextView *selectionOverlayTextView;
+
 // ---------- 链接卡片 ----------
 @property(nonatomic,strong) UIView *linkCardView;
 @property(nonatomic,assign) BOOL isLinkCard;
@@ -258,6 +272,17 @@ static NSMutableDictionary *_jsTableHeights;
 -(void) invalidateSegments {
     self.segmentsBuilt = NO;
     [self clearSegmentViews];
+}
+
+// 普通 markdown（无表格）cell 走普通 reuse pool；进入选区后未关闭就被复用给
+// 另一条消息时，旧的句柄/window tap/KVO/timer/通知 会泄漏到新消息上。在这里
+// 兜底退出选区。表格 cell 用唯一 reuseIdentifier 不会被复用，但调一下 end 也
+// 是无害的。
+-(void) prepareForReuse {
+    if ([self wk_isInSelectionMode]) {
+        [self endInBubbleTextSelection];
+    }
+    [super prepareForReuse];
 }
 
 
@@ -1862,24 +1887,12 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
 
 
 -(void) layoutSubviews {
-    // 选区模式且临时切换为全文本时，跳过分段布局重算（保持手动设置的尺寸）
-    BOOL selHadSegments = [objc_getAssociatedObject(self, "kSelHadSegments") boolValue];
-    if (selHadSegments && [self wk_isInSelectionMode]) {
-        NSLog(@"[SelDebug] layoutSubviews SKIPPED (selection mode). bubble=%@ textLbl=%@ cell=%@",
-              NSStringFromCGSize(self.bubbleBackgroundView.lim_size),
-              NSStringFromCGSize(self.textLbl.lim_size),
-              NSStringFromCGSize(self.frame.size));
-        struct objc_super superSuper = { self, [UITableViewCell class] };
-        ((void(*)(struct objc_super*, SEL))objc_msgSendSuper)(&superSuper, @selector(layoutSubviews));
-        return;
-    }
-
     [super layoutSubviews];
 
     if(!self.messageModel) {
         return;
     }
-    
+
     CGFloat replyBoxBottom = 0.0f;
     
     if([[self class] hasReply:self.messageModel]) {
@@ -2028,8 +2041,13 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
     }
 
     self.securityTipLbl.hidden = YES;
-    
-   
+
+    // 选区 overlay 跟踪：选区宿主是 overlay（覆盖在某个 UILabel 段上）时，每次
+    // layoutSubviews 都把 overlay frame 同步到底层 UILabel.frame。layoutSubviews
+    // 在 segmentViews loop 里刚把所有 UILabel 摆好，这里直接 follow。
+    if (self.activeSelectionUnderlyingLabel && self.selectionOverlayTextView.superview == self.messageContentView) {
+        self.selectionOverlayTextView.frame = self.activeSelectionUnderlyingLabel.frame;
+    }
 
 }
 
@@ -2601,162 +2619,99 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     return objc_getAssociatedObject(self, &kSelStartHandleKey) != nil;
 }
 
--(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems {
+-(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems atPoint:(CGPoint)touchPoint {
     if ([self wk_isInSelectionMode]) return;
 
     self.transform = CGAffineTransformIdentity;
 
-    // 含表格的分段消息：临时切换为纯文本模式
-    BOOL hasSegments = self.segmentsBuilt && self.segmentViews.count > 1;
+    // ── 1) 决定选区宿主 activeSelectionTextView ──
+    // 设计原则：气泡渲染态全程不变（不灌 fullRawText、不撑大 bubble、不改 cellHeightCache）。
+    // 长按命中哪段就让哪段进入选区：
+    //   - 命中 textLbl（第一段文本）         → 宿主 = textLbl，无 overlay
+    //   - 命中其它 UILabel 段                → 用 selectionOverlayTextView 覆盖在
+    //                                         UILabel 上当宿主，UILabel 临时 hidden
+    //   - 命中表格 container                  → 直接 return，表格段不参与选区，
+    //                                         保留它自己工具栏上的「复制本表格」按钮
+    //   - 没命中（spacing 间隙等）            → 兜底用 textLbl
+    // 这样 cellHeightCache 永远只存一种几何值，selection 态和渲染态完全共享。
+    UITextView *host = nil;
+    UILabel *underlying = nil;
+    NSInteger hitSegIdx = -1;
+    NSString *hostKind = @"textLbl";
+
+    BOOL hasSegments = self.segmentsBuilt && self.segmentViews.count > 0;
     if (hasSegments) {
-        NSString *fullRawText = [[self class] getRawContent:self.messageModel];
-        if (fullRawText.length > 0) {
-            objc_setAssociatedObject(self, "kSelHadSegments", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            // 仅快照 bubble / messageContentView 完整 frame —— end 路径不再走 textLbl
-            // 局部恢复（UITextView TK1/TK2 切换路径下 setAttributedText 偶发不刷新
-            // textStorage，导致 textLbl 残留 fullRawText、其它 segmentViews 不可见），
-            // 改为整体 invalidateSegments + refresh: 重建。frame 快照仍保留，给 refresh:
-            // 之前先把锚位拨回 selection 之前，避免 sent 气泡（右锚）在重建中间帧
-            // 越出屏幕。
-            objc_setAssociatedObject(self, "kSelOrigBubbleFrame", [NSValue valueWithCGRect:self.bubbleBackgroundView.frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            objc_setAssociatedObject(self, "kSelOrigContentFrame", [NSValue valueWithCGRect:self.messageContentView.frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-            // 隐藏分段视图
-            for (UIView *v in self.segmentViews) {
-                if (v != self.textLbl) v.hidden = YES;
-            }
-            for (UIScrollView *o in self.tableOverlays) { o.hidden = YES; }
-
-            // 用完整文本替换 textLbl
-            self.textLbl.attributedText = nil;
-            self.textLbl.text = fullRawText;
-            self.textLbl.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
-            self.textLbl.textColor = self.messageModel.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
-            self.textLbl.hidden = NO;
-            CGSize fullSize = [self.textLbl sizeThatFits:CGSizeMake([WKApp shared].config.messageContentMaxWidth, CGFLOAT_MAX)];
-            self.textLbl.lim_size = fullSize;
-
-            // 构建与 heightForRowAtIndexPath 一致的缓存 key
-            NSInteger bubblePos = [[self class] bubblePosition:self.messageModel];
-            NSString *heightKey = [NSString stringWithFormat:@"%@-bp%ld", self.messageModel.clientMsgNo, (long)bubblePos];
-            if (self.messageModel.remoteExtra.contentEdit) {
-                heightKey = [NSString stringWithFormat:@"%@-e%lu", heightKey, (unsigned long)self.messageModel.remoteExtra.editedAt];
-            }
-
-            UIEdgeInsets contentInsets = [[self class] contentEdgeInsets:self.messageModel];
-            UIEdgeInsets bubbleInsets = [[self class] bubbleEdgeInsets:self.messageModel contentSize:fullSize];
-            CGFloat newCellHeight = fullSize.height + contentInsets.top + contentInsets.bottom + bubbleInsets.top + bubbleInsets.bottom;
-
-            NSNumber *origH = [[WKMessageListView cellHeightCache] objectForKey:heightKey];
-            // 关键决策：raw-text 高度是否大于当前渲染（含表格 JS 实测高度）的高度。
-            // 带大表格的 markdown 消息上，rendered 通常 > raw（表格 WebView 撑开很大），
-            // 老逻辑无脑把 cellHeightCache 写成 raw 高度 → cell 突然缩小一大段，
-            // tableView 在 begin/endUpdates 里产生剧烈的内容偏移（contentOffset 不动
-            // 但 contentSize 变了），用户视觉上看到「位置突跳 + 菜单显示在屏外
-            // + 卡死在选区模式」。不过 raw > rendered 的场景（短消息纯文本类）仍
-            // 然需要撑大让 textLbl 完整可见，所以这里只在「raw 比当前更大」时才
-            // 撑大；raw <= rendered 时保持几何不动，textLbl 在原 bubble 内部留空
-            // 即可，视觉无副作用。
-            BOOL needsInflate = (!origH) || (origH.floatValue + 0.5f < newCellHeight);
-            NSLog(@"[SelDebug] key=%@ origHeight=%@ newHeight=%.1f needsInflate=%d",
-                  heightKey, origH, newCellHeight, needsInflate);
-
-            objc_setAssociatedObject(self, "kSelOrigHeight", origH, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            objc_setAssociatedObject(self, "kSelHeightKey", heightKey, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            // needsInflate 让 end 路径也知道当前态：YES → 我们改了缓存 + 几何，end 必须
-            // remove 缓存键并恢复 frame；NO → 什么都没动，end 也不必清缓存（清了反而
-            // 让 heightForRow 重算一次，无效但无害）。
-            objc_setAssociatedObject(self, "kSelDidInflate", @(needsInflate), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-            if (needsInflate) {
-                [[WKMessageListView cellHeightCache] setObject:@(newCellHeight) forKey:heightKey];
-
-                // 更新气泡大小
-                self.messageContentView.lim_size = fullSize;
-                self.bubbleBackgroundView.lim_size = CGSizeMake(
-                    fullSize.width + contentInsets.left + contentInsets.right,
-                    fullSize.height + contentInsets.top + contentInsets.bottom
-                );
-            }
-            // 不论是否 inflate，textLbl 都应按 raw 文本尺寸放置（在不 inflate 的情况
-            // 下，textLbl 完整内容 < bubble 高度，下方留空，bubble 背景可见，OK）。
-
-            NSLog(@"[SelDebug] BEFORE tableView update: cell.frame=%@ bubble=%@ contentView=%@ textLbl=%@",
-                  NSStringFromCGRect(self.frame),
-                  NSStringFromCGSize(self.bubbleBackgroundView.lim_size),
-                  NSStringFromCGSize(self.messageContentView.lim_size),
-                  NSStringFromCGSize(self.textLbl.lim_size));
-
-            // wk_isInSelectionMode 此时还未设置（后面才设置 kSelRangeLocKey），
-            // 所以需要提前设置标记让 layoutSubviews 跳过重算
-            // kSelHadSegments 已设置，但 wk_isInSelectionMode 依赖 kSelRangeLocKey
-            // → 先设置 kSelRangeLocKey/kSelRangeLenKey，让 wk_isInSelectionMode 返回 YES
-            NSUInteger textLen = self.textLbl.text.length;
-            objc_setAssociatedObject(self, &kSelRangeLocKey, @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            objc_setAssociatedObject(self, &kSelRangeLenKey, @(textLen), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-            // 仅 inflate 路径需要 begin/endUpdates；不 inflate 时 cell 高度无变化，
-            // 没必要让 tableView 走一次重新布局，省掉位置突跳的几率。
-            if (needsInflate) {
-                UIView *v = self.superview;
-                while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
-                if ([v isKindOfClass:[UITableView class]]) {
-                    UITableView *tv = (UITableView *)v;
-                    [UIView performWithoutAnimation:^{
-                        [tv beginUpdates];
-                        [tv endUpdates];
-                    }];
-
-                    // beginUpdates/endUpdates 期间 layoutSubviews 可能被触发并覆盖气泡大小
-                    // 重新强制设置正确的尺寸
-                    self.textLbl.lim_size = fullSize;
-                    self.messageContentView.lim_size = fullSize;
-                    self.bubbleBackgroundView.lim_size = CGSizeMake(
-                        fullSize.width + contentInsets.left + contentInsets.right,
-                        fullSize.height + contentInsets.top + contentInsets.bottom
-                    );
-
-                    NSLog(@"[SelDebug] AFTER fix: cell.frame=%@ bubble=%@ contentView=%@ textLbl=%@",
-                          NSStringFromCGRect(self.frame),
-                          NSStringFromCGSize(self.bubbleBackgroundView.lim_size),
-                          NSStringFromCGSize(self.messageContentView.lim_size),
-                          NSStringFromCGSize(self.textLbl.lim_size));
-                } else {
-                    NSLog(@"[SelDebug] ERROR: tableView not found in superview chain");
-                }
+        CGPoint pointInMCV = [self.messageContentView convertPoint:touchPoint fromView:nil];
+        for (NSUInteger i = 0; i < self.segmentViews.count; i++) {
+            UIView *v = self.segmentViews[i];
+            if (!CGRectContainsPoint(v.frame, pointInMCV)) continue;
+            hitSegIdx = (NSInteger)i;
+            if (v == self.textLbl) {
+                host = self.textLbl;
+                hostKind = @"textLbl";
+            } else if ([v isKindOfClass:[UILabel class]]) {
+                UILabel *label = (UILabel *)v;
+                host = [self wk_overlayTextViewForLabel:label];
+                underlying = label;
+                hostKind = @"overlay";
             } else {
-                NSLog(@"[SelDebug] no inflate (raw fits in rendered cell). Skipping tableView update.");
+                // 表格 container：不进选区，让用户走表格自带复制按钮
+                NSLog(@"[SelDebug][start] hit table segment, skip selection. msgNo=%@ segIdx=%lu",
+                      self.messageModel.clientMsgNo, (unsigned long)i);
+                return;
             }
+            break;
         }
+        if (!host) {
+            host = self.textLbl;
+            hostKind = @"fallback";
+        }
+    } else {
+        host = self.textLbl;
     }
 
+    NSUInteger textLen = host.text.length;
+    if (textLen == 0) {
+        // 空段不进选区（理论不会，防御性兜底）
+        if (underlying) underlying.hidden = NO;
+        if (host == self.selectionOverlayTextView) [self.selectionOverlayTextView removeFromSuperview];
+        return;
+    }
+
+    self.activeSelectionTextView = host;
+    self.activeSelectionUnderlyingLabel = underlying;
+
+    // ── 2) visible area 检查：宿主完全在屏外不进选区 ──
     UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
     CGFloat bottomMargin = 80.0f + window.safeAreaInsets.bottom;
     CGRect visibleArea = CGRectMake(0, window.safeAreaInsets.top, window.frame.size.width,
                                     window.frame.size.height - window.safeAreaInsets.top - bottomMargin);
-    CGRect tvInWindow = [self.textLbl convertRect:self.textLbl.bounds toView:nil];
-    CGRect visibleFrame = CGRectIntersection(tvInWindow, visibleArea);
-    if (CGRectIsNull(visibleFrame) || visibleFrame.size.height < 4) return;
+    CGRect hostInWindow = [host convertRect:host.bounds toView:nil];
+    CGRect visibleFrame = CGRectIntersection(hostInWindow, visibleArea);
+    if (CGRectIsNull(visibleFrame) || visibleFrame.size.height < 4) {
+        if (underlying) underlying.hidden = NO;
+        if (host == self.selectionOverlayTextView) [self.selectionOverlayTextView removeFromSuperview];
+        self.activeSelectionTextView = nil;
+        self.activeSelectionUnderlyingLabel = nil;
+        return;
+    }
 
-    // 保存状态
+    // ── 3) 保存状态、应用全选高亮 ──
     objc_setAssociatedObject(self, &kSelectionMenusKey, menuItems ?: @[], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelectionVisibleKey, [NSValue valueWithCGRect:visibleFrame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelOrigAttrTextKey, [host.attributedText copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelRangeLocKey, @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kSelRangeLenKey, @(textLen), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 保存原始 attributedText
-    objc_setAssociatedObject(self, &kSelOrigAttrTextKey, [self.textLbl.attributedText copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-    // 全选范围（分段模式已提前设置，非分段模式在这里设置）
-    if (!hasSegments) {
-        NSUInteger textLen = self.textLbl.text.length;
-        objc_setAssociatedObject(self, &kSelRangeLocKey, @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        objc_setAssociatedObject(self, &kSelRangeLenKey, @(textLen), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    NSUInteger textLen = self.textLbl.text.length;
-
-    // 应用高亮
     [self wk_applyHighlightForRange:NSMakeRange(0, textLen)];
 
-    // 创建句柄加到 window
+    NSLog(@"[SelDebug][start] msgNo=%@ host=%@ segIdx=%ld textLen=%lu hostFrame=%@ bubble=%@ cellH=%.1f",
+          self.messageModel.clientMsgNo, hostKind, (long)hitSegIdx,
+          (unsigned long)textLen, NSStringFromCGRect(host.frame),
+          NSStringFromCGRect(self.bubbleBackgroundView.frame),
+          self.frame.size.height);
+
+    // ── 4) 创建句柄 / KVO / window tap / nav 屏蔽 / 通知 ──
     __weak typeof(self) weakSelf = self;
     WKSelectionHandle *startHandle = [[WKSelectionHandle alloc] initWithStart:YES];
     WKSelectionHandle *endHandle = [[WKSelectionHandle alloc] initWithStart:NO];
@@ -2771,18 +2726,15 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     objc_setAssociatedObject(self, &kSelStartHandleKey, startHandle, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelEndHandleKey, endHandle, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 定位句柄
     [self wk_updateHandlePositions];
 
-    // KVO 监听 tableView 滚动，实时更新句柄位置
-    UIView *v = self.superview;
-    while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
-    if ([v isKindOfClass:[UITableView class]]) {
-        [v addObserver:self forKeyPath:@"contentOffset" options:NSKeyValueObservingOptionNew context:kSelScrollKVOCtx];
-        objc_setAssociatedObject(self, &kSelTableViewKey, v, OBJC_ASSOCIATION_ASSIGN);
+    UIView *vv = self.superview;
+    while (vv && ![vv isKindOfClass:[UITableView class]]) vv = vv.superview;
+    if ([vv isKindOfClass:[UITableView class]]) {
+        [vv addObserver:self forKeyPath:@"contentOffset" options:NSKeyValueObservingOptionNew context:kSelScrollKVOCtx];
+        objc_setAssociatedObject(self, &kSelTableViewKey, vv, OBJC_ASSOCIATION_ASSIGN);
     }
 
-    // 禁用导航滑动返回
     UIResponder *responder = self;
     while (responder) {
         if ([responder isKindOfClass:[UINavigationController class]]) {
@@ -2796,25 +2748,53 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
         responder = [responder nextResponder];
     }
 
-    // window tap（点击气泡外 dismiss）
     UITapGestureRecognizer *windowTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(wk_selectionWindowTap:)];
     windowTap.cancelsTouchesInView = NO;
     windowTap.delegate = self;
     [window addGestureRecognizer:windowTap];
     objc_setAssociatedObject(self, &kSelWindowTapKey, windowTap, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 通知监听
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(wk_keyboardDismissSelection:) name:UIKeyboardWillShowNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(wk_viewDisappearDismissSelection:) name:@"WKConversationViewWillDisappear" object:nil];
 
-    // 显示菜单
+    // ── 5) 显示菜单 ──
     [self wk_showSelectionMenuForRange:NSMakeRange(0, textLen) isAll:YES];
+}
+
+// 选区 overlay 懒加载：覆盖在某个 UILabel 段上提供 layoutManager/textContainer，
+// 让现有的句柄/拖拽/菜单几何代码（依赖 UITextView API）直接复用到非首段的 UILabel 上。
+// 设计上 overlay 实例只一个，end 时 removeFromSuperview 并 attrText=nil 释放
+// textStorage，下次进入选区命中另一段 UILabel 时再 add 进来 + 重写内容。
+-(WKMessageTextView*) wk_overlayTextViewForLabel:(UILabel*)label {
+    if (!self.selectionOverlayTextView) {
+        self.selectionOverlayTextView = [[WKMessageTextView alloc] init];
+        // 自定义句柄方案，不用原生 UITextView selection / lollipop
+        self.selectionOverlayTextView.editable = NO;
+        self.selectionOverlayTextView.selectable = NO;
+        self.selectionOverlayTextView.scrollEnabled = NO;
+        self.selectionOverlayTextView.backgroundColor = [UIColor clearColor];
+    }
+    self.selectionOverlayTextView.attributedText = label.attributedText;
+    self.selectionOverlayTextView.frame = label.frame;
+    [self.messageContentView addSubview:self.selectionOverlayTextView];
+    label.hidden = YES;
+    return self.selectionOverlayTextView;
 }
 
 -(void) endInBubbleTextSelection {
     if (![self wk_isInSelectionMode]) return;
 
-    // 移除句柄
+    UITextView *host = self.activeSelectionTextView;
+    UILabel *underlying = self.activeSelectionUnderlyingLabel;
+
+    NSLog(@"[SelDebug][end] msgNo=%@ host=%@ hostFrame=%@ bubble=%@ cellH=%.1f",
+          self.messageModel.clientMsgNo,
+          (host == self.textLbl ? @"textLbl" : (host == self.selectionOverlayTextView ? @"overlay" : @"unknown")),
+          NSStringFromCGRect(host.frame),
+          NSStringFromCGRect(self.bubbleBackgroundView.frame),
+          self.frame.size.height);
+
+    // 1) 移除句柄
     WKSelectionHandle *sh = objc_getAssociatedObject(self, &kSelStartHandleKey);
     WKSelectionHandle *eh = objc_getAssociatedObject(self, &kSelEndHandleKey);
     [sh removeFromSuperview];
@@ -2822,36 +2802,33 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     objc_setAssociatedObject(self, &kSelStartHandleKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelEndHandleKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 恢复原始 attributedText（去除高亮）
-    // 注意：segmented 路径下 kSelOrigAttrTextKey 是 selection start REPLACEMENT 之后
-    // 保存的（即 fullRawText 推导出的 attributedText，见 startInBubbleTextSelection
-    // 行 2624-2629 + 2726），如果在这里把它设回 textLbl，就把 textLbl 推回了
-    // 「全文 raw」状态。后面 hadSegments 块再 setAttributedText 到 first-segment
-    // 紧接两次 setter，UITextView 的 textStorage 在某些路径下不会真正刷新到第二
-    // 次的内容，结果 textLbl 残留 fullRawText、其它 segmentViews 又显示渲染版本，
-    // 用户看到「raw 文本 + 渲染版本」两份重复。
-    // segmented 路径下完全交给后面的 hadSegments 块处理，这里只对 NON-segmented
-    // 路径做去高亮恢复。
-    BOOL hadSegmentsAtEntry = [objc_getAssociatedObject(self, "kSelHadSegments") boolValue];
-    if (!hadSegmentsAtEntry) {
-        NSAttributedString *orig = objc_getAssociatedObject(self, &kSelOrigAttrTextKey);
-        if (orig) self.textLbl.attributedText = orig;
-    }
+    // 2) 恢复 host 的原 attributedText（去掉高亮）
+    NSAttributedString *orig = objc_getAssociatedObject(self, &kSelOrigAttrTextKey);
+    if (orig && host) host.attributedText = orig;
     objc_setAssociatedObject(self, &kSelOrigAttrTextKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 移除 window tap
+    // 3) overlay 反向解除：unhide 原 UILabel + 移除 overlay（保留实例供下次复用）
+    if (underlying) underlying.hidden = NO;
+    if (host == self.selectionOverlayTextView) {
+        [self.selectionOverlayTextView removeFromSuperview];
+        self.selectionOverlayTextView.attributedText = nil; // 释放 textStorage
+    }
+    self.activeSelectionTextView = nil;
+    self.activeSelectionUnderlyingLabel = nil;
+
+    // 4) 移除 window tap
     UITapGestureRecognizer *tap = objc_getAssociatedObject(self, &kSelWindowTapKey);
     if (tap) { [tap.view removeGestureRecognizer:tap]; }
     objc_setAssociatedObject(self, &kSelWindowTapKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 移除 KVO
+    // 5) 移除 KVO
     UIView *tv = objc_getAssociatedObject(self, &kSelTableViewKey);
     if (tv) {
         @try { [tv removeObserver:self forKeyPath:@"contentOffset" context:kSelScrollKVOCtx]; } @catch (...) {}
         objc_setAssociatedObject(self, &kSelTableViewKey, nil, OBJC_ASSOCIATION_ASSIGN);
     }
 
-    // 恢复导航手势
+    // 6) 恢复导航手势
     UINavigationController *nav = objc_getAssociatedObject(self, &kSelNavKey);
     if (nav) {
         for (UIGestureRecognizer *gr in nav.view.gestureRecognizers) {
@@ -2860,125 +2837,26 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
         objc_setAssociatedObject(self, &kSelNavKey, nil, OBJC_ASSOCIATION_ASSIGN);
     }
 
-    // 取消 timer
+    // 7) 取消 timer
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(wk_reshowMenuAfterScroll) object:nil];
     dispatch_block_t t = objc_getAssociatedObject(self, &kSelTimerKey);
     if (t) { dispatch_block_cancel(t); }
     objc_setAssociatedObject(self, &kSelTimerKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
 
-    // 移除通知
+    // 8) 移除通知
     [[NSNotificationCenter defaultCenter] removeObserver:self name:UIKeyboardWillShowNotification object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKConversationViewWillDisappear" object:nil];
 
-    // 隐藏菜单
+    // 9) 隐藏菜单 popup + 复位系统编辑菜单
     [self wk_hideSelectionPopup];
-
-    // 恢复系统编辑菜单（自定义选区可能污染了全局 UIMenuController 状态）
     [UIMenuController sharedMenuController].menuItems = nil;
 
     objc_setAssociatedObject(self, &kSelectionMenusKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelectionVisibleKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelRangeLocKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kSelRangeLenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-    // 恢复分段视图和高度 ——
-    // 历史方案是「逐项 setter 局部恢复」（textLbl.text=nil → attrText=nil →
-    // attrText=origAttr，segmentViews unhide，bubble/contentView frame snapshot
-    // 拨回 compact），但 UITextView 在 TK1/TK2 切换路径下 setAttributedText 偶发
-    // 不刷新 textStorage，结果 textLbl 残留 fullRawText、其它 segmentViews 不可
-    // 见 / 显示异常。
-    // 改为「整体重建」：清掉 segmentsBuilt + clearSegmentViews + refresh:，让
-    // refresh 走和首次渲染完全一致的路径重建。代价是关闭选区时 ~50–150ms 的
-    // segmentViews 重建（WebView 走 pool，HTML 重 load），收益是状态保证一致，
-    // 不再依赖 textLbl 局部 setter 是否生效。
-    BOOL hadSegments = [objc_getAssociatedObject(self, "kSelHadSegments") boolValue];
-    if (hadSegments) {
-        WKMessageModel *capturedModel = self.messageModel;
-        NSValue *origBubbleVal = objc_getAssociatedObject(self, "kSelOrigBubbleFrame");
-        NSValue *origContentVal = objc_getAssociatedObject(self, "kSelOrigContentFrame");
-        NSString *heightKey = objc_getAssociatedObject(self, "kSelHeightKey");
-        BOOL didInflate = [objc_getAssociatedObject(self, "kSelDidInflate") boolValue];
-
-        NSLog(@"[SelDebug][end] begin restore msgNo=%@ heightKey=%@ didInflate=%d origBubble=%@ origContent=%@ "
-              @"selBubble=%@ selContent=%@ textLblLen=%lu segmentsBuilt=%d segCount=%lu",
-              capturedModel.clientMsgNo, heightKey, didInflate,
-              origBubbleVal ? NSStringFromCGRect([origBubbleVal CGRectValue]) : @"(nil)",
-              origContentVal ? NSStringFromCGRect([origContentVal CGRectValue]) : @"(nil)",
-              NSStringFromCGRect(self.bubbleBackgroundView.frame),
-              NSStringFromCGRect(self.messageContentView.frame),
-              (unsigned long)self.textLbl.text.length,
-              (int)self.segmentsBuilt,
-              (unsigned long)self.segmentViews.count);
-
-        // 1) 把 bubble / messageContentView 拨回 selection 之前的几何 ——
-        //    refresh: 内部不动这两个 frame，重建中间帧若不先 restore，sent 气泡
-        //    （右锚）会在 layoutSubviews 之前短暂越出屏幕。
-        if (origBubbleVal) self.bubbleBackgroundView.frame = [origBubbleVal CGRectValue];
-        if (origContentVal) self.messageContentView.frame = [origContentVal CGRectValue];
-
-        // 2) 清空 textLbl —— refresh: 在 hasTable 路径下不再覆写 textLbl（因为
-        //    segmentsBuilt=YES 在 refresh 之前已被清成 NO，但接着进入 segments
-        //    构建分支，第一段文本会复用 textLbl 并重写 attributedText，所以这里
-        //    单纯保险一下，避免 refresh 中间帧短暂闪现 fullRawText）。
-        self.textLbl.text = nil;
-        self.textLbl.attributedText = nil;
-
-        // 3) 整体 invalidate + refresh，rebuild 出和首次渲染同一份 segmentViews。
-        self.segmentsBuilt = NO;
-        [self clearSegmentViews];
-        if (capturedModel) {
-            @try {
-                [self refresh:capturedModel];
-            } @catch (NSException *e) {
-                NSLog(@"[SelDebug][end] refresh: exception msgNo=%@ ex=%@", capturedModel.clientMsgNo, e);
-            }
-        } else {
-            NSLog(@"[SelDebug][end] capturedModel nil, skipping refresh:");
-        }
-
-        // 4) 高度缓存清掉，让 beginUpdates/endUpdates 走 +sizeForMessage: 重算
-        //    （selection start 期间写入的是 inflated raw-text 高度，不能留下）。
-        //    didInflate=NO 时 cache 没被改过，无需清；省掉一次大消息的高度重算。
-        if (didInflate && heightKey.length > 0) {
-            [[WKMessageListView cellHeightCache] removeObjectForKey:heightKey];
-        }
-
-        [self setNeedsLayout];
-        [self layoutIfNeeded];
-
-        // 5) 触发 tableView 同步行高
-        UIView *v = self.superview;
-        while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
-        if ([v isKindOfClass:[UITableView class]]) {
-            UITableView *tv = (UITableView *)v;
-            [UIView performWithoutAnimation:^{
-                [tv beginUpdates];
-                [tv endUpdates];
-            }];
-        } else {
-            NSLog(@"[SelDebug][end] tableView not found in superview chain msgNo=%@", capturedModel.clientMsgNo);
-        }
-
-        [self setNeedsLayout];
-        [self layoutIfNeeded];
-
-        NSLog(@"[SelDebug][end] done restore msgNo=%@ bubble=%@ content=%@ "
-              @"textLblLen=%lu segmentsBuilt=%d segCount=%lu cellH=%.1f",
-              capturedModel.clientMsgNo,
-              NSStringFromCGRect(self.bubbleBackgroundView.frame),
-              NSStringFromCGRect(self.messageContentView.frame),
-              (unsigned long)self.textLbl.text.length,
-              (int)self.segmentsBuilt,
-              (unsigned long)self.segmentViews.count,
-              self.frame.size.height);
-    }
-    objc_setAssociatedObject(self, "kSelHadSegments", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, "kSelOrigBubbleFrame", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, "kSelOrigContentFrame", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, "kSelOrigHeight", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, "kSelHeightKey", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(self, "kSelDidInflate", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
+    // 旧方案的 inflate / cellHeightCache / frame snapshot / refresh: 整体重建 全部移除 ——
+    // 现在 cell/bubble 几何在选区全程不变，end 不需要恢复任何几何，也不需要清缓存。
 }
 
 #pragma mark - 自定义选区：高亮、句柄定位、拖拽
@@ -2992,33 +2870,37 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
 -(void) wk_applyHighlightForRange:(NSRange)range {
     NSAttributedString *orig = objc_getAssociatedObject(self, &kSelOrigAttrTextKey);
     if (!orig) return;
+    UITextView *host = self.activeSelectionTextView;
+    if (!host) return;
     NSMutableAttributedString *highlighted = [orig mutableCopy];
     if (range.length > 0 && NSMaxRange(range) <= highlighted.length) {
         [highlighted addAttribute:NSBackgroundColorAttributeName
                             value:[[UIColor systemBlueColor] colorWithAlphaComponent:0.3]
                             range:range];
     }
-    self.textLbl.attributedText = highlighted;
+    host.attributedText = highlighted;
 }
 
 -(void) wk_updateHandlePositions {
     NSRange range = [self wk_currentSelRange];
     if (range.length == 0) return;
+    UITextView *host = self.activeSelectionTextView;
+    if (!host) return;
 
-    NSLayoutManager *lm = self.textLbl.layoutManager;
-    NSTextContainer *tc = self.textLbl.textContainer;
+    NSLayoutManager *lm = host.layoutManager;
+    NSTextContainer *tc = host.textContainer;
     [lm ensureLayoutForTextContainer:tc];
 
     // 起始句柄：选区首字符的左上角
     NSUInteger startGlyph = [lm glyphIndexForCharacterAtIndex:range.location];
     CGRect startRect = [lm boundingRectForGlyphRange:NSMakeRange(startGlyph, 1) inTextContainer:tc];
-    CGPoint startPt = [self.textLbl convertPoint:CGPointMake(startRect.origin.x, startRect.origin.y) toView:nil];
+    CGPoint startPt = [host convertPoint:CGPointMake(startRect.origin.x, startRect.origin.y) toView:nil];
 
     // 结束句柄：选区末字符的右下角
     NSUInteger endCharIdx = NSMaxRange(range) - 1;
     NSUInteger endGlyph = [lm glyphIndexForCharacterAtIndex:endCharIdx];
     CGRect endRect = [lm boundingRectForGlyphRange:NSMakeRange(endGlyph, 1) inTextContainer:tc];
-    CGPoint endPt = [self.textLbl convertPoint:CGPointMake(CGRectGetMaxX(endRect), CGRectGetMaxY(endRect)) toView:nil];
+    CGPoint endPt = [host convertPoint:CGPointMake(CGRectGetMaxX(endRect), CGRectGetMaxY(endRect)) toView:nil];
 
     WKSelectionHandle *sh = objc_getAssociatedObject(self, &kSelStartHandleKey);
     WKSelectionHandle *eh = objc_getAssociatedObject(self, &kSelEndHandleKey);
@@ -3029,13 +2911,16 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
 -(void) wk_handleDrag:(BOOL)isStart point:(CGPoint)windowPt {
     [self wk_hideSelectionPopup];
 
-    // 转换为 textLbl 本地坐标
-    CGPoint local = [self.textLbl convertPoint:windowPt fromView:nil];
-    local.x = MAX(0, MIN(local.x, self.textLbl.bounds.size.width));
-    local.y = MAX(0, MIN(local.y, self.textLbl.bounds.size.height));
+    UITextView *host = self.activeSelectionTextView;
+    if (!host) return;
 
-    NSLayoutManager *lm = self.textLbl.layoutManager;
-    NSTextContainer *tc = self.textLbl.textContainer;
+    // 转换为宿主本地坐标，并夹紧到 host bounds —— v1 单段：handle 不会越段
+    CGPoint local = [host convertPoint:windowPt fromView:nil];
+    local.x = MAX(0, MIN(local.x, host.bounds.size.width));
+    local.y = MAX(0, MIN(local.y, host.bounds.size.height));
+
+    NSLayoutManager *lm = host.layoutManager;
+    NSTextContainer *tc = host.textContainer;
     CGFloat fraction = 0;
     NSUInteger idx = [lm characterIndexForPoint:local inTextContainer:tc
                fractionOfDistanceBetweenInsertionPoints:&fraction];
@@ -3049,12 +2934,12 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     } else {
         newEnd = idx + 1;
     }
-    if (newEnd > self.textLbl.text.length) newEnd = self.textLbl.text.length;
+    if (newEnd > host.text.length) newEnd = host.text.length;
     if (newStart >= newEnd) {
         if (isStart) newStart = newEnd > 0 ? newEnd - 1 : 0;
         else newEnd = newStart + 1;
     }
-    if (newEnd > self.textLbl.text.length) newEnd = self.textLbl.text.length;
+    if (newEnd > host.text.length) newEnd = host.text.length;
     if (newStart >= newEnd) return;
 
     NSRange newRange = NSMakeRange(newStart, newEnd - newStart);
@@ -3068,7 +2953,8 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
 -(void) wk_handleDragEnd {
     NSRange range = [self wk_currentSelRange];
     if (range.length == 0) return;
-    BOOL isAll = (range.location == 0 && range.length == self.textLbl.text.length);
+    UITextView *host = self.activeSelectionTextView;
+    BOOL isAll = host && (range.location == 0 && range.length == host.text.length);
     __weak typeof(self) weakSelf = self;
     dispatch_block_t block = dispatch_block_create(0, ^{
         [weakSelf wk_showSelectionMenuForRange:[weakSelf wk_currentSelRange] isAll:isAll];
@@ -3127,7 +3013,8 @@ static void *kSelScrollKVOCtx          = &kSelScrollKVOCtx;
     if (![self wk_isInSelectionMode]) return;
     NSRange range = [self wk_currentSelRange];
     if (range.length == 0) return;
-    BOOL isAll = (range.location == 0 && range.length == self.textLbl.text.length);
+    UITextView *host = self.activeSelectionTextView;
+    BOOL isAll = host && (range.location == 0 && range.length == host.text.length);
     [self wk_showSelectionMenuForRange:range isAll:isAll];
 }
 
@@ -3178,7 +3065,7 @@ static const NSInteger kSelectionPopupTag = 0x574B5350;
     } else {
         // 复制选中文字（先快照 range 和 text，因为 dismiss 会清除选区）
         NSRange capturedRange = selRange;
-        NSString *capturedText = [self.textLbl.text copy];
+        NSString *capturedText = [self.activeSelectionTextView.text copy];
         UIImage *copyIcon = [GenerateImageUtils generateTintedImgWithImage:[[WKApp shared] loadImage:@"Conversation/ContextMenu/Copy" moduleID:@"WuKongBase"] color:iconTintColor backgroundColor:nil];
         [btns addObject:@{
             @"title": LLang(@"复制"),
@@ -3189,14 +3076,14 @@ static const NSInteger kSelectionPopupTag = 0x574B5350;
                 }
             }
         }];
-        // 全选
+        // 全选（在当前段范围内全选；跨段连选 v2 再做）
         UIImage *selectIcon = [GenerateImageUtils generateTintedImgWithImage:[[WKApp shared] loadImage:@"Conversation/ContextMenu/Select" moduleID:@"WuKongBase"] color:iconTintColor backgroundColor:nil];
         [btns addObject:@{
             @"title": LLang(@"全选"),
             @"icon": selectIcon ?: [NSNull null],
             @"dismiss": @NO,
             @"action": ^{
-                NSUInteger len = weakSelf.textLbl.text.length;
+                NSUInteger len = weakSelf.activeSelectionTextView.text.length;
                 objc_setAssociatedObject(weakSelf, &kSelRangeLocKey, @0, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 objc_setAssociatedObject(weakSelf, &kSelRangeLenKey, @(len), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 [weakSelf wk_applyHighlightForRange:NSMakeRange(0, len)];
@@ -3208,8 +3095,9 @@ static const NSInteger kSelectionPopupTag = 0x574B5350;
         // 选区状态下走自定义弹窗：把选中文字作为子区名默认值（前 50 字），跳过
         // 长按菜单原 onTap（它的 default 是 digest 前 10 字），避免覆盖用户选区。
         NSString *capturedSelText = @"";
-        if (selRange.length > 0 && NSMaxRange(selRange) <= self.textLbl.text.length) {
-            capturedSelText = [self.textLbl.text substringWithRange:selRange];
+        NSString *hostText = self.activeSelectionTextView.text;
+        if (selRange.length > 0 && NSMaxRange(selRange) <= hostText.length) {
+            capturedSelText = [hostText substringWithRange:selRange];
         }
         if (capturedSelText.length > 50) capturedSelText = [capturedSelText substringToIndex:50];
         for (WKMessageLongMenusItem *item in menuItems) {
@@ -3300,18 +3188,22 @@ static const NSInteger kSelectionPopupTag = 0x574B5350;
     // 菜单定位（实时计算选区位置，跟随滚动）
     CGRect visFrame;
     NSRange selRangeForPos = selRange;
-    if (selRangeForPos.length > 0 && selRangeForPos.location + selRangeForPos.length <= self.textLbl.text.length) {
-        NSLayoutManager *lm = self.textLbl.layoutManager;
-        NSTextContainer *tc = self.textLbl.textContainer;
+    UITextView *menuHost = self.activeSelectionTextView;
+    if (menuHost && selRangeForPos.length > 0 && selRangeForPos.location + selRangeForPos.length <= menuHost.text.length) {
+        NSLayoutManager *lm = menuHost.layoutManager;
+        NSTextContainer *tc = menuHost.textContainer;
         [lm ensureLayoutForTextContainer:tc];
         NSUInteger startGlyph = [lm glyphIndexForCharacterAtIndex:selRangeForPos.location];
         NSUInteger endGlyph = [lm glyphIndexForCharacterAtIndex:NSMaxRange(selRangeForPos) - 1];
         CGRect startRect = [lm boundingRectForGlyphRange:NSMakeRange(startGlyph, 1) inTextContainer:tc];
         CGRect endRect = [lm boundingRectForGlyphRange:NSMakeRange(endGlyph, 1) inTextContainer:tc];
         CGRect unionRect = CGRectUnion(startRect, endRect);
-        visFrame = [self.textLbl convertRect:unionRect toView:nil];
+        visFrame = [menuHost convertRect:unionRect toView:nil];
+    } else if (menuHost) {
+        visFrame = [menuHost convertRect:menuHost.bounds toView:nil];
     } else {
-        visFrame = [self.textLbl convertRect:self.textLbl.bounds toView:nil];
+        // 兜底：理论不会走到（菜单只在选区激活时才显示）
+        visFrame = [self.bubbleBackgroundView convertRect:self.bubbleBackgroundView.bounds toView:nil];
     }
     CGFloat safeTop = window.safeAreaInsets.top + 8;
     CGFloat safeBot = window.frame.size.height - window.safeAreaInsets.bottom - 80;

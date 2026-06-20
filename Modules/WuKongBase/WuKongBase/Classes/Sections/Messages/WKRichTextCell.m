@@ -525,7 +525,10 @@ static const NSInteger kRichTextSelOverlayTag = 0x57524F56;  // 'WROV' transpare
 // Forward declaration of the overlay subclass (defined at bottom of file).
 @class _WKRichSelOverlayView;
 
-- (void)startInBubbleTextSelectionWithMenuItems:(NSArray *)menuItems {
+- (void)startInBubbleTextSelectionWithMenuItems:(NSArray *)menuItems atPoint:(CGPoint)touchPoint {
+    // touchPoint 是 window 坐标，原生 UITextView selection 路径由用户后续手势驱动，
+    // 这里不需要锚点；保留参数仅为匹配基类签名。
+    (void)touchPoint;
     if (self.textLbl.isFirstResponder) {
         WKRichSelLog(@"start: already first responder, skip");
         return;

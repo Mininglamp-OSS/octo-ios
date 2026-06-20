@@ -646,7 +646,7 @@
     // WK_RICHTEXT 用原生 UITextView 选区 + UIMenuController 挂自定义菜单项）。
     if (contextMessage.contentType == WK_TEXT || contextMessage.contentType == WK_RICHTEXT) {
         NSArray *capturedMenus = [toolbarMenus copy];
-        [messageCell startInBubbleTextSelectionWithMenuItems:capturedMenus];
+        [messageCell startInBubbleTextSelectionWithMenuItems:capturedMenus atPoint:touchInWindow];
         return;
     }
 

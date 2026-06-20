@@ -420,7 +420,7 @@ static NSMutableDictionary *flameNodeCacheDict;
 }
 
 // 基类空实现，WKTextMessageCell 重写
--(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems {}
+-(void) startInBubbleTextSelectionWithMenuItems:(NSArray*)menuItems atPoint:(CGPoint)touchPoint {}
 -(void) endInBubbleTextSelection {}
 // 保留方法声明兼容性（实现为空，外部不再调用）
 -(void) showLongPressHighlight {}
