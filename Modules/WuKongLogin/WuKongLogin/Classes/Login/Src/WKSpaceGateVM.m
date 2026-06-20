@@ -57,7 +57,15 @@
     // 空间 role=0 也是成员，与 WKSpaceEntity.h 注释对齐，与 aegis 历史
     // role==0=非成员的注释相反）。fallback 仍走 role>0 保守语义，避免 aegis
     // 切账号场景回归（详见类注释 + WKSpaceGateVM.h:54）。
+    //
+    // R8 fix (yujiawei P1-1): 加 fallbackAny 兜底, 治"明略首装 role=0 default 唯一
+    // 成员空间"用户被 stranded 的回归: 该用户没 uid snapshot, preferred nil; fallback
+    // 要求 role>0 也 nil → pickJoinedSpace 返 nil → checkSpaces 不 enterApp 也不 .catch
+    // → 用户卡 SpaceGate 页只能登出。fallbackAny 在 fallback nil 时退到 role>=0 任一
+    // 成员空间, 把这条路径救回来。aegis 多空间用户依然走 fallback role>0 优先, 单空间
+    // role>0 用户行为不变。
     NSDictionary *fallback = nil;
+    NSDictionary *fallbackAny = nil;
     NSDictionary *preferredHit = nil;
     for (id item in spaces) {
         if (![item isKindOfClass:[NSDictionary class]]) continue;
@@ -72,6 +80,7 @@
             continue;
         }
         if (role > 0 && !fallback) fallback = s;
+        if (!fallbackAny) fallbackAny = s;
     }
     if (preferredHit) {
         WKLogDebug(@"[pickJoinedSpace] hit preferred spaceId=%@ name=%@ role=%@",
@@ -81,10 +90,15 @@
     if (fallback) {
         WKLogDebug(@"[pickJoinedSpace] fallback spaceId=%@ name=%@ (preferred=%@)",
                    fallback[@"space_id"], fallback[@"name"], preferredId);
-    } else {
-        WKLogDebug(@"[pickJoinedSpace] no member space found");
+        return fallback;
     }
-    return fallback;
+    if (fallbackAny) {
+        WKLogDebug(@"[pickJoinedSpace] fallbackAny (role=0 only-member) spaceId=%@ name=%@",
+                   fallbackAny[@"space_id"], fallbackAny[@"name"]);
+        return fallbackAny;
+    }
+    WKLogDebug(@"[pickJoinedSpace] no member space found");
+    return nil;
 }
 
 @end
