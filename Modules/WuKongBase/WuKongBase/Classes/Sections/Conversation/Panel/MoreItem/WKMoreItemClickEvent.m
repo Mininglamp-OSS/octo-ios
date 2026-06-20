@@ -242,11 +242,25 @@ static WKMoreItemClickEvent *_instance;
 // 原子性闸门（Jerry-Xin critical，与 captioned 路径 sendRichTextMixedImageDatas: 对称）：
 // 压缩可能返回 nil/丢图，使 imageDatas.count < assetCount。此时绝不静默只发部分图——
 // 整条可见失败（弹「发送失败」HUD），与 captioned 路径的 count==assetCount gate 一致。
+//
+// R10 fix (lml2468): 加 onFailure 回调。原子闸 / 空 NSData 兜底命中时发生在任何
+// sendMessage: 之前 (没有 failed bubble 留在 chat), 调用方已同步清 bar → 不调
+// onFailure 等于静默丢图。onFailure 与 HUD 同 dispatch_async block 内同步触发,
+// 给调用方一个把 bar 恢复回去的入口, 不会与已 sendMessage 的 failed bubble 重复
+// (那条路径走 IM SDK 的 retry, 不经过这里)。
 -(void) sendAlbumImageDatas:(NSArray<NSData *> *)imageDatas assetCount:(NSUInteger)assetCount context:(id<WKConversationContext>)context {
+    [self sendAlbumImageDatas:imageDatas assetCount:assetCount context:context onFailure:nil];
+}
+
+-(void) sendAlbumImageDatas:(NSArray<NSData *> *)imageDatas
+                  assetCount:(NSUInteger)assetCount
+                     context:(id<WKConversationContext>)context
+                   onFailure:(void(^)(void))onFailure {
     if (context == nil) return;
     void (^failVisible)(void) = ^{
         dispatch_async(dispatch_get_main_queue(), ^{
             [[WKNavigationManager shared].topViewController.view showHUDWithHide:LLang(@"发送失败")];
+            if (onFailure) onFailure();
         });
     };
     // 选了 N 张就必须发齐 N 张：数量不符或存在空数据 → 整条中止、可见失败，不部分发送。

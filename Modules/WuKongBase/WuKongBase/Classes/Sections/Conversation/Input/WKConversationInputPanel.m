@@ -1301,9 +1301,26 @@ CGFloat itemSpace = 10.0f;
         self.inFlightPendingSend = NO;
     } else {
         // 无 caption / 全空白 → 纯图（已含 count==assetCount 闸门）。
+        // R10 fix (lml2468): 给 sendAlbumImageDatas 传 onFailure。原子闸 / 空 NSData 兜底
+        // 命中时, sendMessage 还没跑过 (chat 里没有 failed bubble 给用户重发), 调用方已同步
+        // 清 bar → 没 onFailure 等于静默丢图。复用 R7 的合并恢复语义 (failVisible 在
+        // dispatch_async hop 后才触发, 用户极小概率开新草稿, 防御 merge)。
+        __weak typeof(self) weakSelf = self;
+        NSArray<NSData *> *capturedImages = images;
         [[WKMoreItemClickEvent shared] sendAlbumImageDatas:images
                                                 assetCount:images.count
-                                                   context:ctx];
+                                                   context:ctx
+                                                 onFailure:^{
+            __strong typeof(weakSelf) self_ = weakSelf;
+            if (!self_) return;
+            BOOL imagesOverwriteOnly = ([self_ pendingImageCount] == 0);
+            if (imagesOverwriteOnly) {
+                [self_.pendingImageBar setImageDatas:capturedImages];
+            } else if (capturedImages.count > 0) {
+                [self_.pendingImageBar appendImageDatas:capturedImages];
+            }
+            [self_ animateInputPanelChange];
+        }];
     }
 
     [self animateInputPanelChange];
@@ -1465,9 +1482,22 @@ CGFloat itemSpace = 10.0f;
         NSArray<NSData *> *images = [self.pendingImageBar.imageDatas copy];
         [self.pendingImageBar clear];
         if (self.conversationContext) {
+            // R10 fix (lml2468): 同 _commitPendingWithCaption 纯图分支, 失败兜底恢复 bar。
+            __weak typeof(self) weakSelf = self;
+            NSArray<NSData *> *capturedImages = images;
             [[WKMoreItemClickEvent shared] sendAlbumImageDatas:images
                                                     assetCount:images.count
-                                                       context:self.conversationContext];
+                                                       context:self.conversationContext
+                                                     onFailure:^{
+                __strong typeof(weakSelf) self_ = weakSelf;
+                if (!self_) return;
+                if ([self_ pendingImageCount] == 0) {
+                    [self_.pendingImageBar setImageDatas:capturedImages];
+                } else if (capturedImages.count > 0) {
+                    [self_.pendingImageBar appendImageDatas:capturedImages];
+                }
+                [self_ animateInputPanelChange];
+            }];
         }
         [self handleTextViewContentDidChange];
         [self animateInputPanelChange];
