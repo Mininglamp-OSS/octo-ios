@@ -53,9 +53,15 @@
         maxMessageSeq = model.lastMessage.messageSeq;
     }
 
-
-    if(position && ![self needsSpaceFiltering]) {
-        // 无需空间过滤时，使用 position 直接加载
+    if(position) {
+        // 有 position 时始终走 pullAround:position.orderSeq, 即便当前频道需要空间过滤.
+        // 原实现在 needsSpaceFiltering=YES 时直接走 pullLastWithSpaceFilter "从最新递归向前",
+        // 把 position 丢掉, 表现就是「右下角 @ 我快速定位按钮在个人聊天 + Space 模式下,
+        // 老 @ 消息所在窗口加载不到, 视图静默重载到最新页」(这条注释配套见 WKMessageListView.m
+        // locateMessageCellWithOrderSeqForReminder:). 定位/跳转场景下的 position 指向的就是
+        // 当前会话的某条具体消息, 不会"指到其他空间", 直接以它为锚拉一窗口即可;
+        // 拉回的数据仍由 messagesToMessageModels: 里的 filterMessagesBySpace: 兜底过滤,
+        // 不会出现"看到别的空间消息"的副作用.
         __weak typeof(self) weakSelf = self;
         // 串到 ioQueue：SDK 内部 pullMessages → getLocalMessages 是同步 FMDB 读，
         // 主线程发起会被 FMDB 串行队列堵 (ANR 11:40:06 367ms)；统一在 ioQueue 上发起。
@@ -83,8 +89,8 @@
             }];
         });
     } else {
-        // 需要空间过滤时，忽略全局 position（因为它可能指向其他空间的消息区域），
-        // 从最新消息开始递归向前搜索当前空间的消息
+        // 没有 position: 从最新消息开始递归向前搜索 (内部 filterMessagesBySpace 在
+        // 不需要过滤时退化为 no-op, 安全复用同一路径).
         [self pullLastWithSpaceFilter:0 maxMessageSeq:maxMessageSeq accumulated:[NSMutableArray array] existingIds:[NSMutableSet set] complete:complete];
     }
 }

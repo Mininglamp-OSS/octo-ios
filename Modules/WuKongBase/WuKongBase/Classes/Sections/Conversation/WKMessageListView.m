@@ -110,6 +110,12 @@ static const BOOL kIncrementalPulldown = NO;
 // 主线程被某段同步代码占住了，记录这段卡顿时长 + 当时是否在滚动。用于定位"停留不动 FPS=12"幽灵卡顿。
 @property(nonatomic,assign) CFTimeInterval fpsLastTickTime;
 
+// reminder 跳转的内部入口: 允许在本地 DB 也没命中时走一次服务端 pullAround 兜底,
+// 然后递归回到主入口完成 keepPosition + loadMessages 的滚动定位.
+-(void) locateMessageCellWithOrderSeqForReminder:(uint32_t)orderSeq
+                                   tablePosition:(UITableViewScrollPosition)tablePosition
+                             allowServerFallback:(BOOL)allowServerFallback;
+
 @end
 
 @implementation WKMessageListView
@@ -1314,6 +1320,10 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 
 
 -(void) locateMessageCellWithOrderSeqForReminder:(uint32_t)orderSeq tablePosition:(UITableViewScrollPosition)tablePosition{
+    [self locateMessageCellWithOrderSeqForReminder:orderSeq tablePosition:tablePosition allowServerFallback:YES];
+}
+
+-(void) locateMessageCellWithOrderSeqForReminder:(uint32_t)orderSeq tablePosition:(UITableViewScrollPosition)tablePosition allowServerFallback:(BOOL)allowServerFallback{
     if(orderSeq == 0) {
         return;
     }
@@ -1328,12 +1338,56 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         [self scrollToIndex:locatMessagePath animated:YES atScrollPosition:tablePosition];
         return;
     }
-    
+
+    // 本地窗口没加载到目标消息: 必须先确认它在本地 DB 是否存在, 缺失就走一次服务端
+    // pullAround 兜底再递归. 与 locateMessageCellWithMessageSeq: 保持一致.
+    //
+    // 旧实现直接 setKeepPosition + loadMessages, 走 pullFirst 内部的
+    // pullAround(aroundOrderSeq=target, maxMessageSeq=本地最新) 这一支. 当 reminder
+    // 指向一条"上翻很多页才能看到"的老 @ 消息、且本地 DB 还没缓存它时,
+    // getChannelAroundFirstMessageSeq 取不到 baseMessageSeq, 选窗口逻辑会落到
+    // 错误的一页, 表现就是按钮点击后视图静默重载/落不到目标——也就是当前 bug.
+    // 改成: 先 [WKMessageDB getMessage:] 判 DB; DB 缺失 → 显式
+    // pullAround(orderSeq=0, maxMessageSeq=target) 让 SDK 以 target 为锚去服务端
+    // 拉一窗口并写本地 DB, 然后递归 (allowServerFallback=NO) 走到 keepPosition
+    // + loadMessages 的正常滚动定位分支.
+    uint32_t messageSeq = [[WKSDK shared].chatManager getMessageSeq:orderSeq];
+    if(messageSeq == 0) {
+        return;
+    }
+    WKMessage *targetMsg = [[WKMessageDB shared] getMessage:self.channel messageSeq:messageSeq];
+    if(targetMsg && (targetMsg.isDeleted || targetMsg.remoteExtra.revoke)) {
+        [self.tableView showMsg:LLang(@"原消息不存在")];
+        return;
+    }
+    if(!targetMsg) {
+        if(!allowServerFallback) {
+            [self.tableView showMsg:LLang(@"原消息不存在")];
+            return;
+        }
+        __weak typeof(self) weakSelf = self;
+        [[WKSDK shared].chatManager pullAround:self.channel
+                                       orderSeq:0
+                                  maxMessageSeq:messageSeq
+                                          limit:[WKApp shared].config.eachPageMsgLimit
+                                       complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
+            void(^next)(void) = ^{
+                [weakSelf locateMessageCellWithOrderSeqForReminder:orderSeq tablePosition:tablePosition allowServerFallback:NO];
+            };
+            if (![NSThread isMainThread]) {
+                dispatch_async(dispatch_get_main_queue(), next);
+            } else {
+                next();
+            }
+        }];
+        return;
+    }
+
     [[WKConversationPositionManager shared] removePositions:self.channel type:WKConversationPositionTypeUnreadFirst];
     [[WKConversationPositionManager shared] channel:self.channel position:[WKConversationPosition orderSeq:orderSeq offset:0]];
-    
+
     self.keepPosition = [WKConversationPosition orderSeq:orderSeq offset:0];
-    
+
     __weak typeof(self) weakSelf = self;
     [self loadMessages:true firstLoad:false complete:^{
         [weakSelf startReminderAnimation];
