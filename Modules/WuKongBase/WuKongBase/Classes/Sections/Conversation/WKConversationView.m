@@ -11,6 +11,7 @@
 #import "WKConversationListVM.h"
 #import "WKConversationInputPanel.h"
 #import "WKMessageListView+Position.h"
+#import "WKMessageListView+Fold.h"
 #import "WKLastImgView.h"
 #import "WKConversationContextImpl.h"
 #import "WKStickerManager.h"
@@ -94,6 +95,9 @@
     [self.input addKeyboardListen];
     // 与 viewWillDisappear 对称：暴露 reappear 钩子给关心的子模块（如 AI 总结按钮的入口控制器）
     [[NSNotificationCenter defaultCenter] postNotificationName:@"WKConversationViewDidAppear" object:nil];
+
+    // bot 折叠："停留就不折叠"状态机入口
+    [self.messageListView wk_fold_applyPageVisible:YES];
 }
 
 
@@ -162,6 +166,9 @@
     }
     
     [self.messageListView viewWillDisappear];
+
+    // bot 折叠："停留就不折叠"状态机出口（页面切走，后续新消息按 web 等价规则折叠）
+    [self.messageListView wk_fold_applyPageVisible:NO];
 
     [[NSNotificationCenter defaultCenter] postNotificationName:@"WKConversationViewWillDisappear" object:nil];
 

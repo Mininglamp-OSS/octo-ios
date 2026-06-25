@@ -73,3 +73,6 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# ───────── octospec（本地接入，不入版本控制） ─────────
+.octospec/

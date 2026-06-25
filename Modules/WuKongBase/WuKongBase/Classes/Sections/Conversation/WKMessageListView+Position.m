@@ -6,7 +6,7 @@
 //
 
 #import "WKMessageListView+Position.h"
-
+#import "WKMessageListView+Fold.h"
 #import "WKConversationPositionBarView.h"
 #import "WuKongBase.h"
 
@@ -81,16 +81,25 @@
         NSIndexPath *visibleRow = visibleRows[i];
         CGRect rect =  [self.tableView rectForRowAtIndexPath:visibleRow];
          if([self cellIsVisible:rect]) {
-            WKMessageModel *messageModel = [self.dataProvider messageAtIndexPath:visibleRow];
-             if(messageModel) {
-                 if(minVisiableOrderSeq == 0 ) {
-                     minVisiableOrderSeq = messageModel.orderSeq;
-                 }
-                 maxVisiableOrderSeq = messageModel.orderSeq;
-                 for (WKReminder *reminder in reminders) {
-                     if(!reminder.done && messageModel.messageSeq == reminder.messageSeq) {
-                         reminder.done = true;
-                         hasDone = true;
+             // bot 折叠：折叠卡覆盖整组消息——该行的"可见 orderSeq 范围"是 [min, max]
+             // 取自该组所有消息；遍历这些消息触发 reminder.done 判定，并把 row 的
+             // min/max 并入全局 min/max。
+             NSArray<WKMessageModel *> *covered = [self wk_fold_coveredMessagesForTableIndexPath:visibleRow];
+             NSArray<WKMessageModel *> *toScan = covered.count > 0 ? covered :
+                 (^{ WKMessageModel *m = [self.dataProvider messageAtIndexPath:visibleRow]; return m ? @[m] : @[]; })();
+             for (WKMessageModel *messageModel in toScan) {
+                 if(messageModel) {
+                     if(minVisiableOrderSeq == 0 || messageModel.orderSeq < minVisiableOrderSeq) {
+                         minVisiableOrderSeq = messageModel.orderSeq;
+                     }
+                     if(messageModel.orderSeq > maxVisiableOrderSeq) {
+                         maxVisiableOrderSeq = messageModel.orderSeq;
+                     }
+                     for (WKReminder *reminder in reminders) {
+                         if(!reminder.done && messageModel.messageSeq == reminder.messageSeq) {
+                             reminder.done = true;
+                             hasDone = true;
+                         }
                      }
                  }
              }
@@ -145,12 +154,19 @@
         NSIndexPath *visibleRow = visibleRows[i];
         CGRect rect =  [self.tableView rectForRowAtIndexPath:visibleRow];
          if([self cellIsVisible:rect]) {
-            WKMessageModel *messageModel = [self.dataProvider messageAtIndexPath:visibleRow];
-             if(messageModel) {
-                 if(minVisiableOrderSeq == 0 ) {
-                     minVisiableOrderSeq = messageModel.orderSeq;
+             // bot 折叠：同 updatePostionReminders——展开覆盖消息，min/max 都并入
+             NSArray<WKMessageModel *> *covered = [self wk_fold_coveredMessagesForTableIndexPath:visibleRow];
+             NSArray<WKMessageModel *> *toScan = covered.count > 0 ? covered :
+                 (^{ WKMessageModel *m = [self.dataProvider messageAtIndexPath:visibleRow]; return m ? @[m] : @[]; })();
+             for (WKMessageModel *messageModel in toScan) {
+                 if(messageModel) {
+                     if(minVisiableOrderSeq == 0 || messageModel.orderSeq < minVisiableOrderSeq) {
+                         minVisiableOrderSeq = messageModel.orderSeq;
+                     }
+                     if(messageModel.orderSeq > maxVisiableOrderSeq) {
+                         maxVisiableOrderSeq = messageModel.orderSeq;
+                     }
                  }
-                 maxVisiableOrderSeq = messageModel.orderSeq;
              }
          }
     }
@@ -180,13 +196,21 @@
     NSIndexPath *lastIndexPath = [self.dataProvider indexPathAtClientMsgNo:self.lastMessage.clientMsgNo];
     if(!lastIndexPath) { // 如果最新的消息在tableView里没有 则表示消息没到底部
         self.positionAtBottom = false;
-    }else{
-        CGRect lastMessageRect = [self.tableView rectForRowAtIndexPath:lastIndexPath]; // 获取最底部消息的rect
-        if([self cellIsVisible:lastMessageRect]) { // 如果最新的消息可见了 说明到底部了，反之没有
-            self.positionAtBottom = true;
-        }else {
-            self.positionAtBottom = false;
-        }
+        return;
+    }
+    // bot 折叠：dataProvider 返回的是 raw 行号；折叠开启时最后一条消息可能被吞进
+    // 折叠卡里，raw 行号在 tableView 里不存在 → rectForRow 返 CGRectZero → 永远
+    // 判 NO → 用户在底部时也认不出 → 收到新消息不会触发 scrollToBottom。
+    // 翻译到 fold 后的 tableView 行号再查 rect。
+    NSIndexPath *useIndexPath = lastIndexPath;
+    NSIndexPath *foldIndexPath = [self wk_fold_translatedIndexPathForDataProviderIndexPath:lastIndexPath
+                                                                            expandIfNeeded:NO];
+    if (foldIndexPath) useIndexPath = foldIndexPath;
+    CGRect lastMessageRect = [self.tableView rectForRowAtIndexPath:useIndexPath]; // 获取最底部消息的rect
+    if([self cellIsVisible:lastMessageRect]) { // 如果最新的消息可见了 说明到底部了，反之没有
+        self.positionAtBottom = true;
+    }else {
+        self.positionAtBottom = false;
     }
 }
 

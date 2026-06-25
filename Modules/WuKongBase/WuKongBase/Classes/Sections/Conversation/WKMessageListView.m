@@ -16,6 +16,7 @@
 #import "WKHistorySplitTipContent.h"
 #import "WKTypingManager.h"
 #import "WKMessageListView+Position.h"
+#import "WKMessageListView+Fold.h"
 #import "WKConversationListVM.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKMessageEffectManager.h"
@@ -771,6 +772,11 @@ static const BOOL kIncrementalPulldown = NO;
         oldFirstSectionRowCount = [self.dataProvider messagesAtSection:0].count;
     }
 
+    // bot 折叠：pulldown 之前快照一份折叠后的 renderItems，等数据到位后做 incremental diff
+    // 替代 reloadData——保持上滑加载的视觉连贯（不闪、不跳）。
+    NSArray<NSArray<WKBotFoldRenderItem *> *> *oldFoldItemsSnapshot = [self wk_fold_snapshotRenderItemsBySection];
+    NSInteger oldSectionCountForFold = oldSectionCount;
+
     [self.dataProvider pulldown:^(bool hasMore) {
         WK_PERF_LOG(@"[PullDebug] pulldown callback: hasMore=%d", hasMore);
         if(!hasMore) {
@@ -797,6 +803,13 @@ static const BOOL kIncrementalPulldown = NO;
             if (firstVisible) {
                 CGRect cellRect = [weakSelf.tableView rectForRowAtIndexPath:firstVisible];
                 cellOffsetInView = cellRect.origin.y - weakSelf.tableView.contentOffset.y;
+            }
+            // bot 折叠：另外记一个跨拓扑稳定的"锚点消息 clientMsgNo"，因为 firstVisible
+            // 行号在折叠开启时跟 dataProvider 行号不一致；reloadData 之后用 clientMsgNo
+            // 查 dataProvider→翻译到折叠后的新行号才能正确还原 contentOffset。
+            NSString *anchorClientMsgNo = nil;
+            if (firstVisible) {
+                anchorClientMsgNo = [weakSelf wk_fold_anchorClientMsgNoAtTableIndexPath:firstVisible];
             }
             NSIndexPath *targetAfterReload = nil;
             if (firstVisible) {
@@ -849,7 +862,9 @@ static const BOOL kIncrementalPulldown = NO;
                     CFAbsoluteTime t_apply = CFAbsoluteTimeGetCurrent();
                     BOOL didIncremental = NO;
 
-                    if (kIncrementalPulldown && weakSelf && weakSelf.tableView) {
+                    if (kIncrementalPulldown && weakSelf && weakSelf.tableView && ![weakSelf wk_fold_isEnabled]) {
+                        // bot 折叠开启时跳过增量路径：dataProvider 行数 ≠ tableView 行数,
+                        // insertRowsAtIndexPaths 会断言/错位；走 reloadData + anchor 还原。
                         @try {
                             // 关键修法：跟老 reloadData 路径同源 —— 用 layoutIfNeeded +
                             // rectForRowAtIndexPath:targetCopy 拿 anchor 真实新位置，再调 contentOffset。
@@ -907,16 +922,75 @@ static const BOOL kIncrementalPulldown = NO;
                     }
 
                     if (!didIncremental) {
+                        // bot 折叠路径：用 incremental diff + 完成回调里还原 contentOffset
+                        // ——避免老 reloadData 路径的闪屏 / 跳一下。
+                        if ([weakSelf wk_fold_isEnabled]) {
+                            NSString *anchorCmnCopy = anchorClientMsgNo;
+                            CGFloat preApplyOffsetY = weakSelf.tableView.contentOffset.y;
+                            CGFloat preApplyContentH = weakSelf.tableView.contentSize.height;
+                            NSLog(@"[FoldDbg] pulldown OUTER apply BEGIN anchor=%@ preOffsetY=%.1f preContentH=%.1f newSecAdded=%ld",
+                                  anchorCmnCopy ?: @"-", preApplyOffsetY, preApplyContentH, (long)newSectionsAdded);
+                            __weak typeof(weakSelf) wself2 = weakSelf;
+                            [weakSelf wk_fold_applyPulldownIncrementalWithOldItemsBySection:oldFoldItemsSnapshot
+                                                                              oldSectionCount:oldSectionCountForFold
+                                                                            newSectionsAdded:newSectionsAdded
+                                                                                   completion:^{
+                                __strong typeof(wself2) ss = wself2;
+                                if (!ss) return;
+                                [ss.tableView layoutIfNeeded];
+                                CGFloat postApplyContentH = ss.tableView.contentSize.height;
+                                NSIndexPath *resolvedTarget = nil;
+                                if (anchorCmnCopy.length > 0
+                                    && [ss.dataProvider respondsToSelector:@selector(indexPathAtClientMsgNo:)]) {
+                                    NSIndexPath *dpIdx = [ss.dataProvider indexPathAtClientMsgNo:anchorCmnCopy];
+                                    if (dpIdx) {
+                                        NSIndexPath *folded = [ss wk_fold_translatedIndexPathForDataProviderIndexPath:dpIdx
+                                                                                                       expandIfNeeded:NO];
+                                        resolvedTarget = folded ?: dpIdx;
+                                    }
+                                }
+                                if (resolvedTarget) {
+                                    CGRect targetRect = [ss.tableView rectForRowAtIndexPath:resolvedTarget];
+                                    CGFloat newOffsetY = targetRect.origin.y - offsetCopy;
+                                    NSLog(@"[FoldDbg] pulldown OUTER apply RESTORE anchor=%@ resolvedRow=(%ld,%ld) targetY=%.1f offsetInView=%.1f newOffsetY=%.1f postContentH=%.1f tableH=%.1f",
+                                          anchorCmnCopy, (long)resolvedTarget.section, (long)resolvedTarget.row,
+                                          targetRect.origin.y, offsetCopy, newOffsetY,
+                                          postApplyContentH, ss.tableView.bounds.size.height);
+                                    [UIView performWithoutAnimation:^{
+                                        ss.tableView.contentOffset = CGPointMake(0, newOffsetY);
+                                    }];
+                                    CGFloat actualOffsetY = ss.tableView.contentOffset.y;
+                                    if (fabs(actualOffsetY - newOffsetY) > 0.5) {
+                                        NSLog(@"[FoldDbg][WARN] pulldown OUTER apply OFFSET CLAMPED want=%.1f actual=%.1f (likely contentSize not yet settled or offset > max)",
+                                              newOffsetY, actualOffsetY);
+                                    }
+                                } else {
+                                    NSLog(@"[FoldDbg][WARN] pulldown OUTER apply NO-ANCHOR anchor=%@ — contentOffset left unchanged (UIKit may clamp to bottom if contentSize grew)",
+                                          anchorCmnCopy ?: @"-");
+                                }
+                            }];
+                        } else {
                         // 老路径：reloadData + setContentOffset 一步到位（贵但稳）
                         [UIView performWithoutAnimation:^{
                             [weakSelf.tableView reloadData];
                             [weakSelf.tableView layoutIfNeeded];
                         }];
-                        if (targetCopy) {
+                        NSIndexPath *resolvedTarget = targetCopy;
+                        if (anchorClientMsgNo.length > 0
+                            && [weakSelf.dataProvider respondsToSelector:@selector(indexPathAtClientMsgNo:)]) {
+                            NSIndexPath *dpIdx = [weakSelf.dataProvider indexPathAtClientMsgNo:anchorClientMsgNo];
+                            if (dpIdx) {
+                                NSIndexPath *folded = [weakSelf wk_fold_translatedIndexPathForDataProviderIndexPath:dpIdx
+                                                                                                     expandIfNeeded:NO];
+                                resolvedTarget = folded ?: dpIdx;
+                            }
+                        }
+                        if (resolvedTarget) {
                             [UIView performWithoutAnimation:^{
-                                CGRect targetRect = [weakSelf.tableView rectForRowAtIndexPath:targetCopy];
+                                CGRect targetRect = [weakSelf.tableView rectForRowAtIndexPath:resolvedTarget];
                                 weakSelf.tableView.contentOffset = CGPointMake(0, targetRect.origin.y - offsetCopy);
                             }];
+                        }
                         }
                     }
 
@@ -963,6 +1037,11 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         oldLastSectionRowCount = [self.dataProvider messagesAtSection:oldSectionCount - 1].count;
     }
 
+    // bot 折叠：pullup 之前快照一份折叠后的 renderItems，等数据到位后做 incremental diff
+    // 替代 reloadData 路径（reloadData 会闪屏 / 跳一下）。
+    NSArray<NSArray<WKBotFoldRenderItem *> *> *oldFoldItemsSnapshot = [self wk_fold_snapshotRenderItemsBySection];
+    NSInteger oldSectionCountForFold = oldSectionCount;
+
     [self.dataProvider pullup:^(bool hasMore) {
         WK_PERF_LOG(@"[PullDebug] pullup callback: hasMore=%d", hasMore);
         if(!hasMore) {
@@ -1007,6 +1086,20 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 
                 dispatch_async(dispatch_get_main_queue(), ^{
                     CFAbsoluteTime t_insert = CFAbsoluteTimeGetCurrent();
+                    BOOL useFoldReload = [weakSelf wk_fold_isEnabled];
+                    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WKBotFoldDebug"]) {
+                        NSLog(@"[FoldDbg] pullup applying: newMsgs=%lu newSections=%ld path=%@",
+                              (unsigned long)newMsgs.count, (long)newSectionsAddedCopy,
+                              useFoldReload ? @"FOLD-INCREMENTAL" : @"INCREMENTAL");
+                    }
+                    // bot 折叠：用 incremental diff（snapshot vs new renderItems）替代 reloadData，
+                    // 保留视觉连贯（不闪、不跳），同时正确处理 fold-coords 行号 vs raw 行号差异。
+                    if (useFoldReload) {
+                        [weakSelf wk_fold_applyPullupIncrementalWithOldItemsBySection:oldFoldItemsSnapshot
+                                                                       oldSectionCount:oldSectionCountForFold
+                                                                     newSectionsAdded:newSectionsAddedCopy
+                                                                            completion:nil];
+                    } else {
                     [UIView performWithoutAnimation:^{
                         @try {
                             [weakSelf.tableView beginUpdates];
@@ -1043,6 +1136,7 @@ static const NSInteger kMaxPullupDedupRetry = 3;
                             [weakSelf.tableView reloadData];
                         }
                     }];
+                    }
                     CGFloat insertMs = (CFAbsoluteTimeGetCurrent() - t_insert) * 1000;
                     WK_PERF_LOG(@"[Perf] pullup: %lu msgs | precache=%.1fms(bg) insert=%.1fms(main)", (unsigned long)newMsgs.count, precacheMs, insertMs);
 
@@ -1121,7 +1215,20 @@ static const NSInteger kMaxPullupDedupRetry = 3;
     BOOL change = false;
     NSIndexPath *lastVisibleIndexPath =  [self lastVisibleIndexPath];
     if(lastVisibleIndexPath) {
-        WKMessageModel *lastVisibleMessageModel = [self.dataProvider messageAtIndexPath:lastVisibleIndexPath];
+        // bot 折叠：lastVisibleIndexPath 是 tableView 行号；若该行是折叠卡，
+        // 它视觉上覆盖整组消息——取组内最大 orderSeq 才算"看到了"，
+        // 否则 dataProvider 拿 raw 行号会返回组里某条更早的消息，browseToOrderSeq
+        // 永远推不过折叠卡 → 未读永远清不掉。
+        NSArray<WKMessageModel *> *covered = [self wk_fold_coveredMessagesForTableIndexPath:lastVisibleIndexPath];
+        WKMessageModel *lastVisibleMessageModel = nil;
+        if (covered.count > 0) {
+            uint32_t best = 0;
+            for (WKMessageModel *m in covered) {
+                if (m.orderSeq > best) { best = m.orderSeq; lastVisibleMessageModel = m; }
+            }
+        } else {
+            lastVisibleMessageModel = [self.dataProvider messageAtIndexPath:lastVisibleIndexPath];
+        }
         if(lastVisibleMessageModel && lastVisibleMessageModel.orderSeq>self.browseToOrderSeq) {
             self.browseToOrderSeq = lastVisibleMessageModel.orderSeq;
             change = true;
@@ -1149,14 +1256,27 @@ static const NSInteger kMaxPullupDedupRetry = 3;
     if(!firstIndexPath) {
         return;
     }
-    WKMessageModel *firstMessageModel = [self.dataProvider messageAtIndexPath:firstIndexPath];
+    // bot 折叠：firstIndexPath 是 fold 坐标；取该行覆盖的"首条消息"作为 keepPosition 锚点
+    // （折叠卡覆盖整组，取组内最小 orderSeq 那条）。直接 dataProvider 取会拿到错位消息。
+    NSArray<WKMessageModel *> *firstCovered = [self wk_fold_coveredMessagesForTableIndexPath:firstIndexPath];
+    WKMessageModel *firstMessageModel = nil;
+    if (firstCovered.count > 0) {
+        firstMessageModel = firstCovered.firstObject;
+        for (WKMessageModel *m in firstCovered) {
+            if (firstMessageModel.orderSeq == 0 || (m.orderSeq > 0 && m.orderSeq < firstMessageModel.orderSeq)) {
+                firstMessageModel = m;
+            }
+        }
+    } else {
+        firstMessageModel = [self.dataProvider messageAtIndexPath:firstIndexPath];
+    }
     if(firstMessageModel.messageSeq == 1) { // 等于1表示阅读到最后一条消息了 下次进来滚到到底部
         self.keepPosition = nil;
         return;
     }
-    
+
     CGRect firstRect = [self.tableView rectForRowAtIndexPath:firstIndexPath];
-    uint32_t firstVisibleOrderSeq = [self.dataProvider messageAtIndexPath:firstIndexPath].orderSeq;
+    uint32_t firstVisibleOrderSeq = firstMessageModel.orderSeq;
 
     CGFloat offset =  self.tableView.contentOffset.y  - firstRect.origin.y;
     
@@ -1173,9 +1293,20 @@ static const NSInteger kMaxPullupDedupRetry = 3;
     NSArray<NSIndexPath*> *visibleRows = [self.tableView indexPathsForVisibleRows];
     if(visibleRows && visibleRows.count>0) {
         for (NSIndexPath *indexPath in visibleRows) {
-           WKMessageModel *visibleMessage = [self.dataProvider messageAtIndexPath:indexPath];
-            if([clientMsgNo isEqualToString:visibleMessage.clientMsgNo]) {
-                return [self cellIsVisible: [self.tableView rectForRowAtIndexPath:indexPath]];
+            // bot 折叠：取该行覆盖的所有消息，任一命中即视为可见
+            // （折叠卡视觉上覆盖整组消息——其中任一条都算"可见"）
+            NSArray<WKMessageModel *> *covered = [self wk_fold_coveredMessagesForTableIndexPath:indexPath];
+            if (covered.count > 0) {
+                for (WKMessageModel *m in covered) {
+                    if ([clientMsgNo isEqualToString:m.clientMsgNo]) {
+                        return [self cellIsVisible:[self.tableView rectForRowAtIndexPath:indexPath]];
+                    }
+                }
+            } else {
+                WKMessageModel *visibleMessage = [self.dataProvider messageAtIndexPath:indexPath];
+                if([clientMsgNo isEqualToString:visibleMessage.clientMsgNo]) {
+                    return [self cellIsVisible: [self.tableView rectForRowAtIndexPath:indexPath]];
+                }
             }
         }
     }
@@ -1230,6 +1361,11 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         self.browseToOrderSeq = self.lastMessage.orderSeq;
     }
     self.newMsgCount = 0;
+    // 直接同步 UI badge：setNewMsgCount: 是合成 setter 不会触发 handleNewMsgCountChange，
+    // 之前依赖 scrollViewDidScroll → updateBrowseToOrderSeq → refreshNewMsgCount 路径
+    // 链式更新，但点未读按钮路径里 browseToOrderSeq 已经被这里推到 max，updateBrowseToOrderSeq
+    // 检测无变化就早 return，导致 badge UI 永远不被刷新。
+    [self handleNewMsgCountChange];
     [self refreshConversationListNewCount]; // 内部已经做 server + 本地 DB 双写
 }
 
@@ -1281,12 +1417,18 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         for (NSIndexPath *indexPath in visibleRows) {
             CGRect rect = [self.tableView rectForRowAtIndexPath:indexPath];
             if([self cellIsVisible:rect]) {
-                WKMessageModel *messageModel = [self.dataProvider messageAtIndexPath:indexPath];
-                 if(messageModel.messageId != 0 && !messageModel.isSend && !messageModel.readed && messageModel.message.setting.receiptEnabled) {
-                     [messagesOfReaded addObject:messageModel];
-                 }
-                if(messageModel.content.flame && messageModel.content.viewedOfVisible && !messageModel.viewed) {
-                    [messagesOfViewed addObject:messageModel.message];
+                // bot 折叠：取该行覆盖的全部消息（折叠卡覆盖整组），逐条判已读条件。
+                // 不能只用 raw 行号取一条——折叠卡的 raw 行号映射不到组内最后一条。
+                NSArray<WKMessageModel *> *covered = [self wk_fold_coveredMessagesForTableIndexPath:indexPath];
+                NSArray<WKMessageModel *> *toCheck = covered.count > 0 ? covered : @[ [self.dataProvider messageAtIndexPath:indexPath] ?: (WKMessageModel *)[NSNull null] ];
+                for (WKMessageModel *messageModel in toCheck) {
+                    if (![messageModel isKindOfClass:[WKMessageModel class]]) continue;
+                    if(messageModel.messageId != 0 && !messageModel.isSend && !messageModel.readed && messageModel.message.setting.receiptEnabled) {
+                        [messagesOfReaded addObject:messageModel];
+                    }
+                    if(messageModel.content.flame && messageModel.content.viewedOfVisible && !messageModel.viewed) {
+                        [messagesOfViewed addObject:messageModel.message];
+                    }
                 }
             }
         }
@@ -1297,7 +1439,7 @@ static const NSInteger kMaxPullupDedupRetry = 3;
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
                 [WKSDK.shared.flameManager didViewed:messagesOfViewed];
             });
-           
+
         }
     }
 }
@@ -1444,6 +1586,16 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 }
 -(void) scrollToIndex:(NSIndexPath*)indexPath animated:(BOOL)animated atScrollPosition:(UITableViewScrollPosition)atScrollPosition{
     if (!indexPath) return;
+
+    // bot 折叠：indexPath 来自 dataProvider，是数据行索引；tableView 实际可能因折叠
+    // 而行号不同。**这里只翻译、不自动展开**——展开会触发同步 reloadData，
+    // 与滚动/布局正在进行的状态冲突，导致 NSInternalInconsistencyException。
+    // 命中目标位于折叠卡内时返回折叠卡所在行（用户落到卡上手动展开），
+    // 不破坏正在进行的 UITableView 内部状态。
+    NSIndexPath *folded = [self wk_fold_translatedIndexPathForDataProviderIndexPath:indexPath
+                                                                     expandIfNeeded:NO];
+    if (folded) indexPath = folded;
+
     // dataProvider 的 orderSeq→indexPath 索引和 UITableView dataSource 在
     // 增量更新窗口里会短暂不一致：indexPathAtOrderSeq 已能定位到刚 append
     // 的行，但 tableView 还没拿到 numberOfRows 的新值；此时直接
@@ -2008,6 +2160,18 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         return;
     }
 
+    NSLog(@"[FoldDbg] handleRecvMessage ENTRY cmn=%@ ct=%ld isSend=%d isPulldown=%d isRehydrating=%d",
+          message.clientMsgNo ?: @"-", (long)message.contentType,
+          message.isSend, self.isPulldownInProgress, self.isRehydrating);
+
+    // bot 折叠：若聊天详情当前在前台（"停留"状态），把这条可折叠 bot 消息标记为
+    // "不折叠"——折叠 engine 见到 regularIDs 命中即强制独立 cell 渲染，从而满足
+    // brief：用户在页面停留时，新到 bot 消息直接展示，不卷入折叠卡。
+    {
+        WKMessageModel *probe = [[WKMessageModel alloc] initWithMessage:message];
+        [self wk_fold_noteIncomingMessages:@[ probe ]];
+    }
+
     // pulldown / rehydrate 进行中，暂存新消息避免并发修改 tableView 导致布局错乱。
     // pulldown 跑完会在 endPulldown 路径里 drain; rehydrate 跑完在 finishRehydrate
     // 里 drain。两条路径共用同一个 pendingRecvMessages 缓冲区, 不会冲突。
@@ -2025,9 +2189,17 @@ static const NSInteger kMaxPullupDedupRetry = 3;
     WKMessageModel *messageModel = [[WKMessageModel alloc] initWithMessage:message];
     if([self pullupHasMore]) { // 消息没有完全加载完成
         [self updateLastMsgIfNeed:messageModel];
+        NSLog(@"[FoldDbg] recv cmn=%@ ct=%ld → SKIPPED (pullupHasMore=YES; not added to dataProvider; only lastMsg bumped)",
+              message.clientMsgNo ?: @"-", (long)message.contentType);
         if( [message isSend]) {
             [self  pullBottom];
         }
+        // **不要**在用户接收消息时自动 pullBottom——`pullBottom` 内部走
+        // `loadMessages:firstLoad:NO`，会把 dataProvider 整窗口重置（丢掉当前已加载
+        // 的历史 + 重建为以 lastMessage 为锚的新窗口）。如果用户在底部正盯着看，
+        // 每来一条消息都触发一次重置 + reloadData，contentOffset 跟新 contentSize
+        // 对不上 → 整屏空白。badge 涨但消息不出来时让用户手动点未读按钮触发 pullBottom，
+        // 比自动 reset 安全得多。
     } else {
         [self updateLastMsgIfNeed:messageModel];
 
@@ -2046,6 +2218,8 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         //   相等判断提前 return，永远不会补一次 reloadData。reloadData 是惰性的，回前台下次
         //   layout 会重查 numberOfRows 并重新 willDisplayCell:，自愈（对齐 git-init 的原行为）。
         if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
+            NSLog(@"[FoldDbg] recv cmn=%@ ct=%ld → BACKGROUND path (addMessage + reloadData; fold branch SKIPPED)",
+                  message.clientMsgNo ?: @"-", (long)message.contentType);
             // R4 fix: 标记 "回前台 reconcile 时即使 numberOfRows 一致也要强制 reloadData 一次",
             // 治后台 reloadData + scrollToBottom 触发离屏 layout 但 willDisplayCell: 没回调,
             // 回前台 UIKit 误判 "已布局" 不重渲染、cell 内容空白的回归。消费点:
@@ -2081,11 +2255,50 @@ static const NSInteger kMaxPullupDedupRetry = 3;
             return;
         }
 
+        // bot 折叠：跳过 inSyncBefore + 增量 insertRows 路径——fold 模式下 ds 行数（raw）
+        // 与 tv 行数（fold-coords）恒不等，inSyncBefore 必返回 NO，原路径每条新消息都走
+        // reloadData（持续闪屏；锁屏后批量收消息时多次连续 reloadData 还会污染 tableView
+        // 内部 layout pipeline）。改用 snapshot + applyPullupIncremental，与 pullup 同源。
+        if ([self wk_fold_isEnabled]) {
+            NSArray<NSArray<WKBotFoldRenderItem *> *> *foldSnapshot = [self wk_fold_snapshotRenderItemsBySection];
+            NSInteger oldSecCountForFold = [self.dataProvider dateCount];
+            [self.dataProvider addMessage:messageModel];
+            NSInteger newSecCount = [self.dataProvider dateCount];
+            NSInteger newSecAdded = newSecCount - oldSecCountForFold;
+            NSLog(@"[FoldDbg] recv cmn=%@ ct=%ld → fold-incremental (oldSec=%ld newSecAdded=%ld snapshot=%@)",
+                  message.clientMsgNo ?: @"-", (long)message.contentType,
+                  (long)oldSecCountForFold, (long)newSecAdded,
+                  foldSnapshot ? @"yes" : @"NIL");
+            __weak typeof(self) wself = self;
+            BOOL shouldScrollBottom = self.positionAtBottom || [message isSend];
+            [self wk_fold_applyPullupIncrementalWithOldItemsBySection:foldSnapshot
+                                                      oldSectionCount:oldSecCountForFold
+                                                    newSectionsAdded:newSecAdded
+                                                           completion:^{
+                // performBatchUpdates 完成后 contentSize 才是包含新插入行的最新值；
+                // 此时滚到底才能真正看到新消息。在 completion 之前调 scrollToBottom
+                // 拿到的是旧 contentSize → 看似滑到底但新消息其实在视口之下。
+                // snapshotStale fallback 走 reloadData 时同样情况，layoutIfNeeded
+                // 强制把 contentSize 推到位再滚。
+                __strong typeof(wself) ss = wself;
+                if (!ss) return;
+                if (shouldScrollBottom) {
+                    [ss.tableView layoutIfNeeded];
+                    [ss scrollToBottom:YES];
+                }
+            }];
+            return;
+        }
+
         // Bugly #3054 兜底（另一路径 crash：before=31/after=32/inserted=0/deleted=0）：
         //   handleRecvMessage 可能在 dp 已经和 tv 漂移的状态下被调用（前一次 insert 抛异常被吞掉、
         //   或前序 send/recv 因嵌套 RunLoop 留下漂移）。进入增量更新前做一次一致性检查，不一致
         //   就直接 addMessage + reloadData 收敛，不走后面的增量路径。
         BOOL inSyncBefore = [self isTableViewRowCountInSyncWithDataProvider];
+        if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WKBotFoldDebug"]) {
+            NSLog(@"[FoldDbg] handleRecvMessage cmn=%@ inSync=%d foldEnabled=%d",
+                  message.clientMsgNo ?: @"-", inSyncBefore, [self wk_fold_isEnabled]);
+        }
         if (!inSyncBefore) {
             [self.dataProvider addMessage:messageModel];
             [self.tableView reloadData];
@@ -2265,7 +2478,41 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath{
 
-    WKMessageModel *messageModel = [self.dataProvider messageAtIndexPath:indexPath];
+    // ─── bot 折叠优先级：命中折叠项时早返回折叠卡或用折叠后的 message ─────
+    WKBotFoldRenderItem *foldItem = [self wk_fold_renderItemAtIndexPath:indexPath];
+    if (foldItem && foldItem.type == WKBotFoldRenderItemTypeFoldSession) {
+        if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WKBotFoldDebug"]) {
+            NSLog(@"[FoldDbg] cellForRow %ld,%ld → FoldCard (msgs=%lu expanded=%d)",
+                  (long)indexPath.section, (long)indexPath.row,
+                  (unsigned long)foldItem.foldSession.messages.count, foldItem.foldSession.expanded);
+        }
+        return [self wk_fold_dequeueCellForSession:foldItem.foldSession tableView:tableView indexPath:indexPath];
+    }
+    // 折叠开启但 foldItem 为 nil = renderItems 与 tableView 的 numberOfRows 不同步（race）。
+    // dataProvider 行号是 raw-coords，不能直接用 indexPath 取——容易拿到隔壁消息把气泡画错。
+    // 打告警 + 返回 0 高度占位 cell（heightForRow 那条路径已经返回 0.1）。
+    if (!foldItem && [self wk_fold_isEnabled]) {
+        NSLog(@"[FoldDbg][WARN] cellForRow %ld,%ld: fold enabled but renderItem nil — returning empty placeholder (tvRows=%ld)",
+              (long)indexPath.section, (long)indexPath.row,
+              (long)[tableView numberOfRowsInSection:indexPath.section]);
+        UITableViewCell *empty = [tableView dequeueReusableCellWithIdentifier:@"wk_fold_placeholder"];
+        if (!empty) {
+            empty = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"wk_fold_placeholder"];
+            empty.backgroundColor = [UIColor clearColor];
+            empty.selectionStyle = UITableViewCellSelectionStyleNone;
+        }
+        return empty;
+    }
+    WKMessageModel *messageModel = foldItem.message ?: [self.dataProvider messageAtIndexPath:indexPath];
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WKBotFoldDebug"]) {
+        NSLog(@"[FoldDbg] cellForRow %ld,%ld → %@ cmn=%@ ct=%ld foldPath=%d msgNil=%d",
+              (long)indexPath.section, (long)indexPath.row,
+              messageModel ? NSStringFromClass([self getMessageCellClass:messageModel]) : @"(nil-msg)",
+              messageModel.clientMsgNo ?: @"-",
+              (long)messageModel.contentType,
+              foldItem != nil,
+              messageModel == nil);
+    }
     Class messageCellClass =  [self getMessageCellClass:messageModel];
 
     NSString *identifier = NSStringFromClass(messageCellClass);
@@ -2387,7 +2634,29 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath{
-    WKMessageModel *messageModel = [self.dataProvider messageAtIndexPath:indexPath];
+    // ─── bot 折叠优先级：命中折叠卡时给固定高度，命中折叠后的 message 用 fold 项的 message
+    WKBotFoldRenderItem *foldItem = [self wk_fold_renderItemAtIndexPath:indexPath];
+    if (foldItem && foldItem.type == WKBotFoldRenderItemTypeFoldSession) {
+        CGFloat h = [self wk_fold_heightForSession:foldItem.foldSession];
+        if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WKBotFoldDebug"]) {
+            NSLog(@"[FoldDbg] heightForRow %ld,%ld → FoldCard h=%.1f (msgs=%lu active=%d expanded=%d)",
+                  (long)indexPath.section, (long)indexPath.row, h,
+                  (unsigned long)foldItem.foldSession.messages.count,
+                  foldItem.foldSession.isActive, foldItem.foldSession.expanded);
+        }
+        return h;
+    }
+    // 折叠开启但 foldItem 为 nil = renderItems 缓存与 numberOfRows 期望不同步（race）。
+    // 此时 dataProvider 行号是 raw-coords，跟 tableView 的 fold-coords 不匹配，
+    // 用它查到的消息很可能不是该 row 期望的那条 → 后果就是气泡渲染串行错位。
+    // 改为返回 0.1（不可见）+ 打告警，避免用错消息渲染。
+    if (!foldItem && [self wk_fold_isEnabled]) {
+        NSLog(@"[FoldDbg][WARN] heightForRow %ld,%ld: fold enabled but renderItem nil — possible cache/numberOfRows drift (tvRows=%ld)",
+              (long)indexPath.section, (long)indexPath.row,
+              (long)[tableView numberOfRowsInSection:indexPath.section]);
+        return 0.1f;
+    }
+    WKMessageModel *messageModel = foldItem.message ?: [self.dataProvider messageAtIndexPath:indexPath];
     if (!messageModel) return 0.1f;
 
     // 流式消息不缓存高度（内容还在变化）
@@ -2439,11 +2708,24 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         }
     }
 
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WKBotFoldDebug"]) {
+        NSLog(@"[FoldDbg] heightForRow %ld,%ld → Message h=%.1f cmn=%@ ct=%ld streaming=%d",
+              (long)indexPath.section, (long)indexPath.row, height,
+              messageModel.clientMsgNo ?: @"-", (long)messageModel.contentType, isStreaming);
+    }
     return height;
 }
 
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
-    WKMessageModel *messageModel = [self.dataProvider messageAtIndexPath:indexPath];
+    // bot 折叠卡：不走 WKMessageBaseCell 路径（不是 messageBaseCell 的子类，
+    // 强转 setConversationContext: 会 unrecognized selector）
+    if (![cell isKindOfClass:[WKMessageBaseCell class]]) {
+        return;
+    }
+    // 折叠开启时，indexPath 已是折叠后行号；从 renderItem 拿真实 message
+    // 而不是直接 dataProvider lookup（dataProvider 行号未折叠）
+    WKBotFoldRenderItem *foldItem = [self wk_fold_renderItemAtIndexPath:indexPath];
+    WKMessageModel *messageModel = foldItem.message ?: [self.dataProvider messageAtIndexPath:indexPath];
     if (!messageModel) return;
     WKMessageBaseCell *baseCell = (WKMessageBaseCell*)cell;
     baseCell.conversationContext = [self.dataProvider conversationContext];
@@ -2474,6 +2756,26 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     }
     [baseCell onWillDisplay];
 
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WKBotFoldDebug"]) {
+        NSLog(@"[FoldDbg] willDisplay %ld,%ld cmn=%@ ct=%ld cls=%@ foldPath=%d",
+              (long)indexPath.section, (long)indexPath.row,
+              messageModel.clientMsgNo ?: @"-",
+              (long)messageModel.contentType,
+              NSStringFromClass([cell class]),
+              foldItem != nil);
+    }
+
+    // bot 折叠：在展开的 fold 内，若这是某个 bot 的第一条 → 即便 bubblePosition
+    // 判为 Middle/Last（preMessageModel.fromUid 在 dataProvider 链里仍是同 bot 的更早
+    // 消息）也强制显示头像；用户才好区分谁发的。
+    if ([baseCell isKindOfClass:[WKMessageCell class]]
+        && [self wk_fold_shouldForceShowAvatarAtTableIndexPath:indexPath]) {
+        WKMessageCell *mc = (WKMessageCell *)baseCell;
+        if (!messageModel.isSend && !messageModel.isPersonChannel) {
+            mc.avatarImgView.hidden = NO;
+        }
+    }
+
     // 在标记已读之前先检查是否需要触发未读消息的表情特效（否则状态会被改变）
     [self checkFirstViewEffectForMessage:messageModel];
 
@@ -2485,11 +2787,20 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 }
 
 - (void)tableView:(UITableView *)tableView didEndDisplayingCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (![cell isKindOfClass:[WKMessageBaseCell class]]) {
+        return; // 折叠卡等非消息 cell 不走 onEndDisplay 路径
+    }
     WKMessageBaseCell *baseCell = (WKMessageBaseCell*)cell;
     [baseCell onEndDisplay];
 }
 
-//
+// 折叠卡 cell 的展开/收起：由 cell 内 titleRow 自己的 tap gesture 触发 → onToggleExpand
+// 回调 → wk_fold_toggleExpandForSession:。这里 didSelectRowAtIndexPath: **不再自动 toggle**：
+// 当 UITableView 默认 tap + cell 自己的 gesture 双触发时，expandedMessageIDs 会一加一减
+// 来回振荡，每次振荡都触发 reloadData，渲染管线被反复打断 → 气泡崩。
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:NO];
+}//
 //- (UIContextMenuConfiguration *)tableView:(UITableView *)tableView contextMenuConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath point:(CGPoint)point {
 //
 //    return [UIContextMenuConfiguration configurationWithIdentifier:nil previewProvider:nil actionProvider:^UIMenu * _Nullable(NSArray<UIMenuElement *> * _Nonnull suggestedActions) {
@@ -2502,18 +2813,25 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 //}
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    return [self.dataProvider dateCount];
+    NSInteger n = [self.dataProvider dateCount];
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"WKBotFoldDebug"]) {
+        NSLog(@"[FoldDbg] numberOfSections → %ld", (long)n);
+    }
+    return n;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    // ─── bot 折叠优先级：启用时返回折叠后行数 ─────────────────────────────
+    NSInteger foldedCount = [self wk_fold_renderItemsCountInSection:section];
+    if (foldedCount != NSNotFound) {
+        return foldedCount;
+    }
     NSArray<WKMessageModel*> *messages = [self.dataProvider messagesAtSection:section];
     if(!messages||messages.count==0) {
         return 0;
     }
     return messages.count;
 }
-
-
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
    WKTimeHeaderView *headerView = [tableView dequeueReusableHeaderFooterViewWithIdentifier:[WKTimeHeaderView reuseId]];
     static NSDateFormatter *sectionDateFormatter;
@@ -2780,14 +3098,37 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
                 nextClientMsgNo = deleteMessageModel.nextMessageModel.clientMsgNo;
             }
             BOOL sectionRemove = false;
+
+            // bot 折叠：raw indexPath 不能直接喂给 tableView——同 typingAdd 注释。
+            // 走 fold-incremental：snapshot → removeMessage → applyPullupIncremental，
+            // fold 层会内部 diff + per-section 行数预检 + reloadData fallback。
+            if ([self wk_fold_isEnabled]) {
+                NSArray<NSArray<WKBotFoldRenderItem *> *> *snapshot = [self wk_fold_snapshotRenderItemsBySection];
+                NSInteger oldSec = [self.dataProvider dateCount];
+                [self.dataProvider removeMessage:deleteMessageModel sectionRemove:&sectionRemove];
+                if(self.lastMessage && [deleteMessageModel.clientMsgNo isEqualToString:self.lastMessage.clientMsgNo]) {
+                    self.lastMessageInner = nil;
+                    [self updateLastMsgIfNeed:[self.dataProvider lastMessage]];
+                }
+                NSInteger newSec = [self.dataProvider dateCount];
+                // 删除路径 newSec 只会 ≤ oldSec，newSecAdded=0；section 缩减由 fold-incremental 内部
+                // diff 自然处理（applyPullupIncremental 不会因为 newSec < oldSec 漏 section——它只看
+                // oldSec 范围内的差异，但若整 section 没了 LCP 会全 delete，仍走 fallback reloadData）。
+                [self wk_fold_applyPullupIncrementalWithOldItemsBySection:snapshot
+                                                          oldSectionCount:oldSec
+                                                         newSectionsAdded:0
+                                                               completion:nil];
+                return;
+            }
+
             [self.dataProvider removeMessage:deleteMessageModel sectionRemove:&sectionRemove];
-            
+
             if(self.lastMessage && [deleteMessageModel.clientMsgNo isEqualToString:self.lastMessage.clientMsgNo]) {
                 self.lastMessageInner = nil;
                 [self updateLastMsgIfNeed:[self.dataProvider lastMessage]];
-                
+
             }
-            
+
             NSMutableArray *reloadIndexPaths = [NSMutableArray array];
             if(preClientMsgNo) {
                NSIndexPath *preIndexPath =  [self.dataProvider indexPathAtClientMsgNo:preClientMsgNo];
@@ -3274,6 +3615,29 @@ static const NSInteger kMaxRehydratePages = 35;
         return;
     }
     WKMessageModel *model = [[WKMessageModel alloc] initWithMessage:message];
+
+    // bot 折叠：dataProvider raw indexPath ≠ tableView 实际行（fold 把多条消息合并成 1 行）。
+    // 直接 insertRows(dataProvider.lastSection, dataProvider.lastRow) 会落到 tableView 不存在的
+    // 索引上 → _endCellAnimationsWithContext: 行数断言。走 fold-incremental 让 fold 层自己
+    // 处理 indexPath 翻译 + 行数自洽预检 + reloadData fallback。
+    if ([self wk_fold_isEnabled]) {
+        NSArray<NSArray<WKBotFoldRenderItem *> *> *snapshot = [self wk_fold_snapshotRenderItemsBySection];
+        NSInteger oldSec = [self.dataProvider dateCount];
+        [self.dataProvider addMessage:model];
+        NSInteger newSec = [self.dataProvider dateCount];
+        NSInteger newSecAdded = MAX(0, newSec - oldSec);
+        [self wk_fold_applyPullupIncrementalWithOldItemsBySection:snapshot
+                                                  oldSectionCount:oldSec
+                                                 newSectionsAdded:newSecAdded
+                                                       completion:^{
+            if(self.positionAtBottom) {
+                [self animateMessageWithBlock:^{
+                    [self scrollToBottom:NO];
+                }];
+            }
+        }];
+        return;
+    }
 
     // 走增量插入而不是 reloadData。reloadData 会让所有 visible cell 经过 didEndDisplayingCell
     // → prepareForReuse 周期；用户正在长按选区时 prepareForReuse 会 endInBubbleTextSelection，

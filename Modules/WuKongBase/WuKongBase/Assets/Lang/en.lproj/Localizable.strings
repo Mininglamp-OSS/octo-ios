@@ -1074,3 +1074,17 @@
 "已配置 %ld 个"="%ld configured";
 "查看 ›"="View ›";
 
+
+// ─── bot fold session (mirrors web foldSessionCard / conversation.foldSession) ─
+"AI 助手"="AI assistant";
+"AI 协作"="AI collaboration";
+"进行中 · %ld 条"="In progress · %ld";
+"%ld 条"="%ld items";
+"%@ 等 %ld 人"="%@ and %ld others";
+"收起 %ld 条讨论"="Collapse %ld discussions";
+"[表格]"="[Table]";
+"[含表格 · 展开查看]"="[Has table · expand to view]";
+"展开 %ld 条讨论"="Expand %ld discussions";
+"讨论记录"="Discussion log";
+"[含表格]"="[Has table]";
+"%@ 等"="%@ et al.";
