@@ -13,6 +13,8 @@
 #import "WKMessageDB.h"
 #import "WKReactionDB.h"
 #import "WKReminderDB.h"
+#import "WKChatManager.h"
+#import "WKChatManagerInner.h"
 #import "WKConversationExtraDB.h"
 @interface WKConversationManager ()
 /**
@@ -248,6 +250,11 @@
         }
         if(messages.count>0) {
             [[WKMessageDB shared] replaceMessages:messages];
+            // 离线 @ 补偿: conversation/sync 把 recents 直接走 replaceMessages 写库,
+            // 绕过 WKChatManager.saveMessages → addOrUpdateConversationWithMessages 路径,
+            // 其内联的 mention reminder 补偿对杀进程期间的 @ 消息失效。这里显式补一刀,
+            // 确保杀进程后离线收到的 @ 也能立刻在会话列表上显示 [有人@我] 角标。
+            [[WKSDK shared].chatManager compensateMentionRemindersFromMessages:messages];
         }
 
         // ########## 存储所有会话 ##########
