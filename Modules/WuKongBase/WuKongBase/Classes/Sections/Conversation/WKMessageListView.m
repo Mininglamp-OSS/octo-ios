@@ -1215,12 +1215,28 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         model.unreadCount = self.newMsgCount;
         [[WKSDK shared].conversationManager callOnConversationUpdateDelegate:[model getConversation]];
     }
-    // 用户滚到底 / 看到 last message → 已读 newMsgCount=0 这一段. 走 store
-    // 持久化 lastReadSeq + 清本地 DB + 入队上报(带重试),取代直接调
-    // conversationSetUnread + setConversationUnreadCount(后者上报失败会静默丢).
+    uint32_t messageSeq = self.lastMessage ? self.lastMessage.messageSeq : 0;
     if (self.newMsgCount == 0) {
-        uint32_t messageSeq = self.lastMessage ? self.lastMessage.messageSeq : 0;
+        // 读完: 走 store, 保留 e32cb1d 引入的好处:
+        //   - 入 ack 队列重试上报 (治"子区 server unread 永远=1": A 类 bug)
+        //   - 写 lastReadSeq + lastLocalReadAt → reconcile 表 branch 1/3 防止
+        //     锁屏后 sync 把 0 拉回 >0 (治"锁屏后红点复活": B 类 bug)
         [[WKUnreadStore shared] markLocalRead:self.channel readSeq:messageSeq];
+    } else {
+        // 部分读 (e.g. 5 条只读了 2 条, newMsgCount=3): build 62 老路径直接 PUT +
+        // 写本地 DB。e32cb1d 把这一支砍了, 退出聊天后 list VC 走 loadConversationList
+        // 从 DB 重读会把 in-memory 的 partial(3) 覆盖回原始 unreadCount(5),
+        // 表现就是用户报告的「滚动看了一部分,退出后 badge 又回到 5」。
+        //
+        // 为什么 PUT + DB 写不走 store?
+        //   - store 的 markLocalRead 设计是「读到这里就清 0」的语义,不支持 partial。
+        //   - server 协议是 conversationSetUnread(unread:任意值), 用 build 62 写法
+        //     直接 PUT 当前 newMsgCount, 跟 SDK markLocalRead 走的是同一 server 端口。
+        //   - 唯一回归: partial PUT 失败不入队重试 (build 62 也是这样, fire-and-forget),
+        //     server 端可能短期不收敛, 下次「读完」时 markLocalRead 会把 lastReadSeq
+        //     带上, server 端会被对齐, 可接受。
+        [[WKMessageManager shared] conversationSetUnread:self.channel unread:self.newMsgCount messageSeq:messageSeq complete:nil];
+        [[WKSDK shared].conversationManager setConversationUnreadCount:self.channel unread:self.newMsgCount];
     }
 }
 
