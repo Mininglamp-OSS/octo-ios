@@ -216,106 +216,6 @@
     return newMessages;
 }
 
--(void) compensateMentionRemindersFromMessages:(NSArray<WKMessage*>*)messages {
-    if(!messages || messages.count == 0) {
-        return;
-    }
-    // 先扫一遍, 收集所有「需要补 reminder 的候选 messageId」(= 候选 reminderID, 跟内联
-    // 路径一样用 messageId 直接当 reminderID, 见 makeConversationLastMessageAndUnreadCount).
-    NSMutableArray<NSNumber*> *candidateReminderIDs = [NSMutableArray array];
-    NSMutableArray<WKMessage*> *candidateMessages = [NSMutableArray array];
-    for (WKMessage *message in messages) {
-        if([message isSend]) continue;
-        if(!message.channel || message.channel.channelId.length == 0) continue;
-        BOOL unreadGate = (message.channel.channelType != WK_COMMUNITY_TOPIC)
-                            ? message.header.showUnread : YES;
-        if(!unreadGate) continue;
-        if(!message.content.mentionedInfo || !message.content.mentionedInfo.isMentionedMe) continue;
-        [candidateReminderIDs addObject:@((int64_t)message.messageId)];
-        [candidateMessages addObject:message];
-    }
-    if(candidateMessages.count == 0) {
-        return;
-    }
-    // 跨 id 空间查重: 服务端给"直接 @uid"建的 reminder 用服务端 reminder_id(≠messageId),
-    // 按 reminder_id 查不到, 会被本地补偿又造一条 reminder_id=messageId 的重复 → 已读 @ 复活
-    // (用户报告: 离线收到一条 @, 重开后历史已读 @ 也一起提醒)。改按 message_id 查重,
-    // 抓到服务端那条(它 message_id 列 = 该 @ 消息 messageId), 命中即 skip 不重建。
-    NSArray<WKReminder*> *existing = [[WKReminderDB shared] getRemindersByMessageIds:candidateReminderIDs];
-    NSMutableSet<NSNumber*> *existingMsgIds = [NSMutableSet set];
-    for (WKReminder *r in existing) {
-        [existingMsgIds addObject:@((int64_t)r.messageId)];
-    }
-
-    // [未读窗口门闸] 卸载重装后本地 DB 全空, 上面的查重拦不住(服务端只回未读 reminder,
-    // 已读的 @ 服务端不回 → DB 里没有那条 → 查重 miss)。done 状态权威在服务端
-    // (WKReminderManager.sync 走 reminderProvider 只返回未读), 本地补偿是从消息 payload
-    // 捏的, 不知道 done。用服务端下发的 conversation 未读状态做门闸: 只为"未读尾部"的
-    // @ 消息补偿。已读老 @: messageSeq <= lastMessageSeq - unreadCount → 不在尾部 → 不补。
-    // unreadCount==0(整会话已读) → 一条不补。取不到 conversation / lastSeq 不可用 →
-    // fail-closed(不补), 宁可漏补也不复活已读 @(漏补的真未读 @ 由服务端 reminder sync 兜)。
-    NSMutableDictionary<NSString*, WKConversation*> *convCache = [NSMutableDictionary dictionary];
-
-    NSMutableArray<WKReminder*> *toAdd = [NSMutableArray array];
-    NSMutableSet<WKChannel*> *channelsTouched = [NSMutableSet set];
-    for (WKMessage *message in candidateMessages) {
-        NSNumber *msgIdNum = @((int64_t)message.messageId);
-        if([existingMsgIds containsObject:msgIdNum]) {
-            // 该 @ 消息已有 reminder(服务端建的或本地建的, 不论 done) → skip, 不造重复
-            NSLog(@"[ReminderTrace] offlineCompensation SKIP existing(by msgId) channelId=%@ msgId=%llu",
-                  message.channel.channelId, message.messageId);
-            continue;
-        }
-
-        // 未读窗口判定(fail-closed)
-        NSString *cacheKey = [NSString stringWithFormat:@"%@-%d", message.channel.channelId, message.channel.channelType];
-        WKConversation *conv = convCache[cacheKey];
-        if(!conv) {
-            conv = [[WKSDK shared].conversationManager getConversation:message.channel];
-            if(conv) convCache[cacheKey] = conv;
-        }
-        if(!conv) {
-            NSLog(@"[ReminderTrace] offlineCompensation SKIP no-conversation channelId=%@ msgId=%llu",
-                  message.channel.channelId, message.messageId);
-            continue; // 取不到会话 → 无法判定已读/未读 → 保守不补
-        }
-        NSInteger unread = conv.unreadCount;
-        uint32_t lastSeq = conv.lastMessageSeq;
-        // lastSeq 不可用(=0)或整会话已读(unread<=0) → fail-closed 不补
-        BOOL inUnreadTail = (unread > 0) && (lastSeq > 0)
-            && (message.messageSeq > (lastSeq > (uint32_t)unread ? lastSeq - (uint32_t)unread : 0));
-        if(!inUnreadTail) {
-            NSLog(@"[ReminderTrace] offlineCompensation SKIP read(outside unread tail) channelId=%@ msgSeq=%u lastSeq=%u unread=%ld",
-                  message.channel.channelId, message.messageSeq, lastSeq, (long)unread);
-            continue;
-        }
-
-        WKReminder *reminder = [[WKReminder alloc] init];
-        reminder.reminderID = msgIdNum.longLongValue;
-        reminder.messageId = message.messageId;
-        reminder.messageSeq = message.messageSeq;
-        reminder.channel = message.channel;
-        reminder.type = WKReminderTypeMentionMe;
-        reminder.text = @"[有人@我]";
-        reminder.publisher = message.fromUid ?: @"";
-        reminder.isLocate = YES;
-        reminder.done = NO;
-        reminder.version = 0;
-        [toAdd addObject:reminder];
-        [channelsTouched addObject:message.channel];
-        NSLog(@"[ReminderTrace] offlineCompensation create channelId=%@ type=%d msgSeq=%u msgId=%llu mentionType=%d humans=%d uidsCount=%lu",
-              message.channel.channelId, message.channel.channelType,
-              message.messageSeq, message.messageId,
-              (int)message.content.mentionedInfo.type,
-              (int)message.content.mentionedInfo.humans,
-              (unsigned long)message.content.mentionedInfo.uids.count);
-    }
-    if(toAdd.count > 0) {
-        [[WKReminderDB shared] addOrUpdates:toAdd];
-        [[WKReminderManager shared] updateConversations:channelsTouched];
-    }
-}
-
 -(void) addOrUpdateMessages:(NSArray<WKMessage*>*)messages  {
     if(!messages || messages.count<=0) {
         return;
@@ -869,19 +769,17 @@
             lastMessageUnreadModel.incUnreadCount += 1;
         }
     }
-    // 客户端检测被 @, 创建本地 reminder。直接走 WKMentionedInfo.isMentionedMe,
-    // 它已经覆盖三类:
-    //   - uids 包含我 (直接 @ 我某 uid)
-    //   - WK_Mentioned_All / mention.humans=1 (@所有人)
-    //   - type == WK_Mentioned_Humans
-    // ais=1 单独命中 isMentionedMe 自动返 NO (bot 广播, 人类不应被打扰)。
-    //
-    // 旧实现只判 type/humans flag, 忽略了 uids 数组 → 直接 @ 我必须靠 server CMD
-    // syncReminders 异步补 reminder, 第一条 @ message 到达时 conversation.reminders
-    // 还是空, 列表角标不显示, 要等下一条 @ message 触发再 sync 才会出来。
-    // 用 isMentionedMe 一行覆盖两路, 消息一到就同步生成 reminder, 不再依赖 CMD 时机。
-    BOOL shouldCreateReminder = (message.content.mentionedInfo
-                                 && message.content.mentionedInfo.isMentionedMe);
+    // 客户端检测@所有人，创建本地reminder（服务端只为@具体用户创建reminder，@所有人需要客户端补偿）
+    // 三态 mention：
+    //   - WK_Mentioned_All / mention.humans=1 → 创建 [有人@我] reminder
+    //   - mention.ais=1 单独命中 → 不创建 reminder（bot 广播，人类不应被打扰）
+    BOOL shouldCreateReminder = NO;
+    if(message.content.mentionedInfo) {
+        WKMentionedInfo *mi = message.content.mentionedInfo;
+        if(mi.type == WK_Mentioned_All || mi.type == WK_Mentioned_Humans || mi.humans) {
+            shouldCreateReminder = YES;
+        }
+    }
     // COMMUNITY_TOPIC 子区跳过 showUnread 检查（服务端 red_dot 策略不同，对齐 Android）
     BOOL unreadGate = (message.channel.channelType != WK_COMMUNITY_TOPIC) ? message.header.showUnread : YES;
     if(![message isSend] && unreadGate && shouldCreateReminder) {
@@ -896,14 +794,11 @@
         reminder.isLocate = YES;
         reminder.done = NO;
         reminder.version = 0;
-        // [ReminderTrace] 本地 mention 补偿创建路径(直接 @ uid / @所有人 / mention.humans).
-        NSLog(@"[ReminderTrace] localCompensation create channelId=%@ type=%d msgSeq=%u msgId=%llu reminderID=%lld publisher=%@ mentionType=%d humans=%d uidsCount=%lu",
+        // [ReminderTrace] 本地 mention 补偿创建路径(@所有人 / mention.humans).
+        NSLog(@"[ReminderTrace] localCompensation create channelId=%@ type=%d msgSeq=%u msgId=%llu reminderID=%lld publisher=%@",
               message.channel.channelId, message.channel.channelType,
               message.messageSeq, message.messageId,
-              reminder.reminderID, reminder.publisher,
-              (int)message.content.mentionedInfo.type,
-              (int)message.content.mentionedInfo.humans,
-              (unsigned long)message.content.mentionedInfo.uids.count);
+              reminder.reminderID, reminder.publisher);
         [[WKReminderDB shared] addOrUpdates:@[reminder]];
         [[WKReminderManager shared] updateConversations:[NSSet setWithObject:message.channel]];
     }

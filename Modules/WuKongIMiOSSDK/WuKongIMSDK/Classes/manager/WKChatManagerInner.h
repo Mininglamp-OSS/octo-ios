@@ -56,17 +56,5 @@
 -(NSArray<MessageStoreBeforeIntercept>*) getMessageStoreBeforeIntercepts;
 
 
-/// 批量检测被 @ 的消息, 给会话补 [有人@我] reminder。
-/// live recv (saveMessages → addOrUpdateConversationWithMessages) 路径已经在
-/// makeConversationLastMessageAndUnreadCount 里内联做了; conversation/sync 接口
-/// 把 recents 直接走 [WKMessageDB replaceMessages:] 写库, 绕过 chat manager 那条
-/// 路径, 离线期间(杀进程)收到的 @ 消息 reminder 不会被本地补偿。在 sync 完成后
-/// 显式调一刀, 修复杀进程后离线 @ 不显示。
-///
-/// 与内联路径用同一套判定 (isMentionedMe + showUnread/子区 bypass + 不补自己发的)。
-/// 命中后调 [WKReminderManager updateConversations:] 让会话列表角标立刻刷新。
--(void) compensateMentionRemindersFromMessages:(NSArray<WKMessage*>*)messages;
-
-
 
 @end

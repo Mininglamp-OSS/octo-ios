@@ -44,9 +44,6 @@ NS_ASSUME_NONNULL_BEGIN
 // 获取提醒项列表
 -(NSArray<WKReminder*>*) getReminders:(NSArray<NSNumber*>*)ids;
 
-// 按 message_id 查提醒项(不论 done / reminder_id), 用于本地 @ 补偿跨 id 空间查重
--(NSArray<WKReminder*>*) getRemindersByMessageIds:(NSArray<NSNumber*>*)messageIds;
-
 @end
 
 NS_ASSUME_NONNULL_END

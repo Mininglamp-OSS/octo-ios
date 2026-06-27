@@ -176,27 +176,6 @@ static WKReminderDB *_instance;
     return reminders;
 }
 
-// 按 message_id 查 reminder(不论 done / reminder_id)。
-// 用于本地 @ 补偿查重: 服务端给"直接 @uid"建的 reminder 用的是服务端 reminder_id
-// (≠ messageId), 按 reminder_id 查不到; 但它的 message_id 列 = 该 @ 消息 messageId,
-// 用这个能跨 id 空间抓到, 避免补偿又造一条重复 reminder 把已读 @ 复活。
--(NSArray<WKReminder*>*) getRemindersByMessageIds:(NSArray<NSNumber*>*)messageIds {
-    if(!messageIds || messageIds.count == 0) {
-        return @[];
-    }
-    __block NSMutableArray<WKReminder*> *reminders = [NSMutableArray array];
-    [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
-        NSString *sql = [NSString stringWithFormat:@"select * from %@ where message_id in (%@)",
-                         @"reminders", [messageIds componentsJoinedByString:@","]];
-        FMResultSet *resultSet = [db executeQuery:sql];
-        while(resultSet.next) {
-            [reminders addObject:[self toReminder:resultSet]];
-        }
-        [resultSet close];
-    }];
-    return reminders;
-}
-
 -(NSDictionary<WKChannel*,NSArray<WKReminder*>*>*)  getWaitDoneReminders:(NSArray<WKChannel*>*) channels {
     if(!channels||channels.count == 0) {
         return nil;
