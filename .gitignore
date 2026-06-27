@@ -67,6 +67,7 @@ firebase.json
 .idea/
 .vscode/
 *.iml
+.octospec/
 
 # ───────── Python 调试脚本（项目根有 test_*.py）─────────
 __pycache__/
