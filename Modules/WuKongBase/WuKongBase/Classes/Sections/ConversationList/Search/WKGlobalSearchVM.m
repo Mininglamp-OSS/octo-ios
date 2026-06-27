@@ -20,7 +20,25 @@
 #import "WKSearchMediaCell.h"
 #import "WKConversationListVM.h"
 #import "WKSpaceFilter.h"
+#import "WKSpaceBotRegistry.h"
 #define WKSearchMaxCount 4
+
+// ============================================================================
+// [SearchSpaceTrace] 搜索结果空间过滤诊断日志。调试用途, 定位"切空间后还能搜到
+// 别空间聊天记录"的具体放行档位。问题定位完成后置 NO（合规 CLAUDE.md 调试工具
+// 生命周期要求）。所有埋点统一前缀 [SearchSpaceTrace]。
+// ============================================================================
+static const BOOL WKSearchSpaceTrace = YES;
+#define WK_SEARCH_TRACE(...) do { if (WKSearchSpaceTrace) { NSLog(__VA_ARGS__); } } while (0)
+
+static inline const char *WKSpaceDecisionStr(WKSpaceFilterDecision d) {
+    switch (d) {
+        case WKSpaceFilterDecisionKeep: return "Keep";
+        case WKSpaceFilterDecisionSkip: return "Skip";
+        case WKSpaceFilterDecisionFailOpen: return "FailOpen";
+    }
+    return "?";
+}
 
 @interface WKGlobalSearchVM ()
 
@@ -267,18 +285,134 @@
     return items;
 }
 
-/// 按当前空间过滤本地聊天记录搜索结果（频道级判定，与会话/消息列表口径一致）
+/// 按当前空间过滤本地聊天记录搜索结果。
+/// - 群聊/子区：频道级判定足够（decideChannel + 白名单，明略群在别空间会被 Skip）。
+/// - 私聊/Bot：频道级判不出空间（同一个人在多空间 channelId 相同；Bot DM payload
+///   不带 space_id），必须下钻到消息级。否则切到别的空间能搜到明略私聊/Bot 内容,
+///   点开因为消息不在当前空间而定位空白。
 - (NSArray<WKChannelMessageSearchResult*> *)filterSearchResultsByCurrentSpace:(NSArray<WKChannelMessageSearchResult*> *)results {
     if (!results || results.count == 0) {
         return results;
     }
+    NSString *currentSpaceId = [[WKSpaceFilter shared] currentSpaceId];
+    WK_SEARCH_TRACE(@"[SearchSpaceTrace] ===== filter chat results: total=%lu currentSpaceId=%@ keyword=%@ =====",
+                    (unsigned long)results.count, currentSpaceId ?: @"<nil>", self.keyword ?: @"");
     NSMutableArray<WKChannelMessageSearchResult*> *filtered = [NSMutableArray array];
     for (WKChannelMessageSearchResult *result in results) {
-        if ([self isChannelInCurrentSpace:result.channel]) {
+        WKChannel *ch = result.channel;
+        // 频道级 gate（群聊靠 decideChannel/白名单；私聊裸 UID 一律放行进入下一层）
+        if (![self isChannelInCurrentSpace:ch]) {
+            WK_SEARCH_TRACE(@"[SearchSpaceTrace] DROP(channel-gate) channelId=%@ type=%d count=%ld",
+                            ch.channelId, ch.channelType, (long)result.messageCount);
+            continue;
+        }
+        // 单空间 / 未设置空间：不过滤
+        if (currentSpaceId.length == 0) {
             [filtered addObject:result];
+            continue;
+        }
+        // 群聊/子区：频道级判定已足够
+        if (ch.channelType != WK_PERSON) {
+            WK_SEARCH_TRACE(@"[SearchSpaceTrace] KEEP(group/topic, channel-gate passed) channelId=%@ type=%d count=%ld",
+                            ch.channelId, ch.channelType, (long)result.messageCount);
+            [filtered addObject:result];
+            continue;
+        }
+        // 私聊/Bot：下钻消息级重算
+        WKChannelMessageSearchResult *refined = [self refinePersonResult:result currentSpaceId:currentSpaceId];
+        if (refined) {
+            [filtered addObject:refined];
         }
     }
+    WK_SEARCH_TRACE(@"[SearchSpaceTrace] ===== filter chat results done: kept=%lu / %lu =====",
+                    (unsigned long)filtered.count, (unsigned long)results.count);
     return filtered;
+}
+
+/// 私聊/Bot 频道按消息级空间归属重算搜索结果（SQL 是 GROUP BY channel 聚合的，
+/// 跨空间的同一个人/同一个 Bot 会被塌缩成一行，必须在这里拆开按空间过滤）。
+/// 返回 nil 表示该频道在当前空间没有命中消息 → 整条剔除。
+- (WKChannelMessageSearchResult *)refinePersonResult:(WKChannelMessageSearchResult *)result
+                                       currentSpaceId:(NSString *)currentSpaceId {
+    WKChannel *channel = result.channel;
+
+    // Bot：payload 无 space_id（线上确认），消息级 space_id 判定无效，只能用
+    // WKSpaceBotRegistry 成员判定（与会话列表 isConversationInCurrentSpace 同源）。
+    // 同一 Bot 在某空间的会话整体归属由注册表决定，不必逐条拆。
+    WKChannelInfo *info = [[WKChannelInfoDB shared] queryChannelInfo:channel];
+    if (info && info.robot) {
+        WKSpaceBotMembership mem = [[WKSpaceBotRegistry shared] membershipForBotUID:channel.channelId inSpace:currentSpaceId];
+        const char *memStr = (mem == WKSpaceBotMembershipMember) ? "Member"
+                            : (mem == WKSpaceBotMembershipNotMember) ? "NotMember" : "Unknown";
+        if (mem == WKSpaceBotMembershipNotMember) {
+            WK_SEARCH_TRACE(@"[SearchSpaceTrace] DROP(bot NotMember) channelId=%@ botRegistry=%s", channel.channelId, memStr);
+            return nil; // 明确不属于当前空间 → 剔除
+        }
+        WK_SEARCH_TRACE(@"[SearchSpaceTrace] KEEP(bot %s, fail-open) channelId=%@ count=%ld", memStr, channel.channelId, (long)result.messageCount);
+        return result; // Member / Unknown（未加载）→ fail-open 保留
+    }
+
+    // 普通私聊：同一个人在 A、B 都有聊天时 channelId 相同，SQL 聚合行无法区分。
+    // 重查该频道命中消息，逐条按空间过滤：
+    //   - msg.space_id == 当前空间          → 保留（确凿属于当前空间）
+    //   - msg.space_id != 当前空间          → 剔除（shouldSkipMessageForSpace=YES）
+    //   - 无 space_id（明略/默认空间的消息） → 仅当该私聊频道存在于「当前空间会话列表」
+    //     时才保留；否则剔除。明略消息不带 space_id，旧逻辑按「向前兼容放行」会把它
+    //     在所有空间漏出（日志实测 inSpace 全是 noSpaceId）。会话列表是按空间从服务端
+    //     同步的，明略-only 私聊不会进 B 的列表，用 anyModelAtChannel 作权威信号对齐。
+    // 再重算 messageCount + 代表消息（保留集合里 orderSeq 最大的一条），保证预览文字
+    // 与点击定位都落在当前空间的消息上。
+    WKConversationListVM *convVM = [WKConversationListVM shared];
+    // 列表尚未加载（race 窗口）→ 无法判定 → 对无 space_id 消息 fail-open 放行，避免误杀。
+    BOOL convListReady = ([convVM conversationCount] > 0);
+    BOOL channelInCurrentSpaceList = ([convVM anyModelAtChannel:channel] != nil);
+    NSArray<WKMessage*> *msgs = [[WKMessageDB shared] getMessages:channel keyword:self.keyword limit:1000];
+    WKMessage *rep = nil;
+    NSInteger keptCount = 0;
+    NSInteger taggedCount = 0;      // space_id == 当前空间
+    NSInteger noSpaceIdKept = 0;    // 无 space_id 且因频道在当前空间列表被保留
+    NSInteger noSpaceIdDropped = 0; // 无 space_id 但频道不在当前空间列表被剔除
+    NSInteger otherSpaceCount = 0;  // space_id != 当前空间被剔除
+    for (WKMessage *m in msgs) {
+        if ([[WKSpaceFilter shared] shouldSkipMessageForSpace:m channelType:channel.channelType]) {
+            otherSpaceCount++;
+            continue; // space_id != current
+        }
+        NSString *msgSpace = nil;
+        id sv = m.content.contentDict[@"space_id"];
+        if ([sv isKindOfClass:[NSString class]]) msgSpace = (NSString *)sv;
+        if (msgSpace.length == 0) {
+            // 无 space_id（明略消息）：只有该私聊频道在当前空间会话列表里才放行
+            if (convListReady && !channelInCurrentSpaceList) {
+                noSpaceIdDropped++;
+                continue;
+            }
+            noSpaceIdKept++;
+        } else {
+            taggedCount++; // space_id == current
+        }
+        keptCount++;
+        if (!rep || m.orderSeq > rep.orderSeq) {
+            rep = m;
+        }
+    }
+    WK_SEARCH_TRACE(@"[SearchSpaceTrace] person channelId=%@ inList=%d listReady=%d matchedMsgs=%lu kept=%ld (tagged=%ld noSpaceIdKept=%ld) noSpaceIdDropped=%ld otherSpace=%ld → %@",
+                    channel.channelId, channelInCurrentSpaceList, convListReady, (unsigned long)msgs.count,
+                    (long)keptCount, (long)taggedCount, (long)noSpaceIdKept, (long)noSpaceIdDropped,
+                    (long)otherSpaceCount, (keptCount > 0 ? @"KEEP" : @"DROP"));
+    if (keptCount == 0 || !rep) {
+        return nil; // 这个人跟我在当前空间没有命中消息 → 整条剔除
+    }
+
+    WKChannelMessageSearchResult *refined = [WKChannelMessageSearchResult new];
+    refined.channel = channel;
+    refined.messageCount = keptCount;
+    refined.orderSeq = rep.orderSeq;
+    refined.searchableWord = [rep.content searchableWord];
+    refined.content = [rep.content encode]; // 重新编码出 content JSON, 供预览解码兜底
+    refined.contentType = rep.contentType;
+    refined.timestamp = rep.timestamp;
+    return refined;
 }
 
 /// 判断频道是否属于当前空间，口径对齐 WKConversationListVC.isConversationInCurrentSpace：
@@ -311,6 +445,9 @@
 
     // 私聊 / Bot：Skip 才排除，Keep / FailOpen 放行（缺 space_id 的历史私聊向前兼容）
     WKSpaceFilterDecision decision = [[WKSpaceFilter shared] decideChannel:channel.channelId channelType:type];
+    WK_SEARCH_TRACE(@"[SearchSpaceTrace] person/bot channel-gate channelId=%@ decide=%s → %@",
+                    channel.channelId, WKSpaceDecisionStr(decision),
+                    (decision != WKSpaceFilterDecisionSkip) ? @"PASS(进入消息级)" : @"DROP");
     return decision != WKSpaceFilterDecisionSkip;
 }
 
@@ -321,17 +458,23 @@
     }
     WKSpaceFilterDecision decision = [[WKSpaceFilter shared] decideChannel:groupId channelType:WK_GROUP];
     if (decision == WKSpaceFilterDecisionKeep) {
+        WK_SEARCH_TRACE(@"[SearchSpaceTrace] group %@ decide=Keep → YES", groupId);
         return YES;
     }
     if (decision == WKSpaceFilterDecisionSkip) {
+        WK_SEARCH_TRACE(@"[SearchSpaceTrace] group %@ decide=Skip → NO", groupId);
         return NO;
     }
     // FailOpen：channelInfo / member 未缓存 → 降级到会话列表白名单（与 isConversationInCurrentSpace 一致）
     WKConversationListVM *vm = [WKConversationListVM shared];
-    if (![vm isGroupWhitelistInitialized]) {
+    BOOL wlInit = [vm isGroupWhitelistInitialized];
+    if (!wlInit) {
+        WK_SEARCH_TRACE(@"[SearchSpaceTrace] group %@ decide=FailOpen whitelistInit=NO → NO(fail-closed)", groupId);
         return NO; // 白名单未初始化期严格过滤，避免其它空间群聊漏入
     }
-    return [vm isGroupInWhitelist:groupId];
+    BOOL inWL = [vm isGroupInWhitelist:groupId];
+    WK_SEARCH_TRACE(@"[SearchSpaceTrace] group %@ decide=FailOpen whitelistInit=YES inWhitelist=%d → %@", groupId, inWL, inWL ? @"YES" : @"NO");
+    return inWL;
 }
 
 /// 取一条聊天记录命中的预览文字：
@@ -393,11 +536,43 @@
         return;
     }
     NSArray<WKMessage*> *fileMessages = [[WKMessageDB shared] searchFileMessagesWithKeyword:keyword limit:50];
+    NSString *currentSpaceId = [[WKSpaceFilter shared] currentSpaceId];
     NSMutableArray<WKMessage*> *filtered = [NSMutableArray array];
     for (WKMessage *message in fileMessages) {
-        if ([self isChannelInCurrentSpace:message.channel]) {
-            [filtered addObject:message];
+        // 频道级过滤(群聊靠 decideChannel/白名单)
+        if (![self isChannelInCurrentSpace:message.channel]) {
+            continue;
         }
+        // 私聊/Bot 文件: 与聊天记录 tab 对称, 下钻消息级。文件 tab 这里本身就是
+        // 逐条 WKMessage, 不必像聊天记录那样重查:
+        //   - Bot: payload 无 space_id, 用 WKSpaceBotRegistry 成员判定
+        //   - 普通私聊: message.content.space_id 判定 (shouldSkipMessageForSpace)
+        if (message.channel.channelType == WK_PERSON && currentSpaceId.length > 0) {
+            WKChannelInfo *info = [[WKChannelInfoDB shared] queryChannelInfo:message.channel];
+            if (info && info.robot) {
+                WKSpaceBotMembership mem = [[WKSpaceBotRegistry shared] membershipForBotUID:message.channel.channelId inSpace:currentSpaceId];
+                if (mem == WKSpaceBotMembershipNotMember) {
+                    continue;
+                }
+            } else if ([[WKSpaceFilter shared] shouldSkipMessageForSpace:message channelType:message.channel.channelType]) {
+                continue; // space_id != current
+            } else {
+                // space_id==current 直接保留；无 space_id（明略文件）需该私聊频道在
+                // 当前空间会话列表里才保留（与聊天记录 refinePersonResult 同口径）。
+                NSString *msgSpace = nil;
+                id sv = message.content.contentDict[@"space_id"];
+                if ([sv isKindOfClass:[NSString class]]) msgSpace = (NSString *)sv;
+                if (msgSpace.length == 0) {
+                    WKConversationListVM *convVM = [WKConversationListVM shared];
+                    BOOL convListReady = ([convVM conversationCount] > 0);
+                    BOOL inList = ([convVM anyModelAtChannel:message.channel] != nil);
+                    if (convListReady && !inList) {
+                        continue; // 明略-only 私聊文件，不在当前空间列表 → 剔除
+                    }
+                }
+            }
+        }
+        [filtered addObject:message];
     }
     self.localFileSearchResults = filtered;
     // 文件 section 独立从 localFileSearchResults 渲染；searchResult 仅需非 nil
