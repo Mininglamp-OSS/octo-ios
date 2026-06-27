@@ -9,6 +9,8 @@
 #import "WKChannelMessageSearchVM.h"
 #import "WKChannelMessageCell.h"
 #import "WKConversationVC.h"
+#import "WKSpaceFilter.h"
+#import "WKConversationListVM.h"
 
 @implementation WKChannelMessageSearchVM
 
@@ -24,6 +26,12 @@
         if(message.fromUid && ![message.fromUid isEqualToString:@""]) {
             [newResults addObject:message];
         }
+    }
+    // 按当前空间过滤(私聊跨空间隔离): 与列表层 WKGlobalSearchVM.refinePersonResult 同口径,
+    // 否则列表显示"N条相关记录"(已按空间过滤)而点进详情页显示跨空间全部消息, 计数与内容不一致。
+    newResults = [[self filterMessagesByCurrentSpace:newResults] mutableCopy];
+    if (newResults.count == 0) {
+        return nil;
     }
     
     NSMutableArray *items = [NSMutableArray array];
@@ -71,6 +79,45 @@
     }];
 }
 
+/// 按当前空间过滤命中消息, 与全局搜索列表 WKGlobalSearchVM.refinePersonResult 同口径:
+///   - 群聊/子区/Bot/单空间(无 currentSpaceId): 频道级已在列表层判定 → 原样放行, 不逐条拆。
+///   - 普通私聊(WK_PERSON 非 Bot): 同一个人在多空间 channelId 相同, SQL 聚合无法区分, 逐条按
+///     消息级 space_id 过滤:
+///       · space_id == 当前空间          → 保留
+///       · space_id != 当前空间          → 剔除(shouldSkipMessageForSpace=YES)
+///       · 无 space_id(明略/默认空间消息) → 仅当该私聊频道在「当前空间会话列表」中才保留
+///         (列表未就绪的 race 窗口 fail-open 放行, 避免误杀)。
+- (NSArray<WKMessage*> *)filterMessagesByCurrentSpace:(NSArray<WKMessage*> *)messages {
+    if (messages.count == 0) return messages;
+    if (self.channel.channelType != WK_PERSON) return messages; // 群/子区: 频道级已判定
+    NSString *currentSpaceId = [[WKSpaceFilter shared] currentSpaceId];
+    if (currentSpaceId.length == 0) return messages;             // 单空间/未设置: 不过滤
+
+    // Bot: payload 无 space_id, 由 WKSpaceBotRegistry 整体判定(列表层已 gate), 这里不逐条拆。
+    WKChannelInfo *info = [[WKChannelInfoDB shared] queryChannelInfo:self.channel];
+    if (info && info.robot) return messages;
+
+    WKConversationListVM *convVM = [WKConversationListVM shared];
+    BOOL convListReady = ([convVM conversationCount] > 0);
+    BOOL channelInCurrentSpaceList = ([convVM anyModelAtChannel:self.channel] != nil);
+
+    NSMutableArray<WKMessage*> *kept = [NSMutableArray array];
+    for (WKMessage *m in messages) {
+        if ([[WKSpaceFilter shared] shouldSkipMessageForSpace:m channelType:self.channel.channelType]) {
+            continue; // space_id != current
+        }
+        NSString *msgSpace = nil;
+        id sv = m.content.contentDict[@"space_id"];
+        if ([sv isKindOfClass:[NSString class]]) msgSpace = (NSString *)sv;
+        if (msgSpace.length == 0) {
+            // 无 space_id(明略消息): 仅当该私聊频道在当前空间会话列表里才放行
+            if (convListReady && !channelInCurrentSpaceList) continue;
+        }
+        [kept addObject:m];
+    }
+    return kept;
+}
+
 /// 消息预览文字（按类型而定，口径与全局搜索一致）：
 /// - 文件：展示真实文件名（而非占位 [文件]）
 /// - 合并转发：searchableWord 为空 → 用 conversationDigest（[聊天记录]）
@@ -103,9 +150,11 @@
     NSInteger contextRadius = (maxLength - (NSInteger)keyword.length) / 2;
     NSInteger start = MAX(0, (NSInteger)range.location - contextRadius);
     NSInteger end = MIN((NSInteger)text.length, (NSInteger)(range.location + range.length) + contextRadius);
-    NSString *snippet = [text substringWithRange:NSMakeRange(start, end - start)];
-    if (start > 0) snippet = [NSString stringWithFormat:@"...%@", snippet];
-    if (end < (NSInteger)text.length) snippet = [NSString stringWithFormat:@"%@...", snippet];
+    // 截取窗口对齐到字素边界, 避免按 UTF-16 code unit 截断把 emoji / 组合字劈成半个产生乱码
+    NSRange safe = [text rangeOfComposedCharacterSequencesForRange:NSMakeRange(start, end - start)];
+    NSString *snippet = [text substringWithRange:safe];
+    if (safe.location > 0) snippet = [NSString stringWithFormat:@"...%@", snippet];
+    if (NSMaxRange(safe) < text.length) snippet = [NSString stringWithFormat:@"%@...", snippet];
     return snippet;
 }
 

@@ -21,6 +21,14 @@
 #define WKFileCellHeight 72.0f
 #define WKFileIconSize 40.0f
 
+// ============================================================================
+// 文件打开失败的「原始诊断详情」开关。调试用途, 默认关闭(NO) —— 遵 CLAUDE.md 调试工具
+// 生命周期: release 不得把 content JSON / 频道·用户 ID / 时间戳这类原始 payload 弹给终端
+// 用户。关闭时只展示友好提示文案; 置 YES 可重新打开"复制详情"alert 供线上排查截图回传。
+// [File-onTap][DIAG] 的 NSLog 埋点与 DB 重读救回 url 逻辑不受此开关影响, 始终保留。
+// ============================================================================
+static const BOOL WKFileOpenDiagAlert = NO;
+
 @interface WKFileMessageCell ()
 
 @property(nonatomic,strong) UIImageView *fileIconView;
@@ -412,12 +420,18 @@
     [self showFileOpenFailureAlertWithTitle:LLang(@"文件不存在或正在上传中") detail:diagText];
 }
 
-// 文件打开失败的用户可见诊断 alert —— 三条失败路径共用:
+// 文件打开失败的用户可见提示 —— 三条失败路径共用:
 //   (a) onTap "no remoteUrl + no local file" 主诊断分支
 //   (b) SDK download SUCCESS 但落地路径找不到 (path mismatch)
 //   (c) SDK download FAIL (网络/服务端错)
-// 用 alert 渲染 detail; 加"复制详情"action 让用户能粘到反馈 / 发回支持。
+// 默认(release): 只弹友好 title, 不暴露 detail 原始 payload。
+// WKFileOpenDiagAlert=YES(调试): 渲染 detail + "复制详情", 供线上排查截图/回传。
 - (void)showFileOpenFailureAlertWithTitle:(NSString *)title detail:(NSString *)detail {
+    if (!WKFileOpenDiagAlert) {
+        // release: detail 仅进 console([File-onTap][DIAG]), 用户只看到友好提示
+        [[WKNavigationManager shared].topViewController.view showMsg:title];
+        return;
+    }
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title
                                                                    message:detail
                                                             preferredStyle:UIAlertControllerStyleAlert];

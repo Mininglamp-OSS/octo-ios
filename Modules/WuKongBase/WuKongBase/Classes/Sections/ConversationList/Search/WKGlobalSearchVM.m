@@ -592,9 +592,11 @@ static inline const char *WKSpaceDecisionStr(WKSpaceFilterDecision d) {
     NSInteger start = MAX(0, (NSInteger)range.location - contextRadius);
     NSInteger end = MIN((NSInteger)text.length, (NSInteger)(range.location + range.length) + contextRadius);
 
-    NSString *snippet = [text substringWithRange:NSMakeRange(start, end - start)];
-    if (start > 0) snippet = [NSString stringWithFormat:@"...%@", snippet];
-    if (end < (NSInteger)text.length) snippet = [NSString stringWithFormat:@"%@...", snippet];
+    // 截取窗口对齐到字素边界, 避免按 UTF-16 code unit 截断把 emoji / 组合字劈成半个产生乱码
+    NSRange safe = [text rangeOfComposedCharacterSequencesForRange:NSMakeRange(start, end - start)];
+    NSString *snippet = [text substringWithRange:safe];
+    if (safe.location > 0) snippet = [NSString stringWithFormat:@"...%@", snippet];
+    if (NSMaxRange(safe) < text.length) snippet = [NSString stringWithFormat:@"%@...", snippet];
     return snippet;
 }
 
