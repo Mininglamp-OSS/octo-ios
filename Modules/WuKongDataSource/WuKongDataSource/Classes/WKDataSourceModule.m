@@ -384,7 +384,11 @@
         NSArray<WKConversation*> *conversations = [[WKSDK shared].conversationManager getConversationList];
         if(conversations && conversations.count>0) {
             for (WKConversation *conversation in conversations) {
-                if(conversation.channel.channelType == WK_GROUP) {
+                // 对齐 web (dmworkdatasource/module.ts: Group || CommunityTopic):
+                // reminder sync 的 channel_ids 要同时带群聊和子区, 否则子区里的 @我
+                // reminder 不在查询范围, 别端读了之后本端 sync 收不到 done 更新。
+                if(conversation.channel.channelType == WK_GROUP
+                   || conversation.channel.channelType == WK_COMMUNITY_TOPIC) {
                     [channelIDs addObject:conversation.channel.channelId];
                 }
             }

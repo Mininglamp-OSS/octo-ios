@@ -1,6 +1,8 @@
 #import "WKSafeFilePreviewVC.h"
 #import <PDFKit/PDFKit.h>
 #import <WebKit/WebKit.h>
+#import <AVKit/AVKit.h>
+#import <AVFoundation/AVFoundation.h>
 #import "WKApp.h"
 #import "WuKongBase.h"
 #import "WKNavigationManager.h"
@@ -17,6 +19,7 @@ static UIWindow *_previousKeyWindow = nil;
 @property (nonatomic, copy) NSString *fileTitle;
 @property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) UIActivityIndicatorView *loadingIndicator;
+@property (nonatomic, strong) AVPlayerViewController *playerVC; // mp4/mov 等视频走 AVPlayer
 @end
 
 @implementation WKSafeFilePreviewVC
@@ -81,14 +84,18 @@ static UIWindow *_previousKeyWindow = nil;
 + (void)dismissPreview {
     if (!_previewWindow) return;
 
-    // 清理 WebKit
+    // 清理 WebKit + AVPlayer (video 路径不走 webView, 需要单独 teardown 否则
+    // 关窗后 player 还在内存里继续放音)。
     UINavigationController *nav = (UINavigationController *)_previewWindow.rootViewController;
     if ([nav isKindOfClass:[UINavigationController class]]) {
         WKSafeFilePreviewVC *vc = (WKSafeFilePreviewVC *)nav.topViewController;
-        if ([vc isKindOfClass:[WKSafeFilePreviewVC class]] && vc.webView) {
-            [vc.webView stopLoading];
-            [vc.webView removeFromSuperview];
-            vc.webView = nil;
+        if ([vc isKindOfClass:[WKSafeFilePreviewVC class]]) {
+            if (vc.webView) {
+                [vc.webView stopLoading];
+                [vc.webView removeFromSuperview];
+                vc.webView = nil;
+            }
+            [vc teardownPlayer];
         }
     }
 
@@ -130,6 +137,8 @@ static UIWindow *_previousKeyWindow = nil;
         [self setupUnsupportedViewInFrame:contentFrame];
     } else if ([ext isEqualToString:@"pdf"]) {
         [self setupPDFViewInFrame:contentFrame];
+    } else if ([WKSafeFilePreviewVC mediaExtensions:ext]) {
+        [self setupMediaPlayerInFrame:contentFrame];
     } else {
         [self setupWebViewInFrame:contentFrame];
     }
@@ -179,10 +188,28 @@ static UIWindow *_previousKeyWindow = nil;
         [self.webView stopLoading];
         [self.webView removeFromSuperview];
         self.webView = nil;
+        [self teardownPlayer];
         [self.navigationController popViewControllerAnimated:YES];
     } else {
         [WKSafeFilePreviewVC dismissPreview];
     }
+}
+
+// AVPlayer 资源释放 + child VC 摘除; 不释放会有"返回后视频仍在播放声音"的残留。
+- (void)teardownPlayer {
+    if (!self.playerVC) return;
+    [self.playerVC.player pause];
+    self.playerVC.player = nil;
+    [self.playerVC willMoveToParentViewController:nil];
+    [self.playerVC.view removeFromSuperview];
+    [self.playerVC removeFromParentViewController];
+    self.playerVC = nil;
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    // 用户切到后台 / push 到子页面时暂停, 避免黑屏继续放音。再进来时控件可点继续播放。
+    [self.playerVC.player pause];
 }
 
 - (void)shareTapped {
@@ -212,9 +239,30 @@ static UIWindow *_previousKeyWindow = nil;
             @"sh", @"swift", @"java", @"py", @"js", @"ts", @"css",
             // 富文本渲染
             @"md", @"markdown", @"csv", @"html", @"htm",
+            // 视频 / 音频 (走 AVPlayerViewController) —— AVFoundation 原生支持的容器格式;
+            // 不在解码白名单内的容器 (avi/flv/mkv/wmv/ogg 等) 仍归占位页。
+            @"mp4", @"m4v", @"mov", @"3gp", @"3gpp",
+            @"mp3", @"wav", @"aac", @"m4a", @"caf", @"aiff", @"aif",
         ]];
     });
     return [previewable containsObject:ext.lowercaseString];
+}
+
+// 媒体扩展名子集 (视频 + 音频): 命中后走 setupMediaPlayerInFrame:。AVPlayerViewController
+// 同一套 API 既能放视频也能放音频, 音频文件会自动显示 speaker 占位 + 进度/播放控件,
+// 跟系统"文件"app 行为对齐。
++ (BOOL)mediaExtensions:(NSString *)ext {
+    static NSSet *mediaSet;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        mediaSet = [NSSet setWithArray:@[
+            // video
+            @"mp4", @"m4v", @"mov", @"3gp", @"3gpp",
+            // audio
+            @"mp3", @"wav", @"aac", @"m4a", @"caf", @"aiff", @"aif",
+        ]];
+    });
+    return [mediaSet containsObject:ext.lowercaseString];
 }
 
 - (void)setupUnsupportedViewInFrame:(CGRect)frame {
@@ -277,6 +325,38 @@ static UIWindow *_previousKeyWindow = nil;
     pdfView.backgroundColor = bgColor;
     pdfView.document = [[PDFDocument alloc] initWithURL:self.fileURL];
     [self.view addSubview:pdfView];
+}
+
+#pragma mark - 视频 / 音频 (AVPlayerViewController)
+
+// mp4 / mov / m4v / 3gp / mp3 / wav / aac / m4a 等 AVFoundation 原生容器走 AVPlayer
+// 播放, 而不是塞给 WebKit。WebKit 渲染 video tag 在 file:// 协议下要么白屏要么报
+// "暂时无法预览"(走到我们自己的占位页), 而 AVPlayerViewController 自带原生播放控件
+// (播放/暂停/进度/全屏/AirPlay), 体验跟系统相册/文件 app 一致;
+// 音频文件 AVPlayerViewController 会自动显示 speaker 占位图 + 控件, 无需另起一套 UI。
+- (void)setupMediaPlayerInFrame:(CGRect)frame {
+    // 视频文件可能跨在沙盒受限目录, 用 fileURLWithPath: 重新拼一遍, 保证 AVAsset
+    // 能拿到正确 scheme。playerItem 显式构造以便后续监听 status / 错误。
+    AVPlayerItem *item = [AVPlayerItem playerItemWithURL:self.fileURL];
+    AVPlayer *player = [AVPlayer playerWithPlayerItem:item];
+
+    AVPlayerViewController *vc = [[AVPlayerViewController alloc] init];
+    vc.player = player;
+    vc.showsPlaybackControls = YES;
+    vc.allowsPictureInPicturePlayback = YES;
+    vc.videoGravity = AVLayerVideoGravityResizeAspect; // 居中缩放, 保留比例
+    vc.view.frame = frame;
+    vc.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    vc.view.backgroundColor = [UIColor blackColor];
+
+    // 用 add-child-VC 而不是 present, 这样栈仍跟在我们的导航条之下 (右滑手势返回保持有效)。
+    [self addChildViewController:vc];
+    [self.view addSubview:vc.view];
+    [vc didMoveToParentViewController:self];
+    self.playerVC = vc;
+
+    // 进入即自动播放, 跟系统相册行为一致; 失败时不阻塞 UI, 用户仍可看到控件 / 关闭页面。
+    [player play];
 }
 
 #pragma mark - 其他文档 (WKWebView，在独立 Window 中与主导航完全隔离)

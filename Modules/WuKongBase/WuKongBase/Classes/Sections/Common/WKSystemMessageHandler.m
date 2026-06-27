@@ -317,6 +317,21 @@ bool needRemind = false; // 是否需要提醒
         NSLog(@"[UnreadTrace] WKCMDUnreadClear channelId=%@ type=%d setUnread=%ld param=%@",
               channel.channelId, channel.channelType, (long)unread, param);
         [[WKSDK shared].conversationManager setConversationUnreadCount:channel unread:unread];
+        // 跨端已读 → 清 @我 badge: web/其它端读完(unread=0)后, 除了清未读, 把该频道
+        // 待办的 [有人@我] reminder 也标 done。服务端 message/reminder/sync 增量没把
+        // 别端标 done 的 reminder 可靠回传到本端, 导致未读清了但 @我 角标残留。
+        // 这里在收到多端已读 cmd 且 unread=0 时本地走 done:(更新 DB + 刷 badge + 幂等
+        // 回传服务端), 与本端读消息时 markReminderDoneIfNeed 等效。只清不创建, 无复活风险。
+        if(unread == 0) {
+            NSArray<WKReminder*> *pending = [[WKReminderDB shared] getWaitDoneReminder:channel];
+            if(pending.count > 0) {
+                NSMutableArray<NSNumber*> *ids = [NSMutableArray array];
+                for(WKReminder *r in pending) {
+                    [ids addObject:@(r.reminderID)];
+                }
+                [[WKSDK shared].reminderManager done:ids];
+            }
+        }
     }else if([cmd isEqualToString:WKCMDGroupAvatarUpdate] && param&&param[@"group_no"]) { // 群头像更新
          WKLogDebug(@"处理群头像更新！->%@",param[@"group_no"]);
         [[SDImageCache sharedImageCache] removeImageForKey:[WKAvatarUtil getGroupAvatar:param[@"group_no"]] withCompletion:nil];

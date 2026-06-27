@@ -331,19 +331,24 @@
         messageSeq = self.messageListView.lastMessage.messageSeq;
     }
     NSInteger newUnread = self.messageListView.newMsgCount;
-    BOOL shouldClear = NO;
+    // 恢复 build 62 的三档 targetUnread 判定 (e32cb1d 错误简化成「仅 newUnread==0 才清」,
+    // 导致退出聊天时部分读完全不上报, 用户报告的 bug 之一)。
+    NSInteger targetUnread = -1;
     if(self.messageListView.browseToOrderSeq == 0 && newUnread > 0) {
-        shouldClear = YES;
+        targetUnread = 0;
     } else if(conversation.unreadCount != newUnread) {
-        shouldClear = (newUnread == 0);  // 只有"读完了"才走 store
-    } else if(self.messageListView.hasRecvMsg && newUnread == 0) {
-        shouldClear = YES;
+        targetUnread = newUnread;
+    } else if(self.messageListView.hasRecvMsg) {
+        targetUnread = newUnread;
     }
-    if(shouldClear) {
-        // : 老路径直接调 conversationSetUnread + setConversationUnreadCount,
-        // server 上报失败就静默丢失,造成"子区 server 永远=1". 改走 store:
-        // markLocalRead 持久化 lastReadSeq + 清本地 DB + 入队上报(带重试).
+    // 路由: targetUnread==0 走 store (保留 e32cb1d 引入的子区 ack 重试 + lastReadSeq
+    // 防锁屏复活); targetUnread>0 走 build 62 老路径 (PUT + 写本地 DB), 否则退出后
+    // list VC 重读 DB 会把 in-memory 的 partial 覆盖回原始 unreadCount。
+    if(targetUnread == 0) {
         [[WKUnreadStore shared] markLocalRead:self.channel readSeq:messageSeq];
+    } else if(targetUnread > 0) {
+        [[WKMessageManager shared] conversationSetUnread:self.channel unread:targetUnread messageSeq:messageSeq complete:nil];
+        [[WKSDK shared].conversationManager setConversationUnreadCount:self.channel unread:targetUnread];
     }
 }
 

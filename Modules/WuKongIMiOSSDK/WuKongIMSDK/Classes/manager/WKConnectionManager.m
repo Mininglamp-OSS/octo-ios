@@ -70,7 +70,11 @@
 @property(nonatomic,assign) bool isBackoffReconnect; // 是否在退避重连中
 
 @property(nonatomic,assign) bool pullOfflineFinished; // 是否拉取离线完成
-
+// 冷启动会话全量同步闸(对齐 Android ConversationManager.coldStartSyncDone):
+// 本进程第一次成功 sync 之前强制 version=0(全量拉历史会话), 成功后转增量(用 DB max version)。
+// iOS 旧逻辑永远用 DB max version, 本地一旦有较新会话(version 非 0)就只拉增量,
+// 服务端那些本地没有的旧历史会话再也拉不回来 → "加载不到历史会话"。logout 复位。
+@property(nonatomic,assign) BOOL coldStartSyncDone;
 @property(nonatomic,strong) NSMutableArray<WKPacket*> *tempPackets; // 临时包（当没拉取离线完成前所有消息都存临时数组里，避免漏消息。）
 
 @property(nonatomic,copy) NSString *deviceUUID;
@@ -425,11 +429,13 @@ didCompleteWithError:(NSError *)error {
     }
     
     // 同步会话
-    long long version = [[WKConversationDB shared] getConversationMaxVersion];
+    long long dbVersion = [[WKConversationDB shared] getConversationMaxVersion];
+    // 冷启动强制全量(version=0)拉一次历史会话, 之后转增量。对齐 Android。
+    long long version = self.coldStartSyncDone ? dbVersion : 0;
     NSString *syncKey = [[WKConversationDB shared] getConversationSyncKey];
     // [UnreadTrace] sync 入口,锁屏后回前台/网络抖动重连都会走这里;
     // 后面紧跟一批 [UnreadTrace] replaceConversations 就是这次 sync 的覆盖动作.
-    NSLog(@"[UnreadTrace] syncConversations enter version=%lld syncKey=%@", version, syncKey ?: @"<nil>");
+    NSLog(@"[UnreadTrace] syncConversations enter version=%lld(dbVersion=%lld coldStartSyncDone=%d) syncKey=%@", version, dbVersion, self.coldStartSyncDone, syncKey ?: @"<nil>");
     [WKSDK shared].conversationManager.syncConversationProvider(version, syncKey, ^(WKSyncConversationWrapModel* _Nullable model, NSError * _Nullable error) {
         if(error) {
             // 如果拉取离线消息发生错误 则休息3秒再拉取
@@ -438,8 +444,10 @@ didCompleteWithError:(NSError *)error {
             });
             return;
         }
+        // 本次 sync 成功(不论是否有 model): 冷启动全量已完成, 后续转增量(对齐 Android line 451-453)。
+        self.coldStartSyncDone = YES;
         if(model) {
-           
+
             [[WKSDK shared].conversationManager handleSyncConversation:model];
         }
         if([WKSDK shared].isDebug) {
@@ -505,6 +513,9 @@ didCompleteWithError:(NSError *)error {
 -(void) logout {
     [self.connectStatusLock lock];
     self.forceDisconnect = true;
+    // 复位冷启动全量同步闸: 下个账号登录后第一次 sync 重新走 version=0 全量(对齐 Android
+    // ConversationManager line 759-764 在 clear 时复位 coldStartSyncDone)。
+    self.coldStartSyncDone = NO;
     [WKSDK shared].options.connectInfo =nil;
     [self.connectStatusLock unlock];
 
