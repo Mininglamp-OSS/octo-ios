@@ -1064,11 +1064,11 @@ static WKConversationListVM *_instance;
 #pragma mark - 过滤
 
 + (BOOL)isInactiveGroup:(WKConversationWrapModel *)model {
-    if (!model || model.channel.channelType != WK_GROUP) return NO;
-    NSInteger ts = model.lastMsgTimestamp; // SDK 10 位秒级时间戳
-    if (ts <= 0) return YES; // 从未活跃过的群也按 stale 处理
-    NSTimeInterval now = [NSDate date].timeIntervalSince1970;
-    return (now - (NSTimeInterval)ts) >= 3 * 86400;
+    // 去掉"群聊 3 天无消息就从会话列表隐藏"的逻辑(用户要求): 一律按活跃处理。
+    // 单一判定点, 同时覆盖最近 tab 过滤(modelMatchesFilter)、未读统计(getRecentUnreadCount)、
+    // @提醒(recentHasMention)三处, 保证"列表显示 / 未读计数 / 提醒"口径一致, 不会出现
+    // 列表显示了某群但它的未读不计入的错位。子区(thread)的 3 天切片此前已移除。
+    return NO;
 }
 
 - (void)applyThreadConversationUpdates:(NSArray<WKConversation*>*)threadConversations {
