@@ -237,30 +237,61 @@
     if(candidateMessages.count == 0) {
         return;
     }
-    // ON CONFLICT(reminder_id) DO UPDATE SET ... done=excluded.done 会把 DB 里已经
-    // done=1 的 reminder 覆盖回 done=0 → 用户读完 @ 消息杀进程, 重启后 conversation/sync
-    // 拉回 recents 里的 @ 消息时, 我们 if 不加守卫就把已读 @ 角标"复活"。
-    // 预查一次 DB, 把已经存在的 reminderID 集合拿出来, 命中的直接 skip 不重建。
-    // 新消息 (DB 里没有这个 reminderID) 才补创建。
-    NSArray<WKReminder*> *existing = [[WKReminderDB shared] getReminders:candidateReminderIDs];
-    NSMutableSet<NSNumber*> *existingIDs = [NSMutableSet set];
+    // 跨 id 空间查重: 服务端给"直接 @uid"建的 reminder 用服务端 reminder_id(≠messageId),
+    // 按 reminder_id 查不到, 会被本地补偿又造一条 reminder_id=messageId 的重复 → 已读 @ 复活
+    // (用户报告: 离线收到一条 @, 重开后历史已读 @ 也一起提醒)。改按 message_id 查重,
+    // 抓到服务端那条(它 message_id 列 = 该 @ 消息 messageId), 命中即 skip 不重建。
+    NSArray<WKReminder*> *existing = [[WKReminderDB shared] getRemindersByMessageIds:candidateReminderIDs];
+    NSMutableSet<NSNumber*> *existingMsgIds = [NSMutableSet set];
     for (WKReminder *r in existing) {
-        [existingIDs addObject:@(r.reminderID)];
+        [existingMsgIds addObject:@((int64_t)r.messageId)];
     }
+
+    // [未读窗口门闸] 卸载重装后本地 DB 全空, 上面的查重拦不住(服务端只回未读 reminder,
+    // 已读的 @ 服务端不回 → DB 里没有那条 → 查重 miss)。done 状态权威在服务端
+    // (WKReminderManager.sync 走 reminderProvider 只返回未读), 本地补偿是从消息 payload
+    // 捏的, 不知道 done。用服务端下发的 conversation 未读状态做门闸: 只为"未读尾部"的
+    // @ 消息补偿。已读老 @: messageSeq <= lastMessageSeq - unreadCount → 不在尾部 → 不补。
+    // unreadCount==0(整会话已读) → 一条不补。取不到 conversation / lastSeq 不可用 →
+    // fail-closed(不补), 宁可漏补也不复活已读 @(漏补的真未读 @ 由服务端 reminder sync 兜)。
+    NSMutableDictionary<NSString*, WKConversation*> *convCache = [NSMutableDictionary dictionary];
 
     NSMutableArray<WKReminder*> *toAdd = [NSMutableArray array];
     NSMutableSet<WKChannel*> *channelsTouched = [NSMutableSet set];
     for (WKMessage *message in candidateMessages) {
-        NSNumber *reminderID = @((int64_t)message.messageId);
-        if([existingIDs containsObject:reminderID]) {
-            // DB 已有, 不论 done 状态都 skip (done=1 不能覆盖回 0; done=0 重建无意义)
-            NSLog(@"[ReminderTrace] offlineCompensation SKIP existing channelId=%@ msgId=%llu reminderID=%lld",
-                  message.channel.channelId, message.messageId, reminderID.longLongValue);
+        NSNumber *msgIdNum = @((int64_t)message.messageId);
+        if([existingMsgIds containsObject:msgIdNum]) {
+            // 该 @ 消息已有 reminder(服务端建的或本地建的, 不论 done) → skip, 不造重复
+            NSLog(@"[ReminderTrace] offlineCompensation SKIP existing(by msgId) channelId=%@ msgId=%llu",
+                  message.channel.channelId, message.messageId);
+            continue;
+        }
+
+        // 未读窗口判定(fail-closed)
+        NSString *cacheKey = [NSString stringWithFormat:@"%@-%d", message.channel.channelId, message.channel.channelType];
+        WKConversation *conv = convCache[cacheKey];
+        if(!conv) {
+            conv = [[WKSDK shared].conversationManager getConversation:message.channel];
+            if(conv) convCache[cacheKey] = conv;
+        }
+        if(!conv) {
+            NSLog(@"[ReminderTrace] offlineCompensation SKIP no-conversation channelId=%@ msgId=%llu",
+                  message.channel.channelId, message.messageId);
+            continue; // 取不到会话 → 无法判定已读/未读 → 保守不补
+        }
+        NSInteger unread = conv.unreadCount;
+        uint32_t lastSeq = conv.lastMessageSeq;
+        // lastSeq 不可用(=0)或整会话已读(unread<=0) → fail-closed 不补
+        BOOL inUnreadTail = (unread > 0) && (lastSeq > 0)
+            && (message.messageSeq > (lastSeq > (uint32_t)unread ? lastSeq - (uint32_t)unread : 0));
+        if(!inUnreadTail) {
+            NSLog(@"[ReminderTrace] offlineCompensation SKIP read(outside unread tail) channelId=%@ msgSeq=%u lastSeq=%u unread=%ld",
+                  message.channel.channelId, message.messageSeq, lastSeq, (long)unread);
             continue;
         }
 
         WKReminder *reminder = [[WKReminder alloc] init];
-        reminder.reminderID = reminderID.longLongValue;
+        reminder.reminderID = msgIdNum.longLongValue;
         reminder.messageId = message.messageId;
         reminder.messageSeq = message.messageSeq;
         reminder.channel = message.channel;
