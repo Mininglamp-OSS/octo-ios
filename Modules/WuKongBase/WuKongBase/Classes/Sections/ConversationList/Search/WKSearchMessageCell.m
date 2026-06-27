@@ -182,7 +182,7 @@
 
     // content（内容行整行可用，不与时间同行）
     self.contentLbl.lim_width = self.lim_width - self.nameLbl.lim_left - 20.0f;
-    self.contentLbl.lim_height = 15.0f;
+    self.contentLbl.lim_height = 20.0f; // 14pt 字体行高约 19pt, 原 15pt 会切到中文下沉笔画
     self.contentLbl.lim_left = self.nameLbl.lim_left;
     self.contentLbl.lim_top = self.nameLbl.lim_bottom + 10.0f;
 }

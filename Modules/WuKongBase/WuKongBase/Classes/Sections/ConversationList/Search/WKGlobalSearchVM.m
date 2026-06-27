@@ -24,11 +24,10 @@
 #define WKSearchMaxCount 4
 
 // ============================================================================
-// [SearchSpaceTrace] 搜索结果空间过滤诊断日志。调试用途, 定位"切空间后还能搜到
-// 别空间聊天记录"的具体放行档位。问题定位完成后置 NO（合规 CLAUDE.md 调试工具
-// 生命周期要求）。所有埋点统一前缀 [SearchSpaceTrace]。
+// [SearchSpaceTrace]/[SnippetTrace] 搜索诊断日志。调试用途, 定位完成后已关闭(NO)。
+// 开关置 YES 即可重新打开全部埋点(代码保留, 便于后续排查)。CLAUDE.md 调试工具生命周期。
 // ============================================================================
-static const BOOL WKSearchSpaceTrace = YES;
+static const BOOL WKSearchSpaceTrace = NO;
 #define WK_SEARCH_TRACE(...) do { if (WKSearchSpaceTrace) { NSLog(__VA_ARGS__); } } while (0)
 
 static inline const char *WKSpaceDecisionStr(WKSpaceFilterDecision d) {
@@ -722,6 +721,15 @@ static inline const char *WKSpaceDecisionStr(WKSpaceFilterDecision d) {
 
             // 截取关键词周围的上下文片段用于预览
             NSString *snippet = [self snippetFromText:previewText keyword:kw maxLength:40];
+
+            // [SnippetTrace] 诊断"关键词附近预览失效"。看 kw 是否为空 / previewText 是否含 kw /
+            // searchableWord 是否含 kw。定位完置 WKSearchSpaceTrace=NO 一并关。
+            WK_SEARCH_TRACE(@"[SnippetTrace] channelId=%@ count=%ld kw=[%@] swHasKw=%d previewHasKw=%d preview=[%@] snippet=[%@]",
+                            ch.channelId, (long)result.messageCount, kw,
+                            (result.searchableWord && kw.length>0 && [result.searchableWord rangeOfString:kw options:NSCaseInsensitiveSearch].location != NSNotFound),
+                            (previewText && kw.length>0 && [previewText rangeOfString:kw options:NSCaseInsensitiveSearch].location != NSNotFound),
+                            previewText.length > 30 ? [previewText substringToIndex:30] : previewText,
+                            snippet);
 
             if (result.messageCount == 1) {
                 // 单条命中 → 显示消息预览，点击直接跳到该消息

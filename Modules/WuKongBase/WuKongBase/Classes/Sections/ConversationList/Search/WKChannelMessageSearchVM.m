@@ -53,7 +53,7 @@
            @"name":name,
            @"avatar":[WKAvatarUtil getFullAvatarWIthPath:logo],
            @"keyword": self.keyword?:@"",
-           @"content": [self previewTextForMessage:message],
+           @"content": [self snippetFromText:[self previewTextForMessage:message] keyword:self.keyword maxLength:40],
            @"timestamp": @(message.timestamp),
            @"showBottomLine":@(NO),
            @"showTopLine":@(NO),
@@ -87,6 +87,26 @@
     if (word.length > 0) return word;
     NSString *digest = [content conversationDigest];
     return digest ?: @"";
+}
+
+/// 以关键词为中心截取上下文片段(与全局搜索 WKGlobalSearchVM.snippetFromText 同口径)。
+/// 会话内搜索详情页之前直接用整段 previewText, 命中关键词在中后部时只显示开头、
+/// 看不到关键词附近内容。这里居中截取, 与外层全局搜索结果体验一致。
+- (NSString *)snippetFromText:(NSString *)text keyword:(NSString *)keyword maxLength:(NSInteger)maxLength {
+    if (!text || text.length == 0) return @"";
+    if (!keyword || keyword.length == 0) return text.length > (NSUInteger)maxLength ? [text substringToIndex:maxLength] : text;
+
+    NSRange range = [text rangeOfString:keyword options:NSCaseInsensitiveSearch];
+    if (range.location == NSNotFound) {
+        return text.length > (NSUInteger)maxLength ? [NSString stringWithFormat:@"%@...", [text substringToIndex:maxLength]] : text;
+    }
+    NSInteger contextRadius = (maxLength - (NSInteger)keyword.length) / 2;
+    NSInteger start = MAX(0, (NSInteger)range.location - contextRadius);
+    NSInteger end = MIN((NSInteger)text.length, (NSInteger)(range.location + range.length) + contextRadius);
+    NSString *snippet = [text substringWithRange:NSMakeRange(start, end - start)];
+    if (start > 0) snippet = [NSString stringWithFormat:@"...%@", snippet];
+    if (end < (NSInteger)text.length) snippet = [NSString stringWithFormat:@"%@...", snippet];
+    return snippet;
 }
 
 
