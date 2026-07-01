@@ -5,11 +5,11 @@
 #import "WKChannelHistoryMediaBrowser.h"
 #import "WKChannelHistoryMediaBrowserToolbar.h"
 #import "WKChannelHistoryFileDownloader.h"
+#import "WKChannelHistoryStreamingVideoData.h"
 #import "WKApp.h"
 #import "WuKongBase.h"
 #import "WKImageBrowser.h"
 #import "WKDefaultWebImageMediator.h"
-#import "WKVideoBrowserData.h"
 #import "WKImageContent.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 #import <YBImageBrowser/YBImageBrowser.h>
@@ -55,38 +55,37 @@
     return [[WKApp shared] getImageFullUrl:imgc.remoteUrl];
 }
 
-/// 视频项 → WKVideoBrowserData。download 块由 WKChannelHistoryFileDownloader 实现 (命中
-/// tmp 缓存则秒回, 否则边下边播)。封面图先用 SDWebImage 预拉一次, 命中后赋值。
-/// 返回 nil 表示连本地缓存都没有可播 URL —— 调用方会自动回退到 imageData 展示缩略图。
-+ (nullable WKVideoBrowserData *)videoDataForItem:(WKChannelHistorySearchItem *)it {
+/// 视频项 → WKChannelHistoryStreamingVideoData。
+/// 数据源: 服务端 URL / 本地 WKMessageDB 消息 content, 二者任一都优先; 再判 tmp 缓存
+/// 命中就走 file:// 起播 (瞬间), 否则给远端 URL 让 AVPlayer 边下边播 (中央 spinner)。
+/// 返回 nil 表示两条来源都拿不到 URL —— 调用方会自动回退到 imageData 展示缩略图。
++ (nullable WKChannelHistoryStreamingVideoData *)videoDataForItem:(WKChannelHistorySearchItem *)it {
     NSString *rawSrc = it.originalUrl.length > 0 ? it.originalUrl : it.previewUrl;
-    NSURL *videoURL = [self resolveRemoteURL:rawSrc];
+    NSURL *remote = [self resolveRemoteURL:rawSrc];
     // 服务端字段缺失时降级到 WKMessageDB
-    if (!videoURL) videoURL = [self fallbackVideoURLFromLocalMessage:it];
-    if (!videoURL) return nil;
+    if (!remote) remote = [self fallbackVideoURLFromLocalMessage:it];
+    if (!remote) return nil;
 
-    WKVideoBrowserData *vd = [WKVideoBrowserData new];
-    vd.extraData = @{ @"channelHistoryItem": it };
-
-    NSString *remoteUrl = videoURL.absoluteString;
+    NSString *remoteStr = remote.absoluteString;
     NSString *fileName = it.fileName.length > 0 ? it.fileName : nil;
-    // download 块只会在 cell 真正展示时被调用一次。下载器内部对同 URL 做了 tmp 缓存,
-    // 反复滑动同一条不会重复请求网络。
-    vd.download = ^(void(^downCompleteBlock)(NSString *videoPath, NSError *error)) {
-        [WKChannelHistoryFileDownloader downloadRemoteUrl:remoteUrl
-                                                  fileName:fileName
-                                                   onProgress:nil
-                                                onComplete:^(NSURL *localURL, NSError *error) {
-            if (downCompleteBlock) {
-                downCompleteBlock(localURL.path ?: @"", error);
-            }
-        }];
-    };
 
-    // 预拉封面 (异步) — 拉到了就显示, 拉不到也不阻塞下载。
+    WKChannelHistoryStreamingVideoData *vd = [WKChannelHistoryStreamingVideoData new];
+    vd.extraData = @{ @"channelHistoryItem": it };
+    vd.remoteURLString = remoteStr;
+    vd.fileName = fileName;
+
+    // 缓存命中: 之前保存到相册 / 别处下过 → 用 file:// 起播 (0 延迟)
+    NSString *cachedPath = [WKChannelHistoryFileDownloader cachedLocalPathForRemoteUrl:remoteStr fileName:fileName];
+    if (cachedPath.length > 0 && [[NSFileManager defaultManager] fileExistsAtPath:cachedPath]) {
+        vd.videoURL = [NSURL fileURLWithPath:cachedPath];
+    } else {
+        vd.videoURL = remote;
+    }
+
+    // 预拉封面 (异步) — 拉到了就显示, 拉不到 AVPlayer 首帧到位后会自动接管 (readyForDisplay)
     NSURL *thumbURL = [self resolveRemoteURL:(it.thumbUrl.length > 0 ? it.thumbUrl : it.previewUrl)];
     if (thumbURL) {
-        __weak WKVideoBrowserData *weakVd = vd;
+        __weak WKChannelHistoryStreamingVideoData *weakVd = vd;
         [[SDWebImageManager sharedManager]
          loadImageWithURL:thumbURL
          options:0
@@ -118,7 +117,7 @@
 /// dataSource 与 items 的位置 1:1 对齐, 永远不会出现「点视频却开到第一张图」的错位。
 + (nullable id<YBIBDataProtocol>)dataForItem:(WKChannelHistorySearchItem *)it {
     if (it.mediaKind == WKChannelHistorySearchMediaKindVideo) {
-        WKVideoBrowserData *vd = [self videoDataForItem:it];
+        WKChannelHistoryStreamingVideoData *vd = [self videoDataForItem:it];
         if (vd) return vd;
     }
     return [self imageDataForItem:it];

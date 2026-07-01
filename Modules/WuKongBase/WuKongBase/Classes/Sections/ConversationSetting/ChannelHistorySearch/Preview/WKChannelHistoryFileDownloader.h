@@ -16,6 +16,12 @@ typedef void(^WKChannelHistoryFileProgressHandler)(double progress);
 
 @interface WKChannelHistoryFileDownloader : NSObject
 
+/// 返回该 (remoteUrl, fileName) 组合在 tmp 缓存里的**目标路径** (不判断文件是否存在,
+/// 调用方需要自己 fileExists 检查)。用于流式视频 cell 判断"是否已经下过, 能否直接用
+/// file:// 起播代替 https 边下边播"。
++ (nullable NSString *)cachedLocalPathForRemoteUrl:(NSString *)remoteUrl
+                                            fileName:(nullable NSString *)fileName;
+
 /// 下载 remoteUrl 到 temp/WKChannelHistoryFile/<realName>。
 /// 同一 (remoteUrl, fileName) 命中缓存时直接 completion(localURL, nil)。
 /// 返回的 task 可用于取消。

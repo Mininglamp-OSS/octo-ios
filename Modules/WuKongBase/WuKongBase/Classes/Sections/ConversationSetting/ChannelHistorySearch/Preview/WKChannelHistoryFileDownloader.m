@@ -34,6 +34,13 @@
     return name;
 }
 
++ (NSString *)cachedLocalPathForRemoteUrl:(NSString *)remoteUrl
+                                    fileName:(NSString *)fileName {
+    if (remoteUrl.length == 0) return nil;
+    NSString *safe = [self safeFileNameFromUrl:remoteUrl fileName:fileName];
+    return [[self cacheDir] stringByAppendingPathComponent:safe];
+}
+
 + (NSURLSessionDownloadTask *)downloadRemoteUrl:(NSString *)remoteUrl
                                         fileName:(NSString *)fileName
                                          onProgress:(WKChannelHistoryFileProgressHandler)onProgress

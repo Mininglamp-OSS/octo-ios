@@ -3,6 +3,7 @@
 //
 
 #import "WKChannelHistoryMediaBrowserToolbar.h"
+#import "WKChannelHistoryStreamingVideoData.h"
 #import "WKApp.h"
 #import "WuKongBase.h"
 #import "UIView+WK.h"
@@ -10,7 +11,6 @@
 #import "WKActionSheetView2.h"
 #import "WKActionSheetItem2.h"
 #import "WKConstant.h"
-#import "WKVideoBrowserData.h"
 
 #define kTopBarHeight 44.0f
 
@@ -86,8 +86,8 @@
     id extra = nil;
     if ([data isKindOfClass:[YBIBImageData class]]) {
         extra = ((YBIBImageData *)data).extraData;
-    } else if ([data isKindOfClass:[WKVideoBrowserData class]]) {
-        extra = ((WKVideoBrowserData *)data).extraData;
+    } else if ([data isKindOfClass:[WKChannelHistoryStreamingVideoData class]]) {
+        extra = ((WKChannelHistoryStreamingVideoData *)data).extraData;
     }
     if ([extra isKindOfClass:[NSDictionary class]]) {
         id it = ((NSDictionary *)extra)[@"channelHistoryItem"];
@@ -110,7 +110,7 @@
         }]];
     }
     id<YBIBDataProtocol> data = self.yb_currentData ? self.yb_currentData() : nil;
-    BOOL isVideo = [data isKindOfClass:[WKVideoBrowserData class]];
+    BOOL isVideo = [data isKindOfClass:[WKChannelHistoryStreamingVideoData class]];
     NSString *saveTitle = isVideo ? LLang(@"保存视频到相册") : LLang(@"保存图片到相册");
     [sheet addItem:[WKActionSheetButtonItem2 initWithTitle:saveTitle onClick:^{
         id<YBIBDataProtocol> cur = ws.yb_currentData ? ws.yb_currentData() : nil;
