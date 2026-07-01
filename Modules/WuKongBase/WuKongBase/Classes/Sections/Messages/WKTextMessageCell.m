@@ -290,10 +290,22 @@ static NSMutableDictionary *_jsTableHeights;
 // 另一条消息时，旧的句柄/window tap/KVO/timer/通知 会泄漏到新消息上。在这里
 // 兜底退出选区。表格 cell 用唯一 reuseIdentifier 不会被复用，但调一下 end 也
 // 是无害的。
+//
+// reuse 兜底: cell 出列瞬间主动清空 textLbl.attributedText, 挡住 "cell 已被绘制
+// 到屏幕、但本轮 refresh: 还没跑完" 的中间态。之前 "刷会话时旧消息文字 + 新消息
+// 文字叠在同一气泡" 的反复回归 (094e713 / 9890f1b / 4288435 / c89d436) 全是这一族。
+// 与 willDisplay→refresh: 之间隔了一个 runloop tick, 两步天然分离, 等同于显式
+// "先清后写" 的两步模式, 无需在 setter 内代劳 (那样会引发 UITextView setter
+// 互调死循环, 见 WKMessageTextView.m 类注释)。
+//
+// ⚠ 不调 self.textLbl.text = nil: UITextView -setText: 内部走 self.attributedText
+// 路径会再次进入子类 setter, 与 setter 的清零逻辑互调死递归 (iOS 26 实测闪退)。
+// 单调 .attributedText=nil 即可清空 textStorage, 不会触发互调。
 -(void) prepareForReuse {
     if ([self wk_isInSelectionMode]) {
         [self endInBubbleTextSelection];
     }
+    self.textLbl.attributedText = nil;
     [super prepareForReuse];
 }
 
@@ -1528,6 +1540,14 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
 - (void)refresh:(WKMessageModel *)model {
     [super refresh:model];
 
+    // 故障隔离: refresh 主体路径里 attrStr 解析 / markdown 渲染 / 表格段构建 /
+    // WKWebView 装载 / reply 块拼装 任意一处抛 NSException, 整条主线程的 batch
+    // update 流程会被打断, 同帧其它 cell 的 layoutSubviews 全部跳过 — 视觉上
+    // 就是"整页气泡全没了, 必须退出重进才能恢复"。这条共因链路是用户反馈
+    // "刷会话气泡全空"的根本原因之一 (见 8141a16 commit message + 同期排查)。
+    // 这里把单条 cell 的渲染异常隔离在本 cell 内, 降级为纯文本气泡兜底, 让
+    // 同帧其它 cell 的 layout 不被波及。
+    @try {
     // 检测链接卡片
     NSString *rawText = [[self class] getRawContent:model];
     if ([rawText hasPrefix:@"[链接]"]) {
@@ -1818,6 +1838,41 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         self.botActionView.hidden = YES;
     }
 
+    } @catch (NSException *exception) {
+        NSLog(@"[CellRefresh] ⚠️ refresh 抛异常被隔离 msgNo=%@ name=%@ reason=%@",
+              model.clientMsgNo, exception.name, exception.reason);
+        [self wk_renderPlainTextFallback:model];
+    }
+}
+
+// 异常隔离降级路径: refresh 主体任一处抛异常时, 兜底渲染成"纯文本气泡 + 默认配色"。
+// 不调用任何 markdown / 表格 / 段落构建路径 — 这条路径必须比 refresh 主体短小且
+// 不再抛异常, 否则故障隔离就成了故障传染。包一层 @try 兜底, 自己再炸就只剩空气泡,
+// 但仍不会污染整页 layout。
+- (void)wk_renderPlainTextFallback:(WKMessageModel *)model {
+    @try {
+        [self clearSegmentViews];
+        self.linkCardView.hidden = YES;
+        self.isLinkCard = NO;
+        self.textLbl.hidden = NO;
+        NSString *raw = [[self class] getRawContent:model] ?: @"";
+        UIColor *color = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
+        if (!color) color = [UIColor blackColor];
+        NSDictionary *attrs = @{
+            NSFontAttributeName: [UIFont systemFontOfSize:16.0f],
+            NSForegroundColorAttributeName: color,
+        };
+        NSAttributedString *attr = [[NSAttributedString alloc] initWithString:raw attributes:attrs];
+        self.textLbl.attributedText = attr;
+        CGFloat maxWidth = [WKApp shared].config.messageContentMaxWidth;
+        if (maxWidth <= 0) maxWidth = 240.0f;
+        CGSize fit = [attr boundingRectWithSize:CGSizeMake(maxWidth, CGFLOAT_MAX)
+                                        options:(NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading)
+                                        context:nil].size;
+        self.textLbl.lim_size = CGSizeMake(ceil(fit.width), ceil(fit.height));
+    } @catch (NSException *e) {
+        NSLog(@"[CellRefresh] ⚠️ fallback 也抛异常, 留空气泡: %@", e.reason);
+    }
 }
 
 -(void) onTapWithGestureRecognizer:(TapLongTapOrDoubleTapGestureRecognizerWrap*)gesture {
@@ -1937,6 +1992,12 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         return;
     }
 
+    // 故障隔离: layout 主体异常 (reply 块尺寸算崩 / segment frame 数学 NaN /
+    // WKWebView 容器 frame 越界等) 沿 layoutSubviews 抛进 UIKit batch update,
+    // 会打断同帧后续所有 cell 的 layout - 视觉上"整页气泡全没"。这里把单 cell
+    // layout 异常隔离, [super layoutSubviews] 已经跑完, 基础 frame 已就位,
+    // 我们只是放弃本帧的子视图精细布局, 下一帧 UIKit 自然重试。
+    @try {
     CGFloat replyBoxBottom = 0.0f;
     
     if([[self class] hasReply:self.messageModel]) {
@@ -2122,6 +2183,10 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         }];
     }
 
+    } @catch (NSException *exception) {
+        NSLog(@"[CellLayout] ⚠️ layoutSubviews 抛异常被隔离 msgNo=%@ name=%@ reason=%@",
+              self.messageModel.clientMsgNo, exception.name, exception.reason);
+    }
 }
 
 -(void) layoutName {
@@ -2516,6 +2581,34 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
             }
         });
     }];
+}
+
+// WKWebView content process 被 iOS 回收后的自愈路径。
+//
+// 触发场景: 设备长时间锁屏 / 整机内存压力大 / 系统主动回收 WebContent XPC,
+// WKWebView 实例还活着但底层 process 已死, 表格段视觉上变成空白容器,
+// evaluateJavaScript / loadHTMLString 调进去都没反应 — 这条 cell 看起来
+// "好像正常但表格永远不出来", 是用户反馈"回前台后部分气泡空白" 的另一条根因。
+//
+// 自愈: tableRawContents 在 segment 构建时存了原始 markdown 表格内容,
+// 这里用它直接重建 HTML 重新装载, 不需要走 refresh: 全量重建 (避免被
+// reload 视为漂移源)。装载触发 WebKit 重新 spawn WebContent process, 表格
+// 内容回来。idx 匹配失败时安全跳过, 不抛异常。
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
+    NSUInteger idx = [self.tableWebViews indexOfObject:webView];
+    if (idx == NSNotFound || idx >= self.tableRawContents.count) {
+        return;
+    }
+    NSString *content = self.tableRawContents[idx];
+    if (content.length == 0) return;
+    NSString *tableHTML = [WKMarkdownRenderer extractTableHTML:content
+                                                     fontSize:[WKApp shared].config.messageTextFontSize
+                                                 textColorHex:@"#333333"];
+    if (tableHTML.length > 0) {
+        [webView loadHTMLString:tableHTML baseURL:nil];
+    }
+    NSLog(@"[WKWebView] content process terminated, reloaded msgNo=%@ idx=%lu",
+          self.messageModel.clientMsgNo, (unsigned long)idx);
 }
 
 -(void) scrollViewDidScroll:(UIScrollView *)scrollView {

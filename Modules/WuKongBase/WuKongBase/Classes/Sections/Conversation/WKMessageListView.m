@@ -97,6 +97,22 @@ static const BOOL kIncrementalPulldown = NO;
 // reloadData + scrollToBottom 触发离屏 layout 但 willDisplayCell: 没回调, refresh: 永不跑
 // → 回前台 cell 内容空白" 的回归。设置点: handleRecvMessage 后台分支 + onConversationSyncFinished。
 @property(nonatomic,assign) BOOL dirtyAfterBackground;
+// reconcile 防抖: 同一回前台动作会同时派发 UIApplicationWillEnterForeground /
+// UIApplicationDidBecomeActive / UISceneWillEnterForeground / UISceneDidActivate
+// 多条通知, 全部 hook 到本对账方法。500ms 内重复触发跳过, 避免连刷 reloadData
+// 抢主线程导致回前台首帧卡顿。注意: 防抖放在所有 gate 之后, gate 命中而早退
+// 时不更新时间戳, 后到的通知仍能补一次, 不损失对账机会。
+@property(nonatomic,assign) NSTimeInterval reconcileLastTs;
+// pendingReconcile: gate 命中 (isPulldownInProgress / isRehydrating / pullupHasMore)
+// 时, dirtyAfterBackground 不被消费, 同时 pending 置位; gate 清掉的路径 (pulldown
+// 完成 / rehydrate finish) 末尾调 wk_tryConsumePendingReconcile, 异步派发一次
+// reconcile 补刷。
+//
+// 没有这条机制时, 用户在看历史 (pullupHasMore=YES) / 重连补齐期间 (isRehydrating)
+// 锁屏复活就会落入空窗: 回前台时三条通知派发 reconcile, 全被 gate 拒掉, 等
+// gate 自然清掉时已经无人再触发 reconcile, 后台离屏 insert 的 cell 就永久空白
+// 必须退出重进。
+@property(nonatomic,assign) BOOL pendingReconcile;
 // 跟踪上一次连接状态: 只在 (非 Connected → Connected) 跳变时触发 rehydrate,
 // 否则连续 ping/pong 都会重复跑。
 @property(nonatomic,assign) WKConnectStatus prevConnectStatus;
@@ -238,8 +254,20 @@ static const BOOL kIncrementalPulldown = NO;
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onShareExtensionMessageSent:) name:@"WKShareExtensionMessageSent" object:nil];
     // 多选模式下 cell 圆圈被勾选时刷新 anchor
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onMultipleAnchorDidChange:) name:@"WKMessageMultipleAnchorDidChange" object:nil];
-    // 回前台对账：修后台收消息离屏 insert 致最新消息行空白（见 onAppDidBecomeActiveReconcile:）
+    // 回前台对账：修后台收消息离屏 insert 致最新消息行空白（见 onAppDidBecomeActiveReconcile:）。
+    //
+    // 监听 4 路通知, 任一触发都跑一次对账, 用 reconcileLastTs 500ms 防抖去重。
+    // 旧实现只挂 UIApplicationDidBecomeActiveNotification, 在 iPadOS 多场景 /
+    // iOS 13+ scene lifecycle 下有些回前台路径根本不派发该通知 (例如多窗口
+    // app 中某个 scene 单独被 resume), 导致对账 hook 永远不响应、cell 内容空白
+    // 必须退出重进才能修。Will* 系列比 Did* 系列早一帧, 让 reloadData 在 UIKit
+    // 真正开始渲染前完成, 视觉上更顺。
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppDidBecomeActiveReconcile:) name:UIApplicationDidBecomeActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppDidBecomeActiveReconcile:) name:UIApplicationWillEnterForegroundNotification object:nil];
+    if (@available(iOS 13.0, *)) {
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppDidBecomeActiveReconcile:) name:UISceneDidActivateNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAppDidBecomeActiveReconcile:) name:UISceneWillEnterForegroundNotification object:nil];
+    }
 }
 
 -(void) removeDelegates {
@@ -258,6 +286,11 @@ static const BOOL kIncrementalPulldown = NO;
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKShareExtensionMessageSent" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:@"WKMessageMultipleAnchorDidChange" object:nil];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidBecomeActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationWillEnterForegroundNotification object:nil];
+    if (@available(iOS 13.0, *)) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:UISceneDidActivateNotification object:nil];
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:UISceneWillEnterForegroundNotification object:nil];
+    }
 }
 
 /// 外部分享的消息发送后，插入消息到当前聊天页面
@@ -453,12 +486,25 @@ static const BOOL kIncrementalPulldown = NO;
 
 -(void) loadMessages:(BOOL)animation firstLoad:(BOOL)firstLoad complete:(void(^)(void))complete{
     __weak typeof(self) weakSelf = self;
+    WKMessageModel *_dpHeadBefore = [self.dataProvider firstMessage];
+    WKMessageModel *_dpTailBefore = [self.dataProvider lastMessage];
+    NSLog(@"[BubbleBugRepro] loadMessages ENTRY animation=%d firstLoad=%d keepPos=%u dpHead=%u dpTail=%u dpCount=date×%lu",
+          animation, firstLoad,
+          self.keepPosition.orderSeq,
+          _dpHeadBefore.orderSeq, _dpTailBefore.orderSeq,
+          (unsigned long)self.dataProvider.dates.count);
     if(self.keepPosition) {
         [self enablePullup:YES];
     }else {
         [self enablePullup:NO];
     }
     [self.dataProvider pullFirst:self.keepPosition complete:^(bool hasMore) {
+        WKMessageModel *_dpHeadAfter = [weakSelf.dataProvider firstMessage];
+        WKMessageModel *_dpTailAfter = [weakSelf.dataProvider lastMessage];
+        NSLog(@"[BubbleBugRepro] loadMessages pullFirst RETURN hasMore=%d dpHead=%u dpTail=%u dpDates=%lu",
+              hasMore,
+              _dpHeadAfter.orderSeq, _dpTailAfter.orderSeq,
+              (unsigned long)weakSelf.dataProvider.dates.count);
         [weakSelf handleLoadMessages:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
     }];
 }
@@ -560,15 +606,23 @@ static const BOOL kIncrementalPulldown = NO;
 
 // 请求到最底部
 -(void) pullBottom {
+    WKMessageModel *_dpHead = [self.dataProvider firstMessage];
+    WKMessageModel *_dpTail = [self.dataProvider lastMessage];
+    NSLog(@"[BubbleBugRepro] pullBottom ENTRY pullupHasMore=%d positionAtBottom=%d dpHead=%u dpTail=%u lastMsg=%u appState=%ld",
+          [self pullupHasMore], self.positionAtBottom,
+          _dpHead.orderSeq, _dpTail.orderSeq, self.lastMessage.orderSeq,
+          (long)[UIApplication sharedApplication].applicationState);
     if(![self pullupHasMore]) {
+        NSLog(@"[BubbleBugRepro] pullBottom PATH=scroll-only (already at bottom in dp)");
         [self pullupFinished];
         [self.tableView setContentOffset:self.tableView.contentOffset animated:NO]; // 立刻停止滚动
         [self scrollToBottom:YES];
         return;
     }
+    NSLog(@"[BubbleBugRepro] pullBottom PATH=reset-load (pullupHasMore=YES) — will pullFirst:nil");
     self.keepPosition = nil;
     [self loadMessages:true firstLoad:false complete:nil];
-  
+
 }
 
 - (void)suppressScrollOnce {
@@ -759,6 +813,13 @@ static const BOOL kIncrementalPulldown = NO;
     }
 
     __weak typeof(self) weakSelf = self;
+    {
+        WKMessageModel *_dpHead = [self.dataProvider firstMessage];
+        WKMessageModel *_dpTail = [self.dataProvider lastMessage];
+        NSLog(@"[BubbleBugRepro] pulldown ENTRY dpHead=%u dpTail=%u dpDates=%lu positionAtBottom=%d",
+              _dpHead.orderSeq, _dpTail.orderSeq,
+              (unsigned long)self.dataProvider.dates.count, self.positionAtBottom);
+    }
     WK_PERF_LOG(@"[PullDebug] pulldown START, mj_header.state=%ld, isPulldownInProgress=%d", (long)self.tableView.mj_header.state, self.isPulldownInProgress);
 
     // 标记 pulldown 进行中，阻止新消息并发修改 tableView
@@ -928,14 +989,30 @@ static const BOOL kIncrementalPulldown = NO;
                     [weakSelf.tableView.mj_header endRefreshing];
                     weakSelf.isPulldownInProgress = NO;
                     WK_PERF_LOG(@"[PullDebug] pulldown: COMPLETE (hasInsertions path), mj_header.state=%ld", (long)weakSelf.tableView.mj_header.state);
+                    {
+                        WKMessageModel *_dpHead = [weakSelf.dataProvider firstMessage];
+                        WKMessageModel *_dpTail = [weakSelf.dataProvider lastMessage];
+                        NSLog(@"[BubbleBugRepro] pulldown DONE path=hasInsertions newMsgs=%lu dpHead=%u dpTail=%u dpDates=%lu",
+                              (unsigned long)newMsgs.count, _dpHead.orderSeq, _dpTail.orderSeq,
+                              (unsigned long)weakSelf.dataProvider.dates.count);
+                    }
                     [weakSelf processPendingRecvMessages];
+                    [weakSelf wk_tryConsumePendingReconcile];
                 });
             });
         } else {
             [weakSelf.tableView.mj_header endRefreshing];
             weakSelf.isPulldownInProgress = NO;
             WK_PERF_LOG(@"[PullDebug] pulldown: COMPLETE (no insertions), mj_header.state=%ld", (long)weakSelf.tableView.mj_header.state);
+            {
+                WKMessageModel *_dpHead = [weakSelf.dataProvider firstMessage];
+                WKMessageModel *_dpTail = [weakSelf.dataProvider lastMessage];
+                NSLog(@"[BubbleBugRepro] pulldown DONE path=noInsertions dpHead=%u dpTail=%u dpDates=%lu",
+                      _dpHead.orderSeq, _dpTail.orderSeq,
+                      (unsigned long)weakSelf.dataProvider.dates.count);
+            }
             [weakSelf processPendingRecvMessages];
+            [weakSelf wk_tryConsumePendingReconcile];
         }
     }];
 
@@ -1050,6 +1127,11 @@ static const NSInteger kMaxPullupDedupRetry = 3;
                     WK_PERF_LOG(@"[PullDebug] pullup: COMPLETE (hasData path), mj_footer.state=%ld", (long)weakSelf.tableView.mj_footer.state);
                     if(complete) {
                         complete(hasMore);
+                    }
+                    // gate-clear 接力: 用户上滑读历史 + 锁屏复活时 reconcile 被
+                    // pullupHasMore 拦下, 这里 pullup 跑完(hasMore=NO 即已到底)再补一次。
+                    if (!hasMore) {
+                        [weakSelf wk_tryConsumePendingReconcile];
                     }
                 });
             });
@@ -2039,7 +2121,16 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         self.hasRecvMsg = true;
     }
     WKMessageModel *messageModel = [[WKMessageModel alloc] initWithMessage:message];
+    {
+        WKMessageModel *_dpTail = [self.dataProvider lastMessage];
+        NSLog(@"[BubbleBugRepro] handleRecvMessage ENTRY msgNo=%@ msgOrderSeq=%u dpTail=%u lastMsg=%u pullupHasMore=%d positionAtBottom=%d appState=%ld",
+              message.clientMsgNo, messageModel.orderSeq,
+              _dpTail.orderSeq, self.lastMessage.orderSeq,
+              [self pullupHasMore], self.positionAtBottom,
+              (long)[UIApplication sharedApplication].applicationState);
+    }
     if([self pullupHasMore]) { // 消息没有完全加载完成
+        NSLog(@"[BubbleBugRepro] handleRecvMessage PATH=pullupHasMore (only updateLastMsgIfNeed) — NEW MSG DROPPED FROM DP");
         [self updateLastMsgIfNeed:messageModel];
         if( [message isSend]) {
             [self  pullBottom];
@@ -2062,6 +2153,8 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         //   相等判断提前 return，永远不会补一次 reloadData。reloadData 是惰性的，回前台下次
         //   layout 会重查 numberOfRows 并重新 willDisplayCell:，自愈（对齐 git-init 的原行为）。
         if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
+            NSLog(@"[BubbleBugRepro] handleRecvMessage PATH=background msgOrderSeq=%u dpTail=%u (no gap-fill in bg branch)",
+                  messageModel.orderSeq, [self.dataProvider lastMessage].orderSeq);
             // R4 fix: 标记 "回前台 reconcile 时即使 numberOfRows 一致也要强制 reloadData 一次",
             // 治后台 reloadData + scrollToBottom 触发离屏 layout 但 willDisplayCell: 没回调,
             // 回前台 UIKit 误判 "已布局" 不重渲染、cell 内容空白的回归。消费点:
@@ -3053,6 +3146,9 @@ static const NSInteger kMaxRehydratePages = 35;
         [self drainPendingRecvMessagesAfterRehydrate];
     }
 
+    // gate-clear 接力: 回前台对账时若卡在 isRehydrating 早退, 这里走完后补一次。
+    [self wk_tryConsumePendingReconcile];
+
     // capped HUD 也只在仍属活跃显示页时弹, 避免 VC 已被 push 盖住但还没 detach
     // (e.g. push 资料页期间 watchdog 触发) 时把 HUD 弹到无关页面。
     if (capped && self.window) {
@@ -3148,6 +3244,8 @@ static const NSInteger kMaxRehydratePages = 35;
             if (!ss.isPulldownInProgress) {
                 [ss drainPendingRecvMessagesAfterRehydrate];
             }
+            // gate-clear 接力: 回前台对账时若卡在 isRehydrating 早退, 这里走完后补一次。
+            [ss wk_tryConsumePendingReconcile];
         });
     }];
 }
@@ -3163,15 +3261,41 @@ static const NSInteger kMaxRehydratePages = 35;
     if (!self.channel) {
         return;
     }
-    if (self.isPulldownInProgress) { // 不和进行中的 pulldown 抢 tableView
+    NSLog(@"[BubbleBugRepro] reconcile ENTRY note=%@ dirty=%d pending=%d pulldown=%d rehydrate=%d pullupMore=%d posAtBottom=%d",
+          note.name ?: @"(consume)",
+          self.dirtyAfterBackground, self.pendingReconcile,
+          self.isPulldownInProgress, self.isRehydrating,
+          [self pullupHasMore], self.positionAtBottom);
+    // gate 命中早退路径: dirtyAfterBackground 仍为 YES (说明后台真的动过状态、
+    // 需要补刷) 时把 pendingReconcile 置位, 等 gate 清掉的回调路径再调
+    // wk_tryConsumePendingReconcile 补一次。覆盖三种场景:
+    //   - 用户上滑读历史时锁屏复活 (pullupHasMore=YES)
+    //   - 重连补齐期间锁屏复活 (isRehydrating=YES)
+    //   - pulldown 跑着的时候锁屏复活 (isPulldownInProgress=YES)
+    // 不持锁不抢 tableView, 安全。
+    if (self.isPulldownInProgress) {
+        if (self.dirtyAfterBackground) self.pendingReconcile = YES;
+        NSLog(@"[BubbleBugRepro] reconcile GATE=isPulldownInProgress pendingNow=%d", self.pendingReconcile);
         return;
     }
-    if (self.isRehydrating) { // 重连补齐 / orderSeq gap fill 在跑, 让它自己收尾
+    if (self.isRehydrating) {
+        if (self.dirtyAfterBackground) self.pendingReconcile = YES;
+        NSLog(@"[BubbleBugRepro] reconcile GATE=isRehydrating pendingNow=%d", self.pendingReconcile);
         return;
     }
-    if ([self pullupHasMore]) { // 用户上滑在看历史，reload 会跳位，放过
+    if ([self pullupHasMore]) {
+        if (self.dirtyAfterBackground) self.pendingReconcile = YES;
+        NSLog(@"[BubbleBugRepro] reconcile GATE=pullupHasMore pendingNow=%d", self.pendingReconcile);
         return;
     }
+    // 防抖: gate 全部放行后再判, 这样 gate 命中早退不会污染时间戳, 下条通知仍能
+    // 补一次。同一回前台动作 (Will*+Did*+SceneWill*+SceneDidActive) 半秒内只跑一次
+    // reloadData, 避免连刷抢主线程影响首帧丝滑。
+    NSTimeInterval _reconcileNow = CFAbsoluteTimeGetCurrent();
+    if (_reconcileNow - self.reconcileLastTs < 0.5) {
+        return;
+    }
+    self.reconcileLastTs = _reconcileNow;
     WKMessageModel *dpLast = [self.dataProvider lastMessage];
     if (!dpLast) {
         return;
@@ -3212,11 +3336,36 @@ static const NSInteger kMaxRehydratePages = 35;
     }
 
     if (needsReload) {
+        NSLog(@"[BubbleBugRepro] reconcile RELOAD dirty=%d positionAtBottom=%d", dirty, self.positionAtBottom);
         [self.tableView reloadData];
         if (self.positionAtBottom) {
             [self scrollToBottom:NO];
         }
+    } else {
+        NSLog(@"[BubbleBugRepro] reconcile NOOP (no signals)");
     }
+    // 真的跑到这里说明 reconcile 主路径已经走过 (或 cheap-path 确认 UI 状态干净),
+    // pendingReconcile 就此清掉避免后续 gate-clear 路径无谓再补一次。
+    self.pendingReconcile = NO;
+}
+
+// gate (pulldown / rehydrate) 清掉后的统一接力点: 若 pending 立位则异步派发一次
+// reconcile 重跑。异步避开当前调用栈 (pulldown / rehydrate 完成的回调内部还在
+// 持续操作 tableView, reload 嵌套进去会跟 batchUpdates / scroll-to-bottom 抢
+// 主线程), 让本帧 UI 先稳定下来再补刷, 保持丝滑。
+//
+// 防抖时间戳由 reconcile 自己维护, 这里不动 — 接力补刷应当不受 500ms 防抖影响
+// (前一次 reconcile 是 gate 命中直接早退, 没动时间戳, 这次能真正跑进主路径)。
+-(void) wk_tryConsumePendingReconcile {
+    if (!self.pendingReconcile) return;
+    if (!self.channel) return;
+    NSLog(@"[BubbleBugRepro] consumePending SCHEDULED");
+    __weak typeof(self) ws = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!ws.pendingReconcile) return; // 期间已被别条路径消费
+        NSLog(@"[BubbleBugRepro] consumePending FIRING");
+        [ws onAppDidBecomeActiveReconcile:nil];
+    });
 }
 
 #pragma mark - WKConversationManagerDelegate

@@ -57,6 +57,22 @@ static void *kWKMTVTokens = &kWKMTVTokens;
 /// UITextView 的 NSLayoutManager 会遵守段落样式的 lineBreakMode，
 /// 导致 markdown (cmark-gfm) 渲染出的 TruncatingTail 段落被截断。
 /// 重写 setAttributedText: 将所有段落样式归一化为 WordWrapping。
+///
+/// ⚠ 不要在 setter 内部调 `[super setText:nil]` 试图集中清 textStorage:
+/// UITextView 的 -setText: 内部会走 self.attributedText 路径再次进入本 setter,
+/// 形成无穷递归 → 打开任意聊天页直接闪退 (iOS 26 已实测)。
+/// "先 .text=nil 再 .attributedText=X" 的两步清空模式必须由调用点显式做 (例如
+/// WKTextMessageCell.m:3380 选区高亮路径), setter 只负责段落归一化 + 调 super,
+/// 不替调用方代劳, 避免互调死循环。
+///
+/// ⚠ 不要在 setter 内部同步 `ensureLayoutForTextContainer:`:
+/// setter 是所有写入必经入口 (refresh: 主路径 / measure / selection / segmented
+/// 重建), 每次都强制同步 glyph 生成会把「主线程 heightForRow 30 条消息 × 60-80ms
+/// parseAttr」的时间雪上加霜, 低性能机 (CPU 频率低) 累加数秒触发 UI 卡死。
+/// 需要 ensureLayout 的调用方 (+measureTextViewSize:) 已经自己调, display 路径
+/// 由 UIKit layoutSubviews 自然触发 —— setter 不必代劳。
+/// 若真出现「setAttrText 之后首帧空白」的具体 case, 在那一处调用点单独补
+/// ensureLayout, 不再放回 setter 里做全局代劳。
 - (void)setAttributedText:(NSAttributedString *)attributedText {
     if (!attributedText || attributedText.length == 0) {
         [super setAttributedText:attributedText];
