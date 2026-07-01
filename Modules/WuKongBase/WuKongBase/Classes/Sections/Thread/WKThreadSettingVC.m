@@ -20,6 +20,7 @@
 #import "WKChannelUtil.h"
 #import "WKRealnamePrefetcher.h"
 #import "WKInputVC.h"
+#import "WKChannelHistorySearchVC.h"
 
 @interface WKThreadSettingVC () <WKSettingMemberGridViewDelegate, UITableViewDataSource, UITableViewDelegate, WKChannelManagerDelegate>
 
@@ -312,7 +313,7 @@
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (section == 0) return 2;
+    if (section == 0) return 3; // 子区名称 / GROUP.md / 查找聊天内容
     return 1;
 }
 
@@ -349,6 +350,17 @@
         cell.detailTextLabel.text = hasMd ? [NSString stringWithFormat:@"%@ v%ld", LLang(@"已配置"), (long)mdVersion] : LLang(@"未配置");
         cell.detailTextLabel.font = [[WKApp shared].config appFontOfSize:15.0f];
         cell.detailTextLabel.textColor = [UIColor grayColor];
+        cell.backgroundColor = [WKApp shared].config.cellBackgroundColor;
+        return cell;
+    } else if (indexPath.section == 0 && indexPath.row == 2) {
+        UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"SearchCell"];
+        if (!cell) {
+            cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"SearchCell"];
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        }
+        cell.textLabel.text = LLang(@"查找聊天内容");
+        cell.textLabel.font = [[WKApp shared].config appFontOfSize:16.0f];
+        cell.textLabel.textColor = [WKApp shared].config.defaultTextColor;
         cell.backgroundColor = [WKApp shared].config.cellBackgroundColor;
         return cell;
     } else {
@@ -390,6 +402,11 @@
         WKGroupMdVC *vc = [WKGroupMdVC new];
         vc.channel = self.channel;
         vc.canEdit = self.isCreator || self.isGroupAdmin;
+        [[WKNavigationManager shared] pushViewController:vc animated:YES];
+    } else if (indexPath.section == 0 && indexPath.row == 2) {
+        // 子区"查找聊天内容"入口 — 与群/私聊一致，进入新版搜索页（纯 API，对齐 web）。
+        WKChannelHistorySearchVC *vc = [WKChannelHistorySearchVC new];
+        vc.channel = self.channel;
         [[WKNavigationManager shared] pushViewController:vc animated:YES];
     } else if (indexPath.section == 1) {
         if (self.isCreator) {

@@ -20,6 +20,7 @@
 #import "WKTableSectionUtil.h"
 #import "WKGroupQRCodeVC.h"
 #import "WKGlobalSearchResultController.h"
+#import "WKChannelHistorySearchVC.h"
 #import "WKThreadListVC.h"
 #import "WKThreadService.h"
 #import "WKGroupMdVC.h"
@@ -457,9 +458,12 @@
                     @"showBottomLine":@(NO),
                     @"showTopLine":@(NO),
                     @"onClick":^{
-                        WKGlobalSearchResultController *vc = [WKGlobalSearchResultController new];
+                        // 入口：进入新版「查找聊天内容」页（与 web ChannelSearchPanel 同口径，纯 API）。
+                        // 不再走全局搜索栈 WKGlobalSearchResultController —— 那条路径仍服务
+                        // 「会话列表→搜索→在某频道点更多」次级跳转，独立保留。
+                        WKChannelHistorySearchVC *vc = [WKChannelHistorySearchVC new];
                         vc.channel = weakSelf.channel;
-                        [[WKNavigationManager shared] pushViewController:vc animated:NO];
+                        [[WKNavigationManager shared] pushViewController:vc animated:YES];
                     }
                 }
             ]
