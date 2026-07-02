@@ -5,6 +5,7 @@
 #import "WKChannelHistoryStreamingVideoData.h"
 #import "WKChannelHistoryStreamingVideoCell.h"
 #import "WKChannelHistoryFileDownloader.h"
+#import "WuKongBase.h"
 #import <Photos/Photos.h>
 #import <YBImageBrowser/YBIBPhotoAlbumManager.h>
 #import <YBImageBrowser/YBIBCopywriter.h>

@@ -2,11 +2,13 @@
 //  WKChannelHistoryStreamingVideoCell.m
 //
 //  流式视频 cell —— AVPlayer 直接吃 URL, 中央 loading 转圈, 首帧到位后隐藏封面。
-//  行为对齐主流视频浏览器 (WeChat / 抖音):
+//  行为对齐主流视频浏览器 (WeChat / iOS Photos):
 //    · 进入 cell 立即起播 (autoplay), 不必等下载完
 //    · 缓冲/未就绪 → 中央 UIActivityIndicator
 //    · 首帧 (AVPlayerLayer.readyForDisplay=YES) → 隐藏封面
-//    · 单击 → 切换 播放/暂停
+//    · 底部进度条: 播/停按钮 + elapsed / total 时间 + slider 支持拖拽 seek
+//    · 单击 → 切换 播放/暂停 + 弹出/收起底部控件
+//    · 播放中 3s 无操作 → 自动隐藏底部控件 (paused 时常驻)
 //    · 播放到尾 → 循环重播
 //    · cell 滚出屏幕 (prepareForReuse) → 暂停 + 拆 KVO / 通知
 //    · App 进后台 → 暂停音频 (避免锁屏还在响)
@@ -24,6 +26,14 @@ static void * kStreamingKVOStatus = &kStreamingKVOStatus;
 static void * kStreamingKVOTimeControl = &kStreamingKVOTimeControl;
 static void * kStreamingKVOReadyForDisplay = &kStreamingKVOReadyForDisplay;
 
+// 底部控件常量 — 集中一处, 后续调节 spacing/字号只在这里改。
+#define kBottomBarHeight     44.0f
+#define kBottomBarHPadding   12.0f
+#define kBottomBarBtnSize    32.0f
+#define kBottomTimeLblW      44.0f  // "00:00" @ 11pt monospaced 够用
+#define kBottomTimeLblLongW  62.0f  // "00:00:00" (>1h 视频)
+#define kAutoHideAfterSec    3.0
+
 @interface WKChannelHistoryStreamingVideoCell ()
 @property (nonatomic, strong) UIImageView *coverImgView;
 @property (nonatomic, strong) UIView *playerContainer;
@@ -33,6 +43,18 @@ static void * kStreamingKVOReadyForDisplay = &kStreamingKVOReadyForDisplay;
 @property (nonatomic, strong) UIView *playIconOverlay;   // 暂停时中央大播放三角
 @property (nonatomic, assign) BOOL didAttachObservers;
 @property (nonatomic, weak) AVPlayerItem *observedItem;
+
+// 底部进度条
+@property (nonatomic, strong) UIView *bottomBar;
+@property (nonatomic, strong) UIVisualEffectView *bottomBarBg;
+@property (nonatomic, strong) UIButton *playPauseBtn;
+@property (nonatomic, strong) UILabel *elapsedLbl;
+@property (nonatomic, strong) UISlider *slider;
+@property (nonatomic, strong) UILabel *totalLbl;
+@property (nonatomic, strong) id periodicObserver;   // AVPlayer time observer token
+@property (nonatomic, assign) BOOL isDraggingSlider; // 拖拽期间不被 periodic 更新覆盖
+@property (nonatomic, strong) NSTimer *autoHideTimer;
+@property (nonatomic, assign) CGFloat durationSeconds; // 缓存 duration, 避免重复读 CMTime
 @end
 
 @implementation WKChannelHistoryStreamingVideoCell
@@ -82,6 +104,8 @@ static void * kStreamingKVOReadyForDisplay = &kStreamingKVOReadyForDisplay;
         _playIconOverlay.hidden = YES;
         [self.contentView addSubview:_playIconOverlay];
 
+        [self buildBottomBar];
+
         UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
             initWithTarget:self action:@selector(onTap)];
         [self.contentView addGestureRecognizer:tap];
@@ -100,19 +124,72 @@ static void * kStreamingKVOReadyForDisplay = &kStreamingKVOReadyForDisplay;
     v.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.4];
     v.layer.cornerRadius = 32;
     v.layer.masksToBounds = YES;
-    UILabel *tri = [UILabel new];
-    tri.text = @"▶";
-    tri.font = [UIFont systemFontOfSize:28 weight:UIFontWeightMedium];
-    tri.textColor = [UIColor whiteColor];
-    tri.textAlignment = NSTextAlignmentCenter;
-    tri.frame = CGRectMake(4, 0, 64, 64); // 三角形视觉重心偏左, 右移 4pt 让它居中
-    [v addSubview:tri];
+    // SF Symbol 系统 play.fill — 与 iOS 原生播放器 (AVPlayerViewController) 一致
+    UIImageView *iv = [UIImageView new];
+    iv.contentMode = UIViewContentModeCenter;
+    iv.tintColor = [UIColor whiteColor];
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:26
+                                                                                            weight:UIImageSymbolWeightMedium];
+        iv.image = [[UIImage systemImageNamed:@"play.fill" withConfiguration:cfg]
+                     imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    }
+    iv.frame = v.bounds;
+    [v addSubview:iv];
     return v;
+}
+
+- (void)buildBottomBar {
+    _bottomBar = [UIView new];
+    _bottomBar.backgroundColor = [UIColor clearColor];
+    _bottomBar.hidden = YES; // 起播前隐藏, item 就绪后再显示
+    [self.contentView addSubview:_bottomBar];
+
+    // dark blur 半透明 0.3 — 与顶部 navbar 风格一致
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
+    _bottomBarBg = [[UIVisualEffectView alloc] initWithEffect:blur];
+    _bottomBarBg.alpha = 0.3;
+    [_bottomBar addSubview:_bottomBarBg];
+
+    _playPauseBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    _playPauseBtn.tintColor = [UIColor whiteColor];
+    // 默认给个 pause 图标, syncPlayPauseBtn 会按 timeControlStatus 覆盖
+    [_playPauseBtn setImage:[self playerSymbol:@"pause.fill"] forState:UIControlStateNormal];
+    [_playPauseBtn addTarget:self action:@selector(onPlayPauseBtnTap) forControlEvents:UIControlEventTouchUpInside];
+    [_bottomBar addSubview:_playPauseBtn];
+
+    UIFont *timeFont = [UIFont monospacedDigitSystemFontOfSize:11 weight:UIFontWeightRegular];
+    _elapsedLbl = [UILabel new];
+    _elapsedLbl.font = timeFont;
+    _elapsedLbl.textColor = [UIColor whiteColor];
+    _elapsedLbl.textAlignment = NSTextAlignmentCenter;
+    _elapsedLbl.text = @"--:--";
+    [_bottomBar addSubview:_elapsedLbl];
+
+    _totalLbl = [UILabel new];
+    _totalLbl.font = timeFont;
+    _totalLbl.textColor = [UIColor whiteColor];
+    _totalLbl.textAlignment = NSTextAlignmentCenter;
+    _totalLbl.text = @"--:--";
+    [_bottomBar addSubview:_totalLbl];
+
+    _slider = [UISlider new];
+    _slider.minimumValue = 0;
+    _slider.maximumValue = 1;
+    _slider.value = 0;
+    _slider.minimumTrackTintColor = [WKApp shared].config.themeColor;
+    _slider.maximumTrackTintColor = [[UIColor whiteColor] colorWithAlphaComponent:0.3];
+    _slider.thumbTintColor = [UIColor whiteColor];
+    [_slider addTarget:self action:@selector(onSliderTouchDown) forControlEvents:UIControlEventTouchDown];
+    [_slider addTarget:self action:@selector(onSliderValueChanged) forControlEvents:UIControlEventValueChanged];
+    [_slider addTarget:self action:@selector(onSliderTouchUp) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+    [_bottomBar addSubview:_slider];
 }
 
 - (void)dealloc {
     [self teardownPlayer];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [self.autoHideTimer invalidate];
 }
 
 #pragma mark - layout
@@ -125,6 +202,28 @@ static void * kStreamingKVOReadyForDisplay = &kStreamingKVOReadyForDisplay;
     self.playerLayer.frame = self.playerContainer.bounds;
     self.loadingView.center = CGPointMake(CGRectGetMidX(b), CGRectGetMidY(b));
     self.playIconOverlay.center = CGPointMake(CGRectGetMidX(b), CGRectGetMidY(b));
+
+    // 底部条: 贴 safe area bottom 上方
+    CGFloat safeBot = 0;
+    if (@available(iOS 11.0, *)) {
+        safeBot = UIApplication.sharedApplication.keyWindow.safeAreaInsets.bottom;
+    }
+    CGFloat barY = b.size.height - safeBot - kBottomBarHeight;
+    self.bottomBar.frame = CGRectMake(0, barY, b.size.width, kBottomBarHeight + safeBot);
+    self.bottomBarBg.frame = self.bottomBar.bounds;
+
+    CGFloat timeLblW = self.durationSeconds >= 3600.0 ? kBottomTimeLblLongW : kBottomTimeLblW;
+    CGFloat x = kBottomBarHPadding;
+    self.playPauseBtn.frame = CGRectMake(x, 0, kBottomBarBtnSize, kBottomBarHeight);
+    x = CGRectGetMaxX(self.playPauseBtn.frame) + 4.0f;
+    self.elapsedLbl.frame = CGRectMake(x, 0, timeLblW, kBottomBarHeight);
+    x = CGRectGetMaxX(self.elapsedLbl.frame) + 4.0f;
+    CGFloat rightX = self.bottomBar.lim_width - kBottomBarHPadding - timeLblW;
+    self.totalLbl.frame = CGRectMake(rightX, 0, timeLblW, kBottomBarHeight);
+    CGFloat sliderX = x;
+    CGFloat sliderW = rightX - sliderX - 8.0f;
+    if (sliderW < 40) sliderW = 40; // 极窄屏兜底
+    self.slider.frame = CGRectMake(sliderX, (kBottomBarHeight - 20) / 2.0f, sliderW, 20);
 }
 
 #pragma mark - <YBIBCellProtocol>
@@ -138,6 +237,7 @@ static void * kStreamingKVOReadyForDisplay = &kStreamingKVOReadyForDisplay;
     BOOL isCenter = self.yb_cellIsInCenter ? self.yb_cellIsInCenter() : NO;
     if (!isCenter && self.player) {
         [self.player pause];
+        [self syncPlayPauseBtn];
         [self refreshPlayIconVisibility];
     }
 }
@@ -149,6 +249,14 @@ static void * kStreamingKVOReadyForDisplay = &kStreamingKVOReadyForDisplay;
     self.coverImgView.hidden = NO;
     self.playIconOverlay.hidden = YES;
     [self.loadingView stopAnimating];
+    // 复位底部条状态
+    self.bottomBar.hidden = YES;
+    self.slider.value = 0;
+    self.elapsedLbl.text = @"--:--";
+    self.totalLbl.text = @"--:--";
+    self.durationSeconds = 0;
+    self.isDraggingSlider = NO;
+    [self cancelAutoHideTimer];
 }
 
 - (void)setYb_cellData:(id<YBIBDataProtocol>)yb_cellData {
@@ -188,16 +296,29 @@ static void * kStreamingKVOReadyForDisplay = &kStreamingKVOReadyForDisplay;
                                                   name:AVPlayerItemDidPlayToEndTimeNotification
                                                 object:item];
 
+    // Slider 位置 → 定期回读 AVPlayer.currentTime 更新。0.5s 一次对拖拽预览体感够顺,
+    // 又不至于耗 CPU。拖拽期由 isDraggingSlider 拦住不覆盖。
+    __weak typeof(self) ws = self;
+    self.periodicObserver = [self.player
+        addPeriodicTimeObserverForInterval:CMTimeMakeWithSeconds(0.5, NSEC_PER_SEC)
+                                     queue:dispatch_get_main_queue()
+                                usingBlock:^(CMTime time) {
+        [ws refreshSliderFromPlayer];
+    }];
+
     // 起播前 spinner 转起来 (readyForDisplay 或 status=readyToPlay 后再关闭)
     [self.loadingView startAnimating];
     self.playIconOverlay.hidden = YES;
     [self.player play];
+    [self syncPlayPauseBtn];
     [self setNeedsLayout];
 }
 
 - (void)onAppDidEnterBackground {
     [self.player pause];
+    [self syncPlayPauseBtn];
     [self refreshPlayIconVisibility];
+    [self showBottomBarAnimated:YES]; // paused → 常驻显示
 }
 
 #pragma mark - KVO
@@ -214,13 +335,28 @@ static void * kStreamingKVOReadyForDisplay = &kStreamingKVOReadyForDisplay;
     }
     dispatch_async(dispatch_get_main_queue(), ^{
         [self refreshLoadingVisibility];
+        [self syncPlayPauseBtn];
         if (context == kStreamingKVOReadyForDisplay && self.playerLayer.readyForDisplay) {
             self.coverImgView.hidden = YES;
+        }
+        if (context == kStreamingKVOStatus && self.observedItem.status == AVPlayerItemStatusReadyToPlay) {
+            [self refreshDurationFromPlayer];
+            [self showBottomBarAnimated:YES];
+            [self scheduleAutoHideIfPlaying];
         }
         if (context == kStreamingKVOStatus && self.observedItem.status == AVPlayerItemStatusFailed) {
             [self.loadingView stopAnimating];
             id<YBIBAuxiliaryViewHandler> aux = self.yb_auxiliaryViewHandler ? self.yb_auxiliaryViewHandler() : nil;
             [aux yb_showIncorrectToastWithContainer:self text:LLang(@"视频加载失败")];
+        }
+        if (context == kStreamingKVOTimeControl) {
+            // 播放 → 播完 3s 自动隐藏; 暂停 → 常驻显示
+            if (self.player.timeControlStatus == AVPlayerTimeControlStatusPlaying) {
+                [self scheduleAutoHideIfPlaying];
+            } else {
+                [self cancelAutoHideTimer];
+                [self showBottomBarAnimated:YES];
+            }
         }
     });
 }
@@ -254,18 +390,161 @@ static void * kStreamingKVOReadyForDisplay = &kStreamingKVOReadyForDisplay;
     if (note.object != self.observedItem) return;
     [self.player seekToTime:kCMTimeZero];
     [self.player play];
+    [self syncPlayPauseBtn];
+}
+
+#pragma mark - progress bar helpers
+
+- (void)refreshSliderFromPlayer {
+    if (self.isDraggingSlider) return;
+    if (!self.player) return;
+    CMTime cur = self.player.currentTime;
+    CGFloat curSec = CMTIME_IS_VALID(cur) ? CMTimeGetSeconds(cur) : 0;
+    if (!isfinite(curSec) || curSec < 0) curSec = 0;
+    self.elapsedLbl.text = [self formatSeconds:curSec];
+    if (self.durationSeconds > 0) {
+        self.slider.value = (float)MIN(1.0, curSec / self.durationSeconds);
+    }
+}
+
+- (void)refreshDurationFromPlayer {
+    CMTime dur = self.observedItem.duration;
+    if (!CMTIME_IS_VALID(dur) || CMTIME_IS_INDEFINITE(dur)) return;
+    CGFloat s = CMTimeGetSeconds(dur);
+    if (!isfinite(s) || s <= 0) return;
+    self.durationSeconds = s;
+    self.totalLbl.text = [self formatSeconds:s];
+    [self setNeedsLayout]; // 视频超过 1h, 时间标签宽度要变
+}
+
+- (NSString *)formatSeconds:(CGFloat)sec {
+    if (!isfinite(sec) || sec < 0) sec = 0;
+    NSInteger total = (NSInteger)sec;
+    NSInteger h = total / 3600;
+    NSInteger m = (total / 60) % 60;
+    NSInteger s = total % 60;
+    if (h > 0) return [NSString stringWithFormat:@"%02ld:%02ld:%02ld", (long)h, (long)m, (long)s];
+    return [NSString stringWithFormat:@"%02ld:%02ld", (long)m, (long)s];
+}
+
+- (void)syncPlayPauseBtn {
+    if (!self.player) return;
+    BOOL playing = (self.player.timeControlStatus == AVPlayerTimeControlStatusPlaying)
+        || (self.player.timeControlStatus == AVPlayerTimeControlStatusWaitingToPlayAtSpecifiedRate);
+    [self.playPauseBtn setImage:[self playerSymbol:playing ? @"pause.fill" : @"play.fill"]
+                        forState:UIControlStateNormal];
+}
+
+/// SF Symbol 播放器图标 (18pt medium) — iOS 13+ 都能用, 更早 iOS 返 nil 让按钮回落到无图。
+- (UIImage *)playerSymbol:(NSString *)name {
+    if (@available(iOS 13.0, *)) {
+        UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:18
+                                                                                            weight:UIImageSymbolWeightMedium];
+        return [[UIImage systemImageNamed:name withConfiguration:cfg]
+                 imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    }
+    return nil;
+}
+
+#pragma mark - slider events
+
+- (void)onSliderTouchDown {
+    self.isDraggingSlider = YES;
+    [self cancelAutoHideTimer]; // 拖拽期间不隐藏
+}
+
+- (void)onSliderValueChanged {
+    // 只更新左侧时间预览, 不真 seek — 松手才 seek, 拖拽体感更流畅 (省频繁 IO)
+    if (self.durationSeconds > 0) {
+        CGFloat previewSec = self.slider.value * self.durationSeconds;
+        self.elapsedLbl.text = [self formatSeconds:previewSec];
+    }
+}
+
+- (void)onSliderTouchUp {
+    self.isDraggingSlider = NO;
+    if (!self.player || self.durationSeconds <= 0) return;
+    CGFloat target = self.slider.value * self.durationSeconds;
+    CMTime targetTime = CMTimeMakeWithSeconds(target, NSEC_PER_SEC);
+    // toleranceBefore/After = kCMTimeZero → 精确 seek (稍慢但准), 用户拖拽后期望"就到这"。
+    [self.player seekToTime:targetTime
+             toleranceBefore:kCMTimeZero
+              toleranceAfter:kCMTimeZero];
+    [self scheduleAutoHideIfPlaying];
+}
+
+- (void)onPlayPauseBtnTap {
+    if (!self.player) return;
+    if (self.player.timeControlStatus == AVPlayerTimeControlStatusPaused) {
+        [self.player play];
+    } else {
+        [self.player pause];
+    }
+    [self syncPlayPauseBtn];
+    [self refreshPlayIconVisibility];
+}
+
+#pragma mark - auto hide bottom bar
+
+- (void)showBottomBarAnimated:(BOOL)animated {
+    if (!self.player || self.observedItem.status != AVPlayerItemStatusReadyToPlay) return;
+    if (!self.bottomBar.hidden && self.bottomBar.alpha >= 0.99) return;
+    self.bottomBar.hidden = NO;
+    if (animated) {
+        [UIView animateWithDuration:0.2 animations:^{ self.bottomBar.alpha = 1.0; }];
+    } else {
+        self.bottomBar.alpha = 1.0;
+    }
+}
+
+- (void)hideBottomBarAnimated {
+    if (self.bottomBar.hidden) return;
+    [UIView animateWithDuration:0.2 animations:^{
+        self.bottomBar.alpha = 0.0;
+    } completion:^(BOOL finished) {
+        self.bottomBar.hidden = YES;
+        self.bottomBar.alpha = 1.0;
+    }];
+}
+
+- (void)scheduleAutoHideIfPlaying {
+    [self cancelAutoHideTimer];
+    if (self.player.timeControlStatus != AVPlayerTimeControlStatusPlaying) return;
+    __weak typeof(self) ws = self;
+    self.autoHideTimer = [NSTimer scheduledTimerWithTimeInterval:kAutoHideAfterSec
+                                                          repeats:NO
+                                                            block:^(NSTimer *t) {
+        [ws hideBottomBarAnimated];
+    }];
+}
+
+- (void)cancelAutoHideTimer {
+    [self.autoHideTimer invalidate];
+    self.autoHideTimer = nil;
 }
 
 #pragma mark - tap
 
 - (void)onTap {
     if (!self.player) return;
-    if (self.player.timeControlStatus == AVPlayerTimeControlStatusPaused) {
-        [self.player play];
-    } else if (self.player.timeControlStatus == AVPlayerTimeControlStatusPlaying) {
-        [self.player pause];
-    }
     // waiting 状态下不响应, 让 spinner 继续转; 用户可以稍后再点
+    if (self.player.timeControlStatus == AVPlayerTimeControlStatusWaitingToPlayAtSpecifiedRate) return;
+    // 单击: 弹出/收起底部条; 播 ↔ 暂停 通过底部按钮或点中央播放三角来切
+    if (self.bottomBar.hidden || self.bottomBar.alpha < 0.99) {
+        [self showBottomBarAnimated:YES];
+        [self scheduleAutoHideIfPlaying];
+    } else {
+        // 已显示: 播放中 → 隐藏; 暂停中 → 保持
+        if (self.player.timeControlStatus == AVPlayerTimeControlStatusPlaying) {
+            [self hideBottomBarAnimated];
+            [self cancelAutoHideTimer];
+        } else {
+            // 暂停时二次点 → 恢复播放 (让用户还能靠"点视频"起播, 不必非得点小按钮)
+            [self.player play];
+            [self syncPlayPauseBtn];
+            [self scheduleAutoHideIfPlaying];
+        }
+    }
     [self refreshPlayIconVisibility];
 }
 
@@ -281,6 +560,10 @@ static void * kStreamingKVOReadyForDisplay = &kStreamingKVOReadyForDisplay;
         @catch (__unused NSException *e) {}
         self.didAttachObservers = NO;
     }
+    if (self.periodicObserver && self.player) {
+        [self.player removeTimeObserver:self.periodicObserver];
+    }
+    self.periodicObserver = nil;
     if (self.observedItem) {
         [[NSNotificationCenter defaultCenter] removeObserver:self
                                                         name:AVPlayerItemDidPlayToEndTimeNotification
@@ -291,6 +574,7 @@ static void * kStreamingKVOReadyForDisplay = &kStreamingKVOReadyForDisplay;
     self.player = nil;
     [self.playerLayer removeFromSuperlayer];
     self.playerLayer = nil;
+    [self cancelAutoHideTimer];
 }
 
 @end
