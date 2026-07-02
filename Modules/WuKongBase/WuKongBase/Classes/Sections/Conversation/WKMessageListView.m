@@ -97,6 +97,19 @@ static const BOOL kIncrementalPulldown = NO;
 // reloadData + scrollToBottom 触发离屏 layout 但 willDisplayCell: 没回调, refresh: 永不跑
 // → 回前台 cell 内容空白" 的回归。设置点: handleRecvMessage 后台分支 + onConversationSyncFinished。
 @property(nonatomic,assign) BOOL dirtyAfterBackground;
+// pullBottom-reset-load 后的下一次 pulldown 强制走 reloadData 路径 (不用增量
+// insertSections + insertRowsAtIndexPaths)。原因:
+//   reset-load 把 dp 从「用户读的历史片段 (dp=[msg 13..72])」整块替换成「最新
+//   一页 (dp=[msg 2334..2363])」, 用户接着上滑 pulldown 拿到的是「几周/几月前
+//   的一大批老历史」, 一定跨多个 date section 且大概率跟老首 section 混合 (既
+//   insert 新 section 又给老首 section 补行)。UIKit 增量 insert 路径在这种
+//   「post-batch section shift + row insert into shifted section」形态下时序敏感
+//   ——已知 Bugly #3054 就是这条路径的漂移。iOS 27 把内部时序改得更严, 更容易
+//   在这条形态上让 dp/tv 行数簿记漂移, heightForRow 拿不到 model 返 0.1 →
+//   cell 完全不显示 (无气泡框、无文字, 症状 B)。
+// reloadData 稍慢但强壮, 反正 reset-load 后第一次 pulldown 用户也预期一个
+// 「跳一下」的过渡感, 视觉损失可忽略。
+@property(nonatomic,assign) BOOL wasResetLoadPending;
 // reconcile 防抖: 同一回前台动作会同时派发 UIApplicationWillEnterForeground /
 // UIApplicationDidBecomeActive / UISceneWillEnterForeground / UISceneDidActivate
 // 多条通知, 全部 hook 到本对账方法。500ms 内重复触发跳过, 避免连刷 reloadData
@@ -569,6 +582,14 @@ static const BOOL kIncrementalPulldown = NO;
              [self.dataProvider addTypingMessageIfNeed:[[WKMessageModel alloc] initWithMessage:typingMessage]];
          }
     }
+    {
+        WKMessageModel *_dpHead = [self.dataProvider firstMessage];
+        WKMessageModel *_dpTail = [self.dataProvider lastMessage];
+        NSLog(@"[BubbleBugRepro] _handleLoadAfterPrecache RELOAD firstLoad=%d keepPos=%u dpHead=%u dpTail=%u dpDates=%lu",
+              firstLoad, self.keepPosition.orderSeq,
+              _dpHead.orderSeq, _dpTail.orderSeq,
+              (unsigned long)self.dataProvider.dates.count);
+    }
     [self.tableView reloadData];
 
     if(!self.keepPosition) {
@@ -619,9 +640,49 @@ static const BOOL kIncrementalPulldown = NO;
         [self scrollToBottom:YES];
         return;
     }
-    NSLog(@"[BubbleBugRepro] pullBottom PATH=reset-load (pullupHasMore=YES) — will pullFirst:nil");
-    self.keepPosition = nil;
-    [self loadMessages:true firstLoad:false complete:nil];
+    NSLog(@"[BubbleBugRepro] pullBottom PATH=reset-load (pullupHasMore=YES)");
+    // 标记「下一次 pulldown 强制 reloadData」——见 wasResetLoadPending 属性注释。
+    self.wasResetLoadPending = YES;
+
+    // 关键根因修复: 不能用 pullFirst:nil (走 SDK pullLastMessages(start=0,end=0))。
+    // SDK 的 pullMessages 在 startOrderSeq==0 时**整个 anchor gap 检查块被 skip**
+    // (line 906 `if(startOrderSeq!=0)`), 且当 local DB 返回的 count == limit 时
+    // 「last-page 兜底 sync」也不触发 (line 995 `if(count<limit)`)。
+    // 后果: fresh install → 用户搜到 3 月 → local DB 只有 3 月 30 条 → 点跳底部走
+    // pullFirst:nil → SDK 静默返回 local newest 30 = 3 月尾部 → dp = 3 月, 但用户
+    // 视觉上误以为在最新 (因为 scrollToBottom 到了当前 dp 底部)。之后 pulldown 拉
+    // 更老 3 月, 完全跳过 4/5/6 月, 症状复现。endOrderSeq bound 是拦 pulldown 拿远古
+    // stale 的下界防线, 但 reset-load 本身返 stale 数据它救不了。
+    //
+    // 修法: 用 pullAround(knownLatestOrderSeq) 替代。pullAround 走 pullMessages
+    // (start=derivedFromLatest, end=0, mode=Up), 命中 line 906+ anchor gap 检查,
+    // 强制 calSync 到 server 拉齐真正 latest → local DB 一定含 latest → dp 一定是
+    // latest 附近, 不再 stale。
+    // 视觉一致性: pullAround 后 keepPosition 让 setContentOffset 停在 latest msg 顶部
+    // 而不是 viewport 底, complete 回调里清 keepPosition + scrollToBottom 修正到底。
+    // convlist lastMessage.messageSeq 是 knownLatest 来源, fresh install 打开 app 后
+    // convManager 会同步 convlist, 一般 > 0。极端 case 拿不到时 fallback 原路径 (无解,
+    // 至少不 worse than before)。
+    WKConversationWrapModel *_convModel = [[WKConversationListVM shared] modelAtChannel:self.channel];
+    uint32_t _knownLatestOrderSeq = 0;
+    if (_convModel.lastMessage.messageSeq > 0) {
+        _knownLatestOrderSeq = (uint32_t)_convModel.lastMessage.messageSeq * (uint32_t)WKOrderSeqFactor;
+    }
+    __weak typeof(self) weakSelf = self;
+    if (_knownLatestOrderSeq > 0) {
+        NSLog(@"[BubbleBugRepro] pullBottom SUB=pullAround knownLatestOrderSeq=%u (force server sync)",
+              _knownLatestOrderSeq);
+        self.keepPosition = [WKConversationPosition orderSeq:_knownLatestOrderSeq offset:0];
+        [self loadMessages:true firstLoad:true complete:^{
+            weakSelf.keepPosition = nil;
+            [weakSelf scrollToBottom:YES];
+            NSLog(@"[BubbleBugRepro] pullBottom SUB=pullAround DONE, scrollToBottom");
+        }];
+    } else {
+        NSLog(@"[BubbleBugRepro] pullBottom SUB=pullFirst:nil FALLBACK (convlist lastMsg not available)");
+        self.keepPosition = nil;
+        [self loadMessages:true firstLoad:true complete:nil];
+    }
 
 }
 
@@ -910,7 +971,14 @@ static const BOOL kIncrementalPulldown = NO;
                     CFAbsoluteTime t_apply = CFAbsoluteTimeGetCurrent();
                     BOOL didIncremental = NO;
 
-                    if (kIncrementalPulldown && weakSelf && weakSelf.tableView) {
+                    // 消费「reset-load 后强制 reloadData」标记, 见属性注释。
+                    BOOL _forceReloadForResetLoad = weakSelf.wasResetLoadPending;
+                    weakSelf.wasResetLoadPending = NO;
+                    if (_forceReloadForResetLoad) {
+                        NSLog(@"[BubbleBugRepro] pulldown FORCE reloadData (post-reset-load, 避免 UIKit 增量插入漂移)");
+                    }
+
+                    if (kIncrementalPulldown && !_forceReloadForResetLoad && weakSelf && weakSelf.tableView) {
                         @try {
                             // 关键修法：跟老 reloadData 路径同源 —— 用 layoutIfNeeded +
                             // rectForRowAtIndexPath:targetCopy 拿 anchor 真实新位置，再调 contentOffset。
@@ -2426,7 +2494,14 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         }
         CGSize size = [cellClass sizeForMessage:msg];
         CGFloat h = MAX(size.height, 0.1f);
-        [[WKMessageListView cellHeightCache] setObject:@(h) forKey:heightKey];
+        // 拒绝写入病态小值 (< 15pt), 见 heightForRowAtIndexPath 里同款注释。
+        if (h > 15.0f) {
+            [[WKMessageListView cellHeightCache] setObject:@(h) forKey:heightKey];
+        } else {
+            NSLog(@"[BubbleBugRepro] _cachedHeight REJECT pathological h=%.1f msgNo=%@",
+                  h, msg.clientMsgNo);
+            h = 44.0f;
+        }
         return h;
     } @catch (NSException *ex) {
         NSLog(@"[CellPerf] _cachedHeightForMessage exception: %@", ex);
@@ -2456,7 +2531,15 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         if ([[WKMessageListView cellHeightCache] objectForKey:heightKey]) return;
         CGSize size = [cellClass sizeForMessage:msg];
         CGFloat height = MAX(size.height, 0.1f);
-        [[WKMessageListView cellHeightCache] setObject:@(height) forKey:heightKey];
+        // 拒绝写入病态小值 (< 15pt), 见 heightForRowAtIndexPath 里同款注释:
+        // measure race 拿到 0 时如果写进 cache 就永久污染, cell 永远 0.1px 空白。
+        // 不写让下次调用重试, 直到拿到正常值。
+        if (height > 15.0f) {
+            [[WKMessageListView cellHeightCache] setObject:@(height) forKey:heightKey];
+        } else {
+            NSLog(@"[BubbleBugRepro] precache REJECT pathological height=%.1f msgNo=%@",
+                  height, msg.clientMsgNo);
+        }
         CGFloat ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000;
         if (ms > 10) {
             NSString *preview = @"";
@@ -2495,9 +2578,44 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     return _cellHeightCache;
 }
 
+// 统一 heightCache key 计算 + 移除。
+// cellHeightCache 的 key 语义 = clientMsgNo + bubblePos[+editTimestamp], 依赖:
+//   1) 消息本身内容 (clientMsgNo 变则 key 变)
+//   2) bubble 位置 (First/Middle/Last/Alone, 群聊连发气泡合并样式)
+//   3) 编辑时间戳 (contentEdit 后重算)
+// 但实际测出来的高度还依赖多个「异步到达」输入 (sender 昵称 / bot 标识 /
+// 表格 WebView 实测高度 等)。这些数据后到时必须显式 invalidate 对应 msg 的
+// heightCache, 否则 cache 命中的是「旧数据下算的高度」→ 气泡框高度不匹配
+// 新内容 (Bug 1) / bot AI 标识 frame 计算基于旧宽度 (Bug 3) 等。
+// 用法: 数据变化路径 (channelInfoUpdate / WebView didFinish / member 更新 等) 里
+// 调用本方法 + reload/refresh 让 UITableView 重新问高度。
+- (void)wk_invalidateHeightCacheForMessage:(WKMessageModel*)msg {
+    if (!msg || msg.clientMsgNo.length == 0) return;
+    Class cellClass = [self getMessageCellClass:msg];
+    NSInteger bubblePos = 0;
+    if ([cellClass respondsToSelector:@selector(bubblePosition:)]) {
+        bubblePos = [cellClass bubblePosition:msg];
+    }
+    NSString *heightKey = [NSString stringWithFormat:@"%@-bp%ld", msg.clientMsgNo, (long)bubblePos];
+    if (msg.remoteExtra.contentEdit) {
+        heightKey = [NSString stringWithFormat:@"%@-e%lu", heightKey, (unsigned long)msg.remoteExtra.editedAt];
+    }
+    [[WKMessageListView cellHeightCache] removeObjectForKey:heightKey];
+}
+
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath{
     WKMessageModel *messageModel = [self.dataProvider messageAtIndexPath:indexPath];
-    if (!messageModel) return 0.1f;
+    if (!messageModel) {
+        // dp/tv 漂移检测: UITableView 询问的 indexPath 在 dp 里查不到 model → 说明
+        // numberOfRowsInSection 计算和实际 dp 内容不一致, 大概率是 insertRows /
+        // insertSections 增量路径在跨 section + row shift 混合形态下让 UIKit
+        // 内部行数簿记漂移。返 0.1 → cell 完全不可见 (症状 B「无气泡框」)。
+        // 打日志, 复现时可 grep [BubbleBugRepro] dp/tv drift 直接定位到具体 indexPath。
+        NSLog(@"[BubbleBugRepro] dp/tv drift: heightForRow section=%ld row=%ld returned nil model (dpSections=%lu)",
+              (long)indexPath.section, (long)indexPath.row,
+              (unsigned long)self.dataProvider.dates.count);
+        return 0.1f;
+    }
 
     // 流式消息不缓存高度（内容还在变化）
     BOOL isStreaming = messageModel.streamOn && messageModel.streamFlag != WKStreamFlagEnd;
@@ -2528,8 +2646,24 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         NSLog(@"[HeightCache] heightForRow exception at %@: %@", indexPath, exception);
     }
 
-    if (heightKey) {
+    // heightCache 只写「合理值」, 拒绝写入病态小值。原因:
+    //   iOS 27 主线程 UITextView 首帧 measure 存在时序 race 会返 0
+    //   (TK2→TK1 fallback 尚未完成时 sizeThatFits 拿不到 glyph)。
+    //   老实现 `MAX(cellSize.height, 0.1f)` 拿到 0 会写 0.1 进 cache, 后续
+    //   heightForRow 全部命中 0.1 → cell 永久 0.1px 高 → 全空白, 且**没有自愈**
+    //   (cache 命中就 return 不再走 measure)。fresh install (cache 全空,
+    //   一定走 measure) 才会大规模复现。
+    //   阈值 15pt: 空文本气泡最小也 >20pt (avatar+padding), 15pt 以下一定不合理。
+    //   不合理时不写 cache, 让下一次 heightForRow 重试 measure, 直到拿到正常值。
+    // 副作用: 病态窗口内 UITableView 拿到本次 return 的 44/0.1 短暂错位一帧,
+    // 下一次 layout 立刻自愈。远好于永久空白。
+    if (heightKey && height > 15.0f) {
         [[WKMessageListView cellHeightCache] setObject:@(height) forKey:heightKey];
+    } else if (heightKey) {
+        NSLog(@"[BubbleBugRepro] heightCache REJECT pathological height=%.1f msgNo=%@ (measure race, will retry)",
+              height, messageModel.clientMsgNo);
+        // measure race 时返回 44 兜底而不是 0.1, 让本帧至少能看到 cell 存在
+        if (height < 15.0f) height = 44.0f;
     }
 
     if (WKCellPerfLog) {
@@ -2972,19 +3106,52 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         if(channelInfo.channel.channelType != WK_PERSON) {
             return;
         }
-       NSArray<UITableViewCell*> *visibleCells =  self.tableView.visibleCells;
-        if(visibleCells && visibleCells.count>0) {
-            for (UITableViewCell *tableCell in visibleCells) {
-                if([tableCell isKindOfClass:WKMessageCell.class]) {
-                    WKMessageCell *messageCell = (WKMessageCell*)tableCell;
-                    WKMessageModel *messageModel = messageCell.messageModel;
-                    if(messageModel &&  [messageModel.fromUid isEqual:channelInfo.channel.channelId]) {
-                        messageModel.from = nil;
-                        [messageCell refresh:messageModel];
+        // 关键: sender/bot info 异步到达后, 必须做三件事:
+        //   1) 全 dp iterate: 找出所有 fromUid 匹配的 msg (不止 visible cells,
+        //      非 visible 也要处理, 否则用户滚过去时看到 stale 状态)
+        //   2) 每条匹配 msg: 清 model.from (让 refresh 重读缓存) + 失效 heightCache
+        //      (heightCache 的高度是基于旧的空 name 算的, 保留会让 tableView 复用
+        //      错误高度 → Bug 1「气泡高度错」; refresh 后 layoutSubviews 会用新
+        //      name 宽度重算 nameLbl / botBadge frame → 修 Bug 3「AI 标识错位」)
+        //   3) 对 visible cells 主动 refresh + begin/endUpdates 让 UITableView
+        //      重新问高度 (heightCache 已被失效, 这次问会走 measure 拿新值)
+        // 非 visible 匹配 msg 不主动 reload, 依靠 heightCache 失效, 下次进入 visible
+        // 走 heightForRowAtIndexPath → measure MISS → 拿新高度, 自然收敛。
+        NSString *targetFromUid = channelInfo.channel.channelId;
+        NSMutableSet<NSString*> *affectedClientMsgNos = [NSMutableSet set];
+        for (NSInteger section = 0; section < [self.dataProvider dateCount]; section++) {
+            NSArray<WKMessageModel*> *msgs = [self.dataProvider messagesAtSection:section];
+            for (WKMessageModel *msg in msgs) {
+                if (msg.fromUid.length > 0 && [msg.fromUid isEqualToString:targetFromUid]) {
+                    msg.from = nil; // 让下次 refresh 重读 sender 缓存
+                    [self wk_invalidateHeightCacheForMessage:msg];
+                    if (msg.clientMsgNo.length > 0) {
+                        [affectedClientMsgNos addObject:msg.clientMsgNo];
                     }
-                    
                 }
             }
+        }
+        if (affectedClientMsgNos.count == 0) return;
+
+        NSArray<UITableViewCell*> *visibleCells = self.tableView.visibleCells;
+        BOOL anyVisibleAffected = NO;
+        for (UITableViewCell *tableCell in visibleCells) {
+            if (![tableCell isKindOfClass:WKMessageCell.class]) continue;
+            WKMessageCell *messageCell = (WKMessageCell*)tableCell;
+            WKMessageModel *messageModel = messageCell.messageModel;
+            if (messageModel && [affectedClientMsgNos containsObject:messageModel.clientMsgNo]) {
+                [messageCell refresh:messageModel];
+                anyVisibleAffected = YES;
+            }
+        }
+        // begin/endUpdates 空块强制 UITableView 重新 query 可见行高度; heightCache
+        // 已被上面失效, 这次会走 measure 拿到基于新 sender info 的正确高度, 气泡
+        // 框自动调整到匹配内容。performWithoutAnimation 避免视觉跳动。
+        if (anyVisibleAffected) {
+            [UIView performWithoutAnimation:^{
+                [self.tableView beginUpdates];
+                [self.tableView endUpdates];
+            }];
         }
 //         [self.tableView reloadData]; // TODO: 不要用reloadData 会导致长按菜单错位
     }

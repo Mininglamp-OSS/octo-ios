@@ -56,6 +56,14 @@
 #define kBotActionTopSpace 10.0f
 #define kBotActionBtnSpacing 10.0f
 
+// 私有 category: 让本 cell 可以在 WebView JS 高度回调里同步失效 WKMessageListView
+// 的 cellHeightCache 条目, 避免只清 segHeightCache 但 UITableView 命中 stale cellHeightCache
+// 直接 return 旧公式估算高度 (Bug 1「表格气泡高度错」根因)。
+// helper 实现在 WKMessageListView.m 的 wk_invalidateHeightCacheForMessage:。
+@interface WKMessageListView (WKTextCellHeightInvalidation)
+- (void)wk_invalidateHeightCacheForMessage:(WKMessageModel*)msg;
+@end
+
 @interface WKTextMessageCell ()<CNContactViewControllerDelegate,CNContactPickerDelegate,WKNavigationDelegate,UIScrollViewDelegate,UITextViewDelegate,UIGestureRecognizerDelegate>
 
 @property(nonatomic,strong) WKMessageTextView *textLbl; // 原 UILabel，改为 UITextView 子类，天然支持文字选择
@@ -298,6 +306,14 @@ static NSMutableDictionary *_jsTableHeights;
 // "先清后写" 的两步模式, 无需在 setter 内代劳 (那样会引发 UITextView setter
 // 互调死循环, 见 WKMessageTextView.m 类注释)。
 //
+// ⚠ 只清「非分段」cell 的 textLbl: 分段 cell (hasTable, segmentsBuilt=YES) 用
+// 唯一 reuseIdentifier 永远只给同一条 msgId 用, refresh: 的 hasTable && segmentsBuilt
+// 分支会 SKIP textLbl 重设 (line 1601, 假设 textLbl 里已经有正确的第一段文本)。
+// 如果这里无条件清空, 下次同一 cell 出列再展示时 textLbl 是空的 → 表格前的
+// 文字消失, 但 lim_size 早算好了所以气泡高度不缩 → 用户看到「气泡高但半空」。
+// 非分段 cell (进普通 reuse pool) 才有跨消息复用风险, 需要清; 分段 cell 生命
+// 周期跟 msgId 绑定, 内容不需要清。
+//
 // ⚠ 不调 self.textLbl.text = nil: UITextView -setText: 内部走 self.attributedText
 // 路径会再次进入子类 setter, 与 setter 的清零逻辑互调死递归 (iOS 26 实测闪退)。
 // 单调 .attributedText=nil 即可清空 textStorage, 不会触发互调。
@@ -305,7 +321,9 @@ static NSMutableDictionary *_jsTableHeights;
     if ([self wk_isInSelectionMode]) {
         [self endInBubbleTextSelection];
     }
-    self.textLbl.attributedText = nil;
+    if (!self.segmentsBuilt) {
+        self.textLbl.attributedText = nil;
+    }
     [super prepareForReuse];
 }
 
@@ -2570,6 +2588,25 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
             NSString *modeTag = ([WKApp shared].config.style == WKSystemStyleDark) ? @"d" : @"l";
             NSString *cacheKey = [NSString stringWithFormat:@"%@-segH-%@", self.messageModel.clientMsgNo, modeTag];
             [[[self class] segHeightCache] setCache:nil forKey:cacheKey];
+
+            // 关键: 同步失效上层 cellHeightCache 里同 msg 的整条 cell 高度。
+            // 只清 segHeightCache 不够 —— UITableView 下次问高度时 heightForRow
+            // 会先命中 cellHeightCache 拿到基于公式估算的旧值直接 return, 根本
+            // 不会走 sizeForMessage → segmentedContentHeightForMessage → 读 segHeightCache
+            // 的新 JS 高度。结果: 表格气泡高度永远卡在公式估算, JS 实测被忽略,
+            // 就是 Bug 1「表格气泡高度错」的经典触发面 (概率性: 复用 cell 时才命中)。
+            // 找到 tableView 前主动清 cellHeightCache 里对应 msg 的条目 (bubblePos +
+            // 可能的 edit 变体), 然后 begin/endUpdates 会正常走 measure 拿新高度。
+            UIView *_hostView = self.superview;
+            while (_hostView && ![_hostView isKindOfClass:[UITableView class]]) _hostView = _hostView.superview;
+            if ([_hostView isKindOfClass:[UITableView class]]) {
+                UITableView *_hostTv = (UITableView *)_hostView;
+                UIView *_hv = _hostTv.superview;
+                while (_hv && ![_hv isKindOfClass:[WKMessageListView class]]) _hv = _hv.superview;
+                if ([_hv isKindOfClass:[WKMessageListView class]]) {
+                    [(WKMessageListView*)_hv wk_invalidateHeightCacheForMessage:self.messageModel];
+                }
+            }
 
             // 触发 UITableView 重新计算 cell 高度
             UIView *v = self.superview;
