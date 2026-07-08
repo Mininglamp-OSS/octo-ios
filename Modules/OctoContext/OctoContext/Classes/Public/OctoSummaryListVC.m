@@ -697,6 +697,14 @@
         [self confirmDelete:item];
     }]];
     [sheet addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
+    // iPad 上 actionSheet 走 popover, 需要非 nil 的 sourceView + sourceRect。
+    // 这条 sheet 目前是 UIMenu 兼容兜底路径, 无触发按钮引用, 锚到 self.view 中心。
+    if (sheet.popoverPresentationController) {
+        sheet.popoverPresentationController.sourceView = self.view;
+        sheet.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width / 2,
+                                                                    self.view.bounds.size.height / 2, 0, 0);
+        sheet.popoverPresentationController.permittedArrowDirections = 0;
+    }
     [self presentViewController:sheet animated:YES completion:nil];
 }
 

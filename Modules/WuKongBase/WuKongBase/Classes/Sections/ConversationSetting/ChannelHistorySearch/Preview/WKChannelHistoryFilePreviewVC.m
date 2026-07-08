@@ -70,6 +70,14 @@
         // 兜底: 旧 iOS 用分享面板, 用户从分享列表里选「存储到文件」
         UIActivityViewController *avc = [[UIActivityViewController alloc] initWithActivityItems:@[self.fileURL]
                                                                           applicationActivities:nil];
+        // iPad 上 UIActivityViewController 走 popover, 必须设置 sourceView (+ sourceRect)
+        // 或 barButtonItem, 否则抛 NSGenericException。这里没有明确的锚点按钮, 兜底到 self.view 中心。
+        if (avc.popoverPresentationController) {
+            avc.popoverPresentationController.sourceView = self.view;
+            avc.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width / 2,
+                                                                      self.view.bounds.size.height / 2, 0, 0);
+            avc.popoverPresentationController.permittedArrowDirections = 0;
+        }
         [self presentViewController:avc animated:YES completion:nil];
     }
 }

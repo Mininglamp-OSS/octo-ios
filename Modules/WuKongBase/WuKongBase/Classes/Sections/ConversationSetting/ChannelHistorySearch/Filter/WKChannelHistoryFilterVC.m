@@ -221,6 +221,14 @@
         [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationNone];
     }]];
     [ac addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
+    // iPad 上 actionSheet 走 popover, 必须有非 nil 的 sourceView + sourceRect。
+    // 起/止日期两个日期入口都是从 filter 表格里的日期 cell 点触发, 直接锚到 self.view 中心。
+    if (ac.popoverPresentationController) {
+        ac.popoverPresentationController.sourceView = self.view;
+        ac.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width / 2,
+                                                                 self.view.bounds.size.height / 2, 0, 0);
+        ac.popoverPresentationController.permittedArrowDirections = 0;
+    }
     [self presentViewController:ac animated:YES completion:nil];
 }
 
@@ -242,6 +250,12 @@
     [ac addAction:[UIAlertAction actionWithTitle:LLang(@"最近 30 天") style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) { apply(30); }]];
     [ac addAction:[UIAlertAction actionWithTitle:LLang(@"全部时间") style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) { apply(0); }]];
     [ac addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
+    if (ac.popoverPresentationController) {
+        ac.popoverPresentationController.sourceView = self.view;
+        ac.popoverPresentationController.sourceRect = CGRectMake(self.view.bounds.size.width / 2,
+                                                                 self.view.bounds.size.height / 2, 0, 0);
+        ac.popoverPresentationController.permittedArrowDirections = 0;
+    }
     [self presentViewController:ac animated:YES completion:nil];
 }
 
