@@ -1,6 +1,7 @@
 #import "WKSafeFilePreviewVC.h"
 #import <PDFKit/PDFKit.h>
 #import <WebKit/WebKit.h>
+#import <QuickLook/QuickLook.h>
 #import <AVKit/AVKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import "WKApp.h"
@@ -14,12 +15,13 @@
 static UIWindow *_previewWindow = nil;
 static UIWindow *_previousKeyWindow = nil;
 
-@interface WKSafeFilePreviewVC ()<WKNavigationDelegate>
+@interface WKSafeFilePreviewVC ()<WKNavigationDelegate, QLPreviewControllerDataSource, QLPreviewControllerDelegate>
 @property (nonatomic, strong) NSURL *fileURL;
 @property (nonatomic, copy) NSString *fileTitle;
 @property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) UIActivityIndicatorView *loadingIndicator;
 @property (nonatomic, strong) AVPlayerViewController *playerVC; // mp4/mov 等视频走 AVPlayer
+@property (nonatomic, strong) QLPreviewController *qlController; // xls/xlsx 走 QuickLook, 见 setupQuickLookInFrame:
 @end
 
 @implementation WKSafeFilePreviewVC
@@ -84,8 +86,7 @@ static UIWindow *_previousKeyWindow = nil;
 + (void)dismissPreview {
     if (!_previewWindow) return;
 
-    // 清理 WebKit + AVPlayer (video 路径不走 webView, 需要单独 teardown 否则
-    // 关窗后 player 还在内存里继续放音)。
+    // 清理 WebKit + AVPlayer + QuickLook (三条渲染路径都独立占资源, 关窗前需分别 teardown)。
     UINavigationController *nav = (UINavigationController *)_previewWindow.rootViewController;
     if ([nav isKindOfClass:[UINavigationController class]]) {
         WKSafeFilePreviewVC *vc = (WKSafeFilePreviewVC *)nav.topViewController;
@@ -96,6 +97,7 @@ static UIWindow *_previousKeyWindow = nil;
                 vc.webView = nil;
             }
             [vc teardownPlayer];
+            [vc teardownQuickLook];
         }
     }
 
@@ -139,6 +141,15 @@ static UIWindow *_previousKeyWindow = nil;
         [self setupPDFViewInFrame:contentFrame];
     } else if ([WKSafeFilePreviewVC mediaExtensions:ext]) {
         [self setupMediaPlayerInFrame:contentFrame];
+    } else if ([ext isEqualToString:@"xls"] || [ext isEqualToString:@"xlsx"]) {
+        // Excel: WebKit loadFileURL 对 xlsx 走内置 QuickLook 插件, 渲染在 native 层而非 DOM,
+        // WKUserScript / evaluateJavaScript 都触达不到 —— 深色下容器 bg 是 #1c1c1e、内容
+        // 层字色仍是纯黑, 结果就是"黑字-黑底"看不清 (用户初次报的问题)。
+        // 换成 QLPreviewController 后由系统 QuickLook 直接渲染, 与 Files.app 一致:
+        // 内容层始终按原文档配色 (白底 + 用户自设的单元格 fg/bg + 条件格式颜色),
+        // 不做主题反色 —— 强行反色会破坏 xlsx 里"红色警戒行 / 蓝色标题" 之类的用户语义。
+        // 见 -setupQuickLookInFrame:。
+        [self setupQuickLookInFrame:contentFrame];
     } else {
         [self setupWebViewInFrame:contentFrame];
     }
@@ -189,6 +200,7 @@ static UIWindow *_previousKeyWindow = nil;
         [self.webView removeFromSuperview];
         self.webView = nil;
         [self teardownPlayer];
+        [self teardownQuickLook];
         [self.navigationController popViewControllerAnimated:YES];
     } else {
         [WKSafeFilePreviewVC dismissPreview];
@@ -325,6 +337,60 @@ static UIWindow *_previousKeyWindow = nil;
     pdfView.backgroundColor = bgColor;
     pdfView.document = [[PDFDocument alloc] initWithURL:self.fileURL];
     [self.view addSubview:pdfView];
+}
+
+#pragma mark - Excel (QLPreviewController - QuickLook)
+
+// xls / xlsx 单独走 QuickLook, 不走 WKWebView loadFileURL。
+//
+// 背景: WebKit 对 xlsx 的渲染委托给内置 Office 插件, 内容画在 native 层而非 DOM,
+// host 侧的 WKUserScript / evaluateJavaScript 都改不到样式; 而 WKWebView 容器 bg
+// 在深色下是 #1c1c1e, 插件层还按纯黑字画 → "黑字-黑底"看不清。
+//
+// 主题策略: **不对内容做深色主题化**。
+//   - QLPreviewController 是 iOS 系统 QuickLook 的官方入口, 与 Files.app / Numbers
+//     行为一致 —— 内容层永远按原文档配色画 (白底 + 用户自设的字色/单元格 bg /
+//     条件格式着色)。
+//   - 强行反色 / 覆盖字色会破坏 xlsx 里"红色警戒行 / 蓝色标题 / 黄底提示单元格"
+//     之类的用户语义, 得不偿失。
+//   - QLPreviewController.overrideUserInterfaceStyle 对 xlsx 内容层是 no-op (试过 .dark
+//     无效, 内容仍白底), 我们锁到 .light 是为了让 QL 自己的 chrome (Loading 转圈 / 提示)
+//     与白色内容岛保持一致, 避免"暗底浮层-白色内容"的割裂感。外层 WKNavigationBar
+//     仍随 app style 走深色。
+//
+// 布局: QL 作为子 VC add 进内容区, 不 push, 所以不会画自己的 top toolbar,
+// 外层 WKNavigationBar 的 title/back/share 保持可用。
+- (void)setupQuickLookInFrame:(CGRect)frame {
+    QLPreviewController *ql = [[QLPreviewController alloc] init];
+    ql.dataSource = self;
+    ql.delegate = self;
+    if (@available(iOS 13.0, *)) {
+        ql.overrideUserInterfaceStyle = UIUserInterfaceStyleLight;
+    }
+    [self addChildViewController:ql];
+    ql.view.frame = frame;
+    ql.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:ql.view];
+    [ql didMoveToParentViewController:self];
+    self.qlController = ql;
+}
+
+- (void)teardownQuickLook {
+    if (!self.qlController) return;
+    [self.qlController willMoveToParentViewController:nil];
+    [self.qlController.view removeFromSuperview];
+    [self.qlController removeFromParentViewController];
+    self.qlController = nil;
+}
+
+#pragma mark - QLPreviewControllerDataSource
+
+- (NSInteger)numberOfPreviewItemsInPreviewController:(QLPreviewController *)controller {
+    return self.fileURL ? 1 : 0;
+}
+
+- (id<QLPreviewItem>)previewController:(QLPreviewController *)controller previewItemAtIndex:(NSInteger)index {
+    return self.fileURL;
 }
 
 #pragma mark - 视频 / 音频 (AVPlayerViewController)
