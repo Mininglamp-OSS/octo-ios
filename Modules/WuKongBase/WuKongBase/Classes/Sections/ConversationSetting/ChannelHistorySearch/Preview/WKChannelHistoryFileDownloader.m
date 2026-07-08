@@ -4,6 +4,7 @@
 
 #import "WKChannelHistoryFileDownloader.h"
 #import "WKApp.h"
+#import "WKMD5Util.h"
 
 @interface WKChannelHistoryFileDownloader () <NSURLSessionDownloadDelegate>
 @property (nonatomic, copy) WKChannelHistoryFileDownloadHandler onComplete;
@@ -35,11 +36,22 @@
     return name;
 }
 
+// PR #64 review yujiawei P1: 老实现 cache 路径只用 sanitized fileName, 两条
+// 不同 URL 但同名的消息 (chat 里 IMG_001.jpg / 报告.pdf 极常见) 会 collide,
+// 后到者拿到前者内容 — silent data corruption。用 URL 的 MD5 前 16 字符做
+// 子目录, 保留 fileName 作为叶子, 让用户下载出去看到的名字仍然是原名。
++ (NSString *)urlHashDirForRemoteUrl:(NSString *)remoteUrl {
+    if (remoteUrl.length == 0) return @"_nohash";
+    NSString *md5 = [WKMD5Util md5HexDigest:remoteUrl];
+    return md5.length >= 16 ? [md5 substringToIndex:16] : md5;
+}
+
 + (NSString *)cachedLocalPathForRemoteUrl:(NSString *)remoteUrl
                                     fileName:(NSString *)fileName {
     if (remoteUrl.length == 0) return nil;
+    NSString *hashDir = [self urlHashDirForRemoteUrl:remoteUrl];
     NSString *safe = [self safeFileNameFromUrl:remoteUrl fileName:fileName];
-    return [[self cacheDir] stringByAppendingPathComponent:safe];
+    return [[[self cacheDir] stringByAppendingPathComponent:hashDir] stringByAppendingPathComponent:safe];
 }
 
 + (NSURLSessionDownloadTask *)downloadRemoteUrl:(NSString *)remoteUrl
@@ -65,8 +77,10 @@
         return nil;
     }
 
-    NSString *safeName = [self safeFileNameFromUrl:remoteUrl fileName:fileName];
-    NSString *destPath = [[self cacheDir] stringByAppendingPathComponent:safeName];
+    // 下载目标路径必须与 cachedLocalPathForRemoteUrl: 保持完全一致
+    // (URL 哈希作子目录 + safeName 作叶子), 否则同名不同 URL 的 cache-hit
+    // 判定会跟真实产物错位 (PR #64 review yujiawei P1)。
+    NSString *destPath = [self cachedLocalPathForRemoteUrl:remoteUrl fileName:fileName];
 
     // 缓存命中: 文件存在且非空 → 直接回调本地路径, 不重复下载。
     NSFileManager *fm = [NSFileManager defaultManager];
