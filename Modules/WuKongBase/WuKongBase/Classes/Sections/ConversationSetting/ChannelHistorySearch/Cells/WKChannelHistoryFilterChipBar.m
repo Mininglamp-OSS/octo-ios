@@ -8,6 +8,12 @@
 #import "WuKongBase.h"
 #import <objc/runtime.h>
 
+// 用于把 chip descriptor 绑到 ✕ 按钮上的关联对象 key。老实现 set 用 `_cmd`
+// (= relayoutChips) 而 get 用 @selector(onChipTap:), 两把钥匙不匹配 →
+// getAssociatedObject 恒返 nil → ✕ 清除按钮点了没反应 (PR #64 review 3 位 reviewer 独立命中)。
+// 用一个 static const void * 统一 key 避免再犯。
+static const void * const kWKChipDescKey = &kWKChipDescKey;
+
 @implementation WKChannelHistoryFilterChipDescriptor
 @end
 
@@ -74,7 +80,7 @@
         // 用 block 持久持有 onClear
         WKChannelHistoryFilterChipDescriptor *desc = d;
         [clr addTarget:self action:@selector(onChipClearProxy:) forControlEvents:UIControlEventTouchUpInside];
-        objc_setAssociatedObject(clr, _cmd, desc, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(clr, kWKChipDescKey, desc, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [chip addSubview:clr];
 
         CGFloat chipW = CGRectGetMaxX(clr.frame) + 8.0f;
@@ -93,7 +99,7 @@
 }
 
 - (void)onChipClearProxy:(UIButton *)btn {
-    WKChannelHistoryFilterChipDescriptor *d = objc_getAssociatedObject(btn, @selector(onChipTap:));
+    WKChannelHistoryFilterChipDescriptor *d = objc_getAssociatedObject(btn, kWKChipDescKey);
     if (!d) return;
     if (d.onClear) d.onClear();
 }
