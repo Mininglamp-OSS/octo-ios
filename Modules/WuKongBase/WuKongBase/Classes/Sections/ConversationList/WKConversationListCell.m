@@ -795,9 +795,20 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     // 所有 tab 统一走右下角 badgeView。最近 tab 之前用头像右上角徽章已下线 —— 红点挪到
     // 与最后一条消息预览同一水平线，颜色与关注 tab 统一为粉底红字。
     self.badgeView.hidden = YES;
-    if(model.unreadCount>0) {
+    // 最近 tab 里父群行的预览时间 / 内容来自 lastChildConversation（子区最新一条），
+    // 但 wrap.unreadCount 只读主群自身 c.unreadCount，子区消息不 tick 主群 unread。
+    // 这会让长时间后台后收到子区消息时出现「时间对但红点不亮」的现象（用户 repro:
+    // 锁屏 app 挂后台数小时 → 子区推送到达 → 会话列表最新时间刷新了但 badge 保持旧值,
+    // 杀 app 冷启 loadConversationList 从 DB 全量重建后 badge 恢复）。
+    // 最近 tab 走 recentTabActivityUnreadCount：主群 + 最新子区。关注 tab（父群
+    // group-summary）保持 unreadCount：那边子区在 threadToggle 上有独立 indicator,
+    // 双算会重复计数。
+    NSInteger displayUnread = self.recentTabContext
+        ? model.recentTabActivityUnreadCount
+        : model.unreadCount;
+    if(displayUnread > 0) {
         self.badgeView.hidden = NO;
-        self.badgeView.badgeValue = self.model.unreadCount > 99 ? @"99+" : [NSString stringWithFormat:@"%ld",(long)self.model.unreadCount];
+        self.badgeView.badgeValue = displayUnread > 99 ? @"99+" : [NSString stringWithFormat:@"%ld",(long)displayUnread];
         self.badgeView.lim_left = self.lim_width - 15.0f - self.badgeView.lim_width; // 这里强行执行下lim_left 因为杀掉app收离线，从无红点到有红点会向左漂移，因为layoutSubviews后执行
     }
 }
@@ -810,7 +821,10 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     self.avatarUnreadBadge.hidden = YES;
 
     if(muted) { // 免打扰
-        if(model.unreadCount<=0) {
+        // 与 refreshUnread 同源：最近 tab 走 recentTabActivityUnreadCount,
+        // 否则会出现「静音群收到子区消息 → badge 该亮但 muteIcon 挡在原位」的错位。
+        NSInteger effUnread = self.recentTabContext ? model.recentTabActivityUnreadCount : model.unreadCount;
+        if(effUnread <= 0) {
             self.muteIcon.hidden = NO;
         }else {
             self.muteIcon.hidden = YES;
@@ -1289,7 +1303,11 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         self.lastContentLbl.lim_left = self.titleLbl.lim_left - titleIconReserve;
         self.lastContentLbl.lim_width = self.lim_width - self.lastContentLbl.lim_left - 10.0f;
 
-        if(self.model.unreadCount>0 || self.model.mute) {
+        // 与 refreshUnread / refreshSetting 同源：最近 tab 下右下角是否被 badge/mute
+        // 占位需要按 recentTabActivityUnreadCount 判定，否则子区新消息触发 badge 显示
+        // 时 preview 没让位会与 badge 重叠。
+        NSInteger effUnread = self.recentTabContext ? self.model.recentTabActivityUnreadCount : self.model.unreadCount;
+        if(effUnread > 0 || self.model.mute) {
             // 右下角槽位：未读 badge / 静音铃铛会占用 ~40pt，preview 文字让位避免重叠。
             // 最近 tab 现在与关注 tab 统一走右下角 badgeView，红点出现时同样需要让位。
             self.lastContentLbl.lim_width -= 40.0f;

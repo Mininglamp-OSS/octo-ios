@@ -226,6 +226,20 @@
     self.c.unreadCount = unreadCount;
 }
 
+- (NSInteger)recentTabActivityUnreadCount {
+    // 与 -lastMsgTimestamp / -content 同源：最近 tab 父群行的预览时间/内容读
+    // lastChildConversation，unread 也把这一路 fold 进来，避免 app 长时间后台后
+    // 收到子区消息时出现「时间对但红点不亮」（bug repro：锁屏久挂后子区推送到达）。
+    // 只 fold 「最新一个」子区，不遍历 children —— 与 lastMsgTimestamp getter 的
+    // 观察窗口保持一致；tab 底部汇总 / follow section header 走独立累加路径,
+    // 不复用此 getter（详见 .h 注释）。
+    NSInteger own = self.c.unreadCount;
+    if (self.lastChildConversation) {
+        own += self.lastChildConversation.unreadCount;
+    }
+    return own;
+}
+
 /// 判断是否需要按空间过滤最后一条消息（所有个人聊天在多空间模式下都需要）
 -(BOOL) isSystemBotChannel {
     if(self.c.channel.channelType != WK_PERSON) {
