@@ -1481,10 +1481,15 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         key = [NSString stringWithFormat:@"%@-size-edit-%lu",model.clientMsgNo,model.remoteExtra.editedAt];
     }
     static WKMemoryCache *memoryCache;
-    if(!memoryCache) {
+    // Bugly #9089: 老 `if(!memoryCache) alloc` 写法在首次进群 bg 预算高度 +
+    // 主线程 heightForRow 同帧并发时能各起一份实例, 先写者被 ARC storeStrong
+    // 立刻释放, 遗留引用在后续 getCache: 释放阶段命中 objc_release_x0 SEGV。
+    // dispatch_once 保证唯一实例, 与 textAttrCache/segHeightCache 对齐。
+    static dispatch_once_t sizeCacheOnce;
+    dispatch_once(&sizeCacheOnce, ^{
         memoryCache = [[WKMemoryCache alloc] init];
         memoryCache.maxCacheNum = 0; // 数值缓存，内存极小，不设上限
-    }
+    });
     NSString  *sizeStr =  [memoryCache getCache:key];
     if(sizeStr) {
         return CGSizeFromString(sizeStr);
@@ -1535,10 +1540,12 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         key = [NSString stringWithFormat:@"%@-lastLine-edit-%lu",model.clientMsgNo,model.remoteExtra.editedAt];
     }
     static WKMemoryCache *memoryCache;
-    if(!memoryCache) {
+    // 见 textSize: 里的 Bugly #9089 注释, 同样用 dispatch_once 保护并发首建。
+    static dispatch_once_t lastLineCacheOnce;
+    dispatch_once(&lastLineCacheOnce, ^{
         memoryCache = [[WKMemoryCache alloc] init];
         memoryCache.maxCacheNum = 0; // 数值缓存，内存极小，不设上限
-    }
+    });
     NSNumber  *lastLineWidth =  [memoryCache getCache:key];
     if(lastLineWidth) {
         return lastLineWidth.floatValue;

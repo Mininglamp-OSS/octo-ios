@@ -31,6 +31,11 @@
             [self.cacheDictonary removeObjectForKey:key];
         }
 
+        // cacheArray 是 FIFO 淘汰序, 先 remove 再 addObject 保证同一 key 只占
+        // 一个槽位。老实现直接 addObject: 允许重复, 高频 setCache 同一 key 会
+        // 让 cacheArray 无界膨胀; cleanCache 里 removeObject: 又只删首个匹配,
+        // 淘汰错位 → dict 里陈旧对象长期存活, 放大 Bugly #9089 race 概率。
+        [self.cacheArray removeObject:key];
         [self.cacheArray addObject:key];
 
         [self cleanCache];
@@ -38,9 +43,17 @@
 }
 -(id) getCache:(NSString*)key {
     if (!key) return nil;
+    // 用显式 __strong 本地承接返回值, 而不是 `return dict[key]`。
+    // 后者依赖 `objc_retainAutoreleasedReturnValue` fast-path 才能在 @synchronized
+    // 退出前完成 +1, 极端场景 (Bugly #9089 iOS 26 上 objc_release_x0 SEGV) 下
+    // 拿不到 retain 的 val 在锁外被别的线程 setCache 顶掉即被解引, ARC 尾部的
+    // objc_autoreleaseReturnValue 踩释放页。显式本地强引用后, retain 落在锁内、
+    // release 落在返回后, 无论 RRV fast-path 是否命中都安全。
+    id __strong value = nil;
     @synchronized (self) {
-        return self.cacheDictonary[key];
+        value = [self.cacheDictonary objectForKey:key];
     }
+    return value;
 }
 // 清理缓存 (调用方已在 @synchronized(self) 内,本方法不再重入加锁)
 -(void) cleanCache {
