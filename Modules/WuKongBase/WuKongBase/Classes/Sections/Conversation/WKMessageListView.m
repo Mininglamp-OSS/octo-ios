@@ -1566,36 +1566,49 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 
 
 -(void) startReminderAnimation {
+    // 历史实现把整段包在 [tableView performBatchUpdates:] 里, 但 block 内既没有
+    // insert/delete/move, 也没有 reload (原本那行 reloadRowsAtIndexPaths 已注释掉),
+    // 属于一个"空 batch"。UITableView 对空 batch 会在 block 前后各查一次
+    // numberOfRowsInSection 做一致性校验; 而本方法的入口
+    // (locateMessageCellWithOrderSeqForReminder: → pullAround → loadMessages
+    //  → completion) 是跨 runloop 的异步链, 中间任何一个通知路径 (新消息到达 /
+    // 分页 loadMore) 若已改动 dataProvider 但 tableView 还没被 insertRows 通知,
+    // 空 batch 就会撞上假 delta:
+    //   NSInternalInconsistencyException "invalid number of rows in section 0.
+    //   after update (60) must be equal to before update (30) plus 0 inserted..."
+    // (Bugly #24037 类同款堆栈: onTap → updateReminders → initPosition →
+    //  locateMessageCellWithOrderSeqForReminder → startReminderAnimation →
+    //  _performBatchUpdates)
+    //
+    // 修复: 拿掉 performBatchUpdates 外壳 —— 这段代码本来就没有 batch 语义要维护,
+    // 唯一的实际工作是 0.5s 后拿到 cell 触发 per-cell 的 startReminderAnimation,
+    // 与批量更新完全无关。行为等价, 消除崩溃面。
     NSArray<WKReminder*> *reminders = self.reminders;
-    if(reminders && reminders.count>0) {
-        __weak typeof(self) weakSelf = self;
-        [self.tableView performBatchUpdates:^{
-            NSMutableArray *indexPaths = [NSMutableArray array];
-            for (WKReminder *reminder in reminders) {
-                if(reminder.isLocate && !reminder.done) {
-                    uint32_t orderSeq = [[WKSDK shared].chatManager getOrderSeq:reminder.messageSeq];
-                    NSIndexPath *indexPath = [weakSelf.dataProvider indexPathAtOrderSeq:orderSeq];
-                    if(indexPath) {
-                        [indexPaths addObject:indexPath];
-                    }
-                }
-            }
-            if(indexPaths.count>0) {
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    for (NSIndexPath *indexPath in indexPaths) {
-                        WKMessageBaseCell *cell =  (WKMessageBaseCell*) [weakSelf.tableView cellForRowAtIndexPath:indexPath];
-                        if(cell && [cell isKindOfClass:[WKMessageCell class]]) {
-                            [(WKMessageCell*)cell startReminderAnimation];
-                        }
-                    }
-                   // [weakSelf.tableView reloadRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
-                });
-                
-            }
-        } completion:nil];
-        
+    if(!reminders || reminders.count == 0) {
+        return;
     }
-    
+    NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
+    for (WKReminder *reminder in reminders) {
+        if(reminder.isLocate && !reminder.done) {
+            uint32_t orderSeq = [[WKSDK shared].chatManager getOrderSeq:reminder.messageSeq];
+            NSIndexPath *indexPath = [self.dataProvider indexPathAtOrderSeq:orderSeq];
+            if(indexPath) {
+                [indexPaths addObject:indexPath];
+            }
+        }
+    }
+    if(indexPaths.count == 0) {
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        for (NSIndexPath *indexPath in indexPaths) {
+            WKMessageBaseCell *cell = (WKMessageBaseCell*) [weakSelf.tableView cellForRowAtIndexPath:indexPath];
+            if(cell && [cell isKindOfClass:[WKMessageCell class]]) {
+                [(WKMessageCell*)cell startReminderAnimation];
+            }
+        }
+    });
 }
 
 -(void) scrollToIndex:(NSIndexPath*)indexPath {
