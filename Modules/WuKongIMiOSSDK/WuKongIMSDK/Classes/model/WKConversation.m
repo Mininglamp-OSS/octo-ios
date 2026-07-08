@@ -119,9 +119,11 @@
         return YES;
     }
     // 消息在本地 + mention 信息完整 + 明确未 @ 自己 → 判定为服务端脏 reminder
+    #if DEBUG
     NSLog(@"[ReminderTrace] drop fake mention reminder: channelId=%@ msgId=%llu msgSeq=%u uids=%@ humans=%d selfUid=%@",
           reminder.channel.channelId, reminder.messageId, reminder.messageSeq,
           mi.uids, mi.humans, selfUid);
+    #endif
     return NO;
 }
 

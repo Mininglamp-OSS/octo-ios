@@ -120,10 +120,12 @@
                               && minVisiableOrderSeq != 0
                               && [[WKSDK shared].chatManager getOrderSeq:reminder.messageSeq] >= minVisiableOrderSeq
                               && [[WKSDK shared].chatManager getOrderSeq:reminder.messageSeq] <= maxVisiableOrderSeq);
+            #if DEBUG
             NSLog(@"[ReminderTrace] orphan-check channelId=%@ reminderID=%lld msgSeq=%u localMsgExists=%d localMsgIsDeleted=%d inVisibleRange=%d minVisOrder=%u maxVisOrder=%u",
                   reminder.channel.channelId, reminder.reminderID, reminder.messageSeq,
                   msg != nil, msg ? (int)msg.isDeleted : -1, inVisible,
                   minVisiableOrderSeq, maxVisiableOrderSeq);
+            #endif
         }
     }
 }

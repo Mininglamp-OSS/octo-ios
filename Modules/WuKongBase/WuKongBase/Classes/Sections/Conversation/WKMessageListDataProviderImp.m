@@ -443,8 +443,10 @@
                                         pullMode:WKPullModeDown
                                         complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
             dispatch_async(dispatch_get_main_queue(), ^{
+                #if DEBUG
                 NSLog(@"[BubbleBugRepro] dp.pullDown SDK RETURN start=%u end=%u msgs=%lu err=%@",
                       startOrderSeq, endOrderSeq, (unsigned long)messages.count, error.localizedDescription ?: @"nil");
+                #endif
                 if (error || !messages || messages.count == 0) {
                     if (accumulated.count > 0) {
                         [weakSelf handleMessages:accumulated insertFirst:YES complete:complete];
