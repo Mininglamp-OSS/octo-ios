@@ -238,9 +238,17 @@
                                                           preferredStyle:UIAlertControllerStyleActionSheet];
     void(^apply)(NSInteger) = ^(NSInteger days) {
         NSDate *end = [NSDate date];
-        NSDate *start = days > 0
-            ? [end dateByAddingTimeInterval:-(days * 24 * 3600)]
-            : nil;
+        NSDate *start;
+        if (days <= 0) {
+            start = nil;
+        } else if (days == 1) {
+            // "今天" 特化: 起点为今日 00:00, 不做 24h 回退。API 只发 yyyy-MM-dd (见
+            // WKChannelHistorySearchModels.toApiDict), now-24h 会拿到昨日日期使
+            // sent_at_from 跨两个自然日 (PR #64 review yujiawei 命中)。
+            start = [[NSCalendar currentCalendar] startOfDayForDate:end];
+        } else {
+            start = [end dateByAddingTimeInterval:-(days * 24 * 3600)];
+        }
         self.draft.startDate = start;
         self.draft.endDate = days > 0 ? end : nil;
         [self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationNone];

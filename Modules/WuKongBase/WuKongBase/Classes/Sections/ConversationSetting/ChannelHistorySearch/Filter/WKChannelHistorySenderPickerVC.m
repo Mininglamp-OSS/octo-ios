@@ -81,6 +81,10 @@
 @property (nonatomic, strong) UITableView *tableView;
 @property (nonatomic, strong) NSMutableArray<WKChannelHistorySenderEntry *> *entries;
 @property (nonatomic, strong) NSMutableSet<NSString *> *selected;
+// 搜索请求单调计数器: 快速打字时 searchMembers: 是异步的, 慢完成的老 keyword
+// 结果不能覆盖新 keyword 已经清空的 entries (PR #64 review 3 位 reviewer 独立命中)。
+// 与 WKChannelHistorySearchVM.reqIdCounter 同款模式。
+@property (nonatomic, assign) NSInteger reqIdCounter;
 @end
 
 @implementation WKChannelHistorySenderPickerVC
@@ -136,6 +140,8 @@
 
 - (void)loadEntriesWithKeyword:(nullable NSString *)keyword {
     [self.entries removeAllObjects];
+    self.reqIdCounter += 1;
+    NSInteger reqId = self.reqIdCounter;
     if (self.channel.channelType == WK_PERSON) {
         // 自己 + 对方
         NSString *myUid = [WKSDK shared].options.connectInfo.uid;
@@ -170,20 +176,25 @@
             lookupChannel = [[WKChannel alloc] initWith:groupNo channelType:WK_GROUP];
         }
     }
+    __weak typeof(self) ws = self;
     [WKGroupManager.shared searchMembers:lookupChannel
                                   keyword:keyword ?: @""
                                      page:1
                                     limit:200
                           requestStrategy:WKRequestStrategyOnlyNetwork
                                  complete:^(WKChannelMemberCacheType cacheType, NSArray<WKChannelMember *> * _Nonnull members) {
+        __strong typeof(ws) ss = ws;
+        if (!ss) return;
+        // 只有 reqId 仍是最新一轮的才 append; 慢完成的老 keyword 结果直接丢弃。
+        if (reqId != ss.reqIdCounter) return;
         for (WKChannelMember *m in members) {
             WKChannelHistorySenderEntry *e = [WKChannelHistorySenderEntry new];
             e.uid = m.memberUid ?: @"";
             e.displayName = m.memberName.length > 0 ? m.memberName : (m.memberRemark.length > 0 ? m.memberRemark : m.memberUid);
             e.avatarUrl = nil;
-            if (e.uid.length > 0) [self.entries addObject:e];
+            if (e.uid.length > 0) [ss.entries addObject:e];
         }
-        [self.tableView reloadData];
+        [ss.tableView reloadData];
     }];
 }
 
