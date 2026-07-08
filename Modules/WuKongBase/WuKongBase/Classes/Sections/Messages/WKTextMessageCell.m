@@ -1864,8 +1864,10 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
     }
 
     } @catch (NSException *exception) {
+#if DEBUG
         NSLog(@"[CellRefresh] ⚠️ refresh 抛异常被隔离 msgNo=%@ name=%@ reason=%@",
               model.clientMsgNo, exception.name, exception.reason);
+#endif
         [self wk_renderPlainTextFallback:model];
     }
 }
@@ -1896,7 +1898,9 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
                                         context:nil].size;
         self.textLbl.lim_size = CGSizeMake(ceil(fit.width), ceil(fit.height));
     } @catch (NSException *e) {
+#if DEBUG
         NSLog(@"[CellRefresh] ⚠️ fallback 也抛异常, 留空气泡: %@", e.reason);
+#endif
     }
 }
 
@@ -2209,8 +2213,10 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
     }
 
     } @catch (NSException *exception) {
+#if DEBUG
         NSLog(@"[CellLayout] ⚠️ layoutSubviews 抛异常被隔离 msgNo=%@ name=%@ reason=%@",
               self.messageModel.clientMsgNo, exception.name, exception.reason);
+#endif
     }
 }
 
@@ -2651,8 +2657,10 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
     if (tableHTML.length > 0) {
         [webView loadHTMLString:tableHTML baseURL:nil];
     }
+#if DEBUG
     NSLog(@"[WKWebView] content process terminated, reloaded msgNo=%@ idx=%lu",
           self.messageModel.clientMsgNo, (unsigned long)idx);
+#endif
 }
 
 -(void) scrollViewDidScroll:(UIScrollView *)scrollView {

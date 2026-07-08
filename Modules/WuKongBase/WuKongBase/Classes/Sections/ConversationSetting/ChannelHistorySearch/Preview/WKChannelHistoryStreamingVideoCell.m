@@ -333,7 +333,23 @@ static void * kStreamingKVOReadyForDisplay = &kStreamingKVOReadyForDisplay;
         [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
         return;
     }
+    // weak-strong + object == observed 双重保护 (PR #64 review Octo-Q + yujiawei
+    // 共同 P2)。dispatch_async 会 retain block 里的 self, cell 在 dealloc 后
+    // block 才 drain 会短暂延后释放; 更重要的是 prepareForReuse → teardownPlayer
+    // 后再 setYb_cellData: 换新 item, 旧 KVO 的 in-flight callback 到 main 时
+    // observedItem/player/playerLayer 已经是新的, 不 guard 会用错 item 的状态
+    // 去改新 UI (提前 hide loading / 顶起进度条)。
+    __weak typeof(self) weakSelf = self;
+    id observedObject = object;
     dispatch_async(dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) return;
+        if ((context == kStreamingKVOStatus && observedObject != self.observedItem) ||
+            (context == kStreamingKVOTimeControl && observedObject != self.player) ||
+            (context == kStreamingKVOReadyForDisplay && observedObject != self.playerLayer)) {
+            // 已被 teardown / 换 item, 老回调直接丢弃, 不动新 UI
+            return;
+        }
         [self refreshLoadingVisibility];
         [self syncPlayPauseBtn];
         if (context == kStreamingKVOReadyForDisplay && self.playerLayer.readyForDisplay) {

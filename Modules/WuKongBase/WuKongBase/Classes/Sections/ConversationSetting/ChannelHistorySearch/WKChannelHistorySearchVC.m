@@ -502,6 +502,9 @@
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         fmt = [NSDateFormatter new];
+        // 与 toApiDict 里的 formatter 对齐, 用 en_US_POSIX locale, 避免设备设佛历
+        // / 伊斯兰历时年份被按当地日历渲染 (PR #64 review Octo-Q P2)。
+        fmt.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
         fmt.dateFormat = @"yyyy/MM/dd";
     });
     NSString *s = start ? [fmt stringFromDate:start] : LLang(@"最早");

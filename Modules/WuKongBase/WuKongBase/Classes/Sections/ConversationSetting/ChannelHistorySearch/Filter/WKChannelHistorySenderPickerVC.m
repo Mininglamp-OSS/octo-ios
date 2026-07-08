@@ -237,4 +237,11 @@
     [self loadEntriesWithKeyword:kw];
 }
 
+- (void)dealloc {
+    // performSelector:afterDelay: 会强引用 self 直到 selector 触发, 用户在
+    // 0.16s 打字 debounce 窗口内快速 pop VC 时, pending 调度会撞到 dealloc-ing
+    // self 上 (PR #64 review Octo-Q P2)。dealloc 里主动清一次, 无副作用。
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(reloadByKeyword:) object:nil];
+}
+
 @end
