@@ -81,7 +81,11 @@
     NSString *url = item.thumbUrl.length > 0 ? item.thumbUrl : item.previewUrl;
     if (url.length == 0) url = item.originalUrl;
     if (url.length > 0) {
-        [self.thumbView sd_setImageWithURL:[NSURL URLWithString:url] placeholderImage:nil];
+        // 服务端返回的 URL 可能是相对路径, 走 WKApp.getImageFullUrl: 拼 apiBaseUrl,
+        // 与同模块 WKChannelHistoryMediaBrowser.resolveRemoteURL: 同口径 (PR #64 review
+        // yujiawei 命中: cells 直接 URLWithString 导致相对 URL thumb 空白, 但 browser
+        // 打开又能显示)。
+        [self.thumbView sd_setImageWithURL:[[WKApp shared] getImageFullUrl:url] placeholderImage:nil];
     } else {
         self.thumbView.image = nil;
     }

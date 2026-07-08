@@ -103,7 +103,8 @@
     NSString *thumb = item.thumbUrl.length > 0 ? item.thumbUrl : item.previewUrl;
     if (thumb.length == 0) thumb = item.originalUrl;
     if (thumb.length > 0) {
-        [self.thumbView sd_setImageWithURL:[NSURL URLWithString:thumb]
+        // 见 WKChannelHistoryMediaGridCell.m 同源注释, 走 getImageFullUrl: 兜相对 URL。
+        [self.thumbView sd_setImageWithURL:[[WKApp shared] getImageFullUrl:thumb]
                           placeholderImage:nil];
     } else {
         self.thumbView.image = nil;

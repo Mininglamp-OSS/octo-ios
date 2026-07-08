@@ -3,6 +3,7 @@
 //
 
 #import "WKChannelHistoryFileDownloader.h"
+#import "WKApp.h"
 
 @interface WKChannelHistoryFileDownloader () <NSURLSessionDownloadDelegate>
 @property (nonatomic, copy) WKChannelHistoryFileDownloadHandler onComplete;
@@ -53,7 +54,10 @@
         }
         return nil;
     }
-    NSURL *url = [NSURL URLWithString:remoteUrl];
+    NSURL *url = [[WKApp shared] getFileFullUrl:remoteUrl];
+    // getFileFullUrl: 对 http(s) 起头的直接放行, 其它按 apiBaseUrl 拼接; 老实现只 URLWithString
+    // 相对路径回 nil, 服务端在个别 envelope 里下发相对 file/preview/... URL 就下载失败
+    // (PR #64 review yujiawei 命中, 与 WKChannelHistoryMediaBrowser 同源修复)。
     if (!url) {
         onComplete(nil, [NSError errorWithDomain:@"WKChannelHistoryFileDownloader"
                                             code:-2
