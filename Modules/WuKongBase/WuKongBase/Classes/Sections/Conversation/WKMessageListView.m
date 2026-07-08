@@ -501,11 +501,13 @@ static const BOOL kIncrementalPulldown = NO;
     __weak typeof(self) weakSelf = self;
     WKMessageModel *_dpHeadBefore = [self.dataProvider firstMessage];
     WKMessageModel *_dpTailBefore = [self.dataProvider lastMessage];
+    #if DEBUG
     NSLog(@"[BubbleBugRepro] loadMessages ENTRY animation=%d firstLoad=%d keepPos=%u dpHead=%u dpTail=%u dpCount=date×%lu",
           animation, firstLoad,
           self.keepPosition.orderSeq,
           _dpHeadBefore.orderSeq, _dpTailBefore.orderSeq,
           (unsigned long)self.dataProvider.dates.count);
+    #endif
     if(self.keepPosition) {
         [self enablePullup:YES];
     }else {
@@ -514,10 +516,12 @@ static const BOOL kIncrementalPulldown = NO;
     [self.dataProvider pullFirst:self.keepPosition complete:^(bool hasMore) {
         WKMessageModel *_dpHeadAfter = [weakSelf.dataProvider firstMessage];
         WKMessageModel *_dpTailAfter = [weakSelf.dataProvider lastMessage];
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] loadMessages pullFirst RETURN hasMore=%d dpHead=%u dpTail=%u dpDates=%lu",
               hasMore,
               _dpHeadAfter.orderSeq, _dpTailAfter.orderSeq,
               (unsigned long)weakSelf.dataProvider.dates.count);
+        #endif
         [weakSelf handleLoadMessages:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
     }];
 }
@@ -585,10 +589,12 @@ static const BOOL kIncrementalPulldown = NO;
     {
         WKMessageModel *_dpHead = [self.dataProvider firstMessage];
         WKMessageModel *_dpTail = [self.dataProvider lastMessage];
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] _handleLoadAfterPrecache RELOAD firstLoad=%d keepPos=%u dpHead=%u dpTail=%u dpDates=%lu",
               firstLoad, self.keepPosition.orderSeq,
               _dpHead.orderSeq, _dpTail.orderSeq,
               (unsigned long)self.dataProvider.dates.count);
+        #endif
     }
     [self.tableView reloadData];
 
@@ -629,18 +635,24 @@ static const BOOL kIncrementalPulldown = NO;
 -(void) pullBottom {
     WKMessageModel *_dpHead = [self.dataProvider firstMessage];
     WKMessageModel *_dpTail = [self.dataProvider lastMessage];
+    #if DEBUG
     NSLog(@"[BubbleBugRepro] pullBottom ENTRY pullupHasMore=%d positionAtBottom=%d dpHead=%u dpTail=%u lastMsg=%u appState=%ld",
           [self pullupHasMore], self.positionAtBottom,
           _dpHead.orderSeq, _dpTail.orderSeq, self.lastMessage.orderSeq,
           (long)[UIApplication sharedApplication].applicationState);
+    #endif
     if(![self pullupHasMore]) {
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] pullBottom PATH=scroll-only (already at bottom in dp)");
+        #endif
         [self pullupFinished];
         [self.tableView setContentOffset:self.tableView.contentOffset animated:NO]; // 立刻停止滚动
         [self scrollToBottom:YES];
         return;
     }
+    #if DEBUG
     NSLog(@"[BubbleBugRepro] pullBottom PATH=reset-load (pullupHasMore=YES)");
+    #endif
     // 标记「下一次 pulldown 强制 reloadData」——见 wasResetLoadPending 属性注释。
     self.wasResetLoadPending = YES;
 
@@ -666,20 +678,35 @@ static const BOOL kIncrementalPulldown = NO;
     WKConversationWrapModel *_convModel = [[WKConversationListVM shared] modelAtChannel:self.channel];
     uint32_t _knownLatestOrderSeq = 0;
     if (_convModel.lastMessage.messageSeq > 0) {
-        _knownLatestOrderSeq = (uint32_t)_convModel.lastMessage.messageSeq * (uint32_t)WKOrderSeqFactor;
+        // 在 uint64 里算, 溢出 uint32 时保持 _knownLatestOrderSeq=0 走 pullFirst:nil
+        // 已有 fallback (line 682-684)。SDK 全线 orderSeq 都是 uint32, 单会话
+        // messageSeq > ~4.29M 是 SDK 级天花板 (WKMessageDB / pullAround:orderSeq: /
+        // WKConversationPosition.orderSeq 全 uint32), 这里只保证不给 keepPosition
+        // 留脏值触发 pullAround 定位到错误的老窗口 (PR #64 review OctoBoooot + Jerry-Xin
+        // 独立命中)。
+        uint64_t _computed = (uint64_t)_convModel.lastMessage.messageSeq * (uint64_t)WKOrderSeqFactor;
+        if (_computed > 0 && _computed <= UINT32_MAX) {
+            _knownLatestOrderSeq = (uint32_t)_computed;
+        }
     }
     __weak typeof(self) weakSelf = self;
     if (_knownLatestOrderSeq > 0) {
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] pullBottom SUB=pullAround knownLatestOrderSeq=%u (force server sync)",
               _knownLatestOrderSeq);
+        #endif
         self.keepPosition = [WKConversationPosition orderSeq:_knownLatestOrderSeq offset:0];
         [self loadMessages:true firstLoad:true complete:^{
             weakSelf.keepPosition = nil;
             [weakSelf scrollToBottom:YES];
+            #if DEBUG
             NSLog(@"[BubbleBugRepro] pullBottom SUB=pullAround DONE, scrollToBottom");
+            #endif
         }];
     } else {
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] pullBottom SUB=pullFirst:nil FALLBACK (convlist lastMsg not available)");
+        #endif
         self.keepPosition = nil;
         [self loadMessages:true firstLoad:true complete:nil];
     }
@@ -877,9 +904,11 @@ static const BOOL kIncrementalPulldown = NO;
     {
         WKMessageModel *_dpHead = [self.dataProvider firstMessage];
         WKMessageModel *_dpTail = [self.dataProvider lastMessage];
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] pulldown ENTRY dpHead=%u dpTail=%u dpDates=%lu positionAtBottom=%d",
               _dpHead.orderSeq, _dpTail.orderSeq,
               (unsigned long)self.dataProvider.dates.count, self.positionAtBottom);
+        #endif
     }
     WK_PERF_LOG(@"[PullDebug] pulldown START, mj_header.state=%ld, isPulldownInProgress=%d", (long)self.tableView.mj_header.state, self.isPulldownInProgress);
 
@@ -975,7 +1004,9 @@ static const BOOL kIncrementalPulldown = NO;
                     BOOL _forceReloadForResetLoad = weakSelf.wasResetLoadPending;
                     weakSelf.wasResetLoadPending = NO;
                     if (_forceReloadForResetLoad) {
+                        #if DEBUG
                         NSLog(@"[BubbleBugRepro] pulldown FORCE reloadData (post-reset-load, 避免 UIKit 增量插入漂移)");
+                        #endif
                     }
 
                     if (kIncrementalPulldown && !_forceReloadForResetLoad && weakSelf && weakSelf.tableView) {
@@ -1060,9 +1091,11 @@ static const BOOL kIncrementalPulldown = NO;
                     {
                         WKMessageModel *_dpHead = [weakSelf.dataProvider firstMessage];
                         WKMessageModel *_dpTail = [weakSelf.dataProvider lastMessage];
+                        #if DEBUG
                         NSLog(@"[BubbleBugRepro] pulldown DONE path=hasInsertions newMsgs=%lu dpHead=%u dpTail=%u dpDates=%lu",
                               (unsigned long)newMsgs.count, _dpHead.orderSeq, _dpTail.orderSeq,
                               (unsigned long)weakSelf.dataProvider.dates.count);
+                        #endif
                     }
                     [weakSelf processPendingRecvMessages];
                     [weakSelf wk_tryConsumePendingReconcile];
@@ -1075,9 +1108,11 @@ static const BOOL kIncrementalPulldown = NO;
             {
                 WKMessageModel *_dpHead = [weakSelf.dataProvider firstMessage];
                 WKMessageModel *_dpTail = [weakSelf.dataProvider lastMessage];
+                #if DEBUG
                 NSLog(@"[BubbleBugRepro] pulldown DONE path=noInsertions dpHead=%u dpTail=%u dpDates=%lu",
                       _dpHead.orderSeq, _dpTail.orderSeq,
                       (unsigned long)weakSelf.dataProvider.dates.count);
+                #endif
             }
             [weakSelf processPendingRecvMessages];
             [weakSelf wk_tryConsumePendingReconcile];
@@ -2204,14 +2239,18 @@ static const NSInteger kMaxPullupDedupRetry = 3;
     WKMessageModel *messageModel = [[WKMessageModel alloc] initWithMessage:message];
     {
         WKMessageModel *_dpTail = [self.dataProvider lastMessage];
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] handleRecvMessage ENTRY msgNo=%@ msgOrderSeq=%u dpTail=%u lastMsg=%u pullupHasMore=%d positionAtBottom=%d appState=%ld",
               message.clientMsgNo, messageModel.orderSeq,
               _dpTail.orderSeq, self.lastMessage.orderSeq,
               [self pullupHasMore], self.positionAtBottom,
               (long)[UIApplication sharedApplication].applicationState);
+        #endif
     }
     if([self pullupHasMore]) { // 消息没有完全加载完成
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] handleRecvMessage PATH=pullupHasMore (only updateLastMsgIfNeed) — NEW MSG DROPPED FROM DP");
+        #endif
         [self updateLastMsgIfNeed:messageModel];
         if( [message isSend]) {
             [self  pullBottom];
@@ -2234,8 +2273,10 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         //   相等判断提前 return，永远不会补一次 reloadData。reloadData 是惰性的，回前台下次
         //   layout 会重查 numberOfRows 并重新 willDisplayCell:，自愈（对齐 git-init 的原行为）。
         if ([UIApplication sharedApplication].applicationState != UIApplicationStateActive) {
+            #if DEBUG
             NSLog(@"[BubbleBugRepro] handleRecvMessage PATH=background msgOrderSeq=%u dpTail=%u (no gap-fill in bg branch)",
                   messageModel.orderSeq, [self.dataProvider lastMessage].orderSeq);
+            #endif
             // R4 fix: 标记 "回前台 reconcile 时即使 numberOfRows 一致也要强制 reloadData 一次",
             // 治后台 reloadData + scrollToBottom 触发离屏 layout 但 willDisplayCell: 没回调,
             // 回前台 UIKit 误判 "已布局" 不重渲染、cell 内容空白的回归。消费点:
@@ -2511,8 +2552,10 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         if (h > 15.0f) {
             [[WKMessageListView cellHeightCache] setObject:@(h) forKey:heightKey];
         } else {
+            #if DEBUG
             NSLog(@"[BubbleBugRepro] _cachedHeight REJECT pathological h=%.1f msgNo=%@",
                   h, msg.clientMsgNo);
+            #endif
             h = 44.0f;
         }
         return h;
@@ -2550,8 +2593,10 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         if (height > 15.0f) {
             [[WKMessageListView cellHeightCache] setObject:@(height) forKey:heightKey];
         } else {
+            #if DEBUG
             NSLog(@"[BubbleBugRepro] precache REJECT pathological height=%.1f msgNo=%@",
                   height, msg.clientMsgNo);
+            #endif
         }
         CGFloat ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000;
         if (ms > 10) {
@@ -2624,9 +2669,11 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         // insertSections 增量路径在跨 section + row shift 混合形态下让 UIKit
         // 内部行数簿记漂移。返 0.1 → cell 完全不可见 (症状 B「无气泡框」)。
         // 打日志, 复现时可 grep [BubbleBugRepro] dp/tv drift 直接定位到具体 indexPath。
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] dp/tv drift: heightForRow section=%ld row=%ld returned nil model (dpSections=%lu)",
               (long)indexPath.section, (long)indexPath.row,
               (unsigned long)self.dataProvider.dates.count);
+        #endif
         return 0.1f;
     }
 
@@ -2673,8 +2720,10 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     if (heightKey && height > 15.0f) {
         [[WKMessageListView cellHeightCache] setObject:@(height) forKey:heightKey];
     } else if (heightKey) {
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] heightCache REJECT pathological height=%.1f msgNo=%@ (measure race, will retry)",
               height, messageModel.clientMsgNo);
+        #endif
         // measure race 时返回 44 兜底而不是 0.1, 让本帧至少能看到 cell 存在
         if (height < 15.0f) height = 44.0f;
     }
@@ -3441,11 +3490,13 @@ static const NSInteger kMaxRehydratePages = 35;
     if (!self.channel) {
         return;
     }
+    #if DEBUG
     NSLog(@"[BubbleBugRepro] reconcile ENTRY note=%@ dirty=%d pending=%d pulldown=%d rehydrate=%d pullupMore=%d posAtBottom=%d",
           note.name ?: @"(consume)",
           self.dirtyAfterBackground, self.pendingReconcile,
           self.isPulldownInProgress, self.isRehydrating,
           [self pullupHasMore], self.positionAtBottom);
+    #endif
     // gate 命中早退路径: dirtyAfterBackground 仍为 YES (说明后台真的动过状态、
     // 需要补刷) 时把 pendingReconcile 置位, 等 gate 清掉的回调路径再调
     // wk_tryConsumePendingReconcile 补一次。覆盖三种场景:
@@ -3455,24 +3506,35 @@ static const NSInteger kMaxRehydratePages = 35;
     // 不持锁不抢 tableView, 安全。
     if (self.isPulldownInProgress) {
         if (self.dirtyAfterBackground) self.pendingReconcile = YES;
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] reconcile GATE=isPulldownInProgress pendingNow=%d", self.pendingReconcile);
+        #endif
         return;
     }
     if (self.isRehydrating) {
         if (self.dirtyAfterBackground) self.pendingReconcile = YES;
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] reconcile GATE=isRehydrating pendingNow=%d", self.pendingReconcile);
+        #endif
         return;
     }
     if ([self pullupHasMore]) {
         if (self.dirtyAfterBackground) self.pendingReconcile = YES;
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] reconcile GATE=pullupHasMore pendingNow=%d", self.pendingReconcile);
+        #endif
         return;
     }
     // 防抖: gate 全部放行后再判, 这样 gate 命中早退不会污染时间戳, 下条通知仍能
     // 补一次。同一回前台动作 (Will*+Did*+SceneWill*+SceneDidActive) 半秒内只跑一次
     // reloadData, 避免连刷抢主线程影响首帧丝滑。
+    //
+    // 例外: relay 路径 (note==nil, wk_tryConsumePendingReconcile 派发) 不受 debounce
+    // 影响 —— 老实现 relay 会撞上 debounce early-return 却不清 pendingReconcile,
+    // 与本方法文档 "接力补刷应当不受 500ms 防抖影响" 相悖 (PR #64 review OctoBoooot 命中)。
     NSTimeInterval _reconcileNow = CFAbsoluteTimeGetCurrent();
-    if (_reconcileNow - self.reconcileLastTs < 0.5) {
+    BOOL _isRelay = (note == nil);
+    if (!_isRelay && _reconcileNow - self.reconcileLastTs < 0.5) {
         return;
     }
     self.reconcileLastTs = _reconcileNow;
@@ -3516,13 +3578,17 @@ static const NSInteger kMaxRehydratePages = 35;
     }
 
     if (needsReload) {
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] reconcile RELOAD dirty=%d positionAtBottom=%d", dirty, self.positionAtBottom);
+        #endif
         [self.tableView reloadData];
         if (self.positionAtBottom) {
             [self scrollToBottom:NO];
         }
     } else {
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] reconcile NOOP (no signals)");
+        #endif
     }
     // 真的跑到这里说明 reconcile 主路径已经走过 (或 cheap-path 确认 UI 状态干净),
     // pendingReconcile 就此清掉避免后续 gate-clear 路径无谓再补一次。
@@ -3539,11 +3605,15 @@ static const NSInteger kMaxRehydratePages = 35;
 -(void) wk_tryConsumePendingReconcile {
     if (!self.pendingReconcile) return;
     if (!self.channel) return;
+    #if DEBUG
     NSLog(@"[BubbleBugRepro] consumePending SCHEDULED");
+    #endif
     __weak typeof(self) ws = self;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!ws.pendingReconcile) return; // 期间已被别条路径消费
+        #if DEBUG
         NSLog(@"[BubbleBugRepro] consumePending FIRING");
+        #endif
         [ws onAppDidBecomeActiveReconcile:nil];
     });
 }
