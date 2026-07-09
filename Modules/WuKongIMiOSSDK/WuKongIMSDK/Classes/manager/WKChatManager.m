@@ -795,10 +795,12 @@
         reminder.done = NO;
         reminder.version = 0;
         // [ReminderTrace] 本地 mention 补偿创建路径(@所有人 / mention.humans).
+        #if DEBUG
         NSLog(@"[ReminderTrace] localCompensation create channelId=%@ type=%d msgSeq=%u msgId=%llu reminderID=%lld publisher=%@",
               message.channel.channelId, message.channel.channelType,
               message.messageSeq, message.messageId,
               reminder.reminderID, reminder.publisher);
+        #endif
         [[WKReminderDB shared] addOrUpdates:@[reminder]];
         [[WKReminderManager shared] updateConversations:[NSSet setWithObject:message.channel]];
     }

@@ -43,6 +43,17 @@
     [sheet addAction:[UIAlertAction actionWithTitle:LLang(@"删除") style:UIAlertActionStyleDestructive
                                             handler:^(UIAlertAction *_) { if (onAction) onAction(OctoSummaryActionDelete); }]];
     [sheet addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
+    // iPad / Designed-for-iPad on Mac 上 actionSheet 走 popover, 必须有非 nil 的
+    // sourceView + sourceRect (或 barButtonItem), 否则 present 时抛
+    // NSGenericException: "UIPopoverPresentationController ... should have a
+    // non-nil sourceView or barButtonItem set before the presentation occurs.
+    // 手头拿不到触发按钮的引用, 兜底锚到 presenter.view 中心并去掉箭头。
+    if (sheet.popoverPresentationController) {
+        sheet.popoverPresentationController.sourceView = vc.view;
+        sheet.popoverPresentationController.sourceRect = CGRectMake(vc.view.bounds.size.width / 2,
+                                                                    vc.view.bounds.size.height / 2, 0, 0);
+        sheet.popoverPresentationController.permittedArrowDirections = 0;
+    }
     [vc presentViewController:sheet animated:YES completion:nil];
 }
 

@@ -2137,7 +2137,20 @@ static WKApp *_instance;
 
 -(AnyPromise*) loadCollectStickers {
     __weak typeof(self) weakSelf = self;
-   return [[WKAPIClient sharedClient] GET:@"sticker/user" parameters:nil model:WKSticker.class].then(^(NSArray *stickerArray) {
+   return [[WKAPIClient sharedClient] GET:@"sticker/user" parameters:nil model:WKSticker.class].then(^(id stickerResp) {
+        // Bugly: WKAPIClient.resultToModel: 对 NSDictionary 响应会返回单个 WKSticker*,
+        // 对 NSArray 响应才返回 NSArray<WKSticker*>*。sticker/user 通常返回数组,
+        // 但服务端异常帧 / 空态 / envelope 变体下会下发 dict, 直接 assign 到
+        // strong NSArray* 属性 (ObjC 无运行期强类型), 后续 collectStickers.count
+        // 触发 -[WKSticker count]: unrecognized selector 崩溃 (Bugly 上报)。
+        NSArray<WKSticker*> *stickerArray;
+        if ([stickerResp isKindOfClass:[NSArray class]]) {
+            stickerArray = (NSArray<WKSticker*>*)stickerResp;
+        } else if ([stickerResp isKindOfClass:[WKSticker class]]) {
+            stickerArray = @[(WKSticker*)stickerResp];
+        } else {
+            stickerArray = @[];
+        }
         weakSelf.collectStickers = stickerArray;
        return stickerArray;
     }).catch(^(NSError *error){

@@ -103,6 +103,19 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,strong) NSArray<WKReminder*> *simpleReminders;
 
+/// 最近 tab 视角下的「活动未读」= 主群未读 + 最新子区未读。
+/// - 与 -lastMsgTimestamp / -content / -spaceFilteredLastMessage 同源：这几个都
+///   走 lastChildConversation 反映最新一条消息；unread 只读 self.c.unreadCount
+///   会漏掉子区消息带来的未读，用户视角是「预览时间对但红点不亮」（长时间后台后
+///   突然收到子区消息尤其明显）。
+/// - **仅用于最近 tab 里父群行 cell 的 badge 显示**。关注 tab 里父群 group-summary
+///   badge 依然走 unreadCount（只反映主群自身），因为那边子区在 threadToggle /
+///   groupThread 上有独立 indicator/胶囊；双算会重复计数。
+/// - Tab 底部总未读 / follow section header / recent 汇总里 `count += m.unreadCount`
+///   的地方 **不要** 用这个 getter：子区在 threadWrapModels 里已被独立累加，父群
+///   再 fold 一次会重复。
+@property(nonatomic,assign,readonly) NSInteger recentTabActivityUnreadCount;
+
 /**
  扩展数据
  */

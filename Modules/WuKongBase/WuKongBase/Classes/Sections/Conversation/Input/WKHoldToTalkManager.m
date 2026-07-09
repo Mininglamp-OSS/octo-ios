@@ -1209,7 +1209,19 @@ static CGFloat const kMaxTextViewHeight = 15 * 20.0; // 15 lines * ~20pt line he
     NSString *appleT = [current isEqualToString:kVoiceAPIApple] ? @"✓ Apple引擎" : @"Apple引擎";
     [sheet addAction:[UIAlertAction actionWithTitle:appleT style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) { [self setAPIPreference:kVoiceAPIApple]; }]];
     [sheet addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
-    [[WKNavigationManager shared].topViewController presentViewController:sheet animated:YES completion:nil];
+    // iPad 上 actionSheet 走 popover, 必须有非 nil 的 sourceView + sourceRect,
+    // 否则 present 时抛 NSGenericException。锚到触发按钮; 拿不到按钮时兜底 top vc 视图中心。
+    UIViewController *topVC = [WKNavigationManager shared].topViewController;
+    if (sheet.popoverPresentationController) {
+        UIView *anchor = self.apiSwitchBtn ?: topVC.view;
+        sheet.popoverPresentationController.sourceView = anchor;
+        sheet.popoverPresentationController.sourceRect = CGRectMake(anchor.bounds.size.width / 2,
+                                                                    anchor.bounds.size.height / 2, 0, 0);
+        sheet.popoverPresentationController.permittedArrowDirections = self.apiSwitchBtn
+            ? UIPopoverArrowDirectionAny
+            : 0;
+    }
+    [topVC presentViewController:sheet animated:YES completion:nil];
 }
 
 #pragma mark - Waveform

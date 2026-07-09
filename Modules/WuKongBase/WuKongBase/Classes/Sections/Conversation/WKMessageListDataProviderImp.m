@@ -396,6 +396,37 @@
 -(void) pullDownRecursive:(uint32_t)startOrderSeq accumulated:(NSMutableArray<WKMessageModel*>*)accumulated existingIds:(NSMutableSet*)existingIds complete:(void(^)(bool more))complete {
     NSInteger pageLimit = [WKApp shared].config.eachPageMsgLimit;
     __weak typeof(self) weakSelf = self;
+
+    // 关键: pulldown 必须传 endOrderSeq 把查询严格收紧在「dpHead 往下一个连续窗口」内。
+    //
+    // 历史上用的 pullDown:startOrderSeq:limit: (= pullMessages 但 endOrderSeq=0 无下界)
+    // 会让 SDK 在 local DB 里查「WHERE orderSeq < startOrderSeq ORDER BY DESC LIMIT N」,
+    // 命中之前浏览历史时缓存的远古条目, 跟 dpHead 之间可能隔几千 / 上万 messageSeq 没人补。
+    // 经典复现路径:
+    //   1) 用户跳到某条 reminder 读历史 (dp 围绕 orderSeq~17K, local 缓存了 13K..72K 段)
+    //   2) 锁屏期间群里新增大量消息 (server 端 lastMsg=2333K, local DB 大概率也同步进来一些
+    //      碎片段 [191K..220K] 等, 但没有 [221K..2303K] 这块桥接)
+    //   3) 解锁点跳转最新 → pullFirst:nil → dp reset 到 [2304K..2333K]
+    //   4) 用户上滑 → pulldown(startOrderSeq=2304K, endOrderSeq=0) → SDK 命中 local DB
+    //      [191K..220K] 段直接 prepend → dp 变成 [191K..220K, 2304K..2333K] **非连续**
+    //      → UIKit cell 复用 / 日期 section / scroll offset 全错位 → 气泡损坏
+    //
+    // 修复后: 传入窗口下界 endOrderSeq = startOrderSeq - pageLimit × WKOrderSeqFactor × 10。
+    //   - 30 条消息正常 span = 30 × 1000 = 30K orderSeq, 10× slack 给删除 / 空隙 = 300K 上限,
+    //     任何活跃度的群够用 (实际死群更稀疏, 活跃群 messageSeq 是密集的)
+    //   - local DB 在窗口内若有数据: 直接返回 → 跟当前 dpHead 连续的相邻 30 条 (正常 case)
+    //   - local DB 在窗口内若空: SDK 内部 calSync 自动到 server 拉这段 → sync 进 local DB
+    //     → 递归 pullMessages 再查一次 → 拿到桥接消息 (经典 reset-load 后第一次 pulldown)
+    //   - 用户继续上滑: dpHead 移到刚回来的最老一条, 下次 pulldown 窗口下移, 继续按页 sync
+    //
+    // 不丢任何历史: 远古消息只是按需 + 连续地拉, 不再可能一次 prepend 跳进非连续区间。
+    // 跟微信下滑读历史的语义对齐 — 上滑一页 = 当前位置往下相邻一页, 不会突然跳到三个月前。
+    uint32_t endOrderSeq = 0;
+    if (startOrderSeq > 0) {
+        uint64_t bound = (uint64_t)pageLimit * (uint64_t)WKOrderSeqFactor * 10ull;
+        endOrderSeq = (startOrderSeq > (uint32_t)bound) ? (startOrderSeq - (uint32_t)bound) : 1;
+    }
+
     // 串到 ioQueue：SDK 本地 DB 读不再卡 main；递归调用也走 ioQueue，串行队列保证补窗顺序。
     dispatch_async(self.ioQueue, ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
@@ -405,8 +436,17 @@
             }
             return;
         }
-        [[WKSDK shared].chatManager pullDown:strongSelf.channel startOrderSeq:startOrderSeq limit:(int)pageLimit complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
+        [[WKSDK shared].chatManager pullMessages:strongSelf.channel
+                                   startOrderSeq:startOrderSeq
+                                     endOrderSeq:endOrderSeq
+                                           limit:(int)pageLimit
+                                        pullMode:WKPullModeDown
+                                        complete:^(NSArray<WKMessage *> * _Nonnull messages, NSError * _Nonnull error) {
             dispatch_async(dispatch_get_main_queue(), ^{
+                #if DEBUG
+                NSLog(@"[BubbleBugRepro] dp.pullDown SDK RETURN start=%u end=%u msgs=%lu err=%@",
+                      startOrderSeq, endOrderSeq, (unsigned long)messages.count, error.localizedDescription ?: @"nil");
+                #endif
                 if (error || !messages || messages.count == 0) {
                     if (accumulated.count > 0) {
                         [weakSelf handleMessages:accumulated insertFirst:YES complete:complete];

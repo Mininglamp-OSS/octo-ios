@@ -4,6 +4,11 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface WKSafeFilePreviewVC : WKBaseVC
 
+/// 当前预览的本地文件 URL (子类可用)。
+@property (nonatomic, strong, readonly) NSURL *fileURL;
+/// 当前预览的标题 (子类可用)。
+@property (nonatomic, copy, readonly, nullable) NSString *fileTitle;
+
 - (instancetype)initWithFileURL:(NSURL *)fileURL title:(nullable NSString *)title;
 
 + (void)showFilePreview:(NSURL *)fileURL title:(NSString *)title;

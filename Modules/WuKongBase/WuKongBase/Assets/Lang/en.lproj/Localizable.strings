@@ -757,6 +757,76 @@
 // 列表中的硬写文案 LLang 化后所需翻译
 "正在加载空间列表..."="Loading spaces...";
 "请等待连接成功后再切换空间"="Wait until connected before switching spaces";
+
+// ===== Channel history search (ChannelHistorySearch/) — 与 web ChannelSearchPanel 对齐 =====
+// "查找聊天内容" 已在 line 623 翻译，不重复
+"搜索聊天记录"="Search messages";
+"全部"="All";
+"图片视频"="Photos & Videos";
+"图片和视频暂不支持按关键词搜索，可按发送人或日期查找"="Photos and videos can't be searched by keyword — filter by sender or date instead.";
+"关键词最多 %ld 个字"="Keyword can't exceed %ld characters";
+"加载更多失败，请重试"="Failed to load more — please retry";
+"无法定位到该消息"="Can't jump to this message";
+"发送人: %ld"="Senders: %ld";
+"时间正序"="Oldest first";
+"最早"="Earliest";
+"至今"="Now";
+// EmptyView
+"输入关键词查找此聊天内的记录"="Type a keyword to search this chat";
+"未找到相关内容"="No matches";
+"换个关键词或调整筛选条件再试试"="Try a different keyword or adjust filters";
+"搜索中…"="Searching…";
+"加载失败"="Loading failed";
+"请检查网络后重试"="Please check your network and try again";
+"当前网络不可用"="No internet connection";
+"请检查网络设置"="Please check network settings";
+"点击重试"="Tap to retry";
+// Message cell
+"共 %ld 条记录"="%ld messages";
+// Media row cell
+"视频"="Video";
+"图片"="Image";
+// Filter VC
+"选择发送人"="Choose senders";
+"搜索成员"="Search members";
+"最多选择 50 人"="Up to 50 people";
+"重置"="Reset";
+"应用"="Apply";
+"发送人"="Sender";
+"日期范围"="Date range";
+"排序"="Sort";
+"全部成员"="All members";
+"已选 %ld 人"="%ld selected";
+"起始日期"="Start date";
+"结束日期"="End date";
+"不限"="Any";
+"快速选择"="Presets";
+"今天 / 7 天 / 30 天 / 全部"="Today / 7d / 30d / All";
+"时间倒序（最新在前）"="Newest first";
+"时间正序（最早在前）"="Oldest first";
+"今天"="Today";
+"最近 7 天"="Last 7 days";
+"最近 30 天"="Last 30 days";
+"全部时间"="All time";
+"清除"="Clear";
+
+// Preview (media browser + file preview)
+"定位到聊天位置"="Jump to chat";
+"保存图片到相册"="Save image to Photos";
+"保存视频到相册"="Save video to Photos";
+"保存文件"="Save file";
+"文件链接不可用"="File link unavailable";
+"下载中…"="Downloading…";
+"文件下载失败"="Download failed";
+"已保存"="Saved";
+"文件不可用"="File unavailable";
+
+// Forward card in message cell
+"转发聊天记录含\"%@\""="Forwarded messages contain \"%@\"";
+"转发聊天记录"="Forwarded messages";
+"%ld条聊天记录"="%ld messages";
+"还有 %ld 条聊天记录"="+ %ld more";
+"[视频]"="[Video]";
 "%@/#子区"="%@/#thread";
 
 // ============================================================

@@ -45,10 +45,19 @@
 - (void)setReminders:(NSArray<WKReminder *> *)reminders {
     _reminders = reminders;
     NSMutableArray *newSimpleReminderArray = [NSMutableArray array];
+    NSString *selfUid = WKSDK.shared.options.connectInfo.uid;
     if(reminders&&reminders.count>0) {
-        
+
         for (WKReminder *reminder  in reminders) {
             if(reminder.publisher && WKSDK.shared.options.connectInfo && [reminder.publisher isEqualToString:WKSDK.shared.options.connectInfo.uid]) {
+                continue;
+            }
+            // 兜底校验：服务端偶发下发脏的 @我 reminder（消息实际未 @ 到自己），
+            // 客户端拿到消息本体后按 mention.uids/humans/all 复核；若消息在本地
+            // 明确未 @ 到自己，则不进入 simpleReminders，避免会话/子区 cell 上
+            // 挂出"没人@我 却提醒"的假 badge。消息未同步到本地时保守放行。
+            // 对齐 web 端 ConversationWrap.isMentionMe 的"看 mention.uids"分支。
+            if(![WKConversation isReminderTrustworthy:reminder selfUid:selfUid]) {
                 continue;
             }
             BOOL exist = false;
@@ -65,10 +74,57 @@
             }else {
                 newSimpleReminderArray[i] = reminder;
             }
-           
+
         }
     }
     self.simpleReminderInners = newSimpleReminderArray;
+}
+
+/// 校验 @我 reminder 是否可信：只有当本地已经拿到 reminder 指向的消息，且能
+/// 明确判断该消息「没有 @ 到自己」（uids 不含自己 + humans=0 + type 非 All/Humans）
+/// 时才拒绝，其它情况一律放行（避免误伤）。返回 NO 表示丢弃。
++ (BOOL)isReminderTrustworthy:(WKReminder *)reminder selfUid:(NSString *)selfUid {
+    if(!reminder) {
+        return YES;
+    }
+    // 非 @我 reminder 走原路
+    if(reminder.type != WKReminderTypeMentionMe) {
+        return YES;
+    }
+    // selfUid / messageId 缺失，无法校验，保守放行
+    if(!selfUid || selfUid.length == 0) {
+        return YES;
+    }
+    if(reminder.messageId == 0) {
+        return YES;
+    }
+    WKMessage *msg = [[WKMessageDB shared] getMessageWithMessageId:reminder.messageId];
+    if(!msg) {
+        // 消息未同步到本地（长时间未登录后 reminder 先到达）：保守放行，
+        // 后续消息补齐 / 用户进入会话时若真是脏 reminder，可靠 orphan-check
+        // 或 done 上报兜底
+        return YES;
+    }
+    WKMentionedInfo *mi = msg.content.mentionedInfo;
+    if(!mi) {
+        // content 未解析出 mentionedInfo（老消息 / 解析失败）：无法反证，放行
+        return YES;
+    }
+    // 广播型 @：@所有人 / @所有人类，视为可能命中人类自己，放行
+    if(mi.type == WK_Mentioned_All || mi.type == WK_Mentioned_Humans || mi.humans) {
+        return YES;
+    }
+    // 明确 @ 到自己
+    if(mi.uids && [mi.uids containsObject:selfUid]) {
+        return YES;
+    }
+    // 消息在本地 + mention 信息完整 + 明确未 @ 自己 → 判定为服务端脏 reminder
+    #if DEBUG
+    NSLog(@"[ReminderTrace] drop fake mention reminder: channelId=%@ msgId=%llu msgSeq=%u uids=%@ humans=%d selfUid=%@",
+          reminder.channel.channelId, reminder.messageId, reminder.messageSeq,
+          mi.uids, mi.humans, selfUid);
+    #endif
+    return NO;
 }
 
 

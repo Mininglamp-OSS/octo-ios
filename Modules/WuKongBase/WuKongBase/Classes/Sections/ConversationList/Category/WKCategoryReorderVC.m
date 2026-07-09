@@ -167,6 +167,16 @@
         }]];
     }
     [alert addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:nil]];
+    // iPad 上 actionSheet 走 popover, 必须有非 nil 的 sourceView + sourceRect,
+    // 否则 present 时抛 NSGenericException。锚到被点击的 cell; 拿不到 cell (罕见)
+    // 时兜底 self.view 中心。
+    if (alert.popoverPresentationController) {
+        UIView *anchor = [_tableView cellForRowAtIndexPath:indexPath] ?: self.view;
+        alert.popoverPresentationController.sourceView = anchor;
+        alert.popoverPresentationController.sourceRect = CGRectMake(anchor.bounds.size.width / 2,
+                                                                    anchor.bounds.size.height / 2, 0, 0);
+        alert.popoverPresentationController.permittedArrowDirections = 0;
+    }
     [self presentViewController:alert animated:YES completion:nil];
 }
 

@@ -193,6 +193,13 @@
     vc.conversationContext = self.inputPanel.conversationContext;
     vc.modalPresentationStyle = UIModalPresentationPopover;
 //    UINavigationController *navVC = [[UINavigationController alloc] initWithRootViewController:vc];
+    // iPad 上 modalPresentationStyle = Popover 时 popoverPresentationController 需要
+    // 非 nil 的 sourceView (+ sourceRect) 或 barButtonItem, 否则 present 抛 NSGenericException。
+    // 触发是"更多"按钮 btn, 直接锚到它。iPhone 上 popover 自动适配到全屏, 设置 sourceView 无副作用。
+    if (vc.popoverPresentationController && btn) {
+        vc.popoverPresentationController.sourceView = btn;
+        vc.popoverPresentationController.sourceRect = btn.bounds;
+    }
     [[WKNavigationManager shared].topViewController presentViewController:vc animated:YES completion:nil];
 }
 - (NSString *)title {
