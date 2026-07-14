@@ -626,7 +626,7 @@
     }
     WKInputVC *inputVC = [WKInputVC new];
     inputVC.title = LLang(@"修改群名称");
-    inputVC.maxLength = 10;
+    inputVC.maxLength = 50;
     inputVC.placeholder = LLang(@"群名称");
     inputVC.defaultValue = self.viewModel.channelInfo.name;
     [inputVC setOnFinish:^(NSString * _Nonnull value) {

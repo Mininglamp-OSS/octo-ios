@@ -13,6 +13,7 @@
 #import "WKMessageCell.h"
 #import "WuKongBase.h"
 #import "WKApp.h"
+#import "NSString+WK.h"
 
 @interface WKThreadCreatePopupView () <UITextFieldDelegate>
 
@@ -91,7 +92,7 @@
 
     [self buildUI];
 
-    if (defaultName.length > 50) defaultName = [defaultName substringToIndex:50];
+    if (defaultName.length > 0) defaultName = [defaultName limitedStringForMaxBytesLength:100*2];
     if (defaultName.length > 0) _textField.text = defaultName;
     [self refreshCreateBtnEnabled];
 
@@ -169,7 +170,7 @@
 
     // 输入框
     _textField = [[UITextField alloc] init];
-    _textField.placeholder = LLang(@"子区名称 (最多50字)");
+    _textField.placeholder = LLang(@"子区名称 (最多100字)");
     _textField.font = [UIFont systemFontOfSize:15.0f];
     _textField.textColor = [WKApp shared].config.defaultTextColor ?: [UIColor blackColor];
     _textField.delegate = self;
@@ -329,7 +330,7 @@
     if (_creating) return;
     NSString *name = [_textField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (name.length == 0) return;
-    if (name.length > 50) name = [name substringToIndex:50];
+    name = [name limitedStringForMaxBytesLength:100*2];
 
     _creating = YES;
     _createBtn.enabled = NO;
@@ -378,7 +379,8 @@
 
 - (void)onTextFieldChanged {
     NSString *t = _textField.text ?: @"";
-    if (t.length > 50) _textField.text = [t substringToIndex:50];
+    NSString *limited = [t limitedStringForMaxBytesLength:100*2];
+    if (limited.length != t.length) _textField.text = limited;
     [self refreshCreateBtnEnabled];
 }
 
@@ -407,8 +409,9 @@
 
 - (BOOL)textField:(UITextField *)textField shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString *)string {
     NSString *next = [textField.text stringByReplacingCharactersInRange:range withString:string];
-    if (next.length > 50) {
-        textField.text = [next substringToIndex:50];
+    NSString *limited = [next limitedStringForMaxBytesLength:100*2];
+    if (limited.length != next.length) {
+        textField.text = limited;
         [self refreshCreateBtnEnabled];
         return NO;
     }
