@@ -32,6 +32,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 -(UIImage*) getImageNameForBase:(NSString*)name;
 
+// 运行时合成一张与 Conversation/Toolbar/*Normal.pdf 同款风格的图标
+// （紫色渐变 squircle 背景 + 白色 SF Symbol），供缺少美术资源的 item 兜底。
++ (UIImage *)fallbackToolbarIconWithSymbolName:(NSString *)symbolName;
+
 -(NSString*) title;
 
 

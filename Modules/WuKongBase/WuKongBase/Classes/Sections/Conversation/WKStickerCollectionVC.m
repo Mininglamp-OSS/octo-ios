@@ -13,6 +13,10 @@
 #import <MobileCoreServices/MobileCoreServices.h>
 #import "WKStickerCollectAddCell.h"
 #import <ZLPhotoBrowser/ZLPhotoBrowser-Swift.h>
+#import "WKStickerUploadService.h"
+#import "WKStickerLocalOrderStore.h"
+#import "WKConstant.h"
+#import "WKLoginInfo.h"
 
 @interface WKStickerCollectionVC () <UICollectionViewDataSource,UICollectionViewDelegate>
 
@@ -339,121 +343,49 @@
 
 
 #pragma mark -> 添加单个表情
-// 上传表情：COS 预签名直传（对齐 WKFileUploadTask + web/task.ts），
-// 不再走老的 GET file/upload?type=sticker + POST multipart 链路 —
-// 服务端已切换到 file/upload/credentials + PUT。
+// 上传委托给 WKStickerUploadService（下面这版沿用两步走：COS 预签名 → PUT → POST /sticker/user，
+// 内含本地校验 + 主线程 HUD 反馈 + STICKERS_UPDATED 广播）。
+// 老的完整实现保留在下方注释，作为回滚参考。
 - (void)getNewEmojiAddressInStickerCollectionVC:(NSData *)imageData {
-    [self.view showHUD];
-
-    NSString *ext = [self extensionForImageData:imageData];        // png / jpg / gif / webp
-    NSString *contentType = [self mimeForExtension:ext];
-    NSString *uuid = [[[NSUUID UUID] UUIDString] stringByReplacingOccurrencesOfString:@"-" withString:@""];
-    NSString *fileName = [NSString stringWithFormat:@"%@.%@", uuid, ext];
-    NSString *path = [NSString stringWithFormat:@"/sticker/%@", fileName];
-
-    // 写到 tmp 文件，createFileUploadPutTask: 需要 fileURL。
-    NSString *tmpPath = [NSTemporaryDirectory() stringByAppendingPathComponent:fileName];
-    NSError *writeErr = nil;
-    if (![imageData writeToFile:tmpPath options:NSDataWritingAtomic error:&writeErr]) {
-        WKLogError(@"sticker tmp write failed: %@", writeErr);
-        [self.view switchHUDError:LLangW(@"上传失败", self)];
-        return;
-    }
-
     __weak typeof(self) weakSelf = self;
-    void (^cleanup)(void) = ^{ [[NSFileManager defaultManager] removeItemAtPath:tmpPath error:nil]; };
-
-    AnyPromise *credPromise = [[WKAPIClient sharedClient] getUploadCredentialsForPath:path
-                                                                                  type:@"sticker"
-                                                                              filename:fileName
-                                                                           contentType:contentType
-                                                                              fileSize:(long long)imageData.length];
-    credPromise.then(^(NSDictionary *result){
-        NSString *uploadUrl = result[@"uploadUrl"];
-        NSString *downloadUrl = result[@"downloadUrl"];
-        NSString *signedContentType = result[@"contentType"] ?: contentType;
-        NSString *contentDisposition = result[@"contentDisposition"];
-        if (uploadUrl.length == 0 || downloadUrl.length == 0) {
-            cleanup();
-            [weakSelf.view switchHUDError:LLangW(@"上传失败", weakSelf)];
+    [self.view showHUD];
+    [WKStickerUploadService uploadStickerData:imageData
+                                     progress:nil
+                                   completion:^(WKSticker * _Nullable sticker, NSError * _Nullable error) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (error) {
+            // 优先透传服务端 msg（在 userInfo[NSLocalizedDescriptionKey]），让用户看到具体原因
+            NSString *msg = error.userInfo[NSLocalizedDescriptionKey];
+            if (msg.length == 0) {
+                if ((WKStickerUploadError)error.code == WKStickerUploadErrorQuotaExceeded) {
+                    msg = LLangW(@"我的表情已达上限", strongSelf);
+                } else {
+                    msg = LLangW(@"上传失败", strongSelf);
+                }
+            }
+            [strongSelf.view switchHUDError:msg];
             return;
         }
-        NSURLSessionUploadTask *task = [[WKAPIClient sharedClient]
-            createFileUploadPutTask:uploadUrl
-                            fileURL:[@"file://" stringByAppendingString:tmpPath]
-                        contentType:signedContentType
-                 contentDisposition:contentDisposition
-                           progress:^(NSProgress * _Nullable progress) {
-                               WKLogDebug(@"sticker upload progress:%@", @(progress.fractionCompleted));
-                           }
-                   completeCallback:^(NSInteger statusCode, NSError * _Nullable error) {
-                       cleanup();
-                       if (error) {
-                           WKLogError(@"sticker PUT failed status=%ld err=%@", (long)statusCode, error);
-                           [weakSelf.view switchHUDError:LLangW(@"上传失败", weakSelf)];
-                           return;
-                       }
-                       [weakSelf addNewEmojiInStickerCollectionVC:imageData urlString:downloadUrl];
-                   }];
-        if (task) {
-            [task resume];
-        } else {
-            cleanup();
-            [weakSelf.view switchHUDError:LLangW(@"上传失败", weakSelf)];
-        }
-    }).catch(^(NSError *error){
-        cleanup();
-        WKLogError(@"sticker credentials failed: %@", error);
-        [weakSelf.view switchHUDError:LLangW(@"上传失败", weakSelf)];
-    });
-}
-
-// 由文件头几个字节判断图片格式。来源 magic bytes 是公开格式规范。
-- (NSString *)extensionForImageData:(NSData *)data {
-    if (data.length < 4) return @"png";
-    const uint8_t *b = (const uint8_t *)data.bytes;
-    if (b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) return @"png";
-    if (b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return @"jpg";
-    if (b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x38) return @"gif";
-    if (data.length >= 12 && b[0] == 0x52 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x46 &&
-        b[8] == 0x57 && b[9] == 0x45 && b[10] == 0x42 && b[11] == 0x50) return @"webp";
-    return @"png";
-}
-
-- (NSString *)mimeForExtension:(NSString *)ext {
-    if ([ext isEqualToString:@"png"])  return @"image/png";
-    if ([ext isEqualToString:@"jpg"])  return @"image/jpeg";
-    if ([ext isEqualToString:@"gif"])  return @"image/gif";
-    if ([ext isEqualToString:@"webp"]) return @"image/webp";
-    return @"image/png";
-}
-
-//添加单个自定义表情
-- (void)addNewEmojiInStickerCollectionVC:(NSData *)imageData urlString:(NSString *)string {
-    __weak typeof(self) weakSelf = self;
-    UIImage *img = [[UIImage alloc] initWithData:imageData];
-    NSDictionary *paraDict = @{@"path":string,
-                               @"width":@(img.size.width),
-                               @"height":@(img.size.height)};
-    [[WKAPIClient sharedClient] POST:@"sticker/user" parameters:paraDict].then(^{
-        [weakSelf getAllEmojisInStickerCollectionVC];
-        [weakSelf.view hideHud];
-    }).catch(^(NSError *error){
-        WKLogError(@"单个表情收藏失败:%@", error);
-        [self.view switchHUDError:error.domain];
-    });
+        [strongSelf getAllEmojisInStickerCollectionVC];
+        [strongSelf.view hideHud];
+    }];
 }
 
 //获取新数据
 - (void)getAllEmojisInStickerCollectionVC {
     __weak typeof(self) weakSelf = self;
-    
+
     [WKApp.shared loadCollectStickers].then(^(NSArray *stickerArray){
         [weakSelf.dataArray removeAllObjects];
-        
+
+        // 与「我的表情」tab 保持同一顺序：走本地 order merge
+        NSString *uid = [WKApp shared].loginInfo.uid;
+        NSArray *merged = [[WKStickerLocalOrderStore shared] mergeServerList:stickerArray forUID:uid];
+
         NSMutableArray *array = @[[weakSelf setDefaultSticker]].mutableCopy;
-        [array addObjectsFromArray:stickerArray];
-        
+        [array addObjectsFromArray:merged];
+
         [weakSelf.dataArray addObjectsFromArray:array];
         [weakSelf.collectionView reloadData];
     });
@@ -467,47 +399,75 @@
 }
 
 //删除多个表情
+// 服务端 DELETE 是 RESTful `/sticker/user/:sticker_id`（modules/sticker/api.go:121）；
+// 老的 `DELETE sticker/user body {paths}` 已 404。这里逐个删除（选中量通常个位数）。
 - (void)deleteEmojisInStickerCollectionVC {
-    NSMutableArray *deleteArray = @[].mutableCopy;
-    NSMutableArray *deleteModelArray = @[].mutableCopy;
+    NSMutableArray<WKSticker *> *deleteModelArray = @[].mutableCopy;
     for (WKSticker *resp in _dataArray) {
-        if (resp.isSelected) {
-            [deleteArray addObject:resp.path];
+        if ([resp isKindOfClass:WKSticker.class] && resp.isSelected) {
             [deleteModelArray addObject:resp];
         }
     }
-    if (deleteArray.count > 0) {
-        [_dataArray removeObjectsInArray:deleteModelArray];
-        [self.collectionView reloadData];
-        [[WKAPIClient sharedClient] DELETE:@"sticker/user" parameters:@{@"paths":deleteArray}];
-        [self refreshFootViewStatus];
+    if (deleteModelArray.count == 0) return;
+
+    [_dataArray removeObjectsInArray:deleteModelArray];
+    [self.collectionView reloadData];
+
+    for (WKSticker *sticker in deleteModelArray) {
+        NSString *sid = sticker.stickerID;
+        if (sid.length == 0) continue;
+        NSString *encoded = [sid stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLPathAllowedCharacterSet]] ?: sid;
+        NSString *path = [NSString stringWithFormat:@"sticker/user/%@", encoded];
+        [[WKAPIClient sharedClient] DELETE:path parameters:nil];
     }
-    return;
+    [self refreshFootViewStatus];
+
+    // 同步内存缓存 + 广播 —— 让「我的表情」tab 立即刷新
+    NSMutableArray<WKSticker *> *cache = [([WKApp shared].collectStickers ?: @[]) mutableCopy];
+    NSMutableArray<WKSticker *> *toRemoveFromCache = [NSMutableArray array];
+    for (WKSticker *m in deleteModelArray) {
+        for (WKSticker *c in cache) {
+            if (c.stickerID.length > 0 && [c.stickerID isEqualToString:m.stickerID]) {
+                [toRemoveFromCache addObject:c];
+            }
+        }
+    }
+    [cache removeObjectsInArray:toRemoveFromCache];
+    [WKApp shared].collectStickers = [cache copy];
+    [[NSNotificationCenter defaultCenter] postNotificationName:WKNOTIFY_STICKERS_UPDATED object:nil];
 }
 
 // 移到最前
+// 服务端目前没有 reorder / front API（`PUT /sticker/user/front` 已废弃 404），
+// 只能在本地 order store 里改顺序，多端不同步。
 -(void) stickerMoveFont {
     NSMutableArray *moveArray = @[].mutableCopy;
-    NSMutableArray *movePathArray = @[].mutableCopy;
     for (WKSticker *resp in _dataArray) {
-        if (resp.isSelected) {
-            [movePathArray addObject:resp.path];
+        if ([resp isKindOfClass:WKSticker.class] && resp.isSelected) {
             [moveArray addObject:resp];
             resp.isSelected = NO;
         }
     }
-    if(moveArray.count>0) {
-        [self.dataArray removeObjectsInArray:moveArray];
-        NSMutableArray *newDataArray = [NSMutableArray array];
-        [newDataArray addObjectsFromArray:moveArray];
-        [newDataArray addObjectsFromArray:self.dataArray];
-        self.dataArray = newDataArray;
-        [self.collectionView reloadData];
-        
-        [self refreshFootViewStatus];
-        
-        [[WKAPIClient sharedClient] PUT:@"sticker/user/front" parameters:@{@"paths":movePathArray}];
+    if (moveArray.count == 0) return;
+
+    [self.dataArray removeObjectsInArray:moveArray];
+    NSMutableArray *newDataArray = [NSMutableArray array];
+    [newDataArray addObjectsFromArray:moveArray];
+    [newDataArray addObjectsFromArray:self.dataArray];
+    self.dataArray = newDataArray;
+    [self.collectionView reloadData];
+    [self refreshFootViewStatus];
+
+    NSString *uid = [WKApp shared].loginInfo.uid;
+    NSMutableArray<NSString *> *orderPaths = [NSMutableArray array];
+    for (id item in self.dataArray) {
+        if ([item isKindOfClass:WKSticker.class]) {
+            NSString *p = ((WKSticker *)item).path;
+            if (p.length > 0) [orderPaths addObject:p];
+        }
     }
+    [[WKStickerLocalOrderStore shared] saveOrder:orderPaths forUID:uid];
+    [[NSNotificationCenter defaultCenter] postNotificationName:WKNOTIFY_STICKERS_UPDATED object:nil];
 }
 
 

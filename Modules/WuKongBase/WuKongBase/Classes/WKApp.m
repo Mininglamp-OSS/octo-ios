@@ -38,6 +38,8 @@
 #import "WKMessageManager.h"
 #import "WKRealnamePrefetcher.h"
 #import "WKEmojiContentView.h"
+#import "WKMyStickerContentView.h"
+#import "WKStickerLocalOrderStore.h"
 #import "WKStickerGIFContentView.h"
 #import "WKGIFMessageCell.h"
 #import "WKGIFContent.h"
@@ -504,6 +506,11 @@ static WKApp *_instance;
         // 该 cache 是 singleton, key 不含 UID, 不清的话下个账号登录后
         // 同 channelId-channelType 会读到上一个用户的 Space 数据 (跨登录泄漏)。
         [[WKSpaceConvSyncCache shared] clearAll];
+
+        // 清「我的表情」的本地 order 持久化 —— 按 uid 分桶，避免下个账号看到上个账号顺序
+        if (prevUid.length > 0) {
+            [[WKStickerLocalOrderStore shared] clearForUID:prevUid];
+        }
 
         // 显示登录页面
         [[WKApp shared] invoke:WKPOINT_LOGIN_SHOW param:nil];
@@ -1332,7 +1339,13 @@ static WKApp *_instance;
     [self setMethod:WKPOINT_PANELCONTENT_EMOJI handler:^id _Nullable(id  _Nonnull param) {
         return [WKEmojiContentView new];
     } category:WKPOINT_CATEGORY_PANELCONTENT sort:4000];
-   
+
+    // 「我的表情」自定义表情面板 tab（sort:3000 排在 emoji 之后）
+    // 面板打开时默认落在 emoji tab，用户可切到「我的表情」查看/增删/拖拽自己的表情
+    [self setMethod:WKPOINT_PANELCONTENT_COLLECTION handler:^id _Nullable(id  _Nonnull param) {
+        return [WKMyStickerContentView new];
+    } category:WKPOINT_CATEGORY_PANELCONTENT sort:3000];
+
     
 //    // 面板正文 - gif热图
 //    [self setMethod:WKPOINT_PANELCONTENT_HOT handler:^id _Nullable(id  _Nonnull param) {
@@ -2137,24 +2150,31 @@ static WKApp *_instance;
 
 -(AnyPromise*) loadCollectStickers {
     __weak typeof(self) weakSelf = self;
-   return [[WKAPIClient sharedClient] GET:@"sticker/user" parameters:nil model:WKSticker.class].then(^(id stickerResp) {
-        // Bugly: WKAPIClient.resultToModel: 对 NSDictionary 响应会返回单个 WKSticker*,
-        // 对 NSArray 响应才返回 NSArray<WKSticker*>*。sticker/user 通常返回数组,
-        // 但服务端异常帧 / 空态 / envelope 变体下会下发 dict, 直接 assign 到
-        // strong NSArray* 属性 (ObjC 无运行期强类型), 后续 collectStickers.count
-        // 触发 -[WKSticker count]: unrecognized selector 崩溃 (Bugly 上报)。
-        NSArray<WKSticker*> *stickerArray;
-        if ([stickerResp isKindOfClass:[NSArray class]]) {
-            stickerArray = (NSArray<WKSticker*>*)stickerResp;
-        } else if ([stickerResp isKindOfClass:[WKSticker class]]) {
-            stickerArray = @[(WKSticker*)stickerResp];
-        } else {
-            stickerArray = @[];
+    // 后端返回 envelope `{list:[...]}`；不能走 WKAPIClient 的 model: 参数，
+    // 因为 resultToModel 会把整个 envelope dict 直接塞给 WKSticker.fromMap:，
+    // 产出一个所有字段都为 nil 的空 sticker（sticker_id/path/format 全丢）——
+    // 现场表现：面板里出现「灰色缩略图」占位、其它表情也全部添加不成功。
+    // 这里改成拿原始 responseObject，手动挖 list 字段再转 WKSticker。
+    return [[WKAPIClient sharedClient] GET:@"sticker/user" parameters:nil].then(^(id resp) {
+        NSArray *rawList = nil;
+        if ([resp isKindOfClass:NSDictionary.class]) {
+            id l = ((NSDictionary *)resp)[@"list"];
+            if ([l isKindOfClass:NSArray.class]) rawList = l;
+        } else if ([resp isKindOfClass:NSArray.class]) {
+            // 后端老版本可能直接返回数组，兼容之
+            rawList = resp;
         }
-        weakSelf.collectStickers = stickerArray;
-       return stickerArray;
+        NSMutableArray<WKSticker *> *stickerArray = [NSMutableArray arrayWithCapacity:rawList.count];
+        for (id item in rawList) {
+            if ([item isKindOfClass:NSDictionary.class]) {
+                WKSticker *s = (WKSticker *)[WKSticker fromMap:item type:ModelMapTypeAPI];
+                if (s.path.length > 0) [stickerArray addObject:s];
+            }
+        }
+        weakSelf.collectStickers = [stickerArray copy];
+        return (NSArray<WKSticker *> *)stickerArray;
     }).catch(^(NSError *error){
-        NSLog(@"加载收藏的表情失败！");
+        NSLog(@"加载收藏的表情失败！%@", error);
     });
 }
 

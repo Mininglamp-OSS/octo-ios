@@ -302,6 +302,9 @@
 #define WK_NOTIFY_LABELLIST_REFRESH @"lim.notify.labellist.refresh"
 // 实名认证状态更新（userInfo 可包含 @{"verified": @(YES), "real_name": @"..."})
 #define WKNOTIFY_REALNAME_VERIFIED @"user.realname.verified"
+// 「我的表情」列表更新（添加/删除/收藏/置顶后广播）；
+// WKMyStickerContentView 订阅后 reloadData，`WKApp.collectStickers` 是数据源
+#define WKNOTIFY_STICKERS_UPDATED @"lim.stickers.updated"
 
 // 通用设置 · 实名认证入口（WKPOINT_CATEGORY_COMMONSETTING 注册点）
 #define WKPOINT_COMMONSETTING_REALNAME @"commonsetting.realname"

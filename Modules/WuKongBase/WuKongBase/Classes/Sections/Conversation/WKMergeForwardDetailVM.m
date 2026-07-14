@@ -90,6 +90,14 @@
                         modelCls = WKMergeForwardDetailOtherModel.class;
                     }
                     break;
+                case WK_GIF:
+                case WK_LOTTIE_STICKER:
+                case WK_EMOJI_STICKER:
+                    // 表情/贴图统一走 sticker model 用 WKStickerImageView 缩略呈现，
+                    // 与聊天页 WKLottieStickerCell / WKGIFCell 视觉一致；否则会 fallback 到
+                    // 「其他类型消息」灰色占位。
+                    modelCls = WKMergeForwardDetailStickerModel.class;
+                    break;
                 default:
                     modelCls = [WKApp.shared.endpointManager mergeForwardItem:message.contentType];
                     if(!modelCls) {

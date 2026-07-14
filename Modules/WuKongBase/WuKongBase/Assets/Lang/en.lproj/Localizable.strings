@@ -717,7 +717,7 @@
 "子区列表"="Threads";
 "创建子区"="New Thread";
 "子区名称"="Thread name";
-"子区名称 (最多50字)"="Thread name (up to 50 chars)";
+"子区名称 (最多100字)"="Thread name (up to 100 chars)";
 "暂无子区\n创建一个来讨论特定话题"="No threads yet\nCreate one to discuss a specific topic";
 "个子区"=" threads";
 "条消息"=" messages";
@@ -1144,3 +1144,15 @@
 "已配置 %ld 个"="%ld configured";
 "查看 ›"="View ›";
 
+// ---------- 「我的表情」自定义表情面板 tab ----------
+// 已被代码使用的 keys（LLangW/LLang 传的中文 key）:
+"我的表情"="My Stickers";
+"还没有表情，点 + 添加"="No stickers yet. Tap + to add one";
+"删除该表情？"="Delete this sticker?";
+"我的表情已达上限"="Sticker limit reached";
+"已添加到我的表情"="Added to My Stickers";
+"添加表情失败"="Failed to add";
+"添加失败"="Failed to add";
+"删除表情失败"="Failed to delete";
+"移到最前"="Move to front";
+"上传失败"="Upload failed";

@@ -8,6 +8,7 @@
 #import "WKMessageManagerDelegateImp.h"
 #import "WKGIFContent.h"
 #import "WKLottieStickerContent.h"
+#import "WKConstant.h"
 
 @implementation WKMessageManagerDelegateImp
 
@@ -171,34 +172,54 @@
 
 
 -(void) messageManager:(WKMessageManager*) manager collectExpressions:(WKMessageModel*)message {
-    NSMutableDictionary *paraDict;
-    if (message.contentType == WK_GIF) {
+    // 收藏他人发的表情：走 sticker/user/collect（专门 endpoint），
+    // 而不是 sticker/user（那是「上传我自己的表情」的入口）。
+    // 后端对 collect 会按 path 幂等挂到我账户下，保留原始表情；
+    // 走 sticker/user 会被当成新建流程，可能触发缩略图/降级路径（问题现场：
+    // 收藏后在「我的表情」里只看到一张缩略图，与原表情不符）。
+    // 对齐 web `octo-web` `POST /api/v1/sticker/user/collect`。
+    NSString *path;
+    NSString *placeholder;
+    NSString *category;
+    NSString *format;
+    NSInteger contentType = message.contentType;
+    if (contentType == WK_GIF) {
         WKGIFContent *content = (WKGIFContent *)message.content;
-        paraDict = @{@"path":content.url, @"width":@(content.width), @"height":@(content.height)}.mutableCopy;
-    }
-    else {
+        path = content.url;
+    } else {
         WKLottieStickerContent *content = (WKLottieStickerContent *)message.content;
-        paraDict = @{@"path":content.url}.mutableCopy;
-    
-        // TODO: 理论上收藏Lottie表情不需要传高宽，因为lottie是矢量图,这里
-        [paraDict setObject:@(256) forKey:@"width"];
-        [paraDict setObject:@(256) forKey:@"height"];
-        
-        if (content.format && content.format.length > 0) {
-            [paraDict setObject:content.format forKey:@"format"];
-        }
-        if (content.placeholder && content.placeholder.length > 0) {
-            [paraDict setObject:content.placeholder forKey:@"placeholder"];
-        }
-        if (content.category && content.category.length > 0) {
-            [paraDict setObject:content.category forKey:@"category"];
-        }
+        path = content.url;
+        placeholder = content.placeholder;
+        category = content.category;
+        format = content.format;
     }
-    [[WKAPIClient sharedClient] POST:@"sticker/user" parameters:paraDict].then(^{
-        [[WKNavigationManager shared].topViewController.view showHUDWithHide:@"添加成功!"];
-        [WKApp.shared loadCollectStickers];
+    // 详细日志：定位问题（HUD 提示成功但列表里出现缩略图），先看清 wire 上传了什么
+    WKLogInfo(@"[Sticker/collect] BEGIN contentType=%ld path='%@' placeholder='%@' category='%@' format='%@'",
+              (long)contentType, path ?: @"(nil)", placeholder ?: @"(nil)", category ?: @"(nil)", format ?: @"(nil)");
+    if (path.length == 0) {
+        WKLogError(@"[Sticker/collect] ABORT path empty");
+        return;
+    }
+
+    NSMutableDictionary *paraDict = @{@"path": path}.mutableCopy;
+    if (placeholder.length > 0) paraDict[@"placeholder"] = placeholder;
+    WKLogInfo(@"[Sticker/collect] POST sticker/user/collect params=%@", paraDict);
+
+    [[WKAPIClient sharedClient] POST:@"sticker/user/collect" parameters:paraDict].then(^(id resp){
+        WKLogInfo(@"[Sticker/collect] SUCCESS resp class=%@ resp=%@", NSStringFromClass([resp class]), resp);
+        [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"已添加到我的表情")];
+        [WKApp.shared loadCollectStickers].then(^(NSArray *stickers){
+            WKLogInfo(@"[Sticker/collect] loadCollectStickers back count=%lu", (unsigned long)stickers.count);
+            for (WKSticker *s in stickers) {
+                WKLogInfo(@"[Sticker/collect]   item path='%@' format='%@' category='%@' width=%@ height=%@",
+                          s.path, s.format, s.category, s.width, s.height);
+            }
+            [[NSNotificationCenter defaultCenter] postNotificationName:WKNOTIFY_STICKERS_UPDATED object:nil];
+        });
     }).catch(^(NSError *error){
-        WKLogError(@"单个表情收藏失败:%@", error);
+        WKLogError(@"[Sticker/collect] FAIL error=%@ domain=%@ code=%ld userInfo=%@",
+                   error, error.domain, (long)error.code, error.userInfo);
+        [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"添加失败")];
     });
 }
 
