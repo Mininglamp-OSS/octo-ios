@@ -3209,11 +3209,34 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         // begin/endUpdates 空块强制 UITableView 重新 query 可见行高度; heightCache
         // 已被上面失效, 这次会走 measure 拿到基于新 sender info 的正确高度, 气泡
         // 框自动调整到匹配内容。performWithoutAnimation 避免视觉跳动。
-        if (anyVisibleAffected) {
-            [UIView performWithoutAnimation:^{
-                [self.tableView beginUpdates];
-                [self.tableView endUpdates];
-            }];
+        //
+        // Bugly 同款崩溃防护 (TestFlight Dv1hfifowmpA1QbEzBWBFn, 5 份同栈):
+        //   channelInfoUpdate: 走主队列, 但 pullup:_block_invoke 的完成回调是在
+        //   ioQueue 里改完 dataProvider 后, 再 dispatch_async → global queue
+        //   precache → dispatch_async → main queue 才跑 insertRows。这中间的
+        //   窗口里, numberOfRowsInSection 从数据源返新值, 而 tableView 内部
+        //   还是旧值。空 begin/endUpdates 在 endUpdates 里跑一致性校验 → 撞上
+        //   假 delta → NSInternalInconsistencyException
+        //   "_Bug_Detected_In_Client_Of_UITableView_Invalid_Number_Of_Rows_In_Section"
+        //   (同款异常字符串见 6b750ee startReminderAnimation 修复)。
+        //
+        // 修法两道防线, 与 addMessage: (line 365) 同源:
+        //   1) 前置漂移检查: 不 in-sync 直接跳过 begin/endUpdates。visible cells
+        //      内容已 refresh, heightCache 已失效; 用户下次滚一下 heightForRow
+        //      自然 measure 拿新值, 或等 pullup 完成后的 insertRows 一并收敛,
+        //      不会永久错高度。
+        //   2) 二次保险 @try/@catch: 极端 case (校验后立即被别的 main-queue block
+        //      重入改动 dp) 兜底不 crash; 不 fallback reloadData 避免打断
+        //      pullup 增量插入。
+        if (anyVisibleAffected && [self isTableViewRowCountInSyncWithDataProvider]) {
+            @try {
+                [UIView performWithoutAnimation:^{
+                    [self.tableView beginUpdates];
+                    [self.tableView endUpdates];
+                }];
+            } @catch (NSException *ex) {
+                NSLog(@"[WKMessageListView] channelInfoUpdate begin/endUpdates drift caught: %@", ex);
+            }
         }
 //         [self.tableView reloadData]; // TODO: 不要用reloadData 会导致长按菜单错位
     }
@@ -3802,6 +3825,13 @@ static const NSInteger kMaxRehydratePages = 35;
     // 放特效（review R1）—— 我们 mark 后直接 return，不进 trigger 路径。
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        // 双保险：+300ms 首帧 gate + 本处 +100ms 之间可能收到撤回信令；此时 message.revoke
+        // 已经由 SDK 就地更新（WKMessageModel.revoke 读的是 message.remoteExtra.revoke）。
+        // mark 掉消费，避免后续回滑/cell 复用重新入队。
+        if (message.revoke) {
+            [[WKMessageEffectManager shared] markTriggeredForMessage:message];
+            return;
+        }
         NSIndexPath *indexPath = [self.dataProvider indexPathAtClientMsgNo:message.clientMsgNo];
         if (!indexPath) {
             [[WKMessageEffectManager shared] markTriggeredForMessage:message];
