@@ -31,6 +31,14 @@
 			</dict>
 			<dict>
 				<key>file</key>
+				<string>custom_shangfang</string>
+				<key>id</key>
+				<string>custom_shangfang</string>
+				<key>tag</key>
+				<string>[尚方宝剑]</string>
+			</dict>
+			<dict>
+				<key>file</key>
 				<string>ex_bomb</string>
 				<key>id</key>
 				<string>emoticon_ex_bomb</string>

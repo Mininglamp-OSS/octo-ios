@@ -167,7 +167,8 @@
     if (name.length == 0) return NO;
     return [name isEqualToString:@"custom_taste"]
         || [name isEqualToString:@"custom_action"]
-        || [name isEqualToString:@"custom_mission"];
+        || [name isEqualToString:@"custom_mission"]
+        || [name isEqualToString:@"custom_shangfang"];
 }
 
 - (UIImage *)tabIcon {

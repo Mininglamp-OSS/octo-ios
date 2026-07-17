@@ -11,6 +11,7 @@
 #import "WKPartyEffect.h"
 #import "WKActionVideoEffect.h"
 #import "WKClassyVideoEffect.h"
+#import "WKShangfangVideoEffect.h"
 #import "WKMessageModel.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 
@@ -68,6 +69,7 @@ static const NSInteger kMaxTriggeredIds = 1000;
             @"[使命必达]": @"rocketLaunch",
             @"[崇尚行动]": @"actionVideo",
             @"[有品位]":   @"classyVideo",
+            @"[尚方宝剑]": @"shangfangVideo",
         };
 
         _triggeredMessageIds = [NSMutableOrderedSet orderedSet];
@@ -253,6 +255,8 @@ static const NSInteger kMaxTriggeredIds = 1000;
         [WKActionVideoEffect playInView:effectView sourceRect:sourceRect];
     } else if ([effectType isEqualToString:@"classyVideo"]) {
         [WKClassyVideoEffect playInView:effectView sourceRect:sourceRect];
+    } else if ([effectType isEqualToString:@"shangfangVideo"]) {
+        [WKShangfangVideoEffect playInView:effectView sourceRect:sourceRect];
     }
 
     self.pendingEffectType = nil;
