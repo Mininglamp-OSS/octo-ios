@@ -141,8 +141,8 @@
         [self.input becomeFirstResponder]; // 弹出键盘
         self.keepKeyboard = false;
     }
-    // 截屏通知
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(userDidTakeScreenshot) name:UIApplicationUserDidTakeScreenshotNotification object:nil];
+    // 截屏通知（已下线：不再检测用户在聊天页面截屏，也不再向对方发送截屏提醒）
+    // [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(userDidTakeScreenshot) name:UIApplicationUserDidTakeScreenshotNotification object:nil];
     if(self.inputParentView != self) {
         [self.inputParentView addSubview:self.input];
     }
