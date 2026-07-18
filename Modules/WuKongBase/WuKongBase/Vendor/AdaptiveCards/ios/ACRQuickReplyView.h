@@ -1,0 +1,20 @@
+//
+//  ACRQuickReplyView
+//  ACRQuickReplyView.h
+//
+//  Copyright © 2018 Microsoft. All rights reserved.
+//
+
+#import "ACRAggregateTarget.h"
+#import "ACRButton.h"
+#import "ACRQuickReplyMultilineView.h"
+#import "ACRTextField.h"
+#import <UIKit/UIKit.h>
+
+@interface ACRQuickReplyView : UIView <ACRIQuickReply>
+@property (strong, nonatomic) UIStackView *stack;
+@property ACRTextField *textField;
+@property (weak, nonatomic) ACRButton *button;
+@property (weak, nonatomic) ACRAggregateTarget *target;
+- (void)addTextField:(ACRTextField *)textField;
+@end

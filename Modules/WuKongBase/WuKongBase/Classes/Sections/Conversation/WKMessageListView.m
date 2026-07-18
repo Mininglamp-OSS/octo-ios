@@ -12,6 +12,7 @@
 #import "WKTimeHeaderView.h"
 #import "WKMessageRevokeCell.h"
 #import "WKTextMessageCell.h"
+#import "WKInteractiveCardCell.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKHistorySplitTipContent.h"
 #import "WKTypingManager.h"
@@ -750,8 +751,25 @@ static const BOOL kIncrementalPulldown = NO;
     } completion:completionBlock];
 }
 
+// 检测视图子树里是否有第一响应者（如交互卡片里正在编辑的输入框）
+static BOOL WKListViewContainsFirstResponder(UIView *v) {
+    if (!v) return NO;
+    if (v.isFirstResponder) return YES;
+    for (UIView *s in v.subviews) {
+        if (WKListViewContainsFirstResponder(s)) return YES;
+    }
+    return NO;
+}
+
 - (void)stopScrollingAnimation
 {
+    // 原实现通过 removeFromSuperview + 重新插回停止滚动动量，但 detach 会让 UIKit
+    // 强制 resign 列表内所有第一响应者——交互卡片里刚聚焦的输入框会因此被收键盘。
+    // 若列表内有第一响应者，改用非破坏性方式停止动量（不 detach，保住焦点）。
+    if (WKListViewContainsFirstResponder(self.tableView)) {
+        [self.tableView setContentOffset:self.tableView.contentOffset animated:NO];
+        return;
+    }
     UIView *superview = self.tableView.superview;
     NSUInteger index = [self.tableView.superview.subviews indexOfObject:self.tableView];
     [self.tableView removeFromSuperview];
@@ -2486,6 +2504,15 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 # pragma mark -- 列表委托 UITableViewDataSource && UITableViewDelegate
 
 - (void)tableView:(UITableView *)tableView touchesTime:(NSTimeInterval)timestamp {
+    // 交互卡片(type17)输入框聚焦期间，触摸卡片不收键盘——否则点输入框聚焦的同一次触摸
+    // 会冒泡到列表 touchesEnded 把键盘收掉（光标闪一下就消失）。手动滑动仍由
+    // keyboardDismissMode=OnDrag 正常收起。
+    for (UITableViewCell *c in self.tableView.visibleCells) {
+        if ([c respondsToSelector:@selector(wk_hasFocusedCardInput)] &&
+            [(id)c wk_hasFocusedCardInput]) {
+            return;
+        }
+    }
     // 短按点击或长按都收起键盘
     if(self.onContentViewClick) {
         self.onContentViewClick();

@@ -456,6 +456,9 @@ abstract_target 'OctoiOSBase' do
 #  pod  'WuKongIMSDK', '~> 1.0.2' ## 源码地址 https://github.com/WuKongIM/WuKongIMiOSSDK
   # pod 'Down', :git => 'https://github.com/johnxnguyen/Down.git', :tag => 'v0.11.0'  ## 已替换为 libcmark_gfm
   pod 'libcmark_gfm'  ## Markdown 渲染（纯 C 解析，无 WebKit 依赖）
+  # Adaptive Cards 渲染器 —— vendored MIT 源码（非 EULA 二进制 pod），用于 InteractiveCard(type17)。
+  # 详见 Modules/WuKongBase/WuKongBase/Vendor/AdaptiveCards/AdaptiveCards.podspec 头注释。
+  pod 'AdaptiveCards', :path => './Modules/WuKongBase/WuKongBase/Vendor/AdaptiveCards'
   pod 'WuKongBase',  :path => './Modules/WuKongBase'   ## WuKongBase 基础工具包
   pod 'WuKongLogin', :path => './Modules/WuKongLogin'  ##  登录模块
   pod 'WuKongContacts', :path => './Modules/WuKongContacts'  ## 联系人模块

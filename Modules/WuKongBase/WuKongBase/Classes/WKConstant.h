@@ -327,7 +327,9 @@ typedef enum : NSUInteger {
     WK_EMOJI_STICKER = 13, // emoji贴图
     
     WK_RICHTEXT = 14, // 富文本消息类型
-    
+
+    WK_INTERACTIVE_CARD = 17, // 互动卡片（Adaptive Cards octo/v1|v2）—— 与 type7 名片无关
+
     WK_TYPING = 101, // 正在输入
     
     WK_SCREENSHOT = 20, // 截屏通知
