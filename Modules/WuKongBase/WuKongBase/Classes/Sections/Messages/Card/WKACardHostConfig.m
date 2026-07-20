@@ -43,7 +43,7 @@
     NSString *bgDefault  = dark ? @"#1C1C1E" : @"#FFFFFF";
     NSString *bgEmphasis = dark ? @"#2C2C2E" : @"#F5F5F5";
     NSString *sep = dark ? @"#3A3A3C" : @"#E5E5E5";
-    NSString *accent = @"#2F6BFF"; // 链接/强调色
+    NSString *accent = dark ? @"#5A5A5C" : @"#313131"; // [octo] 强调/正向按钮：app 主体灰黑色系(替系统蓝)；深色用中深灰保证在深色卡片上可见 + 白字对比
 
     NSDictionary *(^colorSet)(NSString *) = ^NSDictionary *(NSString *base) {
         return @{ @"default": @{ @"default": base, @"subtle": fgSub },

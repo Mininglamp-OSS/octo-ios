@@ -10,6 +10,7 @@
 #import "ACRInputLabelView.h"
 #import "ACRInputTableView.h"
 #import "UtiliOS.h"
+#import "WKCardAccent.h"
 #import <Foundation/Foundation.h>
 
 using namespace AdaptiveCards;
@@ -47,7 +48,7 @@ const CGFloat minimumRowHeight = 44.0;
             BOOL isChecked = [reuseIdentifier isEqualToString:@"checked-checkbox"] ||
                              [reuseIdentifier isEqualToString:@"checked-radiobutton"];
             self.imageView.image = [iconImage imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-            self.imageView.tintColor = isChecked ? UIColor.systemBlueColor : UIColor.secondaryLabelColor;
+            self.imageView.tintColor = isChecked ? WKCardAccentColor() : UIColor.secondaryLabelColor;
         }
         self.textLabel.numberOfLines = 0;
         self.textLabel.lineBreakMode = NSLineBreakByWordWrapping;

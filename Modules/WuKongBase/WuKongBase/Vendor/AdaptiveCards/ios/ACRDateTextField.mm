@@ -12,6 +12,7 @@
 #import "DateInput.h"
 #import "DateTimePreparser.h"
 #import "TimeInput.h"
+#import "WKCardAccent.h"
 
 using namespace AdaptiveCards;
 
@@ -169,7 +170,7 @@ using namespace AdaptiveCards;
             bar.barTintColor = UIColor.whiteColor;
         }
         bar.items = @[ flexSpace, button ];
-        button.tintColor = UIColor.systemBlueColor;
+        button.tintColor = WKCardAccentColor();
 
         self.inputAccessoryView = bar;
 #endif

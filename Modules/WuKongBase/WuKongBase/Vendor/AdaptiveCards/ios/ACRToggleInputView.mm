@@ -7,6 +7,7 @@
 
 #import "ACRToggleInputView.h"
 #import "ACOBundle.h"
+#import "WKCardAccent.h"
 #import <Foundation/Foundation.h>
 
 @implementation ACRToggleInputView
@@ -56,6 +57,7 @@
 
     toggle.tintColor = self.switchOffStateColor;
     toggle.backgroundColor = self.switchOffStateColor;
+    toggle.onTintColor = WKCardSwitchOnColor();  // [octo] ON 态用主体灰黑色系(替系统绿/蓝)，深色自适应
     toggle.layer.cornerRadius = 16.0f;
 
     // Set properties

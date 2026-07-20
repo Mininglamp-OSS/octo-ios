@@ -14,6 +14,7 @@
 #import "ACRViewPrivate.h"
 #import "UtiliOS.h"
 #import "TSExpressionObjCBridge.h"
+#import "WKCardAccent.h"
 #import <Foundation/Foundation.h>
 
 @implementation ACRButton
@@ -37,8 +38,8 @@ NSString * const DYNAMIC_VISIBLE_PROP = @"isVisible.dynamic";
 
 - (void)setupExpandableConfig
 {
-    self.backgroundColor = UIColor.systemBlueColor;
-    self.tintColor = UIColor.systemBackgroundColor;
+    self.backgroundColor = WKCardButtonBackgroundColor();  // [octo] 替系统蓝：主体灰黑色系，深色自适应
+    self.tintColor = UIColor.whiteColor;                   // chevron 图标白色，在深灰按钮上可见
     
     // Configure autoresizing mask
     self.autoresizingMask = UIViewAutoresizingFlexibleWidth |
@@ -78,8 +79,8 @@ NSString * const DYNAMIC_VISIBLE_PROP = @"isVisible.dynamic";
 
 - (void)setupDefaultConfig
 {
-    self.backgroundColor = UIColor.systemBlueColor;
-    self.tintColor = UIColor.systemBlueColor;
+    self.backgroundColor = WKCardButtonBackgroundColor();  // [octo] 替系统蓝：主体灰黑色系，深色自适应
+    self.tintColor = UIColor.whiteColor;                   // 图标白色，在深灰按钮上可见
     
     // Configure autoresizing mask
     self.autoresizingMask = UIViewAutoresizingFlexibleWidth |
