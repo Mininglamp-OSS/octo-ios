@@ -51,14 +51,26 @@
     out.succeeded = NO;
     out.size = CGSizeMake(width, 0);
 
-    NSString *payload = [self cardJSONString:cardJSON];
+    // [octo] Q2/Q3：把 Input.ChoiceSet 一律渲染成 expanded(内联单选列表)。ACR 的 compact
+    // 下拉是把选项列表 [window addSubview]，样式差且不随会话页 VC 消失(关页面残留)。
+    // expanded 已跑通(圆圈+选中+提交),彻底绕开那个 window 浮层。
+    NSDictionary *effectiveCard = [self wk_cardByForcingExpandedChoiceSets:cardJSON];
+    NSString *payload = [self cardJSONString:effectiveCard];
     if (payload.length == 0) {
         return out;
     }
 
     ACOAdaptiveCardParseResult *parse = [ACOAdaptiveCard fromJson:payload];
     if (!parse.isValid || !parse.card) {
-        NSLog(@"[WKCard][DIAG] parse invalid=%d errors=%@", !parse.isValid, parse.parseErrors);
+        // [WKCard][DIAG] 解析失败去重打印 payload，定位 RequiredPropertyMissing 到底缺哪个必填属性
+        static NSMutableSet *seenParseFails = nil;
+        static dispatch_once_t onceFail;
+        dispatch_once(&onceFail, ^{ seenParseFails = [NSMutableSet set]; });
+        NSNumber *sig = @(payload.hash);
+        if (![seenParseFails containsObject:sig]) {
+            [seenParseFails addObject:sig];
+            NSLog(@"[WKCard][DIAG] parse FAILED errors=%@\npayload=%@", parse.parseErrors, payload);
+        }
         return out;
     }
     out.card = parse.card;
@@ -97,9 +109,6 @@
     return out;
 }
 
-/// 递归 un-hide 被 ACR 误隐藏的 FactSet(渲染为 ACRColumnSetView)。
-/// 仅动 ACRColumnSetView：octo 卡片里唯一被误隐藏的就是 FactSet；显式 ColumnSet 均可见。
-/// Agent 卡的 timeline_detail 是 ACRColumnView(容器)且默认折叠，不在此列，不受影响。
 + (void)wk_unhideHiddenFactSetsInView:(UIView *)view {
     if (!view) return;
     for (UIView *sub in view.subviews) {
@@ -108,6 +117,51 @@
         }
         [self wk_unhideHiddenFactSetsInView:sub];
     }
+}
+
+/// 返回渲染前 sanitize 过的卡片深拷贝(不改原字典)：
+/// - Q2/Q3：Input.ChoiceSet 的 style 一律改 expanded(绕开 ACR 的 window 浮层下拉)。
+/// - Q1：Input.Toggle 缺 title 时补上(AC 的 title 必填且不能空，否则整卡解析失败
+///   RequiredPropertyMissing；web 的 JS SDK 宽松所以能显示)。用 label 提升为 title
+///   并移除 label 避免重复，无 label 则兜底。
++ (NSDictionary *)wk_cardByForcingExpandedChoiceSets:(NSDictionary *)cardJSON {
+    id transformed = [self wk_sanitizeNode:cardJSON];
+    return [transformed isKindOfClass:[NSDictionary class]] ? transformed : cardJSON;
+}
+
++ (id)wk_sanitizeNode:(id)node {
+    if ([node isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary *m = [NSMutableDictionary dictionaryWithCapacity:[node count]];
+        for (id key in (NSDictionary *)node) {
+            m[key] = [self wk_sanitizeNode:((NSDictionary *)node)[key]];
+        }
+        id type = m[@"type"];
+        if ([type isKindOfClass:[NSString class]]) {
+            if ([type isEqualToString:@"Input.ChoiceSet"]) {
+                m[@"style"] = @"expanded";
+            } else if ([type isEqualToString:@"Input.Toggle"]) {
+                NSString *title = [m[@"title"] isKindOfClass:[NSString class]] ? m[@"title"] : nil;
+                if (title.length == 0) {
+                    NSString *label = [m[@"label"] isKindOfClass:[NSString class]] ? m[@"label"] : nil;
+                    if (label.length > 0) {
+                        m[@"title"] = label;
+                        [m removeObjectForKey:@"label"];  // 提升为 title，避免与上方 label 重复
+                    } else {
+                        m[@"title"] = @"开关";
+                    }
+                }
+            }
+        }
+        return m;
+    }
+    if ([node isKindOfClass:[NSArray class]]) {
+        NSMutableArray *a = [NSMutableArray arrayWithCapacity:[(NSArray *)node count]];
+        for (id item in (NSArray *)node) {
+            [a addObject:[self wk_sanitizeNode:item]];
+        }
+        return a;
+    }
+    return node;
 }
 
 + (CGSize)fittingSizeOfView:(ACRView *)view width:(CGFloat)width {

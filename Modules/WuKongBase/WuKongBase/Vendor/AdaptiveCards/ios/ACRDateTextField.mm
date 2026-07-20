@@ -152,14 +152,24 @@ using namespace AdaptiveCards;
         }
 
 #if !TARGET_OS_VISION
+        // [octo] 美化 date/time 选择器完成条：原为 UIBarStyleBlack 深色条 + Done 靠左 + 黑色，
+        // 与 app 浅色风格不搭。改成浅色系统背景条、Done 靠右、系统蓝，贴近原生键盘选择器观感。
+        UIBarButtonItem *flexSpace = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace
+                                                                                   target:nil
+                                                                                   action:nil];
         UIBarButtonItem *button = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
                                                                                 target:self
                                                                                 action:@selector(dismiss)];
         UIToolbar *bar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, picker.frame.size.width, 44)];
-        [bar setBarStyle:UIBarStyleBlack];
-
-        bar.items = @[ button ];
-        button.tintColor = [UIColor blackColor];
+        bar.translucent = NO;
+        if (@available(iOS 13.0, *)) {
+            bar.barTintColor = UIColor.systemBackgroundColor;
+            picker.backgroundColor = UIColor.systemBackgroundColor;
+        } else {
+            bar.barTintColor = UIColor.whiteColor;
+        }
+        bar.items = @[ flexSpace, button ];
+        button.tintColor = UIColor.systemBlueColor;
 
         self.inputAccessoryView = bar;
 #endif
