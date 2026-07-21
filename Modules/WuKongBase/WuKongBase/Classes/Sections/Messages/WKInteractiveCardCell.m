@@ -5,6 +5,7 @@
 
 #import "WKInteractiveCardCell.h"
 #import "WKInteractiveCardContent.h"
+#import <os/lock.h>
 #import "WKACardRenderer.h"
 #import "WKCardActionAPI.h"
 #import "UIView+WKCommon.h"
@@ -136,6 +137,37 @@
     return map;
 }
 
+// 线程安全访问：读发生在后台预缓存行高的并发队列（WKMessageListView.precacheHeightForMessage:
+// → contentSizeForMessage:），写发生在主线程（syncLiveHeightAndReflow / prepareForReuse）。
+// NSMutableDictionary 并发读写是未定义行为，会 EXC_BAD_ACCESS。用 os_unfair_lock 串行化全部
+// 访问；语义与原来完全一致（同一张表、不淘汰），仅加互斥。
++ (os_unfair_lock *)liveHeightLock {
+    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+    return &lock;
+}
+
++ (nullable NSNumber *)liveHeightForKey:(NSString *)key {
+    if (key.length == 0) return nil;
+    os_unfair_lock_lock([self liveHeightLock]);
+    NSNumber *v = [[self liveHeightOverride] objectForKey:key];
+    os_unfair_lock_unlock([self liveHeightLock]);
+    return v;
+}
+
++ (void)setLiveHeight:(NSNumber *)value forKey:(NSString *)key {
+    if (key.length == 0 || value == nil) return;
+    os_unfair_lock_lock([self liveHeightLock]);
+    [[self liveHeightOverride] setObject:value forKey:key];
+    os_unfair_lock_unlock([self liveHeightLock]);
+}
+
++ (void)removeLiveHeightForKey:(NSString *)key {
+    if (key.length == 0) return;
+    os_unfair_lock_lock([self liveHeightLock]);
+    [[self liveHeightOverride] removeObjectForKey:key];
+    os_unfair_lock_unlock([self liveHeightLock]);
+}
+
 + (NSString *)liveHeightKeyForClientMsgNo:(NSString *)clientMsgNo fingerprint:(NSString *)fp {
     return [NSString stringWithFormat:@"%@|%@", clientMsgNo ?: @"", fp ?: @""];
 }
@@ -149,7 +181,7 @@
     if ([self shouldRenderCardForModel:model]) {
         NSString *fp = [content renderFingerprint];
         // 优先用交互后的实测高度覆盖（展开/收起、异步图片）
-        NSNumber *override = [[self liveHeightOverride] objectForKey:[self liveHeightKeyForClientMsgNo:model.clientMsgNo fingerprint:fp]];
+        NSNumber *override = [self liveHeightForKey:[self liveHeightKeyForClientMsgNo:model.clientMsgNo fingerprint:fp]];
         if (override) {
             return CGSizeMake(width, MAX(1, override.doubleValue));
         }
@@ -258,7 +290,7 @@
     self.renderedCardSeq = content.cardSeq;
     // 新渲染的是初始(收起)态视图 → 清掉旧的实测高度覆盖，让行高回到 measureCard 初值，
     // 后续交互/异步布局再由 syncLiveHeightAndReflow 重新写入。
-    [[WKInteractiveCardCell liveHeightOverride] removeObjectForKey:
+    [WKInteractiveCardCell removeLiveHeightForKey:
         [WKInteractiveCardCell liveHeightKeyForClientMsgNo:model.clientMsgNo fingerprint:fp]];
 
     self.plainFallbackLabel.hidden = YES;
@@ -317,7 +349,7 @@
                                                           fingerprint:self.renderedFingerprint];
     // 已有覆盖值 → 初值已定；后续展开/选择/异步的变化由 tap burst / scheduleLiveHeightSync 处理，
     // 这里不再每次 layoutSubviews 都测量，避免滚动时反复计算。
-    if ([[WKInteractiveCardCell liveHeightOverride] objectForKey:key]) return;
+    if ([WKInteractiveCardCell liveHeightForKey:key]) return;
     // [perf] 滚动中不测量(measureLiveACRHeightAtWidth 的 10万-layout 很贵)；标记待办，滚动停下补做。
     UITableView *tv = [self wk_enclosingTableView];
     if (tv && (tv.isDragging || tv.isDecelerating)) {
@@ -507,7 +539,8 @@
 - (void)handleOpenUrlAction:(ACOBaseActionElement *)action {
     NSString *urlStr = [action url];
     if (urlStr.length == 0) return;
-    if (![urlStr hasPrefix:@"http"]) {
+    // 大小写不敏感：HTTPS:// / HTTP:// 也视为已带 scheme，避免被误拼成 http://HTTPS://…。
+    if (![urlStr.lowercaseString hasPrefix:@"http"]) {
         urlStr = [NSString stringWithFormat:@"http://%@", urlStr];
     }
     NSURL *url = [NSURL URLWithString:urlStr];
@@ -629,11 +662,11 @@
 
     NSString *key = [WKInteractiveCardCell liveHeightKeyForClientMsgNo:self.renderedClientMsgNo
                                                           fingerprint:self.renderedFingerprint];
-    NSNumber *cur = [[WKInteractiveCardCell liveHeightOverride] objectForKey:key];
+    NSNumber *cur = [WKInteractiveCardCell liveHeightForKey:key];
     if (cur && fabs(cur.doubleValue - liveH) <= 1.0) { self.pendingLiveHeightSync = NO; return; } // 高度未变
 
     self.pendingLiveHeightSync = NO;
-    [[WKInteractiveCardCell liveHeightOverride] setObject:@(liveH) forKey:key];
+    [WKInteractiveCardCell setLiveHeight:@(liveH) forKey:key];
     [self reflowHeightUsingListInvalidate];
 }
 
