@@ -278,6 +278,12 @@ post_install do |installer|
             config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
             config.build_settings['ENABLE_BITCODE'] = 'NO'
             config.build_settings["EXCLUDED_ARCHS[sdk=iphonesimulator*]"] = "arm64"
+            # Xcode 26.5 起，framework module 内引用非模块化系统头（如 AFNetworking
+            # 4.0.1 的 `#import <netinet6/in6.h>`）由 warning 升级为 error，
+            # 导致 CI `xcodebuild build-for-testing` 在 ScanDependencies 阶段直接失败
+            # （错误未触达任何 authored 代码）。放行非模块化 include，等价于旧工具链行为，
+            # 不改变产物；否则每个 PR（含 main）在新 Xcode runner 上都会红。
+            config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
             # librlottie 0.2.1 (SDWebImage 官方 fork) 的 hmap 把 `config.h` 错误地
             # 映射到 `librlottie/config.h`（不存在）。关 hmap，并手动把所有 rlottie
             # 内部头文件目录加入 HEADER_SEARCH_PATHS，让 `<vrect.h>` 等 angled include
