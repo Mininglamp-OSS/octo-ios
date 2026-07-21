@@ -12,6 +12,15 @@
 #import "WKConstant.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 
+/// 类型安全取字符串：服务端字段可能为 NSNull / 非字符串，`?:` 挡不住 NSNull，
+/// 后续 -length 会 unrecognized selector 崩溃。与本 PR 其它解析层同款防御。
+static NSString *WKGCS_String(id _Nullable v) {
+    if ([v isKindOfClass:[NSString class]]) return (NSString *)v;
+    if ([v isKindOfClass:[NSNumber class]]) return [(NSNumber *)v stringValue];
+    return @"";
+}
+
+
 @interface WKGlobalContactsVM ()
 @property (nonatomic, copy, readwrite) NSString *keyword;
 @property (nonatomic, copy, readwrite) NSArray<WKSearchContactsModel *> *friendModels;
@@ -109,10 +118,10 @@
     NSMutableArray<WKSearchContactsModel *> *models = [NSMutableArray array];
     for (NSDictionary *item in arr) {
         if (![item isKindOfClass:[NSDictionary class]]) continue;
-        NSString *remark = item[@"channel_remark"] ?: @"";
-        NSString *rawName = item[@"channel_name"] ?: @"";
+        NSString *remark = WKGCS_String(item[@"channel_remark"]);
+        NSString *rawName = WKGCS_String(item[@"channel_name"]);
         NSString *name = (remark.length > 0) ? [self stripHTMLTags:remark] : [self stripHTMLTags:rawName];
-        NSString *cid = item[@"channel_id"] ?: @"";
+        NSString *cid = WKGCS_String(item[@"channel_id"]);
 
         WKSearchContactsModel *m = [WKSearchContactsModel new];
         m.name = name ?: @"";
@@ -137,7 +146,11 @@
 
 - (NSString *)stripHTMLTags:(NSString *)html {
     if (!html || html.length == 0) return html ?: @"";
-    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"<[^>]+>" options:0 error:nil];
+    static NSRegularExpression *regex = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        regex = [NSRegularExpression regularExpressionWithPattern:@"<[^>]+>" options:0 error:nil];
+    });
     return [regex stringByReplacingMatchesInString:html options:0 range:NSMakeRange(0, html.length) withTemplate:@""];
 }
 

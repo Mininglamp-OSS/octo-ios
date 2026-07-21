@@ -11,6 +11,8 @@
 #import "WuKongBase.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 #import "WKChannelInfoDB.h"
+#import "WKSpaceFilter.h"
+#import "WKConversationListVM.h"
 #import "WKGroupManager.h"
 
 #define kRowHeight 52.0f
@@ -441,6 +443,8 @@ typedef NS_ENUM(NSInteger, WKCHFilterKind) {
     for (WKChannelInfo *info in list) {
         NSString *uid = info.channel.channelId;
         if (uid.length == 0) continue;
+        // Space 隔离：与 WKGlobalSearchVM 同款过滤，避免其它空间的好友泄漏进候选。
+        if (![self channelInCurrentSpace:uid type:WK_PERSON]) continue;
         NSString *name = info.remark.length > 0 ? info.remark : (info.name.length > 0 ? info.name : uid);
         [out addObject:[WKGlobalSearchPickEntry entryWithId:uid name:name avatarUrl:[WKAvatarUtil getAvatar:uid] channelType:0]];
     }
@@ -454,10 +458,34 @@ typedef NS_ENUM(NSInteger, WKCHFilterKind) {
     for (WKChannelInfo *info in list) {
         NSString *cid = info.channel.channelId;
         if (cid.length == 0) continue;
+        if (![self channelInCurrentSpace:cid type:WK_GROUP]) continue;
         NSString *name = info.remark.length > 0 ? info.remark : (info.name.length > 0 ? info.name : cid);
         [out addObject:[WKGlobalSearchPickEntry entryWithId:cid name:name avatarUrl:[WKAvatarUtil getGroupAvatar:cid] channelType:WK_GROUP]];
     }
     if (done) done(out);
+}
+
+/// 候选是否属于当前 Space。逐字对齐 WKGlobalSearchVM.isChannelInCurrentSpace: 语义
+/// （currentSpaceId 为空=单空间不过滤；群 Keep→YES/Skip→NO/FailOpen→会话列表白名单且未初始化 fail-closed；
+///  人/Bot 仅 Skip 才排除，缺 space_id 的历史私聊向前兼容放行）。
+- (BOOL)channelInCurrentSpace:(NSString *)channelId type:(uint8_t)type {
+    if (channelId.length == 0) return NO;
+    NSString *sid = [[WKSpaceFilter shared] currentSpaceId];
+    if (sid.length == 0) return YES;
+    if (type == WK_GROUP || type == WK_COMMUNITY_TOPIC) {
+        NSString *groupId = channelId;
+        if (type == WK_COMMUNITY_TOPIC) {
+            NSRange sep = [channelId rangeOfString:@"____"];
+            if (sep.location != NSNotFound) groupId = [channelId substringToIndex:sep.location];
+        }
+        WKSpaceFilterDecision d = [[WKSpaceFilter shared] decideChannel:groupId channelType:WK_GROUP];
+        if (d == WKSpaceFilterDecisionKeep) return YES;
+        if (d == WKSpaceFilterDecisionSkip) return NO;
+        WKConversationListVM *vm = [WKConversationListVM shared];
+        if (![vm isGroupWhitelistInitialized]) return NO; // 白名单未初始化期 fail-closed
+        return [vm isGroupInWhitelist:groupId];
+    }
+    return [[WKSpaceFilter shared] decideChannel:channelId channelType:type] != WKSpaceFilterDecisionSkip;
 }
 
 - (void)toggleChatTypeRow:(NSInteger)row {
