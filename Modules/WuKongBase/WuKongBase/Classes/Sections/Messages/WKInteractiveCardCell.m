@@ -24,19 +24,6 @@
 - (void)wk_invalidateHeightCacheForMessage:(WKMessageModel *)msg;
 @end
 
-// [WKCard][DIAG] 临时：抓取当前第一响应者，定位键盘不弹/焦点被抢
-static __weak UIResponder *s_wkDiagFirstResponder;
-@interface UIResponder (WKCardDiag)
-@end
-@implementation UIResponder (WKCardDiag)
-- (void)wk_diagCaptureFR:(id)sender { s_wkDiagFirstResponder = self; }
-@end
-static UIResponder *WKDiagFindFirstResponder(void) {
-    s_wkDiagFirstResponder = nil;
-    [[UIApplication sharedApplication] sendAction:@selector(wk_diagCaptureFR:) to:nil from:nil forEvent:nil];
-    return s_wkDiagFirstResponder;
-}
-
 // 卡片正文与宿主的内边距（卡片自身还有 host config 的 padding）
 #define WKCardHostInset 0.0f
 #define WKCardFallbackFont [UIFont systemFontOfSize:15.0f]
@@ -55,6 +42,7 @@ static UIResponder *WKDiagFindFirstResponder(void) {
 @property(nonatomic,assign) BOOL submitInFlight;           // 提交进行中
 @property(nonatomic,copy)   NSString *submitFingerprint;   // 提交时的帧指纹（用于识别 bot 回写帧到达）
 @property(nonatomic,strong) NSTimer *submitTimeoutTimer;   // 10s 超时
+@property(nonatomic,assign) BOOL pendingLiveHeightSync;    // 滚动中跳过的实测重排，滚动停下补做
 @end
 
 @implementation WKInteractiveCardCell
@@ -121,17 +109,6 @@ static UIResponder *WKDiagFindFirstResponder(void) {
         return NO;
     }
     return YES;
-}
-
-/// [WKCard][DIAG] 临时诊断：返回 fail-closed 的具体原因（定位后移除）。
-+ (NSString *)failClosedReason:(WKMessageModel *)model {
-    if (![self cardFeatureEnabled]) return @"feature-disabled";
-    WKInteractiveCardContent *content = [self effectiveContent:model];
-    if (!content) return @"content-not-interactive-card";
-    if (!content.card) return @"card-nil";
-    if (![self isTrustedSender:model]) return @"untrusted-sender";
-    if (![content isProfileSupported]) return [NSString stringWithFormat:@"profile-unsupported(%@/%@)", content.profile, content.cardVersion];
-    return @"(would-render)";
 }
 
 /// 卡片渲染宽度（气泡正文最大宽度）。
@@ -224,18 +201,6 @@ static UIResponder *WKDiagFindFirstResponder(void) {
     self.plainFallbackLabel.font = WKCardFallbackFont;
     self.plainFallbackLabel.hidden = YES;
     [self.messageContentView addSubview:self.plainFallbackLabel];
-
-    // [WKCard][DIAG] 临时：键盘生命周期追踪
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(wk_diagKbWillShow:) name:UIKeyboardWillShowNotification object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(wk_diagKbDidShow:) name:UIKeyboardDidShowNotification object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(wk_diagKbWillHide:) name:UIKeyboardWillHideNotification object:nil];
-    // [WKCard][DIAG] 临时：文本框开始/结束编辑 + 结束编辑时打调用栈（抓"谁收的键盘"）
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(wk_diagFieldBegin:) name:UITextFieldTextDidBeginEditingNotification object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(wk_diagFieldEnd:) name:UITextFieldTextDidEndEditingNotification object:nil];
-}
-
-- (void)dealloc {
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)refresh:(WKMessageModel *)model {
@@ -245,16 +210,6 @@ static UIResponder *WKDiagFindFirstResponder(void) {
     BOOL dark = [WKInteractiveCardCell isDarkStyle];
 
     if (![WKInteractiveCardCell shouldRenderCardForModel:model]) {
-        // [WKCard][DIAG] 临时诊断：打印降级原因 + 发送方标记（定位后移除）
-        NSLog(@"[WKCard][DIAG] fail-closed clientMsgNo=%@ reason=%@ contentType=%@ contentClass=%@ fromUid=%@ from.robot=%d memberOfFrom.robot=%d hasCard=%d profile=%@ ver=%@",
-              model.clientMsgNo,
-              [WKInteractiveCardCell failClosedReason:model],
-              @(model.contentType),
-              NSStringFromClass([model.content class]),
-              model.fromUid,
-              model.from.robot,
-              model.memberOfFrom.robot,
-              content.card != nil, content.profile, content.cardVersion);
         [self showFallbackWithText:(content.plain ?: LLang(@"[卡片]")) dark:dark];
         return;
     }
@@ -292,7 +247,6 @@ static UIResponder *WKDiagFindFirstResponder(void) {
     }
 
     // 换上新卡片视图
-    NSLog(@"[WKCard][DIAG] re-render(remount) msgNo=%@ hadFocus=%d fpChanged=%d", model.clientMsgNo, [self wk_hasFocusedCardInput], !([fp isEqualToString:self.renderedFingerprint]));
     [self.acrView removeFromSuperview];
     self.acrView = result.view;
     self.acrView.userInteractionEnabled = YES;
@@ -310,61 +264,10 @@ static UIResponder *WKDiagFindFirstResponder(void) {
     self.plainFallbackLabel.hidden = YES;
     self.cardHostView.hidden = NO;
 
-    NSLog(@"[WKCard][DIAG] rendered msgNo=%@ measuredSize=%@ profile=%@ bodyCount=%lu",
-          model.clientMsgNo, NSStringFromCGSize(result.size), content.profile,
-          (unsigned long)[content.card[@"body"] count]);
-
     [self setNeedsLayout];
 
     // 异步安全网：ACRView 图片/异步布局落定后高度可能变化，做一次实测高度校准。
     [self scheduleLiveHeightSync];
-}
-
-// [WKCard][DIAG] 打印卡片 JSON 元素树 + 渲染出的 ACRView 视图树（class+frame），
-// 二者对照即可看出哪些元素没渲染/渲染成 0 高/被裁，以及 ChoiceSet 渲染成了什么控件。
-- (void)diagDumpCardStructure:(NSDictionary *)cardJSON {
-    if (!self.acrView) return;
-    NSMutableString *js = [NSMutableString string];
-    [WKInteractiveCardCell diagDumpJSON:cardJSON[@"body"] depth:0 into:js];
-    NSLog(@"[WKCard][DIAG] cardJSON body:\n%@", js);
-    NSMutableString *vt = [NSMutableString string];
-    [WKInteractiveCardCell diagDumpViewTree:self.acrView depth:0 into:vt];
-    NSLog(@"[WKCard][DIAG] viewTree (acrFrame=%@):\n%@", NSStringFromCGRect(self.acrView.frame), vt);
-}
-
-+ (void)diagDumpJSON:(id)node depth:(int)depth into:(NSMutableString *)s {
-    if (depth > 8) return;
-    NSString *pad = [@"" stringByPaddingToLength:depth*2 withString:@" " startingAtIndex:0];
-    if ([node isKindOfClass:[NSArray class]]) {
-        for (id item in (NSArray *)node) { [self diagDumpJSON:item depth:depth into:s]; }
-        return;
-    }
-    if (![node isKindOfClass:[NSDictionary class]]) return;
-    NSDictionary *d = node;
-    NSString *type = d[@"type"] ?: @"?";
-    NSString *extra = @"";
-    if (d[@"isVisible"] != nil) extra = [extra stringByAppendingFormat:@" isVisible=%@", d[@"isVisible"]];
-    if (d[@"style"]) extra = [extra stringByAppendingFormat:@" style=%@", d[@"style"]];
-    if (d[@"isMultiSelect"]) extra = [extra stringByAppendingFormat:@" multi=%@", d[@"isMultiSelect"]];
-    if (d[@"id"]) extra = [extra stringByAppendingFormat:@" id=%@", d[@"id"]];
-    if ([d[@"text"] isKindOfClass:[NSString class]]) {
-        NSString *t = d[@"text"];
-        if (t.length > 24) t = [[t substringToIndex:24] stringByAppendingString:@"…"];
-        extra = [extra stringByAppendingFormat:@" text=\"%@\"", t];
-    }
-    if (d[@"choices"]) extra = [extra stringByAppendingFormat:@" choices=%lu", (unsigned long)[d[@"choices"] count]];
-    [s appendFormat:@"%@%@%@\n", pad, type, extra];
-    for (NSString *k in @[@"body", @"items", @"columns", @"actions", @"facts", @"rows", @"inlines", @"cells"]) {
-        if (d[k]) [self diagDumpJSON:d[k] depth:depth+1 into:s];
-    }
-}
-
-+ (void)diagDumpViewTree:(UIView *)v depth:(int)depth into:(NSMutableString *)s {
-    if (!v || depth > 8) return;
-    NSString *pad = [@"" stringByPaddingToLength:depth*2 withString:@" " startingAtIndex:0];
-    [s appendFormat:@"%@%@ f=%@ hidden=%d uie=%d\n", pad, NSStringFromClass([v class]),
-        NSStringFromCGRect(v.frame), v.hidden, v.userInteractionEnabled];
-    for (UIView *sub in v.subviews) { [self diagDumpViewTree:sub depth:depth+1 into:s]; }
 }
 
 - (void)showFallbackWithText:(NSString *)text dark:(BOOL)dark {
@@ -415,6 +318,12 @@ static UIResponder *WKDiagFindFirstResponder(void) {
     // 已有覆盖值 → 初值已定；后续展开/选择/异步的变化由 tap burst / scheduleLiveHeightSync 处理，
     // 这里不再每次 layoutSubviews 都测量，避免滚动时反复计算。
     if ([[WKInteractiveCardCell liveHeightOverride] objectForKey:key]) return;
+    // [perf] 滚动中不测量(measureLiveACRHeightAtWidth 的 10万-layout 很贵)；标记待办，滚动停下补做。
+    UITableView *tv = [self wk_enclosingTableView];
+    if (tv && (tv.isDragging || tv.isDecelerating)) {
+        self.pendingLiveHeightSync = YES;
+        return;
+    }
     CGFloat width = self.cardHostView.lim_width;
     if (width <= 0) return;
     CGFloat fitH = [self measureLiveACRHeightAtWidth:width];
@@ -426,7 +335,6 @@ static UIResponder *WKDiagFindFirstResponder(void) {
 
 - (void)prepareForReuse {
     [super prepareForReuse];
-    NSLog(@"[WKCard][DIAG] prepareForReuse msgNo=%@ hadFocus=%d", self.renderedClientMsgNo, [self wk_hasFocusedCardInput]);
     // 复用时不主动销毁 acrView；refresh: 会按指纹决定是否 remount。
     // 但清掉 fallback 文本避免闪现旧内容，并结束任何进行中的提交 loading。
     self.plainFallbackLabel.text = nil;
@@ -521,65 +429,6 @@ static UIResponder *WKDiagFindFirstResponder(void) {
     return [self wk_firstResponderTextInputInView:self.acrView] != nil;
 }
 
-#pragma mark - [WKCard][DIAG] 键盘生命周期（临时）
-
-- (BOOL)wk_cardContainsTextInput {
-    // 只让含输入框的卡片打印，减少噪声
-    __block BOOL found = NO;
-    void (^walk)(UIView *) = nil;
-    __block __weak void (^weakWalk)(UIView *);
-    weakWalk = walk = ^(UIView *v) {
-        if (found || !v) return;
-        if ([v isKindOfClass:[UITextField class]] || [v isKindOfClass:[UITextView class]]) { found = YES; return; }
-        for (UIView *s in v.subviews) weakWalk(s);
-    };
-    walk(self.acrView);
-    return found;
-}
-
-- (void)wk_diagKbWillShow:(NSNotification *)note {
-    if (![self wk_cardContainsTextInput]) return;
-    NSLog(@"[WKCard][DIAG] KB willShow cardFocused=%d FR=%@ kb=%@",
-          [self wk_hasFocusedCardInput], NSStringFromClass([WKDiagFindFirstResponder() class]),
-          NSStringFromCGRect([note.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue]));
-}
-- (void)wk_diagKbDidShow:(NSNotification *)note {
-    if (![self wk_cardContainsTextInput]) return;
-    NSLog(@"[WKCard][DIAG] KB didShow cardFocused=%d FR=%@",
-          [self wk_hasFocusedCardInput], NSStringFromClass([WKDiagFindFirstResponder() class]));
-}
-- (void)wk_diagKbWillHide:(NSNotification *)note {
-    if (![self wk_cardContainsTextInput]) return;
-    NSLog(@"[WKCard][DIAG] KB willHide cardFocused=%d FR=%@",
-          [self wk_hasFocusedCardInput], NSStringFromClass([WKDiagFindFirstResponder() class]));
-}
-
-- (void)wk_diagFieldBegin:(NSNotification *)note {
-    UIView *f = note.object;
-    if (![f isKindOfClass:[UIView class]] || !self.acrView || ![f isDescendantOfView:self.acrView]) return;
-    NSLog(@"[WKCard][DIAG] FIELD didBegin %@", NSStringFromClass([f class]));
-}
-
-- (void)wk_diagFieldEnd:(NSNotification *)note {
-    UIView *f = note.object;
-    if (![f isKindOfClass:[UIView class]] || !self.acrView || ![f isDescendantOfView:self.acrView]) return;
-    NSLog(@"[WKCard][DIAG] FIELD didEnd %@ inWindow=%d cellWindow=%d ——栈前12帧:",
-          NSStringFromClass([f class]), (f.window != nil), (self.window != nil));
-    NSArray<NSString *> *frames = [NSThread callStackSymbols];
-    for (NSUInteger i = 0; i < frames.count && i < 12; i++) {
-        NSLog(@"[WKCard][DIAG]   #%02lu %@", (unsigned long)i, frames[i]);
-    }
-}
-
-- (UIScrollView *)wk_enclosingScrollView {
-    UIView *v = self.superview;
-    while (v) {
-        if ([v isKindOfClass:[UIScrollView class]]) return (UIScrollView *)v;
-        v = v.superview;
-    }
-    return nil;
-}
-
 // 卡片内不触发长按上下文菜单（让位给卡片交互）。
 - (BOOL)shouldBeginContextGestureAtPoint:(CGPoint)point {
     if ([self isPointInCard:point]) return NO;
@@ -605,13 +454,11 @@ static UIResponder *WKDiagFindFirstResponder(void) {
 
 // ACRView 异步布局变化(图片加载/ToggleVisibility 展开收起) → 校准实测高度并重排。
 - (void)didChangeViewLayout:(CGRect)oldFrame newFrame:(CGRect)newFrame {
-    NSLog(@"[WKCard][DIAG] didChangeViewLayout old=%@ new=%@", NSStringFromCGRect(oldFrame), NSStringFromCGRect(newFrame));
     [self syncLiveHeightAndReflow];
 }
 
 // ToggleVisibility 切换可见性 → 同样校准高度(等 ACR 完成内部布局后一拍)。
 - (void)didChangeVisibility:(UIButton *)button isVisible:(BOOL)isVisible {
-    NSLog(@"[WKCard][DIAG] didChangeVisibility isVisible=%d", isVisible);
     __weak WKInteractiveCardCell *weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf syncLiveHeightAndReflow]; });
 }
@@ -766,6 +613,14 @@ static UIResponder *WKDiagFindFirstResponder(void) {
     // 尺寸改成超大再 layout、reflow 又走 begin/endUpdates，都会扰动正在编辑的输入框，导致
     // 每次打字光标就消失。编辑期间卡片高度稳定、无需重排；结束编辑后由其它路径再校准。
     if ([self wk_hasFocusedCardInput]) return;
+    // [perf] 列表正在滚动时跳过实测重排：measureLiveACRHeightAtWidth 的 10万-layout +
+    // begin/endUpdates 在快滑+大量卡片时会把 60fps 打到 30。标记待办，滚动停下后补做一次。
+    // 卡片此刻仍按 measureCard/override 的正确高度显示，视觉无回退。
+    UITableView *tv = [self wk_enclosingTableView];
+    if (tv && (tv.isDragging || tv.isDecelerating)) {
+        self.pendingLiveHeightSync = YES;
+        return;
+    }
     CGFloat width = self.cardHostView.lim_width;
     if (width <= 0) return;
 
@@ -775,11 +630,24 @@ static UIResponder *WKDiagFindFirstResponder(void) {
     NSString *key = [WKInteractiveCardCell liveHeightKeyForClientMsgNo:self.renderedClientMsgNo
                                                           fingerprint:self.renderedFingerprint];
     NSNumber *cur = [[WKInteractiveCardCell liveHeightOverride] objectForKey:key];
-    NSLog(@"[WKCard][DIAG] syncLiveHeight liveH=%.1f rowH=%.1f override=%@", liveH, self.cardHostView.lim_height, cur);
-    if (cur && fabs(cur.doubleValue - liveH) <= 1.0) return; // 高度未变，避免重复重排
+    if (cur && fabs(cur.doubleValue - liveH) <= 1.0) { self.pendingLiveHeightSync = NO; return; } // 高度未变
 
+    self.pendingLiveHeightSync = NO;
     [[WKInteractiveCardCell liveHeightOverride] setObject:@(liveH) forKey:key];
     [self reflowHeightUsingListInvalidate];
+}
+
+/// 滚动停下后由列表调用：补做一次被滚动跳过的实测重排。
+- (void)wk_calibrateLiveHeightIfPending {
+    if (!self.pendingLiveHeightSync) return;
+    self.pendingLiveHeightSync = NO;
+    [self syncLiveHeightAndReflow];
+}
+
+- (UITableView *)wk_enclosingTableView {
+    UIView *v = self.superview;
+    while (v && ![v isKindOfClass:[UITableView class]]) v = v.superview;
+    return (UITableView *)v;
 }
 
 /// 失效上层行高缓存 + begin/endUpdates 重新测高。keepPosition/ajustTableViewByStreams

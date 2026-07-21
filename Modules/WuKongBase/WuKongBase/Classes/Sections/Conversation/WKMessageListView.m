@@ -1776,6 +1776,12 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 // 结束滚动
 -(void) endScroll:(UIScrollView*)scrollView {
     self.scrolling = false;
+    // [perf] 滚动停下：补做交互卡片(type17)在滚动中被跳过的实测高度校准，避免快滑掉帧。
+    for (UITableViewCell *c in self.tableView.visibleCells) {
+        if ([c respondsToSelector:@selector(wk_calibrateLiveHeightIfPending)]) {
+            [(id)c wk_calibrateLiveHeightIfPending];
+        }
+    }
 }
 
 - (void)reloadData {

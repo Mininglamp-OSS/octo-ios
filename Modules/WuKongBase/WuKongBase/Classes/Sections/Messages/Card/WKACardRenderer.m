@@ -62,24 +62,9 @@
 
     ACOAdaptiveCardParseResult *parse = [ACOAdaptiveCard fromJson:payload];
     if (!parse.isValid || !parse.card) {
-        // [WKCard][DIAG] 解析失败去重打印 payload，定位 RequiredPropertyMissing 到底缺哪个必填属性
-        static NSMutableSet *seenParseFails = nil;
-        static dispatch_once_t onceFail;
-        dispatch_once(&onceFail, ^{ seenParseFails = [NSMutableSet set]; });
-        NSNumber *sig = @(payload.hash);
-        if (![seenParseFails containsObject:sig]) {
-            [seenParseFails addObject:sig];
-            NSLog(@"[WKCard][DIAG] parse FAILED errors=%@\npayload=%@", parse.parseErrors, payload);
-        }
         return out;
     }
     out.card = parse.card;
-    // [WKCard][DIAG] 解析告警（掉元素/未知类型会在这里体现，定位 #1 内容不全）
-    if (parse.parseWarnings.count > 0) {
-        NSMutableArray *ws = [NSMutableArray array];
-        for (id w in parse.parseWarnings) { [ws addObject:[w description] ?: @"?"]; }
-        NSLog(@"[WKCard][DIAG] parseWarnings(%lu)=%@", (unsigned long)parse.parseWarnings.count, ws);
-    }
 
     ACOHostConfig *config = [WKACardHostConfig hostConfigForDark:dark];
     ACRTheme theme = dark ? ACRThemeDark : ACRThemeLight;
@@ -191,9 +176,6 @@
     CGFloat h = MAX(fitH, unionBottom);
     if (h <= 0) {
         h = ceil(view.frame.size.height);
-    }
-    if (fabs(fitH - unionBottom) > 1.0) {
-        NSLog(@"[WKCard][DIAG] fittingSize mismatch fit=%.1f union=%.1f use=%.1f w=%.1f", fitH, unionBottom, h, width);
     }
     return CGSizeMake(width, h);
 }
