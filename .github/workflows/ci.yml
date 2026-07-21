@@ -56,4 +56,5 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGN_IDENTITY='' \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES=YES
