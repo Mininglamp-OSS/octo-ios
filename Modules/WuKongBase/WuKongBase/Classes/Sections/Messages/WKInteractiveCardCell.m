@@ -9,6 +9,8 @@
 #import "WKCardActionAPI.h"
 #import "UIView+WKCommon.h"
 #import "WuKongBase.h"
+#import "WKWebViewVC.h"
+#import "WKNavigationManager.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 #import <AdaptiveCards/ACRView.h>
 #import <AdaptiveCards/ACRActionDelegate.h>
@@ -658,12 +660,15 @@ static UIResponder *WKDiagFindFirstResponder(void) {
 - (void)handleOpenUrlAction:(ACOBaseActionElement *)action {
     NSString *urlStr = [action url];
     if (urlStr.length == 0) return;
+    if (![urlStr hasPrefix:@"http"]) {
+        urlStr = [NSString stringWithFormat:@"http://%@", urlStr];
+    }
     NSURL *url = [NSURL URLWithString:urlStr];
     if (!url) return;
-    // http(s) 已由服务端白名单校验；交给系统/App 内既有打开逻辑。
-    if ([[UIApplication sharedApplication] canOpenURL:url]) {
-        [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
-    }
+    // 统一走 app 内部 WebView(与消息里点链接一致)，不跳外部 Safari。
+    WKWebViewVC *vc = [[WKWebViewVC alloc] init];
+    vc.url = url;
+    [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }
 
 #pragma mark - 提交 loading 态
