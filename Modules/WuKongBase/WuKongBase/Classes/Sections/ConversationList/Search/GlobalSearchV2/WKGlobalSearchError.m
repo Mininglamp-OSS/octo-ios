@@ -4,6 +4,7 @@
 //
 
 #import "WKGlobalSearchError.h"
+#import "WuKongBase.h"
 
 @implementation WKGlobalSearchError
 
@@ -51,10 +52,10 @@
 
 + (nullable NSString *)userMessageForError:(nullable NSError *)error {
     switch ([self codeFromError:error]) {
-        case WKGlobalSearchErrorRateLimited:   return @"搜索太频繁，请稍后再试";
-        case WKGlobalSearchErrorDepthExceeded: return @"结果太多，请缩小搜索范围";
-        case WKGlobalSearchErrorUpstream:      return @"搜索服务暂时不可用，请稍后重试";
-        case WKGlobalSearchErrorNetwork:       return @"当前网络不可用，请检查网络后重试";
+        case WKGlobalSearchErrorRateLimited:   return LLang(@"搜索太频繁，请稍后再试");
+        case WKGlobalSearchErrorDepthExceeded: return LLang(@"结果太多，请缩小搜索范围");
+        case WKGlobalSearchErrorUpstream:      return LLang(@"搜索服务暂时不可用，请稍后重试");
+        case WKGlobalSearchErrorNetwork:       return LLang(@"当前网络不可用，请检查网络后重试");
         case WKGlobalSearchErrorValidation:    return nil; // 静默
         case WKGlobalSearchErrorNotFound:      return nil; // 走空态
         case WKGlobalSearchErrorSearchDisabled:return nil; // 走回落

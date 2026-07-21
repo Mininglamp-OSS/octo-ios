@@ -99,6 +99,9 @@ static NSString *WKGCS_String(id _Nullable v) {
             if (!ss || ss.activeReqId != reqId) return;
             ss.activeReqId = 0;
             ss.isLoading = NO;
+            // 说明：联系人/群组走 legacy `search/global`（非 messages_search 的 ES 端点），
+            // 不会返回 SEARCH_DISABLED，故无需 groups/files VM 那样的运行时回落本地栈；
+            // 普通网络/服务错误走错误空态即可。
             ss.error = error;
             [ss notifyState];
         });

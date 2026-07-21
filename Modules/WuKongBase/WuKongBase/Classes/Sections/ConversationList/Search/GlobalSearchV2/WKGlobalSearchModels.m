@@ -74,6 +74,9 @@ static NSTimeInterval WKGS_ParseTimestamp(id _Nullable v) {
     if (![dict isKindOfClass:[NSDictionary class]]) return nil;
     WKGlobalSearchGroupBucket *b = [WKGlobalSearchGroupBucket new];
     b.channelId = WKGS_String(dict[@"channel_id"]);
+    // 防御：无 channel_id 的桶无法定位/下钻（displayTitle 空、L2 channel_ids 会带空串），
+    // 直接丢弃，避免渲染出无标题、点了搜不到的坏行（服务端 presence 保证正常不会出现）。
+    if (b.channelId.length == 0) return nil;
     b.channelType = WKGS_Int(dict[@"channel_type"]);
     b.parentGroupNo = WKGS_String(dict[@"parent_group_no"]);
     b.groupName = WKGS_String(dict[@"group_name"]);

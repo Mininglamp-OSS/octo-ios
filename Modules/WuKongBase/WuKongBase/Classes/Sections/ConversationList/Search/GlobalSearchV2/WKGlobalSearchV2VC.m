@@ -68,8 +68,6 @@
 
 @property (nonatomic, strong) UITableView *tableView;
 @property (nonatomic, strong) WKChannelHistorySearchEmptyView *emptyView;
-@property (nonatomic, strong) UIView *moreBanner;   // 命中群超上限提示（仅 Messages tab）
-@property (nonatomic, strong) UILabel *moreBannerLbl;
 
 @property (nonatomic, assign) BOOL hasShownKeywordLimitToast;
 @property (nonatomic, assign) BOOL didFallback;
@@ -220,17 +218,6 @@
     self.tableView.mj_footer = [MJRefreshAutoNormalFooter footerWithRefreshingBlock:^{ [ws onLoadMore]; }];
     self.tableView.mj_footer.hidden = YES;
     [self.view addSubview:self.tableView];
-
-    // has_more 提示横幅（Messages tab，L1 无翻页，改静态横幅提示缩小范围）
-    self.moreBanner = [UIView new];
-    self.moreBanner.backgroundColor = [[UIColor systemYellowColor] colorWithAlphaComponent:0.18];
-    self.moreBanner.hidden = YES;
-    self.moreBannerLbl = [UILabel new];
-    self.moreBannerLbl.font = [[WKApp shared].config appFontOfSize:12.0f];
-    self.moreBannerLbl.textColor = [UIColor darkGrayColor];
-    self.moreBannerLbl.numberOfLines = 2;
-    self.moreBannerLbl.textAlignment = NSTextAlignmentCenter;
-    [self.moreBanner addSubview:self.moreBannerLbl];
 
     self.emptyView = [WKChannelHistorySearchEmptyView new];
     self.emptyView.hidden = YES;
