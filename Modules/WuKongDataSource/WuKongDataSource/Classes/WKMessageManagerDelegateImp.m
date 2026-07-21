@@ -136,6 +136,19 @@
     [[WKAPIClient sharedClient] POST:[NSString stringWithFormat:@"message/revoke?channel_id=%@&channel_type=%hhu&message_id=%@&client_msg_no=%@",message.channel.channelId,message.channel.channelType,messageID,message.clientMsgNo] parameters:nil].then(^{
         message.message.remoteExtra.revoke = true;
         message.message.remoteExtra.revoker = [WKApp shared].loginInfo.uid;
+        // 撤回状态必须落到 message_extra 表（撤回状态的权威源，见 WKMessageDB SQL_EXTRA_COLS
+        // 及 Migration 202204151134）。此前只更新内存 remoteExtra + 刷 UI，从未落库；发起端
+        // (如群主撤回) 通常收不到服务端回推的 messageRevoke CMD，故不会触发 syncMessageExtra
+        // 落库。结果：当前会话看着已撤回，离开会话重进从 DB 重载时 message_extra.revoke 仍为空 →
+        // remoteExtra.revoke 读回 false → 撤回丢失、消息重现。messageId==0(未收到服务端 id)时
+        // 无法作为 message_extra 主键落库，跳过（该边界仍依赖 CMD 回推）。
+        if(message.message.messageId != 0) {
+            message.message.remoteExtra.messageID = message.message.messageId;
+            message.message.remoteExtra.messageSeq = message.message.messageSeq;
+            message.message.remoteExtra.channelID = message.channel.channelId;
+            message.message.remoteExtra.channelType = message.channel.channelType;
+            [[WKMessageExtraDB shared] addOrUpdateMessageExtras:@[message.message.remoteExtra]];
+        }
         [[WKSDK shared].chatManager callMessageUpdateDelegate:message.message];
         if(complete) {
             complete(nil);
