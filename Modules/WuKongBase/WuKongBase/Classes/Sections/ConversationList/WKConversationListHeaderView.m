@@ -9,6 +9,7 @@
 #import "WuKongBase.h"
 #import "WKSearchbarView.h"
 #import "WKGlobalSearchResultController.h"
+#import "WKGlobalSearchEntry.h"
 #import "WKPCOnlineVC.h"
 #import "WKMySettingManager.h"
 #define networkErrorViewHeight 50.0f
@@ -170,7 +171,7 @@
         _searchbarView = [[WKSearchbarView alloc] initWithFrame:CGRectMake(15.0f, 0.0f, WKScreenWidth - 30.0f, 36.0f)];
         _searchbarView.placeholder = LLang(@"搜索");
         _searchbarView.onClick = ^{
-            WKGlobalSearchResultController *vc = [WKGlobalSearchResultController new];
+            UIViewController *vc = [WKGlobalSearchEntry controllerWithSearchType:WKHistoryMessageSearchTypeAll keyword:nil];
             [[WKNavigationManager shared] pushViewController:vc animated:NO];
         };
         

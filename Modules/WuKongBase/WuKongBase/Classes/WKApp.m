@@ -702,8 +702,16 @@ static WKApp *_instance;
                 if(response.statusCode == 400) {
                     if(errorData) {
                         NSDictionary *errorDic = [NSJSONSerialization JSONObjectWithData:errorData options:NSJSONReadingMutableLeaves error:nil];
-                        if(errorDic) {
-                            return [NSError errorWithDomain:errorDic[@"msg"] code:[errorDic[@"status"] integerValue] userInfo:errorDic];
+                        if([errorDic isKindOfClass:[NSDictionary class]]) {
+                            // messages_search 等模块的错误体没有顶层 msg，真实语义在 error.{code,http_status,message}。
+                            // 若 domain 为 nil，errorWithDomain: 会抛 NSInvalidArgumentException 崩溃，这里兜底。
+                            NSString *domain = errorDic[@"msg"];
+                            if (![domain isKindOfClass:[NSString class]] || domain.length == 0) {
+                                NSDictionary *errObj = [errorDic[@"error"] isKindOfClass:[NSDictionary class]] ? errorDic[@"error"] : nil;
+                                domain = errObj[@"message"];
+                                if (![domain isKindOfClass:[NSString class]] || domain.length == 0) domain = @"request_failed";
+                            }
+                            return [NSError errorWithDomain:domain code:[errorDic[@"status"] integerValue] userInfo:errorDic];
                         }
                     }else {
                         return [NSError errorWithDomain:error.localizedDescription code:error.code userInfo:error.userInfo];

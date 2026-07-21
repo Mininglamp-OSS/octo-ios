@@ -109,6 +109,11 @@ static WKChannelHistorySearchMediaKind WKCHS_ParseMediaKind(NSString * _Nullable
     c.startDate = self.startDate;
     c.endDate = self.endDate;
     c.sort = self.sort;
+    c.contentTypes = [self.contentTypes copy];
+    c.fileExts = [self.fileExts copy];
+    c.memberUids = [self.memberUids copy];
+    c.channels = [self.channels copy];
+    c.channelTypes = [self.channelTypes copy];
     return c;
 }
 
@@ -116,6 +121,11 @@ static WKChannelHistorySearchMediaKind WKCHS_ParseMediaKind(NSString * _Nullable
     if (self.senderUids.count > 0) return YES;
     if (self.startDate) return YES;
     if (self.endDate) return YES;
+    if (self.contentTypes.count > 0) return YES;
+    if (self.fileExts.count > 0) return YES;
+    if (self.memberUids.count > 0) return YES;
+    if (self.channels.count > 0) return YES;
+    if (self.channelTypes.count > 0) return YES;
     return NO;
 }
 
@@ -140,6 +150,42 @@ static WKChannelHistorySearchMediaKind WKCHS_ParseMediaKind(NSString * _Nullable
     });
     if (self.startDate) d[@"sent_at_from"] = [fmt stringFromDate:self.startDate];
     if (self.endDate) d[@"sent_at_to"] = [fmt stringFromDate:self.endDate];
+    if (self.contentTypes.count > 0) d[@"content_types"] = self.contentTypes;
+    if (self.fileExts.count > 0) {
+        // 服务端 _search_global_files 用 file_exts（小写不含点）。
+        NSMutableArray<NSString *> *exts = [NSMutableArray array];
+        for (NSString *e in self.fileExts) {
+            if (![e isKindOfClass:[NSString class]] || e.length == 0) continue;
+            [exts addObject:[e lowercaseString]];
+        }
+        if (exts.count > 0) d[@"file_exts"] = exts;
+    }
+    // 全局：包含成员 / 所在群聊或子区 / 聊天类型
+    if (self.memberUids.count > 0) {
+        NSMutableOrderedSet *set = [NSMutableOrderedSet orderedSet];
+        for (NSString *uid in self.memberUids) {
+            if ([uid isKindOfClass:[NSString class]] && uid.length > 0) [set addObject:uid];
+        }
+        NSUInteger n = MIN(set.count, (NSUInteger)50);
+        if (n > 0) d[@"member_uids"] = [[set array] subarrayWithRange:NSMakeRange(0, n)];
+    }
+    if (self.channels.count > 0) {
+        NSMutableArray *arr = [NSMutableArray array];
+        for (NSDictionary *c in self.channels) {
+            if (![c isKindOfClass:[NSDictionary class]]) continue;
+            NSString *cid = c[@"channel_id"];
+            if (![cid isKindOfClass:[NSString class]] || cid.length == 0) continue;
+            [arr addObject:@{ @"channel_id": cid, @"channel_type": @([c[@"channel_type"] integerValue]) }];
+        }
+        if (arr.count > 0) d[@"channel_ids"] = arr;
+    }
+    if (self.channelTypes.count > 0) {
+        NSMutableOrderedSet *set = [NSMutableOrderedSet orderedSet];
+        for (NSNumber *t in self.channelTypes) {
+            if ([t isKindOfClass:[NSNumber class]]) [set addObject:t];
+        }
+        if (set.count > 0) d[@"channel_types"] = [set array];
+    }
     return d;
 }
 
