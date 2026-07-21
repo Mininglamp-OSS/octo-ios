@@ -189,6 +189,13 @@ NSString *const WKStickerUploadErrorDomain = @"WKStickerUploadErrorDomain";
                 }
             }
             finish(created, nil);
+        }).catch(^(NSError *reloadErr){
+            // sticker/user 已成功（表情已在服务端注册），仅本地缓存 reload 失败。
+            // 必须仍调 finish，否则调用方的 HUD spinner 永久不消失（需强杀）。按成功处理并广播，
+            // 让面板随 WKNOTIFY_STICKERS_UPDATED / 下次缓存加载补齐。
+            WKLogError(@"[Sticker/upload] STEP5 collectStickers reload FAIL err=%@", reloadErr);
+            [[NSNotificationCenter defaultCenter] postNotificationName:WKNOTIFY_STICKERS_UPDATED object:nil];
+            finish(nil, nil);
         });
     }).catch(^(NSError *error){
         WKLogError(@"[Sticker/upload] STEP4 POST FAIL err=%@ domain=%@ code=%ld userInfo=%@",

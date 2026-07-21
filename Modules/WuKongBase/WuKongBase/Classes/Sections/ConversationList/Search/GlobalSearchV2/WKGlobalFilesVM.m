@@ -103,8 +103,9 @@
             if ([WKGlobalSearchError shouldFallbackToLocal:error]) {
                 if ([ss.delegate respondsToSelector:@selector(globalFilesVM:shouldFallbackToLocalWithError:)]) {
                     [ss.delegate globalFilesVM:ss shouldFallbackToLocalWithError:error];
+                    return;
                 }
-                return;
+                // delegate 未实现回落 → 不能静默吞掉（否则 VM 停在 loading 僵死态），落错误态兜底。
             }
             ss.firstPageError = error;
             [ss notifyState];
