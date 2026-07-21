@@ -284,6 +284,14 @@ post_install do |installer|
             # （错误未触达任何 authored 代码）。放行非模块化 include，等价于旧工具链行为，
             # 不改变产物；否则每个 PR（含 main）在新 Xcode runner 上都会红。
             config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+            # Xcode 26.5 显式模块(explicit modules)的 builtin-ScanDependencies 阶段不认上面的
+            # build setting，仍以 -Werror=non-modular-include-in-framework-module 判红（AFNetworking
+            # 4.0.1 引 <netinet6/in6.h>）。直接把 -Wno-error=... 追加到 OTHER_CFLAGS，clang 参数里
+            # 后置生效、覆盖前面的 -Werror，能进到扫描 clang 调用。只降级这一个诊断，其余不受影响。
+            cflags = config.build_settings['OTHER_CFLAGS'] || '$(inherited)'
+            cflags = [cflags] unless cflags.is_a?(Array)
+            cflags << '-Wno-error=non-modular-include-in-framework-module'
+            config.build_settings['OTHER_CFLAGS'] = cflags
             # librlottie 0.2.1 (SDWebImage 官方 fork) 的 hmap 把 `config.h` 错误地
             # 映射到 `librlottie/config.h`（不存在）。关 hmap，并手动把所有 rlottie
             # 内部头文件目录加入 HEADER_SEARCH_PATHS，让 `<vrect.h>` 等 angled include
