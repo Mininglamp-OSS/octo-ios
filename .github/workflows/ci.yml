@@ -34,7 +34,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: Pods
-          key: ${{ runner.os }}-pods-${{ hashFiles('Podfile.lock') }}
+          key: ${{ runner.os }}-pods-${{ hashFiles('Podfile.lock', 'Podfile') }}
           restore-keys: |
             ${{ runner.os }}-pods-
 
@@ -47,6 +47,21 @@ jobs:
         # in extension targets; xcodebuild fails if the file is absent.
         # Copying the template with placeholder values satisfies the reference.
         run: cp OctoConfig.xcconfig.template OctoConfig.xcconfig
+
+      - name: Assert iOS SDK >= 26
+        # macos-latest 是漂移标签，绿不等于跑在 iOS 26 SDK 上。若 runner
+        # 回落到旧镜像，AFNetworking netinet6/in6.h 的 #error 根因不会触发，
+        # build 假绿 → 补丁形同虚设。这里显式断言 iphonesimulator SDK 主版本
+        # ≥ 26，不满足直接 fail（根因未覆盖）。
+        run: |
+          xcodebuild -version
+          SDK_VERSION="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          echo "iphonesimulator SDK version: ${SDK_VERSION}"
+          SDK_MAJOR="${SDK_VERSION%%.*}"
+          if [ "${SDK_MAJOR}" -lt 26 ]; then
+            echo "::error::iphonesimulator SDK major ${SDK_MAJOR} < 26 — runner drifted to an older image; AFNetworking iOS 26 #error root cause is NOT covered, a green build here would be a false green."
+            exit 1
+          fi
 
       - name: Build
         run: |
