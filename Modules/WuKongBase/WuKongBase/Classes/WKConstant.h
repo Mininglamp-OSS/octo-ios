@@ -302,6 +302,9 @@
 #define WK_NOTIFY_LABELLIST_REFRESH @"lim.notify.labellist.refresh"
 // 实名认证状态更新（userInfo 可包含 @{"verified": @(YES), "real_name": @"..."})
 #define WKNOTIFY_REALNAME_VERIFIED @"user.realname.verified"
+// 「我的表情」列表更新（添加/删除/收藏/置顶后广播）；
+// WKMyStickerContentView 订阅后 reloadData，`WKApp.collectStickers` 是数据源
+#define WKNOTIFY_STICKERS_UPDATED @"lim.stickers.updated"
 
 // 通用设置 · 实名认证入口（WKPOINT_CATEGORY_COMMONSETTING 注册点）
 #define WKPOINT_COMMONSETTING_REALNAME @"commonsetting.realname"
@@ -324,7 +327,9 @@ typedef enum : NSUInteger {
     WK_EMOJI_STICKER = 13, // emoji贴图
     
     WK_RICHTEXT = 14, // 富文本消息类型
-    
+
+    WK_INTERACTIVE_CARD = 17, // 互动卡片（Adaptive Cards octo/v1|v2）—— 与 type7 名片无关
+
     WK_TYPING = 101, // 正在输入
     
     WK_SCREENSHOT = 20, // 截屏通知

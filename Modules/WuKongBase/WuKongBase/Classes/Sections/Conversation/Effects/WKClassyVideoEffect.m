@@ -9,9 +9,11 @@
 
 @implementation WKClassyVideoEffect
 
-// 资源文件名（HEVC / 1036x1920 / 5.07s，放在 WuKongBase/Assets/Other/）
+// 资源文件名（HEVC / 1764x3840 / ~2.4s，放在 WuKongBase/Assets/Other/）
 static NSString * const kClassyVideoName = @"classy_celebrate";
 static NSString * const kClassyVideoExt  = @"mp4";
+// 视频宽高比 (width / height)：换素材时同步更新，否则 videoView 高度算错会拉伸抠像。
+static const CGFloat kClassyVideoAspect = 1764.0 / 3840.0;
 
 + (void)playInView:(WKMessageEffectView *)effectView sourceRect:(CGRect)sourceRect {
     if (!effectView) return;
@@ -29,15 +31,21 @@ static NSString * const kClassyVideoExt  = @"mp4";
     static const NSTimeInterval kFadeOut = 0.6;
 
     WKLumaKeyVideoView *videoView = [[WKLumaKeyVideoView alloc] initWithVideoURL:url];
-    // 直接铺满整屏：手机全屏比例（≈1:2.16）与视频比例（1036:1920≈1:1.85）并不一致，
-    // 不再用视频比例去反算高度（那样上下会留透明边）。让 videoView == effectView 全屏，
-    // 由 WKLumaKeyVideoView 内部 aspect-fill 缩放——视频比屏幕"矮"，会按高度填满、
-    // 左右各裁掉约 9%（主体居中，裁掉的是边缘近黑区，观感是沉浸式全屏特效）。
-    videoView.frame = effectView.bounds;
-    videoView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    // 宽度铺满屏幕、高度按视频比例等比、垂直居中。videoView 的宽高比 == 视频宽高比时，
+    // WKLumaKeyVideoView 内部的 aspect-fill（MAX(w/sw,h/sh)）不再裁边也不留边，视频原样贴合。
+    // 视频比屏更"高"时高度会溢出 effectView，被 effectView.clipsToBounds 裁掉（可接受，边缘本就是抠透明黑）。
+    CGFloat vw = effectView.bounds.size.width;
+    CGFloat vh = vw / kClassyVideoAspect;
+    videoView.frame = CGRectMake(0,
+                                 (effectView.bounds.size.height - vh) * 0.5,
+                                 vw,
+                                 vh);
+    videoView.autoresizingMask = UIViewAutoresizingFlexibleWidth
+                               | UIViewAutoresizingFlexibleTopMargin
+                               | UIViewAutoresizingFlexibleBottomMargin;
     videoView.alpha = 0.0;
-    // 黑底视频，直接复用 Dark 模式（默认）+ action_celebrate 同款参数：
-    // 主体（黄脸/蓝紫电路/酒杯/"有品位"文字 luma 0.25~0.75）远超过阈值，完整保留；
+    // 黑底视频，Dark 模式默认参数：
+    // 主体（luma 0.25~0.75）远超过阈值完整保留；
     // 四角近纯黑 luma<0.005 完全透明，与背景一同消失。
     videoView.lumaThreshold = 0.10;
     videoView.lumaTolerance = 0.12;
@@ -65,8 +73,8 @@ static NSString * const kClassyVideoExt  = @"mp4";
         }];
     }];
 
-    // 兜底：视频 ~5.07s + 余量
-    [effectView scheduleRemovalAfterDelay:8.0];
+    // 兜底：视频 ~2.4s + fadeIn/fadeOut + 余量
+    [effectView scheduleRemovalAfterDelay:4.5];
 }
 
 #pragma mark - 资源定位

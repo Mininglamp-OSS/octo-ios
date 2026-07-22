@@ -16,7 +16,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// 创建子区
 /// @param groupNo 父群编号
-/// @param name 子区名称 (最多50字)
+/// @param name 子区名称 (最多100字)
 /// @param sourceMessageId 来源消息ID (可选)
 /// @param sourceMessagePayload 来源消息正文 (可选，从消息创建时需传)
 - (AnyPromise *)createThread:(NSString *)groupNo
@@ -67,7 +67,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// 修改子区名称 (与 web 端 `PUT groups/{groupNo}/threads/{shortId}` 对齐)
 /// @param groupNo 父群编号
 /// @param shortId 子区 shortId
-/// @param name 新名称 (最多 50 字)
+/// @param name 新名称 (最多 100 字)
 - (AnyPromise *)updateThread:(NSString *)groupNo shortId:(NSString *)shortId name:(NSString *)name;
 
 /// 加入子区

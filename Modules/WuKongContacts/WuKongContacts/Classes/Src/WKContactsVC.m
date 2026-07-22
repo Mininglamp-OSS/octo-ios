@@ -16,6 +16,7 @@
 #import "WKAvatarUtil.h"
 #import "WKSearchbarView.h"
 #import "WKGlobalSearchResultController.h"
+#import "WKGlobalSearchEntry.h"
 #import <WuKongBase/WKFollowedKeysStore.h>
 
 #pragma mark - 跨实例联系人快照
@@ -273,9 +274,8 @@ static void WKContactsWriteSharedSnapshot(NSArray<WKChannelInfo*> *allInfos,
         _searchbarView = [[WKSearchbarView alloc] initWithFrame:CGRectMake(14.0f, 10.0f, WKScreenWidth - 28.0f, 36.0f)];
         _searchbarView.placeholder = LLang(@"搜索联系人、AI、群聊");
         _searchbarView.onClick = ^{
-            WKGlobalSearchResultController *vc = [WKGlobalSearchResultController new];
-            // 通讯录入口：搜索页默认选中"联系人"tab（会话列表入口走默认的"聊天"tab）。
-            vc.searchType = WKHistoryMessageSearchTypeContacts;
+            // 通讯录入口：搜索页默认选中"联系人"tab（会话列表入口走默认的"聊天记录"tab）。
+            UIViewController *vc = [WKGlobalSearchEntry controllerWithSearchType:WKHistoryMessageSearchTypeContacts keyword:nil];
             [[WKNavigationManager shared] pushViewController:vc animated:NO];
         };
     }

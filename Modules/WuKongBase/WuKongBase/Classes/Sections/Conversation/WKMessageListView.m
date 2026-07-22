@@ -12,6 +12,7 @@
 #import "WKTimeHeaderView.h"
 #import "WKMessageRevokeCell.h"
 #import "WKTextMessageCell.h"
+#import "WKInteractiveCardCell.h"
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKHistorySplitTipContent.h"
 #import "WKTypingManager.h"
@@ -750,8 +751,25 @@ static const BOOL kIncrementalPulldown = NO;
     } completion:completionBlock];
 }
 
+// 检测视图子树里是否有第一响应者（如交互卡片里正在编辑的输入框）
+static BOOL WKListViewContainsFirstResponder(UIView *v) {
+    if (!v) return NO;
+    if (v.isFirstResponder) return YES;
+    for (UIView *s in v.subviews) {
+        if (WKListViewContainsFirstResponder(s)) return YES;
+    }
+    return NO;
+}
+
 - (void)stopScrollingAnimation
 {
+    // 原实现通过 removeFromSuperview + 重新插回停止滚动动量，但 detach 会让 UIKit
+    // 强制 resign 列表内所有第一响应者——交互卡片里刚聚焦的输入框会因此被收键盘。
+    // 若列表内有第一响应者，改用非破坏性方式停止动量（不 detach，保住焦点）。
+    if (WKListViewContainsFirstResponder(self.tableView)) {
+        [self.tableView setContentOffset:self.tableView.contentOffset animated:NO];
+        return;
+    }
     UIView *superview = self.tableView.superview;
     NSUInteger index = [self.tableView.superview.subviews indexOfObject:self.tableView];
     [self.tableView removeFromSuperview];
@@ -1758,6 +1776,12 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 // 结束滚动
 -(void) endScroll:(UIScrollView*)scrollView {
     self.scrolling = false;
+    // [perf] 滚动停下：补做交互卡片(type17)在滚动中被跳过的实测高度校准，避免快滑掉帧。
+    for (UITableViewCell *c in self.tableView.visibleCells) {
+        if ([c respondsToSelector:@selector(wk_calibrateLiveHeightIfPending)]) {
+            [(id)c wk_calibrateLiveHeightIfPending];
+        }
+    }
 }
 
 - (void)reloadData {
@@ -2486,6 +2510,15 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 # pragma mark -- 列表委托 UITableViewDataSource && UITableViewDelegate
 
 - (void)tableView:(UITableView *)tableView touchesTime:(NSTimeInterval)timestamp {
+    // 交互卡片(type17)输入框聚焦期间，触摸卡片不收键盘——否则点输入框聚焦的同一次触摸
+    // 会冒泡到列表 touchesEnded 把键盘收掉（光标闪一下就消失）。手动滑动仍由
+    // keyboardDismissMode=OnDrag 正常收起。
+    for (UITableViewCell *c in self.tableView.visibleCells) {
+        if ([c respondsToSelector:@selector(wk_hasFocusedCardInput)] &&
+            [(id)c wk_hasFocusedCardInput]) {
+            return;
+        }
+    }
     // 短按点击或长按都收起键盘
     if(self.onContentViewClick) {
         self.onContentViewClick();
@@ -3209,11 +3242,34 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         // begin/endUpdates 空块强制 UITableView 重新 query 可见行高度; heightCache
         // 已被上面失效, 这次会走 measure 拿到基于新 sender info 的正确高度, 气泡
         // 框自动调整到匹配内容。performWithoutAnimation 避免视觉跳动。
-        if (anyVisibleAffected) {
-            [UIView performWithoutAnimation:^{
-                [self.tableView beginUpdates];
-                [self.tableView endUpdates];
-            }];
+        //
+        // Bugly 同款崩溃防护 (TestFlight Dv1hfifowmpA1QbEzBWBFn, 5 份同栈):
+        //   channelInfoUpdate: 走主队列, 但 pullup:_block_invoke 的完成回调是在
+        //   ioQueue 里改完 dataProvider 后, 再 dispatch_async → global queue
+        //   precache → dispatch_async → main queue 才跑 insertRows。这中间的
+        //   窗口里, numberOfRowsInSection 从数据源返新值, 而 tableView 内部
+        //   还是旧值。空 begin/endUpdates 在 endUpdates 里跑一致性校验 → 撞上
+        //   假 delta → NSInternalInconsistencyException
+        //   "_Bug_Detected_In_Client_Of_UITableView_Invalid_Number_Of_Rows_In_Section"
+        //   (同款异常字符串见 6b750ee startReminderAnimation 修复)。
+        //
+        // 修法两道防线, 与 addMessage: (line 365) 同源:
+        //   1) 前置漂移检查: 不 in-sync 直接跳过 begin/endUpdates。visible cells
+        //      内容已 refresh, heightCache 已失效; 用户下次滚一下 heightForRow
+        //      自然 measure 拿新值, 或等 pullup 完成后的 insertRows 一并收敛,
+        //      不会永久错高度。
+        //   2) 二次保险 @try/@catch: 极端 case (校验后立即被别的 main-queue block
+        //      重入改动 dp) 兜底不 crash; 不 fallback reloadData 避免打断
+        //      pullup 增量插入。
+        if (anyVisibleAffected && [self isTableViewRowCountInSyncWithDataProvider]) {
+            @try {
+                [UIView performWithoutAnimation:^{
+                    [self.tableView beginUpdates];
+                    [self.tableView endUpdates];
+                }];
+            } @catch (NSException *ex) {
+                NSLog(@"[WKMessageListView] channelInfoUpdate begin/endUpdates drift caught: %@", ex);
+            }
         }
 //         [self.tableView reloadData]; // TODO: 不要用reloadData 会导致长按菜单错位
     }
@@ -3802,6 +3858,13 @@ static const NSInteger kMaxRehydratePages = 35;
     // 放特效（review R1）—— 我们 mark 后直接 return，不进 trigger 路径。
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        // 双保险：+300ms 首帧 gate + 本处 +100ms 之间可能收到撤回信令；此时 message.revoke
+        // 已经由 SDK 就地更新（WKMessageModel.revoke 读的是 message.remoteExtra.revoke）。
+        // mark 掉消费，避免后续回滑/cell 复用重新入队。
+        if (message.revoke) {
+            [[WKMessageEffectManager shared] markTriggeredForMessage:message];
+            return;
+        }
         NSIndexPath *indexPath = [self.dataProvider indexPathAtClientMsgNo:message.clientMsgNo];
         if (!indexPath) {
             [[WKMessageEffectManager shared] markTriggeredForMessage:message];

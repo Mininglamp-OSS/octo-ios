@@ -411,6 +411,72 @@ post_install do |installer|
             end
         end
     end
+    # ─────────────────────────────────────────────────────────────────────
+    # AFNetworking 4.0.1 netinet6/in6.h 非模块化私有系统头修复 (2026-07)
+    # iOS 26 SDK 在 <netinet6/in6.h> 顶部放了硬 #error(RFC2553)：该私有头
+    # 已废弃，指引改用 <netinet/in.h>（后者已 #include 全部 in6 定义，语义
+    # 等价、零 API 破坏、零调用方改动）。AFNetworking 4.0.1 有 2 个源文件
+    # 直接 #import <netinet6/in6.h> 命中该 #error → 主分支任何 build 全挂
+    # (YUJ-10005/10060/10061)：AFNetworkReachabilityManager.m 与
+    # AFHTTPSessionManager.m。全库逐文件扫过确认仅此 2 处，其余 0 命中。
+    # AFNetworking 4.0.1 已停维护、无法改源码/升版本，之前尝试过的编译诊断
+    # flag(CLANG_ALLOW_NON_MODULAR/ENABLE_EXPLICIT_MODULES=NO / -Wno-error /
+    # Xcode 版本 pin)对 SDK 内建 #error 无效(已 revert)，故走外科最小 patch：
+    # post_install 逐文件幂等改写这一行 import。
+    #
+    # 硬要求（PlanBot 双顾问评审，逐文件全套、不放松）：
+    #  1) fail-fast：逐文件断言命中 'netinet6/in6.h' 的行数恰为 1，否则
+    #     raise（打印路径+相关行），绝不静默跳过；文件不存在 → raise。
+    #     已 patch(marker 命中)则该文件跳过并打印 already-applied。
+    #  2) 权限按原样恢复：逐文件 stat 记录原 mode → chmod 0644 写入 → chmod
+    #     回原 mode（begin/ensure 保证异常路径也恢复，不硬编码 0444）。
+    #  3) 写后正向断言：逐文件重读确认 netinet6/in6.h 命中=0 且 netinet/in.h
+    #     命中 ≥1，否则 raise。
+    #  4) marker：每个文件改写行尾各附 marker 作幂等探测。
+    # ─────────────────────────────────────────────────────────────────────
+    af_in6_marker  = '// octo-af-in6-include-patch (Podfile post_install)'
+    af_old_import  = '#import <netinet6/in6.h>'
+    af_new_import  = "#import <netinet/in.h> #{af_in6_marker}"
+    af_in6_targets = [
+        'Pods/AFNetworking/AFNetworking/AFNetworkReachabilityManager.m',
+        'Pods/AFNetworking/AFNetworking/AFHTTPSessionManager.m',
+    ]
+    af_in6_targets.each do |rel_path|
+        af_path = File.join(__dir__, rel_path)
+        af_base = File.basename(af_path)
+        unless File.exist?(af_path)
+            raise "AFNetworking in6.h patch: target file not found: #{af_path}"
+        end
+        af_content = File.read(af_path)
+        if af_content.include?(af_in6_marker)
+            puts "✅ #{af_base}: netinet6/in6.h include patch already-applied (marker 命中，跳过)"
+            next
+        end
+        af_in6_lines = af_content.lines.grep(/netinet6\/in6\.h/)
+        unless af_in6_lines.length == 1
+            raise "AFNetworking in6.h patch: expected exactly 1 line matching 'netinet6/in6.h' in #{af_path}, found #{af_in6_lines.length}. Relevant lines: #{af_in6_lines.map(&:strip).inspect}"
+        end
+        af_new_content = af_content.sub(af_old_import, af_new_import)
+        if af_new_content == af_content
+            raise "AFNetworking in6.h patch: matched 'netinet6/in6.h' but exact import token '#{af_old_import}' not present for substitution in #{af_path} (import 写法可能变了，请人工核对)"
+        end
+        af_orig_mode = File.stat(af_path).mode & 0777
+        begin
+            # CocoaPods 1.16+ 默认把 pod 源装成 0444 read-only, 直接 File.write 报 EACCES
+            File.chmod(0644, af_path)
+            File.write(af_path, af_new_content)
+        ensure
+            File.chmod(af_orig_mode, af_path)
+        end
+        # 写后正向断言：重读确认 in6.h 命中=0 且 netinet/in.h 命中≥1
+        af_verify   = File.read(af_path)
+        af_in6_hits = af_verify.scan(/netinet6\/in6\.h/).length
+        af_in_hits  = af_verify.scan(/netinet\/in\.h/).length
+        unless af_in6_hits.zero? && af_in_hits >= 1
+            raise "AFNetworking in6.h patch: post-write assertion FAILED for #{af_path} (netinet6/in6.h hits=#{af_in6_hits} expected 0, netinet/in.h hits=#{af_in_hits} expected >=1)"
+        end
+        puts "🩹 Patched #{af_base}: #import <netinet6/in6.h> → <netinet/in.h> (iOS 26 SDK #error 解锁, mode restored to #{'%04o' % af_orig_mode})"
+    end
 
     installer.pods_project.save
 end
@@ -456,6 +522,9 @@ abstract_target 'OctoiOSBase' do
 #  pod  'WuKongIMSDK', '~> 1.0.2' ## 源码地址 https://github.com/WuKongIM/WuKongIMiOSSDK
   # pod 'Down', :git => 'https://github.com/johnxnguyen/Down.git', :tag => 'v0.11.0'  ## 已替换为 libcmark_gfm
   pod 'libcmark_gfm'  ## Markdown 渲染（纯 C 解析，无 WebKit 依赖）
+  # Adaptive Cards 渲染器 —— vendored MIT 源码（非 EULA 二进制 pod），用于 InteractiveCard(type17)。
+  # 详见 Modules/WuKongBase/WuKongBase/Vendor/AdaptiveCards/AdaptiveCards.podspec 头注释。
+  pod 'AdaptiveCards', :path => './Modules/WuKongBase/WuKongBase/Vendor/AdaptiveCards'
   pod 'WuKongBase',  :path => './Modules/WuKongBase'   ## WuKongBase 基础工具包
   pod 'WuKongLogin', :path => './Modules/WuKongLogin'  ##  登录模块
   pod 'WuKongContacts', :path => './Modules/WuKongContacts'  ## 联系人模块

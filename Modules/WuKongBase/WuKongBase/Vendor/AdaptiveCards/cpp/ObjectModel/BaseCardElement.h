@@ -1,0 +1,92 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+#pragma once
+
+#include "pch.h"
+#include "BaseActionElement.h"
+#include "BaseElement.h"
+#include "ElementParserRegistration.h"
+#include "Separator.h"
+#include "RemoteResourceInformation.h"
+
+void HandleUnknownProperties(const Json::Value& json, const std::unordered_set<std::string>& knownProperties, Json::Value& unknownProperties);
+
+namespace AdaptiveCards
+{
+class BaseCardElement : public BaseElement
+{
+public:
+    BaseCardElement(CardElementType type, Spacing spacing, bool separator, HeightType height, TargetWidthType targetWidthType);
+    BaseCardElement(CardElementType type);
+
+    BaseCardElement() = default;
+    BaseCardElement(const BaseCardElement&) = default;
+    BaseCardElement(BaseCardElement&&) = default;
+    BaseCardElement& operator=(const BaseCardElement&) = default;
+    BaseCardElement& operator=(BaseCardElement&&) = default;
+    ~BaseCardElement() = default;
+
+    Json::Value SerializeToJsonValue() const override;
+
+    virtual bool GetSeparator() const;
+    virtual void SetSeparator(bool value);
+
+    HeightType GetHeight() const;
+    void SetHeight(HeightType value);
+
+    TargetWidthType GetTargetWidth() const;
+    void SetTargetWidth(TargetWidthType value);
+
+    virtual Spacing GetSpacing() const;
+    virtual void SetSpacing(Spacing value);
+
+    bool GetIsVisible() const;
+    void SetIsVisible(bool value);
+
+    CardElementType GetElementType() const;
+
+    std::optional<std::string> GetAreaGridName() const;
+    void SetAreaGridName(const std::optional<std::string>& value);
+
+    std::string GetNonOptionalAreaGridName() const;
+    void SetNonOptionalAreaGridName(const std::string& value);
+
+    bool MeetsTargetWidthRequirement(HostWidth hostWidth) const;
+    static std::shared_ptr<BaseCardElement> DeserializeBasePropertiesFromString(ParseContext& context, const std::string& jsonString);
+    static std::shared_ptr<BaseCardElement> DeserializeBaseProperties(ParseContext& context, const Json::Value& json);
+
+    template <typename T>
+    static std::shared_ptr<T> Deserialize(ParseContext& context, const Json::Value& json);
+
+    static void ParseJsonObject(AdaptiveCards::ParseContext& context, const Json::Value& json, std::shared_ptr<BaseElement>& element);
+
+protected:
+    static Json::Value SerializeSelectAction(const std::shared_ptr<BaseActionElement>& selectAction);
+
+private:
+    void PopulateKnownPropertiesSet();
+    static void DeserializeBaseProperties(ParseContext& context, const Json::Value& json, std::shared_ptr<BaseCardElement>& element);
+
+    CardElementType m_type;
+    Spacing m_spacing;
+    HeightType m_height;
+    TargetWidthType m_targetWidth;
+    bool m_separator;
+    bool m_isVisible;
+    std::optional<std::string> m_areaGridName;
+    std::string m_nonOptionalAreaGridName;
+};
+
+template <typename T>
+std::shared_ptr<T> BaseCardElement::Deserialize(ParseContext& context, const Json::Value& json)
+{
+    std::shared_ptr<T> cardElement = std::make_shared<T>();
+    std::shared_ptr<BaseCardElement> baseCardElement = std::static_pointer_cast<BaseCardElement>(cardElement);
+    DeserializeBaseProperties(context, json, baseCardElement);
+
+    // Walk all properties and put any unknown ones in the additional properties json
+    HandleUnknownProperties(json, baseCardElement->m_knownProperties, baseCardElement->m_additionalProperties);
+
+    return cardElement;
+}
+} // namespace AdaptiveCards

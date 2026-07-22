@@ -28,6 +28,9 @@
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "UIColor+WK.h"
 #import "WKSafeFilePreviewVC.h"
+#import "WKStickerImageView.h"
+#import "WKLottieStickerContent.h"
+#import "WKGIFContent.h"
 
 // 下载进度遮罩（黑色半透明蒙版 + 转圈 + 百分比）
 @interface WKDownloadProgressOverlay : UIView
@@ -1889,6 +1892,61 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
     WKMergeForwardDetailVC *vc = [WKMergeForwardDetailVC new];
     vc.mergeForwardContent = content;
     [[WKNavigationManager shared] pushViewController:vc animated:YES];
+}
+
+@end
+
+
+//---------- 表情/贴图 cell（WK_LOTTIE_STICKER=12 / WK_EMOJI_STICKER=13 / WK_GIF=3）----------
+
+@implementation WKMergeForwardDetailStickerModel
+
+- (Class)cell {
+    return WKMergeForwardDetailStickerCell.class;
+}
+
+@end
+
+@interface WKMergeForwardDetailStickerCell ()
+
+@property(nonatomic,strong) WKStickerImageView *stickerImageView;
+
+@end
+
+@implementation WKMergeForwardDetailStickerCell
+
+// 与聊天页 WKLottieStickerCell 一致：固定 160×160 缩略呈现
++ (CGFloat)contentHeightForModel:(WKMergeForwardDetailStickerModel *)model maxWidth:(CGFloat)maxWidth {
+    return 160.0f;
+}
+
+- (void)setupUI {
+    [super setupUI];
+    self.stickerImageView = [[WKStickerImageView alloc] initWithFrame:CGRectMake(0, 0, 160.0f, 160.0f)];
+    [self.messageContentView addSubview:self.stickerImageView];
+}
+
+- (void)refresh:(WKMergeForwardDetailStickerModel *)model {
+    [super refresh:model];
+    NSString *url = nil;
+    NSString *placeholder = nil;
+    if ([model.message.content isKindOfClass:[WKLottieStickerContent class]]) {
+        // WK_LOTTIE_STICKER=12 / WK_EMOJI_STICKER=13 (WKEmojiStickerContent 继承 WKLottieStickerContent)
+        WKLottieStickerContent *c = (WKLottieStickerContent *)model.message.content;
+        url = c.url;
+        placeholder = c.placeholder;
+    } else if ([model.message.content isKindOfClass:[WKGIFContent class]]) {
+        WKGIFContent *c = (WKGIFContent *)model.message.content;
+        url = c.url;
+    }
+    self.stickerImageView.placehoderSvg = placeholder; // placehoderSvg 必须在 stickerURL 前
+    self.stickerImageView.stickerURL = [[WKApp shared] getFileFullUrl:url];
+    self.stickerImageView.isPlay = YES;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    self.stickerImageView.frame = CGRectMake(0, 0, 160.0f, 160.0f);
 }
 
 @end

@@ -7,6 +7,7 @@
 
 #import "WKConversationContextImpl.h"
 #import <objc/runtime.h>
+#import "WKInteractiveCardContent.h"
 #import "WKUserHandleVC.h"
 #import "WKMentionUserCell.h"
 #import "WKInputMentionCache.h"
@@ -622,6 +623,12 @@
 }
 
 - (void)forwardMessage:(WKMessageContent *)content {
+    // 交互档卡片（octo/v2，含 Input/Submit）禁止转发（复刻 web）。
+    if ([content isKindOfClass:[WKInteractiveCardContent class]] &&
+        ![(WKInteractiveCardContent *)content isForwardable]) {
+        [self.conversationView showMsg:LLang(@"该卡片不支持转发")];
+        return;
+    }
     WKMessage *message = [[WKSDK shared].chatManager forwardMessage:content channel:self.channel];
     [self.conversationView.messageListView sendMessage:[[WKMessageModel alloc] initWithMessage:message]];
 }

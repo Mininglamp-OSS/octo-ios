@@ -66,6 +66,56 @@
 //    return  [[WKResource shared] resourceForImage:name podName:@"WuKongBase_images"];
 }
 
+// Fallback 工具条图标：runtime 合成一张与 Conversation/Toolbar/*Normal.pdf 同款风格
+// （紫色渐变 squircle 背景 + 白色 SF Symbol），供暂缺美术资源的 item（如「文件」）使用。
+// 单一符号名 cache 一次，避免每次 refresh 重画。
++ (UIImage *)fallbackToolbarIconWithSymbolName:(NSString *)symbolName {
+    static NSMutableDictionary<NSString *, UIImage *> *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ cache = [NSMutableDictionary dictionary]; });
+    if (symbolName.length == 0) return nil;
+    UIImage *cached = cache[symbolName];
+    if (cached) return cached;
+
+    // 44pt 是 UIButton 常用图标尺寸；UIGraphicsImageRenderer 输出带屏幕 scale 的位图
+    CGFloat size = 44.0;
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(size, size)];
+    UIImage *img = [renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+        CGContextRef c = ctx.CGContext;
+        // squircle 圆角背景，圆角比例参考 ImageNormal.pdf 的观感 (~28% side)
+        UIBezierPath *bg = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, size, size) cornerRadius:size * 0.28];
+        CGContextSaveGState(c);
+        [bg addClip];
+        // 线性渐变（左下 → 右上），色板对齐美术紫色调
+        CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+        CGFloat locs[] = {0.0, 1.0};
+        NSArray *colors = @[
+            (__bridge id)[UIColor colorWithRed:0.55 green:0.42 blue:0.98 alpha:1.0].CGColor, // 深紫
+            (__bridge id)[UIColor colorWithRed:0.68 green:0.60 blue:0.99 alpha:1.0].CGColor  // 浅紫
+        ];
+        CGGradientRef grad = CGGradientCreateWithColors(cs, (__bridge CFArrayRef)colors, locs);
+        CGContextDrawLinearGradient(c, grad, CGPointMake(0, size), CGPointMake(size, 0), 0);
+        CGGradientRelease(grad);
+        CGColorSpaceRelease(cs);
+        CGContextRestoreGState(c);
+
+        // 居中的白色 SF Symbol（占外框 ~55%，与其他 Normal 图标内部符号视觉比例对齐）
+        if (@available(iOS 13.0, *)) {
+            CGFloat symPt = size * 0.55;
+            UIImageSymbolConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:symPt weight:UIImageSymbolWeightSemibold];
+            UIImage *sym = [UIImage systemImageNamed:symbolName withConfiguration:cfg];
+            sym = [sym imageWithTintColor:[UIColor whiteColor] renderingMode:UIImageRenderingModeAlwaysOriginal];
+            if (sym) {
+                CGRect r = CGRectMake((size - sym.size.width) / 2.0, (size - sym.size.height) / 2.0,
+                                      sym.size.width, sym.size.height);
+                [sym drawInRect:r];
+            }
+        }
+    }];
+    cache[symbolName] = img;
+    return img;
+}
+
 @end
 
 @implementation WKPanelEmojiFuncItem
@@ -274,11 +324,10 @@
 - (UIImage *)itemIcon {
     UIImage *img = [self getImageNameForBase:@"Conversation/Toolbar/FileNormal"];
     if (img) return img;
-    if (@available(iOS 13.0, *)) {
-        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightRegular];
-        return [UIImage systemImageNamed:@"doc" withConfiguration:config];
-    }
-    return nil;
+    // 美术未提供 FileNormal.pdf 时兜底，视觉与其他 Normal 图标一致
+    // （紫色渐变 squircle + 白色 doc）—— 之前 fallback 用裸 SF Symbol「doc」
+    // 是黑色线条无背景，跟一排图标风格断层。
+    return [[self class] fallbackToolbarIconWithSymbolName:@"doc"];
 }
 
 - (void)onPressed:(UIButton *)btn {

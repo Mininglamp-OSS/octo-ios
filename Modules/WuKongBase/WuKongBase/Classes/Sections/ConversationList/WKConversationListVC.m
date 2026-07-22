@@ -30,6 +30,7 @@
 #import "WKGlobalSearchController.h"
 #import "WKSearchbarView.h"
 #import "WKGlobalSearchResultController.h"
+#import "WKGlobalSearchEntry.h"
 #import "WKNetworkListener.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 #import "WKTypingManager.h"
@@ -983,7 +984,7 @@
     searchbar.placeholder = LLang(@"搜索");
     searchbar.layer.masksToBounds = YES;
     searchbar.onClick = ^{
-        WKGlobalSearchResultController *vc = [WKGlobalSearchResultController new];
+        UIViewController *vc = [WKGlobalSearchEntry controllerWithSearchType:WKHistoryMessageSearchTypeAll keyword:nil];
         [[WKNavigationManager shared] pushViewController:vc animated:NO];
     };
     searchbar.tag = 9990;

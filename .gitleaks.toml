@@ -1,0 +1,24 @@
+# gitleaks 配置 — octo-ios
+#
+# 由 org 级 reusable-secret-scan.yml (gitleaks 8.30.1) 自动检测：
+#   if [ -f .gitleaks.toml ]; then --config .gitleaks.toml
+#
+# `[extend] useDefault = true` 保留 gitleaks 全部默认规则，仅在其之上追加下方 allowlist。
+# 若不 extend，自定义 config 会「替换」默认规则集，反而把所有真实密钥漏检——务必保留。
+
+title = "octo-ios gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = """
+WuKongIM SDK 历史加密工具文件的确认误报（非本仓库任何 PR 引入，git 历史范围内未被修改）。
+- WKRSAUtil.m：private-key 规则命中 RSA 相关常量/关键字，非真实私钥。
+- WKCurve25519.swift：generic-api-key 规则命中 Curve25519 高熵常量，非真实凭证。
+经核验两文件均无 PEM / 实体私钥 / 线上凭证。按路径窄范围 allowlist，其余文件仍全量扫描。
+"""
+paths = [
+  '''Modules/WuKongIMiOSSDK/WuKongIMSDK/Classes/utils/WKRSAUtil\.m$''',
+  '''Modules/WuKongIMiOSSDK/WuKongIMSDK/Classes/manager/WKCurve25519\.swift$''',
+]

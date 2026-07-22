@@ -103,6 +103,18 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
+//---------- 表情/贴图 cell（WK_LOTTIE_STICKER=12 / WK_EMOJI_STICKER=13 / WK_GIF=3）----------
+// 与聊天页 WKLottieStickerCell 一致：160×160 固定尺寸 + WKStickerImageView
+// (支持 gif/webp/png/jpg/lottie)。合并转发详情里以缩略呈现，跟聊天里同款视觉。
+
+@interface WKMergeForwardDetailStickerModel : WKMergeForwardDetailModel
+
+@end
+
+@interface WKMergeForwardDetailStickerCell : WKMergeForwardDetailCell
+
+@end
+
 //----------其他cell ----------
 
 @interface WKMergeForwardDetailOtherModel : WKMergeForwardDetailModel

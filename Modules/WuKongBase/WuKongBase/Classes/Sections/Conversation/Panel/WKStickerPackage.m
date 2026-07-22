@@ -14,11 +14,12 @@
 
 + (WKModel *)fromMap:(NSDictionary *)dictory type:(ModelMapType)type {
     WKSticker *resp = [WKSticker new];
+    resp.stickerID = dictory[@"sticker_id"];
     resp.path = dictory[@"path"];
     resp.width = dictory[@"width"];
     resp.height = dictory[@"height"];
     resp.format = dictory[@"format"];
-    resp.sortNum = dictory[@"sort_num"];
+    resp.sortNum = dictory[@"sort"] ?: dictory[@"sort_num"]; // 服务端已改用 sort 字段
     resp.category = dictory[@"category"];
     resp.placeholder = dictory[@"placeholder"];
     return resp;

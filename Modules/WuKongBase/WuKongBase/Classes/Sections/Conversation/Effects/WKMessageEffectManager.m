@@ -11,6 +11,7 @@
 #import "WKPartyEffect.h"
 #import "WKActionVideoEffect.h"
 #import "WKClassyVideoEffect.h"
+#import "WKShangfangVideoEffect.h"
 #import "WKMessageModel.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
 
@@ -68,6 +69,7 @@ static const NSInteger kMaxTriggeredIds = 1000;
             @"[使命必达]": @"rocketLaunch",
             @"[崇尚行动]": @"actionVideo",
             @"[有品位]":   @"classyVideo",
+            @"[尚方宝剑]": @"shangfangVideo",
         };
 
         _triggeredMessageIds = [NSMutableOrderedSet orderedSet];
@@ -87,6 +89,10 @@ static const NSInteger kMaxTriggeredIds = 1000;
 #pragma mark - Detection
 
 - (nullable NSString *)effectTypeForMessage:(WKMessageModel *)message {
+    // 撤回消息不再触发动画特效：本地 content 仍保留原始 tag（如 [使命必达]），
+    // 但用户/其他成员不应看到已被撤回的表情动画。首帧进群 willDisplayCell 会走到这里，
+    // 早退返回 nil 让上游 checkFirstView/checkAndTrigger 直接短路（都有 if(!effectType) return）。
+    if (message.revoke) return nil;
     if (message.contentType != 1) return nil;
 
     WKTextContent *textContent = (WKTextContent *)message.content;
@@ -249,6 +255,8 @@ static const NSInteger kMaxTriggeredIds = 1000;
         [WKActionVideoEffect playInView:effectView sourceRect:sourceRect];
     } else if ([effectType isEqualToString:@"classyVideo"]) {
         [WKClassyVideoEffect playInView:effectView sourceRect:sourceRect];
+    } else if ([effectType isEqualToString:@"shangfangVideo"]) {
+        [WKShangfangVideoEffect playInView:effectView sourceRect:sourceRect];
     }
 
     self.pendingEffectType = nil;

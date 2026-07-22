@@ -11,6 +11,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface WKSticker : WKModel
 
+@property(nonatomic,copy) NSString *stickerID; // 服务端主键（sticker_id），用于 DELETE /sticker/user/:sticker_id
 @property(nonatomic,copy) NSString *path;
 @property(nonatomic,strong) NSNumber *width;
 @property(nonatomic,strong) NSNumber *height;

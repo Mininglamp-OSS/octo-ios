@@ -1234,6 +1234,12 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     } else {
         // ========== 私聊布局（保持原样） ==========
 
+        // 外部群 Tag 占位（与 bot/official 并列，挤占 title 宽度；仅群聊+走本分支时可能出现）
+        CGFloat externalTagReserve = 0.0f;
+        if(!self.externalGroupTagLbl.hidden) {
+            externalTagReserve = self.externalGroupTagLbl.lim_width + 6.0f;
+        }
+
         // 头像（统一尺寸 42x42）
         CGFloat avatarSize = 52.0f;
         self.avatarImgView.frame = CGRectMake(15.0f, 0, avatarSize, avatarSize);
@@ -1282,7 +1288,7 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         }
 
         [self.lastMsgTimeLbl sizeToFit];
-        CGFloat titleMaxWidth = self.lim_width - (self.avatarImgView.lim_right + 5.0f) - (self.lastMsgTimeLbl.lim_width+5.0f + 20.0f)  - 20.0f - titleIconReserve;
+        CGFloat titleMaxWidth = self.lim_width - (self.avatarImgView.lim_right + 5.0f) - (self.lastMsgTimeLbl.lim_width+5.0f + 20.0f)  - 20.0f - titleIconReserve - externalTagReserve;
         if(!self.statusImgView.hidden) {
             titleMaxWidth = titleMaxWidth - (self.statusImgView.lim_width + statusRightSpace);
         }
@@ -1386,6 +1392,18 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
             }
             self.threadCountLbl.lim_left = tcLeft;
             self.threadCountLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.threadCountLbl.lim_height) / 2.0f;
+        }
+
+        // 外部群 Tag（与 group-summary 分支同款让位链：title.right → officialTag → botBadge）
+        if(!self.externalGroupTagLbl.hidden) {
+            CGFloat extLeft = self.titleLbl.lim_right + 6.0f;
+            if(!self.botBadgeLbl.hidden) {
+                extLeft = self.botBadgeLbl.lim_right + 4.0f;
+            } else if(!self.officialTag.hidden) {
+                extLeft = self.officialTag.lim_right + 4.0f;
+            }
+            self.externalGroupTagLbl.lim_left = extLeft;
+            self.externalGroupTagLbl.lim_top = self.titleLbl.lim_top + (self.titleLbl.lim_height - self.externalGroupTagLbl.lim_height) / 2.0f;
         }
     }
 

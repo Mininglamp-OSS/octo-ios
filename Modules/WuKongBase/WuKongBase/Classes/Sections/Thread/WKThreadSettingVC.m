@@ -472,7 +472,7 @@
     __weak typeof(self) weakSelf = self;
     WKInputVC *inputVC = [WKInputVC new];
     inputVC.title = LLang(@"修改子区名称");
-    inputVC.maxLength = 50; // 与 createThread 注释一致
+    inputVC.maxLength = 100; // 与 createThread 一致
     inputVC.defaultValue = self.threadName ?: @"";
     [inputVC setOnFinish:^(NSString * _Nonnull value) {
         [weakSelf updateThreadName:value];

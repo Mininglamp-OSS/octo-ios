@@ -46,6 +46,24 @@
 - **LegacyComponents** (`Vendor/LegacyComponents/`, POP 系列) ——
   2026-05 已物理删除。0 消费方，是历史遗留死代码。
 
+## Vendored 三方源码（在用，非历史包袱）
+
+- **AdaptiveCards** (`Modules/WuKongBase/WuKongBase/Vendor/AdaptiveCards/`) ——
+  微软 Teams-AdaptiveCards-Mobile iOS **2.11.9 的 MIT 源码**，自编译（**不用** EULA 预编译
+  pod）。upstream README 明文双授权：源码 MIT、二进制包才是 EULA，故以源码形式合规使用。
+  - 用途：渲染 InteractiveCard（消息 ContentType=17，Adaptive Cards octo/v1|v2 白名单子集）。
+    直接消费方：`WKInteractiveCardCell` / `WKACardRenderer`（`Sections/Messages/` +
+    `Sections/Messages/Card/`）。
+  - 本地 spec：`Vendor/AdaptiveCards/AdaptiveCards.podspec`（license=MIT），Podfile 以
+    `:path` 引入，`WuKongBase` 依赖之。
+  - **已裁依赖**：不引入 MicrosoftFluentUI（不定义 `ADAPTIVECARDS_USE_FLUENT_TOOLTIPS` 宏）、
+    不引入 SVGKit（`ACRSVGImageView.mm` 已 stub 为栅格兜底——与本仓库 librlottie 的
+    rapidjson 头冲突，且 octo 卡片无 SVG 需求）。
+  - **改名坑（重新 vendor 升级时必须重做）**：AC 的 `Table.h`/`References.h` 与 `libcmark_gfm`
+    的 `table.h`/`references.h` 在大小写不敏感文件系统下冲突，已改名为
+    `ACTable.h`/`ACReferences.h`（含 9 处内部 include 更新）。
+  - 灰度：`OCTO_CARD_MESSAGE_ENABLED`（NSUserDefaults / 启动参数）关时 type-17 直接降级 plain。
+
 ## 调试工具的生命周期
 
 仅为开发期排障使用的组件（检测器、日志增强、性能探针），必须：

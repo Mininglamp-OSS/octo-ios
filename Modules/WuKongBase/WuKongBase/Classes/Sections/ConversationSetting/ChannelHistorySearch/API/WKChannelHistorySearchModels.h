@@ -57,6 +57,20 @@ typedef NS_ENUM(NSInteger, WKChannelHistorySearchSort) {
 /// 排序方式，默认时间倒序。
 @property (nonatomic, assign) WKChannelHistorySearchSort sort;
 
+/// 消息内容类型过滤（全局「聊天记录」用）。元素为 int：1文字/2图片/5视频/8文件/11合并转发/14图文。
+/// 为空表示不限。会话内搜索不使用此字段（保持 nil）。
+@property (nonatomic, copy, nullable) NSArray<NSNumber *> *contentTypes;
+/// 文件扩展名过滤（全局「文件」用），小写不含点，如 @[@"pdf",@"docx"]。为空表示不限。
+@property (nonatomic, copy, nullable) NSArray<NSString *> *fileExts;
+
+#pragma mark 全局搜索专用（会话内搜索不使用，保持 nil）
+/// 包含成员 uid 列表（member_uids，AND 语义，最多 50）。
+@property (nonatomic, copy, nullable) NSArray<NSString *> *memberUids;
+/// 所在群聊或子区。元素为 @{@"channel_id":,@"channel_type":,@"name":}，序列化时只取前两者。
+@property (nonatomic, copy, nullable) NSArray<NSDictionary *> *channels;
+/// 聊天类型（channel_types）。单聊=@[@1]，群聊=@[@2,@5]。为空表示不限。
+@property (nonatomic, copy, nullable) NSArray<NSNumber *> *channelTypes;
+
 /// 是否有任何生效筛选条件（任一字段非空且 sort != desc 时也算）。
 - (BOOL)hasAnyFilter;
 /// 仅看是否有发送人/日期的"硬"筛选（用于 shouldRunSearch 判定）。

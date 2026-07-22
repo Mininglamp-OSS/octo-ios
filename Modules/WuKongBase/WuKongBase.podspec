@@ -127,6 +127,8 @@ TODO: Add long description of the pod here.
   s.libraries = 'c++','stdc++'
 #  s.dependency 'FLEX'
   s.dependency 'WuKongIMSDK'
+  # Adaptive Cards 渲染器（vendored MIT 源码，供 InteractiveCard type17 使用）
+  s.dependency 'AdaptiveCards'
   s.dependency 'CocoaLumberjack','~> 3.0'
   s.dependency 'PromiseKit/CorePromise', '~> 6.0'
   s.dependency 'AFNetworking', '~> 4.0'
