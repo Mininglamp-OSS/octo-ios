@@ -412,6 +412,23 @@ post_install do |installer|
         end
     end
 
+    # ─────────────────────────────────────────────────────────────────────
+    # AFNetworking 4.0.1 non-modular-include 修复 (2026-07)
+    # iOS 26 SDK 收紧了 -Werror=non-modular-include-in-framework-module:
+    # AFNetworkReachabilityManager.m 里 #import <netinet6/in6.h> 这类在
+    # framework module 内引用私有系统头，被判为 error → build 直接挂
+    # ("Use of private header from outside its module: 'netinet6/in6.h'")。
+    # AFNetworking 4.0.1 已停维护，无法改其源码/升版本，故仅对 AFNetworking
+    # 这一个 target 打开 CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES，
+    # 精确放行、不影响其它 pod 的 modular-header 检查。
+    # ─────────────────────────────────────────────────────────────────────
+    installer.pods_project.targets.each do |target|
+        next unless target.name == 'AFNetworking'
+        target.build_configurations.each do |config|
+            config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+        end
+    end
+
     installer.pods_project.save
 end
 
