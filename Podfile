@@ -419,13 +419,19 @@ post_install do |installer|
     # framework module 内引用私有系统头，被判为 error → build 直接挂
     # ("Use of private header from outside its module: 'netinet6/in6.h'")。
     # AFNetworking 4.0.1 已停维护，无法改其源码/升版本，故仅对 AFNetworking
-    # 这一个 target 打开 CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES，
-    # 精确放行、不影响其它 pod 的 modular-header 检查。
+    # 这一个 target 打两个补丁、精确放行、不影响其它 pod：
+    #   1) CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES=YES
+    #      —— 放行常规编译诊断层的 non-modular include。
+    #   2) CLANG_ENABLE_EXPLICIT_MODULES=NO
+    #      —— Xcode 16/26 默认开 explicit modules，那条 error 实际是在
+    #      ScanDependencies(模块图构建)阶段发出的，上面(1)的 flag 管不到；
+    #      对本 target 退回 implicit modules，绕开该 module-scan 诊断路径。
     # ─────────────────────────────────────────────────────────────────────
     installer.pods_project.targets.each do |target|
         next unless target.name == 'AFNetworking'
         target.build_configurations.each do |config|
             config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+            config.build_settings['CLANG_ENABLE_EXPLICIT_MODULES'] = 'NO'
         end
     end
 
