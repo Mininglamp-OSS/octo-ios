@@ -30,12 +30,13 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Select Xcode 26.4
-        # macos-latest rolled to Xcode 26.5, under which AFNetworking 4.0.1 fails to
-        # compile. Pin the toolchain to 26.4 to unblock the build.
+      - name: Select Xcode 26.6
+        # macos-latest defaults to Xcode 26.5, under which AFNetworking 4.0.1 fails to
+        # compile (non-modular-include Werror on netinet6/in6.h). Pin to 26.6, whose
+        # toolchain does not reproduce the error locally.
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
         with:
-          xcode-version: '26.4'
+          xcode-version: '26.6'
 
       - name: Cache CocoaPods
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
