@@ -23,6 +23,8 @@
 // 供 async reflow 复用既有机制而无需暴露完整头。
 @interface NSObject (WKCardListHeightInvalidate)
 - (void)wk_invalidateHeightCacheForMessage:(WKMessageModel *)msg;
+// 卡片高度变化后，请求列表在“漂移守卫 + 非翻页”前提下安全重排（禁止 cell 直接 begin/endUpdates）。
+- (void)wk_reflowHeightForMessage:(WKMessageModel *)msg;
 @end
 
 // 卡片正文与宿主的内边距（卡片自身还有 host config 的 padding）
@@ -263,11 +265,15 @@
         return;
     }
 
+    // 走到这里=需要一次完整渲染(未命中去重)。展示耗时由列表的 disp.<Class> 探针聚合统计。
     CGFloat width = [WKInteractiveCardCell cardWidthForModel:model];
+    // measureSize:NO —— 展示路径不需要 renderCard 内部测高(行高来自 +contentSizeForMessage
+    // 的缓存)，跳过 ~6ms 的 fittingSizeOfView，快滑复用时约减半单卡渲染耗时。
     WKACardRenderResult *result = [WKACardRenderer renderCard:content.card
                                                         width:width
                                                          dark:dark
-                                                     delegate:self];
+                                                     delegate:self
+                                                  measureSize:NO];
     if (!result.succeeded || !result.view) {
         [self showFallbackWithText:(content.plain ?: LLang(@"[卡片]")) dark:dark];
         return;
@@ -683,26 +689,19 @@
     return (UITableView *)v;
 }
 
-/// 失效上层行高缓存 + begin/endUpdates 重新测高。keepPosition/ajustTableViewByStreams
-/// 负责保持滚动位置，上方增高由既有 offset 补偿逻辑吸收。
+/// 失效上层行高缓存 + 安全重排。**关键**：绝不从 cell 直接 begin/endUpdates ——
+/// 那会在下拉翻页(isPulldownInProgress)或行数漂移窗口内抛
+/// _Bug_Detected_In_Client_Of_UITableView，撞坏 UITableView 内部簿记 → 翻页白屏 +
+/// 退出后野指针崩溃(_NSInlineData _fallbackTraitCollection zombie)。故统一委托给
+/// WKMessageListView，由它套用与其它路径一致的漂移守卫。keepPosition/ajustTableViewByStreams
+/// 负责保持滚动位置。
 - (void)reflowHeightUsingListInvalidate {
-    UIView *hostView = self.superview;
-    while (hostView && ![hostView isKindOfClass:[UITableView class]]) hostView = hostView.superview;
-    if (![hostView isKindOfClass:[UITableView class]]) return;
-    UITableView *tv = (UITableView *)hostView;
-
-    UIView *listView = tv.superview;
+    UIView *listView = self.superview;
     while (listView && ![NSStringFromClass([listView class]) isEqualToString:@"WKMessageListView"]) {
         listView = listView.superview;
     }
-    if (listView && [listView respondsToSelector:@selector(wk_invalidateHeightCacheForMessage:)] && self.messageModel) {
-        [listView wk_invalidateHeightCacheForMessage:self.messageModel];
-    }
-    @try {
-        [tv beginUpdates];
-        [tv endUpdates];
-    } @catch (NSException *ex) {
-        // 行数漂移等异常安全吞掉（沿用本仓库对 UITableView batch 的防御姿态）
+    if ([listView respondsToSelector:@selector(wk_reflowHeightForMessage:)] && self.messageModel) {
+        [listView wk_reflowHeightForMessage:self.messageModel];
     }
 }
 

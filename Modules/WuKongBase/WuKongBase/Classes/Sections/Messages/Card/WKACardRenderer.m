@@ -5,6 +5,7 @@
 
 #import "WKACardRenderer.h"
 #import "WKACardHostConfig.h"
+#import <os/lock.h>
 #import <AdaptiveCards/ACRRenderer.h>
 #import <AdaptiveCards/ACRRenderResult.h>
 #import <AdaptiveCards/ACRView.h>
@@ -17,6 +18,40 @@
 @end
 
 @implementation WKACardRenderer
+
+// ───────── 主线程耗时聚合探针 ─────────
+// 关掉：把 WKPerfProbeOn 置 NO。按 label 累计 (count/总耗时/最大单次)，每 ~1s dump 一行，
+// 避免 per-call 刷屏，并能一眼看出哪个组件×阶段吃主线程。
+static const BOOL WKPerfProbeOn = NO;
++ (void)perfAccrue:(NSString *)label ms:(double)ms {
+    if (!WKPerfProbeOn || label.length == 0) return;
+    static NSMutableDictionary<NSString *, NSMutableArray<NSNumber *> *> *acc; // label -> [count,totalMs,maxMs]
+    static os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
+    static CFTimeInterval lastDump = 0;
+    os_unfair_lock_lock(&lock);
+    if (!acc) acc = [NSMutableDictionary dictionary];
+    NSMutableArray<NSNumber *> *e = acc[label];
+    if (!e) { e = [@[@0, @0.0, @0.0] mutableCopy]; acc[label] = e; }
+    e[0] = @(e[0].integerValue + 1);
+    e[1] = @(e[1].doubleValue + ms);
+    e[2] = @(MAX(e[2].doubleValue, ms));
+    CFTimeInterval now = CACurrentMediaTime();
+    if (lastDump == 0) lastDump = now;
+    if (now - lastDump >= 1.0) {
+        NSArray *keys = [acc.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+            return [acc[b][1] compare:acc[a][1]]; // 总耗时降序
+        }];
+        NSMutableString *s = [NSMutableString stringWithFormat:@"[WKPerfProbe/%.1fs]", now - lastDump];
+        for (NSString *k in keys) {
+            NSMutableArray<NSNumber *> *v = acc[k];
+            [s appendFormat:@" | %@ n=%@ sum=%.0f max=%.1f", k, v[0], v[1].doubleValue, v[2].doubleValue];
+        }
+        NSLog(@"%@", s);
+        [acc removeAllObjects];
+        lastDump = now;
+    }
+    os_unfair_lock_unlock(&lock);
+}
 
 + (NSCache<NSString *, NSNumber *> *)measureCache {
     static NSCache *cache = nil;
@@ -47,13 +82,19 @@
                               width:(CGFloat)width
                                dark:(BOOL)dark
                            delegate:(id<ACRActionDelegate>)delegate {
+    return [self renderCard:cardJSON width:width dark:dark delegate:delegate measureSize:YES];
+}
+
++ (WKACardRenderResult *)renderCard:(NSDictionary *)cardJSON
+                              width:(CGFloat)width
+                               dark:(BOOL)dark
+                           delegate:(id<ACRActionDelegate>)delegate
+                        measureSize:(BOOL)measureSize {
     WKACardRenderResult *out = [WKACardRenderResult new];
     out.succeeded = NO;
     out.size = CGSizeMake(width, 0);
 
-    // [octo] Q2/Q3：把 Input.ChoiceSet 一律渲染成 expanded(内联单选列表)。ACR 的 compact
-    // 下拉是把选项列表 [window addSubview]，样式差且不随会话页 VC 消失(关页面残留)。
-    // expanded 已跑通(圆圈+选中+提交),彻底绕开那个 window 浮层。
+    CFTimeInterval __tSanitize = CACurrentMediaTime();
     NSDictionary *effectiveCard = [self wk_cardByForcingExpandedChoiceSets:cardJSON];
     NSString *payload = [self cardJSONString:effectiveCard];
     if (payload.length == 0) {
@@ -65,6 +106,8 @@
         return out;
     }
     out.card = parse.card;
+    CFTimeInterval __tParse = CACurrentMediaTime();
+    [WKACardRenderer perfAccrue:@"card.parse(C++)" ms:(__tParse - __tSanitize) * 1000.0];
 
     ACOHostConfig *config = [WKACardHostConfig hostConfigForDark:dark];
     ACRTheme theme = dark ? ACRThemeDark : ACRThemeLight;
@@ -83,6 +126,9 @@
     if (!result || !result.succeeded || !result.view) {
         return out;
     }
+    CFTimeInterval __tRender = CACurrentMediaTime();
+    // 建 ACR 视图树耗时(主线程；无论 heightForRow-main 还是 precache 的 dispatch_sync-main)。
+    [WKACardRenderer perfAccrue:@"card.build(ACR树)" ms:(__tRender - __tParse) * 1000.0];
 
     out.view = result.view;
     out.succeeded = YES;
@@ -90,7 +136,14 @@
     // GetIsVisible 误隐藏 FactSet 的 ACRColumnSetView；web 用另一套 JS SDK 不受影响）。
     // 在测高前 un-hide，让 UIStackView 重排、高度正确。
     [self wk_unhideHiddenFactSetsInView:result.view];
+    // 展示路径 measureSize=NO：跳过 fittingSizeOfView（~6ms 的 100000-layout），行高由
+    // +measureCard 缓存供给、result.size 不被读取。测高路径 measureSize=YES 才测。
+    if (!measureSize) {
+        return out;
+    }
     out.size = [self fittingSizeOfView:result.view width:width];
+    CFTimeInterval __tMeasure = CACurrentMediaTime();
+    [WKACardRenderer perfAccrue:@"card.layout(测高)" ms:(__tMeasure - __tRender) * 1000.0];
     return out;
 }
 
@@ -194,16 +247,23 @@
     }
 
     // ACR 渲染需在主线程创建 UIView
+    // cache MISS：这里会同步渲一个 ACRView 量高再丢弃(很贵)。若非主线程还会 dispatch_sync 到
+    // 主线程阻塞。大量卡片 miss(如首次滑入/回前台)会集中打主线程。按“是否在主线程 miss”分标签。
+    BOOL __onMain = [NSThread isMainThread];
+    CFTimeInterval __t0 = CACurrentMediaTime();
     __block CGSize measured = CGSizeMake(width, 0);
     void (^work)(void) = ^{
         WKACardRenderResult *r = [self renderCard:cardJSON width:width dark:dark delegate:nil];
         measured = r.size;
     };
-    if ([NSThread isMainThread]) {
+    if (__onMain) {
         work();
     } else {
         dispatch_sync(dispatch_get_main_queue(), work);
     }
+    [WKACardRenderer perfAccrue:(__onMain ? @"card.measureCard.MISS(主线程直算)"
+                                          : @"card.measureCard.MISS(precache→主线程)")
+                             ms:(CACurrentMediaTime() - __t0) * 1000.0];
 
     if (measured.height > 0) {
         [[self measureCache] setObject:@(measured.height) forKey:key];

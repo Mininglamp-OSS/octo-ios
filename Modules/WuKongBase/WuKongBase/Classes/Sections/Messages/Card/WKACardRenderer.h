@@ -28,6 +28,15 @@ NS_ASSUME_NONNULL_BEGIN
                                dark:(BOOL)dark
                            delegate:(nullable id<ACRActionDelegate>)delegate;
 
+/// 同上，但 measureSize=NO 时**跳过 fittingSizeOfView 测高**（out.size 不可用）。
+/// 展示路径(cell refresh)行高另由 +measureCard 缓存供给、不读 result.size，故测高纯属浪费
+/// (~6ms/次)——快滑复用时是主要卡顿源。测高路径(measureCard)才传 YES。
++ (WKACardRenderResult *)renderCard:(NSDictionary *)cardJSON
+                              width:(CGFloat)width
+                               dark:(BOOL)dark
+                           delegate:(nullable id<ACRActionDelegate>)delegate
+                        measureSize:(BOOL)measureSize;
+
 /// 仅测量卡片高度（主线程），按 fingerprint+width+dark 缓存。供 +contentSizeForMessage。
 + (CGSize)measureCard:(NSDictionary *)cardJSON
                 width:(CGFloat)width
@@ -36,6 +45,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// 失效某指纹的测量缓存（卡片被编辑帧改写后调用）。
 + (void)invalidateMeasureForFingerprint:(NSString *)fingerprint;
+
+/// 主线程耗时聚合探针：按 label(组件×阶段) 累计 count/总耗时/最大单次，每 ~1s dump 一行汇总。
+/// 用于把卡顿定位到具体组件而非 per-call 刷屏。排查完关闭即可（见实现里的开关）。
++ (void)perfAccrue:(NSString *)label ms:(double)ms;
 
 @end
 

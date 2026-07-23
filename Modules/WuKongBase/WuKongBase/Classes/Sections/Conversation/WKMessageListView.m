@@ -13,6 +13,7 @@
 #import "WKMessageRevokeCell.h"
 #import "WKTextMessageCell.h"
 #import "WKInteractiveCardCell.h"
+#import "WKACardRenderer.h"  // 主线程耗时聚合探针 +perfAccrue:ms:
 #import <WuKongBase/WuKongBase-Swift.h>
 #import "WKHistorySplitTipContent.h"
 #import "WKTypingManager.h"
@@ -2618,7 +2619,11 @@ static const NSInteger kMaxPullupDedupRetry = 3;
             heightKey = [NSString stringWithFormat:@"%@-e%lu", heightKey, (unsigned long)msg.remoteExtra.editedAt];
         }
         if ([[WKMessageListView cellHeightCache] objectForKey:heightKey]) return;
+        CFTimeInterval __probe0 = CACurrentMediaTime();
         CGSize size = [cellClass sizeForMessage:msg];
+        // 探针：precache 测高耗时按 cell 类聚合。卡片类此调用内部 dispatch_sync 回主线程，会阻塞主线程。
+        [WKACardRenderer perfAccrue:[NSString stringWithFormat:@"P.size.%@", NSStringFromClass(cellClass)]
+                                 ms:(CACurrentMediaTime() - __probe0) * 1000.0];
         CGFloat height = MAX(size.height, 0.1f);
         // 拒绝写入病态小值 (< 15pt), 见 heightForRowAtIndexPath 里同款注释:
         // measure race 拿到 0 时如果写进 cache 就永久污染, cell 永远 0.1px 空白。
@@ -2694,6 +2699,32 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     [[WKMessageListView cellHeightCache] removeObjectForKey:heightKey];
 }
 
+// [octo] 卡片实测高度变化(ToggleVisibility 展开/收起、异步图片落定)后，由 WKInteractiveCardCell
+// 委托列表安全重排。**绝不允许 cell 自己 begin/endUpdates** —— 必须走与本类其它路径
+// (channelInfoUpdate @3264 / addMessage @365) 完全一致的漂移守卫，否则在下拉翻页
+// (isPulldownInProgress) 或行数漂移窗口内触发 begin/endUpdates 会抛
+// _Bug_Detected_In_Client_Of_UITableView，撞坏 UITableView 内部簿记 → 翻页白屏 +
+// 退出后在别处触发野指针崩溃(_NSInlineData _fallbackTraitCollection zombie)。
+- (void)wk_reflowHeightForMessage:(WKMessageModel *)msg {
+    if (!msg) return;
+    // 无论能否立刻重排，先失效行高缓存：cell 已写入 liveHeightOverride，下次 heightForRow 取新值。
+    [self wk_invalidateHeightCacheForMessage:msg];
+    // 翻页 / 重灌注进行中：只失效缓存、不强制批量更新。高度会在 pulldown 的 insertRows
+    // 或用户下次滚动 heightForRow 时自然收敛，不会永久错高度，也不会撞坏 tableView。
+    if (self.isPulldownInProgress || self.isRehydrating) return;
+    // 行数漂移窗口：dp 已改而 tableView 内部行数未同步 → 此刻 begin/endUpdates 必崩，跳过。
+    if (![self isTableViewRowCountInSyncWithDataProvider]) return;
+    @try {
+        [UIView performWithoutAnimation:^{
+            [self.tableView beginUpdates];
+            [self.tableView endUpdates];
+        }];
+    } @catch (NSException *ex) {
+        // 二次保险：校验后被别的 main-queue block 重入改 dp 的极端 case 兜底不 crash。
+        NSLog(@"[WKMessageListView] wk_reflowHeightForMessage drift caught: %@", ex);
+    }
+}
+
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath{
     WKMessageModel *messageModel = [self.dataProvider messageAtIndexPath:indexPath];
     if (!messageModel) {
@@ -2733,7 +2764,11 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     CFAbsoluteTime _heightT0 = WKCellPerfLog ? CFAbsoluteTimeGetCurrent() : 0;
     @try {
         Class messageCellClass = [self getMessageCellClass:messageModel];
+        CFTimeInterval __probe0 = CACurrentMediaTime();
         CGSize cellSize = [messageCellClass sizeForMessage:messageModel];
+        // 探针：heightForRow 在主线程同步测高的耗时(cache MISS 时)，按 cell 类聚合。快滑首见卡片的主要卡顿源。
+        [WKACardRenderer perfAccrue:[NSString stringWithFormat:@"H.size.%@", NSStringFromClass(messageCellClass)]
+                                 ms:(CACurrentMediaTime() - __probe0) * 1000.0];
         height = MAX(cellSize.height, 0.1f);
     } @catch (NSException *exception) {
         NSLog(@"[HeightCache] heightForRow exception at %@: %@", indexPath, exception);
@@ -2791,7 +2826,11 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     }
     @try {
         CFAbsoluteTime _refreshT0 = WKCellPerfLog ? CFAbsoluteTimeGetCurrent() : 0;
+        CFTimeInterval __probe0 = CACurrentMediaTime();
         [baseCell refresh:messageModel];
+        // 探针：willDisplay 内 refresh(含 ACR 显示渲染) 耗时，按 cell 类聚合(主线程)。
+        [WKACardRenderer perfAccrue:[NSString stringWithFormat:@"disp.%@", NSStringFromClass([baseCell class])]
+                                 ms:(CACurrentMediaTime() - __probe0) * 1000.0];
         if (WKCellPerfLog) {
             CGFloat _refreshMs = (CFAbsoluteTimeGetCurrent() - _refreshT0) * 1000;
             if (_refreshMs > kCellPerfRefreshSlowMs) {
