@@ -72,8 +72,12 @@
         self.trailingView.timeLbl.textColor = [WKApp shared].config.tipColor;
         self.trailingView.statusImgView.tintColor = [WKApp shared].config.tipColor;
     }
+    // 竞态兜底: 复用/漂移下错配的非 WKCardContent 会 unrecognized selector 崩 (同 WKImageMessageCell)
+    if (![model.content isKindOfClass:[WKCardContent class]]) {
+        return;
+    }
     WKCardContent *content = (WKCardContent*)model.content;
-    
+
     if(!content.avatar || [content.avatar isEqualToString:@""]) { // 头像
          [self.recommendAvatarImgView lim_setImageWithURL:[NSURL URLWithString:[WKAvatarUtil getAvatar:content.uid]]];
     } else {

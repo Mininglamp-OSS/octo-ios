@@ -180,6 +180,13 @@ static const NSUInteger kWKImagePreloadMaxDecodedBytes = 32 * 1024 * 1024;
 
     [super refresh:model];
     self.messageModel = model;
+    // 竞态兜底: cell 复用/内容类型漂移下, 非 WKImageContent 会错配到图片 cell,
+    // 后续 [imageContent localPath] 会 unrecognized selector 崩 (Bugly
+    // -[WKTextContent localPath])。与 contentSizeForMessage: 的既有 isKindOfClass
+    // 守卫同源; super refresh: 是通用逻辑, 对任意内容安全, 这里跳过图片专属渲染即可。
+    if (![model.content isKindOfClass:[WKImageContent class]]) {
+        return;
+    }
     WKImageContent *imageContent = (WKImageContent*)model.content;
     CGSize imageSize = [WKImageMessageCell contentSizeForMessage:model];
     self.imgView.lim_width = imageSize.width;

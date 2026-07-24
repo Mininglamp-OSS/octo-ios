@@ -2899,8 +2899,15 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         sectionDateFormatter = [[NSDateFormatter alloc] init];
         [sectionDateFormatter setDateFormat:@"yyyy-MM-dd"];
     });
-    NSDate *date = [sectionDateFormatter dateFromString:[self.dataProvider dateWithSection:section]];
-    headerView.dateLbl.text = [WKTimeTool formatDateStyle1:date];
+    NSString *dateStr = [self.dataProvider dateWithSection:section];
+    if (dateStr.length > 0) {
+        NSDate *date = [sectionDateFormatter dateFromString:dateStr];
+        headerView.dateLbl.text = [WKTimeTool formatDateStyle1:date];
+    } else {
+        // section 越界(数据与 tableView 缓存瞬时不一致)时 dateStr 为 nil,
+        // 不把 nil 喂进 formatDateStyle1: 的 NSCalendar 链, 给空 header 兜底。
+        headerView.dateLbl.text = @"";
+    }
 //    [headerView.dateLbl sizeToFit];
     return headerView;
 }

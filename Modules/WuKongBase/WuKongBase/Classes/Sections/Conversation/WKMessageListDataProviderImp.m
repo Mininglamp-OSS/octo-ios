@@ -549,6 +549,11 @@
 }
 
 - (NSString *)dateWithSection:(NSInteger)section {
+    // UITableView 用的是上次 reload 缓存的 section 数; 若 dates 在其后被改短
+    // (后台加载/精缓存重入等), viewForHeaderInSection: 会问到越界 section ->
+    // NSRangeException 主线程崩 (Bugly index N beyond bounds)。对齐
+    // messageAtIndexPath: 的既有越界保护, 越界返回 nil。
+    if (section < 0 || section >= (NSInteger)self.messageList.dates.count) return nil;
     return self.messageList.dates[section];
 }
 

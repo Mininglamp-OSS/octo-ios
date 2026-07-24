@@ -158,6 +158,10 @@
 -(void) refresh:(WKMessageModel *)model {
     [super refresh:model];
 
+    // 竞态兜底: 复用/漂移下错配的非 WKVoiceContent 会 unrecognized selector 崩 (同 WKImageMessageCell)
+    if (![model.content isKindOfClass:[WKVoiceContent class]]) {
+        return;
+    }
     WKVoiceContent *voiceContent = (WKVoiceContent*)model.content;
    
     
