@@ -51,11 +51,18 @@ import iosMath
     /// 缓存未命中再 dispatch_sync 到主线程做真渲染。
     /// 调用方 parseAndCacheTextMessage: 在 bg 是非阻塞的（dispatch_async），main
     /// 不会等 bg 完成 → dispatch_sync 不会死锁。
-    @objc public static func render(tex: String,
+    @objc public static func render(tex rawTex: String,
                                     fontSize: CGFloat,
                                     textColor: UIColor,
                                     isDisplay: Bool) -> WKMathImageResult? {
-        guard !tex.isEmpty else { return nil }
+        guard !rawTex.isEmpty else { return nil }
+
+        // iosMath 0.9.4 只认 \frac / \binom，不认 display/text/continued 变体
+        // (\dfrac \tfrac \cfrac \dbinom \tbinom)。这些变体只改分式的强制 style，
+        // 语义上与基础命令一致（display 数学里 \frac 本就按 display 尺寸渲染），
+        // 遇到未知命令 iosMath 会 setError → 整段公式回退成灰底等宽源码。
+        // 喂给 iosMath 前先归一化到受支持的基础命令，避免块级公式整段失败。
+        let tex = normalizeUnsupportedFractions(rawTex)
 
         let key = cacheKey(tex: tex, fontSize: fontSize, textColor: textColor, isDisplay: isDisplay)
         if let cached = cache.object(forKey: key) {
@@ -181,6 +188,40 @@ import iosMath
 
     @objc public static func clearCache() {
         cache.removeAllObjects()
+    }
+
+    // MARK: - Command normalization
+
+    /// display/text/continued 分式变体 → iosMath 0.9.4 受支持的基础命令。
+    /// 它们与基础命令参数数目一致、语义只差强制 style：
+    ///   \dfrac \tfrac \cfrac → \frac，\dbinom \tbinom → \binom
+    /// 负向前瞻 `(?![a-zA-Z])` 保证只替换完整命令名，不会误伤以此为前缀的其他命令。
+    /// 未命中任何变体时返回原串（同一引用），零额外分配。
+    private static let fractionVariantRegexes: [(NSRegularExpression, String)] = {
+        let mapping: [(String, String)] = [
+            (#"\\dfrac(?![a-zA-Z])"#, #"\frac"#),
+            (#"\\tfrac(?![a-zA-Z])"#, #"\frac"#),
+            (#"\\cfrac(?![a-zA-Z])"#, #"\frac"#),
+            (#"\\dbinom(?![a-zA-Z])"#, #"\binom"#),
+            (#"\\tbinom(?![a-zA-Z])"#, #"\binom"#)
+        ]
+        return mapping.compactMap { pattern, replacement in
+            guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
+            return (re, replacement)
+        }
+    }()
+
+    @objc public static func normalizeUnsupportedFractions(_ tex: String) -> String {
+        // 绝大多数公式不含这些变体，先做一次廉价包含判断避开 regex 开销。
+        guard tex.contains("frac") || tex.contains("binom") else { return tex }
+        var result = tex
+        for (re, replacement) in fractionVariantRegexes {
+            let range = NSRange(result.startIndex..., in: result)
+            // replacement 是字面命令（含单个反斜杠），转义成 template 避免 $ / \ 被当捕获组。
+            let template = NSRegularExpression.escapedTemplate(for: replacement)
+            result = re.stringByReplacingMatches(in: result, options: [], range: range, withTemplate: template)
+        }
+        return result
     }
 
     // MARK: - Cache key
