@@ -8,7 +8,13 @@
 #import "WKSpaceModel.h"
 #import "WKApp.h"
 #import "WKAPIClient.h"
+#import "WKSpaceDiskCache.h"
 #import <PromiseKit/PromiseKit.h>
+
+/// Space 列表的磁盘缓存槽位。它不是"每空间"的数据，用一个固定 key 占位
+/// （WKSpaceDiskCache 的第二段只是文件名的一部分）。
+static NSString * const kWKSpacesCacheNamespace = @"spaces";
+static NSString * const kWKSpacesCacheSlot = @"_all";
 
 @interface WKSpaceModel()
 
@@ -29,6 +35,29 @@
 
 - (void)invalidateCache {
     self.cachedSpaces = nil;
+}
+
+- (nullable NSArray<WKSpaceEntity *> *)cachedSpacesFromDisk {
+    id cached = [WKSpaceDiskCache objectForNamespace:kWKSpacesCacheNamespace spaceId:kWKSpacesCacheSlot];
+    if (![cached isKindOfClass:[NSArray class]]) return nil;
+    NSMutableArray *spaces = [NSMutableArray array];
+    for (NSDictionary *dict in (NSArray *)cached) {
+        if (![dict isKindOfClass:[NSDictionary class]]) continue;
+        WKSpaceEntity *space = (WKSpaceEntity *)[WKSpaceEntity fromMap:dict type:ModelMapTypeAPI];
+        if (space) [spaces addObject:space];
+    }
+    return spaces.count > 0 ? [spaces copy] : nil;
+}
+
+- (nullable NSString *)cachedSpaceNameForSpaceId:(NSString *)spaceId {
+    if (spaceId.length == 0) return nil;
+    NSArray<WKSpaceEntity *> *spaces = self.cachedSpaces ?: [self cachedSpacesFromDisk];
+    for (WKSpaceEntity *space in spaces) {
+        if ([space.space_id isEqualToString:spaceId]) {
+            return space.name.length > 0 ? space.name : nil;
+        }
+    }
+    return nil;
 }
 
 - (AnyPromise *)getMySpaces {
@@ -52,6 +81,11 @@
                 }
             }
             self.cachedSpaces = [spaces copy];
+            // 落盘服务端原始 JSON（不是 entity）—— 断网冷启动时标题 / 空间切换面板
+            // 还能显示上次的空间名，不至于回退成 appName。
+            [WKSpaceDiskCache setObject:responseObject
+                           forNamespace:kWKSpacesCacheNamespace
+                                spaceId:kWKSpacesCacheSlot];
             NSLog(@"✅ 成功解析%lu个Space", (unsigned long)spaces.count);
             return (id)self.cachedSpaces;
         } else {
@@ -63,6 +97,13 @@
         // 失败时返回空数组
         if (self.cachedSpaces) {
             return (id)self.cachedSpaces;
+        }
+        // 断网 / 请求失败：回落到磁盘缓存，让标题和空间切换面板仍然可用。
+        // 不写回 self.cachedSpaces —— 那会让本次会话永远不再打网络刷新。
+        NSArray<WKSpaceEntity *> *disk = [self cachedSpacesFromDisk];
+        if (disk.count > 0) {
+            NSLog(@"↩️ getMySpaces 回落到磁盘缓存（%lu 个）", (unsigned long)disk.count);
+            return (id)disk;
         }
         // 抛出错误
         @throw error;

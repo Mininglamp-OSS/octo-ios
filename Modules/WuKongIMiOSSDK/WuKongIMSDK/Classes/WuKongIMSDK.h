@@ -43,6 +43,7 @@
 #import "WKUnreadAckQueueDB.h"
 #import "WKUnreadAckRunner.h"
 #import "WKUnreadStateDB.h"
+#import "WKConversationSpaceDB.h"
 
 
 

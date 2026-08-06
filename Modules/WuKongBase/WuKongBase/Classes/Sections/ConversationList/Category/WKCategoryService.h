@@ -17,6 +17,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// 获取分组列表
 - (AnyPromise *)listCategories:(NSString *)spaceId;
 
+/// 同步读某空间的分组结构缓存（内存优先，回落到磁盘）。没有缓存返回 nil。
+/// 用途：切空间 / 冷启动时立即 seed `WKConversationListVM.categoryList` ——
+/// 否则 buildGroupDisplayList 没有分组结构，关注 tab 连 section header 都出不来，
+/// 必须等 categories 接口回来。
+- (nullable NSArray<WKCategoryEntity *> *)cachedCategoriesForSpace:(NSString *)spaceId;
+
 /// 创建分组
 - (AnyPromise *)createCategory:(NSString *)spaceId name:(NSString *)name;
 

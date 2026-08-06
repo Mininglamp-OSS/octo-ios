@@ -41,6 +41,11 @@ typedef NS_ENUM(NSInteger, WKFollowTargetType) {
 + (instancetype)fromDict:(NSDictionary *)dict;
 + (NSArray<WKSidebarItemEntity *> *)fromDictArray:(NSArray *)array;
 
+/// fromDict: 的逆运算，供关注集合的磁盘缓存序列化用（键名与服务端字段一致，
+/// 所以 toDict → fromDict 往返无损）。follow_sort 的 NSIntegerMax 兜底值不写进
+/// 字典 —— 让回读时重新走 fromDict: 的兜底分支，避免把哨兵值当真实排序序列化出去。
+- (NSDictionary *)toDict;
+
 /// 唯一键 — 用于 WKFollowedKeysStore，形如 "{target_type}::{target_id}"
 - (NSString *)followKey;
 

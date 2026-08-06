@@ -28,6 +28,8 @@
 #import "WKImageMessageCell.h"
 #import "WKConversationContext.h"
 #import "WKSpaceFilter.h"
+#import "WKSpaceDiskCache.h"
+#import "WKConvListCache.h"
 #import "WKVoicePanel.h"
 #import "WKVoiceMessageCell.h"
 #import "WKGroupManager.h"
@@ -446,6 +448,10 @@ static WKApp *_instance;
         // key 是 channelId-channelType 不含 UID，必须在新账号 sync 前归零。
         [[WKSpaceConvSyncCache shared] clearAll];
 
+        // 同上：作用域要在 connect / syncConversations 之前设好（见另一处同名调用的注释）。
+        [WKConvListCache prepareMembershipIfNeeded];
+        [WKConvListCache applyScopeForSpace:[[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"]];
+
         // 重新加载最近会话保持的位置
         [[WKConversationPositionManager shared] reload];
 
@@ -534,6 +540,15 @@ static WKApp *_instance;
         if(cachedSpaceId && cachedSpaceId.length > 0 && spaceGateCompleted) {
             // 有空间且已完成引导，正常进入主页
             [[WKKitDB shared] switchDB:[WKApp shared].loginInfo.uid];
+            // 会话读路径的空间作用域必须在 connect 之前设好 —— connect 会立刻跑
+            // syncConversations，它读的 maxVersion / syncKey 都要是"本空间"的值
+            // （syncKey 不作用域化就会把别的空间的 channel 报给本空间的 sync）。
+            // 会话列表 VC 的 loadCurrentSpace 里也会设一次，这里只是把时机提前到
+            // 任何网络同步之前，不依赖 VC 的生命周期时序。
+            // backfill/重建必须更早：它消除"归属表整表为空"这个状态，否则读路径拿不到
+            // 精确的空间信息（跨空间污染的来源之一）。
+            [WKConvListCache prepareMembershipIfNeeded];
+            [WKConvListCache applyScopeForSpace:cachedSpaceId];
             if(weakSelf.getHomeViewController) {
                 [[WKNavigationManager shared] resetRootViewController:weakSelf.getHomeViewController()];
             }
@@ -766,6 +781,13 @@ static WKApp *_instance;
 }
 
 -(void) immediatelyLogout {
+    // 会话列表的每空间磁盘缓存（分组结构 / 关注集合）随账号走 —— 必须在
+    // clearMainData 清掉 uid 之前删，否则拿不到目录路径，下个账号会读到上个账号的
+    // 关注结构。会话行本身在 per-uid 的 SDK DB 里，切库天然隔离，无需处理。
+    [WKSpaceDiskCache removeAllForCurrentUser];
+    // 作用域跟着账号走：下一个账号的 DB 里没有这个空间的归属，留着旧值会让
+    // 第一次 sync 前的读路径按错误的空间过滤（表现为空列表）。
+    [WKConvListCache applyScopeForSpace:nil];
     // 清楚登录信息
     [[WKLoginInfo shared] clearMainData];
     // 清掉 WKWebView 共享的 cookie / 本地存储，防止 Aegis 等 OIDC SSO 会话 cookie 遗留
@@ -787,6 +809,9 @@ static WKApp *_instance;
 
 - (void)appDidEnterBackground:(NSNotification *)notification   {
     if([WKApp shared].isLogined) {
+        // 进后台是"用户最后看到的那个列表"最确定的时刻 —— 把它记成当前空间的归属快照。
+        // 下次冷启动（尤其断网）就能还原成这个状态，而不是空列表 / 只剩系统 bot。
+        [[WKConversationListVM shared] persistRenderedMembershipSnapshotSynchronous:YES];
         NSInteger unreadCount = [[WKConversationListVM shared] getAllUnreadCount];
            [[UIApplication sharedApplication] setApplicationIconBadgeNumber:unreadCount];
            [[WKAPIClient sharedClient] POST:@"user/device_badge" parameters:@{@"badge":@(unreadCount)}].catch(^(NSError *error){

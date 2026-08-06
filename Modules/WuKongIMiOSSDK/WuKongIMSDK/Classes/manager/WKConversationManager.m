@@ -14,6 +14,7 @@
 #import "WKReactionDB.h"
 #import "WKReminderDB.h"
 #import "WKConversationExtraDB.h"
+#import "WKConversationSpaceDB.h"
 @interface WKConversationManager ()
 /**
  *  用来存储所有添加j过的delegate
@@ -231,6 +232,10 @@
 }
 
 -(void) handleSyncConversation:(WKSyncConversationWrapModel*)model {
+    [self handleSyncConversation:model completion:nil];
+}
+
+-(void) handleSyncConversation:(WKSyncConversationWrapModel*)model completion:(void(^ _Nullable)(void))completion {
     NSArray<WKSyncConversationModel*> *syncConversations = model.conversations;
 
     // DB 密集操作移到后台线程，避免阻塞主线程动画
@@ -374,7 +379,63 @@
         // side-effects(loadCategories 等),保证 getConversation 能拿到刚 merge
         // 进 DB 的子区行,不再被 3 天活跃过滤误删.
         [self callOnConversationSyncFinishedDelegates];
+
+        // 调用方显式要的完成回调(DB 写 + delegate 通知都已结束),统一回主线程.
+        if(completion) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                completion();
+            });
+        }
     });
+}
+
+#pragma mark - 空间作用域 / 会话归属
+
+-(void) setSpaceScope:(NSString*)spaceId {
+    [WKConversationDB shared].spaceScopeId = spaceId;
+}
+
+-(NSString*) spaceScope {
+    return [WKConversationDB shared].spaceScopeId;
+}
+
+-(void) applySpaceMembership:(NSArray<WKChannel*>*)channels forSpace:(NSString*)spaceId fullSync:(BOOL)fullSync {
+    if(spaceId.length == 0) return;
+    if(fullSync) {
+        [[WKConversationSpaceDB shared] replaceMembership:channels ?: @[] forSpace:spaceId];
+    } else {
+        [[WKConversationSpaceDB shared] addMembership:channels ?: @[] forSpace:spaceId];
+    }
+}
+
+-(void) addSpaceMembership:(WKChannel*)channel forSpace:(NSString*)spaceId {
+    if(!channel || channel.channelId.length == 0 || spaceId.length == 0) return;
+    [[WKConversationSpaceDB shared] addMembership:@[channel] forSpace:spaceId];
+}
+
+-(NSSet<NSString*>*) spaceChannelIdsForSpace:(NSString*)spaceId channelType:(uint8_t)channelType {
+    return [[WKConversationSpaceDB shared] channelIdsForSpace:spaceId channelType:channelType];
+}
+
+-(void) removeSpaceMembership:(NSArray<WKChannel*>*)channels forSpace:(NSString*)spaceId {
+    if(channels.count == 0 || spaceId.length == 0) return;
+    [[WKConversationSpaceDB shared] removeMembership:channels forSpace:spaceId];
+}
+
+-(BOOL) hasSpaceMembershipForSpace:(NSString*)spaceId {
+    return [[WKConversationSpaceDB shared] hasMembershipForSpace:spaceId];
+}
+
+-(NSInteger) backfillSpaceMembershipFromExistingConversationsForSpace:(NSString*)spaceId {
+    return [[WKConversationSpaceDB shared] backfillMembershipFromExistingConversationsForSpace:spaceId];
+}
+
+-(void) deleteAllSpaceMembership {
+    [[WKConversationSpaceDB shared] deleteAllMembership];
+}
+
+-(BOOL) hasSpaceMembership {
+    return [[WKConversationSpaceDB shared] hasAnyMembership];
 }
 
 -(void) syncExtra {

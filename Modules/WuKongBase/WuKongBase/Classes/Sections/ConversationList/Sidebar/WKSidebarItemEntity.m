@@ -59,6 +59,25 @@ static NSString *_Nullable wkSidebarOptionalString(id value) {
     return result;
 }
 
+- (NSDictionary *)toDict {
+    NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+    dict[@"target_type"]   = @(self.target_type);
+    dict[@"target_id"]     = self.target_id ?: @"";
+    dict[@"channel_type"]  = @(self.channel_type);
+    dict[@"channel_id"]    = self.channel_id ?: @"";
+    dict[@"timestamp"]     = @(self.timestamp);
+    dict[@"unread"]        = @(self.unread);
+    dict[@"is_pinned"]     = @(self.is_pinned);
+    dict[@"is_followed"]   = @(self.is_followed);
+    dict[@"category_sort"] = @(self.category_sort);
+    if (self.category_id) dict[@"category_id"] = self.category_id;
+    if (self.parent_channel_id) dict[@"parent_channel_id"] = self.parent_channel_id;
+    // NSIntegerMax 是"服务端没给 follow_sort"的哨兵，不序列化 —— 回读时 fromDict:
+    // 会重新兜底成 NSIntegerMax，语义一致且不会把哨兵当真实值写进缓存文件。
+    if (self.follow_sort != NSIntegerMax) dict[@"follow_sort"] = @(self.follow_sort);
+    return dict;
+}
+
 - (NSString *)followKey {
     return [NSString stringWithFormat:@"%ld::%@", (long)self.target_type, self.target_id ?: @""];
 }

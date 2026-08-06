@@ -128,6 +128,55 @@ typedef void (^WKUpdateConversationExtraProvider)(WKConversationExtra *extra,WKU
 /// 处理同步会话数据（保存到本地数据库并触发更新回调）
 -(void) handleSyncConversation:(WKSyncConversationWrapModel*)model;
 
+/// 同上，但在 DB 写入 + delegate 通知全部完成后回调 completion（主线程）。
+///
+/// 为什么需要：内部把 DB 密集写派发到了后台队列，调用方无法知道"什么时候可以安全地
+/// 从 DB 回读"。上层原先用「设一个 pending 标记，等下一次 onConversationUpdate 再
+/// load」来猜，sync 只返回 0/1 条会话或直接失败时那次 load 就永远不会发生
+/// （切空间后列表卡在空态的成因）。有了 completion 就不需要猜。
+-(void) handleSyncConversation:(WKSyncConversationWrapModel*)model completion:(void(^ _Nullable)(void))completion;
+
+#pragma mark - 空间作用域 / 会话归属
+
+/// 设置会话读路径的空间作用域，详见 WKConversationDB.spaceScopeId。
+/// 传 nil / @"" 关闭作用域（回到"DB 里的会话全都算当前空间"的老行为）。
+-(void) setSpaceScope:(nullable NSString*)spaceId;
+
+/// 当前空间作用域。
+-(nullable NSString*) spaceScope;
+
+/// 记录一批会话归属于某空间。
+/// fullSync=YES 表示 channels 是该空间的 **完整** 会话集（version=0 的
+/// conversation/sync 响应），会覆盖式写入 —— 不在集合里的旧归属被清掉，
+/// 这是退群 / 删会话 / 被移出的自愈路径（顶替原先 deleteAllConversation 的作用）。
+/// fullSync=NO 为增量补充，不删任何已有归属。
+-(void) applySpaceMembership:(NSArray<WKChannel*>*)channels forSpace:(NSString*)spaceId fullSync:(BOOL)fullSync;
+
+/// 单条归属补充（实时会话更新 / 建群进群白名单）。
+/// ⚠️ 只能拿"有正向证据"的判定结果调用，不要写 fail-open 结论 —— 归属是持久的，
+/// 一次猜测会把跨空间污染永久固化。
+-(void) addSpaceMembership:(WKChannel*)channel forSpace:(NSString*)spaceId;
+
+/// 删除归属。用于"明确判定不属于该空间"的自愈路径（prune / sweep）。
+-(void) removeSpaceMembership:(NSArray<WKChannel*>*)channels forSpace:(NSString*)spaceId;
+
+/// 某空间下指定 channelType 的 channelId 集合，供上层水化空间白名单。
+-(NSSet<NSString*>*) spaceChannelIdsForSpace:(NSString*)spaceId channelType:(uint8_t)channelType;
+
+/// 归属表是否已有数据（仅诊断用；作用域不再依赖它，见 WKConversationDB.spaceScopeId）。
+-(BOOL) hasSpaceMembership;
+
+/// 指定空间是否已有归属数据（= 至少被完整同步过一次）。
+-(BOOL) hasSpaceMembershipForSpace:(NSString*)spaceId;
+
+/// 一次性迁移：把 conversation 表现有的行归属到 spaceId。
+/// 老版本靠"清库 + 全量 sync"保证 DB 只有当前空间的会话，所以升级那一刻这些行确实
+/// 属于该空间。回填后归属表不会再有"整表为空"的状态，作用域可以一直精确过滤。
+-(NSInteger) backfillSpaceMembershipFromExistingConversationsForSpace:(NSString*)spaceId;
+
+/// 清空整张归属表（归属索引一次性重建，见 WKConvListCache.prepareMembershipIfNeeded）。
+-(void) deleteAllSpaceMembership;
+
 // 同步扩展提供者
 @property(nonatomic,copy) WKSyncConversationExtraProvider syncConversationExtraProvider;
 // 更新扩展提供者

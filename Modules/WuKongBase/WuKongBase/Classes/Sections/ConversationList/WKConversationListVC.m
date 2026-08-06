@@ -68,6 +68,7 @@
 #import "WKConversationVC.h"
 #import "WKSpaceConversationCache.h"
 #import "WKSpaceConvSyncCache.h"
+#import "WKConvListCache.h"
 #import "WKSpaceBotRegistry.h"
 #import "WKPCOnlineVC.h"
 #import "WKPixelParticleHint.h"
@@ -115,6 +116,10 @@
 @property(nonatomic,assign) NSInteger spaceCount; // Space总数
 @property(nonatomic,strong) UIImageView *spaceArrowView; // Space标题右侧折叠箭头
 @property(nonatomic,assign) BOOL hasCleanedConversationsOnStartup; // 本次启动是否已清理会话数据
+/// 已经为哪个空间做过"作用域 + 白名单 + 关注/分组缓存"水化。
+/// loadCurrentSpace 每次重连都会跑，用它去重；不能拿 SDK 的 spaceScope 当判据 ——
+/// 作用域在 WKApp 启动流程里就设好了（必须早于 connect），比它永远相等。
+@property(nonatomic,copy,nullable) NSString *hydratedSpaceId;
 @property(nonatomic,strong) WKConversationTabView *conversationTabView; // 群组/私聊 tab
 @property(nonatomic,strong) UIView *navLeftView;
 @property(nonatomic,strong) UIView *avatarView;
@@ -379,21 +384,75 @@
 
     if (self.currentSpaceId && self.currentSpaceId.length > 0) {
         NSString *lastSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"WKLastLoadedSpaceId"];
-        // 每次App启动都清空旧会话数据，等待sync重新填充当前空间的会话
-        // 原因：群聊消息不带space_id，无法通过消息内容过滤归属空间
-        //       DB中可能积累了其他空间的群聊（通过实时消息推送写入），
-        //       只有deleteAllConversation + sync才能确保DB只包含当前空间的会话
-        // 使用hasCleanedConversationsOnStartup防止reconnect时重复清理
         NSLog(@"[ConvDebug] loadCurrentSpace: hasCleanedOnStartup=%d, lastSpaceId=%@, currentSpaceId=%@", self.hasCleanedConversationsOnStartup, lastSpaceId, self.currentSpaceId);
-        if (!self.hasCleanedConversationsOnStartup || !lastSpaceId || ![lastSpaceId isEqualToString:self.currentSpaceId]) {
-            self.hasCleanedConversationsOnStartup = YES;
-            NSLog(@"[ConvDebug] 🔄 CLEARING all conversations for space switch!");
-            [self.conversationListVM reset];
-            [[WKConversationDB shared] deleteAllConversation];
-            [self rebuildGroupDisplayAndReload];
-            // 记录当前空间
-            [[NSUserDefaults standardUserDefaults] setObject:self.currentSpaceId forKey:@"WKLastLoadedSpaceId"];
-            [[NSUserDefaults standardUserDefaults] synchronize];
+
+        if ([WKConvListCache enabled]) {
+            // ===== 每空间持久缓存路径 =====
+            // 不再清库。会话归属落在 conversation_space 表里（见 WKConvListCache），
+            // 读路径按空间作用域过滤，所以 DB 可以安全地保留上次的会话 ——
+            // 冷启动第一帧就画出缓存数据，断网也有内容（原来是全空）。
+            // 作用域 + 白名单水化必须在任何 loadConversationList 之前完成。
+            // loadCurrentSpace 每次重连都会被调（onConnectStatus），已经为当前空间水化过
+            // 就不再重复 —— 否则会用归属表覆盖掉 snapshotSyncedGroupIds /
+            // addGroupToWhitelist 刚建立的内存白名单（异步落库可能还没到）。
+            // 判据用 VC 自己的 hydratedSpaceId，不能用 SDK 的 spaceScope：作用域在
+            // WKApp 启动流程里就已经设好了（要早于 connect），这里比它永远相等。
+            if (![self.hydratedSpaceId isEqualToString:self.currentSpaceId]) {
+                // 空间与上次加载的不同（例如空间引导 / deeplink 在别处改过 currentSpaceId）
+                // → 内存里的会话行属于上一个空间，必须清掉；DB 不清（那才是缓存）。
+                if (lastSpaceId.length > 0 && ![lastSpaceId isEqualToString:self.currentSpaceId]) {
+                    NSLog(@"[SpaceIndex] loadCurrentSpace 空间变化 %@ → %@，清 VM 内存（不清库）", lastSpaceId, self.currentSpaceId);
+                    [self.conversationListVM reset];
+                }
+                self.hydratedSpaceId = self.currentSpaceId;
+                [self.conversationListVM hydrateSpaceScope:self.currentSpaceId];
+                // 关注 tab 的另两份数据也从磁盘缓存起手 —— 会话行有缓存但分组结构 /
+                // 关注集合没有的话，buildGroupDisplayList 仍然是 fail-closed 的空态。
+                // hydrateForSpace: 内部对"已经是服务端最新"的状态不会往回盖。
+                [[WKFollowedKeysStore shared] hydrateForSpace:self.currentSpaceId];
+                if (self.conversationListVM.categoryList.count == 0) {
+                    NSArray<WKCategoryEntity *> *cachedCats =
+                        [[WKCategoryService shared] cachedCategoriesForSpace:self.currentSpaceId];
+                    if (cachedCats.count > 0) {
+                        self.conversationListVM.categoryList = cachedCats;
+                    }
+                }
+            }
+            if (!self.hasCleanedConversationsOnStartup || ![lastSpaceId isEqualToString:self.currentSpaceId]) {
+                self.hasCleanedConversationsOnStartup = YES;
+                [[NSUserDefaults standardUserDefaults] setObject:self.currentSpaceId forKey:@"WKLastLoadedSpaceId"];
+                [[NSUserDefaults standardUserDefaults] synchronize];
+            }
+            // DB 不再被清空 → 需要有界化（内部自带单次闸门 + 后台队列）
+            [WKConvListCache runGarbageCollectionIfNeeded];
+        } else {
+            // ===== 灰度关闭：现网行为 =====
+            // 每次App启动都清空旧会话数据，等待sync重新填充当前空间的会话
+            // 原因：群聊消息不带space_id，无法通过消息内容过滤归属空间
+            //       DB中可能积累了其他空间的群聊（通过实时消息推送写入），
+            //       只有deleteAllConversation + sync才能确保DB只包含当前空间的会话
+            // 使用hasCleanedConversationsOnStartup防止reconnect时重复清理
+            if (!self.hasCleanedConversationsOnStartup || !lastSpaceId || ![lastSpaceId isEqualToString:self.currentSpaceId]) {
+                self.hasCleanedConversationsOnStartup = YES;
+                NSLog(@"[ConvDebug] 🔄 CLEARING all conversations for space switch!");
+                [self.conversationListVM reset];
+                [[WKConversationDB shared] deleteAllConversation];
+                [self rebuildGroupDisplayAndReload];
+                // 记录当前空间
+                [[NSUserDefaults standardUserDefaults] setObject:self.currentSpaceId forKey:@"WKLastLoadedSpaceId"];
+                [[NSUserDefaults standardUserDefaults] synchronize];
+            }
+        }
+
+        // 标题先用磁盘缓存的空间名画出来。space/my 是纯网络接口，断网冷启动时它必然
+        // 失败 → currentSpaceName 为空 → refreshTitle 回退成 appName（"Octo"），用户
+        // 看起来像"空间被切走了"。这里先给一个上次的真值，网络回来再覆盖。
+        if (self.currentSpaceName.length == 0) {
+            NSString *cachedName = [[WKSpaceModel shared] cachedSpaceNameForSpaceId:self.currentSpaceId];
+            if (cachedName.length > 0) {
+                self.currentSpaceName = cachedName;
+                [self refreshTitle];
+            }
         }
 
         // 从缓存或网络获取 Space 列表
@@ -473,6 +532,9 @@
         [weakSelf rebuildGroupDisplayAndReload];
         [weakSelf refreshBadge];
         [weakSelf kickoffChannelInfoWarmup];
+        // 列表已构建完成 → 把"实际渲染出来的会话集"记成本空间的归属快照，
+        // 下次冷启动（含断网）就能还原成用户上次看到的这个列表。
+        [weakSelf.conversationListVM persistRenderedMembershipSnapshot];
     }];
 }
 
@@ -907,26 +969,53 @@
     // 更新标题
     [self refreshTitle];
 
-    // 参考 Web/Android 端：清空本地会话数据后重新从服务器同步
-    // 1. 清空 VM 数据和本地会话数据库
-    [self.conversationListVM reset];
-    [[WKConversationDB shared] deleteAllConversation];
+    __weak typeof(self) weakSelf = self;
+    BOOL cacheEnabled = [WKConvListCache enabled];
 
-    // : 关注 tab 跨空间残留修复 —— FollowedKeysStore 是单例，
-    // followedGroupNos / itemsByCategory 都是 A space 的数据；新空间的 categoryList
-    // 拉回来后，buildGroupDisplayList 会用旧 followedGroupNos 去过滤新 cat.groups，
-    // 命中 0 条 → 用户视角是"切完空间分组下面没有任何会话"。这里 fail-closed
-    // 把 store 状态打回未加载，紧跟下面 pendingSpaceSwitchLoad 完成块里的 reload
-    // 拉新空间数据；中间的渲染窗口里 buildGroupDisplayList 走 followLoaded=NO
-    // 分支，section 内只出 header（与切换瞬间的"空列表"语义一致）。
-    [[WKFollowedKeysStore shared] reset];
-    self.lastFollowedKeysReloadAt = 0; // 解除 30s debounce，避免下面 reload 被吞
+    if (cacheEnabled) {
+        // ===== 每空间持久缓存路径 =====
+        // 1. VM 清内存，然后用持久化归属表水化：作用域指向新空间 + 群/DM 白名单
+        //    第一帧就正确（原来 reset 后白名单是 nil，靠"DB 刚被清空"才安全）。
+        [self.conversationListVM reset];
+        self.hydratedSpaceId = spaceId; // 让 loadCurrentSpace 的去重判据同步，避免重复水化
+        [self.conversationListVM hydrateSpaceScope:spaceId];
 
-    // 2. 先刷新 UI 显示空列表
-    [self rebuildGroupDisplayAndReload];
+        // 关注 tab：不再把 store 打回"未加载"（那会让分组下面一条会话都没有），
+        // 而是切到新空间的磁盘缓存，随后 reload 用服务端数据覆盖。
+        [[WKFollowedKeysStore shared] resetAndHydrateForSpace:spaceId];
+        self.lastFollowedKeysReloadAt = 0; // 解除 30s debounce，避免后面的 reload 被吞
+        NSArray<WKCategoryEntity *> *cachedCats = [[WKCategoryService shared] cachedCategoriesForSpace:spaceId];
+        self.conversationListVM.categoryList = cachedCats ?: @[];
+
+        // 2. 立刻画出新空间上次缓存的列表（原来这一步是刷"空列表"）
+        [self.conversationListVM loadConversationList:^{
+            [weakSelf rebuildGroupDisplayAndReload];
+            [weakSelf refreshBadge];
+        }];
+    } else {
+        // ===== 灰度关闭：现网行为 =====
+        // 参考 Web/Android 端：清空本地会话数据后重新从服务器同步
+        // 1. 清空 VM 数据和本地会话数据库
+        [self.conversationListVM reset];
+        [[WKConversationDB shared] deleteAllConversation];
+
+        // : 关注 tab 跨空间残留修复 —— FollowedKeysStore 是单例，
+        // followedGroupNos / itemsByCategory 都是 A space 的数据；新空间的 categoryList
+        // 拉回来后，buildGroupDisplayList 会用旧 followedGroupNos 去过滤新 cat.groups，
+        // 命中 0 条 → 用户视角是"切完空间分组下面没有任何会话"。这里 fail-closed
+        // 把 store 状态打回未加载，紧跟下面 pendingSpaceSwitchLoad 完成块里的 reload
+        // 拉新空间数据；中间的渲染窗口里 buildGroupDisplayList 走 followLoaded=NO
+        // 分支，section 内只出 header（与切换瞬间的"空列表"语义一致）。
+        [[WKFollowedKeysStore shared] reset];
+        self.lastFollowedKeysReloadAt = 0; // 解除 30s debounce，避免下面 reload 被吞
+
+        // 2. 先刷新 UI 显示空列表
+        [self rebuildGroupDisplayAndReload];
+    }
 
     // 3. 通过 syncConversationProvider 重新同步会话（会带上新的 space_id）
-    __weak typeof(self) weakSelf = self;
+    //    version / syncKey 必须在作用域切到新空间之后读 —— 缓存路径下它们是
+    //    "本空间"的值（首次进入某空间 → 0 → 自动全量拉取）。
     WKSyncConversationProvider provider = [WKSDK shared].conversationManager.syncConversationProvider;
     WKSyncConversationAck ack = [WKSDK shared].conversationManager.syncConversationAck;
     if (provider) {
@@ -935,27 +1024,55 @@
         provider(version, syncKey, ^(WKSyncConversationWrapModel * _Nullable model, NSError * _Nullable error) {
             if (error) {
                 NSLog(@"❌ Space会话同步失败: %@", error);
+                if (cacheEnabled) {
+                    // 弱网 / 断网：不动任何数据（缓存继续显示），只把闸门落下 ——
+                    // 否则要等 8s 超时兜底，期间实时消息全被 fail-closed 丢掉。
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        NSLog(@"[SpaceGate] sync 失败，保留缓存列表并立即落闸");
+                        weakSelf.spaceSwitchInProgress = NO;
+                    });
+                }
                 return;
             }
-            // 保存到本地数据库并触发回调
-            if (model) {
-                [[WKSDK shared].conversationManager handleSyncConversation:model];
+            void (^sendAck)(void) = ^{
+                if (ack) {
+                    ack(0, ^(NSError * _Nullable ackError) {
+                        if (ackError) {
+                            NSLog(@"❌ 会话同步回执失败: %@", ackError);
+                        }
+                    });
+                }
+            };
+            if (!cacheEnabled) {
+                // 老时序（顺序与改造前一致：先落库 → 再回执 → 再设标记）：
+                // handleSyncConversation 是异步的，DB 写入还没完成，此时查 DB 会返回
+                // 空数据。设标记，等 onConversationUpdate 回调（DB 写入完成后触发）再加载。
+                if (model) {
+                    [[WKSDK shared].conversationManager handleSyncConversation:model];
+                }
+                sendAck();
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    weakSelf.pendingSpaceSwitchLoad = YES;
+                });
+                return;
             }
-            // 回执
-            if (ack) {
-                ack(0, ^(NSError * _Nullable ackError) {
-                    if (ackError) {
-                        NSLog(@"❌ 会话同步回执失败: %@", ackError);
-                    }
+            // 缓存路径：用 completion 显式等 DB 写完，不再靠 onConversationUpdate 猜。
+            // 原来的猜测式时序只在 filtered.count>1 的分支消费标记 —— sync 只返回
+            // 0/1 条会话时那次 load 永远不会发生，列表卡在空态直到下次 viewWillAppear。
+            if (model) {
+                [[WKSDK shared].conversationManager handleSyncConversation:model completion:^{
+                    [weakSelf finishSpaceSwitchLoadAndSideEffects];
+                }];
+            } else {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [weakSelf finishSpaceSwitchLoadAndSideEffects];
                 });
             }
-            dispatch_async(dispatch_get_main_queue(), ^{
-                // 不直接调 loadConversationList：handleSyncConversation 是异步的，
-                // DB 写入还没完成，此时查 DB 会返回空数据。
-                // 设标记，等 onConversationUpdate 回调（DB 写入完成后触发）再加载。
-                weakSelf.pendingSpaceSwitchLoad = YES;
-            });
+            sendAck();
         });
+    } else if (cacheEnabled) {
+        // 没有 provider（理论上不会发生）：至少别把闸门永久留着
+        self.spaceSwitchInProgress = NO;
     }
 
     // 4. 触发联系人重新同步
@@ -972,6 +1089,66 @@
         // caller push 目标群聊可立即进行 — 进群视图会拿到新 space_id 查询。
         completion();
     }
+}
+
+/// Space 切换的 sync 落地后要跑的一整套收尾：重读列表 + 四层空间隔离兜底 + UI 刷新 + 落闸。
+///
+/// 抽成方法是因为它有两个触发路径，行为必须完全一致：
+///   - 缓存开启：performSwitchToSpaceId 里 handleSyncConversation:completion: 的回调，
+///     以及 sync 失败时的兜底（此时只落闸、不动数据，缓存继续显示）。
+///   - 灰度关闭：onConversationUpdate 里 pendingSpaceSwitchLoad 的消费点（老时序）。
+- (void)finishSpaceSwitchLoadAndSideEffects {
+    __weak typeof(self) weakSelf = self;
+    [self.conversationListVM loadConversationList:^{
+        [weakSelf.conversationListVM snapshotSyncedGroupIds];
+        // : Space 切换完成后再扫一遍 VM，把任何 WKSpaceFilter 明确 Skip
+        // 的群聊从 conversation array 踢出。reset() 已清空，但 sync 回来的批次
+        // 以及中间 onConversationUpdate 里 FailOpen 走回 existsInList 分支都
+        // 可能把不该属于当前 Space 的群带回来——最后一次 prune 保证 snapshot
+        // 之后的单例内存是干净的。
+        [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
+        // YUJ-bot-isolation: race 关键点——performSwitchToSpaceId 里启动了
+        // 异步 loadBotsForSpace；若 registry 回包早于本次 reload，
+        // onSpaceBotRegistryDidLoad 那次 prune 跑在还没被 sync 回灌的 VM 上
+        // 等于空跑。此处 VM 已被 handleSyncConversation 重新填好，必须再
+        // prune 一次。即便 registry 还没回来（Unknown），下次回来时仍会
+        // 走 onSpaceBotRegistryDidLoad 兜底，两者覆盖所有时序。
+        NSString *curSpaceForPrune3 = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+        if(curSpaceForPrune3.length > 0) {
+            [weakSelf.conversationListVM pruneNonCurrentSpaceBotsForSpace:curSpaceForPrune3];
+        }
+        // : 切 Space 后若 backend sync 在新 Space 未返回 botfather，
+        // 本地兜底合成占位 entry，保证用户立即看到系统 bot 入口。
+        [weakSelf.conversationListVM ensureSystemBotsVisible];
+        // : 切换瞬间漏入的跨 Space 会话兜底总清扫 —— 即便闸门
+        // 在某些路径上没拦住（debug 兜底），也能在用户看到列表前最后一次
+        // 把不属于当前 Space 的会话从 VM 中清掉。
+        NSString *sweepSpace = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+        if(sweepSpace.length > 0) {
+            NSInteger sweptConv = 0, sweptThread = 0;
+            [weakSelf.conversationListVM sweepForeignToSpace:sweepSpace removedCount:&sweptConv removedThreadCount:&sweptThread];
+        }
+        [weakSelf rebuildGroupDisplayAndReload];
+        [weakSelf refreshBadge];
+        [weakSelf loadCategories];
+        // : 切空间后 followStore 已被 reset，必须显式 reload 拉新空间
+        // 的 followed 数据，否则 Follow tab 永远只有 header 没有会话。
+        // 走原始 reload 而不是 reloadFollowedKeysIfNeeded，前面已经把
+        // lastFollowedKeysReloadAt 清零，这里再标记一次（让后续 30s 内
+        // 的兜底刷新被 debounce 吞掉，避免重复打）。reload 完成后
+        // onFollowedKeysStoreDidUpdate 会触发 rebuild。
+        weakSelf.lastFollowedKeysReloadAt = [NSDate date].timeIntervalSince1970;
+        [[WKFollowedKeysStore shared] reload];
+        // 切 Space 等价于"新空间冷启动" —— 大量 channelInfo 还没缓存,
+        // 同样会让 mute 判错把红点冲到 99+。后台分批预热（gen 已在
+        // kickoff 内自增，前一空间未完成的批次自动作废）。
+        [weakSelf kickoffChannelInfoWarmup];
+        // 同 onConversationSyncFinished：prune/sweep 之后的列表就是本空间的可信快照。
+        [weakSelf.conversationListVM persistRenderedMembershipSnapshot];
+        // VM 已被 B 的 sync 数据填好、白名单 snapshot 完成、bot registry
+        // 也已尝试加载 → 闸门可落，恢复正常 fail-open 行为
+        weakSelf.spaceSwitchInProgress = NO;
+    }];
 }
 
 /// 创建固定在顶部的搜索栏容器（不随 tableView 滚动）
@@ -1277,6 +1454,8 @@
     [self rebuildGroupDisplayAndReload];
     [self refreshBadge];
     [self loadCategories];
+    // 四层空间隔离刚跑完，此刻的列表是"这个空间该显示什么"最可信的答案 → 落快照。
+    [self.conversationListVM persistRenderedMembershipSnapshot];
 }
 
 #pragma mark - WKConversationManagerDelegate
@@ -1369,57 +1548,12 @@
         [self.conversationListVM fetchThreadCountsForGroups];
 
         // 空间切换后的延迟加载：DB 写入已完成，现在可以安全调 loadConversationList
+        // 注：仅灰度关闭（清库）路径还走这条"等 onConversationUpdate 再加载"的猜测式
+        // 时序。开启缓存后走 handleSyncConversation:completion: 显式回调，见
+        // performSwitchToSpaceId / finishSpaceSwitchLoadAndSideEffects。
         if (self.pendingSpaceSwitchLoad) {
             self.pendingSpaceSwitchLoad = NO;
-            __weak typeof(self) weakSelf = self;
-            [self.conversationListVM loadConversationList:^{
-                [weakSelf.conversationListVM snapshotSyncedGroupIds];
-                // : Space 切换完成后再扫一遍 VM，把任何 WKSpaceFilter 明确 Skip
-                // 的群聊从 conversation array 踢出。reset() 已清空，但 sync 回来的批次
-                // 以及中间 onConversationUpdate 里 FailOpen 走回 existsInList 分支都
-                // 可能把不该属于当前 Space 的群带回来——最后一次 prune 保证 snapshot
-                // 之后的单例内存是干净的。
-                [weakSelf.conversationListVM pruneNonCurrentSpaceGroups];
-                // YUJ-bot-isolation: race 关键点——performSwitchToSpaceId 里启动了
-                // 异步 loadBotsForSpace；若 registry 回包早于本次 reload，
-                // onSpaceBotRegistryDidLoad 那次 prune 跑在还没被 sync 回灌的 VM 上
-                // 等于空跑。此处 VM 已被 handleSyncConversation 重新填好，必须再
-                // prune 一次。即便 registry 还没回来（Unknown），下次回来时仍会
-                // 走 onSpaceBotRegistryDidLoad 兜底，两者覆盖所有时序。
-                NSString *curSpaceForPrune3 = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
-                if(curSpaceForPrune3.length > 0) {
-                    [weakSelf.conversationListVM pruneNonCurrentSpaceBotsForSpace:curSpaceForPrune3];
-                }
-                // : 切 Space 后若 backend sync 在新 Space 未返回 botfather，
-                // 本地兜底合成占位 entry，保证用户立即看到系统 bot 入口。
-                [weakSelf.conversationListVM ensureSystemBotsVisible];
-                // : 切换瞬间漏入的跨 Space 会话兜底总清扫 —— 即便闸门
-                // 在某些路径上没拦住（debug 兜底），也能在用户看到列表前最后一次
-                // 把不属于当前 Space 的会话从 VM 中清掉。
-                NSString *sweepSpace = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
-                if(sweepSpace.length > 0) {
-                    NSInteger sweptConv = 0, sweptThread = 0;
-                    [weakSelf.conversationListVM sweepForeignToSpace:sweepSpace removedCount:&sweptConv removedThreadCount:&sweptThread];
-                }
-                [weakSelf rebuildGroupDisplayAndReload];
-                [weakSelf refreshBadge];
-                [weakSelf loadCategories];
-                // : 切空间后 followStore 已被 reset，必须显式 reload 拉新空间
-                // 的 followed 数据，否则 Follow tab 永远只有 header 没有会话。
-                // 走原始 reload 而不是 reloadFollowedKeysIfNeeded，前面已经把
-                // lastFollowedKeysReloadAt 清零，这里再标记一次（让后续 30s 内
-                // 的兜底刷新被 debounce 吞掉，避免重复打）。reload 完成后
-                // onFollowedKeysStoreDidUpdate 会触发 rebuild。
-                weakSelf.lastFollowedKeysReloadAt = [NSDate date].timeIntervalSince1970;
-                [[WKFollowedKeysStore shared] reload];
-                // 切 Space 等价于"新空间冷启动" —— 大量 channelInfo 还没缓存,
-                // 同样会让 mute 判错把红点冲到 99+。后台分批预热（gen 已在
-                // kickoff 内自增，前一空间未完成的批次自动作废）。
-                [weakSelf kickoffChannelInfoWarmup];
-                // VM 已被 B 的 sync 数据填好、白名单 snapshot 完成、bot registry
-                // 也已尝试加载 → 闸门可落，恢复正常 fail-open 行为
-                weakSelf.spaceSwitchInProgress = NO;
-            }];
+            [self finishSpaceSwitchLoadAndSideEffects];
         }
 
         return;
@@ -1625,6 +1759,11 @@
     if(unknownGroupChannelIds.count > 0) {
         [self verifyAndAddGroupsToList:unknownGroupChannelIds];
     }
+    // 会话 ↔ 空间归属：本方法是"这条实时会话属于当前空间吗"的唯一漏斗，判定通过的
+    // 里面**只有有正向证据的**才落归属 —— filtered 里含 fail-open 放行的条目
+    // （消息无 space_id / 无 lastMessage / Bot 名单未加载），把那些写进持久归属表会
+    // 造成永久跨空间污染。详见 isConversationPositivelyInSpace:。
+    [self persistSpaceMembershipForConversations:filtered spaceId:currentSpaceId];
     return filtered;
 }
 
@@ -1646,7 +1785,12 @@
     NSLog(@"🔍 后台验证 %lu 个未知群聊是否属于当前空间", (unsigned long)pendingIds.count);
 
     // 用 version=0 调用 sync API 获取当前空间的所有会话（仅用于验证，不走 handleSyncConversation）
+    // 标记为"校验型 sync"：它的 version 也是 0，但响应只用来核验某个群的归属，不能被
+    // 当成"这个空间的全部会话"去覆盖式重写归属表（那会在响应缩水时把缓存列表截断，
+    // 表现为下次冷启动只剩系统 bot）。见 WKConvListCache.beginVerificationOnlySync。
+    [WKConvListCache beginVerificationOnlySync];
     provider(0, @"", ^(WKSyncConversationWrapModel * _Nullable model, NSError * _Nullable error) {
+        [WKConvListCache endVerificationOnlySync];
         if(error || !model) {
             NSLog(@"❌ 群聊空间验证失败: %@", error);
             return;
@@ -2012,6 +2156,115 @@
     return YES;
 }
 
+/// 这条会话是否**有正向证据**属于该空间 —— 决定"要不要把归属持久化到
+/// conversation_space"，与 `isConversationInCurrentSpace:` 的"这一帧要不要显示"是两个
+/// 不同的问题，必须分开。
+///
+/// 为什么不能直接复用 isConversationInCurrentSpace：那个方法有三条 fail-open 出口
+///   1. 消息没有 space_id → YES（向前兼容）
+///   2. 会话没有 lastMessage → YES
+///   3. Bot 成员名单未加载（Unknown）→ 继续走 1/2
+/// 这三条对"这一帧显示"是合理的兼容策略（宁可多显示，等 prune/sweep 兜底），但归属是
+/// **持久**的：把一次 fail-open 猜测写进归属表，就等于把跨空间污染永久固化 —— 下次
+/// 冷启动读缓存时它仍然被认为属于这个空间，而且不会再有人来纠正。用户实测到的
+/// "切到其他空间看到别的空间的会话"就是这么来的。
+///
+/// 正向证据（任一命中即可）：
+///   - 系统通知 / 文件助手 / BotFather：本来就是每个空间都可见的全局入口
+///   - channelId 带 `s{spaceId}_` 前缀：服务端明确标注了归属
+///   - 群聊：WKSpaceFilter 判 Keep（channelInfo.space_id 命中，或我是该空间的外部成员），
+///          或命中该空间 sync 出来的群白名单
+///   - 私聊：消息 payload 的 space_id 等于该空间
+///   - Bot DM：WKSpaceBotRegistry 明确判定 Member（服务端 my_bots ∪ space_bots）
+/// 其余（含所有 fail-open / Unknown）→ NO，只显示不落库。
+-(BOOL) isConversationPositivelyInSpace:(WKConversation*)conversation spaceId:(NSString*)spaceId {
+    if(spaceId.length == 0) return NO;
+    NSString *channelId = conversation.channel.channelId;
+    if(channelId.length == 0) return NO;
+
+    // 全局入口：每个空间都该有一份，落库无害且必要（否则冷启动缓存里看不到系统 bot）
+    if([channelId isEqualToString:[WKApp shared].config.systemUID] ||
+       [channelId isEqualToString:[WKApp shared].config.fileHelperUID] ||
+       [channelId isEqualToString:[WKApp shared].config.botfatherUID]) {
+        return YES;
+    }
+
+    // 服务端前缀化的 channelId：`s{spaceId}_xxx` 是最强的归属证据
+    if([channelId hasPrefix:[NSString stringWithFormat:@"s%@_", spaceId]]) {
+        return YES;
+    }
+
+    if(conversation.channel.channelType == WK_GROUP) {
+        WKSpaceFilterDecision decision = [[WKSpaceFilter shared]
+                                           decideChannel:channelId
+                                             channelType:conversation.channel.channelType];
+        // 群聊的 Keep 是真证据：channelInfo.space_id 命中，或 member.source_space_id
+        // 命中（外部群）。注意 PERSON 的 Keep 不是证据 —— WKSpaceFilter 对无前缀的
+        // Person 频道一律 person-pass → Keep，那只是"不拦"，不代表归属已知。
+        if(decision == WKSpaceFilterDecisionKeep) {
+            return YES;
+        }
+        // sync 白名单：它是该空间 conversation/sync 的产物，命中即为该空间成员。
+        // 未初始化（nil）时 isGroupInWhitelist 会返回 YES（fail-open），所以必须先判
+        // 初始化状态，不能直接用它。
+        if([self.conversationListVM isGroupWhitelistInitialized]
+           && [self.conversationListVM isGroupInWhitelist:channelId]) {
+            return YES;
+        }
+        return NO;
+    }
+
+    if(conversation.channel.channelType == WK_PERSON) {
+        // Bot DM：服务端权威名单明确说是本空间成员才算证据（Unknown 不算）
+        WKChannelInfo *info = [[WKChannelInfoDB shared] queryChannelInfo:conversation.channel];
+        if(info && info.robot) {
+            if([[WKSpaceBotRegistry shared] membershipForBotUID:channelId inSpace:spaceId] == WKSpaceBotMembershipMember) {
+                return YES;
+            }
+            return NO;
+        }
+        // 普通私聊：只认消息 payload 里明确写着的 space_id
+        if(conversation.lastMessage) {
+            id v = conversation.lastMessage.content.contentDict[@"space_id"];
+            if([v isKindOfClass:[NSString class]] && [(NSString *)v isEqualToString:spaceId]) {
+                return YES;
+            }
+        }
+        return NO;
+    }
+
+    // 子区：归属跟父群走。父群有证据 → 子区有证据。
+    if(conversation.channel.channelType == WK_COMMUNITY_TOPIC) {
+        NSRange sep = [channelId rangeOfString:@"____"];
+        NSString *parentGroupNo = sep.location != NSNotFound ? [channelId substringToIndex:sep.location] : nil;
+        if(parentGroupNo.length == 0) return NO;
+        WKSpaceFilterDecision decision = [[WKSpaceFilter shared] decideChannel:parentGroupNo channelType:WK_GROUP];
+        if(decision == WKSpaceFilterDecisionKeep) return YES;
+        return [self.conversationListVM isGroupWhitelistInitialized]
+            && [self.conversationListVM isGroupInWhitelist:parentGroupNo];
+    }
+
+    return NO;
+}
+
+/// 从一批"这一帧要显示"的会话里挑出有正向证据的，落归属 + 同步内存白名单。
+/// 见 isConversationPositivelyInSpace: 的注释：显示可以 fail-open，落库不行。
+-(void) persistSpaceMembershipForConversations:(NSArray<WKConversation*>*)conversations
+                                       spaceId:(NSString*)spaceId {
+    if(conversations.count == 0 || spaceId.length == 0) return;
+    NSMutableArray<WKChannel*> *confirmed = [NSMutableArray array];
+    for (WKConversation *conv in conversations) {
+        if(conv.channel.channelId.length == 0) continue;
+        if([self isConversationPositivelyInSpace:conv spaceId:spaceId]) {
+            [confirmed addObject:conv.channel];
+        }
+    }
+    if(confirmed.count == 0) return;
+    [WKConvListCache recordMembershipBatch:confirmed forSpace:spaceId];
+    // 内存白名单同步更新 —— 落库是异步的，shouldShowConversation: 读的是内存集合。
+    [self.conversationListVM noteSpaceMembershipChannels:confirmed];
+}
+
 -(void) uiAddConversation:(WKConversation*)conversation {
     if(conversation.channel.channelType == WK_PERSON) {
         WK_BOT_TRACE(@"[BotSpaceTrace] uiAddConversation enter channelId=%@", conversation.channel.channelId);
@@ -2027,6 +2280,11 @@
         if(![self isConversationInCurrentSpace:conversation spaceId:currentSpaceId]) {
             return;
         }
+        // 通过空间判定 → 归属落库 + 内存白名单同步。这里和
+        // filterConversationsBySpace 是两个独立的"加入当前空间列表"入口，都要记。
+        // 同样只记有正向证据的：isConversationInCurrentSpace 会 fail-open 放行
+        // "无 space_id / 无 lastMessage" 的会话，那种猜测不能进持久归属表。
+        [self persistSpaceMembershipForConversations:@[conversation] spaceId:currentSpaceId];
     }
     // 记录插入前的行数
     NSInteger countBefore = [self.conversationListVM conversationCount];

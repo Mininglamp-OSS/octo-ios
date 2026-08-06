@@ -15,6 +15,7 @@
 #import "WKChannelDataManagerDelegateImp.h"
 #import "WKSpaceConversationCache.h"
 #import "WKSpaceConvSyncCache.h"
+#import "WKConvListCache.h"
 #import "WKApp.h"
 
 @WKModule(WKDataSourceModule)
@@ -265,6 +266,33 @@
             // 预填 channelInfo.extra[@"space_id"] / channelMember.extra[@"source_space_id"]
             // 让 WKSpaceFilter 在 conv sync 落地前即可作 Keep/Skip 判定，消除 fail-open。
             [self prefillSpaceFieldsFromSyncModels:syncConversationModels];
+            // 会话 ↔ 空间归属落库（见 WKConvListCache / WKConversationSpaceDB）。
+            // 请求本身带了 space_id，所以响应就是该空间的会话集。
+            //
+            // 覆盖式写入（fullSync=YES，会 tombstone 掉响应里没有的旧归属，用来自愈
+            // 退群 / 删会话 / 被移出）只在同时满足下面三条时才做：
+            //   1. version == 0 —— 这是一次全量拉取；
+            //   2. 不是校验型调用 —— verifyAndAddGroupsToList 也用 version=0，但它只是
+            //      核验某个群的归属，响应不该被当成"这个空间的全部会话"；
+            //   3. 响应非空 —— 空响应更可能是异常（限流 / 空窗）而不是"这个空间真的一条
+            //      会话都没有"，拿它去 tombstone 会把整个空间的缓存清光，代价太大。
+            // 任何一条不满足就降级为只补充不删除：宁可留一条过期归属（会被下次真全量
+            // 或 prune/sweep 纠正），也不能把用户的缓存列表整片删掉。
+            if (currentSpaceId.length > 0) {
+                NSMutableArray<WKChannel *> *memberChannels = [NSMutableArray array];
+                for (WKSyncConversationModel *m in syncConversationModels) {
+                    if (m.channel.channelId.length > 0) [memberChannels addObject:m.channel];
+                }
+                BOOL verificationOnly = [WKConvListCache isVerificationOnlySync];
+                BOOL authoritativeFull = (version == 0) && !verificationOnly && memberChannels.count > 0;
+                if (version == 0 && !authoritativeFull) {
+                    NSLog(@"[SpaceIndex] version=0 但降级为增量归属写入 (verificationOnly=%d, count=%lu)",
+                          verificationOnly, (unsigned long)memberChannels.count);
+                }
+                [WKConvListCache applyMembership:memberChannels
+                                        forSpace:currentSpaceId
+                                        fullSync:authoritativeFull];
+            }
             callback(wrapModel,nil);
         }).catch(^(NSError *err){
             callback(nil,err);

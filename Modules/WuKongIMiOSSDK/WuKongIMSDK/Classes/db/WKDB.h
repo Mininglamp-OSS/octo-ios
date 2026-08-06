@@ -19,6 +19,11 @@ NS_ASSUME_NONNULL_BEGIN
 // userInfo: @{ @"imDBPath": NSString, @"uid": NSString }
 extern NSString * const WKIMDBHealthCheckFailedNotification;
 
+// 切库完成通知（switchDB: 末尾发出，与调用线程相同）
+// 用途：持有 DB 派生内存缓存的类（如 WKConversationSpaceDB.hasAnyMembership）
+// 必须在切账号时失效缓存，否则会拿 A 账号的结论去判 B 账号的库。
+extern NSString * const WKDBDidSwitchNotification;
+
 @interface WKDB : NSObject
 
 @property (nonatomic, strong) WKFMDatabaseQueue *dbQueue;
