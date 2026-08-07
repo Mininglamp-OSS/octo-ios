@@ -2410,6 +2410,13 @@
 
 #pragma mark - 最近 tab：双击定位下一个未读
 
+/// 底部 tabbar「消息」item 双击入口。宿主只负责判「这是一次双击」，
+/// 「当前在不在最近 tab」「有没有未读」这些业务判定全部收在 jumpToNextRecentUnread 里，
+/// 宿主不需要知道 filterType 之类的内部概念。
+- (void)handleMessageTabDoubleTap {
+    [self jumpToNextRecentUnread];
+}
+
 /// 稳定标识一行会话，用作未读跳转游标。格式与 VM 内部 channelKey: 一致（无耦合，
 /// 只要自身前后一致即可）—— 不能用 row 或对象指针，理由见 unreadJumpCursorKey 注释。
 static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
@@ -2480,10 +2487,8 @@ static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
     NSIndexPath *indexPath = [NSIndexPath indexPathForRow:target inSection:0];
     [self.tableView scrollToRowAtIndexPath:indexPath atScrollPosition:UITableViewScrollPositionTop animated:YES];
 
-    UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-    [feedback prepare];
-    [feedback impactOccurred];
-
+    // 特意不加触感反馈：定位本身有滚动 + 高亮两层视觉反馈已经够明确，再震一下反而
+    // 碎（底部 tabbar 那条路径上，didSelectViewController 每次点击已经各震一次了）。
     // scrollToRow 没有 completion callback；滚动动画约 0.25~0.3s，等它落定再闪，
     // 否则高亮会打在滚动中途的那一行上。
     __weak typeof(self) weakSelf = self;
