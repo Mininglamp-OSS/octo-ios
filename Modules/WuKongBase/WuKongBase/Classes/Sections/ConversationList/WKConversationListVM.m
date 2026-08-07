@@ -1539,6 +1539,24 @@ static WKConversationListVM *_instance;
     return count;
 }
 
+-(NSArray<NSNumber *> *) recentUnreadRowIndexes {
+    // 关注 tab 的 row 来自 groupDisplayList（含分组 header），下标不能和
+    // filteredConversations 混用 —— 直接返回空，让「只在最近 tab 生效」变成数据层不变式。
+    if (self.filterType != WKConversationFilterRecent) return @[];
+    NSArray<WKConversationWrapModel *> *list = self.filteredConversations;
+    NSMutableArray<NSNumber *> *rows = [NSMutableArray array];
+    for (NSInteger i = 0; i < (NSInteger)list.count; i++) {
+        WKConversationWrapModel *model = list[i];
+        // placeholder 子区：unreadCount 来自接口不一定是本人未读，cell 也不渲染红点
+        // （与 getRecentUnreadCount 的 skip 同理由）
+        if (model.channel.channelType == WK_COMMUNITY_TOPIC && model.lastMessage == nil) continue;
+        if ([self isChannelMuted:model]) continue;
+        // 与最近 tab cell 的 refreshUnread 同一个 getter → 跳过去的行必然有红点
+        if (model.recentTabActivityUnreadCount > 0) [rows addObject:@(i)];
+    }
+    return [rows copy];
+}
+
 -(NSArray<WKConversationWrapModel*> *) conversationList {
     return self.filteredConversations ?: @[];
 }

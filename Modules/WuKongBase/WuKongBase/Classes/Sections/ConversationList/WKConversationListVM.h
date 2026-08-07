@@ -264,6 +264,20 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 最近 tab 未读数（DM + 3 天内活跃的群 + 子区，全部 !mute）
 -(NSInteger) getRecentUnreadCount;
 
+/// 最近 tab「双击 tab 依次定位下一个未读」用：按当前 filteredConversations 顺序
+/// 返回**肉眼能看到红点**的行下标（升序，可直接当 tableView 的 row 用）。
+///
+/// 判定口径故意收在这里，与 getRecentUnreadCount / cell 渲染同源，避免出现
+/// 「tab 红点是 0，但双击还能跳到某一行」这种错位：
+///   - filterType != Recent 返回空数组 —— 关注 tab 的 row 来自 groupDisplayList
+///     （含分组 header），下标语义和 filteredConversations 不通用
+///   - 跳过静音（isChannelMuted:，与 tab 红点同源）
+///   - 跳过 placeholder 子区（lastMessage == nil）：那个 unreadCount 来自接口，
+///     不一定是当前用户的未读，cell 也不给它渲染红点（同 getRecentUnreadCount）
+///   - 未读取 recentTabActivityUnreadCount，与 WKConversationListCell.refreshUnread
+///     在最近 tab 下用的是同一个 getter
+-(NSArray<NSNumber *> *) recentUnreadRowIndexes;
+
 /// 子区独立 wrap models — 用于"最近 tab 平铺、子区独立成行"。
 /// 与 conversationWrapModels 互不重叠：后者只有 PERSON+GROUP，前者只有 COMMUNITY_TOPIC。
 @property(nonatomic,copy,readonly,nullable) NSArray<WKConversationWrapModel*> *threadWrapModels;

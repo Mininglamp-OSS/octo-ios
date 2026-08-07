@@ -141,6 +141,14 @@
 @property(nonatomic,assign) CGPoint followTabScrollOffset;
 @property(nonatomic,assign) NSTimeInterval lastFollowedKeysReloadAt; // debounce 用，单位秒
 
+// 「最近」tab 双击 tab 栏 → 依次定位下一个未读会话的游标（纯内存，不持久化）。
+// 记 channelId+channelType 而不是 row：最近 tab 的行会被新消息实时重排，群行还是
+// 每次 rebuildFilteredList 新建的 shadow wrap，行号和对象身份都不稳定。
+@property(nonatomic,copy,nullable) NSString *unreadJumpCursorKey;
+// 上次落点的行号。游标 key 已经不在未读集里（用户点进去读完了 / 会话被删）时，
+// 用它当基准继续往下找，而不是被打回列表顶部。
+@property(nonatomic,assign) NSInteger unreadJumpCursorRow;
+
 // 关注 tab 拖拽排序（方案 A）— 长按弹菜单后继续按住可拖动到其他分组
 @property(nonatomic,strong,nullable) UIView *cellDragSnapshot;
 @property(nonatomic,strong,nullable) UIView *cellDragInsertionLine; // 当前手指落点对应的"将插入到这里"指示
@@ -2354,6 +2362,8 @@
     _conversationTabView.onTabChanged = ^(NSInteger index) {
         // 切 tab 前若正在拖动，强制清理 — 否则 snapshot 会卡在屏上
         [weakSelf resetCellDragState];
+        // 切 tab 语义上就是重新开始浏览，未读跳转游标作废
+        weakSelf.unreadJumpCursorKey = nil;
         NSInteger oldIndex = weakSelf.conversationListVM.filterType;
         // 保存当前 tab 滚动位置
         if (oldIndex == WKConversationFilterFollow) {
@@ -2385,9 +2395,136 @@
         [[NSUserDefaults standardUserDefaults] setInteger:index forKey:@"WKConversationTabIndex"];
     };
 
+    // 双击「最近」→ 依次定位下一个未读会话（企业微信同款）。关注 tab 不参与:
+    // 那边 row 来自 groupDisplayList（含分组 header / 可折叠 / 可拖拽重排），
+    // 行号语义和 filteredConversations 不通用。
+    _conversationTabView.onTabDoubleTapped = ^(NSInteger index) {
+        if (index != WKConversationFilterRecent) return;
+        [weakSelf jumpToNextRecentUnread];
+    };
+
     // 将 tabView 添加到固定头部容器（不随 tableView 滚动）
     [self.fixedHeaderContainer addSubview:_conversationTabView];
     [self layoutFixedHeader];
+}
+
+#pragma mark - 最近 tab：双击定位下一个未读
+
+/// 稳定标识一行会话，用作未读跳转游标。格式与 VM 内部 channelKey: 一致（无耦合，
+/// 只要自身前后一致即可）—— 不能用 row 或对象指针，理由见 unreadJumpCursorKey 注释。
+static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
+    if (!channel) return nil;
+    return [NSString stringWithFormat:@"%@_%d", channel.channelId, (int)channel.channelType];
+}
+
+/// 「最近」tab 双击 tab 栏：滚到下一个未读会话，走完最后一个回到第一个。
+///
+/// 选靶规则（依次）：
+///   1. 游标还在未读集里 → 取它后面那个，`% count` 实现「最后一个回到第一个」
+///   2. 游标失效（会话已读 / 被删 / 被过滤掉）→ 取「行号 > 上次落点」的第一个未读，
+///      再没有才回到第一个。这条回退很关键：否则用户读完一条返回再双击就被打回顶部
+///   3. 没有游标（首次双击 / 用户手动滑过后重置）→ 从当前视口顶行往下找第一个未读
+///
+/// 所有 row 在用之前都对 tableView 的真实行数做 bounds 校验（数据源可能领先于
+/// 尚未落地的 reloadData），沿用本文件既有约定，见 reloadThreadRowsForParentGroup。
+- (void)jumpToNextRecentUnread {
+    if (self.conversationListVM.filterType != WKConversationFilterRecent) return;
+    // 正在拖 cell 时先收干净，否则 snapshot 会跟着滚动漂（对齐 onTabChanged）
+    [self resetCellDragState];
+
+    NSArray<NSNumber *> *unreadRows = [self.conversationListVM recentUnreadRowIndexes];
+    if (unreadRows.count == 0) {
+        self.unreadJumpCursorKey = nil; // 全读完了，下次双击从头开始
+        return;                         // 无未读 → 无操作
+    }
+
+    NSInteger target = -1;
+    if (self.unreadJumpCursorKey.length > 0) {
+        NSInteger cursorPos = NSNotFound;
+        for (NSInteger i = 0; i < (NSInteger)unreadRows.count; i++) {
+            WKConversationWrapModel *m = [self.conversationListVM conversationAtIndex:unreadRows[i].integerValue];
+            NSString *key = WKRecentJumpKeyForChannel(m.channel);
+            if (key && [key isEqualToString:self.unreadJumpCursorKey]) {
+                cursorPos = i;
+                break;
+            }
+        }
+        if (cursorPos != NSNotFound) {
+            target = unreadRows[(cursorPos + 1) % unreadRows.count].integerValue;
+        } else {
+            for (NSNumber *row in unreadRows) {
+                if (row.integerValue > self.unreadJumpCursorRow) { target = row.integerValue; break; }
+            }
+            if (target < 0) target = unreadRows.firstObject.integerValue;
+        }
+    } else {
+        // indexPathsForVisibleRows 为空（列表还没上屏）时 firstObject 是 nil，.row 取 0
+        NSInteger topVisibleRow = self.tableView.indexPathsForVisibleRows.firstObject.row;
+        for (NSNumber *row in unreadRows) {
+            if (row.integerValue >= topVisibleRow) { target = row.integerValue; break; }
+        }
+        if (target < 0) target = unreadRows.firstObject.integerValue;
+    }
+
+    NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
+    if (target < 0 || target >= rowCount) {
+        // 数据源与 tableView 暂时不同步（reloadData 还没落地）：放弃本次，不改游标
+        NSLog(@"[UnreadJump] 放弃本次跳转 target=%ld rowCount=%ld", (long)target, (long)rowCount);
+        return;
+    }
+
+    WKConversationWrapModel *targetModel = [self.conversationListVM conversationAtIndex:target];
+    self.unreadJumpCursorKey = WKRecentJumpKeyForChannel(targetModel.channel);
+    self.unreadJumpCursorRow = target;
+
+    NSIndexPath *indexPath = [NSIndexPath indexPathForRow:target inSection:0];
+    [self.tableView scrollToRowAtIndexPath:indexPath atScrollPosition:UITableViewScrollPositionTop animated:YES];
+
+    UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    [feedback prepare];
+    [feedback impactOccurred];
+
+    // scrollToRow 没有 completion callback；滚动动画约 0.25~0.3s，等它落定再闪，
+    // 否则高亮会打在滚动中途的那一行上。
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.32 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [weakSelf flashRowAtIndexPath:indexPath];
+    });
+}
+
+/// 目标行短暂高亮：在 cell.contentView 上叠一层半透明主题色再淡出。
+///
+/// 特意不碰 cell.backgroundColor —— 那个值由 WKConversationListCell.refreshSetting:
+/// 按 stick 状态在管（置顶行是另一种底色），直接改会把置顶行底色写坏，而且下一次
+/// cell 复用/刷新时机不可控。叠加层带固定 tag，连续双击不会堆出多层。
+- (void)flashRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSInteger const kFlashOverlayTag = 9871;
+    if (self.conversationListVM.filterType != WKConversationFilterRecent) return;
+    if (indexPath.row >= [self.tableView numberOfRowsInSection:0]) return;
+    UITableViewCell *cell = [self.tableView cellForRowAtIndexPath:indexPath];
+    if (!cell) return; // 目标行没上屏（滚动被打断等），跳过高亮，不影响已完成的定位
+
+    [[cell.contentView viewWithTag:kFlashOverlayTag] removeFromSuperview];
+    UIView *overlay = [[UIView alloc] initWithFrame:cell.contentView.bounds];
+    overlay.tag = kFlashOverlayTag;
+    overlay.userInteractionEnabled = NO;
+    overlay.backgroundColor = [([WKApp shared].config.themeColor ?: [UIColor systemBlueColor]) colorWithAlphaComponent:0.14];
+    [cell.contentView addSubview:overlay];
+
+    [UIView animateWithDuration:0.45 delay:0.1 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        overlay.alpha = 0;
+    } completion:^(BOOL finished) {
+        [overlay removeFromSuperview];
+    }];
+}
+
+#pragma mark - UIScrollViewDelegate
+
+- (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
+    if (scrollView != self.tableView) return;
+    // 用户手动滑动 = 接管了导航，未读跳转游标作废，下次双击从视口重新起算。
+    // 只有真实拖拽才回调；scrollToRow / cell 拖拽的 setContentOffset 都不会触发。
+    self.unreadJumpCursorKey = nil;
 }
 
 -(void) handleTabSwipe:(UISwipeGestureRecognizer *)gesture {
