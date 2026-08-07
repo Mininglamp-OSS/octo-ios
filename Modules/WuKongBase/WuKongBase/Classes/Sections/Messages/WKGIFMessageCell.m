@@ -66,6 +66,10 @@
     [super refresh:model];
     // 竞态兜底: 复用/漂移下错配的非 WKGIFContent 会 unrecognized selector 崩 (同 WKImageMessageCell)
     if (![model.content isKindOfClass:[WKGIFContent class]]) {
+        // 早退前清图: super refresh: 已经把气泡换成新 model, 动图还留着上一条的 ——
+        // 那是"别的消息的图配这条", 可能跨会话。只在错配这条异常路径上跑, 正常动图
+        // 消息不经过, 不引入闪动。
+        self.imgView.image = nil;
         return;
     }
     WKGIFContent *content = (WKGIFContent*)model.content;

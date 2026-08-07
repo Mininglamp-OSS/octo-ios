@@ -1790,6 +1790,11 @@
 
     NSSet *pendingIds = [NSSet setWithArray:groupChannelIds];
     NSLog(@"🔍 后台验证 %lu 个未知群聊是否属于当前空间", (unsigned long)pendingIds.count);
+    // 发起时钉住"这次校验是为哪个空间"。回包用 addGroupToWhitelist: / uiAddConversation:
+    // 都是按"当前空间"落地的，若期间用户切了空间，A 的响应会把 A 的群写进 B 的白名单
+    // 并插进 B 的列表。丢弃是安全的：这本身是 fail-open 的兜底路径，2s 去抖之后
+    // 下一条 A 空间的消息会再触发一次校验。
+    NSString *expectedSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
 
     // 用 version=0 调用 sync API 获取当前空间的所有会话（仅用于验证，不走 handleSyncConversation）
     // 标记为"校验型 sync"：它的 version 也是 0，但响应只用来核验某个群的归属，不能被
@@ -1811,6 +1816,13 @@
         }
 
         dispatch_async(dispatch_get_main_queue(), ^{
+            // 空间已经变了 → 这批校验结论属于上一个空间，整批丢弃（见 expectedSpaceId）
+            NSString *nowSpaceId = [[NSUserDefaults standardUserDefaults] objectForKey:@"currentSpaceId"];
+            if (![nowSpaceId isEqualToString:expectedSpaceId]) {
+                NSLog(@"[SpaceIndex] 丢弃过期群聊校验结果: space %@→%@ pending=%lu",
+                      expectedSpaceId ?: @"<nil>", nowSpaceId ?: @"<nil>", (unsigned long)pendingIds.count);
+                return;
+            }
             for(NSString *gid in pendingIds) {
                 if([spaceGroupIds containsObject:gid]) {
                     // 验证通过：群聊属于当前空间

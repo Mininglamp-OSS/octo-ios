@@ -124,6 +124,18 @@ static const NSUInteger kWKImagePreloadMaxDecodedBytes = 32 * 1024 * 1024;
     }
 }
 
+/// 清掉所有"跟具体某张图绑定"的呈现状态。每一项都对应 refresh: 正常路径里的一次赋值 ——
+/// 保持两边同步, 别让早退路径漏掉某个残留控件。
+/// 只给 refresh: 的内容类型早退用: 正常路径自己会清图, 不在这里重复清 (cell 是热路径,
+/// 多余的清理只会多制造一次 bg-decode 期间的空窗)。
+- (void)clearImagePresentationState {
+    self.imgView.image = nil;
+    [[self.imgView sd_imageIndicator] stopAnimatingIndicator];
+    self.visualEffectView.hidden = YES;   // 阅后即焚模糊层
+    self.progressView.hidden = YES;       // 上传进度
+    [self.progressView setProgress:0];
+}
+
 -(void) initUI {
     [super initUI];
     
@@ -185,6 +197,11 @@ static const NSUInteger kWKImagePreloadMaxDecodedBytes = 32 * 1024 * 1024;
     // -[WKTextContent localPath])。与 contentSizeForMessage: 的既有 isKindOfClass
     // 守卫同源; super refresh: 是通用逻辑, 对任意内容安全, 这里跳过图片专属渲染即可。
     if (![model.content isKindOfClass:[WKImageContent class]]) {
+        // 早退前必须把图片专属状态清干净: super refresh: 已经把气泡/头像/时间换成新
+        // model 了, 图还留着上一条消息的 —— 那就是"别人的图配这条消息"的错误内容
+        // (可能是别的会话的图, 隐私问题), 比空图更糟。这段只在错配这条异常路径上跑,
+        // 正常图片消息一行都不经过, 所以不会引入任何闪动。
+        [self clearImagePresentationState];
         return;
     }
     WKImageContent *imageContent = (WKImageContent*)model.content;

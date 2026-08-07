@@ -534,6 +534,19 @@ static WKConversationListVM *_instance;
 -(void) loadConversationList:(void(^)(void)) finished {
     CFAbsoluteTime _lcStart = CFAbsoluteTimeGetCurrent();
 
+    // 发起时就把"这次加载是为哪个空间、属于哪一代 VM"钉下来。回主线程时必须用这两个
+    // 捕获值校验，**不能读当时的 currentSpaceId 去盖章** ——
+    //   A 的 DB 查询在后台跑 → 用户切到 B（reset + hydrateSpaceScope(B) + 新 load）
+    //   → A 的回调后到，把 A 的会话写进 VM，又把 loadedForSpaceId 盖成 B。
+    // 这样 persistRenderedMembershipSnapshot 的 loadedForSpaceId == currentSpaceId
+    // 校验必然通过，A 的 channel 就被永久写进 B 的归属表（归属只增不删，重启也在），
+    // 之后每次冷启动都把 A 的会话种回 B 的列表 —— 正是本次缓存改造要消灭的污染。
+    // 丢弃是安全的：所有 reset 调用点后面都紧跟一次新的 loadConversationList
+    // （performSwitchToSpaceId / loadCurrentSpace 两条空间变化路径 + init），
+    // 不存在"丢了这次就没人再刷"的情况。
+    NSString *requestedSpaceId = [WKConvListCache currentSpaceId];
+    NSInteger requestedGen = self.vmGeneration;
+
     // 在主线程快照旧 threadPreviews/threadCount（后台线程不能读 self.conversationWrapModels）
     // reset 会清空 conversationWrapModels，所以同时用 cachedThreadData 兜底
     NSMutableDictionary *oldThreadData = [NSMutableDictionary dictionary];
@@ -713,14 +726,27 @@ static WKConversationListVM *_instance;
             __strong typeof(weakSelf) mainSelf = weakSelf;
             if (!mainSelf) return;
 
+            // 过期结果闸门：期间发生过 reset（换代）或空间已经变了 → 这批数据属于上一个
+            // 空间，既不能写进 VM 也不能盖章。直接丢弃，不调 finished ——
+            // finished 里会 persistRenderedMembershipSnapshot，让它跑就等于把旧空间的
+            // 会话写进新空间的归属表。新空间自己那次 load 的 finished 会负责刷 UI。
+            NSString *nowSpaceId = [WKConvListCache currentSpaceId];
+            BOOL spaceChanged = (requestedSpaceId || nowSpaceId)
+                && !(requestedSpaceId == nowSpaceId || [requestedSpaceId isEqualToString:nowSpaceId]);
+            if (requestedGen != mainSelf.vmGeneration || spaceChanged) {
+                NSLog(@"[SpaceIndex] 丢弃过期 loadConversationList 结果: gen %ld→%ld space %@→%@ rows=%lu",
+                      (long)requestedGen, (long)mainSelf.vmGeneration,
+                      requestedSpaceId ?: @"<nil>", nowSpaceId ?: @"<nil>",
+                      (unsigned long)conversationWrapModels.count);
+                return;
+            }
+
             mainSelf.cachedAllConversations = conversations;
             mainSelf.conversationWrapModels = conversationWrapModels;
             mainSelf.threadWrapModels = threadWrapModels;
-            // 盖章：这一份内存列表是为哪个空间装的（快照时要和 currentSpaceId 比对）。
-            // 注意用"现在"的 currentSpaceId：DB 查询是在后台线程跑的，理论上期间可能
-            // 发生过切换；不一致的话下一次 loadConversationList 会重新盖章，快照那一轮
-            // 直接跳过，不会误写。
-            mainSelf.loadedForSpaceId = [WKConvListCache currentSpaceId];
+            // 盖章用**发起时**捕获的空间，不是回调时的 currentSpaceId。上面的闸门已经保证
+            // 两者相等，这里用捕获值是为了让"这批数据属于哪个空间"这件事只有一个来源。
+            mainSelf.loadedForSpaceId = requestedSpaceId;
             [mainSelf rebuildChannelIndex];
             mainSelf.cachedTopicsByGroup = topicsByGroup;
             mainSelf.cachedRemindersByChannelId = remindersByChannelId;

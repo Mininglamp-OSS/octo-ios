@@ -88,9 +88,13 @@
         return;
     }
     NSString *nsCopy = [ns copy], *spaceCopy = [spaceId copy];
+    // 路径必须在**入队前**解析：它内部读 [WKLoginInfo shared].uid 拼目录，而 data 是
+    // 当前账号序列化出来的。若在 ioQueue block 里才解析，排队期间登出 A / 登录 B 就会
+    // 把 A 的 categories/follow JSON 写进 B 的目录，而 logout 的 removeAllForCurrentUser
+    // 只删它当时捕获的 A 目录，泄漏会一直留在 B 下面。
+    NSString *path = [self filePathForNamespace:nsCopy spaceId:spaceCopy create:YES];
+    if (!path) return;
     dispatch_async([self ioQueue], ^{
-        NSString *path = [self filePathForNamespace:nsCopy spaceId:spaceCopy create:YES];
-        if (!path) return;
         // 原子写：中途被杀不会留下半个文件（回读时 JSON 解析失败会被当成无缓存）
         NSError *writeError = nil;
         if (![data writeToFile:path options:NSDataWritingAtomic error:&writeError]) {
@@ -101,9 +105,10 @@
 
 + (void)removeNamespace:(NSString *)ns spaceId:(NSString *)spaceId {
     NSString *nsCopy = [ns copy], *spaceCopy = [spaceId copy];
+    // 同 setObject:：删除路径也要在入队前按"当前账号"解析，否则跨账号会删到 B 的文件。
+    NSString *path = [self filePathForNamespace:nsCopy spaceId:spaceCopy create:NO];
+    if (!path) return;
     dispatch_async([self ioQueue], ^{
-        NSString *path = [self filePathForNamespace:nsCopy spaceId:spaceCopy create:NO];
-        if (!path) return;
         [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
     });
 }
