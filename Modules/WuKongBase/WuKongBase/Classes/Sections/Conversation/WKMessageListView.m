@@ -37,11 +37,47 @@ static const BOOL WKCellPerfLog = NO;
 static const CFTimeInterval kCellPerfHeightMissMs = 4.0;    // heightForRow 缓存miss >4ms 才打
 static const CFTimeInterval kCellPerfRefreshSlowMs = 8.0;   // willDisplay 内 refresh 总耗时 >8ms 才打
 
+// ============================================================================
+// 【不变式 I1 —— 改本文件前必读】
+//
+//   dataProvider 的结构性变更（section 数 / row 数变化）与对应的 tableView 失效
+//   （reloadData / insertSections / insertRows / deleteXxx），必须在**同一个主线程
+//   turn** 内完成。两者之间不允许出现 dispatch_async / await / 任何让出主线程的操作。
+//
+// 为什么: UITableView 内部缓存 section/row 数, 只在 reloadData / insert* / delete*
+// 时更新。一旦"dp 已改、tableView 未知"的状态被主线程 runloop 观察到, 下一次
+// layout pass 就会拿旧的 section 数去问新的数据源:
+//   - 读越界: viewForHeaderInSection: → dateWithSection: → NSRangeException
+//   - 一致性断言: begin/endUpdates / reloadRows / performBatchUpdates 撞
+//     _Bug_Detected_In_Client_Of_UITableView_Invalid_Number_Of_Rows_In_Section
+// 现网 1.0.2(74) 5/5 份 `index 1 beyond bounds [0 .. 0]` 就是这个窗口: 后台线程
+// 当时正停在 precacheHeightForMessage 里 —— 那是 dp 改完之后、reloadData 之前的
+// bg 高度预热。
+//
+// 因此三条 pull 路径都是 prepare/commit 两段式 (见 WKMessageListDataProvider.h):
+//   1) pullXxxPrepared: 只拿 models, dp 一动不动
+//   2) 后台对 models 预热高度 (model 是独立对象, 不需要它已在列表里)
+//   3) 回主线程, 一个 turn 内 commitXxx: + reloadData/insertRows
+//      → commitLoadMessages: / commitPulldownModels: / commitPullupModels:
+//        这三个方法体里标了「原子区」的部分, 不要往中间插 dispatch。
+//
+// 增量插入需要的 "新增了几个 section / 几行" 必须在 commit 那个 turn 里 commit 前后
+// 就地 diff, 不能靠"pull 前记一份、pull 后再记一份"—— 那种写法要求 dp 在预热之前
+// 就被改掉, 正是上面那个窗口。
+//
+// 散落在本文件里的 `drift caught → fallback reloadData` / isTableViewRowCountIn-
+// SyncWithDataProvider 检查, 在两段式之后理论上永不触发。暂时保留作为金丝雀:
+// 它们都带 NSLog, 若线上还能看到就说明仍有路径违反 I1。确认干净后可整批删除。
+// ============================================================================
+
 // 增量 pulldown 开关：YES = 走 insertSections/insertRows + 手动 setContentOffset 路径，
 // NO = 走老的 reloadData + rectForRowAtIndexPath + setContentOffset 路径（跟 git 原版完全一致）。
-// 关掉的原因：增量路径在并发场景下，pull #1 capture 的 targetCopy 基于 #1 自己的 newSectionsAdded，
-// 但 ioQueue async 期间 pull #2 已经把 dataProvider 改了，导致 #1 reload 时 targetCopy 指向错误 cell
-// → 视觉"跳到下一页数据顶部"。reloadData 路径每次都用当前 dataProvider 全量重建，对并发友好。
+// 关掉的原因（历史）：增量路径在并发场景下，pull #1 capture 的 targetCopy 基于 #1 自己的
+// newSectionsAdded，但 ioQueue async 期间 pull #2 已经把 dataProvider 改了，导致 #1 reload
+// 时 targetCopy 指向错误 cell → 视觉"跳到下一页数据顶部"。
+// 注：两段式改造后这个并发前提已不成立（增量参数改为在 commit 同 turn 内就地 diff，
+// 不再跨 async 携带旧快照），可以重新评估打开以省掉整页 reloadData 的开销；
+// 但这属于性能优化，需要单独验证视觉锚点，本次不随崩溃修复一起改。
 static const BOOL kIncrementalPulldown = NO;
 
 // CADisplayLink 用的 weak target wrapper：避免 self ↔ link 循环引用导致 dealloc 永不触发
@@ -380,7 +416,7 @@ static const BOOL kIncrementalPulldown = NO;
     NSInteger oldLastSectionRowCount = (oldSectionCount > 0) ? [self.tableView numberOfRowsInSection:oldSectionCount - 1] : 0;
     NSInteger newSectionCount = [self.dataProvider dateCount];
     BOOL newSectionAdded = (newSectionCount > oldSectionCount);
-    NSInteger newLastSectionRowCount = (newSectionCount > 0) ? [self.dataProvider messagesAtSection:newSectionCount - 1].count : 0;
+    NSInteger newLastSectionRowCount = (newSectionCount > 0) ? [self.dataProvider rowCountAtSection:newSectionCount - 1] : 0;
 
     // Bugly #3054 兜底：校验的窗口 + 双保险 @try/@catch。
     //   insertRowsAtIndexPaths 内部会触发 heightForRow / cellForRow，对含 markdown 表格的
@@ -392,7 +428,7 @@ static const BOOL kIncrementalPulldown = NO;
     //   注：M3 表格改为原生渲染后此嵌套 RunLoop 路径消失，但 try/catch 仍作为廉价保险保留。
     if (!newSectionAdded && newLastSectionRowCount > oldLastSectionRowCount) {
         NSInteger intendedDelta = newLastSectionRowCount - oldLastSectionRowCount;
-        NSInteger dsNow = [self.dataProvider messagesAtSection:newSectionCount - 1].count;
+        NSInteger dsNow = [self.dataProvider rowCountAtSection:newSectionCount - 1];
         NSInteger tvNow = [self.tableView numberOfRowsInSection:newSectionCount - 1];
         if (dsNow - tvNow != intendedDelta) {
             [self.tableView reloadData];
@@ -508,69 +544,59 @@ static const BOOL kIncrementalPulldown = NO;
           animation, firstLoad,
           self.keepPosition.orderSeq,
           _dpHeadBefore.orderSeq, _dpTailBefore.orderSeq,
-          (unsigned long)self.dataProvider.dates.count);
+          (unsigned long)[self.dataProvider dateCount]);
     #endif
     if(self.keepPosition) {
         [self enablePullup:YES];
     }else {
         [self enablePullup:NO];
     }
-    [self.dataProvider pullFirst:self.keepPosition complete:^(bool hasMore) {
-        WKMessageModel *_dpHeadAfter = [weakSelf.dataProvider firstMessage];
-        WKMessageModel *_dpTailAfter = [weakSelf.dataProvider lastMessage];
+    // 两段式 (见 WKMessageListDataProvider.h): pullFirst 只交出 models, 数据源一动不动。
+    // 高度预热在**写入之前**对 models 做 —— model 是独立对象, 不需要它已经在列表里。
+    // 然后回到主线程, 在同一个 turn 内 commitReplaceAll: + reloadData。
+    [self.dataProvider pullFirst:self.keepPosition prepared:^(NSArray<WKMessageModel *> *models, BOOL hasMore) {
         #if DEBUG
-        NSLog(@"[BubbleBugRepro] loadMessages pullFirst RETURN hasMore=%d dpHead=%u dpTail=%u dpDates=%lu",
-              hasMore,
-              _dpHeadAfter.orderSeq, _dpTailAfter.orderSeq,
-              (unsigned long)weakSelf.dataProvider.dates.count);
+        NSLog(@"[BubbleBugRepro] loadMessages pullFirst PREPARED hasMore=%d models=%lu",
+              hasMore, (unsigned long)models.count);
         #endif
-        [weakSelf handleLoadMessages:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
+        if (models.count == 0) {
+            [weakSelf commitLoadMessages:@[] animation:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
+            return;
+        }
+        // 预热放在 commit 之前: 此刻 dataProvider 与 tableView 仍然是一致的,
+        // 后台跑多久都不会产生"数据源已变 / tableView 未知"的窗口。
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            CFAbsoluteTime _t0 = CFAbsoluteTimeGetCurrent();
+            for (WKMessageModel *msg in models) {
+                [weakSelf precacheHeightForMessage:msg];
+            }
+            CGFloat _ms = (CFAbsoluteTimeGetCurrent() - _t0) * 1000;
+            WK_PERF_LOG(@"[Perf] pullFirst precache: %lu msgs in %.1fms (bg, pre-commit)", (unsigned long)models.count, _ms);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf commitLoadMessages:models animation:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
+            });
+        });
     }];
 }
 
--(void) handleLoadMessages:(BOOL)animation firstLoad:(BOOL)firstLoad hasMore:(bool)hasMore complete:(void(^)(void))complete {
-    // Bugly #9375: dataProvider.pullFirst 的 PromiseKit 回调在部分路径（thenOn 指定 bg 队列 / 错误重试等）
-    // 会落到非主线程，随后 reloadData → heightForRowAtIndexPath → sharedMeasureTV 首次懒加载在 bg 线程
-    // [UITextView initWithFrame:] 被 iOS 18 主线程契约直接 abort。此处统一 hop 回主线程。
+/// pullFirst 的 commit 阶段。**整段必须跑在一个主线程 turn 内**，中间不允许出现任何
+/// dispatch / await —— `commitReplaceAll:` 之后到 `reloadData` 之前，dataProvider 和
+/// tableView 的 section 数是不一致的，一旦让出主线程就会被 layout pass 撞上。
+-(void) commitLoadMessages:(NSArray<WKMessageModel *> *)models animation:(BOOL)animation firstLoad:(BOOL)firstLoad hasMore:(BOOL)hasMore complete:(void(^)(void))complete {
     if (![NSThread isMainThread]) {
+        // 兜底: 理论上 prepared/precache 都已 hop 回 main。
         __weak typeof(self) weakSelf = self;
         dispatch_async(dispatch_get_main_queue(), ^{
-            [weakSelf handleLoadMessages:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
+            [weakSelf commitLoadMessages:models animation:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
         });
         return;
     }
-
-    // 首次进群：先 bg 预热 cellHeightCache + textAttrCache，再回 main 走 reloadData。
-    // 原来这里直接 reloadData，可视区每条 cell 第一次都在 main 上 parse（15~25ms × N 条），
-    // 是"首次进入某个群聊加载某些气泡后开始卡顿"的根因。pullup/pulldown 路径已有这一步
-    // (line 671-704 / 770-823)，pullFirst 缺失，这里补上。
-    if (firstLoad && self.dataProvider.dates.count > 0) {
-        NSMutableArray<WKMessageModel *> *allMsgs = [NSMutableArray array];
-        for (NSString *date in self.dataProvider.dates) {
-            NSArray<WKMessageModel *> *msgs = [self.dataProvider messagesAtDate:date];
-            if (msgs.count > 0) [allMsgs addObjectsFromArray:msgs];
-        }
-        if (allMsgs.count > 0) {
-            __weak typeof(self) weakSelf = self;
-            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                CFAbsoluteTime _t0 = CFAbsoluteTimeGetCurrent();
-                for (WKMessageModel *msg in allMsgs) {
-                    [weakSelf precacheHeightForMessage:msg];
-                }
-                CGFloat _ms = (CFAbsoluteTimeGetCurrent() - _t0) * 1000;
-                WK_PERF_LOG(@"[Perf] pullFirst precache: %lu msgs in %.1fms (bg)", (unsigned long)allMsgs.count, _ms);
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [weakSelf _handleLoadMessagesAfterPrecache:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
-                });
-            });
-            return;
-        }
-    }
-    [self _handleLoadMessagesAfterPrecache:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
-}
-
--(void) _handleLoadMessagesAfterPrecache:(BOOL)animation firstLoad:(BOOL)firstLoad hasMore:(bool)hasMore complete:(void(^)(void))complete {
     if (!self.tableView) return; // 防止 view 已释放后继续操作
+
+    // ---------- 原子区开始: dp 变更 + tableView 失效, 不得让出主线程 ----------
+    if (models.count > 0) {
+        [self.dataProvider commitReplaceAll:models];
+    }
     if(!hasMore) {
         [self pullupFinished];
         if(!self.keepPosition) {
@@ -592,13 +618,14 @@ static const BOOL kIncrementalPulldown = NO;
         WKMessageModel *_dpHead = [self.dataProvider firstMessage];
         WKMessageModel *_dpTail = [self.dataProvider lastMessage];
         #if DEBUG
-        NSLog(@"[BubbleBugRepro] _handleLoadAfterPrecache RELOAD firstLoad=%d keepPos=%u dpHead=%u dpTail=%u dpDates=%lu",
+        NSLog(@"[BubbleBugRepro] commitLoadMessages RELOAD firstLoad=%d keepPos=%u dpHead=%u dpTail=%u dpDates=%lu",
               firstLoad, self.keepPosition.orderSeq,
               _dpHead.orderSeq, _dpTail.orderSeq,
-              (unsigned long)self.dataProvider.dates.count);
+              (unsigned long)[self.dataProvider dateCount]);
         #endif
     }
     [self.tableView reloadData];
+    // ---------- 原子区结束 ----------
 
     if(!self.keepPosition) {
         [self scrollToBottom:animation];
@@ -926,7 +953,7 @@ static BOOL WKListViewContainsFirstResponder(UIView *v) {
         #if DEBUG
         NSLog(@"[BubbleBugRepro] pulldown ENTRY dpHead=%u dpTail=%u dpDates=%lu positionAtBottom=%d",
               _dpHead.orderSeq, _dpTail.orderSeq,
-              (unsigned long)self.dataProvider.dates.count, self.positionAtBottom);
+              (unsigned long)[self.dataProvider dateCount], self.positionAtBottom);
         #endif
     }
     WK_PERF_LOG(@"[PullDebug] pulldown START, mj_header.state=%ld, isPulldownInProgress=%d", (long)self.tableView.mj_header.state, self.isPulldownInProgress);
@@ -934,210 +961,210 @@ static BOOL WKListViewContainsFirstResponder(UIView *v) {
     // 标记 pulldown 进行中，阻止新消息并发修改 tableView
     self.isPulldownInProgress = YES;
 
-    // 记录旧状态，用于增量插入
-    NSInteger oldSectionCount = [self.dataProvider dateCount];
-    NSInteger oldFirstSectionRowCount = 0;
-    if (oldSectionCount > 0) {
-        oldFirstSectionRowCount = [self.dataProvider messagesAtSection:0].count;
-    }
-
-    [self.dataProvider pulldown:^(bool hasMore) {
-        WK_PERF_LOG(@"[PullDebug] pulldown callback: hasMore=%d", hasMore);
+    // 两段式 (见 WKMessageListDataProvider.h): pulldownPrepared 只交出 models,
+    // 数据源一动不动 → 后台预热 models 的高度 → 回主线程一个 turn 内 commit + insert。
+    // 关键区别: "新增了几个 section / 几行" 不能再靠 pull 前后 diff dataProvider 得到
+    // (那要求 dp 在预热之前就被改掉, 正是崩溃根因), 改为在 commit 那个 turn 里
+    // commitPrepend: 前后就地 diff —— 全程不让出主线程, tableView 看不到中间态。
+    [self.dataProvider pulldownPrepared:^(NSArray<WKMessageModel *> *models, BOOL hasMore) {
+        WK_PERF_LOG(@"[PullDebug] pulldown prepared: hasMore=%d models=%lu", hasMore, (unsigned long)models.count);
         if(!hasMore) {
             [weakSelf pulldownFinished];
         }
 
-        NSInteger newSectionCount = [weakSelf.dataProvider dateCount];
-        NSInteger newSectionsAdded = newSectionCount - oldSectionCount;
-
-        // 旧的第一个 section 现在偏移到 newSectionsAdded 位置，检查是否新增了行
-        NSInteger newRowsInOldFirstSection = 0;
-        if (oldSectionCount > 0 && newSectionsAdded >= 0 && newSectionsAdded < newSectionCount) {
-            NSInteger currentRowCount = [weakSelf.dataProvider messagesAtSection:newSectionsAdded].count;
-            newRowsInOldFirstSection = currentRowCount - oldFirstSectionRowCount;
+        if (models.count == 0) {
+            [weakSelf finishPulldownWithPath:@"noModels"];
+            return;
         }
 
-        BOOL hasInsertions = (newSectionsAdded > 0 || newRowsInOldFirstSection > 0);
-        WK_PERF_LOG(@"[PullDebug] pulldown: hasInsertions=%d newSections=%ld newRows=%ld", hasInsertions, (long)newSectionsAdded, (long)newRowsInOldFirstSection);
-
-        if (hasInsertions) {
-            // 记录当前可见位置
-            NSIndexPath *firstVisible = weakSelf.tableView.indexPathsForVisibleRows.firstObject;
-            CGFloat cellOffsetInView = 0;
-            if (firstVisible) {
-                CGRect cellRect = [weakSelf.tableView rectForRowAtIndexPath:firstVisible];
-                cellOffsetInView = cellRect.origin.y - weakSelf.tableView.contentOffset.y;
+        // 预热放在 commit 之前: 此刻 dp 与 tableView 仍一致, 后台跑多久都不产生窗口。
+        WK_PERF_LOG(@"[PullDebug] pulldown: dispatching precache for %lu msgs", (unsigned long)models.count);
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            CFAbsoluteTime t_precache = CFAbsoluteTimeGetCurrent();
+            for (WKMessageModel *msg in models) {
+                [weakSelf precacheHeightForMessage:msg];
             }
-            NSIndexPath *targetAfterReload = nil;
-            if (firstVisible) {
-                NSInteger newSection = firstVisible.section + newSectionsAdded;
-                NSInteger newRow = firstVisible.row;
-                if (firstVisible.section == 0) {
-                    newRow += newRowsInOldFirstSection;
-                }
-                targetAfterReload = [NSIndexPath indexPathForRow:newRow inSection:newSection];
-            }
+            CGFloat precacheMs = (CFAbsoluteTimeGetCurrent() - t_precache) * 1000;
+            WK_PERF_LOG(@"[PullDebug] pulldown: precache done %.1fms, dispatching to main", precacheMs);
 
-            // 收集需要预计算的消息
-            NSMutableArray<WKMessageModel*> *newMsgs = [NSMutableArray array];
-            for (NSInteger s = 0; s < newSectionsAdded; s++) {
-                NSArray *msgs = [weakSelf.dataProvider messagesAtSection:s];
-                [newMsgs addObjectsFromArray:msgs];
-            }
-            if (newRowsInOldFirstSection > 0) {
-                NSArray *msgs = [weakSelf.dataProvider messagesAtSection:newSectionsAdded];
-                for (NSInteger r = 0; r < newRowsInOldFirstSection && r < (NSInteger)msgs.count; r++) {
-                    [newMsgs addObject:msgs[r]];
-                }
-            }
-
-            // 清除边界消息的高度缓存
-            NSInteger boundarySection = newSectionsAdded;
-            NSArray *boundaryMsgs = (boundarySection < newSectionCount) ? [weakSelf.dataProvider messagesAtSection:boundarySection] : @[];
-            if (boundaryMsgs.count > (NSUInteger)newRowsInOldFirstSection) {
-                WKMessageModel *boundaryMsg = boundaryMsgs[newRowsInOldFirstSection];
-                if (boundaryMsg.clientMsgNo.length > 0) {
-                    [[WKMessageListView cellHeightCache] removeObjectForKey:boundaryMsg.clientMsgNo];
-                }
-            }
-
-            // 后台线程预计算高度，完成后回主线程刷新 UI
-            NSIndexPath *targetCopy = targetAfterReload;
-            CGFloat offsetCopy = cellOffsetInView;
-            NSInteger newSectionsAddedCopy = newSectionsAdded;
-            NSInteger newRowsInOldFirstSectionCopy = newRowsInOldFirstSection;
-            WK_PERF_LOG(@"[PullDebug] pulldown: dispatching precache for %lu msgs", (unsigned long)newMsgs.count);
-            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                CFAbsoluteTime t_precache = CFAbsoluteTimeGetCurrent();
-                for (WKMessageModel *msg in newMsgs) {
-                    [weakSelf precacheHeightForMessage:msg];
-                }
-                CGFloat precacheMs = (CFAbsoluteTimeGetCurrent() - t_precache) * 1000;
-                WK_PERF_LOG(@"[PullDebug] pulldown: precache done %.1fms, dispatching to main", precacheMs);
-
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    CFAbsoluteTime t_apply = CFAbsoluteTimeGetCurrent();
-                    BOOL didIncremental = NO;
-
-                    // 消费「reset-load 后强制 reloadData」标记, 见属性注释。
-                    BOOL _forceReloadForResetLoad = weakSelf.wasResetLoadPending;
-                    weakSelf.wasResetLoadPending = NO;
-                    if (_forceReloadForResetLoad) {
-                        #if DEBUG
-                        NSLog(@"[BubbleBugRepro] pulldown FORCE reloadData (post-reset-load, 避免 UIKit 增量插入漂移)");
-                        #endif
-                    }
-
-                    if (kIncrementalPulldown && !_forceReloadForResetLoad && weakSelf && weakSelf.tableView) {
-                        @try {
-                            // 关键修法：跟老 reloadData 路径同源 —— 用 layoutIfNeeded +
-                            // rectForRowAtIndexPath:targetCopy 拿 anchor 真实新位置，再调 contentOffset。
-                            // 之前用 contentSize.height delta 不准：endUpdates 返回时大批量插入下
-                            // contentSize 还未稳定（异步），delta 偏小导致 anchor 视觉偏低 200-300pt。
-                            // insertSections 跟老 reloadData 的本质区别：不重建 visible cells（reloadData
-                            // 会把所有 cell 释放回 reuse pool 强制重新 cellForRow + refresh）。
-                            [UIView performWithoutAnimation:^{
-                                [CATransaction begin];
-                                [CATransaction setDisableActions:YES];
-
-                                [weakSelf.tableView beginUpdates];
-
-                                if (newRowsInOldFirstSectionCopy > 0) {
-                                    NSMutableArray<NSIndexPath*> *rowPaths = [NSMutableArray array];
-                                    for (NSInteger r = 0; r < newRowsInOldFirstSectionCopy; r++) {
-                                        [rowPaths addObject:[NSIndexPath indexPathForRow:r inSection:newSectionsAddedCopy]];
-                                    }
-                                    [weakSelf.tableView insertRowsAtIndexPaths:rowPaths withRowAnimation:UITableViewRowAnimationNone];
-                                }
-                                if (newSectionsAddedCopy > 0) {
-                                    NSIndexSet *sectionSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, newSectionsAddedCopy)];
-                                    [weakSelf.tableView insertSections:sectionSet withRowAnimation:UITableViewRowAnimationNone];
-                                }
-
-                                [weakSelf.tableView endUpdates];
-                                // 强制完成 layout，rectForRowAtIndexPath 才能返回最终坐标
-                                [weakSelf.tableView layoutIfNeeded];
-
-                                // 用 anchor 真实新位置调 contentOffset，跟老 reloadData 路径完全同源
-                                if (targetCopy) {
-                                    CGRect targetRect = [weakSelf.tableView rectForRowAtIndexPath:targetCopy];
-                                    weakSelf.tableView.contentOffset = CGPointMake(0, targetRect.origin.y - offsetCopy);
-                                }
-
-                                [CATransaction commit];
-                            }];
-
-                            didIncremental = YES;
-
-                            // 视觉对账：DIFF 现在应该 ~ 0（跟 reloadData 路径同源所以精度也同等）
-                            if (targetCopy && WKCellPerfLog) {
-                                CGRect actualRect = [weakSelf.tableView rectForRowAtIndexPath:targetCopy];
-                                CGFloat actualOffset = actualRect.origin.y - weakSelf.tableView.contentOffset.y;
-                                CGFloat diff = actualOffset - offsetCopy;
-                                if (fabs(diff) > 0.5) {
-                                    NSLog(@"[CellPerf] pulldown incremental DIFF: %.2fpt (actualOffsetInView=%.1f expected=%.1f)",
-                                          diff, actualOffset, offsetCopy);
-                                }
-                            }
-                        } @catch (NSException *ex) {
-                            NSLog(@"[CellPerf] pulldown incremental FAILED: %@, falling back to reloadData", ex);
-                            didIncremental = NO;
-                        }
-                    }
-
-                    if (!didIncremental) {
-                        // 老路径：reloadData + setContentOffset 一步到位（贵但稳）
-                        [UIView performWithoutAnimation:^{
-                            [weakSelf.tableView reloadData];
-                            [weakSelf.tableView layoutIfNeeded];
-                        }];
-                        if (targetCopy) {
-                            [UIView performWithoutAnimation:^{
-                                CGRect targetRect = [weakSelf.tableView rectForRowAtIndexPath:targetCopy];
-                                weakSelf.tableView.contentOffset = CGPointMake(0, targetRect.origin.y - offsetCopy);
-                            }];
-                        }
-                    }
-
-                    CGFloat applyMs = (CFAbsoluteTimeGetCurrent() - t_apply) * 1000;
-                    WK_PERF_LOG(@"[Perf] pulldown: %lu msgs | precache=%.1fms(bg) apply=%.1fms(main) path=%@",
-                          (unsigned long)newMsgs.count, precacheMs, applyMs,
-                          didIncremental ? @"INCREMENTAL" : @"RELOAD");
-
-                    [weakSelf.tableView.mj_header endRefreshing];
-                    weakSelf.isPulldownInProgress = NO;
-                    WK_PERF_LOG(@"[PullDebug] pulldown: COMPLETE (hasInsertions path), mj_header.state=%ld", (long)weakSelf.tableView.mj_header.state);
-                    {
-                        WKMessageModel *_dpHead = [weakSelf.dataProvider firstMessage];
-                        WKMessageModel *_dpTail = [weakSelf.dataProvider lastMessage];
-                        #if DEBUG
-                        NSLog(@"[BubbleBugRepro] pulldown DONE path=hasInsertions newMsgs=%lu dpHead=%u dpTail=%u dpDates=%lu",
-                              (unsigned long)newMsgs.count, _dpHead.orderSeq, _dpTail.orderSeq,
-                              (unsigned long)weakSelf.dataProvider.dates.count);
-                        #endif
-                    }
-                    [weakSelf processPendingRecvMessages];
-                    [weakSelf wk_tryConsumePendingReconcile];
-                });
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf commitPulldownModels:models precacheMs:precacheMs];
             });
-        } else {
-            [weakSelf.tableView.mj_header endRefreshing];
-            weakSelf.isPulldownInProgress = NO;
-            WK_PERF_LOG(@"[PullDebug] pulldown: COMPLETE (no insertions), mj_header.state=%ld", (long)weakSelf.tableView.mj_header.state);
-            {
-                WKMessageModel *_dpHead = [weakSelf.dataProvider firstMessage];
-                WKMessageModel *_dpTail = [weakSelf.dataProvider lastMessage];
-                #if DEBUG
-                NSLog(@"[BubbleBugRepro] pulldown DONE path=noInsertions dpHead=%u dpTail=%u dpDates=%lu",
-                      _dpHead.orderSeq, _dpTail.orderSeq,
-                      (unsigned long)weakSelf.dataProvider.dates.count);
-                #endif
-            }
-            [weakSelf processPendingRecvMessages];
-            [weakSelf wk_tryConsumePendingReconcile];
-        }
+        });
     }];
 
+}
+
+/// pulldown 的 commit 阶段。**整段跑在一个主线程 turn 内**，`commitPrepend:` 与
+/// insert/reloadData 之间不允许让出主线程。
+-(void) commitPulldownModels:(NSArray<WKMessageModel *> *)models precacheMs:(CGFloat)precacheMs {
+    if (!self.tableView) {
+        self.isPulldownInProgress = NO;
+        return;
+    }
+
+    CFAbsoluteTime t_apply = CFAbsoluteTimeGetCurrent();
+
+    // ---------- 原子区开始 ----------
+    // 1) commit 前: 记录 tableView 的可见锚点 + dp 的旧计数
+    NSIndexPath *firstVisible = self.tableView.indexPathsForVisibleRows.firstObject;
+    CGFloat cellOffsetInView = 0;
+    if (firstVisible) {
+        CGRect cellRect = [self.tableView rectForRowAtIndexPath:firstVisible];
+        cellOffsetInView = cellRect.origin.y - self.tableView.contentOffset.y;
+    }
+    NSInteger oldSectionCount = [self.dataProvider dateCount];
+    NSInteger oldFirstSectionRowCount = (oldSectionCount > 0) ? [self.dataProvider rowCountAtSection:0] : 0;
+
+    // 2) commit: 前插历史消息
+    [self.dataProvider commitPrepend:models];
+
+    // 3) commit 后: 就地算出增量
+    NSInteger newSectionCount = [self.dataProvider dateCount];
+    NSInteger newSectionsAdded = newSectionCount - oldSectionCount;
+    NSInteger newRowsInOldFirstSection = 0;
+    if (oldSectionCount > 0 && newSectionsAdded >= 0 && newSectionsAdded < newSectionCount) {
+        NSInteger currentRowCount = [self.dataProvider rowCountAtSection:newSectionsAdded];
+        newRowsInOldFirstSection = currentRowCount - oldFirstSectionRowCount;
+    }
+    BOOL hasInsertions = (newSectionsAdded > 0 || newRowsInOldFirstSection > 0);
+    WK_PERF_LOG(@"[PullDebug] pulldown: hasInsertions=%d newSections=%ld newRows=%ld", hasInsertions, (long)newSectionsAdded, (long)newRowsInOldFirstSection);
+
+    if (!hasInsertions) {
+        // models 全被 dedup 掉了, dp 没变 → tableView 也不需要动, 依然是一致的。
+        [self finishPulldownWithPath:@"allDeduped"];
+        return;
+    }
+
+    NSIndexPath *targetAfterReload = nil;
+    if (firstVisible) {
+        NSInteger newSection = firstVisible.section + newSectionsAdded;
+        NSInteger newRow = firstVisible.row;
+        if (firstVisible.section == 0) {
+            newRow += newRowsInOldFirstSection;
+        }
+        targetAfterReload = [NSIndexPath indexPathForRow:newRow inSection:newSection];
+    }
+
+    // 清除边界消息的高度缓存: 老的第一条现在有了前驱, 气泡位置可能变
+    NSInteger boundarySection = newSectionsAdded;
+    NSArray *boundaryMsgs = (boundarySection < newSectionCount) ? [self.dataProvider messagesAtSection:boundarySection] : @[];
+    if (boundaryMsgs.count > (NSUInteger)newRowsInOldFirstSection) {
+        WKMessageModel *boundaryMsg = boundaryMsgs[newRowsInOldFirstSection];
+        if (boundaryMsg.clientMsgNo.length > 0) {
+            [[WKMessageListView cellHeightCache] removeObjectForKey:boundaryMsg.clientMsgNo];
+        }
+    }
+
+    BOOL didIncremental = NO;
+
+    // 消费「reset-load 后强制 reloadData」标记, 见属性注释。
+    BOOL _forceReloadForResetLoad = self.wasResetLoadPending;
+    self.wasResetLoadPending = NO;
+    if (_forceReloadForResetLoad) {
+        #if DEBUG
+        NSLog(@"[BubbleBugRepro] pulldown FORCE reloadData (post-reset-load)");
+        #endif
+    }
+
+    if (kIncrementalPulldown && !_forceReloadForResetLoad) {
+        @try {
+            // 关键修法：跟老 reloadData 路径同源 —— 用 layoutIfNeeded +
+            // rectForRowAtIndexPath:targetAfterReload 拿 anchor 真实新位置，再调 contentOffset。
+            // 之前用 contentSize.height delta 不准：endUpdates 返回时大批量插入下
+            // contentSize 还未稳定（异步），delta 偏小导致 anchor 视觉偏低 200-300pt。
+            // insertSections 跟老 reloadData 的本质区别：不重建 visible cells（reloadData
+            // 会把所有 cell 释放回 reuse pool 强制重新 cellForRow + refresh）。
+            [UIView performWithoutAnimation:^{
+                [CATransaction begin];
+                [CATransaction setDisableActions:YES];
+
+                [self.tableView beginUpdates];
+
+                if (newRowsInOldFirstSection > 0) {
+                    NSMutableArray<NSIndexPath*> *rowPaths = [NSMutableArray array];
+                    for (NSInteger r = 0; r < newRowsInOldFirstSection; r++) {
+                        [rowPaths addObject:[NSIndexPath indexPathForRow:r inSection:newSectionsAdded]];
+                    }
+                    [self.tableView insertRowsAtIndexPaths:rowPaths withRowAnimation:UITableViewRowAnimationNone];
+                }
+                if (newSectionsAdded > 0) {
+                    NSIndexSet *sectionSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, newSectionsAdded)];
+                    [self.tableView insertSections:sectionSet withRowAnimation:UITableViewRowAnimationNone];
+                }
+
+                [self.tableView endUpdates];
+                // 强制完成 layout，rectForRowAtIndexPath 才能返回最终坐标
+                [self.tableView layoutIfNeeded];
+
+                // 用 anchor 真实新位置调 contentOffset，跟老 reloadData 路径完全同源
+                if (targetAfterReload) {
+                    CGRect targetRect = [self.tableView rectForRowAtIndexPath:targetAfterReload];
+                    self.tableView.contentOffset = CGPointMake(0, targetRect.origin.y - cellOffsetInView);
+                }
+
+                [CATransaction commit];
+            }];
+
+            didIncremental = YES;
+
+            // 视觉对账：DIFF 现在应该 ~ 0（跟 reloadData 路径同源所以精度也同等）
+            if (targetAfterReload && WKCellPerfLog) {
+                CGRect actualRect = [self.tableView rectForRowAtIndexPath:targetAfterReload];
+                CGFloat actualOffset = actualRect.origin.y - self.tableView.contentOffset.y;
+                CGFloat diff = actualOffset - cellOffsetInView;
+                if (fabs(diff) > 0.5) {
+                    NSLog(@"[CellPerf] pulldown incremental DIFF: %.2fpt (actualOffsetInView=%.1f expected=%.1f)",
+                          diff, actualOffset, cellOffsetInView);
+                }
+            }
+        } @catch (NSException *ex) {
+            // 两段式之后这里不该再被触发 (dp 和 tableView 在同一个 turn 内一起变)。
+            // 保留兜底: 若真被触发, 说明还有别的路径在 insert 期间重入改了 dp, 该栈值得看。
+            NSLog(@"[CellPerf] pulldown incremental FAILED: %@, falling back to reloadData", ex);
+            didIncremental = NO;
+        }
+    }
+
+    if (!didIncremental) {
+        // 老路径：reloadData + setContentOffset 一步到位（贵但稳）
+        [UIView performWithoutAnimation:^{
+            [self.tableView reloadData];
+            [self.tableView layoutIfNeeded];
+        }];
+        if (targetAfterReload) {
+            [UIView performWithoutAnimation:^{
+                CGRect targetRect = [self.tableView rectForRowAtIndexPath:targetAfterReload];
+                self.tableView.contentOffset = CGPointMake(0, targetRect.origin.y - cellOffsetInView);
+            }];
+        }
+    }
+    // ---------- 原子区结束 ----------
+
+    CGFloat applyMs = (CFAbsoluteTimeGetCurrent() - t_apply) * 1000;
+    WK_PERF_LOG(@"[Perf] pulldown: %lu msgs | precache=%.1fms(bg) apply=%.1fms(main) path=%@",
+          (unsigned long)models.count, precacheMs, applyMs,
+          didIncremental ? @"INCREMENTAL" : @"RELOAD");
+
+    [self finishPulldownWithPath:(didIncremental ? @"INCREMENTAL" : @"RELOAD")];
+}
+
+/// pulldown 的统一收尾：复位 MJRefresh / 进行中标记，然后排空 pulldown 期间挂起的工作。
+-(void) finishPulldownWithPath:(NSString *)path {
+    [self.tableView.mj_header endRefreshing];
+    self.isPulldownInProgress = NO;
+    WK_PERF_LOG(@"[PullDebug] pulldown: COMPLETE (%@), mj_header.state=%ld", path, (long)self.tableView.mj_header.state);
+    #if DEBUG
+    {
+        WKMessageModel *_dpHead = [self.dataProvider firstMessage];
+        WKMessageModel *_dpTail = [self.dataProvider lastMessage];
+        NSLog(@"[BubbleBugRepro] pulldown DONE path=%@ dpHead=%u dpTail=%u dpDates=%lu",
+              path, _dpHead.orderSeq, _dpTail.orderSeq,
+              (unsigned long)[self.dataProvider dateCount]);
+    }
+    #endif
+    [self processPendingRecvMessages];
+    [self wk_tryConsumePendingReconcile];
 }
 
 -(void) pullup {
@@ -1156,137 +1183,149 @@ static const NSInteger kMaxPullupDedupRetry = 3;
     __weak typeof(self) weakSelf = self;
     WK_PERF_LOG(@"[PullDebug] pullup START, mj_footer.state=%ld", (long)self.tableView.mj_footer.state);
 
-    NSInteger oldSectionCount = [self.dataProvider dateCount];
-    NSInteger oldLastSectionRowCount = 0;
-    if (oldSectionCount > 0) {
-        oldLastSectionRowCount = [self.dataProvider messagesAtSection:oldSectionCount - 1].count;
-    }
-
-    [self.dataProvider pullup:^(bool hasMore) {
-        WK_PERF_LOG(@"[PullDebug] pullup callback: hasMore=%d", hasMore);
+    // 两段式 (见 WKMessageListDataProvider.h): pullupPrepared 只交出 models,
+    // 后台预热 models 高度, 回主线程一个 turn 内 commitAppend: + insertRows/Sections。
+    [self.dataProvider pullupPrepared:^(NSArray<WKMessageModel *> *models, BOOL hasMore) {
+        WK_PERF_LOG(@"[PullDebug] pullup prepared: hasMore=%d models=%lu", hasMore, (unsigned long)models.count);
         if(!hasMore) {
             [weakSelf pullupFinished];
         }else {
             [weakSelf enablePullup:YES];
         }
 
-        NSInteger newSectionCount = [weakSelf.dataProvider dateCount];
-        NSInteger newSectionsAdded = newSectionCount - oldSectionCount;
-
-        NSMutableArray<WKMessageModel *> *newMsgs = [NSMutableArray array];
-        if (newSectionsAdded > 0) {
-            if (oldSectionCount > 0) {
-                NSInteger oldSectionNewRowCount = [weakSelf.dataProvider messagesAtSection:oldSectionCount - 1].count;
-                for (NSInteger r = oldLastSectionRowCount; r < oldSectionNewRowCount; r++) {
-                    [newMsgs addObject:[weakSelf.dataProvider messagesAtSection:oldSectionCount - 1][r]];
-                }
-            }
-            for (NSInteger s = oldSectionCount; s < newSectionCount; s++) {
-                [newMsgs addObjectsFromArray:[weakSelf.dataProvider messagesAtSection:s]];
-            }
-        } else if (newSectionCount > 0) {
-            NSInteger newLastSectionRowCount = [weakSelf.dataProvider messagesAtSection:newSectionCount - 1].count;
-            for (NSInteger r = oldLastSectionRowCount; r < newLastSectionRowCount; r++) {
-                [newMsgs addObject:[weakSelf.dataProvider messagesAtSection:newSectionCount - 1][r]];
-            }
+        if (models.count == 0) {
+            [weakSelf finishPullupNoData:hasMore complete:complete dedupRetry:dedupRetry];
+            return;
         }
 
-        WK_PERF_LOG(@"[PullDebug] pullup: newMsgs=%lu newSections=%ld", (unsigned long)newMsgs.count, (long)newSectionsAdded);
-        if (newMsgs.count > 0) {
-            // 后台预计算高度，完成后回主线程插入行
-            NSInteger newSectionsAddedCopy = newSectionsAdded;
-            NSInteger oldSectionCountCopy = oldSectionCount;
-            NSInteger oldLastSectionRowCountCopy = oldLastSectionRowCount;
-            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                CFAbsoluteTime t_precache = CFAbsoluteTimeGetCurrent();
-                for (WKMessageModel *msg in newMsgs) {
-                    [weakSelf precacheHeightForMessage:msg];
-                }
-                CGFloat precacheMs = (CFAbsoluteTimeGetCurrent() - t_precache) * 1000;
+        // 预热放在 commit 之前: 此刻 dp 与 tableView 仍一致, 后台跑多久都不产生窗口。
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            CFAbsoluteTime t_precache = CFAbsoluteTimeGetCurrent();
+            for (WKMessageModel *msg in models) {
+                [weakSelf precacheHeightForMessage:msg];
+            }
+            CGFloat precacheMs = (CFAbsoluteTimeGetCurrent() - t_precache) * 1000;
 
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    CFAbsoluteTime t_insert = CFAbsoluteTimeGetCurrent();
-                    [UIView performWithoutAnimation:^{
-                        @try {
-                            [weakSelf.tableView beginUpdates];
-
-                            if (newSectionsAddedCopy > 0) {
-                                if (oldSectionCountCopy > 0) {
-                                    NSInteger oldSectionNewRowCount = [weakSelf.dataProvider messagesAtSection:oldSectionCountCopy - 1].count;
-                                    if (oldSectionNewRowCount > oldLastSectionRowCountCopy) {
-                                        NSMutableArray<NSIndexPath *> *rowPaths = [NSMutableArray array];
-                                        for (NSInteger r = oldLastSectionRowCountCopy; r < oldSectionNewRowCount; r++) {
-                                            [rowPaths addObject:[NSIndexPath indexPathForRow:r inSection:oldSectionCountCopy - 1]];
-                                        }
-                                        [weakSelf.tableView insertRowsAtIndexPaths:rowPaths withRowAnimation:UITableViewRowAnimationNone];
-                                    }
-                                }
-                                NSIndexSet *sectionSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(oldSectionCountCopy, newSectionsAddedCopy)];
-                                [weakSelf.tableView insertSections:sectionSet withRowAnimation:UITableViewRowAnimationNone];
-                            } else {
-                                NSInteger newSC = [weakSelf.dataProvider dateCount];
-                                if (newSC > 0) {
-                                    NSInteger newLastSectionRowCount = [weakSelf.dataProvider messagesAtSection:newSC - 1].count;
-                                    if (newLastSectionRowCount > oldLastSectionRowCountCopy) {
-                                        NSMutableArray<NSIndexPath *> *indexPaths = [NSMutableArray array];
-                                        for (NSInteger r = oldLastSectionRowCountCopy; r < newLastSectionRowCount; r++) {
-                                            [indexPaths addObject:[NSIndexPath indexPathForRow:r inSection:newSC - 1]];
-                                        }
-                                        [weakSelf.tableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
-                                    }
-                                }
-                            }
-
-                            [weakSelf.tableView endUpdates];
-                        } @catch (NSException *exception) {
-                            [weakSelf.tableView reloadData];
-                        }
-                    }];
-                    CGFloat insertMs = (CFAbsoluteTimeGetCurrent() - t_insert) * 1000;
-                    WK_PERF_LOG(@"[Perf] pullup: %lu msgs | precache=%.1fms(bg) insert=%.1fms(main)", (unsigned long)newMsgs.count, precacheMs, insertMs);
-
-                    [weakSelf.tableView.mj_footer endRefreshing];
-                    WK_PERF_LOG(@"[PullDebug] pullup: COMPLETE (hasData path), mj_footer.state=%ld", (long)weakSelf.tableView.mj_footer.state);
-                    if(complete) {
-                        complete(hasMore);
-                    }
-                    // gate-clear 接力: 用户上滑读历史 + 锁屏复活时 reconcile 被
-                    // pullupHasMore 拦下, 这里 pullup 跑完(hasMore=NO 即已到底)再补一次。
-                    if (!hasMore) {
-                        [weakSelf wk_tryConsumePendingReconcile];
-                    }
-                });
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf commitPullupModels:models
+                                     hasMore:hasMore
+                                  precacheMs:precacheMs
+                                    complete:complete
+                                  dedupRetry:dedupRetry];
             });
-        } else {
-            [weakSelf.tableView.mj_footer endRefreshing];
-            WK_PERF_LOG(@"[PullDebug] pullup: COMPLETE (noData path), hasMore=%d, mj_footer.state=%ld", hasMore, (long)weakSelf.tableView.mj_footer.state);
+        });
+    }];
+}
 
-            // 去重跳过后重试：仅在有限次数内重试。
-            // baseOrderSeq = dataProvider 尾部 orderSeq；newMsgs==0 时尾部未推进，
-            // 下次拉取游标不变 → SDK 返回同一页 → 若不封顶就是主队列无界自我重入，
-            // 打满 CPU 触发 iOS 热降频(全局 15fps + 发热)、主线程饥饿致气泡空白。
-            // 唯一可能推进的是并发 recv 改了尾部，故保留 kMaxPullupDedupRetry 次容忍后停止；
-            // 到顶后用户继续滚动会重新触发 footer pullup(深度归 0)，不丢分页功能。
-            if(hasMore && newMsgs.count == 0) {
-                if (dedupRetry < kMaxPullupDedupRetry) {
-                    WK_PERF_LOG(@"[PullDebug] pullup: retrying (dedup skip) %ld/%ld", (long)(dedupRetry + 1), (long)kMaxPullupDedupRetry);
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        [weakSelf pullup:complete dedupRetry:dedupRetry + 1];
-                    });
-                    return;
+/// pullup 的 commit 阶段。**整段跑在一个主线程 turn 内**，`commitAppend:` 与
+/// insert/reloadData 之间不允许让出主线程。
+-(void) commitPullupModels:(NSArray<WKMessageModel *> *)models
+                   hasMore:(BOOL)hasMore
+                precacheMs:(CGFloat)precacheMs
+                  complete:(void(^)(bool more))complete
+                dedupRetry:(NSInteger)dedupRetry {
+    __weak typeof(self) weakSelf = self;
+    if (!self.tableView) {
+        if (complete) complete(hasMore);
+        return;
+    }
+
+    CFAbsoluteTime t_insert = CFAbsoluteTimeGetCurrent();
+
+    // ---------- 原子区开始 ----------
+    // 1) commit 前: 记录 dp 旧计数（tableView 此刻与之一致）
+    NSInteger oldSectionCount = [self.dataProvider dateCount];
+    NSInteger oldLastSectionRowCount = (oldSectionCount > 0) ? [self.dataProvider rowCountAtSection:oldSectionCount - 1] : 0;
+
+    // 2) commit: 追加新消息
+    [self.dataProvider commitAppend:models];
+
+    // 3) commit 后: 就地算增量
+    NSInteger newSectionCount = [self.dataProvider dateCount];
+    NSInteger newSectionsAdded = newSectionCount - oldSectionCount;
+    NSInteger oldSectionNewRowCount = (oldSectionCount > 0) ? [self.dataProvider rowCountAtSection:oldSectionCount - 1] : 0;
+    NSInteger rowsAddedInOldLastSection = MAX(0, oldSectionNewRowCount - oldLastSectionRowCount);
+    BOOL hasInsertions = (newSectionsAdded > 0 || rowsAddedInOldLastSection > 0);
+
+    if (!hasInsertions) {
+        // models 全被 dedup 掉了, dp 没变 → tableView 也不需要动。
+        [self finishPullupNoData:hasMore complete:complete dedupRetry:dedupRetry];
+        return;
+    }
+
+    [UIView performWithoutAnimation:^{
+        @try {
+            [self.tableView beginUpdates];
+
+            if (rowsAddedInOldLastSection > 0) {
+                NSMutableArray<NSIndexPath *> *rowPaths = [NSMutableArray array];
+                for (NSInteger r = oldLastSectionRowCount; r < oldSectionNewRowCount; r++) {
+                    [rowPaths addObject:[NSIndexPath indexPathForRow:r inSection:oldSectionCount - 1]];
                 }
-                WK_PERF_LOG(@"[PullDebug] pullup: dedup-skip retry capped at %ld, stop", (long)kMaxPullupDedupRetry);
-                if(complete) {
-                    complete(hasMore);
-                }
-                return;
+                [self.tableView insertRowsAtIndexPaths:rowPaths withRowAnimation:UITableViewRowAnimationNone];
+            }
+            if (newSectionsAdded > 0) {
+                NSIndexSet *sectionSet = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(oldSectionCount, newSectionsAdded)];
+                [self.tableView insertSections:sectionSet withRowAnimation:UITableViewRowAnimationNone];
             }
 
-            if(complete) {
-                complete(hasMore);
-            }
+            [self.tableView endUpdates];
+        } @catch (NSException *exception) {
+            // 两段式之后不该再触发 (dp 与 tableView 同 turn 变更)。留兜底并打栈。
+            NSLog(@"[WKMessageListView] pullup insert drift caught: %@, fallback reloadData", exception);
+            [self.tableView reloadData];
         }
     }];
+    // ---------- 原子区结束 ----------
+
+    CGFloat insertMs = (CFAbsoluteTimeGetCurrent() - t_insert) * 1000;
+    WK_PERF_LOG(@"[Perf] pullup: %lu msgs | precache=%.1fms(bg) insert=%.1fms(main)", (unsigned long)models.count, precacheMs, insertMs);
+
+    [self.tableView.mj_footer endRefreshing];
+    WK_PERF_LOG(@"[PullDebug] pullup: COMPLETE (hasData path), mj_footer.state=%ld", (long)self.tableView.mj_footer.state);
+    if(complete) {
+        complete(hasMore);
+    }
+    // gate-clear 接力: 用户上滑读历史 + 锁屏复活时 reconcile 被
+    // pullupHasMore 拦下, 这里 pullup 跑完(hasMore=NO 即已到底)再补一次。
+    if (!hasMore) {
+        [weakSelf wk_tryConsumePendingReconcile];
+    }
+}
+
+/// pullup 没有净新增（没数据 / 全被 dedup）时的收尾 + 有限次重试。
+-(void) finishPullupNoData:(BOOL)hasMore
+                  complete:(void(^)(bool more))complete
+                dedupRetry:(NSInteger)dedupRetry {
+    __weak typeof(self) weakSelf = self;
+    [self.tableView.mj_footer endRefreshing];
+    WK_PERF_LOG(@"[PullDebug] pullup: COMPLETE (noData path), hasMore=%d, mj_footer.state=%ld", hasMore, (long)self.tableView.mj_footer.state);
+
+    // 去重跳过后重试：仅在有限次数内重试。
+    // 进到本方法就意味着"净新增 0 行"（SDK 没返数据，或返回的全被 clientMsgNo dedup 掉）。
+    // baseOrderSeq = dataProvider 尾部 orderSeq；净新增为 0 时尾部未推进，
+    // 下次拉取游标不变 → SDK 返回同一页 → 若不封顶就是主队列无界自我重入，
+    // 打满 CPU 触发 iOS 热降频(全局 15fps + 发热)、主线程饥饿致气泡空白。
+    // 唯一可能推进的是并发 recv 改了尾部，故保留 kMaxPullupDedupRetry 次容忍后停止；
+    // 到顶后用户继续滚动会重新触发 footer pullup(深度归 0)，不丢分页功能。
+    if(hasMore) {
+        if (dedupRetry < kMaxPullupDedupRetry) {
+            WK_PERF_LOG(@"[PullDebug] pullup: retrying (dedup skip) %ld/%ld", (long)(dedupRetry + 1), (long)kMaxPullupDedupRetry);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf pullup:complete dedupRetry:dedupRetry + 1];
+            });
+            return;
+        }
+        WK_PERF_LOG(@"[PullDebug] pullup: dedup-skip retry capped at %ld, stop", (long)kMaxPullupDedupRetry);
+        if(complete) {
+            complete(hasMore);
+        }
+        return;
+    }
+
+    if(complete) {
+        complete(hasMore);
+    }
 }
 
 // 上拉是否还有更多
@@ -2354,21 +2393,21 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         NSInteger oldSectionCount = [self.dataProvider dateCount];
         NSInteger oldLastSectionRowCount = 0;
         if (oldSectionCount > 0) {
-            oldLastSectionRowCount = [self.dataProvider messagesAtSection:oldSectionCount - 1].count;
+            oldLastSectionRowCount = [self.dataProvider rowCountAtSection:oldSectionCount - 1];
         }
 
         [self.dataProvider addMessage:messageModel];
 
         NSInteger newSectionCount = [self.dataProvider dateCount];
         BOOL newSectionAdded = (newSectionCount > oldSectionCount);
-        NSInteger newLastSectionRowCount = (newSectionCount > 0) ? [self.dataProvider messagesAtSection:newSectionCount - 1].count : 0;
+        NSInteger newLastSectionRowCount = (newSectionCount > 0) ? [self.dataProvider rowCountAtSection:newSectionCount - 1] : 0;
 
         // Bugly #3054 兜底：见 sendMessage: 同处注释。insertRows 内嵌套 RunLoop 会让主队列
         // pending 的 pulldown/其他 recv 在 insert 期间追加 dp，校验漂移 → NSInternalInconsistencyException。
         if (!newSectionAdded && newLastSectionRowCount > oldLastSectionRowCount) {
             NSInteger intendedDelta = newLastSectionRowCount - oldLastSectionRowCount;
             NSInteger tvSectionsNow = [self.tableView numberOfSections];
-            NSInteger dsNow = [self.dataProvider messagesAtSection:newSectionCount - 1].count;
+            NSInteger dsNow = [self.dataProvider rowCountAtSection:newSectionCount - 1];
             NSInteger tvNow = (tvSectionsNow == newSectionCount) ? [self.tableView numberOfRowsInSection:newSectionCount - 1] : -1;
             if (tvNow < 0 || dsNow - tvNow != intendedDelta) {
                 [self.tableView reloadData];
@@ -2736,7 +2775,7 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
         #if DEBUG
         NSLog(@"[BubbleBugRepro] dp/tv drift: heightForRow section=%ld row=%ld returned nil model (dpSections=%lu)",
               (long)indexPath.section, (long)indexPath.row,
-              (unsigned long)self.dataProvider.dates.count);
+              (unsigned long)[self.dataProvider dateCount]);
         #endif
         return 0.1f;
     }
@@ -2883,11 +2922,9 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    NSArray<WKMessageModel*> *messages = [self.dataProvider messagesAtSection:section];
-    if(!messages||messages.count==0) {
-        return 0;
-    }
-    return messages.count;
+    // 走 rowCountAtSection: 而不是 messagesAtSection:.count —— 后者会为每个 section
+    // 拷一份不可变快照数组, 而本方法是每帧每 section 都会被调的热路径。
+    return [self.dataProvider rowCountAtSection:section];
 }
 
 
@@ -3003,7 +3040,7 @@ static NSCache<NSString*, NSNumber*> *_cellHeightCache;
     }
     for (NSInteger s = 0; s < tvSectionCount; s++) {
         NSInteger tvRows = [self.tableView numberOfRowsInSection:s];
-        NSInteger dsRows = [self.dataProvider messagesAtSection:s].count;
+        NSInteger dsRows = [self.dataProvider rowCountAtSection:s];
         if (tvRows != dsRows) {
             return NO;
         }
@@ -3803,14 +3840,14 @@ static const NSInteger kMaxRehydratePages = 35;
     } else {
         NSInteger oldSectionCount = [self.dataProvider dateCount];
         NSInteger oldLastSectionRowCount = (oldSectionCount > 0)
-            ? [self.dataProvider messagesAtSection:oldSectionCount - 1].count : 0;
+            ? [self.dataProvider rowCountAtSection:oldSectionCount - 1] : 0;
 
         [self.dataProvider addMessage:model];
 
         NSInteger newSectionCount = [self.dataProvider dateCount];
         BOOL newSectionAdded = (newSectionCount > oldSectionCount);
         NSInteger newLastSectionRowCount = (newSectionCount > 0)
-            ? [self.dataProvider messagesAtSection:newSectionCount - 1].count : 0;
+            ? [self.dataProvider rowCountAtSection:newSectionCount - 1] : 0;
 
         if (newSectionAdded) {
             @try {

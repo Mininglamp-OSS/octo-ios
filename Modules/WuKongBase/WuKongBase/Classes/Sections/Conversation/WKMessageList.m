@@ -9,14 +9,24 @@
 #import "WKTimeTool.h"
 #import "WuKongBase.h"
 #import "WKProhibitwordsService.h"
+
+// 锁纪律（见 WKMessageList.h 的 I1 / I2）:
+//   - 所有 public 方法各自恰好加锁一次, 然后调 `_xxxNoLock` 内部方法完成工作。
+//   - 带 `NoLock` 后缀的方法**必须**在持有 messagesLock 的情况下调用, 且它们之间
+//     互相调用不会重复加锁 (NSLock 非递归, 重入即死锁)。
+//   - 内部方法一律直接用 `self.dates` / `self.dateMessageGroups` (纯 lazy getter,
+//     不加锁); public 只读访问器 (dateCount / dateAtSection: / datesSnapshot /
+//     messagesAtDate: / rowCountAtSection:) 才加锁。
 @interface WKMessageList ()
 
 @property(nonatomic,strong) NSLock *messagesLock;
 
+@property(nonatomic,strong) NSMutableArray<NSString*> *dates; // 消息日期 (私有: 外部只能走持锁访问器)
+
 @property(nonatomic,strong) NSMutableDictionary<NSString*,NSMutableArray<WKMessageModel*>*> *dateMessageGroups; // 通过日期对消息分组
 
 // O(1) 查找索引：存 model 引用而非 NSIndexPath，避免插入/删除后 indexPath 陈旧
-// indexPath 在需要时通过 _indexPathForModel: 从 model 反向计算（O(D+K)，D=日期数，K=当天消息数）
+// indexPath 在需要时通过 _indexPathForModelNoLock: 从 model 反向计算（O(D+K)，D=日期数，K=当天消息数）
 @property(nonatomic,strong) NSMutableDictionary<NSString*, WKMessageModel*> *clientMsgNoIndex;
 @property(nonatomic,strong) NSMutableDictionary<NSNumber*, WKMessageModel*> *orderSeqIndex;
 @property(nonatomic,strong) NSMutableDictionary<NSNumber*, WKMessageModel*> *messageIdIndex;
@@ -25,6 +35,17 @@
 @end
 
 @implementation WKMessageList
+
+// 锁必须在 init 里就建好。历史实现只有 lazy getter, 而多处代码用 `_messagesLock`
+// 直接发消息 —— 首次调用时 ivar 还是 nil, `[nil lock]` 是无害的 no-op, 于是那次
+// 访问**完全没有锁**。
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _messagesLock = [[NSLock alloc] init];
+    }
+    return self;
+}
 
 #pragma mark - 索引维护（调用前必须持有 messagesLock）
 
@@ -43,7 +64,8 @@
 }
 
 // 由 model 反推 NSIndexPath：O(D+K)，D=日期分组数(<20)，K=当天消息数，远小于总消息数 N
-- (NSIndexPath *)_indexPathForModel:(WKMessageModel *)model {
+- (NSIndexPath *)_indexPathForModelNoLock:(WKMessageModel *)model {
+    if (!model) return nil;
     NSString *date = [self formatMessageDate:model];
     NSInteger section = [self.dates indexOfObject:date];
     if (section == NSNotFound) return nil;
@@ -53,32 +75,131 @@
     return [NSIndexPath indexPathForRow:row inSection:section];
 }
 
-#pragma mark -
+// clientMsgNo → indexPath, 全程无锁 (调用方持锁)。
+// 历史实现是 public `indexPathAtClientMsgNo:` (自带 lock/unlock) 拿到 path 后**放锁**,
+// 再重新加锁去用这个 path —— 两段之间别的线程改了 dates/messages, path 就是脏的,
+// 后面 `self.dates[path.section]` / `messages[path.row]` 直接越界崩 (TOCTOU)。
+// removeMessage: / replaceMessage:atClientMsgNo: 现在都走这个 NoLock 版本, 索引计算
+// 与使用在同一个锁作用域内。
+- (NSIndexPath *)_indexPathForClientMsgNoNoLock:(NSString *)clientMsgNo {
+    if (clientMsgNo.length == 0) return nil;
+    return [self _indexPathForModelNoLock:self.clientMsgNoIndex[clientMsgNo]];
+}
 
-- (void)insertMessages:(NSArray<WKMessageModel *> *)messages {
+// section → 当天消息数组 (可变本体)。越界 / 不存在返回 nil。
+- (NSMutableArray<WKMessageModel*> *)_messagesAtSectionNoLock:(NSInteger)section {
+    if (section < 0 || section >= (NSInteger)self.dates.count) return nil;
+    return self.dateMessageGroups[self.dates[section]];
+}
+
+#pragma mark - 只读访问（持锁，越界安全）
+
+- (NSInteger)dateCount {
+    [_messagesLock lock];
+    NSInteger count = (NSInteger)self.dates.count;
+    [_messagesLock unlock];
+    return count;
+}
+
+- (NSString *)dateAtSection:(NSInteger)section {
+    [_messagesLock lock];
+    NSString *date = (section >= 0 && section < (NSInteger)self.dates.count) ? self.dates[section] : nil;
+    [_messagesLock unlock];
+    return date;
+}
+
+- (NSArray<NSString *> *)datesSnapshot {
+    [_messagesLock lock];
+    NSArray<NSString*> *snapshot = [self.dates copy];
+    [_messagesLock unlock];
+    return snapshot ?: @[];
+}
+
+// 返回**不可变快照**而不是 dateMessageGroups 里的可变本体 —— 调用方（含后台线程的
+// 高度预热 / 枚举）持有本体时若主线程插了一条, 就是 "mutated while being enumerated"
+// 的 SIGSEGV。
+-(NSArray<WKMessageModel*>*) messagesAtDate:(NSString*)date {
+    if (!date) return @[];
+    [_messagesLock lock];
+    NSArray<WKMessageModel*> *messages = [self.dateMessageGroups[date] copy];
+    [_messagesLock unlock];
+    return messages ?: @[];
+}
+
+// numberOfRowsInSection: 的热路径, 不走 messagesAtDate: 以免每帧每 section 拷一次数组。
+- (NSInteger)rowCountAtSection:(NSInteger)section {
+    [_messagesLock lock];
+    NSInteger count = (NSInteger)[self _messagesAtSectionNoLock:section].count;
+    [_messagesLock unlock];
+    return count;
+}
+
+#pragma mark - 原子提交（I1）
+
+- (void)_clearAllNoLock {
+    [self.dates removeAllObjects];
+    [self.dateMessageGroups removeAllObjects];
+    [self.clientMsgNoIndex removeAllObjects];
+    [self.orderSeqIndex removeAllObjects];
+    [self.messageIdIndex removeAllObjects];
+    [self.streamNoIndex removeAllObjects];
+}
+
+// 清空 + 按序追加, 一次锁内完成。
+// 关键: 绝不能拆成 `clearMessages` + `appendMessages:` 两次调用 —— 那样中间会出现
+// `dates.count == 0` 的可观测中间态, 正是 `dateWithSection:` /
+// `messagesAtSection:` 一族越界崩溃的来源。
+- (void)replaceAllWithMessages:(NSArray<WKMessageModel *> *)messages {
     [self.messagesLock lock];
-    for(int i=0;i<messages.count;i++) {
-        [self _insertMessageNoLock:messages[i]];
+    [self _clearAllNoLock];
+    for (WKMessageModel *message in messages) {
+        [self _addMessageNoLock:message];
     }
     [self.messagesLock unlock];
 }
 
-
--(void) insertMessage:(WKMessageModel*)model {
+- (void)prependMessages:(NSArray<WKMessageModel *> *)messages {
+    if (messages.count == 0) return;
     [self.messagesLock lock];
-    [self _insertMessageNoLock:model];
+    // _insertMessageAtHeadNoLock: 每次都插到最前, 所以要倒序喂 (最新的先插),
+    // 结果才是升序。历史上这个 reverse 由调用方 (dp 的 handleMessages) 负责,
+    // 容易漏; 收进来由本方法保证。
+    for (WKMessageModel *message in [messages reverseObjectEnumerator]) {
+        [self _insertMessageAtHeadNoLock:message];
+    }
     [self.messagesLock unlock];
 }
 
-// 内部方法，调用前必须持有 messagesLock
--(void) _insertMessageNoLock:(WKMessageModel*)model {
+- (void)appendMessages:(NSArray<WKMessageModel *> *)messages {
+    if (messages.count == 0) return;
+    [self.messagesLock lock];
+    for (WKMessageModel *message in messages) {
+        [self _addMessageNoLock:message];
+    }
+    [self.messagesLock unlock];
+}
+
+-(void) clearMessages {
+    [_messagesLock lock];
+    [self _clearAllNoLock];
+    [_messagesLock unlock];
+}
+
+#pragma mark - 插入 / 追加内部实现
+
+// 插到列表最前（历史消息方向）
+-(void) _insertMessageAtHeadNoLock:(WKMessageModel*)model {
+    if(!model) {
+        return;
+    }
     if(model.clientMsgNo.length > 0 && self.clientMsgNoIndex[model.clientMsgNo]) {
         return;
     }
-    if(model.contentType == WK_TEXT) {
-       WKTextContent *content = (WKTextContent*)model.content;
-        content.content = [WKProhibitwordsService.shared filter:content.content]; // 违禁词过滤
-    }
+    // 违禁词过滤: 走统一的 handleProhibitwords: —— 它带 isKindOfClass 守卫。
+    // 历史实现在这里裸转 `(WKTextContent*)model.content` 再 `filter:content.content`,
+    // 服务端异常下 content 可能是 NSDictionary/NSNumber, 进 filter: 后 `message.length`
+    // 直接 unrecognized selector 崩 (现网 `-[__NSDictionaryI length]` 7 次)。
+    [self handleProhibitwords:model];
 
     NSString *date = [self formatMessageDate:model];
     NSMutableArray *messages = self.dateMessageGroups[date];
@@ -96,156 +217,41 @@
     [self _addToIndexNoLock:model];
 }
 
-
--(void) addMessages:(NSArray<WKMessageModel*>*)messages {
-    for (WKMessageModel *message in messages) {
-        [self addMessage:message];
+// 追加到列表最后（新消息方向），含 typing 占位的替换/让位逻辑
+-(void) _addMessageNoLock:(WKMessageModel*)message {
+    if(!message) {
+        return;
     }
-}
-
--(void) setMessages:(NSArray<WKMessageModel*>*)messages forDate:(NSString*)date {
-    NSMutableArray *oldMessages = self.dateMessageGroups[date];
-    for (WKMessageModel *m in oldMessages) [self _removeFromIndexNoLock:m];
-    NSMutableArray *newMessages = [NSMutableArray arrayWithArray:messages];
-    self.dateMessageGroups[date] = newMessages;
-    for (WKMessageModel *m in newMessages) [self _addToIndexNoLock:m];
-}
-
--(NSArray<WKMessageModel*>*) messagesAtDate:(NSString*)date {
-    [_messagesLock lock];
-    NSArray<WKMessageModel*> *messages =  self.dateMessageGroups[date];
-    [_messagesLock unlock];
-    return messages;
-}
-
--(void) clearMessages {
-    [_messagesLock lock];
-    [self.dates removeAllObjects];
-    [self.dateMessageGroups removeAllObjects];
-    [self.clientMsgNoIndex removeAllObjects];
-    [self.orderSeqIndex removeAllObjects];
-    [self.messageIdIndex removeAllObjects];
-    [self.streamNoIndex removeAllObjects];
-    [_messagesLock unlock];
-}
--(void) addMessage:(WKMessageModel*)message {
-    
-    
-    [self.messagesLock lock];
     WKMessageModel *typingMessageModel;
-    WKMessageModel *lastMessage = [self lastMessage];
+    WKMessageModel *lastMessage = [self _lastMessageNoLock];
     if(lastMessage && lastMessage.contentType == WK_TYPING) {
         typingMessageModel = lastMessage;
     }
     if(typingMessageModel) {
         if(message.contentType == WK_TYPING) { // 如果已经有typing消息，则要添加的消息也是typing消息则直接丢弃
-            [self.messagesLock unlock];
             return;
         }
         if([typingMessageModel.fromUid isEqual:message.fromUid]) {
-            [self replaceMessageLast:message];
+            [self _replaceMessageLastNoLock:message];
         }else {
-           NSMutableArray *messages  =  self.dateMessageGroups[self.dates[self.dates.count-1]];
-            [self _insertMessage:message atIndex:[NSIndexPath indexPathForRow:messages.count-1 inSection:self.dates.count-1]];
+            NSMutableArray *messages = [self _messagesAtSectionNoLock:(NSInteger)self.dates.count - 1];
+            if(messages.count > 0) {
+                // 插到 typing 之前, 让 typing 保持在最后
+                [self _insertMessageNoLock:message atIndex:[NSIndexPath indexPathForRow:messages.count-1 inSection:self.dates.count-1]];
+            }else {
+                [self _addMessageOnlyNoLock:message];
+            }
         }
     }else {
         if(self.dates.count>0) {
             message.preMessageModel = lastMessage;
             lastMessage.nextMessageModel = message;
         }
-        [self addMessageOnly:message];
-    }
-    
-    [self.messagesLock unlock];
-}
-
-
--(NSIndexPath*) replaceMessage:(WKMessageModel*)newMessage atClientMsgNo:(NSString*)clientMsgNo {
-    NSIndexPath *path = [self indexPathAtClientMsgNo:clientMsgNo];
-    return [self replaceMessage:newMessage atIndexPath:path];
-}
-
--(void) _insertMessage:(WKMessageModel*)message atIndex:(NSIndexPath*)indexPath {
-    if(!indexPath || indexPath.section >= self.dates.count) {
-        return;
-    }
-    
-   NSMutableArray<WKMessageModel*> *messages =  self.dateMessageGroups[self.dates[indexPath.section]];
-    if(messages.count>0) {
-        if (indexPath.row == 0) { // 插入到最前面
-            WKMessageModel *oldFirstMessage = messages[0];
-            oldFirstMessage.preMessageModel = message;
-            message.nextMessageModel = oldFirstMessage;
-        } else if(messages.count>indexPath.row) { // 插入到非首尾
-            WKMessageModel *currentMessage = messages[indexPath.row];
-        
-            message.preMessageModel = currentMessage.preMessageModel;
-            message.nextMessageModel = currentMessage;
-           
-            currentMessage.preMessageModel = message;
-            if(message.preMessageModel) {
-                message.preMessageModel.nextMessageModel = message;
-            }
-        
-        }else if(messages.count==indexPath.row) { // 插入到最后
-            WKMessageModel *oldLastMessage = messages[messages.count-1];
-            oldLastMessage.nextMessageModel = message;
-            message.preMessageModel = oldLastMessage;
-        }
-    }
-   
-    [messages insertObject:message atIndex:indexPath.row];
-   [self _addToIndexNoLock:message];
-}
-
-
-// 替换最新的消息
--(void) replaceMessageLast:(WKMessageModel*)model {
-    [self handleProhibitwords:model]; // 处理违禁词
-    NSString *date = self.dates.lastObject;
-    NSMutableArray *messages = self.dateMessageGroups[date];
-    if(messages && messages.count>0) {
-        WKMessageModel *oldMessageModel = messages.lastObject;
-        [self _removeFromIndexNoLock:oldMessageModel];
-        model.preMessageModel = oldMessageModel.preMessageModel;
-        if(oldMessageModel.preMessageModel) {
-            oldMessageModel.preMessageModel.nextMessageModel = model;
-        }
-        [messages replaceObjectAtIndex:messages.count-1 withObject:model];
-        [self _addToIndexNoLock:model];
+        [self _addMessageOnlyNoLock:message];
     }
 }
 
-
--(NSIndexPath*) replaceMessage:(WKMessageModel*)newMessage atIndexPath:(NSIndexPath*)path {
-    [self handleProhibitwords:newMessage]; // 处理违禁词
-    [_messagesLock lock];
-    if(path) {
-       NSMutableArray *messages =  self.dateMessageGroups[self.dates[path.section]];
-        if(!messages) {
-            messages = [NSMutableArray array];
-        }
-        if(path.row < messages.count) {
-            WKMessageModel *oldMessage =  messages[path.row];
-            [self _removeFromIndexNoLock:oldMessage];
-            newMessage.preMessageModel = oldMessage.preMessageModel;
-            newMessage.nextMessageModel = oldMessage.nextMessageModel;
-            messages[path.row] = newMessage;
-            [self _addToIndexNoLock:newMessage];
-            if(oldMessage.preMessageModel) {
-                oldMessage.preMessageModel.nextMessageModel = newMessage;
-            }
-            if(oldMessage.nextMessageModel) {
-                oldMessage.nextMessageModel.preMessageModel = newMessage;
-            }
-        }
-    }
-    [_messagesLock unlock];
-    return path;
-}
-
-
--(void) addMessageOnly:(WKMessageModel *)message {
+-(void) _addMessageOnlyNoLock:(WKMessageModel *)message {
     if(message.clientMsgNo.length > 0 && self.clientMsgNoIndex[message.clientMsgNo]) {
         return;
     }
@@ -263,54 +269,205 @@
     [self _addToIndexNoLock:message];
 }
 
--(void) handleProhibitwords:(WKMessageModel*)messageModel {
-    if(messageModel.contentType == WK_TEXT) {
-        if(messageModel.remoteExtra.isEdit && [messageModel.remoteExtra.contentEdit isKindOfClass:[WKTextContent class]]) {
-            WKTextContent *content = (WKTextContent*)messageModel.remoteExtra.contentEdit;
-            if ([content.content isKindOfClass:[NSString class]]) {
-                content.content = [WKProhibitwordsService.shared filter:content.content];
+-(void) _insertMessageNoLock:(WKMessageModel*)message atIndex:(NSIndexPath*)indexPath {
+    if(!message || !indexPath) {
+        return;
+    }
+    NSMutableArray<WKMessageModel*> *messages = [self _messagesAtSectionNoLock:indexPath.section];
+    if(!messages || indexPath.row < 0 || indexPath.row > (NSInteger)messages.count) {
+        return;
+    }
+
+    if(messages.count>0) {
+        if (indexPath.row == 0) { // 插入到最前面
+            WKMessageModel *oldFirstMessage = messages[0];
+            oldFirstMessage.preMessageModel = message;
+            message.nextMessageModel = oldFirstMessage;
+        } else if((NSInteger)messages.count>indexPath.row) { // 插入到非首尾
+            WKMessageModel *currentMessage = messages[indexPath.row];
+
+            message.preMessageModel = currentMessage.preMessageModel;
+            message.nextMessageModel = currentMessage;
+
+            currentMessage.preMessageModel = message;
+            if(message.preMessageModel) {
+                message.preMessageModel.nextMessageModel = message;
             }
-            return;
+
+        }else if((NSInteger)messages.count==indexPath.row) { // 插入到最后
+            WKMessageModel *oldLastMessage = messages[messages.count-1];
+            oldLastMessage.nextMessageModel = message;
+            message.preMessageModel = oldLastMessage;
         }
-        if (![messageModel.content isKindOfClass:[WKTextContent class]]) return;
-        WKTextContent *content = (WKTextContent*)messageModel.content;
+    }
+
+    [messages insertObject:message atIndex:indexPath.row];
+    [self _addToIndexNoLock:message];
+}
+
+// 替换最新的消息
+-(void) _replaceMessageLastNoLock:(WKMessageModel*)model {
+    [self handleProhibitwords:model]; // 处理违禁词
+    NSMutableArray *messages = [self _messagesAtSectionNoLock:(NSInteger)self.dates.count - 1];
+    if(messages.count>0) {
+        WKMessageModel *oldMessageModel = messages.lastObject;
+        [self _removeFromIndexNoLock:oldMessageModel];
+        model.preMessageModel = oldMessageModel.preMessageModel;
+        if(oldMessageModel.preMessageModel) {
+            oldMessageModel.preMessageModel.nextMessageModel = model;
+        }
+        [messages replaceObjectAtIndex:messages.count-1 withObject:model];
+        [self _addToIndexNoLock:model];
+    }
+}
+
+-(void) _replaceMessageNoLock:(WKMessageModel*)newMessage atIndexPath:(NSIndexPath*)path {
+    NSMutableArray *messages = [self _messagesAtSectionNoLock:path.section];
+    if(!messages || path.row < 0 || path.row >= (NSInteger)messages.count) {
+        return;
+    }
+    WKMessageModel *oldMessage = messages[path.row];
+    [self _removeFromIndexNoLock:oldMessage];
+    newMessage.preMessageModel = oldMessage.preMessageModel;
+    newMessage.nextMessageModel = oldMessage.nextMessageModel;
+    messages[path.row] = newMessage;
+    [self _addToIndexNoLock:newMessage];
+    if(oldMessage.preMessageModel) {
+        oldMessage.preMessageModel.nextMessageModel = newMessage;
+    }
+    if(oldMessage.nextMessageModel) {
+        oldMessage.nextMessageModel.preMessageModel = newMessage;
+    }
+}
+
+#pragma mark - 单条变更
+
+-(void) addMessage:(WKMessageModel*)message {
+    [self.messagesLock lock];
+    [self _addMessageNoLock:message];
+    [self.messagesLock unlock];
+}
+
+-(void) insertMessage:(WKMessageModel*)message atIndex:(NSIndexPath*)indexPath {
+    [self.messagesLock lock];
+    [self _insertMessageNoLock:message atIndex:indexPath];
+    [self.messagesLock unlock];
+}
+
+// 历史实现完全没加锁, 却调了 `_removeFromIndexNoLock:` / `_addToIndexNoLock:`。
+-(void) setMessages:(NSArray<WKMessageModel*>*)messages forDate:(NSString*)date {
+    if (!date) return;
+    [self.messagesLock lock];
+    NSMutableArray *oldMessages = self.dateMessageGroups[date];
+    for (WKMessageModel *m in oldMessages) [self _removeFromIndexNoLock:m];
+    NSMutableArray *newMessages = [NSMutableArray arrayWithArray:messages];
+    self.dateMessageGroups[date] = newMessages;
+    if (![self.dates containsObject:date]) {
+        // 历史实现只写 dateMessageGroups 不写 dates —— 该 date 永远不会成为一个
+        // section, 消息静默消失 (端到端加密提示语走的就是这条路)。
+        [self.dates addObject:date];
+        [self.dates sortUsingSelector:@selector(compare:)]; // dates 按日期升序
+    }
+    for (WKMessageModel *m in newMessages) [self _addToIndexNoLock:m];
+    [self.messagesLock unlock];
+}
+
+-(NSIndexPath*) removeMessage:(WKMessageModel*) message {
+    BOOL sectionRemoved = NO;
+    return [self removeMessage:message sectionRemove:&sectionRemoved];
+}
+
+-(NSIndexPath*) removeMessage:(WKMessageModel*) message sectionRemove:(BOOL*)sectionRemove{
+    [_messagesLock lock];
+    NSIndexPath *path = [self _indexPathForClientMsgNoNoLock:message.clientMsgNo];
+    if(path) {
+        NSMutableArray *messages = [self _messagesAtSectionNoLock:path.section];
+        if(messages && path.row >= 0 && path.row < (NSInteger)messages.count) {
+            WKMessageModel *deleteMessageModel = messages[path.row];
+            [self _removeFromIndexNoLock:deleteMessageModel];
+            if(deleteMessageModel.preMessageModel) {
+                deleteMessageModel.preMessageModel.nextMessageModel = deleteMessageModel.nextMessageModel;
+            }
+            if(deleteMessageModel.nextMessageModel) {
+                deleteMessageModel.nextMessageModel.preMessageModel = deleteMessageModel.preMessageModel;
+            }
+
+            [messages removeObjectAtIndex:path.row];
+            if(messages.count == 0) {
+                if(sectionRemove) {
+                    *sectionRemove = true;
+                }
+                [self.dateMessageGroups removeObjectForKey:self.dates[path.section]];
+                [self.dates removeObjectAtIndex:path.section];
+            }
+        }else {
+            path = nil; // 索引已失效, 不要把脏 path 交给 tableView 去 deleteRows
+        }
+    }
+    [_messagesLock unlock];
+    return path;
+}
+
+-(NSIndexPath*) replaceMessage:(WKMessageModel*)newMessage atClientMsgNo:(NSString*)clientMsgNo {
+    [self handleProhibitwords:newMessage]; // 处理违禁词 (纯 model 操作, 不需要持锁)
+    [_messagesLock lock];
+    NSIndexPath *path = [self _indexPathForClientMsgNoNoLock:clientMsgNo];
+    if(path) {
+        [self _replaceMessageNoLock:newMessage atIndexPath:path];
+    }
+    [_messagesLock unlock];
+    return path;
+}
+
+// 违禁词过滤的唯一实现。类方法, 供 prepare 阶段在测量高度前先跑一遍
+// (见 WKMessageList.h 的 applyProhibitwords: 说明)。
++ (void)applyProhibitwords:(WKMessageModel *)messageModel {
+    if(messageModel.contentType != WK_TEXT) {
+        return;
+    }
+    if(messageModel.remoteExtra.isEdit && [messageModel.remoteExtra.contentEdit isKindOfClass:[WKTextContent class]]) {
+        WKTextContent *content = (WKTextContent*)messageModel.remoteExtra.contentEdit;
         if ([content.content isKindOfClass:[NSString class]]) {
             content.content = [WKProhibitwordsService.shared filter:content.content];
         }
+        return;
     }
+    if (![messageModel.content isKindOfClass:[WKTextContent class]]) return;
+    WKTextContent *content = (WKTextContent*)messageModel.content;
+    if ([content.content isKindOfClass:[NSString class]]) {
+        content.content = [WKProhibitwordsService.shared filter:content.content];
+    }
+}
+
+-(void) handleProhibitwords:(WKMessageModel*)messageModel {
+    [WKMessageList applyProhibitwords:messageModel];
+}
+
+#pragma mark - 查询
+
+-(WKMessageModel*) _lastMessageNoLock {
+    NSMutableArray *messageModels = [self _messagesAtSectionNoLock:(NSInteger)self.dates.count - 1];
+    return messageModels.lastObject;
 }
 
 -(WKMessageModel*) lastMessage {
-    if(self.dates.count==0) {
-        return nil;
-    }
-   NSString *lastDate = self.dates.lastObject;
-    NSMutableArray *messageModels = self.dateMessageGroups[lastDate];
-    if(messageModels && messageModels.count>0) {
-        return messageModels.lastObject;
-    }
-    return nil;
+    [_messagesLock lock];
+    WKMessageModel *model = [self _lastMessageNoLock];
+    [_messagesLock unlock];
+    return model;
 }
-
 
 -(WKMessageModel*) firstMessage {
-    if(self.dates.count==0) {
-        return nil;
-    }
-    NSString *firstDate = self.dates.firstObject;
-     NSMutableArray *messageModels = self.dateMessageGroups[firstDate];
-     if(messageModels && messageModels.count>0) {
-         return messageModels.firstObject;
-     }
-     return nil;
+    [_messagesLock lock];
+    WKMessageModel *model = [self _messagesAtSectionNoLock:0].firstObject;
+    [_messagesLock unlock];
+    return model;
 }
-
 
 -(NSIndexPath*) indexPathAtOrderSeq:(uint32_t)orderSeq {
     if(orderSeq == 0) return nil;
     [_messagesLock lock];
-    WKMessageModel *model = self.orderSeqIndex[@(orderSeq)];
-    NSIndexPath *path = model ? [self _indexPathForModel:model] : nil;
+    NSIndexPath *path = [self _indexPathForModelNoLock:self.orderSeqIndex[@(orderSeq)]];
     [_messagesLock unlock];
     return path;
 }
@@ -318,8 +475,7 @@
 -(NSIndexPath*) indexPathAtMessageID:(uint64_t)messageID {
     if(messageID == 0) return nil;
     [_messagesLock lock];
-    WKMessageModel *model = self.messageIdIndex[@(messageID)];
-    NSIndexPath *path = model ? [self _indexPathForModel:model] : nil;
+    NSIndexPath *path = [self _indexPathForModelNoLock:self.messageIdIndex[@(messageID)]];
     [_messagesLock unlock];
     return path;
 }
@@ -330,14 +486,12 @@
     }
     [_messagesLock lock];
     NSMutableArray<NSIndexPath*> *indexPaths = [NSMutableArray array];
-    for (NSInteger i=self.dates.count-1; i>=0; i--) {
+    for (NSInteger i=(NSInteger)self.dates.count-1; i>=0; i--) {
         NSMutableArray *messages = self.dateMessageGroups[self.dates[i]];
-        if(messages && messages.count>0) {
-            for (NSInteger j=messages.count-1;j>=0; j--) {
-                WKMessageModel *messageModel = messages[j];
-                if(messageModel.content.reply && [messageModel.content.reply.messageID longLongValue] == messageID) {
-                    [indexPaths addObject:[NSIndexPath indexPathForRow:j inSection:i]];
-                }
+        for (NSInteger j=(NSInteger)messages.count-1;j>=0; j--) {
+            WKMessageModel *messageModel = messages[j];
+            if(messageModel.content.reply && [messageModel.content.reply.messageID longLongValue] == messageID) {
+                [indexPaths addObject:[NSIndexPath indexPathForRow:j inSection:i]];
             }
         }
     }
@@ -351,14 +505,12 @@
     }
     [_messagesLock lock];
     NSMutableArray<WKMessageModel*> *resultMessages = [NSMutableArray array];
-    for (NSInteger i=self.dates.count-1; i>=0; i--) {
+    for (NSInteger i=(NSInteger)self.dates.count-1; i>=0; i--) {
         NSMutableArray *messages = self.dateMessageGroups[self.dates[i]];
-        if(messages && messages.count>0) {
-            for (NSInteger j=messages.count-1;j>=0; j--) {
-                WKMessageModel *messageModel = messages[j];
-                if(messageModel.content.reply && [messageModel.content.reply.messageID longLongValue] == messageID) {
-                    [resultMessages addObject:messageModel];
-                }
+        for (NSInteger j=(NSInteger)messages.count-1;j>=0; j--) {
+            WKMessageModel *messageModel = messages[j];
+            if(messageModel.content.reply && [messageModel.content.reply.messageID longLongValue] == messageID) {
+                [resultMessages addObject:messageModel];
             }
         }
     }
@@ -369,8 +521,7 @@
 -(NSIndexPath*) indexPathAtClientMsgNo:(NSString*) clientMsgNo {
     if(!clientMsgNo) return nil;
     [_messagesLock lock];
-    WKMessageModel *model = self.clientMsgNoIndex[clientMsgNo];
-    NSIndexPath *path = model ? [self _indexPathForModel:model] : nil;
+    NSIndexPath *path = [self _indexPathForClientMsgNoNoLock:clientMsgNo];
     [_messagesLock unlock];
     return path;
 }
@@ -378,80 +529,9 @@
 -(NSIndexPath*) indexPathAtStreamNo:(NSString*)streamNo {
     if(!streamNo) return nil;
     [_messagesLock lock];
-    WKMessageModel *model = self.streamNoIndex[streamNo];
-    NSIndexPath *path = model ? [self _indexPathForModel:model] : nil;
+    NSIndexPath *path = [self _indexPathForModelNoLock:self.streamNoIndex[streamNo]];
     [_messagesLock unlock];
     return path;
-}
-
-
-
--(NSIndexPath*) removeMessage:(WKMessageModel*) message {
-    NSIndexPath *path = [self indexPathAtClientMsgNo:message.clientMsgNo];
-    [_messagesLock lock];
-    if(path) {
-        NSMutableArray *messages =  self.dateMessageGroups[self.dates[path.section]];
-        
-        WKMessageModel *deleteMessageModel = messages[path.row];
-        [self _removeFromIndexNoLock:deleteMessageModel];
-        if(deleteMessageModel.preMessageModel) {
-            deleteMessageModel.preMessageModel.nextMessageModel = deleteMessageModel.nextMessageModel;
-        }
-        if(deleteMessageModel.nextMessageModel) {
-            deleteMessageModel.nextMessageModel.preMessageModel = deleteMessageModel.preMessageModel;
-        }
-
-        [messages removeObjectAtIndex:path.row];
-        if(messages.count == 0) {
-            [self.dateMessageGroups removeObjectForKey:self.dates[path.section]];
-            [self.dates removeObjectAtIndex:path.section];
-        }
-    }
-    [_messagesLock unlock];
-    return path;
-}
-
--(NSIndexPath*) removeMessage:(WKMessageModel*) message sectionRemove:(BOOL*)sectionRemove{
-    NSIndexPath *path = [self indexPathAtClientMsgNo:message.clientMsgNo];
-    [_messagesLock lock];
-    if(path) {
-        NSMutableArray *messages =  self.dateMessageGroups[self.dates[path.section]];
-
-        WKMessageModel *deleteMessageModel = messages[path.row];
-        [self _removeFromIndexNoLock:deleteMessageModel];
-        if(deleteMessageModel.preMessageModel) {
-            deleteMessageModel.preMessageModel.nextMessageModel = deleteMessageModel.nextMessageModel;
-        }
-        if(deleteMessageModel.nextMessageModel) {
-            deleteMessageModel.nextMessageModel.preMessageModel = deleteMessageModel.preMessageModel;
-        }
-
-        [messages removeObjectAtIndex:path.row];
-        if(messages.count == 0) {
-            *sectionRemove = true;
-            [self.dateMessageGroups removeObjectForKey:self.dates[path.section]];
-            [self.dates removeObjectAtIndex:path.section];
-        }
-    }
-    [_messagesLock unlock];
-    return path;
-}
-
--(void) insertMessage:(WKMessageModel*)message atIndex:(NSIndexPath*)indexPath {
-    [self.messagesLock lock];
-    [self _insertMessage:message atIndex:indexPath];
-    [self.messagesLock unlock];
-}
-
-- (BOOL)hasTyping {
-    [self.messagesLock lock];
-   NSIndexPath *indexPath = [self typingIndexPath];
-    if(!indexPath) {
-        [self.messagesLock unlock];
-        return false;
-    }
-    [self.messagesLock unlock];
-    return true;
 }
 
 -(NSInteger) messageCount {
@@ -464,55 +544,6 @@
     }];
     [self.messagesLock unlock];
     return count;
-}
-
--(NSIndexPath*) replaceTyping:(WKMessageModel*)messageModel {
-    [self.messagesLock lock];
-    NSIndexPath *indexPath = [self typingIndexPath];
-    BOOL hasTyping = true;
-    if(!indexPath) {
-        hasTyping = false;
-    }
-    if(hasTyping) {
-        WKMessageModel *typingMessageModel = self.dateMessageGroups[self.dates[indexPath.section]][indexPath.row];
-        [self _removeFromIndexNoLock:typingMessageModel];
-        if(typingMessageModel.preMessageModel) {
-            typingMessageModel.preMessageModel.nextMessageModel = messageModel;
-        }
-        if(typingMessageModel.nextMessageModel) {
-            typingMessageModel.nextMessageModel.preMessageModel = messageModel;
-        }
-        messageModel.preMessageModel = typingMessageModel.preMessageModel;
-        messageModel.nextMessageModel = typingMessageModel.nextMessageModel;
-
-        self.dateMessageGroups[self.dates[indexPath.section]][indexPath.row] = messageModel;
-        [self _addToIndexNoLock:messageModel];
-    }
-    
-    [self.messagesLock unlock];
-    
-    return indexPath;
-}
-
--(void) addTypingMessageIfNeed:(WKMessageModel*)messageModel {
-    if([self hasTyping]) {
-        return;
-    }
-    [self addMessage:messageModel];
-}
-
-- (NSIndexPath*)typingIndexPath {
-    NSIndexPath *indexPath;
-    if(self.dates.count>0) {
-        NSArray *messages = self.dateMessageGroups[self.dates[self.dates.count-1]];
-        if(messages && messages.count>0) {
-            WKMessage *message = messages[messages.count-1];
-            if(message.contentType == WK_TYPING) {
-                indexPath = [NSIndexPath indexPathForRow:messages.count-1 inSection:self.dates.count-1];
-            }
-        }
-    }
-    return indexPath;
 }
 
 -(NSArray<WKMessageModel*>*) getMessagesWithContentType:(NSInteger)contentType {
@@ -582,6 +613,61 @@
     return added;
 }
 
+#pragma mark - typing
+
+- (NSIndexPath*)_typingIndexPathNoLock {
+    NSMutableArray *messages = [self _messagesAtSectionNoLock:(NSInteger)self.dates.count - 1];
+    if(messages.count>0) {
+        WKMessageModel *message = messages.lastObject;
+        if(message.contentType == WK_TYPING) {
+            return [NSIndexPath indexPathForRow:messages.count-1 inSection:self.dates.count-1];
+        }
+    }
+    return nil;
+}
+
+- (BOOL)hasTyping {
+    [self.messagesLock lock];
+    BOOL has = [self _typingIndexPathNoLock] != nil;
+    [self.messagesLock unlock];
+    return has;
+}
+
+-(NSIndexPath*) replaceTyping:(WKMessageModel*)messageModel {
+    [self.messagesLock lock];
+    NSIndexPath *indexPath = [self _typingIndexPathNoLock];
+    if(indexPath) {
+        NSMutableArray *messages = [self _messagesAtSectionNoLock:indexPath.section];
+        WKMessageModel *typingMessageModel = messages[indexPath.row];
+        [self _removeFromIndexNoLock:typingMessageModel];
+        if(typingMessageModel.preMessageModel) {
+            typingMessageModel.preMessageModel.nextMessageModel = messageModel;
+        }
+        if(typingMessageModel.nextMessageModel) {
+            typingMessageModel.nextMessageModel.preMessageModel = messageModel;
+        }
+        messageModel.preMessageModel = typingMessageModel.preMessageModel;
+        messageModel.nextMessageModel = typingMessageModel.nextMessageModel;
+
+        messages[indexPath.row] = messageModel;
+        [self _addToIndexNoLock:messageModel];
+    }
+    [self.messagesLock unlock];
+
+    return indexPath;
+}
+
+-(void) addTypingMessageIfNeed:(WKMessageModel*)messageModel {
+    // hasTyping 与 addMessage: 各自加锁, 中间的窗口无害: typing 只是个占位气泡,
+    // 最坏情况多插一条, _addMessageNoLock 里的 "已有 typing 则丢弃" 会兜住。
+    if([self hasTyping]) {
+        return;
+    }
+    [self addMessage:messageModel];
+}
+
+#pragma mark - 日期格式化
+
 -(NSString*) formatMessageDate:(WKMessageModel*)model {
     return [self formatDate:[NSDate dateWithTimeIntervalSince1970:model.timestamp] ];
 }
@@ -590,6 +676,7 @@
     return [WKTimeTool getTimeString:date format:@"yyyy-MM-dd" ];
 }
 
+#pragma mark - lazy
 
 - (NSMutableArray<NSString*> *)dates {
     if(!_dates) {
