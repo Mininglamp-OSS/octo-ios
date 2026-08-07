@@ -85,11 +85,83 @@ static const BOOL WKPerfProbeOn = NO;
     return [self renderCard:cardJSON width:width dark:dark delegate:delegate measureSize:YES];
 }
 
+/// 给 ACR 视图树构建/测高提供一个**显式的 current trait collection**。
+///
+/// 为什么必须有（现网 EXC_BAD_ACCESS 根因，build 74 独有，5 份同栈）:
+///
+/// ACR 的视图树是 windowless 构建的 —— `ACRRenderer render:` 建树、`fittingSizeOfView:`
+/// 用 100000 高强制 layout，全程没有 superview / window。而树里到处是**动态颜色**:
+/// 我们自己的 WKCardAccent.h(`+[UIColor colorWithDynamicProvider:]`)、以及 UIKit 自带的
+/// 系统色(UILabel.textColor / UISwitch.onTintColor / systemBackground 等全是动态的)。
+/// 动态色必须对着一个 trait collection 求值; 既没有 window 可以往上找, 也没有 current
+/// trait collection, UIKit 就退到
+/// `+[UITraitCollection _currentTraitCollectionWithFallback:markFallback:]`
+/// → `_UIGetCurrentFallbackTraitCollection` (文件名 `_UIFallbackEnvironment_NonARC.m`,
+/// NonARC = 那个全局是**不持有**的裸指针)。视图树随后被整棵丢弃, 全局就成了野指针;
+/// 下一个无辜的读者(`[WKConversationVC new]` 的 `_populateInitialTraitCollection`、
+/// 会话列表 reloadData 求默认行高的 `__UIFontForTextStyle`)一 objc_msgSend 就 SIGSEGV
+/// (报告里的 "possible pointer authentication failure" 即 isa 已被复用覆盖)。
+///
+/// `performAsCurrentTraitCollection:` 会压入一个**真实存在且被持有**的 current trait
+/// collection, UIKit 于是根本不会去碰那个 fallback 全局。
+///
+/// 顺带修正一处隐性错误: 之前 windowless 求值时 fallback 命中的是"系统当前外观",
+/// 与本次渲染显式传入的 `dark:` 可能相反 —— 深色卡片有可能拿浅色动态色求值。
+/// 这里用 dark 构造 trait collection, 让动态色与 host config / ACRTheme 三者一致。
++ (UITraitCollection *)wk_traitCollectionForDark:(BOOL)dark {
+    UITraitCollection *styleTC =
+        [UITraitCollection traitCollectionWithUserInterfaceStyle:(dark ? UIUserInterfaceStyleDark : UIUserInterfaceStyleLight)];
+
+    // 以真实 key window 的 traits 为底，只覆盖 userInterfaceStyle —— 这样动态字号
+    // (preferredContentSizeCategory)、size class、displayScale 等都保持用户的真实值。
+    // 若只用 traitCollectionWithUserInterfaceStyle:，其余维度是 Unspecified，会退到
+    // 默认值(如字号按 Large 算)，卡片高度可能与真机外观不一致。
+    // 注意: UITraitCollection 是不可变值对象，持有它不会持有 window，不会造成循环引用。
+    UITraitCollection *base = nil;
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        UIWindowScene *ws = (UIWindowScene *)scene;
+        for (UIWindow *w in ws.windows) {
+            if (w.isKeyWindow) { base = w.traitCollection; break; }
+        }
+        if (!base) base = ws.traitCollection;
+        if (base) break;
+    }
+    if (!base) return styleTC;
+    // 后面的集合覆盖前面的同名 trait，故 styleTC 放最后。
+    return [UITraitCollection traitCollectionWithTraitsFromCollections:@[base, styleTC]];
+}
+
 + (WKACardRenderResult *)renderCard:(NSDictionary *)cardJSON
                               width:(CGFloat)width
                                dark:(BOOL)dark
                            delegate:(id<ACRActionDelegate>)delegate
                         measureSize:(BOOL)measureSize {
+    // 整个建树 + 测高都必须在 current trait collection 内（见
+    // wk_traitCollectionForDark: 的注释）。展示路径同样要包 —— 视图是在
+    // `ACRRenderer render:` 里建好之后才被塞进 cell 的，建树那一刻它也还是 windowless。
+    //
+    // performAsCurrentTraitCollection: 要求主线程。本方法的两个调用方都已保证:
+    // +measureCard 非主线程时 dispatch_sync 到主线程; 展示路径由 cell 的 refresh: 调用。
+    if (![NSThread isMainThread]) {
+        __block WKACardRenderResult *r = nil;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            r = [self renderCard:cardJSON width:width dark:dark delegate:delegate measureSize:measureSize];
+        });
+        return r;
+    }
+    __block WKACardRenderResult *result = nil;
+    [[self wk_traitCollectionForDark:dark] performAsCurrentTraitCollection:^{
+        result = [self wk_renderCardUnderCurrentTraits:cardJSON width:width dark:dark delegate:delegate measureSize:measureSize];
+    }];
+    return result;
+}
+
++ (WKACardRenderResult *)wk_renderCardUnderCurrentTraits:(NSDictionary *)cardJSON
+                                                   width:(CGFloat)width
+                                                    dark:(BOOL)dark
+                                                delegate:(id<ACRActionDelegate>)delegate
+                                             measureSize:(BOOL)measureSize {
     WKACardRenderResult *out = [WKACardRenderResult new];
     out.succeeded = NO;
     out.size = CGSizeMake(width, 0);
