@@ -1760,9 +1760,8 @@
         [self verifyAndAddGroupsToList:unknownGroupChannelIds];
     }
     // 会话 ↔ 空间归属：本方法是"这条实时会话属于当前空间吗"的唯一漏斗，判定通过的
-    // 里面**只有有正向证据的**才落归属 —— filtered 里含 fail-open 放行的条目
-    // （消息无 space_id / 无 lastMessage / Bot 名单未加载），把那些写进持久归属表会
-    // 造成永久跨空间污染。详见 isConversationPositivelyInSpace:。
+    // 就落归属 —— 显示什么就缓存什么，否则下一次完整 loadConversationList 会因为
+    // SQL 作用域把它们筛掉（"进聊天详情返回后私聊消失"就是这么来的）。
     [self persistSpaceMembershipForConversations:filtered spaceId:currentSpaceId];
     return filtered;
 }
@@ -2156,113 +2155,34 @@
     return YES;
 }
 
-/// 这条会话是否**有正向证据**属于该空间 —— 决定"要不要把归属持久化到
-/// conversation_space"，与 `isConversationInCurrentSpace:` 的"这一帧要不要显示"是两个
-/// 不同的问题，必须分开。
+/// 把"这一帧决定要显示在当前空间列表里"的会话落成归属。
 ///
-/// 为什么不能直接复用 isConversationInCurrentSpace：那个方法有三条 fail-open 出口
-///   1. 消息没有 space_id → YES（向前兼容）
-///   2. 会话没有 lastMessage → YES
-///   3. Bot 成员名单未加载（Unknown）→ 继续走 1/2
-/// 这三条对"这一帧显示"是合理的兼容策略（宁可多显示，等 prune/sweep 兜底），但归属是
-/// **持久**的：把一次 fail-open 猜测写进归属表，就等于把跨空间污染永久固化 —— 下次
-/// 冷启动读缓存时它仍然被认为属于这个空间，而且不会再有人来纠正。用户实测到的
-/// "切到其他空间看到别的空间的会话"就是这么来的。
+/// 判据就是调用方已经做过的空间判定（filterConversationsBySpace /
+/// isConversationInCurrentSpace）—— **显示什么就缓存什么**，两者必须同一口径。
 ///
-/// 正向证据（任一命中即可）：
-///   - 系统通知 / 文件助手 / BotFather：本来就是每个空间都可见的全局入口
-///   - channelId 带 `s{spaceId}_` 前缀：服务端明确标注了归属
-///   - 群聊：WKSpaceFilter 判 Keep（channelInfo.space_id 命中，或我是该空间的外部成员），
-///          或命中该空间 sync 出来的群白名单
-///   - 私聊：消息 payload 的 space_id 等于该空间
-///   - Bot DM：WKSpaceBotRegistry 明确判定 Member（服务端 my_bots ∪ space_bots）
-/// 其余（含所有 fail-open / Unknown）→ NO，只显示不落库。
--(BOOL) isConversationPositivelyInSpace:(WKConversation*)conversation spaceId:(NSString*)spaceId {
-    if(spaceId.length == 0) return NO;
-    NSString *channelId = conversation.channel.channelId;
-    if(channelId.length == 0) return NO;
-
-    // 全局入口：每个空间都该有一份，落库无害且必要（否则冷启动缓存里看不到系统 bot）
-    if([channelId isEqualToString:[WKApp shared].config.systemUID] ||
-       [channelId isEqualToString:[WKApp shared].config.fileHelperUID] ||
-       [channelId isEqualToString:[WKApp shared].config.botfatherUID]) {
-        return YES;
-    }
-
-    // 服务端前缀化的 channelId：`s{spaceId}_xxx` 是最强的归属证据
-    if([channelId hasPrefix:[NSString stringWithFormat:@"s%@_", spaceId]]) {
-        return YES;
-    }
-
-    if(conversation.channel.channelType == WK_GROUP) {
-        WKSpaceFilterDecision decision = [[WKSpaceFilter shared]
-                                           decideChannel:channelId
-                                             channelType:conversation.channel.channelType];
-        // 群聊的 Keep 是真证据：channelInfo.space_id 命中，或 member.source_space_id
-        // 命中（外部群）。注意 PERSON 的 Keep 不是证据 —— WKSpaceFilter 对无前缀的
-        // Person 频道一律 person-pass → Keep，那只是"不拦"，不代表归属已知。
-        if(decision == WKSpaceFilterDecisionKeep) {
-            return YES;
-        }
-        // sync 白名单：它是该空间 conversation/sync 的产物，命中即为该空间成员。
-        // 未初始化（nil）时 isGroupInWhitelist 会返回 YES（fail-open），所以必须先判
-        // 初始化状态，不能直接用它。
-        if([self.conversationListVM isGroupWhitelistInitialized]
-           && [self.conversationListVM isGroupInWhitelist:channelId]) {
-            return YES;
-        }
-        return NO;
-    }
-
-    if(conversation.channel.channelType == WK_PERSON) {
-        // Bot DM：服务端权威名单明确说是本空间成员才算证据（Unknown 不算）
-        WKChannelInfo *info = [[WKChannelInfoDB shared] queryChannelInfo:conversation.channel];
-        if(info && info.robot) {
-            if([[WKSpaceBotRegistry shared] membershipForBotUID:channelId inSpace:spaceId] == WKSpaceBotMembershipMember) {
-                return YES;
-            }
-            return NO;
-        }
-        // 普通私聊：只认消息 payload 里明确写着的 space_id
-        if(conversation.lastMessage) {
-            id v = conversation.lastMessage.content.contentDict[@"space_id"];
-            if([v isKindOfClass:[NSString class]] && [(NSString *)v isEqualToString:spaceId]) {
-                return YES;
-            }
-        }
-        return NO;
-    }
-
-    // 子区：归属跟父群走。父群有证据 → 子区有证据。
-    if(conversation.channel.channelType == WK_COMMUNITY_TOPIC) {
-        NSRange sep = [channelId rangeOfString:@"____"];
-        NSString *parentGroupNo = sep.location != NSNotFound ? [channelId substringToIndex:sep.location] : nil;
-        if(parentGroupNo.length == 0) return NO;
-        WKSpaceFilterDecision decision = [[WKSpaceFilter shared] decideChannel:parentGroupNo channelType:WK_GROUP];
-        if(decision == WKSpaceFilterDecisionKeep) return YES;
-        return [self.conversationListVM isGroupWhitelistInitialized]
-            && [self.conversationListVM isGroupInWhitelist:parentGroupNo];
-    }
-
-    return NO;
-}
-
-/// 从一批"这一帧要显示"的会话里挑出有正向证据的，落归属 + 同步内存白名单。
-/// 见 isConversationPositivelyInSpace: 的注释：显示可以 fail-open，落库不行。
+/// 曾经在这里额外要求"正向证据"（消息 payload 带 space_id / channelInfo.extra 命中 /
+/// Bot registry 明确 Member），想借此避免把 fail-open 的猜测写进持久归属。结果是
+/// 大量 DM 拿不到证据 → 显示了却没落归属 → 下一次完整 loadConversationList 时 SQL
+/// 作用域把它们全挡在外面，表现为"进聊天详情再返回，所有私聊消失"。
+///
+/// 结论：缓存与显示必须同一口径，否则同一份数据在两次渲染之间会自相矛盾。跨空间残留
+/// 交给 prune / sweep 在拿到明确反向证据时删归属（dropSpaceMembershipForChannels:），
+/// 以及真全量 sync 的 tombstone。
 -(void) persistSpaceMembershipForConversations:(NSArray<WKConversation*>*)conversations
                                        spaceId:(NSString*)spaceId {
     if(conversations.count == 0 || spaceId.length == 0) return;
-    NSMutableArray<WKChannel*> *confirmed = [NSMutableArray array];
+    // 切空间闸门期不落归属：此时 isConversationInCurrentSpace 是 fail-closed 的，
+    // 能过来的本就可信；但闸门期的会话归属判定还在收敛，等落闸后由快照统一记录更稳。
+    if(self.spaceSwitchInProgress) return;
+    NSMutableArray<WKChannel*> *channels = [NSMutableArray array];
     for (WKConversation *conv in conversations) {
         if(conv.channel.channelId.length == 0) continue;
-        if([self isConversationPositivelyInSpace:conv spaceId:spaceId]) {
-            [confirmed addObject:conv.channel];
-        }
+        [channels addObject:conv.channel];
     }
-    if(confirmed.count == 0) return;
-    [WKConvListCache recordMembershipBatch:confirmed forSpace:spaceId];
-    // 内存白名单同步更新 —— 落库是异步的，shouldShowConversation: 读的是内存集合。
-    [self.conversationListVM noteSpaceMembershipChannels:confirmed];
+    if(channels.count == 0) return;
+    [WKConvListCache recordMembershipBatch:channels forSpace:spaceId];
+    // 内存群白名单同步更新 —— 落库是异步的，而 shouldShowConversation: 的群分支读内存集合。
+    [self.conversationListVM noteSpaceMembershipChannels:channels];
 }
 
 -(void) uiAddConversation:(WKConversation*)conversation {
@@ -2281,9 +2201,8 @@
             return;
         }
         // 通过空间判定 → 归属落库 + 内存白名单同步。这里和
-        // filterConversationsBySpace 是两个独立的"加入当前空间列表"入口，都要记。
-        // 同样只记有正向证据的：isConversationInCurrentSpace 会 fail-open 放行
-        // "无 space_id / 无 lastMessage" 的会话，那种猜测不能进持久归属表。
+        // filterConversationsBySpace 是两个独立的"加入当前空间列表"入口，都要记，
+        // 否则这条会话下次完整 loadConversationList 时会被 SQL 作用域挡在列表外。
         [self persistSpaceMembershipForConversations:@[conversation] spaceId:currentSpaceId];
     }
     // 记录插入前的行数

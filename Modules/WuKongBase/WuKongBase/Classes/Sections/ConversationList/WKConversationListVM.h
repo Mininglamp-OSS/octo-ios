@@ -66,9 +66,11 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 正确的白名单，否则别的空间的会话会漏进列表。
 -(void) hydrateSpaceScope:(NSString*)spaceId;
 
-/// 实时会话更新被判定为"属于当前空间"后，把结论同步进内存白名单（群 + DM）。
-/// 归属落库是异步的，而 shouldShowConversation: 读内存集合 —— 不同步更新的话，
-/// 刚进来的新会话会在下一次 loadConversationList 时被自己的白名单挡掉。
+/// 实时会话更新被判定为"属于当前空间"后，把结论同步进内存群白名单。
+/// 归属落库是异步的，而 shouldShowConversation: 的群分支读内存集合 —— 不同步更新的话，
+/// 刚进来的新群会在下一次 loadConversationList 时被自己的白名单挡掉。
+/// DM 不参与：它没有内存白名单，空间隔离完全交给 SQL 作用域（多一份内存集合只会漂移，
+/// 曾导致"进聊天详情返回后所有私聊消失"）。
 -(void) noteSpaceMembershipChannels:(NSArray<WKChannel*>*)channels;
 
 /// 把"当前实际渲染出来的会话集"记成当前空间的归属快照（只增不删）。
