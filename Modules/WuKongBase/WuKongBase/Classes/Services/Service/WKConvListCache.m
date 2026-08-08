@@ -14,6 +14,12 @@ static const NSInteger kWKConvCacheOrphanKeepDays = 30;
 ///   v1：首版。会把 isConversationInCurrentSpace 的 fail-open 放行结论也写进归属，
 ///       导致跨空间污染被永久固化 —— 所以 v2 必须推平重建。
 ///   v2：归属只接受"正向证据"（见 WKConversationListVC.isConversationPositivelyInSpace:）。
+///
+/// ⚠️ **重新打开灰度（见 +enabled）时必须同时 +1 这个版本号。**
+/// 关闭期间所有写路径都 early-return，归属表停在关闭那一刻的快照，而读路径一旦恢复
+/// 作用域过滤就会拿这批过期行去 EXISTS —— 关闭期间新增的会话全部不在表里，列表会被
+/// 截断成旧快照，要等下一次权威 full sync 才补回。+1 版本号能让启动时先
+/// deleteAllSpaceMembership 再按 WKLastLoadedSpaceId backfill，绕开这个空窗。
 static const NSInteger kWKConvSpaceIndexVersion = 2;
 
 /// recordMembershipBatch 的去重缓存 —— key 为 "space|type:channelId"。
@@ -36,7 +42,28 @@ static NSInteger gVerificationOnlyDepth = 0;
 + (BOOL)enabled {
     id v = [[NSUserDefaults standardUserDefaults] objectForKey:@"OCTO_CONV_CACHE_ENABLED"];
     if (v == nil) {
-        return YES; // 默认开启
+        // 1.0.3 默认**关闭**（PR #70 review 结论，见 issue #69）。
+        //
+        // 为什么关：`conversation` 表主键只有 (channel_id, channel_type)，unread_count /
+        // last_client_msg_no / is_deleted 是单行共享的。同一个 DM 同属 Space A/B 时两边
+        // 互相覆盖 unread，而 loadConversationList 的已读水位夹取只把 unread 往 0 压、
+        // 不会往上抬 —— 所以偏差方向是**漏红点**（用户以为没消息），增量 sync 下还可能
+        // 长时间不回正。旧实现每次切空间 deleteAllConversation 把这个建模缺口掩盖了，
+        // 停止清库之后它就暴露出来。
+        // 缓存是体验优化（进空间先看到上次的列表），漏红点是功能正确性，两者不该在同一个
+        // release 里对赌 —— 所以先关，等 conversation_space_state 把"会话状态"从
+        // "会话身份"里拆出来（issue #69）之后再开。
+        //
+        // 关闭后的行为已逐条核过 = 现网行为：applyScopeForSpace: 在关闭时把 SDK 作用域
+        // 置 nil（读路径回到 SQL_ALL 不过滤），loadCurrentSpace / performSwitchToSpaceId
+        // 走 reset + deleteAllConversation 的 else 分支；viewDidLoad 里 loadCurrentSpace
+        // 在 loadConversationList 之前、且 deleteAllConversation 是同步的，所以第一帧
+        // 不会漏出上个版本留在库里的多空间会话。
+        // 代价：切空间 / 冷启动换空间先空一下等 sync（断网是空白页），关注 tab 的分组 +
+        // 关注集合磁盘缓存也一起关（同一个 flag，见 WKCategoryService / WKFollowedKeysStore）。
+        //
+        // ⚠️ 重新打开时必须同时 +1 kWKConvSpaceIndexVersion，理由见那里的注释。
+        return NO;
     }
     return [v boolValue];
 }
