@@ -9,7 +9,7 @@
 //     字段丢一个就会让缓存态的分组/排序错位
 //   - follow_sort 哨兵值 NSIntegerMax 不被序列化，回读仍兜底成 NSIntegerMax
 //   - WKSpaceDiskCache 读写/隔离/删除
-//   - WKConvListCache.enabled 灰度开关语义（1.0.3 起默认关，显式开/关都覆盖）
+//   - WKConvListCache.enabled 灰度开关语义（默认开，显式开/关都覆盖）
 //
 //  作用域三态（归属表空 → 返回全部 / membership(A) → 只返回 A / membership(B) 为 0 行
 //  → 返回空）和全量 tombstone 需要真实 sqlite，本测试目标没有 DB 引导，放在手工
@@ -170,12 +170,11 @@
 
 #pragma mark - 灰度开关
 
-- (void)testEnabled_DefaultsToNO {
-    // 1.0.3 起默认关闭（跨 Space 共享 unread 的建模缺口未解决，见 WKConvListCache.enabled
-    // 注释 / issue #69）。等 conversation_space_state 落地重新开灰度时，这个断言要跟着翻，
-    // 并且必须同时 +1 kWKConvSpaceIndexVersion。
+- (void)testEnabled_DefaultsToYES {
+    // 默认开启。已知残留风险（跨空间共享 unread → 可能漏红点）见 WKConvListCache.enabled
+    // 注释 / issue #69：唯一有依据的多对多场景是外部群，那里共享 unread 是正确的。
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"OCTO_CONV_CACHE_ENABLED"];
-    XCTAssertFalse([WKConvListCache enabled]);
+    XCTAssertTrue([WKConvListCache enabled]);
 }
 
 - (void)testEnabled_ExplicitOn {

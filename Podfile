@@ -437,13 +437,27 @@ post_install do |installer|
             frame_anchor = "    UIImage *image = [self.class createFrameAtIndex:index source:_imageSource scale:_scale preserveAspectRatio:_preserveAspectRatio thumbnailSize:_thumbnailSize options:options];"
             frame_inject = "    UIImage *image;\n    @synchronized (self) { #{race_marker}\n        image = [self.class createFrameAtIndex:index source:_imageSource scale:_scale preserveAspectRatio:_preserveAspectRatio thumbnailSize:_thumbnailSize options:options];\n    }"
             rc2 = rc.sub(mem_anchor, mem_inject).sub(frame_anchor, frame_inject)
-            if rc2.include?(race_marker) && rc2 != rc
+            # 必须逐个 anchor 单独校验，不能只看 marker 在不在。
+            # String#sub 在 anchor 找不到时是 no-op，而两段注入文本里**都**含 race_marker ——
+            # 所以只要有一处命中，`rc2.include?(race_marker) && rc2 != rc` 就成立，会把只打了
+            # 一半的文件写下去并打印 "Patched"，同时 marker 又让后续 pod install 不再重试。
+            # 互斥只装在一个参与方身上等于没有互斥，那个 SIGSEGV 仍然活着，而构建声称已修。
+            # 宁可大声失败：任一 anchor 不匹配（大概率是 SDWebImage 升版改了源码）就中止，
+            # 让人看见并重新对齐 anchor。
+            mem_ok   = rc.include?(mem_anchor)
+            frame_ok = rc.include?(frame_anchor)
+            if mem_ok && frame_ok
                 File.chmod(0644, sd_coder_path)
                 File.write(sd_coder_path, rc2)
                 File.chmod(0444, sd_coder_path)
                 puts "🛡️  Patched SDImageIOAnimatedCoder.m: @synchronized(self) guard around _imageSource (memoryWarning vs frame-decode race)"
             else
-                puts "⚠️  SDImageIOAnimatedCoder.m: race-guard anchor not found, NOT applied (检查上游版本是否变了)"
+                missing = []
+                missing << 'didReceiveMemoryWarning' unless mem_ok
+                missing << 'createFrameAtIndex' unless frame_ok
+                raise "SDImageIOAnimatedCoder.m race-guard anchor 未命中: #{missing.join(', ')}。" \
+                      "SDWebImage 版本可能已变（当前 pin 5.9.5）。请重新对齐 anchor —— " \
+                      "半个 @synchronized 等于没有互斥，不能静默跳过。"
             end
         end
     end

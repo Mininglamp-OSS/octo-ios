@@ -38,9 +38,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// 增量补充归属, 不删任何已有记录。增量 sync / 实时更新 / 白名单写入走这里。
 ///
-/// ⚠️ 只能用"有正向证据"的判定结果调用 —— 不要拿 fail-open / 向前兼容的放行结论写归属。
-/// 归属是持久的, 把一次猜测写进来就等于把跨空间污染永久固化(下次冷启动仍然认为它属于
-/// 这个空间)。上层的正向证据来源见 WKConversationListVC.isConversationPositivelyInSpace:。
+/// ⚠️ 理想情况下只该用"有正向证据"的判定结果调用 —— 归属是持久的, 把一次猜测写进来就等于
+/// 把跨空间污染永久固化(下次冷启动仍然认为它属于这个空间)。
+/// **但当前上层实际的判定入口 WKConversationListVC -isConversationInCurrentSpace: 是
+/// fail-open 的**（无 space_id 的 DM 会被放行）—— 更严的"只接受正向证据"规则试过，会让
+/// DM 整片消失，已回退。所以这里会收到 fail-open 的结论，残留污染依赖 prune/sweep 在拿到
+/// 负向证据后清理；对"永远拿不到负向证据"的无前缀 DM 仍是已知缺口（issue #69）。
 -(void) addMembership:(NSArray<WKChannel*>*)channels forSpace:(NSString*)spaceId;
 
 /// 删除归属。用于"明确判定某 channel 不属于该空间"的自愈路径

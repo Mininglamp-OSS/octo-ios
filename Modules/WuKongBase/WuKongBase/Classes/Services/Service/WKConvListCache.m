@@ -13,9 +13,13 @@ static const NSInteger kWKConvCacheOrphanKeepDays = 30;
 /// （见 +prepareMembershipIfNeeded）。
 ///   v1：首版。会把 isConversationInCurrentSpace 的 fail-open 放行结论也写进归属，
 ///       导致跨空间污染被永久固化 —— 所以 v2 必须推平重建。
-///   v2：归属只接受"正向证据"（见 WKConversationListVC.isConversationPositivelyInSpace:）。
+///   v2：推平 v1 的索引后重建。归属的判定沿用 WKConversationListVC
+///       -isConversationInCurrentSpace:（**注意：它是 fail-open 的**，无 space_id 的
+///       DM 会被放行）；曾经尝试过更严的"只接受正向证据"规则，但那会让 DM 整片消失，
+///       已回退，见 WKConversationListVC 对应注释。残留污染由 prune/sweep 在拿到
+///       负向证据后清理。
 ///
-/// ⚠️ **重新打开灰度（见 +enabled）时必须同时 +1 这个版本号。**
+/// ⚠️ 灰度（见 +enabled）**关过一段时间后再打开**时，必须同时 +1 这个版本号。
 /// 关闭期间所有写路径都 early-return，归属表停在关闭那一刻的快照，而读路径一旦恢复
 /// 作用域过滤就会拿这批过期行去 EXISTS —— 关闭期间新增的会话全部不在表里，列表会被
 /// 截断成旧快照，要等下一次权威 full sync 才补回。+1 版本号能让启动时先
@@ -42,28 +46,33 @@ static NSInteger gVerificationOnlyDepth = 0;
 + (BOOL)enabled {
     id v = [[NSUserDefaults standardUserDefaults] objectForKey:@"OCTO_CONV_CACHE_ENABLED"];
     if (v == nil) {
-        // 1.0.3 默认**关闭**（PR #70 review 结论，见 issue #69）。
+        // 默认开启。用 NSUserDefaults 或启动参数 `-OCTO_CONV_CACHE_ENABLED 0` 一键关闭。
         //
-        // 为什么关：`conversation` 表主键只有 (channel_id, channel_type)，unread_count /
-        // last_client_msg_no / is_deleted 是单行共享的。同一个 DM 同属 Space A/B 时两边
-        // 互相覆盖 unread，而 loadConversationList 的已读水位夹取只把 unread 往 0 压、
-        // 不会往上抬 —— 所以偏差方向是**漏红点**（用户以为没消息），增量 sync 下还可能
-        // 长时间不回正。旧实现每次切空间 deleteAllConversation 把这个建模缺口掩盖了，
-        // 停止清库之后它就暴露出来。
-        // 缓存是体验优化（进空间先看到上次的列表），漏红点是功能正确性，两者不该在同一个
-        // release 里对赌 —— 所以先关，等 conversation_space_state 把"会话状态"从
-        // "会话身份"里拆出来（issue #69）之后再开。
+        // 已知残留风险（PR #70 review / issue #69）：`conversation` 表主键只有
+        // (channel_id, channel_type)，`unread_count` 是单行共享的，所以"同一个 channel 属于
+        // 两个空间"时两边读到同一个 unread。
         //
-        // 关闭后的行为已逐条核过 = 现网行为：applyScopeForSpace: 在关闭时把 SDK 作用域
-        // 置 nil（读路径回到 SQL_ALL 不过滤），loadCurrentSpace / performSwitchToSpaceId
-        // 走 reset + deleteAllConversation 的 else 分支；viewDidLoad 里 loadCurrentSpace
-        // 在 loadConversationList 之前、且 deleteAllConversation 是同步的，所以第一帧
-        // 不会漏出上个版本留在库里的多空间会话。
-        // 代价：切空间 / 冷启动换空间先空一下等 sync（断网是空白页），关注 tab 的分组 +
-        // 关注集合磁盘缓存也一起关（同一个 flag，见 WKCategoryService / WKFollowedKeysStore）。
+        // 为什么判断这个风险可接受：
+        //   - 唯一有依据的多对多场景是**外部群**（见 202608051200.sql 注释：以 external
+        //     member 身份加入别的空间的群，会同时在两个空间可见）。而外部群在两个空间里是
+        //     同一个群会话，"我在这个群的未读"本来就是一个数 —— 共享 unread_count 是
+        //     **正确行为，不是泄漏**。
+        //   - 要真出问题，需要"未加前缀的 DM 同时出现在两个空间的 sync 响应里、且服务端对
+        //     它给出不同的 unread"。这个场景不在迁移注释里，也**尚未在真机 / 后端上验证过**。
         //
-        // ⚠️ 重新打开时必须同时 +1 kWKConvSpaceIndexVersion，理由见那里的注释。
-        return NO;
+        // 偏差方向（万一发生）：已读水位夹取只把 unread 往 0 压、不会往上抬 → 表现是
+        // **漏红点**（用户以为没消息），不是虚报。等真实用户反馈再处理。
+        //
+        // 真要复核 / 修，两条路子：
+        //   1. 真机确认实际重叠的是什么类型：
+        //        select channel_id, channel_type, count(distinct space_id) c
+        //        from conversation_space group by 1,2 having c > 1;
+        //      只有 channel_type=2（群）→ 风险清零。
+        //   2. 最小修法（**不是** conversation_space_state 大迁移）：给 conversation_space
+        //      加一列 unread_count，默认 -1 = "未知，用 conversation 行的值"。权威写入点只有
+        //      一处（WKDataSourceModule 遍历 syncConversationModels 的循环，那里就有
+        //      m.unread），读路径本来就按 space join 这张表。没被写到的行行为与今天完全一致。
+        return YES;
     }
     return [v boolValue];
 }

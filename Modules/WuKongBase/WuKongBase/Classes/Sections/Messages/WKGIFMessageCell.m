@@ -66,9 +66,11 @@
     [super refresh:model];
     // 竞态兜底: 复用/漂移下错配的非 WKGIFContent 会 unrecognized selector 崩 (同 WKImageMessageCell)
     if (![model.content isKindOfClass:[WKGIFContent class]]) {
-        // 早退前清图: super refresh: 已经把气泡换成新 model, 动图还留着上一条的 ——
-        // 那是"别的消息的图配这条", 可能跨会话。只在错配这条异常路径上跑, 正常动图
-        // 消息不经过, 不引入闪动。
+        // 早退前取消在飞请求 + 清图: super refresh: 已经把气泡换成新 model, 动图还留着
+        // 上一条的 —— 那是"别的消息的图配这条", 可能跨会话。只 nil image 不够: SDWebImage
+        // 只在发起新请求时才取消上一个 operation, 而这条分支不发起新请求, 上一条的回调
+        // 之后仍会把旧图装上。只在错配这条异常路径上跑, 正常动图消息不经过。
+        [self.imgView sd_cancelCurrentImageLoad];
         self.imgView.image = nil;
         return;
     }

@@ -129,11 +129,24 @@ static const NSUInteger kWKImagePreloadMaxDecodedBytes = 32 * 1024 * 1024;
 /// 只给 refresh: 的内容类型早退用: 正常路径自己会清图, 不在这里重复清 (cell 是热路径,
 /// 多余的清理只会多制造一次 bg-decode 期间的空窗)。
 - (void)clearImagePresentationState {
+    // 先取消在飞的 URL 请求，再清已装上的图 —— 顺序不能反，也不能只做后者：
+    // SDWebImage 只在同一个 view 上**发起新请求**时才取消上一个 operation，而错配这条
+    // 分支不发起任何新请求。只 nil 掉 image 的话，上一条消息的 sd_setImageWithURL:
+    // 回调仍会在之后完成，把旧图装到新消息的气泡里 —— 正是这段守卫要挡的那个场景。
+    // （本地 originalImageData/thumbnailData 的 bg-decode 路径本来就按 clientSeq 门控，
+    //   messageModel 在守卫之前已经换成新的，所以那条路径不需要额外处理。）
+    [self.imgView sd_cancelCurrentImageLoad];
     self.imgView.image = nil;
     [[self.imgView sd_imageIndicator] stopAnimatingIndicator];
     self.visualEffectView.hidden = YES;   // 阅后即焚模糊层
     self.progressView.hidden = YES;       // 上传进度
     [self.progressView setProgress:0];
+    // 上一条消息的上传任务还挂着 listener 的话，它的进度回调会把 progressView 再显示
+    // 出来（那是别的消息的进度条）。这里一并摘掉。
+    if (self.uploadTask) {
+        [self.uploadTask removeListener:self];
+        self.uploadTask = nil;
+    }
 }
 
 -(void) initUI {
