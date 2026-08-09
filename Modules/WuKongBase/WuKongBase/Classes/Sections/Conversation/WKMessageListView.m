@@ -536,6 +536,26 @@ static const BOOL kIncrementalPulldown = NO;
 }
 
 -(void) loadMessages:(BOOL)animation firstLoad:(BOOL)firstLoad complete:(void(^)(void))complete{
+    [self loadMessages:animation firstLoad:firstLoad staleRetry:0 complete:complete];
+}
+
+/// prepare→commit 窗口期间 dp 被别的路径写过时，丢弃这批 prepared 重跑的次数上限。
+/// 打满就按原样 commit（退回加此闸门之前的行为），保证一定收敛、不会自我重入。
+static const NSInteger kMaxLoadMessagesStaleRetry = 2;
+
+/// dp 的"结构指纹"：忽略 typing 的末条 clientMsgNo。
+/// 用来判断 prepare→commit 窗口里有没有别的路径往 dp 写过东西（实时收消息 / 本地发送）。
+/// 忽略 typing 是因为它被当成一条消息挂在末尾且变化频繁 —— 拿它当指纹会让"对方正在
+/// 输入"时每次进会话都被逼成重做。跳 typing 取真实末条的做法与 pullupHasMore 一致。
+-(nullable NSString*) dpStructuralTailClientMsgNo {
+    WKMessageModel *tail = [self.dataProvider lastMessage];
+    if (tail && tail.contentType == WK_TYPING) {
+        tail = tail.preMessageModel;
+    }
+    return tail.clientMsgNo;
+}
+
+-(void) loadMessages:(BOOL)animation firstLoad:(BOOL)firstLoad staleRetry:(NSInteger)staleRetry complete:(void(^)(void))complete{
     __weak typeof(self) weakSelf = self;
     WKMessageModel *_dpHeadBefore = [self.dataProvider firstMessage];
     WKMessageModel *_dpTailBefore = [self.dataProvider lastMessage];
@@ -555,12 +575,14 @@ static const BOOL kIncrementalPulldown = NO;
     // 高度预热在**写入之前**对 models 做 —— model 是独立对象, 不需要它已经在列表里。
     // 然后回到主线程, 在同一个 turn 内 commitReplaceAll: + reloadData。
     [self.dataProvider pullFirst:self.keepPosition prepared:^(NSArray<WKMessageModel *> *models, BOOL hasMore) {
+        // prepared 已经 hop 回主线程 (见 callPrepared:)，此刻取指纹和 commit 时同源。
+        NSString *tailAtPrepare = [weakSelf dpStructuralTailClientMsgNo];
         #if DEBUG
         NSLog(@"[BubbleBugRepro] loadMessages pullFirst PREPARED hasMore=%d models=%lu",
               hasMore, (unsigned long)models.count);
         #endif
         if (models.count == 0) {
-            [weakSelf commitLoadMessages:@[] animation:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
+            [weakSelf commitLoadMessages:@[] animation:animation firstLoad:firstLoad hasMore:hasMore tailAtPrepare:tailAtPrepare staleRetry:staleRetry complete:complete];
             return;
         }
         // 预热放在 commit 之前: 此刻 dataProvider 与 tableView 仍然是一致的,
@@ -573,7 +595,7 @@ static const BOOL kIncrementalPulldown = NO;
             CGFloat _ms = (CFAbsoluteTimeGetCurrent() - _t0) * 1000;
             WK_PERF_LOG(@"[Perf] pullFirst precache: %lu msgs in %.1fms (bg, pre-commit)", (unsigned long)models.count, _ms);
             dispatch_async(dispatch_get_main_queue(), ^{
-                [weakSelf commitLoadMessages:models animation:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
+                [weakSelf commitLoadMessages:models animation:animation firstLoad:firstLoad hasMore:hasMore tailAtPrepare:tailAtPrepare staleRetry:staleRetry complete:complete];
             });
         });
     }];
@@ -582,16 +604,47 @@ static const BOOL kIncrementalPulldown = NO;
 /// pullFirst 的 commit 阶段。**整段必须跑在一个主线程 turn 内**，中间不允许出现任何
 /// dispatch / await —— `commitReplaceAll:` 之后到 `reloadData` 之前，dataProvider 和
 /// tableView 的 section 数是不一致的，一旦让出主线程就会被 layout pass 撞上。
--(void) commitLoadMessages:(NSArray<WKMessageModel *> *)models animation:(BOOL)animation firstLoad:(BOOL)firstLoad hasMore:(BOOL)hasMore complete:(void(^)(void))complete {
+///
+/// tailAtPrepare / staleRetry 见方法体内的"过期闸门"注释。
+-(void) commitLoadMessages:(NSArray<WKMessageModel *> *)models animation:(BOOL)animation firstLoad:(BOOL)firstLoad hasMore:(BOOL)hasMore tailAtPrepare:(nullable NSString *)tailAtPrepare staleRetry:(NSInteger)staleRetry complete:(void(^)(void))complete {
     if (![NSThread isMainThread]) {
         // 兜底: 理论上 prepared/precache 都已 hop 回 main。
         __weak typeof(self) weakSelf = self;
         dispatch_async(dispatch_get_main_queue(), ^{
-            [weakSelf commitLoadMessages:models animation:animation firstLoad:firstLoad hasMore:hasMore complete:complete];
+            [weakSelf commitLoadMessages:models animation:animation firstLoad:firstLoad hasMore:hasMore tailAtPrepare:tailAtPrepare staleRetry:staleRetry complete:complete];
         });
         return;
     }
     if (!self.tableView) return; // 防止 view 已释放后继续操作
+
+    // ---------- 过期闸门: 必须在原子区之前 ----------
+    // prepare→precache 窗口（一页 30 条复杂气泡的高度预热，实测可达几百 ms）期间，
+    // 实时收消息 / 本地发送会经由 addMessage:/sendMessage: 直接写进 dp —— 进会话时
+    // dp 是空的，pullupHasMore 返回 false，所以它们走的是"写 dp + 增量 insert"那条分支。
+    // 紧接着 commitReplaceAll: 用 prepared 快照整片替换，把它们连带擦掉。后果不只是
+    // "这条消息晚显示"：此后 dp 末条 ≠ 会话最新条 → pullupHasMore 恒为真 → 之后**收到**
+    // 的消息都走"只更新 lastMessage、不写 dp"分支，等于这个会话暂时不再显示新消息，
+    // 直到用户上拉或退出重进；onConversationSyncFinished 的对账也会因 pullupHasMore
+    // 为真而只更新预览引用、不重载，补不回来。
+    //
+    // 处理方式：丢弃这批 prepared，重跑一次。pullFirst 每次都从 DB 重新取最新一页，
+    // 是幂等的，重跑必然把窗口期那条一并带上 —— 不存在"游标已经推进 → 漏页"的问题
+    // （这也是 pullup 不能照抄这套做法的原因，见 commitPullupModels: 的注释）。
+    // 不调 complete，交给重跑那一轮调，避免回调放大。
+    // 有限次兜底：打满 kMaxLoadMessagesStaleRetry 就按原样 commit（退回加闸门前的行为），
+    // 保证一定收敛，不会在消息密集时自我重入。
+    // models 为空时不进原子区、不 replace，也就不会擦掉任何东西，无需闸门。
+    if (models.count > 0 && staleRetry < kMaxLoadMessagesStaleRetry) {
+        NSString *tailNow = [self dpStructuralTailClientMsgNo];
+        BOOL tailChanged = !(tailAtPrepare == tailNow || [tailAtPrepare isEqualToString:tailNow]);
+        if (tailChanged) {
+            NSLog(@"[BubbleBugRepro] commitLoadMessages STALE: dp 末条 %@ → %@ (窗口期被写过), 丢弃重跑 %ld/%ld",
+                  tailAtPrepare ?: @"<nil>", tailNow ?: @"<nil>",
+                  (long)(staleRetry + 1), (long)kMaxLoadMessagesStaleRetry);
+            [self loadMessages:animation firstLoad:firstLoad staleRetry:staleRetry + 1 complete:complete];
+            return;
+        }
+    }
 
     // ---------- 原子区开始: dp 变更 + tableView 失效, 不得让出主线程 ----------
     if (models.count > 0) {
@@ -1219,6 +1272,21 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 
 /// pullup 的 commit 阶段。**整段跑在一个主线程 turn 内**，`commitAppend:` 与
 /// insert/reloadData 之间不允许让出主线程。
+///
+/// ⚠️ 已知窗口（issue #69 的 follow-up，**不要照抄 commitLoadMessages: 的过期闸门**）：
+/// prepare→precache 期间本地发送的消息会经 sendMessage: 直接 append 进 dp（收到的消息
+/// 进不来 —— 此时 pullupHasMore 为真，走"只更新 lastMessage"分支）。于是 dp = 1..30,61，
+/// 而这批 prepared 是 31..60，`commitAppend:` 走 `_addMessageOnlyNoLock` 无条件尾插、
+/// 不按 orderSeq 排序 → 顺序变成 1..30,61,31..60，pre/next 链和气泡分组跟着错。
+/// 退出重进即恢复（重进走 pullFirst 从 DB 按序重建），无崩溃风险：insert 的行数是在
+/// commitAppend: 前后就地测的，与 tableView 始终一致。
+///
+/// 为什么不能像 pullFirst 那样"丢弃重跑"：pullup 的游标取自 dp 末条，此刻已经是 61，
+/// 重跑会去拉 61 之后的消息，把 31..60 整页跳过 —— 从"顺序错"变成"漏页"，更糟。
+/// 同理也不能复用 finishPullupNoData: 的 dedup 重试（那条路径同样按新末条重算游标）。
+/// 正确的修法只有两条，都需要真机回归，故单独走 follow-up：
+///   1. 给 WKMessageList 加"把指定消息移到末尾"的原语，commit 后把窗口期那几条挪到队尾；
+///   2. 检测到末条变化时改走 keepPosition 锚定的整页重载（pullAround），位置不跳、顺序正确。
 -(void) commitPullupModels:(NSArray<WKMessageModel *> *)models
                    hasMore:(BOOL)hasMore
                 precacheMs:(CGFloat)precacheMs
