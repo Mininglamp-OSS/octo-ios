@@ -4,9 +4,9 @@
 //
 
 #import "WKConvListCache.h"
+#import "WKLoginInfo.h"   // 账号闸门用（见 recordMembershipBatch:）
 
-/// GC 参数：每空间保留的归属条数、孤儿会话行的保留天数。
-static const NSInteger kWKConvCacheKeepPerSpace = 1000;
+/// GC 参数：孤儿会话行的保留天数。
 static const NSInteger kWKConvCacheOrphanKeepDays = 30;
 
 /// 归属索引版本。提升它会让下一次启动把整张 conversation_space 推平重建
@@ -154,7 +154,17 @@ static NSInteger gVerificationOnlyDepth = 0;
         return;
     }
     // 后台批量写：调用点是 onConversationUpdate（主线程、可能高频），不能在那里开事务。
+    // 账号闸门：applySpaceMembership: 在 block 执行时才解析 [WKDB sharedDB].dbQueue，而
+    // switchDB: 会把该单例重定向到新账号的库。排队期间登出/登录，这批归属就会写进新账号
+    // 的库里（与 conversation/sync 那条同类，见 WKDataSourceModule 的账号闸门注释）。
+    // 丢弃安全：归属会在下一次会话更新 / 冷启动全量 sync 时重新落库。
+    NSString *uidAtEnqueue = [WKLoginInfo shared].uid;
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSString *uidNow = [WKLoginInfo shared].uid;
+        if (!(uidAtEnqueue == uidNow || [uidAtEnqueue isEqualToString:uidNow])) {
+            NSLog(@"[SpaceIndex] 丢弃归属批量写：账号已切换 %@ → %@", uidAtEnqueue ?: @"<nil>", uidNow ?: @"<nil>");
+            return;
+        }
         [[WKSDK shared].conversationManager applySpaceMembership:pending forSpace:sid fullSync:NO];
     });
 }
@@ -268,7 +278,18 @@ static NSInteger gVerificationOnlyDepth = 0;
                 return;
             }
             // 归属先裁再清孤儿：裁剪产出的"无归属会话行"这一轮就能被回收。
-            [[WKConversationSpaceDB shared] gcTrimMembershipPerSpaceKeep:kWKConvCacheKeepPerSpace];
+            //
+            // ⚠️ 这里**不再**按"每空间只留最新 N 条"裁剪有效归属（原来 N=1000）。
+            // 原因：列表读是 EXISTS(conversation_space) 作用域连接，裁掉归属 = 那条会话
+            // 立刻从列表上消失。而会话数超过 N 的空间里，被裁的是"最旧"的一批 —— 用户
+            // 视角就是"启动 20s 后列表凭空少了一截"。虽然下次冷启动的强制全量 sync
+            // （WKConnectionManager coldStartSyncDone → version=0 → replaceMembership）
+            // 会把它们重建回来，所以不是永久丢失，但"每次启动 20s 后消失一批、下次启动
+            // 又回来"本身就是不可接受的抖动。
+            // 而这个裁剪省下的空间可以忽略：一行归属约几十字节，1000 行不到 100KB。
+            // 用"隐藏用户数据"换这点空间，任何人明确权衡时都不会选。
+            // 有界化的责任交给 gcOrphanConversationsBefore:（它删的是真正无归属的死行）。
+            [[WKConversationSpaceDB shared] gcDanglingMembership];
             // last_msg_timestamp 单位是秒（对齐 WKMessage.timestamp）
             NSInteger cutoff = (NSInteger)[[NSDate date] timeIntervalSince1970]
                                 - kWKConvCacheOrphanKeepDays * 24 * 3600;

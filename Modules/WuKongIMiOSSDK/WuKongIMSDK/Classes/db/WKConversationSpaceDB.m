@@ -57,16 +57,29 @@ static WKConversationSpaceDB *_instance;
 -(void) replaceMembership:(NSArray<WKChannel*>*)channels forSpace:(NSString*)spaceId {
     if(spaceId.length == 0) return;
     long long now = (long long)[[NSDate date] timeIntervalSince1970];
+    __block BOOL failed = NO;
     [[WKDB sharedDB].dbQueue inTransaction:^(FMDatabase * _Nonnull db, BOOL * _Nonnull rollback) {
-        [db executeUpdate:@"delete from conversation_space where space_id=?", spaceId];
+        // 这是唯一"先删后插"的破坏性写入, 所以必须检查每一步并在失败时回滚:
+        // 删已经跑完、插到一半失败(SQLITE_FULL / IO error)而事务照常提交的话, 会留下一份
+        // **被截断**的归属集合 —— 作用域读会把缺失的那些会话直接藏起来, 而增量 sync
+        // 不会重发它们, 要等下一次冷启动的强制全量才回来。宁可整批不生效(保留旧归属,
+        // 下次 sync 再来一遍), 也不能提交半截。
+        if(![db executeUpdate:@"delete from conversation_space where space_id=?", spaceId]) {
+            NSLog(@"[SpaceIndex] replaceMembership delete 失败, 回滚: %@", db.lastErrorMessage);
+            *rollback = YES; failed = YES; return;
+        }
         for (WKChannel *channel in channels) {
             if(channel.channelId.length == 0) continue;
-            [db executeUpdate:@"insert or replace into conversation_space(space_id,channel_id,channel_type,synced_at) values(?,?,?,?)",
-             spaceId, channel.channelId, @(channel.channelType), @(now)];
+            if(![db executeUpdate:@"insert or replace into conversation_space(space_id,channel_id,channel_type,synced_at) values(?,?,?,?)",
+                 spaceId, channel.channelId, @(channel.channelType), @(now)]) {
+                NSLog(@"[SpaceIndex] replaceMembership insert 失败, 回滚: %@", db.lastErrorMessage);
+                *rollback = YES; failed = YES; return;
+            }
         }
     }];
     [self invalidateHasAnyCache];
-    NSLog(@"[SpaceIndex] replaceMembership space=%@ count=%lu", spaceId, (unsigned long)channels.count);
+    NSLog(@"[SpaceIndex] replaceMembership space=%@ count=%lu%@", spaceId, (unsigned long)channels.count,
+          failed ? @" (失败已回滚)" : @"");
 }
 
 -(void) addMembership:(NSArray<WKChannel*>*)channels forSpace:(NSString*)spaceId {
@@ -218,40 +231,26 @@ static WKConversationSpaceDB *_instance;
     return deleted;
 }
 
--(NSInteger) gcTrimMembershipPerSpaceKeep:(NSInteger)keepCount {
-    if(keepCount <= 0) return 0;
+-(NSInteger) gcDanglingMembership {
     __block NSInteger removed = 0;
     [[WKDB sharedDB].dbQueue inTransaction:^(FMDatabase * _Nonnull db, BOOL * _Nonnull rollback) {
-        NSMutableArray<NSString*> *spaceIds = [NSMutableArray array];
-        FMResultSet *spaceRs = [db executeQuery:@"select distinct space_id from conversation_space"];
-        while (spaceRs.next) {
-            NSString *sid = [spaceRs stringForColumn:@"space_id"];
-            if(sid.length > 0) [spaceIds addObject:sid];
+        // 只删"指不到任何活着的会话行"的归属：会话行已经不存在, 或已 is_deleted=1。
+        // 这类归属对读路径毫无作用（getConversationList 本身就带 is_deleted=0），
+        // 删掉不会让任何肉眼可见的会话消失 —— 这是本方法与旧
+        // gcTrimMembershipPerSpaceKeep: 的关键区别, 后者会裁掉**还活着**的会话的归属,
+        // 导致超过上限的空间在启动 20s 后列表凭空少一截(详见 WKConvListCache
+        // runGarbageCollectionIfNeeded 的注释)。
+        BOOL ok = [db executeUpdate:@"delete from conversation_space where not exists (select 1 from conversation c where c.channel_id=conversation_space.channel_id and c.channel_type=conversation_space.channel_type and c.is_deleted=0)"];
+        if(!ok) {
+            NSLog(@"[SpaceIndex] gcDanglingMembership 失败, 回滚: %@", db.lastErrorMessage);
+            *rollback = YES;
+            return;
         }
-        [spaceRs close];
-
-        for (NSString *sid in spaceIds) {
-            // 按会话的 last_msg_timestamp 倒序, 越过 keepCount 的归属删掉。
-            // 没有对应会话行的(timestamp 视为 0)排最后, 优先被裁。
-            FMResultSet *rs = [db executeQuery:@"select cs.channel_id,cs.channel_type from conversation_space cs left join conversation c on c.channel_id=cs.channel_id and c.channel_type=cs.channel_type where cs.space_id=? order by IFNULL(c.last_msg_timestamp,0) desc limit -1 offset ?",
-                                sid, @(keepCount)];
-            NSMutableArray<NSArray*> *victims = [NSMutableArray array];
-            while (rs.next) {
-                NSString *cid = [rs stringForColumn:@"channel_id"];
-                if(cid.length == 0) continue;
-                [victims addObject:@[cid, @([rs intForColumn:@"channel_type"])]];
-            }
-            [rs close];
-            for (NSArray *v in victims) {
-                [db executeUpdate:@"delete from conversation_space where space_id=? and channel_id=? and channel_type=?",
-                 sid, v[0], v[1]];
-                removed++;
-            }
-        }
+        removed = [db changes];
     }];
     if(removed > 0) {
         [self invalidateHasAnyCache];
-        NSLog(@"[SpaceIndex] gcTrimMembership removed=%ld keep=%ld", (long)removed, (long)keepCount);
+        NSLog(@"[SpaceIndex] gcDanglingMembership removed=%ld", (long)removed);
     }
     return removed;
 }

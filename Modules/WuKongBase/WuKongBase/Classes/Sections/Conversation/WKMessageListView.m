@@ -638,9 +638,11 @@ static const NSInteger kMaxLoadMessagesStaleRetry = 2;
         NSString *tailNow = [self dpStructuralTailClientMsgNo];
         BOOL tailChanged = !(tailAtPrepare == tailNow || [tailAtPrepare isEqualToString:tailNow]);
         if (tailChanged) {
+            #if DEBUG
             NSLog(@"[BubbleBugRepro] commitLoadMessages STALE: dp 末条 %@ → %@ (窗口期被写过), 丢弃重跑 %ld/%ld",
                   tailAtPrepare ?: @"<nil>", tailNow ?: @"<nil>",
                   (long)(staleRetry + 1), (long)kMaxLoadMessagesStaleRetry);
+            #endif
             [self loadMessages:animation firstLoad:firstLoad staleRetry:staleRetry + 1 complete:complete];
             return;
         }

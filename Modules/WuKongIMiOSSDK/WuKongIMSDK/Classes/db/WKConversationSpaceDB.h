@@ -95,10 +95,15 @@ NS_ASSUME_NONNULL_BEGIN
 /// DB 不再被 deleteAllConversation 清空后, 需要有这么一个有界化的出口。
 -(NSInteger) gcOrphanConversationsBefore:(NSInteger)beforeTimestamp;
 
-/// GC: 每个空间只保留 last_msg_timestamp 最新的 keepCount 条归属,
-/// 超出的归属记录删除(会话行本身交给 gcOrphanConversationsBefore: 处理)。
+/// GC: 删掉"指不到任何活着的会话行"的归属（会话行已不存在, 或 is_deleted=1）。
 /// 返回删除的归属记录数。
--(NSInteger) gcTrimMembershipPerSpaceKeep:(NSInteger)keepCount;
+///
+/// ⚠️ 刻意**不**提供"每空间只保留最新 N 条"的裁剪。列表读是 EXISTS(conversation_space)
+/// 作用域连接, 裁掉有效归属 = 那条会话立刻从列表消失; 会话数超过 N 的空间里被裁的是
+/// 最旧那批, 用户视角是"启动 20s 后列表凭空少一截"(下次冷启动的强制全量 sync 会重建,
+/// 于是变成反复抖动)。而一行归属只有几十字节, 用隐藏用户数据换这点空间不成立。
+/// 有界化由本方法 + gcOrphanConversationsBefore: 承担, 它们删的都是不可见的死数据。
+-(NSInteger) gcDanglingMembership;
 
 @end
 
