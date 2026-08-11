@@ -2543,7 +2543,14 @@ static const NSInteger kMaxPullupDedupRetry = 3;
             }
         }
 
-        if (newSectionAdded) {
+        // ⚠️ 这条才是真正**改 tableView** 的链（上面那条只是 Bugly #3054 的计数漂移检查）。
+        // skipIncremental 的守卫必须同时加在这里：@yujiawei P1-A 指出我上一版只守了上面
+        // 那条，于是 skipIncremental 为真时先 reloadData、又落到这里 insertRows ——
+        // 此刻 tableView 的行数已经是 reload 后的新值，再声称"新增 N 行"必然对不上，
+        // 靠下面的 @try 兜住不崩，但每次都白抛一次异常再 reloadData 一遍。
+        if (skipIncremental) {
+            // 已经 reloadData 过了，绝不能再动 tableView
+        } else if (newSectionAdded) {
             // 新日期分组：插入整个 section
             @try {
                 [UIView performWithoutAnimation:^{

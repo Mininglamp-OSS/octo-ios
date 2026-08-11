@@ -136,6 +136,12 @@
 /// 的两条向前兼容 fail-open 改为 NO，applyThreadConversationUpdates 调用前
 /// 也整批丢弃，避免 A space 残留消息漏入 B。
 @property(nonatomic,assign) BOOL spaceSwitchInProgress;
+/// 切换代数。performSwitchToSpaceId: 每次 +1，所有异步回调在"清闸门 / 跑收尾"之前必须
+/// 校验自己捕获的代数仍等于当前值。
+/// 为什么不能只比 spaceId（@yujiawei P1-B）：A→B→C→**B** 时，B 那次切换的迟到回调发现
+/// currentSpaceId 又是 B 了 → 比对通过 → 把 C→B 这次仍在飞的切换的闸门清掉。代数是单调的，
+/// 不会出现这种"值回绕"。
+@property(nonatomic,assign) NSInteger spaceSwitchGeneration;
 @property(nonatomic,assign) BOOL pendingRebuild;
 @property(nonatomic,assign) CGPoint recentTabScrollOffset;
 @property(nonatomic,assign) CGPoint followTabScrollOffset;
@@ -944,12 +950,14 @@
     // 开 fail-closed 闸门 —— B 的 sync 数据 + 白名单 snapshot 未就绪前,
     // 把所有 fail-open / nil-fail-open 路径翻成 NO，避免 A space 残留消息漏入 B。
     self.spaceSwitchInProgress = YES;
+    self.spaceSwitchGeneration += 1;
+    NSInteger gateGeneration = self.spaceSwitchGeneration;
     // 兜底：万一 sync 永不回包（断网等），8s 后自动落闸，恢复正常 fail-open 行为
     __weak typeof(self) weakSelfSwitchGate = self;
-    NSString *gateSpaceId = spaceId;
+    NSString *gateSpaceId = spaceId; // 仅用于日志可读性；判据一律用 gateGeneration
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (weakSelfSwitchGate.spaceSwitchInProgress
-            && [weakSelfSwitchGate.currentSpaceId isEqualToString:gateSpaceId]) {
+            && weakSelfSwitchGate.spaceSwitchGeneration == gateGeneration) {
             NSLog(@"[SpaceGate] 8s 超时兜底落闸 spaceId=%@", gateSpaceId);
             weakSelfSwitchGate.spaceSwitchInProgress = NO;
         }
@@ -1038,7 +1046,7 @@
                     dispatch_async(dispatch_get_main_queue(), ^{
                         // 同 finishSpaceSwitchLoadAndSideEffects:：只落自己那次切换的闸门。
                         // error 分支在弱网下极易触发, 是这条 race 最可能的入口。
-                        if([weakSelf.currentSpaceId isEqualToString:gateSpaceId]) {
+                        if(weakSelf.spaceSwitchGeneration == gateGeneration) {
                             NSLog(@"[SpaceGate] sync 失败，保留缓存列表并立即落闸");
                             weakSelf.spaceSwitchInProgress = NO;
                         } else {
@@ -1076,11 +1084,11 @@
             // 0/1 条会话时那次 load 永远不会发生，列表卡在空态直到下次 viewWillAppear。
             if (model) {
                 [[WKSDK shared].conversationManager handleSyncConversation:model completion:^{
-                    [weakSelf finishSpaceSwitchLoadAndSideEffects:gateSpaceId];
+                    [weakSelf finishSpaceSwitchLoadAndSideEffects:gateGeneration];
                 }];
             } else {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [weakSelf finishSpaceSwitchLoadAndSideEffects:gateSpaceId];
+                    [weakSelf finishSpaceSwitchLoadAndSideEffects:gateGeneration];
                 });
             }
             sendAck();
@@ -1112,14 +1120,17 @@
 ///   - 缓存开启：performSwitchToSpaceId 里 handleSyncConversation:completion: 的回调，
 ///     以及 sync 失败时的兜底（此时只落闸、不动数据，缓存继续显示）。
 ///   - 灰度关闭：onConversationUpdate 里 pendingSpaceSwitchLoad 的消费点（老时序）。
-/// expectedSpaceId: 发起这次切换时的目标空间。A→B→C 快速连切时，B 的迟到 success/error
-/// 回调会跑完 C 的整套收尾并把 C 的 fail-closed 闸门清掉（@yujiawei P1-3）——
-/// 闸门一落，isConversationInCurrentSpace: 从 fail-closed 退回 fail-open，
-/// 而 persistSpaceMembershipForConversations: 只在闸门期跳过，于是那些 fail-open 放行
-/// 会被写进 **C 的** conversation_space。归属只增不删、无前缀 DM 又永远拿不到负向证据，
-/// 加上本 PR 取消了冷启动清库，这份错归属会跨重启存活并每次启动重新种进 C 的列表。
-/// 所以所有清闸门的地方都必须先比一次空间 —— 8s 超时兜底(:951)本来就是这么做的。
-- (void)finishSpaceSwitchLoadAndSideEffects:(nullable NSString *)expectedSpaceId {
+/// expectedGeneration: 发起这次切换时捕获的 spaceSwitchGeneration（0 = 不设限）。
+/// A→B→C 快速连切时，B 的迟到 success/error 回调会跑完 C 的整套收尾并把 C 的 fail-closed
+/// 闸门清掉（@yujiawei P1-3）—— 闸门一落，isConversationInCurrentSpace: 从 fail-closed
+/// 退回 fail-open，而 persistSpaceMembershipForConversations: 只在闸门期跳过，于是那些
+/// fail-open 放行会被写进 **C 的** conversation_space。归属只增不删、无前缀 DM 又永远拿不到
+/// 负向证据，加上本 PR 取消了冷启动清库，这份错归属会跨重启存活并每次启动重新种进 C 的列表。
+///
+/// 用**代数**而不是比 spaceId（@yujiawei P1-B）：A→B→C→**B** 时，B 那次的迟到回调会发现
+/// currentSpaceId 又变回 B → 比对通过 → 把 C→B 这次仍在飞的切换的闸门清掉。代数单调递增，
+/// 不存在这种值回绕。三处清闸门（8s 兜底 / sync error 分支 / 本方法）现在都用它。
+- (void)finishSpaceSwitchLoadAndSideEffects:(NSInteger)expectedGeneration {
     __weak typeof(self) weakSelf = self;
     [self.conversationListVM loadConversationList:^{
         [weakSelf.conversationListVM snapshotSyncedGroupIds];
@@ -1170,11 +1181,11 @@
         // VM 已被 sync 数据填好、白名单 snapshot 完成、bot registry
         // 也已尝试加载 → 闸门可落，恢复正常 fail-open 行为。
         // 但只能落**自己那次**切换的闸门：期间又切走了就不许动（见方法头注释）。
-        if(expectedSpaceId.length == 0 || [weakSelf.currentSpaceId isEqualToString:expectedSpaceId]) {
+        if(expectedGeneration <= 0 || weakSelf.spaceSwitchGeneration == expectedGeneration) {
             weakSelf.spaceSwitchInProgress = NO;
         } else {
-            NSLog(@"[SpaceGate] 迟到回调不清闸门: 发起时 %@，当前 %@",
-                  expectedSpaceId, weakSelf.currentSpaceId ?: @"<nil>");
+            NSLog(@"[SpaceGate] 迟到回调不清闸门: 发起代数 %ld，当前 %ld",
+                  (long)expectedGeneration, (long)weakSelf.spaceSwitchGeneration);
         }
     }];
 }
@@ -1583,7 +1594,7 @@
             self.pendingSpaceSwitchLoad = NO;
             // 这条是灰度关闭(清库)路径的猜测式时序, 它本身就是"当前空间"驱动的 ——
             // 传当前 spaceId 即可, 语义上等价于"不额外设限"。
-            [self finishSpaceSwitchLoadAndSideEffects:self.currentSpaceId];
+            [self finishSpaceSwitchLoadAndSideEffects:0]; // 0 = 不设限（灰度关闭路径，见方法头）
         }
 
         return;
