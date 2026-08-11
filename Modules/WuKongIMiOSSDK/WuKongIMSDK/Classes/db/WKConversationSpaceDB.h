@@ -60,7 +60,14 @@ NS_ASSUME_NONNULL_BEGIN
 /// 切空间"时会把上一个空间的会话整片漏进新空间。
 ///
 /// 只插入不删除, 且不覆盖已有归属。返回写入的行数。
--(NSInteger) backfillMembershipFromExistingConversationsForSpace:(NSString*)spaceId;
+/// ⚠️ **已停用，不要再调用。** 它是"整张 conversation 表无条件归给一个空间"的一次性
+/// 迁移，前提是"库里只有一个空间的会话"—— 那只在 deleteAllConversation 还存在的年代成立。
+/// 会话列表改成保留多空间缓存之后这个前提永远不再成立，跑它就是把所有空间的会话归给
+/// 一个空间（列表串空间；而且群白名单是从归属表水化的，别的空间会缺群 → 子区预览也空掉）。
+/// 实际事故见 WKConvListCache 的 kWKConvSpaceIndexVersion v3 注释。
+/// 归属一律由权威全量 sync 建立（version==0 → applyMembership(fullSync=YES) →
+/// replaceMembership 按 space_id 精确重建）。
+-(NSInteger) backfillMembershipFromExistingConversationsForSpace:(NSString*)spaceId __attribute__((deprecated("整表归一个空间, 会导致列表串空间; 归属交给权威全量 sync 重建")));
 
 /// 清空整张归属表。用于"归属索引可能已被写坏"时的一次性重建
 /// (见 WKConvListCache.prepareMembershipIfNeeded)。

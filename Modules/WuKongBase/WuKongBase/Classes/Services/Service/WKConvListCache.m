@@ -13,6 +13,18 @@ static const NSInteger kWKConvCacheOrphanKeepDays = 30;
 /// （见 +prepareMembershipIfNeeded）。
 ///   v1：首版。会把 isConversationInCurrentSpace 的 fail-open 放行结论也写进归属，
 ///       导致跨空间污染被永久固化 —— 所以 v2 必须推平重建。
+///   v3：**修 fe27bc3 造成的串空间事故**。v3 之前这里会跑一次"整张 conversation 表
+///       无条件归给 WKLastLoadedSpaceId"的回填(backfillMembershipFromExistingConversations)。
+///       它的前提是"老版本靠清库保证 DB 只有一个空间的会话"—— 那**只对 1.0.2 → 1.0.3
+///       的那一次升级成立**。本 PR 取消清库之后，库里会合法地存着多个空间的会话，
+///       此时再跑回填就是把所有空间的会话归给一个空间 = 列表串空间，且因为
+///       hydrateSpaceScope: 的群白名单是从归属表水化的，别的空间会缺群 → 那些群的
+///       子区被过滤 → 子区预览也空掉。
+///       所以 v3 = 推平归属 + **不再回填**，交给权威全量 sync 重建
+///       （冷启动首次 sync 强制 version=0，见 WKConnectionManager coldStartSyncDone →
+///       applyMembership(fullSync=YES) → replaceMembership 按空间精确重建）。
+///       代价：本版第一次启动时列表要等那次 sync 才出内容（断网则为空），仅一次。
+///       这个代价换的是"绝不会把 A 的会话归到 B"，方向不能反。
 ///   v2：推平 v1 的索引后重建。归属的判定沿用 WKConversationListVC
 ///       -isConversationInCurrentSpace:（**注意：它是 fail-open 的**，无 space_id 的
 ///       DM 会被放行）；曾经尝试过更严的"只接受正向证据"规则，但那会让 DM 整片消失，
@@ -24,7 +36,7 @@ static const NSInteger kWKConvCacheOrphanKeepDays = 30;
 /// 作用域过滤就会拿这批过期行去 EXISTS —— 关闭期间新增的会话全部不在表里，列表会被
 /// 截断成旧快照，要等下一次权威 full sync 才补回。+1 版本号能让启动时先
 /// deleteAllSpaceMembership 再按 WKLastLoadedSpaceId backfill，绕开这个空窗。
-static const NSInteger kWKConvSpaceIndexVersion = 2;
+static const NSInteger kWKConvSpaceIndexVersion = 3;
 
 /// recordMembershipBatch 的去重缓存 —— key 为 "space|type:channelId"。
 /// 只读写在 gRecordedLock 保护下；applyScopeForSpace: 切换空间时整块清掉
@@ -254,20 +266,24 @@ static NSInteger gVerificationOnlyDepth = 0;
     }
     if (legacySpaceId.length == 0) {
         // 还没有空间上下文（未登录 / 空间引导未完成）→ 不落版本号，下次启动再来。
-        // 这里返回前不能清表：没有可归属的空间，清了就纯粹是数据损失。
+        // 这里返回前不能清表：连当前空间都不知道，清了之后连"哪个空间该重建"都无从谈起。
         return;
     }
 
-    if (stored > 0) {
-        // 已经存在旧版本的归属索引 —— 它可能是被写坏的（v1 会把 fail-open 的放行结论
-        // 当成归属写进来，导致跨空间污染固化）。与其带着脏数据自愈，直接推平重建：
-        // 各空间退回"从未同步过"，第一次进入时列表为空、sync 回来即重建。
-        NSLog(@"[SpaceIndex] 归属索引版本 %ld → %ld，推平重建",
-              (long)stored, (long)kWKConvSpaceIndexVersion);
-        [[WKSDK shared].conversationManager deleteAllSpaceMembership];
-    }
+    // 一律推平（不再区分 stored > 0）：
+    //   - v1 的索引混入过 fail-open 结论；
+    //   - v2 期间可能已被那次"整表归一个空间"的回填写脏（fe27bc3 事故）。
+    // 两种都只能推平重来，没有可自愈的中间态。
+    NSLog(@"[SpaceIndex] 归属索引版本 %ld → %ld，推平重建（不回填，交给权威全量 sync）",
+          (long)stored, (long)kWKConvSpaceIndexVersion);
+    [[WKSDK shared].conversationManager deleteAllSpaceMembership];
 
-    [[WKSDK shared].conversationManager backfillSpaceMembershipFromExistingConversationsForSpace:legacySpaceId];
+    // ⚠️ **不要**在这里调 backfillSpaceMembershipFromExistingConversationsForSpace:。
+    // 那个回填是"整张 conversation 表无条件归给一个空间"，只在"库里确定只有一个空间的
+    // 会话"时才成立 —— 本 PR 取消清库之后这个前提永远不再成立，跑它就是串空间。
+    // 归属改由权威全量 sync 建立：冷启动首次 sync 强制 version=0
+    // （WKConnectionManager coldStartSyncDone）→ applyMembership(fullSync=YES) →
+    // replaceMembership 按 space_id 精确重建。
     [[NSUserDefaults standardUserDefaults] setInteger:kWKConvSpaceIndexVersion forKey:kVersionKey];
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:kV1DoneKey]; // 已被版本号取代
     [[NSUserDefaults standardUserDefaults] synchronize];
