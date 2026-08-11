@@ -578,9 +578,11 @@ static const NSInteger kMaxLoadMessagesStaleRetry = 2;
     // 两段式 (见 WKMessageListDataProvider.h): pullFirst 只交出 models, 数据源一动不动。
     // 高度预热在**写入之前**对 models 做 —— model 是独立对象, 不需要它已经在列表里。
     // 然后回到主线程, 在同一个 turn 内 commitReplaceAll: + reloadData。
+    // 指纹必须在**发起前**取 (@yujiawei P2-8): prepared 回调是在 DB 读**之后**才跑的,
+    // 在那里取指纹, 读库期间到达的消息已经被算进指纹 → 比不出差异 → commitReplaceAll:
+    // 照样把它擦掉。挪到这里, 整个"读库 + 预热"窗口都被覆盖。
+    NSString *tailAtPrepare = [self dpStructuralTailClientMsgNo];
     [self.dataProvider pullFirst:self.keepPosition prepared:^(NSArray<WKMessageModel *> *models, BOOL hasMore) {
-        // prepared 已经 hop 回主线程 (见 callPrepared:)，此刻取指纹和 commit 时同源。
-        NSString *tailAtPrepare = [weakSelf dpStructuralTailClientMsgNo];
         #if DEBUG
         NSLog(@"[BubbleBugRepro] loadMessages pullFirst PREPARED hasMore=%d models=%lu",
               hasMore, (unsigned long)models.count);
@@ -1279,20 +1281,13 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 /// pullup 的 commit 阶段。**整段跑在一个主线程 turn 内**，`commitAppend:` 与
 /// insert/reloadData 之间不允许让出主线程。
 ///
-/// ⚠️ 已知窗口（issue #69 的 follow-up，**不要照抄 commitLoadMessages: 的过期闸门**）：
-/// prepare→precache 期间本地发送的消息会经 sendMessage: 直接 append 进 dp（收到的消息
-/// 进不来 —— 此时 pullupHasMore 为真，走"只更新 lastMessage"分支）。于是 dp = 1..30,61，
-/// 而这批 prepared 是 31..60，`commitAppend:` 走 `_addMessageOnlyNoLock` 无条件尾插、
-/// 不按 orderSeq 排序 → 顺序变成 1..30,61,31..60，pre/next 链和气泡分组跟着错。
-/// 退出重进即恢复（重进走 pullFirst 从 DB 按序重建），无崩溃风险：insert 的行数是在
-/// commitAppend: 前后就地测的，与 tableView 始终一致。
-///
-/// 为什么不能像 pullFirst 那样"丢弃重跑"：pullup 的游标取自 dp 末条，此刻已经是 61，
-/// 重跑会去拉 61 之后的消息，把 31..60 整页跳过 —— 从"顺序错"变成"漏页"，更糟。
-/// 同理也不能复用 finishPullupNoData: 的 dedup 重试（那条路径同样按新末条重算游标）。
-/// 正确的修法只有两条，都需要真机回归，故单独走 follow-up：
-///   1. 给 WKMessageList 加"把指定消息移到末尾"的原语，commit 后把窗口期那几条挪到队尾；
-///   2. 检测到末条变化时改走 keepPosition 锚定的整页重载（pullAround），位置不跳、顺序正确。
+/// 关于 prepare→precache 窗口内本地发送导致乱序的那个历史问题：**已在 WKMessageList
+/// 层根治**（按序插入，见 _shouldOrderAfterNoLock:），这里不再需要任何闸门。
+/// 现在的行为是：窗口期发送的消息先进 dp，随后这一页会被**插到它之前**（正确顺序），
+/// 而由于那不是纯尾插，下面会退化成 reloadData 而不是走增量 insert ——
+/// 这是必须的：增量计算假设"末尾新增 N 行"，中段插入时算出来的 indexPath 会错位
+/// （行数仍对得上、不抛异常，但渲染内容错乱）。判据是
+/// dataProvider.lastInsertWasPureTailAppend，契约见 WKMessageList.h。
 -(void) commitPullupModels:(NSArray<WKMessageModel *> *)models
                    hasMore:(BOOL)hasMore
                 precacheMs:(CGFloat)precacheMs
@@ -2515,13 +2510,27 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 
         [self.dataProvider addMessage:messageModel];
 
+        // 与 sendMessage: 同一份契约（WKMessageList.h）：按序插入之后新消息不保证落在末尾，
+        // 而下面整段增量计算假设"末尾新增 N 行"。中段插入时算出来的 indexPath 是错的 ——
+        // 行数仍对得上所以不抛异常，但 row N-1 会继续渲染旧 model、新绑定的 row N 渲染原末条，
+        // 结果是**这条新消息看不见、上一条末尾显示两遍**，比乱序更糟。
+        // 这是四个增量调用方里最忙的一个，之前漏了（@yujiawei P1-1）。
+        // 注意：这里**不能**直接 return —— 本方法末尾的 positionAtBottom 滚动是收尾的一
+        // 部分（P2-5 同类问题）。所以只跳过增量计算，用 skipIncremental 走到下面的滚动。
+        BOOL skipIncremental = ![self.dataProvider lastInsertWasPureTailAppend];
+        if (skipIncremental) {
+            [self.tableView reloadData];
+        }
+
         NSInteger newSectionCount = [self.dataProvider dateCount];
         BOOL newSectionAdded = (newSectionCount > oldSectionCount);
         NSInteger newLastSectionRowCount = (newSectionCount > 0) ? [self.dataProvider rowCountAtSection:newSectionCount - 1] : 0;
 
         // Bugly #3054 兜底：见 sendMessage: 同处注释。insertRows 内嵌套 RunLoop 会让主队列
         // pending 的 pulldown/其他 recv 在 insert 期间追加 dp，校验漂移 → NSInternalInconsistencyException。
-        if (!newSectionAdded && newLastSectionRowCount > oldLastSectionRowCount) {
+        if (skipIncremental) {
+            // 已经 reloadData 过了，整段增量计算跳过（它的前提"末尾新增"不成立）
+        } else if (!newSectionAdded && newLastSectionRowCount > oldLastSectionRowCount) {
             NSInteger intendedDelta = newLastSectionRowCount - oldLastSectionRowCount;
             NSInteger tvSectionsNow = [self.tableView numberOfSections];
             NSInteger dsNow = [self.dataProvider rowCountAtSection:newSectionCount - 1];
@@ -3963,9 +3972,10 @@ static const NSInteger kMaxRehydratePages = 35;
 
         // typing 由 _isTailPinnedNoLock: 固定置底, 所以正常必然是纯尾插; 这里仍做一次
         // 判定作为不变式的显式声明 —— 万一不是尾插, 下面按"末尾新增"算的 indexPath 会错位。
-        if (![self.dataProvider lastInsertWasPureTailAppend]) {
+        // 不能直接 return: 方法末尾还有 positionAtBottom 滚动 (@yujiawei P2-5)。
+        BOOL typingSkipIncremental = ![self.dataProvider lastInsertWasPureTailAppend];
+        if (typingSkipIncremental) {
             [self.tableView reloadData];
-            return;
         }
 
         NSInteger newSectionCount = [self.dataProvider dateCount];
@@ -3973,7 +3983,9 @@ static const NSInteger kMaxRehydratePages = 35;
         NSInteger newLastSectionRowCount = (newSectionCount > 0)
             ? [self.dataProvider rowCountAtSection:newSectionCount - 1] : 0;
 
-        if (newSectionAdded) {
+        if (typingSkipIncremental) {
+            // 已 reloadData, 跳过增量
+        } else if (newSectionAdded) {
             @try {
                 [UIView performWithoutAnimation:^{
                     [self.tableView insertSections:[NSIndexSet indexSetWithIndex:newSectionCount - 1]

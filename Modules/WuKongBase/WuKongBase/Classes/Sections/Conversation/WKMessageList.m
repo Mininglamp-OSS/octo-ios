@@ -36,6 +36,10 @@
 
 @implementation WKMessageList
 
+// 自定义了 lastInsertWasPureTailAppend 的 getter（要加锁），clang 就不再自动合成
+// 对应 ivar，必须显式 synthesize。
+@synthesize lastInsertWasPureTailAppend = _lastInsertWasPureTailAppend;
+
 // 锁必须在 init 里就建好。历史实现只有 lazy getter, 而多处代码用 `_messagesLock`
 // 直接发消息 —— 首次调用时 ivar 还是 nil, `[nil lock]` 是无害的 no-op, 于是那次
 // 访问**完全没有锁**。
@@ -151,6 +155,7 @@
 // `messagesAtSection:` 一族越界崩溃的来源。
 - (void)replaceAllWithMessages:(NSArray<WKMessageModel *> *)messages {
     [self.messagesLock lock];
+    _lastInsertWasPureTailAppend = YES;
     [self _clearAllNoLock];
     for (WKMessageModel *message in messages) {
         [self _addMessageNoLock:message];
@@ -161,6 +166,7 @@
 - (void)prependMessages:(NSArray<WKMessageModel *> *)messages {
     if (messages.count == 0) return;
     [self.messagesLock lock];
+    _lastInsertWasPureTailAppend = NO; // 前插永远不是尾插
     // _insertMessageAtHeadNoLock: 每次都插到最前, 所以要倒序喂 (最新的先插),
     // 结果才是升序。历史上这个 reverse 由调用方 (dp 的 handleMessages) 负责,
     // 容易漏; 收进来由本方法保证。
@@ -171,9 +177,12 @@
 }
 
 - (void)appendMessages:(NSArray<WKMessageModel *> *)messages {
-    if (messages.count == 0) return;
     [self.messagesLock lock];
-    _lastInsertWasPureTailAppend = YES;
+    _lastInsertWasPureTailAppend = YES;   // 空数组也要复位, 别把上一次的结论留给下一个读者
+    if (messages.count == 0) {
+        [self.messagesLock unlock];
+        return;
+    }
     for (WKMessageModel *message in messages) {
         [self _addMessageNoLock:message];
     }
@@ -276,7 +285,22 @@
         }
         [self.dates insertObject:date atIndex:section];
     } else {
-        section = (NSInteger)[self.dates indexOfObject:date];
+        NSUInteger found = [self.dates indexOfObject:date];
+        if(found == NSNotFound) {
+            // 防御 (@yujiawei P2-4): dateMessageGroups 有这个 date 但 dates 里没有 ——
+            // 现有路径到不了这个状态(removeMessage: 两边一起删, setMessages:forDate: 两边
+            // 一起加), 但新代码是第一个**依赖这次查找必然成功**的地方。真出现时把 date
+            // 补回 dates 而不是让 section 变成 -1: 后者会让 _firstMessageOfSectionNoLock:0
+            // 返回别的 section 的首条, 把无关 model 接进全局 pre/next 链。
+            NSInteger insertAt = (NSInteger)self.dates.count;
+            while(insertAt > 0 && [self.dates[insertAt-1] compare:date] == NSOrderedDescending) {
+                insertAt--;
+            }
+            [self.dates insertObject:date atIndex:insertAt];
+            found = (NSUInteger)insertAt;
+            _lastInsertWasPureTailAppend = NO; // 结构被修补过, 强制调用方 reloadData
+        }
+        section = (NSInteger)found;
     }
 
     // 组内按序定位: 从尾部往前走。正常情况(新消息就是最新的)第一次比较就停 → O(1),
@@ -305,19 +329,26 @@
     [self _addToIndexNoLock:message];
 }
 
-/// 排序键的核心判定: 未 ack 的本地消息(以及 typing)固定置底。
+/// 排序键的核心判定: "正在发送中"的本地消息与 typing 固定置底。
 ///
-/// 为什么不能纯按 orderSeq: 本地发送落库时 orderSeq = **本地库** max(order_seq)+1
+/// 为什么需要置底: 本地发送落库时 orderSeq = **本地库** max(order_seq)+1
 /// (WKMessageDB.m:256-260)。如果更新的那一页还没下载到本地(例如用户正上滑读历史),
 /// 这个临时值会**小于**那一页 —— 纯按 orderSeq 排会把"用户刚发出的消息"插到几十条
-/// 更旧消息中间。messageSeq == 0 正好就是"服务端还没给它排序"这个条件。
-/// 置底同时也符合用户直觉(自己发的就在最下面), 并且 ack 之后它的真实 orderSeq
-/// (messageSeq × WKOrderSeqFactor) 通常已大于全部已加载消息, 位置自然正确 ——
+/// 更旧消息中间。置底同时也符合用户直觉(自己发的就在最下面), 并且 ack 之后它的真实
+/// orderSeq (messageSeq × WKOrderSeqFactor) 通常已大于全部已加载消息, 位置自然正确 ——
 /// 所以不需要额外做"ack 后重定位"。
+///
+/// 为什么判据是 status 而不是 messageSeq == 0 (@yujiawei P2-1):
+/// messageSeq == 0 对**已持久化的失败消息**同样成立, 而 replaceAllWithMessages: 会把
+/// 每一条 DB 载入的 model 都喂进同一个 funnel —— 用它当判据会让"发送失败的消息"每次
+/// 重开会话都被重新排到当天最底部(改动前它待在发送时刻的位置)。那是可见的行为回退。
+/// 收紧成 WAITSEND / UPLOADING(即真正在飞的那两个状态)后: 失败消息按它的临时 orderSeq
+/// 落在发送时刻附近, 与改动前一致。
 -(BOOL) _isTailPinnedNoLock:(WKMessageModel*)model {
     if(!model) return NO;
     if(model.contentType == WK_TYPING) return YES;   // typing 永远在最后
-    return model.messageSeq == 0;                    // 未 ack: orderSeq 只是本地临时值
+    WKMessageStatus status = model.message.status;
+    return status == WK_MESSAGE_WAITSEND || status == WK_MESSAGE_UPLOADING;
 }
 
 /// a 是否应该排在 b 之后。与 WKChatManager.sortMessages: 同口径(orderSeq, 相同比 timestamp),
@@ -327,6 +358,21 @@
     BOOL bPinned = [self _isTailPinnedNoLock:b];
     if(aPinned != bPinned) {
         return aPinned;
+    }
+    if(aPinned && bPinned) {
+        // 两个都置底时**不能**落到 orderSeq 比较 (@yujiawei P1-2):
+        // typing 占位的 messageSeq / orderSeq 都是 0 (WKTypingManager 不给它们赋值),
+        // 而发送中的消息带着真实的本地 orderSeq(max+1) —— 比 orderSeq 会让发送中的消息
+        // 排到 typing 之后, 于是 typing 不在末尾。
+        // 而 _addMessageNoLock: 的 typing 替换、evictStaleTypingForIncomingMessage:、
+        // typingRemove:newMessage: 三处都**只看末条**来识别 typing, typing 一旦不在末尾,
+        // 到来的真实消息就不会替换掉它 → 屏幕中间留下一个永久的"正在输入"气泡。
+        // 所以这里按种类定序: typing 恒在最后。
+        BOOL aTyping = (a.contentType == WK_TYPING);
+        BOOL bTyping = (b.contentType == WK_TYPING);
+        if(aTyping != bTyping) {
+            return aTyping;
+        }
     }
     if(a.orderSeq != b.orderSeq) {
         return a.orderSeq > b.orderSeq;
@@ -419,6 +465,14 @@
 
 #pragma mark - 单条变更
 
+/// 读也加锁: 写在锁内, 读不加锁就是 data race (@yujiawei P2-3)。
+-(BOOL) lastInsertWasPureTailAppend {
+    [_messagesLock lock];
+    BOOL v = _lastInsertWasPureTailAppend;
+    [_messagesLock unlock];
+    return v;
+}
+
 -(void) addMessage:(WKMessageModel*)message {
     [self.messagesLock lock];
     _lastInsertWasPureTailAppend = YES;
@@ -428,6 +482,7 @@
 
 -(void) insertMessage:(WKMessageModel*)message atIndex:(NSIndexPath*)indexPath {
     [self.messagesLock lock];
+    _lastInsertWasPureTailAppend = NO; // 定点插入, 调用方自己算 indexPath
     [self _insertMessageNoLock:message atIndex:indexPath];
     [self.messagesLock unlock];
 }

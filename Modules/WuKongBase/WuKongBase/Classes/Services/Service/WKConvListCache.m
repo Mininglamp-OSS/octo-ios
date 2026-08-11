@@ -225,10 +225,20 @@ static NSInteger gVerificationOnlyDepth = 0;
 
 + (void)prepareMembershipIfNeeded {
     if (![self enabled]) return;
-    static NSString * const kVersionKey = @"OCTO_CONV_SPACE_INDEX_VERSION";
+    // 键必须按 uid 隔离 (@yujiawei P1-4): NSUserDefaults 是 App 级的, 而
+    // conversation_space 活在 WKDB.switchDB: 会整体换掉的 per-uid 库里, 且
+    // prepareMembershipIfNeeded 恰好就跑在换库那条路径上 (WKApp 的 LOGIN_SUCCESS)。
+    // 不隔离的后果: 同设备两个账号都从老版本升上来 —— A 先启动跑完回填、把版本号写成 2,
+    // 切到 B 时 `stored >= 2` 直接 return, B 的库永远不会被回填。而读路径**故意没有**
+    // "归属表为空就不过滤"的兜底(WKConversationDB.m:134 的注释明确禁止), 于是 B 的
+    // getConversationList 会一直返回空数组, 断网时永久空列表。
+    NSString *uid = [WKLoginInfo shared].uid ?: @"";
+    NSString *kVersionKey = [NSString stringWithFormat:@"OCTO_CONV_SPACE_INDEX_VERSION_%@", uid];
     // v1 那一版没有版本号，只写了一个 BOOL 完成标记。不认它的话，真正需要推平重建的
     // 用户（跑过 v1、索引里已经混入 fail-open 结论）反而不会触发重建。
-    static NSString * const kV1DoneKey = @"OCTO_CONV_SPACE_LEGACY_BACKFILL_DONE";
+    // 注: v1 那个键当年是不带 uid 的, 这里也按 uid 读 —— 读不到就当没跑过 v1,
+    // 走一次干净的 v2 回填, 结果一致(v2 本身就要推平重建)。
+    NSString *kV1DoneKey = [NSString stringWithFormat:@"OCTO_CONV_SPACE_LEGACY_BACKFILL_DONE_%@", uid];
     NSInteger stored = [[NSUserDefaults standardUserDefaults] integerForKey:kVersionKey];
     if (stored == 0 && [[NSUserDefaults standardUserDefaults] boolForKey:kV1DoneKey]) {
         stored = 1;

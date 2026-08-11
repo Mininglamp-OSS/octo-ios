@@ -105,9 +105,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)prepareMembershipIfNeeded;
 
 /// 有界化：DB 不再被清空后需要 GC。冷启动后延迟在后台跑一次即可（内部自带单次闸门）。
-///   - 清掉没有对应会话行的孤儿归属
-///   - 每空间只保留最近 1000 条归属
+///   - 清掉"指不到任何活着会话行"的归属（会话行已不存在 / is_deleted=1）
 ///   - 物理删除"不属于任何空间且 30 天没动静"的会话行
+/// ⚠️ 刻意**没有**"每空间只保留最近 N 条"的裁剪：裁掉有效归属 = 那条会话立刻从列表消失
+/// （读路径是 EXISTS(conversation_space)）。详见 WKConversationSpaceDB.gcDanglingMembership。
 + (void)runGarbageCollectionIfNeeded;
 
 @end
