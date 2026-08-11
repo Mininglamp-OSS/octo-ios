@@ -412,6 +412,56 @@ post_install do |installer|
         end
     end
     # ─────────────────────────────────────────────────────────────────────
+    # SDWebImage 5.9.5 SDImageIOAnimatedCoder._imageSource 跨线程 data race
+    # (Bugly 现网 SIGSEGV/SEGV_ACCERR #25459, 崩在后台 fetch 线程:
+    #  -[SDAnimatedImagePlayer displayDidRefresh:] → animatedImageFrameAtIndex
+    #  → createFrameAtIndex → CGImageSourceCreateImageAtIndex, 与 主线程
+    #  -[SDImageIOAnimatedCoder didReceiveMemoryWarning:] → 逐帧
+    #  CGImageSourceRemoveCacheAtIndex 并发访问同一个 CGImageSourceRef。
+    #  CGImageSource 非线程安全: race 会返回一个"非空但已失效"的 CGImageRef,
+    #  喂给 [[UIImage alloc] initWithCGImage:] → objc_msgSend 野指针 → SIGSEGV。
+    #  与上面的 nil-guard 是两个不同崩溃: 那个是 imageRef==NULL 抛
+    #  NSInvalidArgumentException 的 SIGABRT, 这个是 imageRef 野指针的 SIGSEGV,
+    #  nil-guard 拦不住(imageRef 不是 NULL)。设备连用 10h+ 触发内存警告概率高。
+    #  上游 5.10+ 给 coder 加了锁; 项目暂 pin 5.9.5, 本地用 @synchronized(self)
+    #  把两个竞争方法在同一 coder 实例上互斥(self 即锁对象)。开销 = 每帧一次
+    #  递归锁 lock/unlock, 可忽略; 无重入(createFrameAtIndex 是类方法, 不回调 self)。
+    #  幂等: marker 探测, 已 patch 不重复注入。
+    # ─────────────────────────────────────────────────────────────────────
+    race_marker = '// octo-imagesource-race-guard (Podfile post_install)'
+    if File.exist?(sd_coder_path)
+        rc = File.read(sd_coder_path)
+        unless rc.include?(race_marker)
+            mem_anchor = "- (void)didReceiveMemoryWarning:(NSNotification *)notification\n{\n    if (_imageSource) {\n        for (size_t i = 0; i < _frameCount; i++) {\n            CGImageSourceRemoveCacheAtIndex(_imageSource, i);\n        }\n    }\n}"
+            mem_inject = "- (void)didReceiveMemoryWarning:(NSNotification *)notification\n{\n    @synchronized (self) { #{race_marker}\n    if (_imageSource) {\n        for (size_t i = 0; i < _frameCount; i++) {\n            CGImageSourceRemoveCacheAtIndex(_imageSource, i);\n        }\n    }\n    } // octo-imagesource-race-guard\n}"
+            frame_anchor = "    UIImage *image = [self.class createFrameAtIndex:index source:_imageSource scale:_scale preserveAspectRatio:_preserveAspectRatio thumbnailSize:_thumbnailSize options:options];"
+            frame_inject = "    UIImage *image;\n    @synchronized (self) { #{race_marker}\n        image = [self.class createFrameAtIndex:index source:_imageSource scale:_scale preserveAspectRatio:_preserveAspectRatio thumbnailSize:_thumbnailSize options:options];\n    }"
+            rc2 = rc.sub(mem_anchor, mem_inject).sub(frame_anchor, frame_inject)
+            # 必须逐个 anchor 单独校验，不能只看 marker 在不在。
+            # String#sub 在 anchor 找不到时是 no-op，而两段注入文本里**都**含 race_marker ——
+            # 所以只要有一处命中，`rc2.include?(race_marker) && rc2 != rc` 就成立，会把只打了
+            # 一半的文件写下去并打印 "Patched"，同时 marker 又让后续 pod install 不再重试。
+            # 互斥只装在一个参与方身上等于没有互斥，那个 SIGSEGV 仍然活着，而构建声称已修。
+            # 宁可大声失败：任一 anchor 不匹配（大概率是 SDWebImage 升版改了源码）就中止，
+            # 让人看见并重新对齐 anchor。
+            mem_ok   = rc.include?(mem_anchor)
+            frame_ok = rc.include?(frame_anchor)
+            if mem_ok && frame_ok
+                File.chmod(0644, sd_coder_path)
+                File.write(sd_coder_path, rc2)
+                File.chmod(0444, sd_coder_path)
+                puts "🛡️  Patched SDImageIOAnimatedCoder.m: @synchronized(self) guard around _imageSource (memoryWarning vs frame-decode race)"
+            else
+                missing = []
+                missing << 'didReceiveMemoryWarning' unless mem_ok
+                missing << 'createFrameAtIndex' unless frame_ok
+                raise "SDImageIOAnimatedCoder.m race-guard anchor 未命中: #{missing.join(', ')}。" \
+                      "SDWebImage 版本可能已变（当前 pin 5.9.5）。请重新对齐 anchor —— " \
+                      "半个 @synchronized 等于没有互斥，不能静默跳过。"
+            end
+        end
+    end
+    # ─────────────────────────────────────────────────────────────────────
     # AFNetworking 4.0.1 netinet6/in6.h 非模块化私有系统头修复 (2026-07)
     # iOS 26 SDK 在 <netinet6/in6.h> 顶部放了硬 #error(RFC2553)：该私有头
     # 已废弃，指引改用 <netinet/in.h>（后者已 #include 全部 in6 定义，语义

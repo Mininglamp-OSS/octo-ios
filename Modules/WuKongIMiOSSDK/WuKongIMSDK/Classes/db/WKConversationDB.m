@@ -10,6 +10,7 @@
 #import "WKConversationUtil.h"
 #import "WKUnreadStore.h"
 #import "WKUnreadAckQueueDB.h"
+#import "WKConversationSpaceDB.h"
 #define SQL_EXIST @"select count(*) cn from conversation where channel_id=? and channel_type=? and is_deleted=0"
 
 #define SQL_GET_SELECT @"conversation.*,IFNULL(channel.stick,0) stick,IFNULL(channel.mute,0) mute,IFNULL(conversation_extra.browse_to,0) browse_to,IFNULL(conversation_extra.keep_message_seq,0) keep_message_seq,IFNULL(conversation_extra.keep_offset_y,0) keep_offset_y,IFNULL(conversation_extra.draft,'') draft,IFNULL(conversation_extra.version,0) extra_version"
@@ -57,7 +58,18 @@
 // 更新预览至
 #define SQL_UPDATE_BROWSETO @"update conversation set browse_to=? where channel_id=? and channel_type=?"
 
+// 空间作用域子句（见 -spaceScopeClauseWithAlias:）。
+// conversation_space 表由 migration 202608051200 建立，写入方见 WKConversationSpaceDB。
+#define SQL_SPACE_SCOPE_FMT @" exists(select 1 from conversation_space cs where cs.channel_id=%@.channel_id and cs.channel_type=%@.channel_type and cs.space_id=?)"
+
+@interface WKConversationDB ()
+@property (nonatomic, strong) NSRecursiveLock *scopeLock;
+@end
+
 @implementation WKConversationDB
+
+// getter/setter 都自定义了（加锁），需要显式 synthesize 出 ivar
+@synthesize spaceScopeId = _spaceScopeId;
 
 static WKConversationDB *_instance;
 + (id)allocWithZone:(NSZone *)zone
@@ -75,6 +87,63 @@ static WKConversationDB *_instance;
         _instance = [[self alloc] init];
     });
     return _instance;
+}
+
+-(instancetype) init {
+    self = [super init];
+    if(self) {
+        _scopeLock = [[NSRecursiveLock alloc] init];
+    }
+    return self;
+}
+
+#pragma mark - 空间作用域
+
+/// 会话列表 / 同步版本号 / syncKey 三条读路径的空间作用域。
+///
+/// 背景：上层原先靠 `deleteAllConversation + 全量 sync` 保证 "DB 里只有当前空间的会话"，
+/// 每次冷启动 / 切空间都把本地缓存丢掉（断网时列表全空）。改成 DB 保留多空间会话 +
+/// 读路径按空间过滤后，缓存得以复用。
+///
+/// 作用域只有一个开关条件：spaceScopeId 非空就生效，只返回 conversation_space 里
+/// 归属于它的会话。某空间归属为 0 行（从未同步过该空间）时返回空列表 —— 与原先
+/// "清库后等 sync" 的行为一致。
+///
+/// ⚠️ 历史坑：这里曾经额外有一条 "conversation_space 整表为空 → 作用域 Off（返回 DB
+/// 全部会话）" 的升级兼容态。它在「升级后首次全量 sync 还没落地就切空间」时会把上一个
+/// 空间的会话整片漏进新空间（用户实测到的跨空间污染）。**不要**再把"表空"当成"不过滤"。
+///
+/// 注：这条禁令仍然成立，但它原本给的理由（"兼容性改由一次性回填解决"）已经失效 ——
+/// 那个整表回填在 8431d8e 被删除了（它自己导致了另一起列表串空间事故，见
+/// WKConvListCache 的 kWKConvSpaceIndexVersion v3 注释）。现在的机制是：归属由权威全量
+/// sync 逐空间重建（version==0 → replaceMembership），"表空"只代表"这个空间还没被同步
+/// 过"，正确行为就是返回空列表并等 sync —— 恰恰**不能**退化成"不过滤"。
+-(void) setSpaceScopeId:(NSString *)spaceScopeId {
+    [self.scopeLock lock];
+    if(_spaceScopeId != spaceScopeId && ![_spaceScopeId isEqualToString:spaceScopeId]) {
+        NSLog(@"[SpaceIndex] setSpaceScopeId %@ → %@", _spaceScopeId ?: @"<nil>", spaceScopeId ?: @"<nil>");
+        _spaceScopeId = [spaceScopeId copy];
+    }
+    [self.scopeLock unlock];
+}
+
+-(NSString *)spaceScopeId {
+    [self.scopeLock lock];
+    NSString *result = _spaceScopeId;
+    [self.scopeLock unlock];
+    return result;
+}
+
+/// 作用域是否生效。生效时调用方必须把 spaceScopeId 作为 SQL 参数补在末尾。
+/// 见 setSpaceScopeId: 的注释：**不要**再加"归属表为空就不过滤"的条件。
+-(BOOL) spaceScopeActive {
+    return self.spaceScopeId.length > 0;
+}
+
+/// alias 是 SQL 中 conversation 表的名字/别名。作用域关闭时返回空串。
+-(NSString*) spaceScopeClauseWithAlias:(NSString*)alias {
+    if(![self spaceScopeActive]) return @"";
+    return [NSString stringWithFormat:SQL_SPACE_SCOPE_FMT, alias, alias];
 }
 
 -(void) addOrUpdateConversation:(WKConversation*)conversation{
@@ -297,8 +366,13 @@ static WKConversationDB *_instance;
 
 -(NSInteger) getAllConversationUnreadCount {
     __block NSInteger unreadCount;
+    NSString *scope = [self spaceScopeClauseWithAlias:@"conversation"];
+    NSString *sql = scope.length > 0
+        ? [NSString stringWithFormat:@"%@ and%@", SQL_GET_ALL_UNREADCOUNT, scope]
+        : SQL_GET_ALL_UNREADCOUNT;
+    NSString *scopeId = self.spaceScopeId;
     [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
-        FMResultSet *resultSet = [db executeQuery:SQL_GET_ALL_UNREADCOUNT];
+        FMResultSet *resultSet = scope.length > 0 ? [db executeQuery:sql, scopeId] : [db executeQuery:sql];
         if(resultSet.next) {
            unreadCount = [resultSet intForColumn:@"unreadCount"];
         }
@@ -342,8 +416,13 @@ static WKConversationDB *_instance;
 
 -(NSArray<WKConversation*>*) getConversationList {
     __block NSMutableArray<WKConversation*> *items = [NSMutableArray new];
+    NSString *scope = [self spaceScopeClauseWithAlias:@"conversation"];
+    NSString *sql = scope.length > 0
+        ? [NSString stringWithFormat:@"select %@ from conversation left join channel on conversation.channel_id=channel.channel_id and conversation.channel_type=channel.channel_type left join conversation_extra on conversation.channel_id=conversation_extra.channel_id and conversation.channel_type=conversation_extra.channel_type where conversation.is_deleted=0 and%@ order by conversation.last_msg_timestamp desc,conversation.id desc", SQL_GET_SELECT, scope]
+        : SQL_ALL;
+    NSString *scopeId = self.spaceScopeId;
     [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
-        FMResultSet *result = [db executeQuery:SQL_ALL];
+        FMResultSet *result = scope.length > 0 ? [db executeQuery:sql, scopeId] : [db executeQuery:sql];
         while (result.next) {
            [items addObject:[self toConversation:result.resultDictionary]];
         }
@@ -477,8 +556,15 @@ static WKConversationDB *_instance;
 
 -(long long) getConversationMaxVersion {
     __block long long version =0;
+    // 作用域生效时取的是"本空间"的最大版本号 —— 首次进入某空间时归属集为空 → 0
+    // → 上层自动发起 version=0 的全量 sync，不需要额外的"切空间强制全量"逻辑。
+    NSString *scope = [self spaceScopeClauseWithAlias:@"conversation"];
+    NSString *sql = scope.length > 0
+        ? [NSString stringWithFormat:@"%@ and%@", SQL_MAX_VERSION, scope]
+        : SQL_MAX_VERSION;
+    NSString *scopeId = self.spaceScopeId;
     [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
-        FMResultSet *result = [db executeQuery:SQL_MAX_VERSION];
+        FMResultSet *result = scope.length > 0 ? [db executeQuery:sql, scopeId] : [db executeQuery:sql];
         if(result.next){
             NSDictionary *resultDic = result.resultDictionary;
             version = [resultDic[@"version"] longLongValue];
@@ -490,15 +576,23 @@ static WKConversationDB *_instance;
 
 -(NSString*) getConversationSyncKey {
     __block NSString *syncKey = @"";
+    // syncKey 会作为 last_msg_seqs 发给 conversation/sync?space_id=X。不作用域化就会把
+    // 别的空间的 channel 报给本空间的 sync，服务端可能据此回灌跨空间会话。
+    NSString *scope = [self spaceScopeClauseWithAlias:@"conversation"];
+    NSString *sql = scope.length > 0
+        ? [NSString stringWithFormat:@"select GROUP_CONCAT(channel_id||':'||channel_type||':'||last_msg_seq,'|') synckey from (select *,(select max(message_seq) from message where message.channel_id=conversation.channel_id and message.channel_type= conversation.channel_type and message.content_type<>0 and message.content_type<>? limit 1) last_msg_seq from conversation where%@) cn where channel_id<>''", scope]
+        : SQL_SYNC_KEY;
+    NSString *scopeId = self.spaceScopeId;
     [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
-        
-        FMResultSet *result = [db executeQuery:SQL_SYNC_KEY,@(WK_CMD)];
+        FMResultSet *result = scope.length > 0
+            ? [db executeQuery:sql,@(WK_CMD),scopeId]
+            : [db executeQuery:sql,@(WK_CMD)];
         if(result.next){
             NSDictionary *resultDic = result.resultDictionary;
             if(resultDic[@"synckey"] && ![resultDic[@"synckey"] isKindOfClass:[NSNull class]]) {
                 syncKey = resultDic[@"synckey"];
             }
-            
+
         }
         [result close];
     }];

@@ -8,16 +8,27 @@
 #import "WKFollowedKeysStore.h"
 #import "WKSidebarService.h"
 #import "WKLoginInfo.h"
+#import "WKSpaceDiskCache.h"
+#import "WKConvListCache.h"
 
 NSNotificationName const kWKFollowedKeysStoreDidUpdateNotification = @"kWKFollowedKeysStoreDidUpdateNotification";
 
+/// 磁盘缓存 namespace（文件名前缀）
+static NSString * const kWKFollowCacheNamespace = @"follow";
+
 @interface WKFollowedKeysStore ()
 @property (atomic, assign, readwrite) BOOL loaded;
+@property (atomic, assign, readwrite) BOOL loadedFromCache;
 @property (atomic, assign, readwrite) NSInteger followVersion;
 @property (atomic, strong, readwrite) NSSet<NSString *> *followedKeys;
 @property (atomic, strong, readwrite) NSDictionary<NSString *, NSArray<WKSidebarItemEntity *> *> *itemsByCategory;
 @property (atomic, strong, readwrite) NSSet<NSString *> *followedGroupNos;
 @property (atomic, assign) BOOL retryScheduled;
+/// applyItems: 这一次是"磁盘缓存水化"还是"服务端最新"。
+/// 必须在 applyItems: 内部 post 通知**之前**就定好 —— 观察者
+/// （onFollowedKeysStoreDidUpdate → buildGroupDisplayList）会同步读 loadedFromCache
+/// 决定 placeholder 的红点要不要亮，post 之后再纠正就晚了一帧。
+@property (atomic, assign) BOOL applyingFromCache;
 /// 切 Space / 切账号会调 reset，但 reload 是异步的，旧 Space 在飞的请求若 reset
 /// 之后才回包，applyItems: 会拿旧 Space 的数据覆盖刚 reset 完的状态 —— 破坏空间
 /// 隔离，Follow tab 看到上一个 Space 的关注项（PR review #12 critical）。
@@ -110,9 +121,57 @@ NSNotificationName const kWKFollowedKeysStoreDidUpdateNotification = @"kWKFollow
     self.itemsByCategory = @{};
     self.followVersion = 0;
     self.loaded = NO;
+    self.loadedFromCache = NO;
     [[NSNotificationCenter defaultCenter] postNotificationName:kWKFollowedKeysStoreDidUpdateNotification
                                                         object:self
                                                       userInfo:@{ @"reset": @YES }];
+}
+
+#pragma mark - 每空间磁盘缓存
+
+- (void)resetAndHydrateForSpace:(NSString *)spaceId {
+    // reset 里的 generation +1 仍然是必须的：旧空间在飞的 reload 回包不能污染新空间。
+    // 它同时会 post 一次 reset 通知（观察者会看到一瞬间的空态），紧接着的水化会再
+    // post 一次带内容的通知，UI 以后者为准。
+    [self reset];
+    if (![WKConvListCache enabled]) return;
+    [self hydrateForSpace:spaceId];
+}
+
+- (BOOL)hydrateForSpace:(NSString *)spaceId {
+    if (![WKConvListCache enabled] || spaceId.length == 0) return NO;
+    // 已经是服务端最新（fresh）就不要用缓存往回盖
+    if (self.loaded && !self.loadedFromCache) return NO;
+
+    id cached = [WKSpaceDiskCache objectForNamespace:kWKFollowCacheNamespace spaceId:spaceId];
+    if (![cached isKindOfClass:[NSDictionary class]]) return NO;
+    NSDictionary *dict = (NSDictionary *)cached;
+    NSArray *rawItems = dict[@"items"];
+    if (![rawItems isKindOfClass:[NSArray class]]) return NO;
+
+    NSArray<WKSidebarItemEntity *> *items = [WKSidebarItemEntity fromDictArray:rawItems];
+    NSInteger version = [dict[@"follow_version"] integerValue];
+    // 标记这一轮 applyItems: 是缓存水化：它内部据此把 loadedFromCache 置 YES 并跳过
+    // 回写磁盘（数据本来就是从磁盘读的）。必须在 applyItems: 之前设，见属性注释。
+    self.applyingFromCache = YES;
+    [self applyItems:items followVersion:version];
+    self.applyingFromCache = NO;
+    NSLog(@"[FollowCache] hydrate space=%@ items=%lu version=%ld",
+          spaceId, (unsigned long)items.count, (long)version);
+    return items.count > 0;
+}
+
+- (void)persistForSpace:(NSString *)spaceId {
+    if (![WKConvListCache enabled] || spaceId.length == 0) return;
+    NSMutableArray *rawItems = [NSMutableArray array];
+    [self.itemsByCategory enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSArray<WKSidebarItemEntity *> *arr, BOOL *stop) {
+        for (WKSidebarItemEntity *it in arr) {
+            [rawItems addObject:[it toDict]];
+        }
+    }];
+    [WKSpaceDiskCache setObject:@{ @"items": rawItems, @"follow_version": @(self.followVersion) }
+                   forNamespace:kWKFollowCacheNamespace
+                        spaceId:spaceId];
 }
 
 - (void)applyItems:(NSArray<WKSidebarItemEntity *> *)items followVersion:(NSInteger)version {
@@ -158,6 +217,17 @@ NSNotificationName const kWKFollowedKeysStoreDidUpdateNotification = @"kWKFollow
     self.itemsByCategory = [sortedBuckets copy];
     self.followVersion = version;
     self.loaded = YES;
+    self.loadedFromCache = self.applyingFromCache;
+
+    // 落盘给下次进入本空间做首帧渲染用。写在 post 通知之前，保证"UI 看到的"和
+    // "缓存里的"是同一份数据；实际写文件是异步的，不阻塞主线程。
+    // 缓存水化那一轮不回写（数据本来就是从磁盘读出来的）。
+    if (!self.applyingFromCache) {
+        NSString *spaceId = [WKConvListCache currentSpaceId];
+        if (spaceId.length > 0) {
+            [self persistForSpace:spaceId];
+        }
+    }
 
     [[NSNotificationCenter defaultCenter] postNotificationName:kWKFollowedKeysStoreDidUpdateNotification
                                                         object:self

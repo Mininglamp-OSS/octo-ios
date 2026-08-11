@@ -11,6 +11,7 @@
 #import <objc/runtime.h>
 
 NSString * const WKIMDBHealthCheckFailedNotification = @"WKIMDBHealthCheckFailedNotification";
+NSString * const WKDBDidSwitchNotification = @"WKDBDidSwitchNotification";
 
 // 数据库中常见的几种类型
 #define SQL_TEXT     @"TEXT" //文本
@@ -20,7 +21,7 @@ NSString * const WKIMDBHealthCheckFailedNotification = @"WKIMDBHealthCheckFailed
 
 @interface WKDB ()
 // 当前数据库的uid
-@property(nonatomic,copy) NSString *currentUid;
+@property(nonatomic,copy) NSString *currentUid; // .h 里以 readonly 暴露，见那里的注释
 // 当前db前缀
 @property(nonatomic,copy) NSString *currentDBPrefix;
 
@@ -94,6 +95,8 @@ static WKDBMigrationManager *_manager;
         return;
     }
     [self migrateDatabase];
+    // 切库完成 —— 让持有 DB 派生缓存的类失效（见 WKDBDidSwitchNotification 注释）
+    [[NSNotificationCenter defaultCenter] postNotificationName:WKDBDidSwitchNotification object:nil];
 }
 
 - (BOOL)isDBHealthyForUID:(NSString *)uid dbPath:(NSString *)dbPath {

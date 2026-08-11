@@ -124,6 +124,31 @@ static const NSUInteger kWKImagePreloadMaxDecodedBytes = 32 * 1024 * 1024;
     }
 }
 
+/// 清掉所有"跟具体某张图绑定"的呈现状态。每一项都对应 refresh: 正常路径里的一次赋值 ——
+/// 保持两边同步, 别让早退路径漏掉某个残留控件。
+/// 只给 refresh: 的内容类型早退用: 正常路径自己会清图, 不在这里重复清 (cell 是热路径,
+/// 多余的清理只会多制造一次 bg-decode 期间的空窗)。
+- (void)clearImagePresentationState {
+    // 先取消在飞的 URL 请求，再清已装上的图 —— 顺序不能反，也不能只做后者：
+    // SDWebImage 只在同一个 view 上**发起新请求**时才取消上一个 operation，而错配这条
+    // 分支不发起任何新请求。只 nil 掉 image 的话，上一条消息的 sd_setImageWithURL:
+    // 回调仍会在之后完成，把旧图装到新消息的气泡里 —— 正是这段守卫要挡的那个场景。
+    // （本地 originalImageData/thumbnailData 的 bg-decode 路径本来就按 clientSeq 门控，
+    //   messageModel 在守卫之前已经换成新的，所以那条路径不需要额外处理。）
+    [self.imgView sd_cancelCurrentImageLoad];
+    self.imgView.image = nil;
+    [[self.imgView sd_imageIndicator] stopAnimatingIndicator];
+    self.visualEffectView.hidden = YES;   // 阅后即焚模糊层
+    self.progressView.hidden = YES;       // 上传进度
+    [self.progressView setProgress:0];
+    // 上一条消息的上传任务还挂着 listener 的话，它的进度回调会把 progressView 再显示
+    // 出来（那是别的消息的进度条）。这里一并摘掉。
+    if (self.uploadTask) {
+        [self.uploadTask removeListener:self];
+        self.uploadTask = nil;
+    }
+}
+
 -(void) initUI {
     [super initUI];
     
@@ -180,6 +205,18 @@ static const NSUInteger kWKImagePreloadMaxDecodedBytes = 32 * 1024 * 1024;
 
     [super refresh:model];
     self.messageModel = model;
+    // 竞态兜底: cell 复用/内容类型漂移下, 非 WKImageContent 会错配到图片 cell,
+    // 后续 [imageContent localPath] 会 unrecognized selector 崩 (Bugly
+    // -[WKTextContent localPath])。与 contentSizeForMessage: 的既有 isKindOfClass
+    // 守卫同源; super refresh: 是通用逻辑, 对任意内容安全, 这里跳过图片专属渲染即可。
+    if (![model.content isKindOfClass:[WKImageContent class]]) {
+        // 早退前必须把图片专属状态清干净: super refresh: 已经把气泡/头像/时间换成新
+        // model 了, 图还留着上一条消息的 —— 那就是"别人的图配这条消息"的错误内容
+        // (可能是别的会话的图, 隐私问题), 比空图更糟。这段只在错配这条异常路径上跑,
+        // 正常图片消息一行都不经过, 所以不会引入任何闪动。
+        [self clearImagePresentationState];
+        return;
+    }
     WKImageContent *imageContent = (WKImageContent*)model.content;
     CGSize imageSize = [WKImageMessageCell contentSizeForMessage:model];
     self.imgView.lim_width = imageSize.width;

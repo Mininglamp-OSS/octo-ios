@@ -273,6 +273,62 @@ CMD 是 best-effort（弱网/断连场景可能丢），前台 reload 是确定�
 
 现有 `SwipeTableCell` 返回空数组，本期不动；二期再评估是否加左滑"取消关注"。
 
+### 4.8 最近 tab 双击定位下一个未读
+
+双击「最近」tab 栏 → 列表滚到下一个未读会话（对齐企业微信）。**只在最近 tab 生效**：
+关注 tab 的 row 来自 `groupDisplayList`（含分组 header / 可折叠 / 可拖拽重排），
+行号语义与 `filteredConversations` 不通用，双击不做任何事。
+
+**未读口径**（`WKConversationListVM.recentUnreadRowIndexes`，与 tab 汇总红点
+`getRecentUnreadCount` / cell 的 `refreshUnread` 同源，保证"跳过去的行必然有红点"）：
+
+- 未读判定用 `recentTabActivityUnreadCount > 0`（最近 tab cell 渲染红点的同一个 getter）
+- **排除静音**（`isChannelMuted:`）—— 与 tab 红点一致，否则会出现"红点是 0 但双击还能跳"
+- **排除 placeholder 子区**（`lastMessage == nil`）—— 那个 unread 来自接口不一定是本人的
+
+**游标语义**（`WKConversationListVC.unreadJumpCursorKey`，纯内存不持久化）：
+
+- 记 `channelId + channelType`，**不能记 row 或对象指针** —— 最近 tab 会按新消息实时
+  重排，群行还是每次 `rebuildFilteredList` 新建的 shadow wrap
+- 游标仍在未读集 → 取它后面那个，`% count` 实现"最后一个回到第一个"
+- 游标失效（读完 / 被删）→ 取"行号 > 上次落点 `unreadJumpCursorRow`"的第一个未读，
+  再没有才回第一个。**不能直接回顶部**，否则读完一条返回再双击就断了浏览节奏
+- 无游标（首次 / 用户手动滑动后）→ 从当前视口顶行往下找第一个未读
+- 失效时机：`scrollViewWillBeginDragging:`（用户接管导航）、切 tab
+- 一条未读都没有 → 无操作（不滚动不震动）
+
+**反馈**：目标行置顶 + 目标行叠一层半透明主题色淡出（`flashRowAtIndexPath:`）。
+**不加触感反馈** —— 滚动 + 高亮两层视觉已经够明确，再震一下反而碎（底部 tabbar 那条
+路径上 `didSelectViewController:` 每次点击本来就各震一次）。高亮走独立 overlay，
+**不能改 `cell.backgroundColor`** —— 那个值由 `refreshSetting:` 按 `stick` 管，
+置顶行底色会被写坏。
+
+**手势注意**：双击 GR 挂在 `WKConversationTabView._capsuleContainer` 上，必须
+`delaysTouchesEnded = NO` —— 默认 YES 会把单击的 `touchUpInside` 压后一个双击间隔
+（~0.25s）等判定失败，切 tab 会明显发粘。GR 按需安装（只有设置了
+`onTabDoubleTapped` 才创建），`WKForwardSelectVC` 复用同一 view，不受影响。
+
+### 4.9 底部 tabbar 双击「消息」= 同一个定位交互
+
+第二个入口：双击底部 tabbar 的「消息」item，同样定位下一个未读会话。
+宿主 `WKMainTabController._handlePossibleMessageTabDoubleTap:` 判定双击后转发到
+`WKConversationListVC.handleMessageTabDoubleTap`，业务判定（在不在最近 tab、有没有
+未读）全部收在 VC 里，宿主不需要知道 `filterType` 这些内部概念。
+
+- **不挂手势**：`UITabBarController` 每次点击 item 都会回调 `didSelectViewController:`
+  （**包括重复点当前已选中项**），时间戳判定（窗口 0.35s）就够，因此不会有
+  「双击 GR 延迟单击」那类副作用，系统切 tab 行为字面上不变
+- **只认「两下都落在已经选中的消息 tab 上」**：从别的 tab 双击「消息」时第一下是切 tab，
+  不算双击的第一下 —— 否则用户不耐烦快点两下切 tab 会莫名跳一次。
+  **这一点与页内双击「最近」有意不同**（那边第一下切 tab、第二下就跳）
+- 是否「重选」靠 `lastSelectedViewController` 自己记一份。前提是主 tabbar 的
+  `selectedIndex` 全程只由用户点击驱动，没有任何程序化修改 —— **以后要加程序化切 tab
+  （如外部入口强切消息 tab），记得同步这个字段**，否则第一次双击会少认一下
+- 命中后把时间戳清零，三击不会被算成两次双击
+- ⚠️ **潜在约定冲突**：iOS 习惯是「重复点当前 tab = 回列表顶部 / pop 到 root」。本 app
+  目前重复点 tab 不做任何事，所以眼下不冲突；**以后若要加「回顶部」，会和双击抢同一个
+  手势**，届时需要一起设计（例如单击回顶部 + 双击定位未读的先后关系）
+
 ---
 
 ## 5. 子区特殊规则（务必对齐）

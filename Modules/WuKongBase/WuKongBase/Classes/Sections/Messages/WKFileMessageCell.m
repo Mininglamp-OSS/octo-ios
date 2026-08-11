@@ -90,6 +90,10 @@ static const BOOL WKFileOpenDiagAlert = NO;
         self.trailingView.statusImgView.tintColor = [WKApp shared].config.tipColor;
     }
 
+    // 竞态兜底: 复用/漂移下错配的非 WKFileContent 会 unrecognized selector 崩 (同 WKImageMessageCell)
+    if (![model.content isKindOfClass:[WKFileContent class]]) {
+        return;
+    }
     WKFileContent *fileContent = (WKFileContent *)model.content;
     self.fileNameLbl.text = fileContent.name ?: @"";
     self.fileSizeLbl.text = [self formatFileSize:fileContent.fileSize];

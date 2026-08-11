@@ -21,6 +21,7 @@ static CGFloat const kBadgeSize = 16.0f;
 @property (nonatomic, strong) UIButton *recentBtn;
 @property (nonatomic, strong) UILabel *followBadge;
 @property (nonatomic, strong) UILabel *recentBadge;
+@property (nonatomic, strong, nullable) UITapGestureRecognizer *doubleTapGR;
 
 @end
 
@@ -202,6 +203,33 @@ static CGFloat const kBadgeSize = 16.0f;
 
 - (void)onRecentTap {
     [self setSelectedIndex:1 animated:YES];
+}
+
+#pragma mark - 双击
+
+/// 按需安装：没人订阅就不挂手势（WKForwardSelectVC 复用本 view，那边不订阅）。
+- (void)setOnTabDoubleTapped:(void (^)(NSInteger))onTabDoubleTapped {
+    _onTabDoubleTapped = [onTabDoubleTapped copy];
+    if (!_onTabDoubleTapped || _doubleTapGR) return;
+
+    UITapGestureRecognizer *gr = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onCapsuleDoubleTap:)];
+    gr.numberOfTapsRequired = 2;
+    // delaysTouchesEnded 默认 YES —— 那会把**单击**的 touchUpInside 压后约一个
+    // 双击间隔（~0.25s）等双击判定失败，切 tab 立刻变得发粘。这是引入双击最容易
+    // 破坏现有体验的地方，必须置 NO：单击照原样立即切 tab，双击在第二次抬手时
+    // 依然能识别。cancelsTouchesInView 也置 NO，保证按钮自身事件流不被截断。
+    gr.delaysTouchesEnded = NO;
+    gr.cancelsTouchesInView = NO;
+    [_capsuleContainer addGestureRecognizer:gr];
+    _doubleTapGR = gr;
+}
+
+- (void)onCapsuleDoubleTap:(UITapGestureRecognizer *)gr {
+    if (!self.onTabDoubleTapped) return;
+    // 一个 GR 覆盖整条胶囊，用落点 x 反推是哪半边，避免给两个按钮各挂一个手势。
+    CGFloat halfW = _capsuleContainer.bounds.size.width / 2.0f;
+    CGPoint p = [gr locationInView:_capsuleContainer];
+    self.onTabDoubleTapped(p.x < halfW ? 0 : 1);
 }
 
 - (void)setSelectedIndex:(NSInteger)index animated:(BOOL)animated {

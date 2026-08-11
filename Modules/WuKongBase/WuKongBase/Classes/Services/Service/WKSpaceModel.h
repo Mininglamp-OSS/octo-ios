@@ -16,7 +16,19 @@ NS_ASSUME_NONNULL_BEGIN
 + (instancetype)shared;
 
 // 获取我的所有 Space
+// 内存缓存 → 网络。网络失败且无内存缓存时，回落到磁盘缓存（断网也能拿到上次的列表）；
+// 磁盘也没有才抛错。
 - (AnyPromise *)getMySpaces;
+
+/// 同步读磁盘缓存里某个 Space 的名字，没有返回 nil。
+///
+/// 为什么需要：会话列表的标题来自 `space/my` 这个**纯网络**接口，断网冷启动时它失败 →
+/// currentSpaceName 为空 → 标题回退成 appName（"Octo"），用户看起来像"空间被切走了"。
+/// 有了这个同步入口，标题第一帧就能显示上次的空间名。
+- (nullable NSString *)cachedSpaceNameForSpaceId:(NSString *)spaceId;
+
+/// 同步读磁盘缓存的 Space 列表，没有返回 nil。
+- (nullable NSArray<WKSpaceEntity *> *)cachedSpacesFromDisk;
 
 // 创建 Space
 - (AnyPromise *)createSpaceWithName:(NSString *)name description:(NSString *)desc;

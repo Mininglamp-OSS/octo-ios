@@ -17,7 +17,14 @@
 
 - (instancetype)initWithFrame:(CGRect)frame element:(ACOBaseCardElement *)element
 {
-    self = [super initWithFrame:frame];
+    // [octo perf] 同 ACRUILabel：显式 TextKit1 栈初始化，避免 iOS16+ 默认 TextKit2 在访问
+    // layoutManager 时触发昂贵的 TextKit2→1 转换。Input.Text 字段最终亦为 TextKit1，态一致。
+    NSTextStorage *textStorage = [[NSTextStorage alloc] init];
+    NSLayoutManager *layoutManager = [[NSLayoutManager alloc] init];
+    [textStorage addLayoutManager:layoutManager];
+    NSTextContainer *textContainer = [[NSTextContainer alloc] initWithSize:CGSizeZero];
+    [layoutManager addTextContainer:textContainer];
+    self = [super initWithFrame:frame textContainer:textContainer];
     if (self) {
         _completionHandlers = [[NSMutableArray alloc] init];
         self.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];

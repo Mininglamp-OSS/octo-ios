@@ -57,6 +57,43 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 /// 将群聊添加到当前空间白名单（用于群聊创建后立即显示在会话列表）
 -(void) addGroupToWhitelist:(NSString*)channelId;
 
+/// 用持久化的会话归属表（conversation_space）水化空间白名单 + SDK 会话读路径的空间作用域。
+/// 启动 / 切空间时在 `reset` 之后、任何 `loadConversationList` 之前调用。
+///
+/// 为什么必须有：`reset` 把 syncedGroupChannelIds 清成 nil，而 shouldShowConversation:
+/// 对 nil 的语义是"尚未 sync，暂不过滤"。原先这个 fail-open 窗口安全是因为 DB 刚被
+/// deleteAllConversation 清空；改成保留多空间缓存后，必须靠归属表在第一帧就给出
+/// 正确的白名单，否则别的空间的会话会漏进列表。
+-(void) hydrateSpaceScope:(NSString*)spaceId;
+
+/// 实时会话更新被判定为"属于当前空间"后，把结论同步进内存群白名单。
+/// 归属落库是异步的，而 shouldShowConversation: 的群分支读内存集合 —— 不同步更新的话，
+/// 刚进来的新群会在下一次 loadConversationList 时被自己的白名单挡掉。
+/// DM 不参与：它没有内存白名单，空间隔离完全交给 SQL 作用域（多一份内存集合只会漂移，
+/// 曾导致"进聊天详情返回后所有私聊消失"）。
+-(void) noteSpaceMembershipChannels:(NSArray<WKChannel*>*)channels;
+
+/// 把"当前实际渲染出来的会话集"记成当前空间的归属快照（只增不删）。
+///
+/// 这是缓存的**主要**建立方式，而不是靠"预测归属"：
+/// 会话是否属于当前空间，本来就有一整套判定链（sync 白名单 → WKSpaceFilter →
+/// SpaceBotRegistry → pruneNonCurrentSpaceGroups / pruneNonCurrentSpaceBots /
+/// sweepForeignToSpace 四层兜底）。这条链跑完之后留在 conversationWrapModels 里的，
+/// 就是"这个空间该显示的会话"最可信的答案 —— 比任何单一证据信号都强。把它记下来，
+/// 下次冷启动（含断网）就能还原成用户上次看到的那个列表。
+///
+/// 反过来，只靠证据预测归属会有缺口：很多 DM 的消息 payload 不带 space_id、群的
+/// channelInfo.extra 也未必有 space_id，于是证据链命中不了 → 归属漏记 → 断网冷启动
+/// 只剩系统 bot（实测过的现象）。
+///
+/// 调用时机：列表构建完成 / Space 切换收尾 / sync 收尾 / App 进后台。
+/// 只增不删：tombstone（退群、删会话）仍由真正的全量 sync 与 prune/sweep 负责。
+-(void) persistRenderedMembershipSnapshot;
+
+/// 同上，synchronous=YES 时同步写完再返回。App 进后台必须用同步版本 ——
+/// 异步写可能还没执行进程就被挂起，而那一刻恰好是最需要记住列表状态的时候。
+-(void) persistRenderedMembershipSnapshotSynchronous:(BOOL)synchronous;
+
 /// 检查群聊是否在当前空间白名单中
 /// 白名单未初始化（首次sync前）时返回YES（暂不过滤）
 -(BOOL) isGroupInWhitelist:(NSString*)channelId;
@@ -226,6 +263,20 @@ typedef NS_ENUM(NSInteger, WKConversationFilterType) {
 
 /// 最近 tab 未读数（DM + 3 天内活跃的群 + 子区，全部 !mute）
 -(NSInteger) getRecentUnreadCount;
+
+/// 最近 tab「双击 tab 依次定位下一个未读」用：按当前 filteredConversations 顺序
+/// 返回**肉眼能看到红点**的行下标（升序，可直接当 tableView 的 row 用）。
+///
+/// 判定口径故意收在这里，与 getRecentUnreadCount / cell 渲染同源，避免出现
+/// 「tab 红点是 0，但双击还能跳到某一行」这种错位：
+///   - filterType != Recent 返回空数组 —— 关注 tab 的 row 来自 groupDisplayList
+///     （含分组 header），下标语义和 filteredConversations 不通用
+///   - 跳过静音（isChannelMuted:，与 tab 红点同源）
+///   - 跳过 placeholder 子区（lastMessage == nil）：那个 unreadCount 来自接口，
+///     不一定是当前用户的未读，cell 也不给它渲染红点（同 getRecentUnreadCount）
+///   - 未读取 recentTabActivityUnreadCount，与 WKConversationListCell.refreshUnread
+///     在最近 tab 下用的是同一个 getter
+-(NSArray<NSNumber *> *) recentUnreadRowIndexes;
 
 /// 子区独立 wrap models — 用于"最近 tab 平铺、子区独立成行"。
 /// 与 conversationWrapModels 互不重叠：后者只有 PERSON+GROUP，前者只有 COMMUNITY_TOPIC。

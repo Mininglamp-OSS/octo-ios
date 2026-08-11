@@ -23,6 +23,8 @@
 // 供 async reflow 复用既有机制而无需暴露完整头。
 @interface NSObject (WKCardListHeightInvalidate)
 - (void)wk_invalidateHeightCacheForMessage:(WKMessageModel *)msg;
+// 卡片高度变化后，请求列表在“漂移守卫 + 非翻页”前提下安全重排（禁止 cell 直接 begin/endUpdates）。
+- (void)wk_reflowHeightForMessage:(WKMessageModel *)msg;
 @end
 
 // 卡片正文与宿主的内边距（卡片自身还有 host config 的 padding）
@@ -38,6 +40,7 @@
 @property(nonatomic,assign) BOOL renderedDark;             // 已渲染的主题
 @property(nonatomic,copy)   NSString *renderedClientMsgNo; // 已渲染帧所属消息
 @property(nonatomic,assign) NSInteger renderedCardSeq;     // 已渲染帧的 card_seq（乱序丢弃用）
+@property(nonatomic,assign) CGFloat renderedWidth;         // 已渲染帧的宽度（视图池 key 用）
 // —— 交互档（octo/v2）提交态 ——
 @property(nonatomic,strong) UIView *loadingOverlay;        // 提交 loading 遮罩
 @property(nonatomic,assign) BOOL submitInFlight;           // 提交进行中
@@ -172,6 +175,79 @@
     return [NSString stringWithFormat:@"%@|%@", clientMsgNo ?: @"", fp ?: @""];
 }
 
+#pragma mark - ACRView 复用池（显示过一次的视图，滑走→滑回免重建）
+
+// 按 clientMsgNo|fingerprint|width|dark 缓存已构建的 ACRView。关键点：key 含 clientMsgNo，
+// 而每条消息只占一行 → 同一 key 的视图任何时刻至多被一个 on-screen cell 持有，天然规避
+// UIView「单 superview」冲突与跨消息状态串扰。命中即免掉 ~6ms 的建树 + Auto Layout。
+// 只在主线程访问（refresh: / prepareForReuse / showFallback 均主线程），无需加锁。
+// 视图较重，LRU 上限 24；超出淘汰最旧（移出字典即释放，无 superview）。
+static const NSUInteger kWKCardViewPoolLimit = 24;
+
++ (NSMutableDictionary<NSString *, ACRView *> *)viewPool {
+    static NSMutableDictionary *pool = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ pool = [NSMutableDictionary dictionaryWithCapacity:kWKCardViewPoolLimit + 1]; });
+    return pool;
+}
+
+// LRU 顺序：末尾=最近使用。
++ (NSMutableArray<NSString *> *)viewPoolLRU {
+    static NSMutableArray *lru = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ lru = [NSMutableArray arrayWithCapacity:kWKCardViewPoolLimit + 1]; });
+    return lru;
+}
+
++ (NSString *)viewPoolKeyForClientMsgNo:(NSString *)clientMsgNo
+                            fingerprint:(NSString *)fp
+                                  width:(CGFloat)width
+                                   dark:(BOOL)dark {
+    if (clientMsgNo.length == 0 || fp.length == 0) return nil;
+    return [NSString stringWithFormat:@"%@|%@|w%.0f|d%d", clientMsgNo, fp, width, dark ? 1 : 0];
+}
+
+// 取出并从池中移除（取出后由 cell 独占持有）。
++ (nullable ACRView *)checkoutPooledViewForKey:(NSString *)key {
+    if (key.length == 0) return nil;
+    NSMutableDictionary *pool = [self viewPool];
+    ACRView *view = pool[key];
+    if (view) {
+        [pool removeObjectForKey:key];
+        [[self viewPoolLRU] removeObject:key];
+    }
+    return view;
+}
+
+// 存回池（先脱离 cell、断开 delegate 引用；超限淘汰最旧）。
++ (void)checkinPooledView:(ACRView *)view forKey:(NSString *)key {
+    if (!view || key.length == 0) { [view removeFromSuperview]; return; }
+    [view removeFromSuperview];
+    view.acrActionDelegate = nil; // 断开对旧 cell 的弱引用，避免误派发
+    NSMutableDictionary *pool = [self viewPool];
+    NSMutableArray *lru = [self viewPoolLRU];
+    if (pool[key]) { [lru removeObject:key]; } // 覆盖旧值
+    pool[key] = view;
+    [lru addObject:key];
+    while (lru.count > kWKCardViewPoolLimit) {
+        NSString *oldest = lru.firstObject;
+        [lru removeObjectAtIndex:0];
+        [pool removeObjectForKey:oldest]; // 淘汰视图 → 无 superview → 释放
+    }
+}
+
+// 把 cell 当前的 acrView 存回池（用其“已渲染”身份作 key），并置空 self.acrView。
+- (void)wk_stashCurrentACRViewToPool {
+    if (!self.acrView) return;
+    NSString *key = [WKInteractiveCardCell viewPoolKeyForClientMsgNo:self.renderedClientMsgNo
+                                                        fingerprint:self.renderedFingerprint
+                                                              width:self.renderedWidth
+                                                               dark:self.renderedDark];
+    [WKInteractiveCardCell checkinPooledView:self.acrView forKey:key]; // key 为空时内部只 removeFromSuperview
+    self.acrView = nil;
+}
+
+
 #pragma mark - 尺寸
 
 + (CGSize)contentSizeForMessage:(WKMessageModel *)model {
@@ -263,11 +339,49 @@
         return;
     }
 
+    // 走到这里=需要切换到另一帧视图（未命中去重）。先把当前视图存回复用池（按其旧身份 key），
+    // 供它稍后滑回时零成本复用。
+    [self wk_stashCurrentACRViewToPool];
+
     CGFloat width = [WKInteractiveCardCell cardWidthForModel:model];
+
+    // 复用池命中：该消息+内容+主题+宽度的视图之前建过（滑走时存入）→ 直接重挂，免建树/测高。
+    // 重新把 acrActionDelegate 指向当前 cell（ACR 在点击时动态读取该属性派发动作）。
+    NSString *poolKey = [WKInteractiveCardCell viewPoolKeyForClientMsgNo:model.clientMsgNo
+                                                            fingerprint:fp
+                                                                  width:width
+                                                                   dark:dark];
+    ACRView *pooled = [WKInteractiveCardCell checkoutPooledViewForKey:poolKey];
+    if (pooled) {
+        if (self.submitInFlight && self.submitFingerprint && ![fp isEqualToString:self.submitFingerprint]) {
+            [self endSubmitLoading];
+        }
+        self.acrView = pooled;
+        pooled.acrActionDelegate = self;
+        pooled.userInteractionEnabled = YES;
+        [self.cardHostView addSubview:pooled];
+        self.renderedFingerprint = fp;
+        self.renderedDark = dark;
+        self.renderedWidth = width;
+        self.renderedClientMsgNo = model.clientMsgNo;
+        self.renderedCardSeq = content.cardSeq;
+        self.plainFallbackLabel.hidden = YES;
+        self.cardHostView.hidden = NO;
+        [self setNeedsLayout];
+        // 复用的视图可能是（上次交互后的）展开态，其 liveHeight 覆盖仍然有效，不清除；
+        // 校准一次以防行高与内容不一致。
+        [self scheduleLiveHeightSync];
+        return;
+    }
+
+    // 复用池未命中=首次见到该帧，完整渲染一次。展示耗时由列表的 disp.<Class> 探针聚合统计。
+    // measureSize:NO —— 展示路径不需要 renderCard 内部测高(行高来自 +contentSizeForMessage
+    // 的缓存)，跳过 ~6ms 的 fittingSizeOfView。
     WKACardRenderResult *result = [WKACardRenderer renderCard:content.card
                                                         width:width
                                                          dark:dark
-                                                     delegate:self];
+                                                     delegate:self
+                                                  measureSize:NO];
     if (!result.succeeded || !result.view) {
         [self showFallbackWithText:(content.plain ?: LLang(@"[卡片]")) dark:dark];
         return;
@@ -279,13 +393,13 @@
     }
 
     // 换上新卡片视图
-    [self.acrView removeFromSuperview];
     self.acrView = result.view;
     self.acrView.userInteractionEnabled = YES;
     [self.cardHostView addSubview:self.acrView];
 
     self.renderedFingerprint = fp;
     self.renderedDark = dark;
+    self.renderedWidth = width;
     self.renderedClientMsgNo = model.clientMsgNo;
     self.renderedCardSeq = content.cardSeq;
     // 新渲染的是初始(收起)态视图 → 清掉旧的实测高度覆盖，让行高回到 measureCard 初值，
@@ -303,8 +417,8 @@
 }
 
 - (void)showFallbackWithText:(NSString *)text dark:(BOOL)dark {
-    [self.acrView removeFromSuperview];
-    self.acrView = nil;
+    // 存回复用池（若当前挂着的是某卡片视图），供其滑回时复用；再清空已渲染身份。
+    [self wk_stashCurrentACRViewToPool];
     self.renderedFingerprint = nil;
     self.renderedClientMsgNo = nil;
     self.renderedCardSeq = -1;
@@ -367,8 +481,12 @@
 
 - (void)prepareForReuse {
     [super prepareForReuse];
-    // 复用时不主动销毁 acrView；refresh: 会按指纹决定是否 remount。
-    // 但清掉 fallback 文本避免闪现旧内容，并结束任何进行中的提交 loading。
+    // 被复用给别的行前，把当前卡片视图存回复用池（按其消息身份 key），滑回原消息时零成本复用；
+    // 并清空已渲染身份，让下次 refresh: 走 checkout/build。清 fallback 文本 + 结束提交 loading。
+    [self wk_stashCurrentACRViewToPool];
+    self.renderedFingerprint = nil;
+    self.renderedClientMsgNo = nil;
+    self.renderedCardSeq = -1;
     self.plainFallbackLabel.text = nil;
     [self endSubmitLoading];
 }
@@ -683,26 +801,19 @@
     return (UITableView *)v;
 }
 
-/// 失效上层行高缓存 + begin/endUpdates 重新测高。keepPosition/ajustTableViewByStreams
-/// 负责保持滚动位置，上方增高由既有 offset 补偿逻辑吸收。
+/// 失效上层行高缓存 + 安全重排。**关键**：绝不从 cell 直接 begin/endUpdates ——
+/// 那会在下拉翻页(isPulldownInProgress)或行数漂移窗口内抛
+/// _Bug_Detected_In_Client_Of_UITableView，撞坏 UITableView 内部簿记 → 翻页白屏 +
+/// 退出后野指针崩溃(_NSInlineData _fallbackTraitCollection zombie)。故统一委托给
+/// WKMessageListView，由它套用与其它路径一致的漂移守卫。keepPosition/ajustTableViewByStreams
+/// 负责保持滚动位置。
 - (void)reflowHeightUsingListInvalidate {
-    UIView *hostView = self.superview;
-    while (hostView && ![hostView isKindOfClass:[UITableView class]]) hostView = hostView.superview;
-    if (![hostView isKindOfClass:[UITableView class]]) return;
-    UITableView *tv = (UITableView *)hostView;
-
-    UIView *listView = tv.superview;
+    UIView *listView = self.superview;
     while (listView && ![NSStringFromClass([listView class]) isEqualToString:@"WKMessageListView"]) {
         listView = listView.superview;
     }
-    if (listView && [listView respondsToSelector:@selector(wk_invalidateHeightCacheForMessage:)] && self.messageModel) {
-        [listView wk_invalidateHeightCacheForMessage:self.messageModel];
-    }
-    @try {
-        [tv beginUpdates];
-        [tv endUpdates];
-    } @catch (NSException *ex) {
-        // 行数漂移等异常安全吞掉（沿用本仓库对 UITableView batch 的防御姿态）
+    if ([listView respondsToSelector:@selector(wk_reflowHeightForMessage:)] && self.messageModel) {
+        [listView wk_reflowHeightForMessage:self.messageModel];
     }
 }
 

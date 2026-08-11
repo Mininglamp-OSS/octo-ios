@@ -61,6 +61,19 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
+//---------- 图文混排 cell（RichText=14，WKRichTextContent）----------
+// 复用 WKRichTextCell 的图文 attributed 构建逻辑，按 block 顺序内联渲染文字 + 图片，
+// 与聊天页一致。之前 RichText 落到 Other cell 只显示 conversationDigest（图片→[图片] 文本），
+// 图片丢失。
+
+@interface WKMergeForwardDetailRichTextModel : WKMergeForwardDetailModel
+
+@end
+
+@interface WKMergeForwardDetailRichTextCell : WKMergeForwardDetailCell
+
+@end
+
 
 
 //---------- 文件cell ----------

@@ -49,6 +49,10 @@
 - (void)refresh:(WKMessageModel *)model {
     [super refresh:model];
     self.messageModel = model;
+    // 竞态兜底: 复用/漂移下错配的非 WKScreenshotContent 会 unrecognized selector 崩 (同 WKImageMessageCell)
+    if (![model.content isKindOfClass:[WKScreenshotContent class]]) {
+        return;
+    }
     WKScreenshotContent *content = (WKScreenshotContent*)model.content;
     
     self.tipTextLbl.text = content.tip;

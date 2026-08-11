@@ -9,6 +9,7 @@
 
 #import "WKMergeForwardDetailCell.h"
 #import "WKConstant.h"
+#import "WKRichTextContent.h"
 
 @implementation WKMergeForwardDetailVM
 
@@ -86,6 +87,15 @@
                 case WK_MERGEFORWARD:
                     if([message.content isKindOfClass:[WKMergeForwardContent class]]) {
                         modelCls = WKMergeForwardDetailNestedModel.class;
+                    } else {
+                        modelCls = WKMergeForwardDetailOtherModel.class;
+                    }
+                    break;
+                case WK_RICHTEXT:
+                    // 图文混排（RichText=14）：内联渲染文字 + 图片。类型错配兜底到 Other。
+                    // 之前无此 case → 落 default → Other cell 只显示 conversationDigest（图片→[图片] 文本）。
+                    if([message.content isKindOfClass:[WKRichTextContent class]]) {
+                        modelCls = WKMergeForwardDetailRichTextModel.class;
                     } else {
                         modelCls = WKMergeForwardDetailOtherModel.class;
                     }

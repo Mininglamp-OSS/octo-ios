@@ -89,12 +89,21 @@ static const char kRichTextSelOrigDelegateKey = 0;
 /// appendRemoteImage（新建 WKRemoteImageToken，不走 entities offset 路线）。
 /// 按 blocks 顺序穿插；超长按 block 截断，不切断图片块。
 + (NSMutableAttributedString*)attributedStringForMessage:(WKMessageModel*)model truncated:(BOOL*)truncated {
+    // 聊天时间线：文字/mention 配色按 isSend 走气泡语义（发送方紫底用白，接收方白底用主题色）。
+    UIColor *textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
+    UIColor *mentionColor = model.isSend ? [UIColor whiteColor] : [WKApp shared].config.themeColor;
+    return [self attributedStringForMessage:model textColor:textColor mentionColor:mentionColor truncated:truncated];
+}
+
+// 颜色参数化版：合并转发详情等无气泡（白底、左对齐列表）场景复用同一份 block 构建逻辑，
+// 但强制传 defaultTextColor，避免复用 isSend 分支时发送方消息拿到白字在白底上看不见。
++ (NSMutableAttributedString*)attributedStringForMessage:(WKMessageModel*)model textColor:(UIColor*)textColor mentionColor:(UIColor*)mentionColor truncated:(BOOL*)truncated {
     NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] init];
     attr.font = [[WKApp shared].config appFontOfSize:[WKApp shared].config.messageTextFontSize];
-    attr.textColor = model.isSend ? [WKApp shared].config.messageSendTextColor : [WKApp shared].config.messageRecvTextColor;
-    // 与 WKTextMessageCell:1454-1462 同款 mention 配色——发送方紫色气泡用白，接收方白气泡用主题色，
-    // 统一加下划线表征"可点跳名片"。appendMetion: 内部直接读这两个属性写到 mention range 上。
-    attr.metionColor = model.isSend ? [UIColor whiteColor] : [WKApp shared].config.themeColor;
+    attr.textColor = textColor;
+    // 与 WKTextMessageCell:1454-1462 同款 mention 配色，统一加下划线表征"可点跳名片"。
+    // appendMetion: 内部直接读这两个属性写到 mention range 上。
+    attr.metionColor = mentionColor;
     attr.metionUnderline = YES;
 
     if (![model.content isKindOfClass:[WKRichTextContent class]]) {

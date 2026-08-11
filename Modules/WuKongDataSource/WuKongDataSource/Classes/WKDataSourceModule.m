@@ -15,6 +15,7 @@
 #import "WKChannelDataManagerDelegateImp.h"
 #import "WKSpaceConversationCache.h"
 #import "WKSpaceConvSyncCache.h"
+#import "WKConvListCache.h"
 #import "WKApp.h"
 
 @WKModule(WKDataSourceModule)
@@ -237,6 +238,10 @@
     [[WKSDK shared].conversationManager setSyncConversationProviderAndAck:^(long long version, NSString * _Nonnull lastMsgSeqs, WKSyncConversationCallback  _Nonnull callback) {
         // 获取当前 Space ID（参考 Web 端实现）
         NSString *currentSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+        // 账号身份也必须在**发起时**钉住。原因见下方 .then 里的账号闸门：DB 句柄
+        // ([WKDB sharedDB].dbQueue) 是在写入 block 执行时才解析的，而 switchDB: 会把
+        // 这个单例重定向到新账号的库文件。
+        NSString *uidAtRequest = [WKApp shared].loginInfo.uid;
         NSString *syncPath = @"conversation/sync";
         if (currentSpaceId && currentSpaceId.length > 0) {
             // URL 编码 space_id 参数
@@ -250,7 +255,34 @@
             @"last_msg_seqs": lastMsgSeqs?:@"",
             @"msg_count":@([WKApp shared].config.eachPageMsgLimit),
         }].then(^(NSDictionary* dict){
-            
+
+            // ---------- 账号闸门：必须在任何解析 / 落库之前 ----------
+            // 这个响应可能是以账号 A 的身份发出、在切到 B 之后才回来的：
+            //   - 401 统一错误处理里直接调 immediatelyLogout（WKApp），也就是说登出恰好
+            //     发生在"有请求在飞"的时刻，而没有任何地方取消这些在飞请求；
+            //   - 下游所有写入（mergeConversations 的 SQL_REPLACE、replaceMessages:、
+            //     applySpaceMembership:）都在 block 执行时才去解析 [WKDB sharedDB].dbQueue，
+            //     而 switchDB: 已经把这个单例重定向到 B 的库文件（并 post
+            //     WKDBDidSwitchNotification）。
+            // 于是 A 的会话行、消息体、空间归属会一起写进 **B 的库**。归属和会话行由同一个
+            // 晚回调同时写入，所以作用域那层 EXISTS join 两边都命中、挡不住它。
+            // 改造前这属于瞬态（下次冷启动 deleteAllConversation 会清掉），本 PR 取消清库
+            // 之后它就变成持久的 —— 泄漏的会话行会成为进入 A 消息记录的入口。
+            //
+            // 丢弃是安全的：走 error 分支后 SDK 的 syncConversations 会在 3s 后重试
+            // （此时身份已是 B，拉到的是 B 的数据），且冷启动首次 sync 强制 version=0
+            // 全量（WKConnectionManager coldStartSyncDone），不存在"丢一次就永久缺数据"。
+            NSString *uidNow = [WKApp shared].loginInfo.uid;
+            BOOL accountChanged = !(uidAtRequest == uidNow || [uidAtRequest isEqualToString:uidNow]);
+            if (accountChanged) {
+                NSLog(@"[SpaceIndex] 丢弃过期 conversation/sync 响应：账号已切换 %@ → %@",
+                      uidAtRequest ?: @"<nil>", uidNow ?: @"<nil>");
+                callback(nil, [NSError errorWithDomain:@"WKDataSource"
+                                                  code:-4090
+                                              userInfo:@{NSLocalizedDescriptionKey: @"account switched, sync response discarded"}]);
+                return;
+            }
+
             // ---------- conversation  ----------
             NSArray<NSDictionary*>* conversationDicts = dict[@"conversations"];
             NSMutableArray<WKSyncConversationModel*> *syncConversationModels = [NSMutableArray array];
@@ -265,6 +297,33 @@
             // 预填 channelInfo.extra[@"space_id"] / channelMember.extra[@"source_space_id"]
             // 让 WKSpaceFilter 在 conv sync 落地前即可作 Keep/Skip 判定，消除 fail-open。
             [self prefillSpaceFieldsFromSyncModels:syncConversationModels];
+            // 会话 ↔ 空间归属落库（见 WKConvListCache / WKConversationSpaceDB）。
+            // 请求本身带了 space_id，所以响应就是该空间的会话集。
+            //
+            // 覆盖式写入（fullSync=YES，会 tombstone 掉响应里没有的旧归属，用来自愈
+            // 退群 / 删会话 / 被移出）只在同时满足下面三条时才做：
+            //   1. version == 0 —— 这是一次全量拉取；
+            //   2. 不是校验型调用 —— verifyAndAddGroupsToList 也用 version=0，但它只是
+            //      核验某个群的归属，响应不该被当成"这个空间的全部会话"；
+            //   3. 响应非空 —— 空响应更可能是异常（限流 / 空窗）而不是"这个空间真的一条
+            //      会话都没有"，拿它去 tombstone 会把整个空间的缓存清光，代价太大。
+            // 任何一条不满足就降级为只补充不删除：宁可留一条过期归属（会被下次真全量
+            // 或 prune/sweep 纠正），也不能把用户的缓存列表整片删掉。
+            if (currentSpaceId.length > 0) {
+                NSMutableArray<WKChannel *> *memberChannels = [NSMutableArray array];
+                for (WKSyncConversationModel *m in syncConversationModels) {
+                    if (m.channel.channelId.length > 0) [memberChannels addObject:m.channel];
+                }
+                BOOL verificationOnly = [WKConvListCache isVerificationOnlySync];
+                BOOL authoritativeFull = (version == 0) && !verificationOnly && memberChannels.count > 0;
+                if (version == 0 && !authoritativeFull) {
+                    NSLog(@"[SpaceIndex] version=0 但降级为增量归属写入 (verificationOnly=%d, count=%lu)",
+                          verificationOnly, (unsigned long)memberChannels.count);
+                }
+                [WKConvListCache applyMembership:memberChannels
+                                        forSpace:currentSpaceId
+                                        fullSync:authoritativeFull];
+            }
             callback(wrapModel,nil);
         }).catch(^(NSError *err){
             callback(nil,err);

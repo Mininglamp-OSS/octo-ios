@@ -16,8 +16,11 @@
 #import "WKFollowedKeysStore.h"
 #import "WKSidebarItemEntity.h"
 #import <WuKongIMSDK/WKReminderDB.h>
+#import <WuKongIMSDK/WKUnreadStore.h>
+#import <WuKongIMSDK/WKUnreadStateDB.h>
 #import "WKSpaceFilter.h"
 #import "WKSpaceBotRegistry.h"
+#import "WKConvListCache.h"
 #import "WKApp.h"
 #import "WKTimeTool.h"
 
@@ -37,6 +40,12 @@
 @property(nonatomic,strong) NSArray<WKConversationWrapModel*> *filteredConversations; // 过滤后的列表
 @property(nonatomic,strong) NSRecursiveLock *conversationsLock;
 @property(nonatomic,strong) NSSet<NSString*> *syncedGroupChannelIds; // 当前空间的合法群聊白名单
+/// conversationWrapModels 当前这一份是"为哪个空间"装载的。
+/// 快照（persistRenderedMembershipSnapshot）必须用它和 currentSpaceId 比对：
+/// 只有两者一致时，内存里的列表才真的代表当前空间 —— 否则就有可能把上一个空间的
+/// 会话写进新空间的归属（例如切换过程中 App 被切到后台触发快照）。
+/// reset 时清空，loadConversationList 落数据时盖章。
+@property(nonatomic,copy,nullable) NSString *loadedForSpaceId;
 @property(nonatomic,strong) NSMutableSet<NSString*> *expandedThreadGroups; // 子区预览展开的群 channelId
 @property(nonatomic,copy) NSArray<WKConversation*> *cachedAllConversations; // loadConversationList 缓存，供 buildGroupDisplayList 复用
 @property(nonatomic,strong) NSDictionary<NSString*, NSArray<WKConversation*>*> *cachedTopicsByGroup; // groupId → 子区会话列表
@@ -126,6 +135,7 @@ static WKConversationListVM *_instance;
                                   // badge 也算它们；rebuildFilteredList 会把它们 append 进 filteredConversations。
                                   // 必须和 conversationWrapModels 一起清，等下次 loadConversationList 重建。
     self.syncedGroupChannelIds = nil;
+    self.loadedForSpaceId = nil; // 内存列表已清空，不再代表任何空间
     self.categoryList = @[];
     self.cachedAllConversations = nil;
     self.cachedTopicsByGroup = nil;
@@ -142,7 +152,68 @@ static WKConversationListVM *_instance;
         }
     }
     self.syncedGroupChannelIds = [groupIds copy];
+    // DM 不维护内存白名单：DM 的空间隔离由 SQL 作用域负责，多一份内存集合只会和 DB
+    // 漂移（曾导致"进聊天详情返回后所有私聊消失"）。见 shouldShowConversation: 的注释。
     NSLog(@"📋 已记录当前空间合法群聊白名单: %lu 个群", (unsigned long)groupIds.count);
+}
+
+/// 实时会话更新被判定为"属于当前空间"后，把结论同步进内存群白名单。
+///
+/// 归属落库（WKConvListCache.recordMembershipBatch）是异步的，而
+/// shouldShowConversation: 的群分支读的是这个内存集合 —— 不同步更新的话，刚进来的新群
+/// 会在下一次 loadConversationList 时被自己的白名单挡掉（DB 里有、列表里没有）。
+/// DM 不参与：它没有内存白名单，隔离完全交给 SQL 作用域。
+-(void) noteSpaceMembershipChannels:(NSArray<WKChannel*>*)channels {
+    if(channels.count == 0) return;
+    NSMutableSet *groups = self.syncedGroupChannelIds ? [self.syncedGroupChannelIds mutableCopy] : nil;
+    if(!groups) return; // 白名单未初始化时保持 nil 的 fail-open 语义，不要凭这一批把它变成窄集合
+    BOOL groupChanged = NO;
+    for (WKChannel *ch in channels) {
+        if(ch.channelId.length == 0) continue;
+        if(ch.channelType == WK_GROUP && ![groups containsObject:ch.channelId]) {
+            [groups addObject:ch.channelId];
+            groupChanged = YES;
+        }
+    }
+    if(groupChanged) self.syncedGroupChannelIds = [groups copy];
+}
+
+-(void) persistRenderedMembershipSnapshot {
+    [self persistRenderedMembershipSnapshotSynchronous:NO];
+}
+
+-(void) persistRenderedMembershipSnapshotSynchronous:(BOOL)synchronous {
+    if(![WKConvListCache enabled]) return;
+    NSString *spaceId = [WKConvListCache currentSpaceId];
+    if(spaceId.length == 0) return;
+    // 内存列表必须确实是为这个空间装的。不一致说明正处在切换的中间态（例如切换过程中
+    // App 被切到后台触发了快照）—— 这时候写快照会把上一个空间的会话记进新空间的归属，
+    // 正是跨空间污染的经典成因，直接跳过。
+    if(![self.loadedForSpaceId isEqualToString:spaceId]) {
+        NSLog(@"[SpaceIndex] 跳过快照：内存列表属于 %@，当前空间 %@",
+              self.loadedForSpaceId ?: @"<nil>", spaceId);
+        return;
+    }
+    if(self.conversationWrapModels.count == 0 && self.threadWrapModels.count == 0) {
+        return; // 没有渲染内容就不写（别把"空"记成这个空间的状态）
+    }
+    NSMutableArray<WKChannel*> *rendered = [NSMutableArray array];
+    for (WKConversationWrapModel *m in self.conversationWrapModels) {
+        if(m.channel.channelId.length > 0) [rendered addObject:m.channel];
+    }
+    // 子区也要记：最近 tab 里子区是独立行，不记的话下次冷启动子区行会消失。
+    for (WKConversationWrapModel *t in self.threadWrapModels) {
+        if(t.channel.channelId.length > 0) [rendered addObject:t.channel];
+    }
+    // recordMembershipBatch 内部按 (space, channel) 内存去重 + 批量事务，
+    // 所以这个方法可以被高频调用（每次 loadConversationList 完成都调）而几乎无成本。
+    [WKConvListCache recordMembershipBatch:rendered forSpace:spaceId synchronous:synchronous];
+    // 内存群白名单跟着放宽：快照会往归属表里加行，而群白名单是在 hydrate 时按归属表
+    // 建立的。不同步放宽的话，白名单会比 DB 作用域更严，下一次 loadConversationList
+    // 就会把这些群筛掉 —— 与 DM 那个"进详情返回后消失"的 bug 同一类漂移。
+    [self noteSpaceMembershipChannels:rendered];
+    NSLog(@"[SpaceIndex] 快照已渲染列表 space=%@ rows=%lu sync=%d",
+          spaceId, (unsigned long)rendered.count, synchronous);
 }
 
 -(void) addGroupToWhitelist:(NSString*)channelId {
@@ -154,7 +225,42 @@ static WKConversationListVM *_instance;
     } else {
         self.syncedGroupChannelIds = [NSSet setWithObject:channelId];
     }
+    // 归属同时落库：白名单是内存态（reset 就没了），归属表才是跨启动的空间闸门。
+    // 缺这一步，刚建/刚进的群下次冷启动会被作用域挡在列表外。
+    [WKConvListCache recordMembership:[WKChannel channelID:channelId channelType:WK_GROUP] forSpace:nil];
     NSLog(@"📋 群聊 %@ 已添加到当前空间白名单", channelId);
+}
+
+/// 用持久化的归属表水化空间白名单 + 会话读路径作用域。
+///
+/// 为什么需要：`reset` 把 syncedGroupChannelIds 清成 nil，而
+/// `shouldShowConversation:` 对 nil 的语义是 "尚未 sync，暂不过滤"（fail-open）。
+/// 原先这个 fail-open 窗口是安全的 —— 因为 DB 刚被 deleteAllConversation 清过，
+/// 里面没有别的空间的会话。现在 DB 会长期保留多空间会话，这个窗口必须关掉：
+/// 从归属表里把白名单直接读出来，第一帧就是正确的过滤结果。
+///
+/// 调用时机：启动、切空间 —— 都在 `reset` 之后、任何 loadConversationList 之前。
+-(void) hydrateSpaceScope:(NSString*)spaceId {
+    // 归属索引的一次性准备/重建必须在任何读之前：它把"归属表整表为空"这个状态彻底
+    // 消掉，读路径从此可以一直按空间精确过滤（那个兼容态就是跨空间污染的来源之一）。
+    [WKConvListCache prepareMembershipIfNeeded];
+    [WKConvListCache applyScopeForSpace:spaceId];
+    if(![WKConvListCache enabled] || spaceId.length == 0) {
+        return;
+    }
+    if(![WKConvListCache hasMembershipForSpace:spaceId]) {
+        // 这个空间从没被完整同步过（全新安装 / 第一次进这个空间）：白名单保持 nil，
+        // 沿用"首次 sync 前不过滤"的既有语义 —— 实时消息路径靠
+        // isGroupWhitelistInitialized 判断，收紧成空集会让 sync 回来的会话全被挡住。
+        // DB 读路径不受影响：作用域仍生效，membership 为 0 行 → 返回空列表（正确，
+        // 本来就没有这个空间的缓存）。
+        self.syncedGroupChannelIds = nil;
+        NSLog(@"[SpaceIndex] hydrate space=%@ 该空间尚无归属数据，白名单保持未初始化", spaceId);
+        return;
+    }
+    self.syncedGroupChannelIds = [[WKConvListCache channelIdsForSpace:spaceId channelType:WK_GROUP] copy];
+    NSLog(@"[SpaceIndex] hydrate space=%@ groups=%lu", spaceId,
+          (unsigned long)self.syncedGroupChannelIds.count);
 }
 
 -(BOOL) isGroupInWhitelist:(NSString*)channelId {
@@ -179,6 +285,7 @@ static WKConversationListVM *_instance;
     if(self.conversationWrapModels.count == 0) return removed;
     // 先拷贝一份 snapshot，避免遍历中修改原数组
     NSArray<WKConversationWrapModel*> *snapshot = [self.conversationWrapModels copy];
+    NSMutableArray<WKChannel*> *removedChannels = [NSMutableArray array];
     for(WKConversationWrapModel *m in snapshot) {
         WKChannel *ch = m.channel;
         if(ch.channelType != WK_GROUP) continue;
@@ -187,13 +294,35 @@ static WKConversationListVM *_instance;
         if(d == WKSpaceFilterDecisionSkip) {
             [self removeAtChannnel:ch];
             [removed addObject:ch.channelId];
+            [removedChannels addObject:ch];
         }
     }
     if(removed.count > 0) {
         NSLog(@"🧹 [] 清理当前 Space 不应展示的残留群聊 %lu 个: %@",
               (unsigned long)removed.count, removed);
+        // Skip 是 WKSpaceFilter 的**明确**判定（channelInfo.space_id 指向别的空间且我
+        // 也不是外部成员），所以同步把归属删掉 —— 否则此前误写的归属会一直挂着，
+        // 下次冷启动从缓存里又把它读回当前空间的列表（跨空间污染的自愈通道）。
+        [self dropSpaceMembershipForChannels:removedChannels forSpace:nil];
     }
     return removed;
+}
+
+/// 明确判定不属于某空间的 channel → 删归属 + 从内存白名单剔除。
+/// 只应由 prune / sweep 这类"有明确 Skip 证据"的路径调用；fail-open 判定绝不能进来
+/// （那会把用户正常的会话从缓存里删掉）。
+-(void) dropSpaceMembershipForChannels:(NSArray<WKChannel*>*)channels forSpace:(NSString*)spaceId {
+    if(channels.count == 0) return;
+    NSString *sid = spaceId.length > 0 ? spaceId : [WKConvListCache currentSpaceId];
+    if(sid.length == 0) return;
+    [WKConvListCache removeMembership:channels forSpace:sid];
+    // 只有在被删的就是"当前空间"时才动内存白名单 —— 白名单描述的是当前空间。
+    if(![sid isEqualToString:[WKConvListCache currentSpaceId]]) return;
+    NSMutableSet *groups = self.syncedGroupChannelIds ? [self.syncedGroupChannelIds mutableCopy] : nil;
+    for (WKChannel *ch in channels) {
+        if(ch.channelType == WK_GROUP) [groups removeObject:ch.channelId];
+    }
+    if(groups) self.syncedGroupChannelIds = [groups copy];
 }
 
 /// YUJ-bot-isolation: 清掉当前 Space 的 conversation list 里"不属于当前 Space 已添加 Bot"
@@ -209,6 +338,7 @@ static WKConversationListVM *_instance;
     if(spaceId.length == 0 || self.conversationWrapModels.count == 0) return removed;
     NSArray<WKConversationWrapModel*> *snapshot = [self.conversationWrapModels copy];
     NSArray<NSString*> *systemBotUIDs = [WKApp shared].config.systemBotUIDs;
+    NSMutableArray<WKChannel*> *removedChannels = [NSMutableArray array];
     for(WKConversationWrapModel *m in snapshot) {
         WKChannel *ch = m.channel;
         if(ch.channelType != WK_PERSON) continue;
@@ -220,6 +350,7 @@ static WKConversationListVM *_instance;
         if(mem == WKSpaceBotMembershipNotMember) {
             [self removeAtChannnel:ch];
             [removed addObject:ch.channelId];
+            [removedChannels addObject:ch];
         }
     }
     if(removed.count > 0) {
@@ -227,6 +358,9 @@ static WKConversationListVM *_instance;
         NSLog(@"🧹 [BotSpaceTrace] pruneNonCurrentSpaceBots removed %lu bot(s) for space=%@: %@",
               (unsigned long)removed.count, spaceId, removed);
 #endif
+        // NotMember 是服务端权威名单的明确判定 → 同步删归属（自愈，见
+        // dropSpaceMembershipForChannels:forSpace: 注释）。Unknown 不走这里，不会误删。
+        [self dropSpaceMembershipForChannels:removedChannels forSpace:spaceId];
     }
     return removed;
 }
@@ -251,6 +385,8 @@ static WKConversationListVM *_instance;
 
     // 1) conversationWrapModels 扫描
     NSArray<WKConversationWrapModel*> *convSnapshot = [self.conversationWrapModels copy];
+    /// 被明确判定"不属于本空间"的 channel —— 方法末尾一并删归属（自愈）
+    NSMutableArray<WKChannel*> *sweptChannels = [NSMutableArray array];
     NSArray<NSString*> *systemBotUIDs = [WKApp shared].config.systemBotUIDs;
     NSString *botfatherUID = [WKApp shared].config.botfatherUID;
     NSString *systemUID = [WKApp shared].config.systemUID;
@@ -271,6 +407,7 @@ static WKConversationListVM *_instance;
             WKSpaceFilterDecision d = [[WKSpaceFilter shared] decideChannel:cid channelType:ch.channelType];
             if(d == WKSpaceFilterDecisionSkip) {
                 [self removeAtChannnel:ch];
+                [sweptChannels addObject:ch];
                 removedConv++;
             }
             continue;
@@ -281,6 +418,7 @@ static WKConversationListVM *_instance;
             WKSpaceFilterDecision d = [[WKSpaceFilter shared] decideChannel:cid channelType:ch.channelType];
             if(d == WKSpaceFilterDecisionSkip) {
                 [self removeAtChannnel:ch];
+                [sweptChannels addObject:ch];
                 removedConv++;
                 continue;
             }
@@ -290,6 +428,7 @@ static WKConversationListVM *_instance;
                 WKSpaceBotMembership mem = [[WKSpaceBotRegistry shared] membershipForBotUID:cid inSpace:spaceId];
                 if(mem == WKSpaceBotMembershipNotMember) {
                     [self removeAtChannnel:ch];
+                    [sweptChannels addObject:ch];
                     removedConv++;
                     continue;
                 }
@@ -303,6 +442,7 @@ static WKConversationListVM *_instance;
                     NSString *msgSpace = (NSString *)v;
                     if(msgSpace.length > 0 && ![msgSpace isEqualToString:spaceId]) {
                         [self removeAtChannnel:ch];
+                        [sweptChannels addObject:ch];
                         removedConv++;
                         continue;
                     }
@@ -337,6 +477,12 @@ static WKConversationListVM *_instance;
     if(removedConv > 0 || removedThread > 0) {
         NSLog(@"🧹 [SpaceSweep] sweepForeignToSpace=%@ removedConv=%ld removedThread=%ld",
               spaceId, (long)removedConv, (long)removedThread);
+    }
+    if(sweptChannels.count > 0) {
+        // 本方法的三条移除判据（SpaceFilter Skip / Bot NotMember / lastMessage.space_id
+        // 明确不匹配）都是**明确**证据，不是 fail-open，所以可以安全地把归属一起删掉。
+        // 这是"归属曾被写错"的自愈通道：不删的话，下次冷启动会从缓存里把它读回来。
+        [self dropSpaceMembershipForChannels:sweptChannels forSpace:spaceId];
     }
     if(outRemovedCount) *outRemovedCount = removedConv;
     if(outRemovedThreadCount) *outRemovedThreadCount = removedThread;
@@ -388,6 +534,19 @@ static WKConversationListVM *_instance;
 -(void) loadConversationList:(void(^)(void)) finished {
     CFAbsoluteTime _lcStart = CFAbsoluteTimeGetCurrent();
 
+    // 发起时就把"这次加载是为哪个空间、属于哪一代 VM"钉下来。回主线程时必须用这两个
+    // 捕获值校验，**不能读当时的 currentSpaceId 去盖章** ——
+    //   A 的 DB 查询在后台跑 → 用户切到 B（reset + hydrateSpaceScope(B) + 新 load）
+    //   → A 的回调后到，把 A 的会话写进 VM，又把 loadedForSpaceId 盖成 B。
+    // 这样 persistRenderedMembershipSnapshot 的 loadedForSpaceId == currentSpaceId
+    // 校验必然通过，A 的 channel 就被永久写进 B 的归属表（归属只增不删，重启也在），
+    // 之后每次冷启动都把 A 的会话种回 B 的列表 —— 正是本次缓存改造要消灭的污染。
+    // 丢弃是安全的：所有 reset 调用点后面都紧跟一次新的 loadConversationList
+    // （performSwitchToSpaceId / loadCurrentSpace 两条空间变化路径 + init），
+    // 不存在"丢了这次就没人再刷"的情况。
+    NSString *requestedSpaceId = [WKConvListCache currentSpaceId];
+    NSInteger requestedGen = self.vmGeneration;
+
     // 在主线程快照旧 threadPreviews/threadCount（后台线程不能读 self.conversationWrapModels）
     // reset 会清空 conversationWrapModels，所以同时用 cachedThreadData 兜底
     NSMutableDictionary *oldThreadData = [NSMutableDictionary dictionary];
@@ -413,6 +572,41 @@ static WKConversationListVM *_instance;
         NSArray<WKConversation*> *conversations = [[[WKSDK shared] conversationManager] getConversationList];
         NSLog(@"[TabPerf] loadConversationList(bg): DB query=%.1fms count=%lu",
               (CFAbsoluteTimeGetCurrent()-_dbStart)*1000, (unsigned long)conversations.count);
+        // 跨空间污染定位用：DB 读路径已经按 conversation_space 作用域过滤过，所以这里的
+        // count 就是"归属于当前空间的会话数"。若列表里出现别的空间的会话而这条日志的
+        // scope 是对的，说明污染来自实时路径（WKConversationListVC.filterConversationsBySpace）
+        // 而不是缓存；反之则是归属表被写脏了。
+        NSLog(@"[SpaceIndex] loadConversationList scope=%@ dbRows=%lu groupWhitelist=%@",
+              [[WKSDK shared].conversationManager spaceScope] ?: @"<off>",
+              (unsigned long)conversations.count,
+              strongSelf.syncedGroupChannelIds ? [@(strongSelf.syncedGroupChannelIds.count) stringValue] : @"<nil>");
+
+        // 已读水位夹取：用本地 last_read_seq 把"已经读过、但 DB 里 unread 还没归零"的
+        // 会话压成 0。
+        //
+        // 为什么在这里做：DB 不再被清空后，列表第一帧直接来自上次持久化的 unread。
+        // 正常路径上它已经是 mergeConversations → WKUnreadStore.reconcileServerSnapshot
+        // 的结果（本地优先），但边界情况仍会留下偏大的值 —— 例如"读完最后一条后
+        // 立刻被杀进程、ack 还没上报"，或 server 在下一次 sync 前回了个偏大的 unread。
+        // 用户对"已读又变未读"的容忍度是 0，所以在渲染前统一夹一次。
+        // prefetchReconcileContext 一次性预读整张 unread_state（本来就是给 250+ 行
+        // 批量 reconcile 设计的入口），避免每行一次 DB 查询。
+        WKUnreadReconcileContext *unreadCtx = [[WKUnreadStore shared] prefetchReconcileContext];
+        NSInteger clampedCount = 0;
+        for (WKConversation *conversation in conversations) {
+            if(conversation.unreadCount <= 0) continue;
+            WKUnreadStateRecord *rec = unreadCtx.unreadStateMap[[WKUnreadStore channelKeyFor:conversation.channel]];
+            if(!rec) continue;
+            // lastMessageSeq 为 0 表示这条会话没有可比对的 seq 锚点（占位 / 纯 cmd 会话），
+            // 不夹 —— 宁可多显示一个红点，也不要凭没有锚点的比较把真未读抹掉。
+            if(conversation.lastMessageSeq > 0 && rec.lastReadSeq >= conversation.lastMessageSeq) {
+                conversation.unreadCount = 0;
+                clampedCount++;
+            }
+        }
+        if(clampedCount > 0) {
+            NSLog(@"[UnreadTrace] loadConversationList 已读水位夹取 %ld 条", (long)clampedCount);
+        }
 
         NSMutableArray<WKConversationWrapModel*> *conversationWrapModels = [[NSMutableArray alloc] init];
         NSInteger filteredCount = 0;
@@ -532,9 +726,27 @@ static WKConversationListVM *_instance;
             __strong typeof(weakSelf) mainSelf = weakSelf;
             if (!mainSelf) return;
 
+            // 过期结果闸门：期间发生过 reset（换代）或空间已经变了 → 这批数据属于上一个
+            // 空间，既不能写进 VM 也不能盖章。直接丢弃，不调 finished ——
+            // finished 里会 persistRenderedMembershipSnapshot，让它跑就等于把旧空间的
+            // 会话写进新空间的归属表。新空间自己那次 load 的 finished 会负责刷 UI。
+            NSString *nowSpaceId = [WKConvListCache currentSpaceId];
+            BOOL spaceChanged = (requestedSpaceId || nowSpaceId)
+                && !(requestedSpaceId == nowSpaceId || [requestedSpaceId isEqualToString:nowSpaceId]);
+            if (requestedGen != mainSelf.vmGeneration || spaceChanged) {
+                NSLog(@"[SpaceIndex] 丢弃过期 loadConversationList 结果: gen %ld→%ld space %@→%@ rows=%lu",
+                      (long)requestedGen, (long)mainSelf.vmGeneration,
+                      requestedSpaceId ?: @"<nil>", nowSpaceId ?: @"<nil>",
+                      (unsigned long)conversationWrapModels.count);
+                return;
+            }
+
             mainSelf.cachedAllConversations = conversations;
             mainSelf.conversationWrapModels = conversationWrapModels;
             mainSelf.threadWrapModels = threadWrapModels;
+            // 盖章用**发起时**捕获的空间，不是回调时的 currentSpaceId。上面的闸门已经保证
+            // 两者相等，这里用捕获值是为了让"这批数据属于哪个空间"这件事只有一个来源。
+            mainSelf.loadedForSpaceId = requestedSpaceId;
             [mainSelf rebuildChannelIndex];
             mainSelf.cachedTopicsByGroup = topicsByGroup;
             mainSelf.cachedRemindersByChannelId = remindersByChannelId;
@@ -960,6 +1172,18 @@ static WKConversationListVM *_instance;
         if(decision == WKSpaceFilterDecisionSkip) {
             return NO;
         }
+        // 注意：这里**不要**再加一道"内存 DM 白名单"过滤。
+        //
+        // 曾经加过（用 syncedPersonChannelIds 按归属表过滤 DM），结果是"进聊天详情再返回，
+        // 所有私聊全部消失"：会话列表里的 DM 有两个来源 —— DB 读路径（已被 SQL 空间作用域
+        // 过滤过）和实时路径（onConversationUpdate → uiAddConversation，走的是
+        // isConversationInCurrentSpace）。实时路径加进来的 DM 不一定在归属表里，于是
+        // 内存白名单比 DB 作用域更严，返回列表触发一次完整 loadConversationList 就把它们
+        // 全筛掉了。
+        //
+        // 空间隔离由 SQL 作用域负责（getConversationList 只返回归属于当前空间的行），
+        // 一份事实一个权威源；再叠一层内存集合只会因为两者漂移而丢数据。
+        // 跨空间残留由 prune / sweep 在拿到明确证据时清理。
         // 跨 Space 私聊 lastMessage.space_id 兜底：与实时路径
         // (WKConversationListVC.filterConversationsBySpace → isConversationInCurrentSpace) 对齐。
         // 场景：在 Space A 时收到 Space B 的人私聊，SDK 把该 WKConversation 写进 DB；
@@ -1341,6 +1565,24 @@ static WKConversationListVM *_instance;
     return count;
 }
 
+-(NSArray<NSNumber *> *) recentUnreadRowIndexes {
+    // 关注 tab 的 row 来自 groupDisplayList（含分组 header），下标不能和
+    // filteredConversations 混用 —— 直接返回空，让「只在最近 tab 生效」变成数据层不变式。
+    if (self.filterType != WKConversationFilterRecent) return @[];
+    NSArray<WKConversationWrapModel *> *list = self.filteredConversations;
+    NSMutableArray<NSNumber *> *rows = [NSMutableArray array];
+    for (NSInteger i = 0; i < (NSInteger)list.count; i++) {
+        WKConversationWrapModel *model = list[i];
+        // placeholder 子区：unreadCount 来自接口不一定是本人未读，cell 也不渲染红点
+        // （与 getRecentUnreadCount 的 skip 同理由）
+        if (model.channel.channelType == WK_COMMUNITY_TOPIC && model.lastMessage == nil) continue;
+        if ([self isChannelMuted:model]) continue;
+        // 与最近 tab cell 的 refreshUnread 同一个 getter → 跳过去的行必然有红点
+        if (model.recentTabActivityUnreadCount > 0) [rows addObject:@(i)];
+    }
+    return [rows copy];
+}
+
 -(NSArray<WKConversationWrapModel*> *) conversationList {
     return self.filteredConversations ?: @[];
 }
@@ -1627,11 +1869,21 @@ static WKConversationListVM *_instance;
         if(completion) completion();
         return;
     }
+    // 先用缓存 seed（冷启动 / 切空间的首帧）：关注 tab 的 section header + 分组内会话
+    // 都依赖 categoryList，等网络回来才有内容的话这段时间分组下面是空的。
+    // 已经有内容时不覆盖（避免把服务端刚回的结果盖回缓存值）。
+    if(self.categoryList.count == 0) {
+        NSArray<WKCategoryEntity *> *cached = [[WKCategoryService shared] cachedCategoriesForSpace:spaceId];
+        if(cached.count > 0) {
+            self.categoryList = cached;
+        }
+    }
     [[WKCategoryService shared] listCategories:spaceId].then(^(NSArray<WKCategoryEntity *> *list) {
         self.categoryList = list ?: @[];
         if(completion) completion();
     }).catch(^(NSError *error) {
         NSLog(@"加载分组失败: %@", error);
+        // 失败时保留已 seed 的缓存值，不清空 —— 弱网下分组结构不该消失。
         if(completion) completion();
     });
 }
@@ -2011,19 +2263,26 @@ static WKConversationListVM *_instance;
     // sidebar/sync 已确认 followed 但本地 IM cache miss 的项（冷启 / 缓存清过 / 新关注还没拉到 conv）
     // 补 placeholder wrap，否则 Follow tab 会丢行 — 用户视角是「明明关注了却看不到」。
     // 真实 conv 到达后由 onConversationUpdate 流程接管，placeholder 会自然被替换。
+    //
+    // 未读红点：store 是磁盘缓存水化出来的（loadedFromCache）时，placeholder 的 unread
+    // 一律按 0 渲染。原因是 placeholder 没有 lastMessageSeq 锚点，无法用
+    // WKUnreadStore 的已读水位夹取 —— 拿一份可能过期的缓存点亮红点，就有"已读会话
+    // 又变未读"的风险，而这是用户容忍度为 0 的一类错。少一个红点等 sync 回来补上，
+    // 比错亮一个红点好。本地已有真实 conv 行的项不走这个分支，不受影响。
+    BOOL followFromCache = followStore.loadedFromCache;
     for (NSArray<WKSidebarItemEntity *> *bucket in followItemsByCat.allValues) {
         for (WKSidebarItemEntity *it in bucket) {
             if (it.target_id.length == 0) continue;
             if (it.target_type == WKFollowTargetTypeDM && !dmChannelMap[it.target_id]) {
                 WKConversation *p = [[WKConversation alloc] init];
                 p.channel = [WKChannel channelID:it.target_id channelType:WK_PERSON];
-                p.unreadCount = (int)it.unread;
+                p.unreadCount = followFromCache ? 0 : (int)it.unread;
                 p.lastMsgTimestamp = it.timestamp;
                 dmChannelMap[it.target_id] = [[WKConversationWrapModel alloc] initWithConversation:p];
             } else if (it.target_type == WKFollowTargetTypeChannel && !groupChannelMap[it.target_id]) {
                 WKConversation *p = [[WKConversation alloc] init];
                 p.channel = [WKChannel channelID:it.target_id channelType:WK_GROUP];
-                p.unreadCount = (int)it.unread;
+                p.unreadCount = followFromCache ? 0 : (int)it.unread;
                 p.lastMsgTimestamp = it.timestamp;
                 groupChannelMap[it.target_id] = [[WKConversationWrapModel alloc] initWithConversation:p];
             }

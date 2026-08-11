@@ -14,6 +14,25 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (WKConversationDB *)shared;
 
+/// 会话读路径的空间作用域（nil / @"" = 不作用域化，走老行为）。
+///
+/// 设了它之后，下面 4 条读路径只看归属于该空间的会话（归属表 conversation_space，
+/// 见 WKConversationSpaceDB）：
+///   - getConversationList          列表 / 转发选择器的唯一数据源
+///   - getConversationMaxVersion    增量 sync 的 version 必须是本空间的最大版本号
+///                                  （首次进入某空间时自然为 0 → 自动全量拉取）
+///   - getConversationSyncKey       作为 last_msg_seqs 发给 conversation/sync?space_id=X，
+///                                  不作用域化会把别的空间的 channel 报给本空间的 sync
+///   - getAllConversationUnreadCount
+///
+/// 只有一个开关条件：spaceScopeId 非空就生效。某空间归属为 0 行（从未同步过该空间）时
+/// 返回空列表，与原先"清库后等 sync"的行为一致。
+/// ⚠️ **不要**再加"归属表整表为空 → 作用域降级为 Off"的兼容态：它在「升级后首次全量
+/// sync 还没落地就切空间」时会把上一个空间的会话整片漏进新空间（实测到的跨空间污染）。
+/// 升级兼容改由一次性回填解决，详见 -setSpaceScopeId: 的实现注释。
+/// 由上层在启动 / 切空间时设置。
+@property (nonatomic, copy, nullable) NSString *spaceScopeId;
+
 
 /**
  添加或修改最近会话

@@ -31,7 +31,17 @@
 // 按 tabBar 内 button view → image view 的实测 frame 计算,不写死 item 索引外的常量。
 @property(nonatomic,strong) WKBadgeView *messageTabBadge;
 
+// 「消息」item 双击判定用。见 _handlePossibleMessageTabDoubleTap:。
+// lastSelectedViewController 记「本次点击之前停在哪个 tab」，用来区分
+// 「切 tab」和「重复点当前 tab」；weak 是因为 tab 的子 VC 由 self.viewControllers 持有。
+@property(nonatomic,weak,nullable) UIViewController *lastSelectedViewController;
+@property(nonatomic,assign) NSTimeInterval lastMessageTabReselectAt; // CACurrentMediaTime 单位秒
+
 @end
+
+// 双击判定窗口。系统双击间隔约 0.25s，留一点余量；再长会把「点一下看一眼、
+// 过一会儿再点一下」误判成双击。
+static NSTimeInterval const kWKMessageTabDoubleTapInterval = 0.35;
 
 @implementation WKMainTabController
 
@@ -57,6 +67,10 @@
 
     // 必须在 setupChildVC 之后，applySelectedTitleColor 要遍历 self.viewControllers
     [self updateTabBarAppearance];
+
+    // 启动就停在「消息」tab（selectedIndex 默认 0）。种下这个初值，第一次双击「消息」
+    // 才能被正确判成「两下重选」；否则第一下会被当成切 tab 吃掉。
+    self.lastSelectedViewController = self.viewControllers.firstObject;
 }
 
 - (void)onLangChange {
@@ -428,6 +442,37 @@ static UIImpactFeedbackGenerator *impactFeedBack;
     [impactFeedBack prepare];
     [impactFeedBack impactOccurred];
     [self _layoutPillIndicatorAnimated:YES];
+    [self _handlePossibleMessageTabDoubleTap:viewController];
+}
+
+/// 双击「消息」item = 定位下一个未读会话（与会话页内双击「最近」同一交互）。
+///
+/// 为什么不挂手势：UITabBarController 每次点击 item 都会回调
+/// didSelectViewController:（**包括重复点当前已选中项**），所以时间戳判定就够了 ——
+/// 不引入 UITapGestureRecognizer，就不会有「双击 GR 延迟单击」那类副作用，
+/// 系统切 tab 的行为字面上不变。
+///
+/// 只认「两下都落在已经选中的消息 tab 上」：从别的 tab 双击「消息」时第一下是切
+/// tab，不当成双击的第一下 —— 否则用户不耐烦快点两下切 tab 就会莫名跳一次。
+/// （这一点与页内双击「最近」的语义有意不同：那边第一下切 tab、第二下就跳。）
+- (void)_handlePossibleMessageTabDoubleTap:(UIViewController *)viewController {
+    // 本次点击前是否已经停在这个 tab 上。主 tabbar 的 selectedIndex 全程没有任何
+    // 程序化修改（只有用户点击），所以自己记一份 last selected 就是可信的。
+    BOOL isReselect = (viewController == self.lastSelectedViewController);
+    self.lastSelectedViewController = viewController;
+
+    if (!isReselect || ![viewController isKindOfClass:[WKConversationListVC class]]) {
+        self.lastMessageTabReselectAt = 0;
+        return;
+    }
+    NSTimeInterval now = CACurrentMediaTime();
+    if (self.lastMessageTabReselectAt > 0
+        && (now - self.lastMessageTabReselectAt) < kWKMessageTabDoubleTapInterval) {
+        self.lastMessageTabReselectAt = 0; // 消费掉，三击不会被算成两次双击
+        [(WKConversationListVC *)viewController handleMessageTabDoubleTap];
+    } else {
+        self.lastMessageTabReselectAt = now;
+    }
 }
 
 @end

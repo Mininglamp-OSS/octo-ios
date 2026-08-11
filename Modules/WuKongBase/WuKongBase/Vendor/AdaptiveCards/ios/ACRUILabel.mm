@@ -22,7 +22,19 @@
 
 - (instancetype)initWithFrame:(CGRect)frame
 {
-    self = [super initWithFrame:frame];
+    // [octo perf] 显式以 TextKit1 栈初始化。
+    // iOS16+ UITextView 默认走 TextKit2，而 ACR 必然访问 .layoutManager（本类子类
+    // ACRViewAttachingTextView.commonInit 在 init 里就设 layoutManager.delegate；各
+    // renderer 还会设 layoutManager.usesFontLeading）→ 每个文本视图触发一次昂贵的
+    // TextKit2→1 运行时转换（快滑时成片出现的 "switching to TextKit 1 compatibility mode"
+    // 警告即此，计入 card.build 的 ~7ms）。直接给定 NSTextContainer 走 TextKit1 designated
+    // init 可跳过该转换；这些视图本就恒为 TextKit1，最终渲染态与原来完全一致。
+    NSTextStorage *textStorage = [[NSTextStorage alloc] init];
+    NSLayoutManager *layoutManager = [[NSLayoutManager alloc] init];
+    [textStorage addLayoutManager:layoutManager];
+    NSTextContainer *textContainer = [[NSTextContainer alloc] initWithSize:CGSizeZero];
+    [layoutManager addTextContainer:textContainer];
+    self = [super initWithFrame:frame textContainer:textContainer];
     if (self) {
         self.tag = eACRUILabelTag;
     }

@@ -31,6 +31,13 @@
 #import "WKStickerImageView.h"
 #import "WKLottieStickerContent.h"
 #import "WKGIFContent.h"
+#import "WKRichTextContent.h"
+#import "WKRichTextCell.h"
+#import "WKMessageModel.h"
+#import "WKMessageTextView.h"
+#import "WKMatchToken.h"
+#import "WKRemoteImageAttachment.h"
+#import "NSMutableAttributedString+WK.h"
 
 // 下载进度遮罩（黑色半透明蒙版 + 转圈 + 百分比）
 @interface WKDownloadProgressOverlay : UIView
@@ -1226,6 +1233,183 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
     return _messageImgView;
 }
 
+
+@end
+
+//---------- 图文混排 cell（RichText=14，WKRichTextContent）----------
+
+@implementation WKMergeForwardDetailRichTextModel
+
+- (Class)cell {
+    return WKMergeForwardDetailRichTextCell.class;
+}
+
+@end
+
+@interface WKMergeForwardDetailRichTextCell ()
+
+// display-only UITextView（等同 UILabel，但天然渲染 NSTextAttachment 内联图片）。
+@property(nonatomic,strong) WKMessageTextView *textView;
+// 已渲染的是哪条消息——图片下载回调回来时用它防 cell 复用错位刷到别人。
+@property(nonatomic,assign) uint64_t lastRenderedMessageId;
+
+@end
+
+@implementation WKMergeForwardDetailRichTextCell
+
+// 复用 WKRichTextCell 的 block 迭代 / 图片 attachment 构建逻辑，强制传 defaultTextColor
+// （合并详情是白底左对齐列表，用 isSend 分支的白字会看不见）。非 RichText 返回 nil。
++ (NSMutableAttributedString *)attributedStringForModel:(WKMergeForwardDetailModel *)model {
+    if (![model.message.content isKindOfClass:[WKRichTextContent class]]) {
+        return nil;
+    }
+    WKMessageModel *msgModel = [[WKMessageModel alloc] initWithMessage:model.message];
+    return [WKRichTextCell attributedStringForMessage:msgModel
+                                            textColor:[WKApp shared].config.defaultTextColor
+                                         mentionColor:[WKApp shared].config.themeColor
+                                            truncated:NULL];
+}
+
++ (CGFloat)contentHeightForModel:(WKMergeForwardDetailRichTextModel *)model maxWidth:(CGFloat)maxWidth {
+    NSMutableAttributedString *attr = [self attributedStringForModel:model];
+    if (attr.length == 0) return minContentHeight;
+    // 与 WKMessageTextView 一致的零 inset/padding 测量（NSMutableAttributedString+WK size:）。
+    return ceil([attr size:maxWidth].height) + 1.0f;
+}
+
+- (void)setupUI {
+    [super setupUI];
+    [self.messageContentView addSubview:self.textView];
+
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(onTapRichText:)];
+    self.textView.userInteractionEnabled = YES;
+    [self.textView addGestureRecognizer:tap];
+}
+
+- (void)refresh:(WKMergeForwardDetailRichTextModel *)model {
+    [super refresh:model];
+
+    NSMutableAttributedString *attr = [[self class] attributedStringForModel:model];
+    if (attr.length == 0) {
+        self.textView.attributedText = [[NSAttributedString alloc] initWithString:@""];
+        self.lastRenderedMessageId = 0;
+        return;
+    }
+    self.textView.attributedText = attr;
+    self.lastRenderedMessageId = model.message.messageId;
+    [self triggerImageDownloads:attr forMessageId:model.message.messageId];
+}
+
+// 触发内联图片下载；就绪后仅局部 invalidate 对应 glyph 的显示（不动 layout / 不重设
+// attributedText），避免多图下载时「连环闪」。思路同 WKRichTextCell.m 的 triggerImageDownloads:。
+- (void)triggerImageDownloads:(NSAttributedString *)attr forMessageId:(uint64_t)messageId {
+    if (attr.length == 0) return;
+    __weak typeof(self) weakSelf = self;
+    [attr enumerateAttribute:NSAttachmentAttributeName
+                     inRange:NSMakeRange(0, attr.length)
+                     options:0
+                  usingBlock:^(id value, NSRange range, BOOL *stop) {
+        if (![value isKindOfClass:[WKRemoteImageAttachment class]]) return;
+        WKRemoteImageAttachment *attachment = (WKRemoteImageAttachment *)value;
+        if (attachment.image) return; // 内存命中，首帧就已画出
+        NSRange capturedRange = range;
+        [attachment startDownload:^(UIImage *img) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                typeof(weakSelf) strongSelf = weakSelf;
+                if (!strongSelf) return;
+                if (strongSelf.lastRenderedMessageId != messageId) return; // cell 复用错位
+                NSLayoutManager *lm = strongSelf.textView.layoutManager;
+                if (capturedRange.location + capturedRange.length > strongSelf.textView.attributedText.length) {
+                    [strongSelf.textView setNeedsDisplay];
+                    return;
+                }
+                NSRange glyphRange = [lm glyphRangeForCharacterRange:capturedRange actualCharacterRange:NULL];
+                [lm invalidateDisplayForGlyphRange:glyphRange];
+                [strongSelf.textView setNeedsDisplay];
+            });
+        }];
+    }];
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    self.textView.frame = CGRectMake(0, 0, self.messageContentView.lim_width, self.messageContentView.lim_height);
+}
+
+#pragma mark - 点击内联图片弹全屏预览
+
+- (void)onTapRichText:(UITapGestureRecognizer *)gesture {
+    CGPoint point = [gesture locationInView:self.textView];
+    NSUInteger charIndex = [self richCharacterIndexAtPoint:point];
+    if (charIndex == NSNotFound) return;
+    NSAttributedString *attr = self.textView.attributedText;
+    if (charIndex >= attr.length) return;
+    id attach = [attr attribute:NSAttachmentAttributeName atIndex:charIndex effectiveRange:nil];
+    if (![attach isKindOfClass:[WKRemoteImageAttachment class]]) return;
+    [self showImageBrowserAtCharIndex:charIndex];
+}
+
+// point（textView 坐标系）→ 字符下标；落在 glyph rect 外返回 NSNotFound（防点空白误开图）。
+- (NSUInteger)richCharacterIndexAtPoint:(CGPoint)point {
+    NSAttributedString *attr = self.textView.attributedText;
+    if (attr.length == 0) return NSNotFound;
+    NSLayoutManager *lm = self.textView.layoutManager;
+    NSTextContainer *tc = self.textView.textContainer;
+    [lm ensureLayoutForTextContainer:tc];
+    UIEdgeInsets inset = self.textView.textContainerInset;
+    CGPoint ptInContainer = CGPointMake(point.x - inset.left, point.y - inset.top);
+    NSUInteger glyphIndex = [lm glyphIndexForPoint:ptInContainer inTextContainer:tc];
+    if (glyphIndex >= [lm numberOfGlyphs]) return NSNotFound;
+    CGRect glyphRect = [lm boundingRectForGlyphRange:NSMakeRange(glyphIndex, 1) inTextContainer:tc];
+    if (!CGRectContainsPoint(glyphRect, ptInContainer)) return NSNotFound;
+    return [lm characterIndexForGlyphAtIndex:glyphIndex];
+}
+
+// 收集该消息全部内联图片，YBImageBrowser 弹预览，命中页定位到点中那张（多图可左右切）。
+// 与本文件 WKMergeForwardDetailImageCell 共用同一套 YBImageBrowser 方案。
+- (void)showImageBrowserAtCharIndex:(NSUInteger)hitCharIndex {
+    NSAttributedString *attr = self.textView.attributedText;
+    NSMutableArray<YBIBImageData *> *dataSource = [NSMutableArray array];
+    __block NSInteger hitIdx = -1;
+    __block NSInteger runningIdx = 0;
+    [attr enumerateAttribute:NSAttachmentAttributeName
+                     inRange:NSMakeRange(0, attr.length)
+                     options:0
+                  usingBlock:^(id value, NSRange range, BOOL *stop) {
+        if (![value isKindOfClass:[WKRemoteImageAttachment class]]) return;
+        WKRemoteImageAttachment *att = (WKRemoteImageAttachment *)value;
+        YBIBImageData *item = [YBIBImageData new];
+        if (att.url.length > 0) {
+            item.imageURL = [NSURL URLWithString:att.url];
+        }
+        if (att.image) {
+            UIImage *cached = att.image;
+            item.image = ^UIImage *_Nullable{ return cached; };
+        }
+        [dataSource addObject:item];
+        if (hitCharIndex >= range.location && hitCharIndex < NSMaxRange(range)) {
+            hitIdx = runningIdx;
+        }
+        runningIdx++;
+    }];
+    if (dataSource.count == 0) return;
+    if (hitIdx < 0) hitIdx = 0;
+
+    YBImageBrowser *imageBrowser = [[YBImageBrowser alloc] init];
+    imageBrowser.webImageMediator = [WKDefaultWebImageMediator new];
+    imageBrowser.toolViewHandlers = @[WKBrowserToolbar.new];
+    imageBrowser.dataSourceArray = dataSource;
+    imageBrowser.currentPage = hitIdx;
+    [imageBrowser show];
+}
+
+- (WKMessageTextView *)textView {
+    if (!_textView) {
+        _textView = [[WKMessageTextView alloc] init];
+        _textView.backgroundColor = [UIColor clearColor];
+    }
+    return _textView;
+}
 
 @end
 
