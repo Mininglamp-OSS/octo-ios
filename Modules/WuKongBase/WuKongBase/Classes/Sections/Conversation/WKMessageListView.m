@@ -1420,6 +1420,29 @@ static const NSInteger kMaxPullupDedupRetry = 3;
         return false;
     }
     if(![self.lastMessage.clientMsgNo isEqualToString:currentLastClientMsgNo]) {
+        // 末条 ≠ 会话最新条。正常语义是"下面还有没加载进来的消息"，返回 YES。
+        //
+        // 但还有一种**异常态**：最新那条其实**已经在 dp 里了，只是不在末尾**。目前已知的
+        // 成因是 pullup 预热窗口内本地发送导致的乱序（见 commitPullupModels: 注释 / #72）：
+        // dp 变成 1..30,61,31..60，末条退回 60，而 lastMessage 是 61。
+        // 这种状态下如果仍返回 YES，会连锁出一个远比"顺序错"严重的后果：
+        //   - handleRecvMessage 一直走"只更新 lastMessage、不写 dp"分支 → 该会话**不再显示
+        //     任何新收到的消息**；
+        //   - 而 pullup 的游标取自 dp 末条(60) 的 orderSeq，拉不到那条待发消息
+        //     （它的 orderSeq 是本地 max+1，比 31..60 还小），零新增 → hasMore=NO →
+        //     **footer 也被隐藏**；
+        //   - onConversationSyncFinished / 回前台 reconcile 同样被这个 gate 拦住。
+        // 结果是用户没有任何恢复入口，只能退出重进 —— 这是必须掐掉的那一半。
+        //
+        // 所以补一次"在不在"的判定：最新条只要已经在 dp 里，就当已加载完（返回 NO）。
+        // 这是把谓词从「末条 == 最新条」放宽成「最新条已存在」，**只在上述异常态下与原
+        // 语义不同**：正常情况下若最新条在 dp 里，它必然就在末尾（typing 已在上面跳过），
+        // 所以正常路径行为逐字节不变。放宽之后，那些 reconcile / sync-finished 路径反而
+        // 能跑起来做一次重载，顺带把顺序修正回来。
+        // 顺序本身的根治仍在 #72（按序插入 + pending 置尾 + ack 后重定位），这里只封症状。
+        if([self.dataProvider messageAtClientMsgNo:self.lastMessage.clientMsgNo]) {
+            return false;
+        }
         return true;
     }
     return false;

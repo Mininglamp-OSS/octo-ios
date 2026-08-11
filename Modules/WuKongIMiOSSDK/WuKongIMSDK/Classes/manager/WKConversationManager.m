@@ -238,8 +238,27 @@
 -(void) handleSyncConversation:(WKSyncConversationWrapModel*)model completion:(void(^ _Nullable)(void))completion {
     NSArray<WKSyncConversationModel*> *syncConversations = model.conversations;
 
+    // 账号闸门（第二道）：上层 WKDataSourceModule 已经在响应到达时校验过一次 uid，但从那次
+    // 校验到下面这个 block 真正执行之间还有一段窗口 —— 而 block 内的
+    // replaceMessages: / mergeConversations: 都是在执行时才解析 [WKDB sharedDB].dbQueue，
+    // switchDB: 会把这个单例换成新账号的库。所以这里按"发起这次落库时的库身份"再钉一次。
+    // 用 [WKDB sharedDB].currentUid 而不是上层的登录态：它就是"这批写入会落到哪个库"的
+    // 直接答案，判据和被保护的对象完全同源。
+    // 注意这仍不是完全互斥（check 到实际 SQL 之间理论上仍可插入 switchDB:），彻底消除
+    // 需要 account-bound database context 或与 switchDB: 互斥，属 SDK 架构改动，另行跟进。
+    NSString *uidAtEnqueue = [WKDB sharedDB].currentUid;
+
     // DB 密集操作移到后台线程，避免阻塞主线程动画
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSString *uidNow = [WKDB sharedDB].currentUid;
+        if(!(uidAtEnqueue == uidNow || [uidAtEnqueue isEqualToString:uidNow])) {
+            NSLog(@"[SpaceIndex] 丢弃 handleSyncConversation 落库：DB 已切换 %@ → %@",
+                  uidAtEnqueue ?: @"<nil>", uidNow ?: @"<nil>");
+            if(completion) {
+                dispatch_async(dispatch_get_main_queue(), ^{ completion(); });
+            }
+            return;
+        }
         CFAbsoluteTime syncStart = CFAbsoluteTimeGetCurrent();
 
         // ########## 存储会话所有消息 ##########

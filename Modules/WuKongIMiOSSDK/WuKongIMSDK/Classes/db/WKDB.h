@@ -28,6 +28,13 @@ extern NSString * const WKDBDidSwitchNotification;
 
 @property (nonatomic, strong) WKFMDatabaseQueue *dbQueue;
 
+/// 当前 dbQueue 指向哪个账号的库（switchDB: 设置）。只读暴露给需要做"账号闸门"的写入方：
+/// 所有落库 block 都是在**执行时**才解析 dbQueue，而 switchDB: 会把它换成新账号的库 ——
+/// 在入队前捕获这个值、执行时比一次，就能丢弃跨账号的过期写入
+/// （见 WKConversationManager.handleSyncConversation:completion:）。
+/// 它比上层登录态更适合当判据：这就是"这批写入会落到哪个库"的直接答案，与被保护对象同源。
+@property (nonatomic, copy, readonly, nullable) NSString *currentUid;
+
 + (WKDB *)sharedDB;
 
 /**

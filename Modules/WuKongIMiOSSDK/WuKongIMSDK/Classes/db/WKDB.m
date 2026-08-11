@@ -21,7 +21,7 @@ NSString * const WKDBDidSwitchNotification = @"WKDBDidSwitchNotification";
 
 @interface WKDB ()
 // 当前数据库的uid
-@property(nonatomic,copy) NSString *currentUid;
+@property(nonatomic,copy) NSString *currentUid; // .h 里以 readonly 暴露，见那里的注释
 // 当前db前缀
 @property(nonatomic,copy) NSString *currentDBPrefix;
 
