@@ -135,6 +135,10 @@
     [self.messageList appendMessages:models];
 }
 
+-(BOOL) lastInsertWasPureTailAppend {
+    return self.messageList.lastInsertWasPureTailAppend;
+}
+
 
 -(NSArray<WKMessageModel*>*) messagesToMessageModels:(NSArray<WKMessage*>*) messages {
     // 按当前空间过滤消息

@@ -405,7 +405,11 @@ static const BOOL kIncrementalPulldown = NO;
 
     [self.dataProvider addMessage:message];
 
-    if (pulldownActive || !inSyncBefore) {
+    // 按序插入之后，新消息不保证落在末尾（并发交错时会中段插入）。下面整段增量计算都
+    // 假设"末尾新增"，前提不成立时算出来的 indexPath 是错的 —— 行数仍对得上所以不抛
+    // 异常，但渲染内容会错位，比乱序更糟。所以中段插入直接 reloadData。
+    // 正常路径（消息就是最新的）恒为纯尾插，这个分支不会走到，行为与改前一致。
+    if (pulldownActive || !inSyncBefore || ![self.dataProvider lastInsertWasPureTailAppend]) {
         [self.tableView reloadData];
         [self didAddMessageUI];
         return;
@@ -1309,6 +1313,26 @@ static const NSInteger kMaxPullupDedupRetry = 3;
 
     // 2) commit: 追加新消息
     [self.dataProvider commitAppend:models];
+
+    // 按序插入之后，这一页不保证全部落在末尾 —— 预热窗口内本地发送过消息时，这一页会被
+    // 插到那条之前（这正是我们要的正确顺序）。但下面的增量计算假设"末尾新增 N 行"，
+    // 前提不成立时 indexPath 会错位（行数对得上不抛异常，但渲染内容错乱）。
+    // 所以中段插入直接 reloadData：顺序已经是对的，只是刷新方式退化，无动画。
+    // 正常路径（这一页确实比 dp 里所有消息都新）恒为纯尾插，走下面原有的增量分支。
+    if (![self.dataProvider lastInsertWasPureTailAppend]) {
+        #if DEBUG
+        NSLog(@"[BubbleBugRepro] commitPullup 中段插入 → reloadData（预热窗口内有新消息写入 dp）");
+        #endif
+        [self.tableView reloadData];
+        [self.tableView.mj_footer endRefreshing];
+        if(complete) {
+            complete(hasMore);
+        }
+        if (!hasMore) {
+            [weakSelf wk_tryConsumePendingReconcile];
+        }
+        return;
+    }
 
     // 3) commit 后: 就地算增量
     NSInteger newSectionCount = [self.dataProvider dateCount];
@@ -3936,6 +3960,13 @@ static const NSInteger kMaxRehydratePages = 35;
             ? [self.dataProvider rowCountAtSection:oldSectionCount - 1] : 0;
 
         [self.dataProvider addMessage:model];
+
+        // typing 由 _isTailPinnedNoLock: 固定置底, 所以正常必然是纯尾插; 这里仍做一次
+        // 判定作为不变式的显式声明 —— 万一不是尾插, 下面按"末尾新增"算的 indexPath 会错位。
+        if (![self.dataProvider lastInsertWasPureTailAppend]) {
+            [self.tableView reloadData];
+            return;
+        }
 
         NSInteger newSectionCount = [self.dataProvider dateCount];
         BOOL newSectionAdded = (newSectionCount > oldSectionCount);

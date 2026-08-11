@@ -173,6 +173,7 @@
 - (void)appendMessages:(NSArray<WKMessageModel *> *)messages {
     if (messages.count == 0) return;
     [self.messagesLock lock];
+    _lastInsertWasPureTailAppend = YES;
     for (WKMessageModel *message in messages) {
         [self _addMessageNoLock:message];
     }
@@ -236,17 +237,20 @@
         }else {
             NSMutableArray *messages = [self _messagesAtSectionNoLock:(NSInteger)self.dates.count - 1];
             if(messages.count > 0) {
-                // 插到 typing 之前, 让 typing 保持在最后
+                // 插到 typing 之前, 让 typing 保持在最后。
+                // 这是一次**中段插入**(row = count-1, typing 还在它后面), 而调用方的增量
+                // 刷新假设"末尾新增" —— 必须打掉纯尾插标记让它退化成 reloadData。
+                // 这个错位在加标记之前就存在(见 handleRecvMessage 上方注释), 顺带修掉。
+                _lastInsertWasPureTailAppend = NO;
                 [self _insertMessageNoLock:message atIndex:[NSIndexPath indexPathForRow:messages.count-1 inSection:self.dates.count-1]];
             }else {
                 [self _addMessageOnlyNoLock:message];
             }
         }
     }else {
-        if(self.dates.count>0) {
-            message.preMessageModel = lastMessage;
-            lastMessage.nextMessageModel = message;
-        }
+        // pre/next 的连接已经收进 _addMessageOnlyNoLock: —— 它按插入位置去左右邻居
+        // (含跨 section) 重接。这里**不能**再手工把 preMessageModel 指向"当前末条":
+        // 按序插入之后新消息不一定落在末尾, 那样连出来的链是错的。
         [self _addMessageOnlyNoLock:message];
     }
 }
@@ -260,13 +264,86 @@
 
     NSString *date = [self formatMessageDate:message];
     NSMutableArray *messages = self.dateMessageGroups[date];
+    NSInteger section;
     if(!messages) {
         messages = [NSMutableArray array];
         self.dateMessageGroups[date] = messages;
-        [self.dates addObject:date];
+        // dates 也必须保持有序 —— 否则 section 顺序会依赖"消息按日期递增到达"这个
+        // 无法保证的前提。日期串是 yyyy-MM-dd, 字典序 == 时间序。
+        section = (NSInteger)self.dates.count;
+        while(section > 0 && [self.dates[section-1] compare:date] == NSOrderedDescending) {
+            section--;
+        }
+        [self.dates insertObject:date atIndex:section];
+    } else {
+        section = (NSInteger)[self.dates indexOfObject:date];
     }
-    [messages addObject:message];
+
+    // 组内按序定位: 从尾部往前走。正常情况(新消息就是最新的)第一次比较就停 → O(1),
+    // 与原来的 addObject: 开销等价; 只有乱序到达时才多走几步。
+    NSInteger idx = (NSInteger)messages.count;
+    while(idx > 0 && [self _shouldOrderAfterNoLock:messages[idx-1] than:message]) {
+        idx--;
+    }
+
+    // 纯尾插判定: 落在最后一个 section 的最末。调用方据此决定走增量 insertRows 还是
+    // reloadData —— 中段插入时按"末尾新增 N 行"算出来的 indexPath 是错的。
+    if(!(section == (NSInteger)self.dates.count - 1 && idx == (NSInteger)messages.count)) {
+        _lastInsertWasPureTailAppend = NO;
+    }
+
+    [messages insertObject:message atIndex:idx];
+
+    // 重接 pre/next。链是**跨 section 全局**的, 所以组内首/末位要去相邻 section 取邻居。
+    WKMessageModel *prev = (idx > 0) ? messages[idx-1] : [self _lastMessageOfSectionNoLock:section-1];
+    WKMessageModel *next = (idx + 1 < (NSInteger)messages.count) ? messages[idx+1] : [self _firstMessageOfSectionNoLock:section+1];
+    message.preMessageModel = prev;
+    message.nextMessageModel = next;
+    if(prev) prev.nextMessageModel = message;
+    if(next) next.preMessageModel = message;
+
     [self _addToIndexNoLock:message];
+}
+
+/// 排序键的核心判定: 未 ack 的本地消息(以及 typing)固定置底。
+///
+/// 为什么不能纯按 orderSeq: 本地发送落库时 orderSeq = **本地库** max(order_seq)+1
+/// (WKMessageDB.m:256-260)。如果更新的那一页还没下载到本地(例如用户正上滑读历史),
+/// 这个临时值会**小于**那一页 —— 纯按 orderSeq 排会把"用户刚发出的消息"插到几十条
+/// 更旧消息中间。messageSeq == 0 正好就是"服务端还没给它排序"这个条件。
+/// 置底同时也符合用户直觉(自己发的就在最下面), 并且 ack 之后它的真实 orderSeq
+/// (messageSeq × WKOrderSeqFactor) 通常已大于全部已加载消息, 位置自然正确 ——
+/// 所以不需要额外做"ack 后重定位"。
+-(BOOL) _isTailPinnedNoLock:(WKMessageModel*)model {
+    if(!model) return NO;
+    if(model.contentType == WK_TYPING) return YES;   // typing 永远在最后
+    return model.messageSeq == 0;                    // 未 ack: orderSeq 只是本地临时值
+}
+
+/// a 是否应该排在 b 之后。与 WKChatManager.sortMessages: 同口径(orderSeq, 相同比 timestamp),
+/// 额外叠加"置底"规则。
+-(BOOL) _shouldOrderAfterNoLock:(WKMessageModel*)a than:(WKMessageModel*)b {
+    BOOL aPinned = [self _isTailPinnedNoLock:a];
+    BOOL bPinned = [self _isTailPinnedNoLock:b];
+    if(aPinned != bPinned) {
+        return aPinned;
+    }
+    if(a.orderSeq != b.orderSeq) {
+        return a.orderSeq > b.orderSeq;
+    }
+    return a.timestamp > b.timestamp;
+}
+
+-(WKMessageModel*) _lastMessageOfSectionNoLock:(NSInteger)section {
+    if(section < 0 || section >= (NSInteger)self.dates.count) return nil;
+    NSMutableArray *arr = [self _messagesAtSectionNoLock:section];
+    return arr.lastObject;
+}
+
+-(WKMessageModel*) _firstMessageOfSectionNoLock:(NSInteger)section {
+    if(section < 0 || section >= (NSInteger)self.dates.count) return nil;
+    NSMutableArray *arr = [self _messagesAtSectionNoLock:section];
+    return arr.firstObject;
 }
 
 -(void) _insertMessageNoLock:(WKMessageModel*)message atIndex:(NSIndexPath*)indexPath {
@@ -344,6 +421,7 @@
 
 -(void) addMessage:(WKMessageModel*)message {
     [self.messagesLock lock];
+    _lastInsertWasPureTailAppend = YES;
     [self _addMessageNoLock:message];
     [self.messagesLock unlock];
 }

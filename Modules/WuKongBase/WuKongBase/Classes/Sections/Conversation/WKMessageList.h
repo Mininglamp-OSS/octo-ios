@@ -72,6 +72,20 @@ NS_ASSUME_NONNULL_BEGIN
 
 -(void) addMessage:(WKMessageModel*)message;
 
+/// 最近一次 `addMessage:` / `appendMessages:` 是否**全部**落在列表最末（纯尾插）。
+///
+/// 插入是按序定位的（orderSeq，相同比 timestamp；未 ack 的本地消息与 typing 固定置底），
+/// 所以新消息不保证落在末尾 —— 并发交错时（例如 pullup 预热窗口内本地发送）会发生
+/// **中段插入**。而调用方的增量刷新普遍假设"末尾新增 N 行"并据此算 indexPath，
+/// 那个假设一旦不成立，算出来的 indexPath 就是错的（行数仍对得上，所以不抛异常，
+/// 但渲染内容会错位，比乱序更糟）。
+///
+/// 所以约定：调用方在 add/append 之后读这个值 ——
+///   YES → 走原有增量 insertRows/insertSections（正常路径，行为不变）
+///   NO  → 必须 reloadData
+/// 主线程同 turn 内读取有效，不跨调用保留语义。
+@property (nonatomic, assign, readonly) BOOL lastInsertWasPureTailAppend;
+
 // 设置消息
 -(void) setMessages:(NSArray<WKMessageModel*>*)messages forDate:(NSString*)date;
 

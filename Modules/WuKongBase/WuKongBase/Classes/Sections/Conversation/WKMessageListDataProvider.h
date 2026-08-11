@@ -71,6 +71,12 @@ typedef void(^WKMessageListPreparedBlock)(NSArray<WKMessageModel*> *models, BOOL
 /// 后追加消息，原子。必须在主线程调用，且同一个 turn 内让 tableView 失效。
 -(void) commitAppend:(NSArray<WKMessageModel*>*)models;
 
+/// 转发 WKMessageList.lastInsertWasPureTailAppend —— 最近一次 addMessage: /
+/// commitAppend: 是否全部落在末尾。插入是按序定位的, 并发交错时会中段插入, 而调用方的
+/// 增量刷新假设"末尾新增 N 行"; 该值为 NO 时调用方**必须** reloadData 而不是走增量。
+/// 详见 WKMessageList.h 上的完整说明。
+-(BOOL) lastInsertWasPureTailAppend;
+
 #pragma mark - 只读访问
 
 // 日期数量
