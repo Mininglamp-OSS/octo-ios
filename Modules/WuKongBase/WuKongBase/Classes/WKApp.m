@@ -545,7 +545,7 @@ static WKApp *_instance;
             // （syncKey 不作用域化就会把别的空间的 channel 报给本空间的 sync）。
             // 会话列表 VC 的 loadCurrentSpace 里也会设一次，这里只是把时机提前到
             // 任何网络同步之前，不依赖 VC 的生命周期时序。
-            // backfill/重建必须更早：它消除"归属表整表为空"这个状态，否则读路径拿不到
+            // 归属索引的版本迁移必须更早：它决定读路径的空间作用域从第一帧起就精确，否则拿不到
             // 精确的空间信息（跨空间污染的来源之一）。
             [WKConvListCache prepareMembershipIfNeeded];
             [WKConvListCache applyScopeForSpace:cachedSpaceId];

@@ -111,9 +111,13 @@ static WKConversationDB *_instance;
 ///
 /// ⚠️ 历史坑：这里曾经额外有一条 "conversation_space 整表为空 → 作用域 Off（返回 DB
 /// 全部会话）" 的升级兼容态。它在「升级后首次全量 sync 还没落地就切空间」时会把上一个
-/// 空间的会话整片漏进新空间（用户实测到的跨空间污染）。兼容性改由一次性回填
-/// (WKConversationSpaceDB.backfillMembershipFromExistingConversationsForSpace:) 解决，
-/// **不要**再把"表空"当成"不过滤"。
+/// 空间的会话整片漏进新空间（用户实测到的跨空间污染）。**不要**再把"表空"当成"不过滤"。
+///
+/// 注：这条禁令仍然成立，但它原本给的理由（"兼容性改由一次性回填解决"）已经失效 ——
+/// 那个整表回填在 8431d8e 被删除了（它自己导致了另一起列表串空间事故，见
+/// WKConvListCache 的 kWKConvSpaceIndexVersion v3 注释）。现在的机制是：归属由权威全量
+/// sync 逐空间重建（version==0 → replaceMembership），"表空"只代表"这个空间还没被同步
+/// 过"，正确行为就是返回空列表并等 sync —— 恰恰**不能**退化成"不过滤"。
 -(void) setSpaceScopeId:(NSString *)spaceScopeId {
     [self.scopeLock lock];
     if(_spaceScopeId != spaceScopeId && ![_spaceScopeId isEqualToString:spaceScopeId]) {

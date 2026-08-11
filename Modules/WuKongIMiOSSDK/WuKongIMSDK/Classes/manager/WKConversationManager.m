@@ -446,11 +446,16 @@
 }
 
 -(NSInteger) backfillSpaceMembershipFromExistingConversationsForSpace:(NSString*)spaceId {
+    // 这层只是转发, 必须保留; deprecated 警告要留给**上层调用方**看见, 不是这里
+    // (@yujiawei round-11 P2-4)。所以局部消掉本行的警告。
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     return [[WKConversationSpaceDB shared] backfillMembershipFromExistingConversationsForSpace:spaceId];
+#pragma clang diagnostic pop
 }
 
--(void) deleteAllSpaceMembership {
-    [[WKConversationSpaceDB shared] deleteAllMembership];
+-(BOOL) deleteAllSpaceMembership {
+    return [[WKConversationSpaceDB shared] deleteAllMembership];
 }
 
 -(BOOL) hasSpaceMembership {

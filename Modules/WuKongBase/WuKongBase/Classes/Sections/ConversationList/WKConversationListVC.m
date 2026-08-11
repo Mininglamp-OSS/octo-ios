@@ -131,6 +131,9 @@
 @property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeLeft;
 @property(nonatomic,strong) UISwipeGestureRecognizer *tabSwipeRight;
 @property(nonatomic,assign) BOOL pendingSpaceSwitchLoad;
+/// 与 pendingSpaceSwitchLoad 配对的切换代数：那条老时序路径的 completion 也必须只清
+/// 自己那次切换的闸门（@yujiawei round-11 P2-2）。
+@property(nonatomic,assign) NSInteger pendingSpaceSwitchGeneration;
 /// 切换 Space 期间的 fail-closed 闸门。从 performSwitchToSpaceId: 起到
 /// pendingSpaceSwitchLoad 处理完成为止；闸门期内 isConversationInCurrentSpace
 /// 的两条向前兼容 fail-open 改为 NO，applyThreadConversationUpdates 调用前
@@ -1076,6 +1079,7 @@
                 sendAck();
                 dispatch_async(dispatch_get_main_queue(), ^{
                     weakSelf.pendingSpaceSwitchLoad = YES;
+                    weakSelf.pendingSpaceSwitchGeneration = gateGeneration;
                 });
                 return;
             }
@@ -1594,7 +1598,7 @@
             self.pendingSpaceSwitchLoad = NO;
             // 这条是灰度关闭(清库)路径的猜测式时序, 它本身就是"当前空间"驱动的 ——
             // 传当前 spaceId 即可, 语义上等价于"不额外设限"。
-            [self finishSpaceSwitchLoadAndSideEffects:0]; // 0 = 不设限（灰度关闭路径，见方法头）
+            [self finishSpaceSwitchLoadAndSideEffects:self.pendingSpaceSwitchGeneration];
         }
 
         return;

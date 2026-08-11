@@ -172,10 +172,13 @@ typedef void (^WKUpdateConversationExtraProvider)(WKConversationExtra *extra,WKU
 /// 一次性迁移：把 conversation 表现有的行归属到 spaceId。
 /// 老版本靠"清库 + 全量 sync"保证 DB 只有当前空间的会话，所以升级那一刻这些行确实
 /// 属于该空间。回填后归属表不会再有"整表为空"的状态，作用域可以一直精确过滤。
--(NSInteger) backfillSpaceMembershipFromExistingConversationsForSpace:(NSString*)spaceId;
+/// ⚠️ **已停用，不要调用。** 整张 conversation 表无条件归给一个空间；会话列表改成保留
+/// 多空间缓存之后它的前提永远不成立，跑它就是列表串空间（真机实测事故，见
+/// WKConvListCache 的 kWKConvSpaceIndexVersion v3 注释）。归属由权威全量 sync 逐空间重建。
+-(NSInteger) backfillSpaceMembershipFromExistingConversationsForSpace:(NSString*)spaceId __attribute__((deprecated("整表归一个空间, 会导致列表串空间; 归属交给权威全量 sync 重建")));
 
 /// 清空整张归属表（归属索引一次性重建，见 WKConvListCache.prepareMembershipIfNeeded）。
--(void) deleteAllSpaceMembership;
+-(BOOL) deleteAllSpaceMembership;  // 返回是否删除成功, 迁移据此决定是否盖版本号
 
 // 同步扩展提供者
 @property(nonatomic,copy) WKSyncConversationExtraProvider syncConversationExtraProvider;

@@ -129,12 +129,19 @@ static WKConversationSpaceDB *_instance;
 
 #pragma mark - 读
 
--(void) deleteAllMembership {
+-(BOOL) deleteAllMembership {
+    __block BOOL ok = NO;
     [[WKDB sharedDB].dbQueue inDatabase:^(FMDatabase * _Nonnull db) {
-        [db executeUpdate:@"delete from conversation_space"];
+        ok = [db executeUpdate:@"delete from conversation_space"];
+        if(!ok) {
+            NSLog(@"[SpaceIndex] deleteAllMembership 失败: %@", db.lastErrorMessage);
+        }
     }];
-    [self invalidateHasAnyCache];
-    NSLog(@"[SpaceIndex] deleteAllMembership (归属索引重建)");
+    if(ok) {
+        [self invalidateHasAnyCache];
+    }
+    NSLog(@"[SpaceIndex] deleteAllMembership (归属索引重建) ok=%d", ok);
+    return ok;
 }
 
 -(NSSet<NSString*>*) channelIdsForSpace:(NSString*)spaceId channelType:(uint8_t)channelType {

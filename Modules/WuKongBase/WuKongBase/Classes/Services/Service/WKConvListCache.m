@@ -6,8 +6,6 @@
 #import "WKConvListCache.h"
 #import "WKLoginInfo.h"   // 账号闸门用（见 recordMembershipBatch:）
 
-/// GC 参数：孤儿会话行的保留天数。
-static const NSInteger kWKConvCacheOrphanKeepDays = 30;
 
 /// 归属索引版本。提升它会让下一次启动把整张 conversation_space 推平重建
 /// （见 +prepareMembershipIfNeeded）。
@@ -35,7 +33,10 @@ static const NSInteger kWKConvCacheOrphanKeepDays = 30;
 /// 关闭期间所有写路径都 early-return，归属表停在关闭那一刻的快照，而读路径一旦恢复
 /// 作用域过滤就会拿这批过期行去 EXISTS —— 关闭期间新增的会话全部不在表里，列表会被
 /// 截断成旧快照，要等下一次权威 full sync 才补回。+1 版本号能让启动时先
-/// deleteAllSpaceMembership 再按 WKLastLoadedSpaceId backfill，绕开这个空窗。
+/// deleteAllSpaceMembership 推平重建，绕开这个空窗。
+/// ⚠️ **不要**在这里恢复"按 WKLastLoadedSpaceId 整表回填" —— 那正是 8431d8e 修掉的串空间
+/// 成因（整表归一个空间）。推平之后归属由权威全量 sync 逐空间重建，代价是那次启动列表要
+/// 等 sync（断网则空），仅一次。
 static const NSInteger kWKConvSpaceIndexVersion = 3;
 
 /// recordMembershipBatch 的去重缓存 —— key 为 "space|type:channelId"。
@@ -276,7 +277,14 @@ static NSInteger gVerificationOnlyDepth = 0;
     // 两种都只能推平重来，没有可自愈的中间态。
     NSLog(@"[SpaceIndex] 归属索引版本 %ld → %ld，推平重建（不回填，交给权威全量 sync）",
           (long)stored, (long)kWKConvSpaceIndexVersion);
-    [[WKSDK shared].conversationManager deleteAllSpaceMembership];
+    // 只有推平**确实成功**才盖版本号（@yujiawei round-11 P2-1）：删除失败（库被锁 / 磁盘
+    // 压力）却把版本号盖上去的话，`stored >= 版本` 会让以后每次启动都短路，用户就被永久
+    // 钉在这个迁移要逃离的那个脏索引状态上 —— 这是整个改动里唯一不可自愈的失败模式。
+    // 失败就不盖章，下次启动重试。
+    if(![[WKSDK shared].conversationManager deleteAllSpaceMembership]) {
+        NSLog(@"[SpaceIndex] 推平归属失败，不盖版本号，下次启动重试");
+        return;
+    }
 
     // ⚠️ **不要**在这里调 backfillSpaceMembershipFromExistingConversationsForSpace:。
     // 那个回填是"整张 conversation 表无条件归给一个空间"，只在"库里确定只有一个空间的
@@ -303,23 +311,29 @@ static NSInteger gVerificationOnlyDepth = 0;
                 NSLog(@"[SpaceIndex] GC 跳过：归属表为空（首次 sync 尚未落地）");
                 return;
             }
-            // 归属先裁再清孤儿：裁剪产出的"无归属会话行"这一轮就能被回收。
+            // ⚠️ **不再清"孤儿会话行"**（@yujiawei round-11 P1）。
             //
-            // ⚠️ 这里**不再**按"每空间只留最新 N 条"裁剪有效归属（原来 N=1000）。
-            // 原因：列表读是 EXISTS(conversation_space) 作用域连接，裁掉归属 = 那条会话
-            // 立刻从列表上消失。而会话数超过 N 的空间里，被裁的是"最旧"的一批 —— 用户
-            // 视角就是"启动 20s 后列表凭空少了一截"。虽然下次冷启动的强制全量 sync
-            // （WKConnectionManager coldStartSyncDone → version=0 → replaceMembership）
-            // 会把它们重建回来，所以不是永久丢失，但"每次启动 20s 后消失一批、下次启动
-            // 又回来"本身就是不可接受的抖动。
-            // 而这个裁剪省下的空间可以忽略：一行归属约几十字节，1000 行不到 100KB。
-            // 用"隐藏用户数据"换这点空间，任何人明确权衡时都不会选。
-            // 有界化的责任交给 gcOrphanConversationsBefore:（它删的是真正无归属的死行）。
+            // gcOrphanConversationsBefore: 删的是 `not exists(归属) 且 30 天没动静` 的
+            // conversation 行。它的安全前提是"归属表覆盖了库里所有该保留的会话"——
+            // 这个前提由那次"整表回填"提供，而 8431d8e 已经把回填删掉了（它导致串空间）。
+            //
+            // 现在的实际状态：v3 推平全部归属后，冷启动的强制全量 sync **只重建当前空间**
+            // （applyMembership → replaceMembership 是 forSpace:sid）。于是别的空间的会话
+            // 一行归属都没有 → 全部符合"孤儿"条件 → 30 天以上的会被**物理删除**。
+            // 而守卫 hasAnyMembership 是**全局**的（当前空间一有归属它就为真），挡不住。
+            //
+            // 为什么不用"这次启动做过迁移就跳过 GC"的标志（reviewer 建议的最小修法）：
+            // 那只把问题推迟一次启动 —— 未访问过的空间在被访问前归属一直是空的，
+            // 下一次启动 hasAnyMembership 仍为真，照样删。要真正判定安全，得知道
+            // "库里每个空间都已被权威重建过"，而这个信息现在拿不到。
+            //
+            // 所以直接去掉这个破坏性操作：有界化只保留 gcDanglingMembership（删的是
+            // 指不到任何活着会话行的归属，肉眼不可见的死数据，不可能删掉用户内容）。
+            // 代价是"再也不会被访问的空间"的 conversation 行会长期留着 —— 一行几十字节
+            // 的元数据，message 表本来也不由这条路径清理，与"静默删除用户本地缓存"
+            // 相比这个代价可以忽略。
+            // 什么时候能恢复：能按空间判定"归属已被权威重建"之后（见 issue #69）。
             [[WKConversationSpaceDB shared] gcDanglingMembership];
-            // last_msg_timestamp 单位是秒（对齐 WKMessage.timestamp）
-            NSInteger cutoff = (NSInteger)[[NSDate date] timeIntervalSince1970]
-                                - kWKConvCacheOrphanKeepDays * 24 * 3600;
-            [[WKConversationSpaceDB shared] gcOrphanConversationsBefore:cutoff];
         });
     });
 }

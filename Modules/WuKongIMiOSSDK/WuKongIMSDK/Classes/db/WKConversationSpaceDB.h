@@ -73,7 +73,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// (见 WKConvListCache.prepareMembershipIfNeeded)。
 /// 清完后各空间会退回"从未同步过"状态: 第一次进入时列表为空 → sync 回来后重建,
 /// 与清库时代的行为一致, 代价是一次性的首帧空列表, 换来"绝不继承脏归属"。
--(void) deleteAllMembership;
+/// 返回是否**确实**删除成功。调用方（迁移）必须据此决定要不要盖版本号 ——
+/// 删除失败却盖了章，用户会被永久钉在这个迁移要逃离的脏索引状态上。
+-(BOOL) deleteAllMembership;
 
 /// 某空间下指定 channelType 的 channelId 集合。上层用它水化
 /// WKConversationListVM.syncedGroupChannelIds, 让空间白名单从第一帧起就非 nil。
