@@ -16,6 +16,7 @@
 #import "WKConversationVC.h"
 #import "WKWebViewService.h"
 #import "WKCSVRenderer.h"
+#import "WKDocsViewerSpaceHandoff.h"
 #include <libcmark_gfm/cmark-gfm.h>
 #include <libcmark_gfm/cmark-gfm-core-extensions.h>
 @interface WKWebViewVC ()<WKUIDelegate,WKNavigationDelegate,UIScrollViewDelegate>
@@ -825,6 +826,19 @@
  @param webView wkwebview
  */
 - (void)addUserScript:(WKWebView *)webView {
+    // Standalone Docs reads this key during bootstrap. Capture the native value now and
+    // install it at document-start so app scripts cannot observe stale pooled storage.
+    // Scope is deliberately narrow: exact server origin + explicit viewer routes only.
+    if (WKIsTrustedDocsViewerURL(self.url, [WKApp shared].config.apiBaseUrl)) {
+        NSString *spaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+        NSString *apiBaseURL = [WKApp shared].config.apiBaseUrl;
+        WKUserScript *spaceScript = [[WKUserScript alloc]
+            initWithSource:WKDocsViewerSpaceJavaScript(spaceId, apiBaseURL)
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+            forMainFrameOnly:YES];
+        [webView.configuration.userContentController addUserScript:spaceScript];
+    }
+
     // 让网页（含登录 OIDC 页）跟随 App 内语言切换，而不是 iOS 系统语言。
     // 背景：WKWebView 的 navigator.language / navigator.languages 取自
     // NSLocale.preferredLanguages（设备系统语言），不受 [WKApp shared].config.langue 影响；
