@@ -41,15 +41,29 @@
 @property(nonatomic,assign) BOOL isLayingOutTabItems;
 // 命中重入时置位, 由外层调用返回前重跑一次 —— 不能直接丢弃, 见 _layoutTabItemsIntoSlots 注释。
 @property(nonatomic,assign) BOOL needsTabItemRelayout;
-// 切 tab 的 pill spring 动画进行中。此时 layoutSubviews 回调里不能用 animated:NO 覆盖 pill,
-// 否则滑动被打断变成硬跳。
+// 切 tab 的 pill spring 动画进行中。此时任何 animated:NO 的 pill 定位都必须跳过,
+// 否则滑动被打断变成硬跳。守卫统一在 _layoutPillIndicatorAnimated: 开头实施,
+// 调用点不需要自己判 (曾经只在两个调用点之一判过, 漏掉的那个由 viewDidLayoutSubviews
+// 触发, 旋转 / 键盘升降都能绕过标志把动画打断)。
 @property(nonatomic,assign) BOOL isPillAnimating;
+// pill spring 动画的代次。见 _layoutPillIndicatorAnimated: —— 用来分辨
+// 「本次动画自己结束」和「被后一次动画打断」, 后者不能清 isPillAnimating。
+@property(nonatomic,assign) NSUInteger pillAnimationGeneration;
+// _verifyTabBarInstalledOnce 只跑一次的标记。
+@property(nonatomic,assign) BOOL didVerifyTabBarInstall;
 
 @end
 
 // 双击判定窗口。系统双击间隔约 0.25s，留一点余量；再长会把「点一下看一眼、
 // 过一会儿再点一下」误判成双击。
 static NSTimeInterval const kWKMessageTabDoubleTapInterval = 0.35;
+
+// tab 标题字号。唯一消费方是 updateTabBarAppearance 的 titleTextAttributes
+// (normal / selected 两处要用同一个字号)。
+// 【必须声明在 updateTabBarAppearance 之前】—— 文件作用域 C 标识符只按文本顺序查找,
+// 声明写在使用点之后会直接编译不过 ("use of undeclared identifier")。曾经就放在下面
+// 「胶囊外观」那组常量里, 编译中断。
+static const CGFloat kWKItemTitleFontSize = 10;
 
 // +tabConfigs 里每条配置的 key
 static NSString *const kWKTabCfgClass    = @"cls";    // UIViewController 子类
@@ -91,6 +105,39 @@ static NSString *const kWKTabCfgImage    = @"image";  // 普通态图标名; 选
     UITraitCollection *_cachedCompactTraits;
 }
 
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        [self _installCompactSizeClassOverride];
+    }
+    return self;
+}
+
+- (instancetype)initWithCoder:(NSCoder *)coder {
+    self = [super initWithCoder:coder];
+    if (self) {
+        [self _installCompactSizeClassOverride];
+    }
+    return self;
+}
+
+/// iOS 17+ 走受支持的 traitOverrides;更老的系统没有这个 API, 落到 -traitCollection
+/// 覆写兜底 (见该方法注释)。
+///
+/// 为什么优先用 traitOverrides: 覆写 traitCollection getter 不是受支持的扩展点 ——
+/// UIKit 自己维护一份 trait 状态, 内部布局路径到底读 self.traitCollection (会命中我们的
+/// 覆写) 还是读传播下来的环境 (不受影响) 是无文档的, 且 iOS 17 已重写整套 trait 系统。
+/// traitOverrides 是官方为「改本 view 及其后代的 trait」提供的入口, 会正确参与传播,
+/// 不依赖任何内部实现细节。
+///
+/// 装上之后 [super traitCollection] 本身就报 compact, 下面的 getter 会走
+/// 「本来就是 compact → 原样返回」那一条分支, 不再包装, 两条路不会打架。
+- (void)_installCompactSizeClassOverride {
+    if (@available(iOS 17.0, *)) {
+        self.traitOverrides.horizontalSizeClass = UIUserInterfaceSizeClassCompact;
+    }
+}
+
 - (void)layoutSubviews {
     [super layoutSubviews];
     if (self.onDidLayoutSubviews) {
@@ -98,6 +145,9 @@ static NSString *const kWKTabCfgImage    = @"image";  // 普通态图标名; 选
     }
 }
 
+/// 【iOS 17 以下的兜底路径】iOS 17+ 已由 -_installCompactSizeClassOverride 用
+/// traitOverrides 处理, 那时 super 已经报 compact, 本方法直接原样返回。
+///
 /// 只把 horizontalSizeClass 改成 compact, 其余 trait (userInterfaceStyle / 缩放等)
 /// 原样从 super 带过来。
 ///
@@ -145,28 +195,45 @@ static NSString *const kWKTabCfgImage    = @"image";  // 普通态图标名; 选
     self.delegate = self;
 
     // 换成 WKOctoTabBar, 拿到「系统排完 item 之后」的回调 (见该类注释)。
-    // tabBar 是只读属性, 只能走 KVC 私有 setter —— 必须在 addChildViewController 之前,
-    // 否则 item 会先挂到原生 bar 上。setValue 失败时 self.tabBar 仍是系统实例,
-    // 下面的类型判断会跳过 hook, 功能降级为「图标不居中」, 不会 crash。
+    //
+    // 【私有 API 提示】tabBar 是只读属性, 这里走的是 UITabBarController 的私有
+    // setTabBar: —— 是一个有意识的取舍, 不是顺手写的。必须在 addChildViewController
+    // 之前, 否则 item 会先挂到原生 bar 上。
+    //
+    // 两条失败路径, 后果不同, 都要能看出来:
+    //   1) setValue:forKey: 抛异常 → self.tabBar 仍是系统实例, 下面的判等跳过 hook,
+    //      功能降级为「图标不居中」, 其余 (pill / 浮岛 / 角标 / 双击) 照常。
+    //   2) 私有 setter 消失 → KVC **不抛异常**, 退化成直接写 backing ivar。此时
+    //      self.tabBar 返回新 bar, 但它从未被接入视图层级, bar.superview == nil,
+    //      _applyCapsuleStyleToTabBar 会一直提前返回 —— 浮岛 / pill / 角标全部消失,
+    //      比第 1 种严重得多。所以视图层级那一项在首次 layout 后另行核验
+    //      (见 _verifyTabBarInstalledOnce)。
     WKOctoTabBar *octoBar = [[WKOctoTabBar alloc] init];
     @try {
         [self setValue:octoBar forKey:@"tabBar"];
     } @catch (NSException *e) {
         NSLog(@"[WKMainTabController] 安装 WKOctoTabBar 失败, 退回系统 UITabBar: %@", e.reason);
     }
-    if ([self.tabBar isKindOfClass:[WKOctoTabBar class]]) {
+    if (self.tabBar == octoBar) {
         __weak typeof(self) weakSelf = self;
-        [(WKOctoTabBar *)self.tabBar setOnDidLayoutSubviews:^(UITabBar *bar) {
+        [octoBar setOnDidLayoutSubviews:^(UITabBar *bar) {
             __strong typeof(weakSelf) self_ = weakSelf;
             if (!self_) return;
             // item 槽位与 pill 都从 _islandFrameInParent 取几何 (唯一真源), 且在同一个
             // 回调里紧邻执行 —— 两者不可能再读到不同的宽度。
             [self_ _layoutTabItemsIntoSlots];
-            // 切 tab 的 spring 滑动进行中就别覆盖, 否则动画被打断变硬跳。
-            if (!self_.isPillAnimating) {
-                [self_ _layoutPillIndicatorAnimated:NO];
-            }
+            // spring 滑动进行中会被 _layoutPillIndicatorAnimated: 内部的守卫挡掉,
+            // 这里不再重复判 isPillAnimating (不变量集中在那个方法里实施)。
+            [self_ _layoutPillIndicatorAnimated:NO];
+            // 角标锚在 icon 上, 而上面刚挪过 button —— 必须跟着重定位, 且必须排在
+            // _layoutTabItemsIntoSlots 之后 (读的是修正后的 icon frame)。
+            // 少了这一句, 本路径会把角标留在上一帧的位置, 靠下一次
+            // _applyCapsuleStyleToTabBar 才收敛。
+            [self_ _layoutMessageTabBadge];
         }];
+    } else {
+        NSLog(@"[WKMainTabController] tabBar 未被替换成 WKOctoTabBar (实际: %@), "
+              @"降级为图标不居中", NSStringFromClass([self.tabBar class]));
     }
 
     // 监听 viewConfigChange 通知（WKBaseVC 的 traitCollectionDidChange 会发这个）
@@ -366,9 +433,7 @@ static const CGFloat kWKContentBottomPadding = 24;
 // pill 内缩 —— pill 比单个 item 区略小, 给 capsule 边缘留点呼吸
 static const CGFloat kWKPillVerticalInset    = 8;    // 上下各 8pt: 圆形端帽外露 ~6pt
 static const CGFloat kWKPillHorizontalInset  = 14;   // 左右各 14pt: 让 pill 视觉上"包住" icon+标题, 不顶到胶囊端帽
-// tab 标题字号。updateTabBarAppearance 的 titleTextAttributes 与 _applyTabItemSlotsOnce
-// 算 label 高度都用它, 保持单一来源。
-static const CGFloat kWKItemTitleFontSize    = 10;
+// (kWKItemTitleFontSize 见文件顶部 —— 必须声明在 updateTabBarAppearance 之前)
 
 // Liquid Glass 关闭后,标准 UITabBar 是横贯全宽的扁平条。这里手工把它做成"浮岛胶囊":
 // 白底 capsuleBackground + pill 选中胶囊 + tabBar 透明在最上层承接事件。
@@ -376,7 +441,23 @@ static const CGFloat kWKItemTitleFontSize    = 10;
 // safeArea / orientation 反复重排 tabBar.frame。
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
+    [self _verifyTabBarInstalledOnce];
     [self _applyCapsuleStyleToTabBar];
+}
+
+/// 核验 KVC 换 bar 的第 2 条失败路径 (见 viewDidLoad 注释): 私有 setter 消失时 KVC 会
+/// 静默退化成直接写 ivar, self.tabBar 是新 bar 但从未接入视图层级 —— 表现是浮岛 / pill /
+/// 角标整体消失, 而代码里到处都是「superview 为 nil 就 return 等下一拍」的软失败,
+/// 不吭声就很难归因。上屏后核验一次, 出问题时大声报出来。
+- (void)_verifyTabBarInstalledOnce {
+    if (self.didVerifyTabBarInstall) return;
+    if (!self.view.window) return;   // 还没上屏, 此时 superview 为 nil 是正常的, 不能下结论
+    self.didVerifyTabBarInstall = YES;
+    if (self.tabBar.superview == nil) {
+        NSLog(@"[WKMainTabController] tabBar (%@) 不在视图层级里 —— KVC 换 bar 可能已退化成"
+              @"直接写 ivar, 浮岛 / pill / 角标都不会出现。请检查 setTabBar: 是否仍存在。",
+              NSStringFromClass([self.tabBar class]));
+    }
 }
 
 - (UIColor *)_capsuleBackgroundColor {
@@ -478,8 +559,8 @@ static const CGFloat kWKItemTitleFontSize    = 10;
         [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, target.size.width, target.size.height)
                                    cornerRadius:kWKCapsuleHeight / 2.0].CGPath;
 
-    // item button / icon / label 的水平布局由我们接管, 必须在 pill 和 badge 之前 ——
-    // badge 要读修正后的 icon frame。
+    // item button 的 frame (槽位 + 热区) 由我们接管, 必须在 pill 和 badge 之前 ——
+    // badge 要读修正后的 icon frame。button 内部的 icon / label 不碰。
     [self _layoutTabItemsIntoSlots];
 
     // pill 跟随当前 selectedIndex 定位 (无动画, layout 阶段)
@@ -502,13 +583,25 @@ static const CGFloat kWKItemTitleFontSize    = 10;
 #pragma mark - item 水平布局接管
 
 /// tabBar 内的 item 容器 (系统私有类 UITabBarButton), 按 x 升序 == tab 顺序。
-/// 结构化过滤而非判类名 (类名可能随 iOS 版本变): 有尺寸 + 含 UIImageView 子视图。
+/// 结构化过滤而非判类名 (类名可能随 iOS 版本变): 是 UIControl + 有尺寸 + 含 UIImageView 子视图。
+///
+/// UIControl 这一条是必须的, 不只是收紧:
+///   _UIBarBackground 也是 bar 的兄弟子视图, 也有非零 bounds, 且当 bar 设了
+///   backgroundImage / shadowImage 时它内部会挂 UIImageView —— 而
+///   _applyCapsuleStyleToTabBar 恰好把这两个都设成了 [UIImage new]。只靠
+///   「有尺寸 + 含 UIImageView」在某些系统版本上会把它一并收进来, 于是 buttons.count
+///   变成 count+1, _applyTabItemSlotsOnce 的数量闸门触发, **整个槽位修正静默失效**。
+///   UITabBarButton 是 UIControl, _UIBarBackground 是普通 UIView, 这一条把两者分开,
+///   同时保住「不写死私有类名」。
+///
 /// 显式排除 _messageTabBadge —— 它是 addSubview 到 tabBar 上的兄弟视图 (见
 /// messageTabBadge getter), 内部若含 UIImageView 会被误当成 item button。
+/// (它不是 UIControl, 已被上面那条挡掉, 这里保留是双保险。)
 - (NSArray<UIView *> *)_sortedItemButtons {
     NSMutableArray<UIView *> *itemViews = [NSMutableArray array];
     for (UIView *v in self.tabBar.subviews) {
         if (v == _messageTabBadge) continue;
+        if (![v isKindOfClass:[UIControl class]]) continue;
         if (v.bounds.size.width <= 0 || v.bounds.size.height <= 0) continue;
         BOOL hasImage = NO;
         for (UIView *sub in v.subviews) {
@@ -525,8 +618,9 @@ static const CGFloat kWKItemTitleFontSize    = 10;
     return itemViews;
 }
 
-/// 把每个 item button 摆到与 _pillFrameForIndex: 同源的槽位 (barW/count), 并把它内部的
-/// icon / label 在槽位内水平居中、label 宽度撑到槽位全宽。
+/// 把每个 item button 摆到与 _pillFrameForIndex: 同源的槽位 (islandW/count)。
+/// **只写 button.frame, 不碰它内部的 icon / label** —— 原因见 _applyTabItemSlotsOnce
+/// 循环里那段注释 (硬写 icon/label frame 会被 UIKit 在事务提交后重排, 把图标挤到负坐标)。
 ///
 /// 为什么要接管而不是用 itemPositioning / itemWidth:
 ///   iPad 全屏 (横向 regular) 下 UITabBar 默认 Centered 排布, item 居中挤成一簇, 与
@@ -538,14 +632,15 @@ static const CGFloat kWKItemTitleFontSize    = 10;
 ///   这个非标准值, 而 UITabBar 已按 controller 给的原始 frame 排过一轮, 两套基准不一致。
 ///   iPhone (compact / Fill) 上数字恰好对得上, 所以只有 iPad 暴露。
 ///
-/// 只改水平方向 (x / width), 纵向沿用系统算好的 y / height —— 保住 stackedLayoutAppearance
-/// 的 titlePositionAdjustment (0,-12) 和 icon/title 间距。
+/// 只改 button 的 frame (= 槽位 + 热区), 内部内容排版交回 UIKit —— 它在一个 itemW 宽的
+/// button 里排 stacked 布局, 本来就会把图标水平居中。纵向微调走 stackedLayoutAppearance
+/// 的 titlePositionAdjustment (0,-12), 不在这里写 frame。
 ///
 /// button.frame 就是热区, 所以点击位置自动跟着图标走 (这是不用 imageInsets 的原因:
 /// imageInsets 只移动图标绘制位置, 热区留在原处, 会造成点图标没反应)。
 ///
-/// 同源保证: 槽位算法与 _pillFrameForIndex: 都用 bar.bounds.size.width / count, 改一处
-/// 必须同步改另一处。
+/// 同源保证: 槽位算法与 _pillFrameForIndex: 都用 _islandFrameInParent 的宽度 / count,
+/// 改一处必须同步改另一处。
 - (void)_layoutTabItemsIntoSlots {
     // 重入保护 + 延迟重跑。
     //
@@ -590,17 +685,43 @@ static const CGFloat kWKItemTitleFontSize    = 10;
     // 宁可维持系统原样也不要摆出错位的半成品。
     CGRect island = [self _islandFrameInParent];
     if (CGRectIsEmpty(island) || count <= 0 || (NSInteger)buttons.count != count) {
+#if DEBUG
+        // 数量对不上而且不是「还没排」(0 个) 时留一声 —— 若将来 UIKit 换了内部结构,
+        // 让 _sortedItemButtons 多收/少收一个, 这个闸门会让整段修正静默失效,
+        // 表现就是「图标又不居中了」却没有任何线索。
+        if (buttons.count > 0 && (NSInteger)buttons.count != count) {
+            NSLog(@"[WKMainTabController] item button 数量不符 (识别到 %lu, 期望 %ld), "
+                  @"本轮跳过槽位修正 —— 检查 _sortedItemButtons 的过滤条件。",
+                  (unsigned long)buttons.count, (long)count);
+        }
+#endif
         return;
     }
 
     // 槽位尺寸取 _islandFrameInParent, 与 _pillFrameForIndex: 同一真源 ——
     // 不读 bar.bounds, 否则两者在不同时机会拿到不同宽度 (见 _islandFrameInParent 注释)。
-    CGFloat itemW = island.size.width / (CGFloat)count;
-    CGFloat itemH = island.size.height;
+    //
+    // 坐标系: island 在 tabBar.superview 下, 而 button.frame 在 tabBar.bounds 下, 两者
+    // 只有在 bar.frame == island 时才等价。当前调用顺序下这个前提确实成立
+    // (_applyCapsuleStyleToTabBar 先把 bar.frame 改成 island 再调本方法; layoutSubviews
+    // 回调路径上 bar 早已是浮岛尺寸), 但那是**另一个方法、另一个入口点**建立的顺序保证,
+    // 在这里不可见 —— 靠它就等于埋一个「哪天顺序变了就整帧错位」的雷,
+    // 而错位一帧正是本次要根除的那类 bug。
+    // 所以直接把 island 换算到 bar 坐标系, 不依赖任何前提: 即使某一拍 bar.frame 还是
+    // 系统给的全宽值, 算出来的槽位落在屏幕上的位置依然正确。
+    UIView *parent = self.tabBar.superview;
+    if (!parent) return;
+    CGRect islandInBar = [self.tabBar convertRect:island fromView:parent];
+
+    CGFloat itemW = islandInBar.size.width / (CGFloat)count;
+    CGFloat itemH = islandInBar.size.height;
 
     for (NSInteger i = 0; i < count; i++) {
         UIView *button = buttons[i];
-        CGRect slot = CGRectMake((CGFloat)i * itemW, 0, itemW, itemH);
+        CGRect slot = CGRectMake(islandInBar.origin.x + (CGFloat)i * itemW,
+                                 islandInBar.origin.y,
+                                 itemW,
+                                 itemH);
         if (!CGRectEqualToRect(button.frame, slot)) {
             button.frame = slot;
         }
@@ -724,6 +845,19 @@ static const CGFloat kWKItemTitleFontSize    = 10;
 - (void)_layoutPillIndicatorAnimated:(BOOL)animated {
     if (!self.pillIndicator) return;
     if (CGRectIsEmpty(self.tabBar.bounds)) return;
+
+    // 不变量「spring 动画进行中不得被 animated:NO 覆盖」在这里集中实施, 不放在调用点。
+    //
+    // 之前只在 WKOctoTabBar.layoutSubviews 回调那一处加了守卫, 漏掉了
+    // _applyCapsuleStyleToTabBar 里的这一处 —— 而后者由 viewDidLayoutSubviews 触发,
+    // 于是 0.34s 窗口内任何控制器级布局 (旋转 / Split View 改尺寸 / 键盘升降 /
+    // additionalSafeAreaInsets 变化) 都会绕过标志把动画打成硬跳。
+    // 两个调用点各写一遍守卫只是把漏写的概率推到下一个人身上, 所以收到这里 ——
+    // 以后新增调用点自动继承这条不变量。
+    if (!animated && self.isPillAnimating) {
+        return;
+    }
+
     CGRect target = [self _pillFrameForIndex:self.selectedIndex];
     CGFloat radius = target.size.height / 2.0;
     if (!animated) {
@@ -732,8 +866,18 @@ static const CGFloat kWKItemTitleFontSize    = 10;
         return;
     }
     // 切换 tab: spring 滑动。damping/velocity 取偏跟手不晃的取值。
-    // isPillAnimating 期间 WKOctoTabBar 的 layoutSubviews 回调会跳过 animated:NO 的
-    // 定位, 否则刚启动的滑动会被立刻覆盖成硬跳。
+    // 滑动期间所有 animated:NO 的定位都被本方法开头的守卫挡掉, 否则刚启动的滑动
+    // 会被立刻覆盖成硬跳。
+    //
+    // 为什么要 generation 而不是裸 BOOL: 0.34s 内快速连切两次时, 动画 B 会打断 A,
+    // A 的 completion 以 finished == NO 立刻回调 —— 裸 BOOL 会在 B 还在飞的时候把
+    // isPillAnimating 清成 NO, 于是 layoutSubviews 回调恢复用 animated:NO 覆盖 pill,
+    // B 当场变硬跳, 正好是这个标志要防的事。只有「自己是最新一代」的 completion
+    // 才有资格清标志; 被打断的那一代直接放行, 由打断它的那一代负责收尾。
+    // (注意仍然不看 finished —— 最新一代即使被系统中途取消也必须清, 否则一次打断就
+    //  永久卡在 YES, 旋转时 pill 再也不会跟着重排。)
+    NSUInteger generation = self.pillAnimationGeneration + 1;
+    self.pillAnimationGeneration = generation;
     self.isPillAnimating = YES;
     __weak typeof(self) weakSelf = self;
     [UIView animateWithDuration:0.34
@@ -744,12 +888,22 @@ static const CGFloat kWKItemTitleFontSize    = 10;
                                 | UIViewAnimationOptionBeginFromCurrentState
                                 | UIViewAnimationOptionAllowUserInteraction
                      animations:^{
-        self.pillIndicator.frame = target;
-        self.pillIndicator.layer.cornerRadius = radius;
+        __strong typeof(weakSelf) self_ = weakSelf;
+        if (!self_) return;
+        self_.pillIndicator.frame = target;
+        self_.pillIndicator.layer.cornerRadius = radius;
     } completion:^(BOOL finished) {
-        // 无论是否 finished 都要复位, 否则被打断一次就永久卡在 YES,
-        // 旋转时 pill 再也不会跟着重排。
-        weakSelf.isPillAnimating = NO;
+        __strong typeof(weakSelf) self_ = weakSelf;
+        if (!self_ || self_.pillAnimationGeneration != generation) return;
+        self_.isPillAnimating = NO;
+        // 收尾必须重新定位一次, 不能就这么停下。
+        //
+        // 守卫收到方法内部之后, 动画期间**所有** animated:NO 都被挡掉了 —— 包括旋转 /
+        // Split View 改尺寸带来的那些, 而它们是真的改了 target 几何。若不在这里补一次,
+        // pill 会停在按旧几何算出的位置, 且之后不保证还有 layout 来纠正
+        // (旋转的 layout 已经在动画期间发生过了), 表现是「转屏后 pill 错位, 要点一下才回正」。
+        // 此时 isPillAnimating 已是 NO, 这次调用不会被自己的守卫挡掉, 也不会再递归。
+        [self_ _layoutPillIndicatorAnimated:NO];
     }];
 }
 
