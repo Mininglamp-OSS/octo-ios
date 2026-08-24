@@ -427,4 +427,49 @@ static NSInteger WK_AttachmentCount(NSAttributedString *attr) {
                    (long)attachmentCount, (long)fallbackCount, attr.string);
 }
 
+#pragma mark - iosMath 命令归一化 (\dfrac 等 → 受支持基础命令)
+
+// iosMath 0.9.4 不认 \dfrac / \tfrac / \cfrac / \dbinom / \tbinom，遇到会 setError
+// → 整段公式回退成灰底等宽源码。喂给 iosMath 前先归一化到 \frac / \binom。
+
+- (void)test_normalize_dfrac_to_frac {
+    NSString *out = [WKMathImageRenderer normalizeUnsupportedFractions:@"\\dfrac{a}{b}"];
+    XCTAssertEqualObjects(out, @"\\frac{a}{b}");
+}
+
+- (void)test_normalize_tfrac_and_cfrac_to_frac {
+    XCTAssertEqualObjects([WKMathImageRenderer normalizeUnsupportedFractions:@"\\tfrac{a}{b}"], @"\\frac{a}{b}");
+    XCTAssertEqualObjects([WKMathImageRenderer normalizeUnsupportedFractions:@"\\cfrac{a}{b}"], @"\\frac{a}{b}");
+}
+
+- (void)test_normalize_dbinom_tbinom_to_binom {
+    XCTAssertEqualObjects([WKMathImageRenderer normalizeUnsupportedFractions:@"\\dbinom{n}{k}"], @"\\binom{n}{k}");
+    XCTAssertEqualObjects([WKMathImageRenderer normalizeUnsupportedFractions:@"\\tbinom{n}{k}"], @"\\binom{n}{k}");
+}
+
+- (void)test_normalize_leaves_frac_untouched {
+    // 基础命令本身不应被改动
+    XCTAssertEqualObjects([WKMathImageRenderer normalizeUnsupportedFractions:@"\\frac{a}{b}"], @"\\frac{a}{b}");
+    XCTAssertEqualObjects([WKMathImageRenderer normalizeUnsupportedFractions:@"\\binom{n}{k}"], @"\\binom{n}{k}");
+}
+
+- (void)test_normalize_no_fraction_returns_input {
+    NSString *src = @"x^2 + y_1 = \\sum_i a_i";
+    XCTAssertEqualObjects([WKMathImageRenderer normalizeUnsupportedFractions:src], src);
+}
+
+- (void)test_normalize_multiple_and_nested {
+    // 触发本 bug 的真实块级公式：外层 \frac + 内层 \dfrac
+    NSString *src = @"\\text{TokenROI}(t) = \\frac{P \\times Q(t)}{C(t) + \\dfrac{N(t)}{L(t)}}";
+    NSString *out = [WKMathImageRenderer normalizeUnsupportedFractions:src];
+    XCTAssertFalse([out containsString:@"\\dfrac"], @"残留 \\dfrac: %@", out);
+    XCTAssertTrue([out containsString:@"\\frac{P \\times Q(t)}{C(t) + \\frac{N(t)}{L(t)}}"], @"got: %@", out);
+}
+
+- (void)test_normalize_word_boundary_guard {
+    // \dfracX 不是 \dfrac 命令（后接字母），负向前瞻保证不误替换
+    NSString *src = @"\\dfracsomething{a}{b}";
+    XCTAssertEqualObjects([WKMathImageRenderer normalizeUnsupportedFractions:src], src);
+}
+
 @end
