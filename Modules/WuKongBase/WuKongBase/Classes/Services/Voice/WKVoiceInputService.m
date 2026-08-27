@@ -203,6 +203,22 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
         personalContext:(NSString *)personalContext
           memberContext:(NSString *)memberContext
              completion:(void(^)(WKVoiceInputResult *, NSError *))completion {
+    [self transcribeAudio:audioData
+               contextText:contextText
+               chatContext:chatContext
+           personalContext:personalContext
+             memberContext:memberContext
+                      mode:nil
+                completion:completion];
+}
+
+- (void)transcribeAudio:(NSData *)audioData
+            contextText:(NSString *)contextText
+            chatContext:(NSString *)chatContext
+        personalContext:(NSString *)personalContext
+          memberContext:(NSString *)memberContext
+                   mode:(NSString *)mode
+             completion:(void(^)(WKVoiceInputResult *, NSError *))completion {
 
     // 检查文件大小（max 5MB）
     if (audioData.length > 5 * 1024 * 1024) {
@@ -228,14 +244,18 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
     if (memberContext.length > 0) {
         formFields[@"member_context"] = memberContext;
     }
+    if (mode.length > 0) {
+        formFields[@"mode"] = mode;
+    }
 
     // R4 fix (Critical privacy): 不打 context 字段内容。
 #if DEBUG
-    NSLog(@"[VoiceInput] transcribe m4a request: contextText.len=%lu chatContext.len=%lu personalContext.len=%lu memberContext.len=%lu audio=%lu bytes",
+    NSLog(@"[VoiceInput] transcribe m4a request: contextText.len=%lu chatContext.len=%lu personalContext.len=%lu memberContext.len=%lu mode=%@ audio=%lu bytes",
           (unsigned long)contextText.length,
           (unsigned long)chatContext.length,
           (unsigned long)personalContext.length,
           (unsigned long)memberContext.length,
+          mode ?: @"(nil)",
           (unsigned long)audioData.length);
 #endif
 
@@ -290,6 +310,22 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
            personalContext:(NSString *)personalContext
              memberContext:(NSString *)memberContext
                 completion:(void(^)(WKVoiceInputResult *, NSError *))completion {
+    [self transcribeWavAudio:audioData
+                  contextText:contextText
+                  chatContext:chatContext
+              personalContext:personalContext
+                memberContext:memberContext
+                         mode:nil
+                   completion:completion];
+}
+
+- (void)transcribeWavAudio:(NSData *)audioData
+               contextText:(NSString *)contextText
+               chatContext:(NSString *)chatContext
+           personalContext:(NSString *)personalContext
+             memberContext:(NSString *)memberContext
+                      mode:(NSString *)mode
+                completion:(void(^)(WKVoiceInputResult *, NSError *))completion {
 
     if (audioData.length > 10 * 1024 * 1024) {
         if (completion) {
@@ -304,16 +340,18 @@ static const NSTimeInterval kTranscribeTimeout = 30.0;
     if (chatContext.length > 0) formFields[@"chat_context"] = chatContext;
     if (personalContext.length > 0) formFields[@"personal_context"] = personalContext;
     if (memberContext.length > 0) formFields[@"member_context"] = memberContext;
+    if (mode.length > 0) formFields[@"mode"] = mode;
 
     // R4 fix (Critical privacy): 不打转写请求的 context 字段内容
     // (context_text / chat_context / personal_context / member_context 均是用户数据);
     // 仅保留 DEBUG-only 的长度类 metadata 。
 #if DEBUG
-    NSLog(@"[VoiceInput] transcribe WAV request: contextText.len=%lu chatContext.len=%lu personalContext.len=%lu memberContext.len=%lu audio=%lu bytes",
+    NSLog(@"[VoiceInput] transcribe WAV request: contextText.len=%lu chatContext.len=%lu personalContext.len=%lu memberContext.len=%lu mode=%@ audio=%lu bytes",
           (unsigned long)contextText.length,
           (unsigned long)chatContext.length,
           (unsigned long)personalContext.length,
           (unsigned long)memberContext.length,
+          mode ?: @"(nil)",
           (unsigned long)audioData.length);
 #endif
 
