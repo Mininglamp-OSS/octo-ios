@@ -51,6 +51,7 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
 @property(nonatomic, strong) UITextView *textView;
 @property(nonatomic, copy) NSString *initialContent;
 @property(nonatomic, strong) UIButton *undoBtn; // 导航栏"撤销",和保存并排,统一撤销 textView.undoManager 的历史(手动打字/语音改写共用一个栈)
+@property(nonatomic, strong) UIButton *saveBtn; // 导航栏"保存",非 Idle 语音态下必须禁用——否则 overlay 顶部通栏的 passthrough 区域会漏出这两个按钮,录音/思考/结果待确认期间点了会拿到过期的 textView.text 或打断正在进行的语音编辑
 @property(nonatomic, strong) NSUndoManager *wk_privateUndoManager; // 本页专属的 undoManager 实例,配合下面对 -undoManager 的重写使用
 @property(nonatomic, assign) CGFloat keyboardHeight;     // 当前键盘高度,影响 textView 底缘
 @property(nonatomic, assign) BOOL pendingRealKeyboard;   // 点"点击输入…"触发按钮时置 YES,一次性放行真系统键盘
@@ -150,6 +151,7 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     };
 
     UIButton *saveBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.saveBtn = saveBtn;
     [saveBtn setTitle:LLang(@"保存") forState:UIControlStateNormal];
     saveBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
     // 字色与底色反向配对, 浅 / 深两态都正确出对比 (见 CreateVC 同模式注释)
@@ -264,6 +266,7 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     [self.recordTimer invalidate];
     [self.waveformTimer invalidate];
     [self.highlightDebounceTimer invalidate];
+    [self.thinkingTimer invalidate];
     if (self.audioRecorder.isRecording) [self.audioRecorder stop];
     [self restoreAudioSession];
 }
@@ -297,7 +300,13 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGFloat top = CGRectGetMaxY(self.navigationBar.frame);
-    CGFloat voiceBarHeight = 48;
+    CGFloat voiceBarContentHeight = 48;
+    // 键盘收起时 voiceBar 贴的是屏幕最底部——notch/Home Indicator 机型这里必须留出
+    // safeAreaInsets.bottom,否则"按住 说话"这个主操作会正好卡在系统手势热区里
+    // (对齐 OctoSummaryDetailVC/OctoSummaryListVC 底部条已有的写法)。键盘弹出时
+    // 键盘本身已经顶开了这段安全区,不需要再叠加,否则会凭空多出一段空白。
+    CGFloat bottomSafe = self.keyboardHeight > 0 ? 0 : self.view.safeAreaInsets.bottom;
+    CGFloat voiceBarHeight = voiceBarContentHeight + bottomSafe;
     CGFloat bottomInset = self.keyboardHeight + voiceBarHeight;
 
     self.textView.frame = CGRectMake(8, top + 8,
@@ -309,10 +318,10 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     self.voiceBarHairline.frame = CGRectMake(0, 0, self.voiceBar.bounds.size.width, 0.5);
 
     CGFloat toggleSize = 32;
-    self.modeToggleBtn.frame = CGRectMake(12, (voiceBarHeight - toggleSize) / 2, toggleSize, toggleSize);
+    self.modeToggleBtn.frame = CGRectMake(12, (voiceBarContentHeight - toggleSize) / 2, toggleSize, toggleSize);
     CGFloat slotX = CGRectGetMaxX(self.modeToggleBtn.frame) + 12;
 
-    CGRect slotFrame = CGRectMake(slotX, (voiceBarHeight - 36) / 2,
+    CGRect slotFrame = CGRectMake(slotX, (voiceBarContentHeight - 36) / 2,
                                    self.voiceBar.bounds.size.width - slotX - 12, 36);
     self.holdToTalkBtn.frame = slotFrame;
     self.textInputTriggerBtn.frame = slotFrame;
@@ -406,6 +415,26 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     BOOL canUndo = self.textView.undoManager.canUndo;
     self.undoBtn.enabled = canUndo;
     self.undoBtn.alpha = canUndo ? 1.0 : 0.35;
+}
+
+// 自定义 setter:非 Idle 语音态下必须把 saveBtn/undoBtn 一起禁掉——OctoVoiceOverlayPassthroughView
+// 为了不挡系统返回手势和导航栏点击,顶部整条 topPassthroughHeight 高度都会放行触摸穿透到
+// self.view/navigationBar,rightView 里的这两个按钮底下的触摸事件因此在录音/思考/结果待确认
+// 期间其实一直能穿透 overlay 打到它们身上。不在这里兜底禁用的话:1) 录音/思考过程中点保存,
+// 会拿此刻的 textView.text(可能还是上一版旧文本)直接发出去保存,和正在进行中的这轮语音
+// 编辑结果不一致;2) 结果气泡还没确认时点撤销,撤的是语音编辑开始前就已存在的上一步操作,
+// 而用户此刻根本看不到 textView,不知道撤的是什么。
+- (void)setVoiceState:(OctoVoiceState)voiceState {
+    _voiceState = voiceState;
+    BOOL idle = (voiceState == OctoVoiceStateIdle);
+    self.saveBtn.enabled = idle;
+    self.saveBtn.alpha = idle ? 1.0 : 0.35;
+    if (idle) {
+        [self wk_updateUndoButtonState];
+    } else {
+        self.undoBtn.enabled = NO;
+        self.undoBtn.alpha = 0.35;
+    }
 }
 
 - (void)onSave {
@@ -584,14 +613,22 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
             }
             break;
         }
-        case UIGestureRecognizerStateEnded:
-        case UIGestureRecognizerStateCancelled: {
+        case UIGestureRecognizerStateEnded: {
             self.isGestureActive = NO;
             if (self.voiceState == OctoVoiceStateCancelling) {
                 [self cancelRecordingIfNeeded];
             } else if (self.voiceState == OctoVoiceStateRecording) {
                 [self stopRecordingAndTranscribe];
             }
+            break;
+        }
+        case UIGestureRecognizerStateCancelled: {
+            // Cancelled 和 Ended 语义完全不同:Cancelled 是系统单方面收回了手势(另一个
+            // recognizer 抢赢、来电横幅/系统弹窗打断……),不代表用户主动松手说完了话,
+            // 不能当成"提交转文字"处理,否则用户还在犹豫要不要说的时候被系统打断一下,
+            // 就会被当成正常说完直接送去识别。这里始终无条件走取消。
+            self.isGestureActive = NO;
+            [self cancelRecordingIfNeeded];
             break;
         }
         default:
@@ -664,7 +701,17 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
         // 建了一个空文件,失败路径不清理会留下孤儿临时文件,和下面正常结束/取消路径的
         // 清理动作保持一致。
         [self cleanupRecordFile];
-        self.voiceState = OctoVoiceStateIdle;
+        // "按住继续"追加录音失败时,voiceOverlay 此刻还完整停在"确认原话"结果气泡那个
+        // 展示态(transitionToRecordingUI 在下面还没执行到,整个 UI 其实没被这次失败的
+        // 录音动作改过),不能像首次录音失败那样把 voiceState 打回 Idle——那样内部状态机
+        // 和屏幕上仍然显示着的结果气泡就对不上了。这里退回 Result 态,和界面保持一致,
+        // 用户可以再按一次"按住继续"重试。
+        if (self.isAppendMode) {
+            self.isAppendMode = NO;
+            self.voiceState = OctoVoiceStateResult;
+        } else {
+            self.voiceState = OctoVoiceStateIdle;
+        }
         return;
     }
 
@@ -1254,14 +1301,20 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
             }
             break;
         }
-        case UIGestureRecognizerStateEnded:
-        case UIGestureRecognizerStateCancelled: {
+        case UIGestureRecognizerStateEnded: {
             self.isGestureActive = NO;
             if (self.voiceState == OctoVoiceStateCancelling) {
                 [self cancelAppendRecording];
             } else if (self.voiceState == OctoVoiceStateRecording) {
                 [self stopAppendRecordingAndTranscribe];
             }
+            break;
+        }
+        case UIGestureRecognizerStateCancelled: {
+            // 同 handleHoldToTalk: 的 Cancelled 分支——系统单方面收回手势不等于
+            // 用户说完了话,不能提交转文字,始终无条件走取消。
+            self.isGestureActive = NO;
+            [self cancelAppendRecording];
             break;
         }
         default: break;
@@ -1630,6 +1683,17 @@ typedef struct {
     NSInteger maxSuffix = MIN(n, m) - prefixLen;
     while (suffixLen < maxSuffix && a[n - 1 - suffixLen] == b[m - 1 - suffixLen]) {
         suffixLen++;
+    }
+    // 表情等增补平面字符在 UTF-16 里由高低代理项(surrogate pair)两个 unichar 组成,逐
+    // code unit 比对公共前缀/后缀有可能刚好切在代理对中间——下面 substringWithRange: 会把
+    // 一个字符从正中间切开,高亮/diff 边界因此可能落在半个表情符号上。这里各自回退一个
+    // code unit,保证边界总是落在完整字符之间;prefixLen/suffixLen 是在同一份 a/b 上各自
+    // 独立裁出来的、互不重叠(前面 maxSuffix 已经保证了这点),回退不会导致两者交叉。
+    if (prefixLen > 0 && a[prefixLen - 1] >= 0xD800 && a[prefixLen - 1] <= 0xDBFF) {
+        prefixLen--;
+    }
+    if (suffixLen > 0 && a[n - suffixLen] >= 0xDC00 && a[n - suffixLen] <= 0xDFFF) {
+        suffixLen--;
     }
     NSInteger coreN = n - prefixLen - suffixLen;
     NSInteger coreM = m - prefixLen - suffixLen;
