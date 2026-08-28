@@ -17,6 +17,36 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
     OctoVoiceStateResult,
 };
 
+// 首次录音(handleHoldToTalk:)和"按住继续"追加录音(handleAppendLongPress:)原来各自
+// 硬编了一个不同的上滑取消阈值(60pt / 100pt)——同一个手势在两个入口的手感不一致,用户在
+// 追加录音时要多滑 40pt 才会进入取消区,容易误以为追加录音的取消判定"失灵"了。两处统一
+// 用这一个常量。
+static const CGFloat kVoiceCancelUpOffset = 60.0;
+
+// voiceOverlay 是挂在 window 上的全屏蒙版,z-order 高于 self.view 里的自绘 WKNavigationBar
+// 和系统 interactivePopGestureRecognizer(挂在 nav controller 的 view 上,是全高的左边缘
+// UIScreenEdgePanGestureRecognizer)。任何语音态(含没有任何取消入口的 Thinking 态)下,
+// 蒙版存在期间返回按钮点击和右滑手势都会被它挡掉,导致编辑页彻底退不出去。
+// 这里让蒙版对"导航栏高度带"(返回按钮所在区域)和"左边缘竖条"(interactivePop 手势的
+// 识别热区)两处触摸直接返回 nil——hitTest 返回 nil 时该次触摸不会命中蒙版及其祖先链,
+// 会继续往下命中 self.view 树,从而正常送达导航栏和挂在其祖先视图上的手势识别器。
+@interface OctoVoiceOverlayPassthroughView : UIView
+@property(nonatomic, assign) CGFloat topPassthroughHeight;
+@property(nonatomic, assign) CGFloat edgePassthroughWidth;
+@end
+
+@implementation OctoVoiceOverlayPassthroughView
+
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *hit = [super hitTest:point withEvent:event];
+    if (hit != self) return hit; // 命中了气泡/波形/结果条等真实子视图,照常处理
+    if (point.y <= self.topPassthroughHeight) return nil;
+    if (point.x <= self.edgePassthroughWidth) return nil;
+    return hit;
+}
+
+@end
+
 @interface OctoSummaryEditVC () <UIGestureRecognizerDelegate, UITextViewDelegate>
 @property(nonatomic, strong) UITextView *textView;
 @property(nonatomic, copy) NSString *initialContent;
@@ -41,24 +71,34 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
 @property(nonatomic, copy) NSString *recordFilePath;
 @property(nonatomic, strong) NSTimer *recordTimer;
 @property(nonatomic, strong) NSTimer *waveformTimer;
+// textViewDidChange: 每敲一个字符都会触发,而 wk_refreshManualEditHighlight 要跑一遍全文
+// diff——直接同步做的话,长文档下每个按键都要重新分配/比较一遍,输入越长越卡。改成"停手
+// 后再算":每次 didChange 都把这个计时器重新预约到 0.12s 后,只有连续 0.12s 没有新按键时
+// 才真正跑一次 diff,期间无论敲多快都只在末尾算一次。
+@property(nonatomic, strong) NSTimer *highlightDebounceTimer;
 @property(nonatomic, assign) NSInteger recordSeconds;
 @property(nonatomic, assign) float currentPower;
 @property(nonatomic, copy) NSString *previousAudioCategory;
 @property(nonatomic, assign) AVAudioSessionCategoryOptions previousAudioCategoryOptions;
 @property(nonatomic, assign) CGPoint touchStartPoint;
-@property(nonatomic, strong) NSMutableArray<NSNumber *> *recordedLevels;
+// 权限弹窗打断长按手势时,系统会立刻给一次 Cancelled,但那一刻 voiceState 还是 Idle,
+// 落不到任何处理分支;真正的风险在权限回调异步返回时——如果手指已经松开,不能再无条件
+// 开始录音(否则会在无人触摸的情况下自己录起来,直到 60 秒上限才结束)。
+@property(nonatomic, assign) BOOL isGestureActive;
+// 每次 hideVoiceOverlay 兜底重置(取消/关闭/页面消失)都会递增,transcribeAudio 的异步回调
+// 在真正落地状态变更前先比对捕获时的这个值——不一致说明这段录音所属的语音会话已经结束,
+// 回调是"迟到"的,直接丢弃,不能再把 voiceState/pendingAudioClips 之类的东西改回去。
+@property(nonatomic, assign) NSUInteger voiceEditGeneration;
 @property(nonatomic, copy) NSString *transcribedText;
-@property(nonatomic, assign) NSTimeInterval recordedDuration;
 
-// 语音编辑正文只需用户确认一次:气泡展示 ASR 原话("确认原话"阶段,isASRPreview==YES),
-// 用户确认后重新上传录音交给大模型按当前正文改写(Phase B),处理完直接写回正文并高亮标出
-// 改动范围、关闭气泡,不再要求二次确认。"确认原话"阶段允许用户不点确认、继续按住继续多说
-// 几句——这几句原始录音先各自攒在 pendingAudioClips 里,直到用户点确认时才依次(链式,
-// 前一段的AI改写结果作为后一段的基准正文)重新上传处理,避免因为接口一次只认一段音频而丢内容。
+// 语音编辑正文只需用户确认一次:气泡展示 ASR 原话("确认原话"阶段),用户确认后重新上传
+// 录音交给大模型按当前正文改写(Phase B),处理完直接写回正文并高亮标出改动范围、关闭气泡,
+// 不再要求二次确认。"确认原话"阶段允许用户不点确认、继续按住继续多说几句——这几句原始
+// 录音先各自攒在 pendingAudioClips 里,直到用户点确认时才依次(链式,前一段的AI改写结果
+// 作为后一段的基准正文)重新上传处理,避免因为接口一次只认一段音频而丢内容。
 @property(nonatomic, strong) NSMutableArray<NSData *> *pendingAudioClips;
 @property(nonatomic, copy) NSString *pendingEditBaseContext; // Phase B 要合并/高亮diff用的基准正文,这一批开始时就锁定
 @property(nonatomic, assign) NSRange pendingInsertCursorRange; // 这一批开始录音那一刻的光标位置,判定出"纯口述"时插回这里(而非甩到文末)
-@property(nonatomic, assign) BOOL isASRPreview;               // YES = 气泡当前展示"确认原话"阶段,尚未交给AI处理
 
 // 气泡+波形 overlay UI（参照 WKHoldToTalkManager）
 @property(nonatomic, strong) UIView *voiceOverlay;
@@ -200,6 +240,12 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onKeyboardWillShow:) name:UIKeyboardWillShowNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onKeyboardWillHide:) name:UIKeyboardWillHideNotification object:nil];
 
+    // 来电/闹钟等系统中断会由 AVAudioSession 直接把 AVAudioRecorder 停掉,不会触发任何手势
+    // 回调——不监听这个通知的话,voiceState 会一直卡在 Recording/Cancelling,录音其实早已
+    // 停止,松手手势也再不会触发(手指其实还在屏幕上按着,但 recorder 已经不工作了)。参照
+    // WKHoldToTalkManager 的 onAudioInterrupt: 处理方式。
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onAudioSessionInterruption:) name:AVAudioSessionInterruptionNotification object:nil];
+
     // 点击键盘以外的区域收起键盘。挂在 self.view (textView 的祖先视图) 上而不是
     // textView 自己身上——挂在 textView 上会跟它内部"点哪儿光标摆哪儿"的系统手势抢
     // 触摸,导致点正文光标出不来。cancelsTouchesInView=NO + delegate 里过滤掉
@@ -212,11 +258,37 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [self.recordTimer invalidate];
+    [self.waveformTimer invalidate];
+    [self.highlightDebounceTimer invalidate];
+    if (self.audioRecorder.isRecording) [self.audioRecorder stop];
+    [self restoreAudioSession];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
     [self cancelRecordingIfNeeded];
+    // cancelRecordingIfNeeded 只在 Recording/Cancelling 态才会清理 timer 和 overlay——
+    // 处于 Thinking(AI 处理中)或 Result(结果待确认)态时它直接 return,voiceOverlay 是
+    // 挂在 window 而不是 self.view 上的,VC 消失后没人移除,会留下一层全屏蒙版挡住整个
+    // App。这里无条件兜底清一次,hideVoiceOverlay/invalidateRecordTimers 本身是幂等的。
+    [self invalidateRecordTimers];
+    [self hideVoiceOverlay];
+}
+
+// wk_privateUndoManager 是本页自己持有的 NSUndoManager,而 wk_replaceTextViewAttributedText:
+// 每次注册撤销/重做操作都用 prepareWithInvocationTarget:self——也就是说 undo/redo 栈里的
+// NSInvocation 会强引用 self(this VC),形成"VC 强引用 undoManager,undoManager 的栈又强
+// 引用 VC"的循环引用。只要用户操作过几次撤销/重做,这个环就一直在,页面 pop 之后 VC 也
+// 不会被释放。viewWillDisappear 不能用来打破这个环——它在 push 到新页面、来一个模态弹层等
+// "临时不可见"场景下也会触发,那时用户可能还会 pop 回来继续撤销;只有 didMoveToParent
+// ViewController: 拿到的 parent==nil 才说明这个页面真的从导航栈里被移除了,这时清空撤销
+// 栈把环断开是安全的。
+- (void)didMoveToParentViewController:(UIViewController *)parent {
+    [super didMoveToParentViewController:parent];
+    if (!parent) {
+        [self.wk_privateUndoManager removeAllActions];
+    }
 }
 
 - (void)viewDidLayoutSubviews {
@@ -399,9 +471,16 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
 
 - (void)textViewDidChange:(UITextView *)textView {
     // 手动打字会被 UITextView 自动登记进 self.textView.undoManager,这里只是跟着
-    // 同步一下按钮的可用态,不需要自己再登记一遍。
+    // 同步一下按钮的可用态,不需要自己再登记一遍。撤销按钮的可用态要跟手感一致,不能延迟,
+    // 所以这行仍然同步执行;真正开销大的 diff 高亮走下面的防抖。
     [self wk_updateUndoButtonState];
-    [self wk_refreshManualEditHighlight];
+    [self.highlightDebounceTimer invalidate];
+    __weak typeof(self) weakSelf = self;
+    self.highlightDebounceTimer = [NSTimer scheduledTimerWithTimeInterval:0.12
+                                                                    repeats:NO
+                                                                      block:^(NSTimer *timer) {
+        [weakSelf wk_refreshManualEditHighlight];
+    }];
 }
 
 // 手动打字和语音改写一样都算"修改过的内容",也要有紫色高亮。这里只重算/重贴
@@ -467,6 +546,7 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
     switch (gesture.state) {
         case UIGestureRecognizerStateBegan: {
             if (self.voiceState == OctoVoiceStateIdle) {
+                self.isGestureActive = YES;
                 self.touchStartPoint = point;
                 [self requestRecordPermissionThenStart];
             }
@@ -479,7 +559,7 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
             // 而不是 stopRecordingAndTranscribe——表现为"松手没有进入转文字状态"。
             if (self.voiceState != OctoVoiceStateRecording && self.voiceState != OctoVoiceStateCancelling) return;
             CGFloat delta = self.touchStartPoint.y - point.y;
-            BOOL shouldCancel = delta > 60;
+            BOOL shouldCancel = delta > kVoiceCancelUpOffset;
             BOOL wasInCancel = (self.voiceState == OctoVoiceStateCancelling);
             if (shouldCancel && !wasInCancel) {
                 self.voiceState = OctoVoiceStateCancelling;
@@ -492,6 +572,7 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
         }
         case UIGestureRecognizerStateEnded:
         case UIGestureRecognizerStateCancelled: {
+            self.isGestureActive = NO;
             if (self.voiceState == OctoVoiceStateCancelling) {
                 [self cancelRecordingIfNeeded];
             } else if (self.voiceState == OctoVoiceStateRecording) {
@@ -513,6 +594,9 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
                 [weakSelf showMicPermissionAlert];
                 return;
             }
+            // 权限弹窗期间手指已经松开(手势已 Ended/Cancelled),不能再开始录音——
+            // 否则会在无人触摸的情况下自己录起来,直到 60 秒上限才结束。
+            if (!weakSelf.isGestureActive) return;
             [weakSelf beginRecording];
         });
     }];
@@ -556,7 +640,11 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
                                                          error:&error];
     if (error || ![self.audioRecorder prepareToRecord] || ![self.audioRecorder record]) {
         [self.view showMsg:LLang(@"录音启动失败")];
-        [[AVAudioSession sharedInstance] setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
+        // 前面已经把 session 切到 PlayAndRecord 并 setActive:YES 了(见上面 previousAudioCategory
+        // 的记录),这里如果只是简单 setActive:NO,session 的 category 会一直卡在 PlayAndRecord,
+        // 不会换回进页面前的原始 category(比如 Playback)——用 restoreAudioSession 走统一的
+        // "换回原 category + setActive:NO"路径,和正常录音结束/取消时完全一致。
+        [self restoreAudioSession];
         self.voiceState = OctoVoiceStateIdle;
         return;
     }
@@ -565,7 +653,6 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
     self.audioRecorder.meteringEnabled = YES;
     self.recordSeconds = 0;
     self.currentPower = 0;
-    self.recordedLevels = [NSMutableArray array];
 
     __weak typeof(self) weakSelf = self;
     self.recordTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
@@ -587,9 +674,43 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
 - (void)onRecordTick {
     self.recordSeconds++;
     if (self.recordSeconds >= 60) {
-        [self stopRecordingAndTranscribe];
+        // 触顶那一刻如果手指还在"取消"区(红区),必须走取消路径——否则会违背用户此刻明确
+        // 表达出来的"不要提交"意图,把这段录音悄悄发出去。追加录音(isAppendMode)另外还有
+        // 一条独立限制:不能走 stopRecordingAndTranscribe——它固定以 isFirstUtterance:YES
+        // 提交,会用这一段覆盖掉 pendingAudioClips,把之前追加的片段全部丢掉,还会调
+        // hideVoiceOverlay 而不是 hideAppendOverlay 导致 UI 错乱。
+        BOOL isCancelling = (self.voiceState == OctoVoiceStateCancelling);
+        if (self.isAppendMode) {
+            if (isCancelling) {
+                [self cancelAppendRecording];
+            } else {
+                [self stopAppendRecordingAndTranscribe];
+            }
+        } else {
+            if (isCancelling) {
+                [self cancelRecordingIfNeeded];
+            } else {
+                [self stopRecordingAndTranscribe];
+            }
+        }
     }
 }
+
+- (void)onAudioSessionInterruption:(NSNotification *)notification {
+    AVAudioSessionInterruptionType type = [notification.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue];
+    if (type != AVAudioSessionInterruptionTypeBegan) return;
+    if (self.voiceState != OctoVoiceStateRecording && self.voiceState != OctoVoiceStateCancelling) return;
+    // 系统已经把 AVAudioRecorder 停掉,这里只做状态清理,不尝试提交这段录音——打断多半发生
+    // 在录音中途,数据大概率不完整,交给用户中断结束后重新按住说一遍更可靠。Thinking 态
+    // (已经在等网络返回,不在录音)不受这个通知影响,参照 WKHoldToTalkManager 的处理方式。
+    self.isGestureActive = NO;
+    if (self.isAppendMode) {
+        [self cancelAppendRecording];
+    } else {
+        [self cancelRecordingIfNeeded];
+    }
+}
+
 
 - (void)stopRecordingAndTranscribe {
     [self invalidateRecordTimers];
@@ -659,7 +780,10 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
     CGFloat sw = window.bounds.size.width;
     CGFloat sh = window.bounds.size.height;
 
-    self.voiceOverlay = [[UIView alloc] initWithFrame:window.bounds];
+    OctoVoiceOverlayPassthroughView *overlay = [[OctoVoiceOverlayPassthroughView alloc] initWithFrame:window.bounds];
+    overlay.topPassthroughHeight = CGRectGetMaxY(self.navigationBar.frame);
+    overlay.edgePassthroughWidth = 24; // 对齐系统 interactivePopGestureRecognizer 的左边缘识别热区
+    self.voiceOverlay = overlay;
     self.voiceOverlay.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.65];
     self.voiceOverlay.userInteractionEnabled = YES;
     self.voiceOverlay.alpha = 0;
@@ -782,7 +906,6 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
     float norm = MAX(0, MIN(1, (power + 40) / 40.0));
     if (norm < 0.08) norm = 0;
     self.currentPower = norm;
-    [self.recordedLevels addObject:@(norm)];
 
     // 追加录音直接复用同一套 waveBars/waveContainer(见 transitionToRecordingUI),
     // 不需要再按 isAppendMode 分流成两套。
@@ -811,6 +934,22 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
 }
 
 - (void)hideVoiceOverlay {
+    // 状态机重置和"蒙版视图本身还在不在"解耦——不能像以前那样把整个方法用
+    // `if (!self.voiceOverlay) return;` 一道闸门挡住:一旦 voiceOverlay 因为某种原因
+    // (比如下面这次调用之前,一个过期的转录回调在它已经被清过之后又把 voiceState 改了回去)
+    // 已经是 nil 但 voiceState 还卡在非 Idle,外层想"兜底重置"时调这个方法会直接
+    // no-op,状态永远卡死、再也进不了下一次录音。这里无条件把状态和 generation 复位,
+    // 视图清理这部分才按 voiceOverlay 是否存在来决定要不要做。
+    self.voiceEditGeneration++;
+    self.isAppendMode = NO;
+    self.recordingBubbleFrame = CGRectZero;
+    self.preAppendBubbleFrame = CGRectZero;
+    self.voiceState = OctoVoiceStateIdle;
+    self.transcribedText = nil;
+    self.pendingAudioClips = nil;
+    self.pendingEditBaseContext = nil;
+    self.pendingInsertCursorRange = NSMakeRange(0, 0);
+
     if (!self.voiceOverlay) return;
     [self stopThinkingAnimation];
     UIView *ov = self.voiceOverlay;
@@ -831,16 +970,8 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
     self.resultAppendLabel = nil;
     self.thinkingDots = nil;
     self.thinkingOverlayView = nil;
-    self.isAppendMode = NO;
-    self.recordingBubbleFrame = CGRectZero;
-    self.preAppendBubbleFrame = CGRectZero;
-    self.voiceState = OctoVoiceStateIdle;
-    self.transcribedText = nil;
-    self.pendingAudioClips = nil;
-    self.pendingEditBaseContext = nil;
-    self.pendingInsertCursorRange = NSMakeRange(0, 0);
-    self.isASRPreview = NO;
 }
+
 
 #pragma mark - Thinking Animation
 
@@ -1032,8 +1163,8 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
     // 只读:这段文字编辑了也不会带入 Phase B,见 transitionToResultUIWithThinking: 里的说明。
     self.resultTextView.editable = NO;
     self.resultBottomBar.hidden = NO;
-    // "确认原话"阶段(isASRPreview==YES)也允许继续按住说话——多段录音各自攒进
-    // pendingAudioClips,确认时再依次链式改写,所以这里不再禁用"按住继续"按钮。
+    // "确认原话"阶段也允许继续按住说话——多段录音各自攒进 pendingAudioClips,确认时再依次
+    // 链式改写,所以这里不再禁用"按住继续"按钮。
     self.resultAppendBtn.userInteractionEnabled = YES;
     self.resultAppendBtn.alpha = 1.0;
     [self resizeResultBubbleForText:self.transcribedText animated:YES];
@@ -1050,7 +1181,7 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
 - (void)onResultInsertTapped {
     // 键盘和按钮动作要同步收起,原因同 onResultCancel。气泡现在只会展示"确认原话"这一个
     // 阶段——AI 改写(Phase B)完成后直接写回正文并关闭气泡,不会再展示等待二次确认的状态,
-    // 所以这里点确认统一走 Phase B,不用再按 isASRPreview 分流。
+    // 所以这里点确认统一走 Phase B,不用再分流。
     [self.resultTextView resignFirstResponder];
     [self confirmASRPreviewAndRunEditPhase];
 }
@@ -1059,6 +1190,7 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
     switch (gesture.state) {
         case UIGestureRecognizerStateBegan: {
             self.isAppendMode = YES;
+            self.isGestureActive = YES;
             self.touchStartPoint = [gesture locationInView:self.voiceOverlay];
             [self requestRecordPermissionThenStart];
             break;
@@ -1069,7 +1201,7 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
             if (self.voiceState != OctoVoiceStateRecording && self.voiceState != OctoVoiceStateCancelling) return;
             CGPoint current = [gesture locationInView:self.voiceOverlay];
             CGFloat upOffset = self.touchStartPoint.y - current.y;
-            BOOL shouldCancel = upOffset > 100;
+            BOOL shouldCancel = upOffset > kVoiceCancelUpOffset;
             if (shouldCancel && self.voiceState != OctoVoiceStateCancelling) {
                 self.voiceState = OctoVoiceStateCancelling;
                 [self updateVoiceOverlayForState];
@@ -1081,6 +1213,7 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
         }
         case UIGestureRecognizerStateEnded:
         case UIGestureRecognizerStateCancelled: {
+            self.isGestureActive = NO;
             if (self.voiceState == OctoVoiceStateCancelling) {
                 [self cancelAppendRecording];
             } else if (self.voiceState == OctoVoiceStateRecording) {
@@ -1165,7 +1298,7 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
 }
 
 - (void)beginASRPreviewForAudio:(NSData *)audioData isFirstUtterance:(BOOL)isFirstUtterance {
-    // "确认原话"阶段(isASRPreview==YES)按住继续不禁用,允许用户在还没交给AI处理之前继续
+    // "确认原话"阶段按住继续不禁用,允许用户在还没交给AI处理之前继续
     // 多说几句——这种情况下这段录音要追加进同一批 pendingAudioClips,基准正文不变(仍是
     // 这一整批开始时锁定的正文)。Phase B 确认后会直接把结果写回正文并关闭气泡(见
     // confirmASRPreviewAndRunEditPhase),不会再出现"AI结果已确认、气泡还开着"的状态,
@@ -1190,6 +1323,11 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
     // 续说的话要拼在已展示的原话后面,不能被这一次的识别结果整个覆盖掉。
     NSString *previousPreviewText = isFirstUtterance ? nil : (self.transcribedText ?: @"");
     __weak typeof(self) weakSelf = self;
+    // 捕获发起这次请求那一刻的 generation——hideVoiceOverlay 会在会话被取消/关闭/页面消失
+    // 时递增它。等这个网络回调真正回来时,如果 generation 已经变了,说明这段录音所属的
+    // 语音会话早就结束了,回调是"迟到"的,不能再往 voiceState/pendingAudioClips 这些属于
+    // 新会话(或者已经不存在的旧会话)的状态上写东西。
+    NSUInteger capturedGeneration = self.voiceEditGeneration;
     // Phase A: 不传 contextText,只做纯 ASR——气泡先展示"这一次说的原话"给用户核对,
     // 确认后才进入 Phase B(见 confirmASRPreviewAndRunEditPhase)交给大模型按
     // pendingEditBaseContext 改写。注意:此处用户如果编辑了气泡里的原话文字,那次编辑
@@ -1202,6 +1340,7 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
                                      memberContext:nil
                                               mode:nil
                                         completion:^(WKVoiceInputResult *result, NSError *error) {
+        if (!weakSelf || weakSelf.voiceEditGeneration != capturedGeneration) return;
         if (error) {
             // 排查"确认原话就显示成功,确认改写却报识别失败"这类问题时,这行日志能看出
             // 具体是哪一段(Phase A/isFirstUtterance)、什么 domain/code——网络层超时通常是
@@ -1230,7 +1369,6 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
             }
             return;
         }
-        weakSelf.isASRPreview = YES;
         weakSelf.transcribedText = previousPreviewText.length > 0
             ? [previousPreviewText stringByAppendingString:result.text]
             : result.text;
@@ -1257,9 +1395,9 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
                       remainingClips:(NSMutableArray<NSData *> *)remainingClips {
     if (remainingClips.count == 0) {
         // octo-speech 无论把这段话判成"口述"还是"编辑指令",text 字段返回的都是整篇处理后的
-        // 正文(口述=原文+新话拼接,指令=按指令改写后的整篇正文,见
-        // docs/语音指令编辑正文接口需求文档.md 8.4 节),接口本身不区分着返回、也没有多余
-        // 字段告诉客户端它判了哪一种。但这个"拼接 vs 改写"的差异会机械地体现在文本关系上:
+        // 正文(口述=原文+新话拼接,指令=按指令改写后的整篇正文),接口本身不区分着返回、也
+        // 没有多余字段告诉客户端它判了哪一种。但这个"拼接 vs 改写"的差异会机械地体现在文本
+        // 关系上:
         // 如果这一整批(不管链了几段、中途是不是有些段落被当成指令重新措辞过)最终产出的
         // 正文,原封不动地把 batch 开始前的正文(pendingEditBaseContext)当成前缀、只在后面
         // 多出一段——那就意味着原文一个字没被动过,不需要借助任何关键词/语义判断,单看
@@ -1288,6 +1426,12 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
     NSData *audioData = remainingClips.firstObject;
     [remainingClips removeObjectAtIndex:0];
     __weak typeof(self) weakSelf = self;
+    // 同 beginASRPreviewForAudio:isFirstUtterance: 里的道理——这条链每一段录音都要单独
+    // 请求一次网络,链条本身可能横跨好几次网络往返;只要中途会话被取消/关闭/页面消失,
+    // hideVoiceOverlay 就会让 generation 变掉,后面还没返回的每一段回调都要能认出自己已经
+    // "迟到"、不再是当前会话的一部分,否则递归调用 runEditPhaseWithBaseContext: 会继续在
+    // 一个早已不存在的会话上跑下去。
+    NSUInteger capturedGeneration = self.voiceEditGeneration;
     [[WKVoiceInputService shared] transcribeAudio:audioData
                                        contextText:baseContext
                                        chatContext:nil
@@ -1295,6 +1439,7 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
                                      memberContext:nil
                                               mode:nil
                                         completion:^(WKVoiceInputResult *result, NSError *error) {
+        if (!weakSelf || weakSelf.voiceEditGeneration != capturedGeneration) return;
         if (error) {
             // Phase B 比 Phase A 多带了 contextText(当前正文全文)交给服务端做改写,处理量更大、
             // 更可能超时或撞长度限制——这行日志把 remainingClips/contextText 长度和真实 error
@@ -1307,11 +1452,23 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
             [weakSelf hideVoiceOverlay];
             return;
         }
-        // 未识别到有效语音时,contextText 非空会被服务端原样当作 text 返回(IsNoSpeech 分支),
-        // 必须显式识别"原样返回"这种情况,否则会把"没说话"误当成 AI 处理成功展示给用户。
-        if (result.text.length == 0 || (baseContext.length > 0 && [result.text isEqualToString:baseContext])) {
+        // result.text 为空是接口层面的硬失败(没转出任何文本),这一批录音已经没有基准可续,
+        // 只能整体中止。
+        if (result.text.length == 0) {
             [weakSelf.view showMsg:LLang(@"未识别到语音")];
             [weakSelf hideVoiceOverlay];
+            return;
+        }
+        // 未识别到有效语音时,contextText 非空会被服务端原样当作 text 返回(IsNoSpeech 分支)。
+        // 但这跟上面 length==0 不是一回事:AI 判断"这段指令效果就是不改正文"(比如追加录音里
+        // 有一段是清嗓子/无意义的话)同样会原样返回 baseContext,跟"没识别到语音"在文本上没法
+        // 区分。这两种情况的正确处理都是"跳过这一段、不当成这一段有任何改动",但不该像之前
+        // 那样把 hideVoiceOverlay 整个会话都收掉——remainingClips 里后面几段可能是有效内容,
+        // 一整批因为中间某一段没说清楚就被全部丢弃,对用户是不成比例的破坏。所以这里继续用
+        // 同一个 baseContext 跑下一段,只有 remainingClips 耗尽仍是这个结果才会走到上面
+        // length==0 分支或者直接进入 count==0 分支正常收尾。
+        if (baseContext.length > 0 && [result.text isEqualToString:baseContext]) {
+            [weakSelf runEditPhaseWithBaseContext:baseContext remainingClips:remainingClips];
             return;
         }
         [weakSelf runEditPhaseWithBaseContext:result.text remainingClips:remainingClips];
@@ -1365,6 +1522,15 @@ typedef NS_ENUM(NSInteger, OctoVoiceState) {
 // 该片段直接退化为"整段高亮"(只影响这一个片段,不会牵连其它片段)——这类场景下这个片段
 // 本来也确实是整段都变了,退化后的效果反而还是合理的,只是不再精细到字符。
 static const NSInteger kVoiceDiffMaxTotalLen = 2000;
+
+// 行级 Myers(wk_lineMatchAnchorsForOldLines:newLines:)按 (oldLines.count + newLines.count)
+// 分配 trace 数组,大小是 O((n+m)^2) 且没有上限——字符级那条路径靠 kVoiceDiffMaxTotalLen
+// 兜底退化,行级这条路径原来没有对应的兜底。总结正文正常情况下就几十到大几十行,
+// 但用户可能整段粘贴一篇很长的文章(几千行)进来,此时这里会在主线程(每次
+// textViewDidChange: 触发)分配几百 MB 甚至更多、并且不止一次(每敲一个字符都要重新跑),
+// 卡顿甚至 OOM。超过这个行数直接退化为不切行、整个核心区交给字符级 Myers 处理——那条
+// 路径自己的 kVoiceDiffMaxTotalLen 还会再兜底一层,不会真的按 O(D^2) 展开。
+static const NSInteger kVoiceDiffMaxLineCount = 500;
 
 typedef struct {
     NSInteger oldIdx;
@@ -1426,8 +1592,10 @@ typedef struct {
                            intoIndexSet:(NSMutableIndexSet *)insertedInNew {
     NSArray<NSString *> *oldLines = [oldCore componentsSeparatedByString:@"\n"];
     NSArray<NSString *> *newLines = [newCore componentsSeparatedByString:@"\n"];
-    if (oldLines.count <= 1 || newLines.count <= 1) {
-        // 核心区本身不跨行,行级切分没有意义,直接按字符级处理(含超限退化)。
+    if (oldLines.count <= 1 || newLines.count <= 1 ||
+        oldLines.count + newLines.count > kVoiceDiffMaxLineCount) {
+        // 核心区本身不跨行,行级切分没有意义;或者行数超过兜底阈值,行级 Myers 的
+        // O((n+m)^2) trace 数组不能再展开——两种情况都直接按字符级处理(含超限退化)。
         [self wk_addSingleRegionChangedIndexesOldText:oldCore newText:newCore offset:offset intoIndexSet:insertedInNew];
         return;
     }
