@@ -47,7 +47,7 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
 
 @end
 
-@interface OctoSummaryEditVC () <UIGestureRecognizerDelegate, UITextViewDelegate>
+@interface OctoSummaryEditVC () <UIGestureRecognizerDelegate, UITextViewDelegate, AVAudioRecorderDelegate>
 @property(nonatomic, strong) UITextView *textView;
 @property(nonatomic, copy) NSString *initialContent;
 @property(nonatomic, strong) UIButton *undoBtn; // 导航栏"撤销",和保存并排,统一撤销 textView.undoManager 的历史(手动打字/语音改写共用一个栈)
@@ -185,7 +185,6 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     saveBtn.frame = sf;
     [rightContainer addSubview:saveBtn];
     self.navigationBar.rightView = rightContainer;
-    [self wk_updateUndoButtonState];
 
     self.textView = [UITextView new];
     self.textView.font = [UIFont systemFontOfSize:14];
@@ -194,6 +193,10 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     self.textView.textColor = [UIColor labelColor];
     self.textView.delegate = self;
     [self.view addSubview:self.textView];
+    // wk_updateUndoButtonState 读的是 self.textView.undoManager,必须放在 textView 创建
+    // 之后调用——挪之前这里读到的是 nil.undoManager,靠"给 nil 发消息返回 NO"侥幸算对,
+    // 不依赖这种写法。
+    [self wk_updateUndoButtonState];
 
     self.voiceBar = [UIView new];
     self.voiceBar.backgroundColor = [UIColor systemBackgroundColor];
@@ -406,7 +409,10 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
 }
 
 - (void)onSave {
-    // 语音编辑留下的高亮标记只保留到用户点保存这一刻,不管保存最终成功与否都清掉。
+    // 语音编辑留下的高亮标记只保留到用户点保存这一刻,不管保存最终成功与否都清掉;但保存
+    // 失败时要把这份高亮加回去(见下面 error 分支)——否则用户会看到"保存失败了,但刚才
+    // 语音改过的痕迹却凭空消失"这种不一致的观感。
+    NSAttributedString *attrBeforeClear = [self.textView.attributedText copy];
     [self clearVoiceEditHighlight];
     int64_t baseResultId = self.detail.resultId.longLongValue;
     __weak typeof(self) weakSelf = self;
@@ -421,6 +427,7 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
             } else {
                 [weakSelf.view showMsg:error.localizedDescription ?: LLang(@"保存失败")];
             }
+            weakSelf.textView.attributedText = attrBeforeClear;
             return;
         }
         if (weakSelf.onSaved) weakSelf.onSaved();
@@ -638,6 +645,7 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     self.audioRecorder = [[AVAudioRecorder alloc] initWithURL:[NSURL fileURLWithPath:self.recordFilePath]
                                                       settings:settings
                                                          error:&error];
+    self.audioRecorder.delegate = self;
     if (error || ![self.audioRecorder prepareToRecord] || ![self.audioRecorder record]) {
         [self.view showMsg:LLang(@"录音启动失败")];
         // 前面已经把 session 切到 PlayAndRecord 并 setActive:YES 了(见上面 previousAudioCategory
@@ -645,6 +653,10 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
         // 不会换回进页面前的原始 category(比如 Playback)——用 restoreAudioSession 走统一的
         // "换回原 category + setActive:NO"路径,和正常录音结束/取消时完全一致。
         [self restoreAudioSession];
+        // initWithURL: / prepareToRecord 阶段 AVAudioRecorder 可能已经在 recordFilePath
+        // 建了一个空文件,失败路径不清理会留下孤儿临时文件,和下面正常结束/取消路径的
+        // 清理动作保持一致。
+        [self cleanupRecordFile];
         self.voiceState = OctoVoiceStateIdle;
         return;
     }
@@ -711,6 +723,30 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     }
 }
 
+// AVAudioRecorderDelegate:上面的中断通知只覆盖"系统抢占音频会话"这一种场景,录音器自身的
+// 编码失败(磁盘写满、格式协商失败等)不会触发中断通知,必须靠这两个 delegate 回调兜底,
+// 否则 voiceState 会一直卡在 Recording,波形/计时空转,用户只能手动取消。清理路径复用
+// cancelAppendRecording/cancelRecordingIfNeeded,和上面中断处理保持一致;和"用户主动取消"
+// 的区别是这里要额外提示一下,让用户知道是录音本身出错、不是自己划走取消的。
+- (void)audioRecorderEncodeErrorDidOccur:(AVAudioRecorder *)recorder error:(NSError *)error {
+    [self wk_abortRecordingDueToRecorderFailure];
+}
+
+- (void)audioRecorderDidFinishRecording:(AVAudioRecorder *)recorder successfully:(BOOL)flag {
+    if (flag) return;
+    [self wk_abortRecordingDueToRecorderFailure];
+}
+
+- (void)wk_abortRecordingDueToRecorderFailure {
+    if (self.voiceState != OctoVoiceStateRecording && self.voiceState != OctoVoiceStateCancelling) return;
+    self.isGestureActive = NO;
+    if (self.isAppendMode) {
+        [self cancelAppendRecording];
+    } else {
+        [self cancelRecordingIfNeeded];
+    }
+    [self.view showMsg:LLang(@"录音异常中断,请重试")];
+}
 
 - (void)stopRecordingAndTranscribe {
     [self invalidateRecordTimers];
@@ -1345,8 +1381,10 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
             // 排查"确认原话就显示成功,确认改写却报识别失败"这类问题时,这行日志能看出
             // 具体是哪一段(Phase A/isFirstUtterance)、什么 domain/code——网络层超时通常是
             // NSURLErrorDomain 负数 code,服务端业务失败是 WKVoiceInput domain、code=status。
+#if DEBUG
             NSLog(@"[SummaryVoiceEdit] Phase A ASR 失败 isFirstUtterance=%d domain=%@ code=%ld msg=%@",
                   isFirstUtterance, error.domain, (long)error.code, error.localizedDescription);
+#endif
             [weakSelf.view showMsg:LLang(@"语音识别失败,请重试")];
             [weakSelf hideVoiceOverlay];
             return;
@@ -1445,9 +1483,11 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
             // 更可能超时或撞长度限制——这行日志把 remainingClips/contextText 长度和真实 error
             // 一起打出来,方便区分是网络超时(NSURLErrorDomain)还是服务端业务失败(WKVoiceInput
             // domain,code=业务 status)。
+#if DEBUG
             NSLog(@"[SummaryVoiceEdit] Phase B 改写失败 remainingClips=%lu contextLen=%lu domain=%@ code=%ld msg=%@",
                   (unsigned long)remainingClips.count, (unsigned long)baseContext.length,
                   error.domain, (long)error.code, error.localizedDescription);
+#endif
             [weakSelf.view showMsg:LLang(@"语音识别失败,请重试")];
             [weakSelf hideVoiceOverlay];
             return;
@@ -1485,6 +1525,11 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
 // 会有紫色高亮),不需要再写一份重复逻辑,也不会像整段替换 attributedText 那样把光标弹飞。
 - (void)wk_insertDictatedSuffix:(NSString *)suffix atCursorRange:(NSRange)range {
     if (suffix.length == 0) return;
+    // 语音模式下 textView 未必是 first responder(键盘态被 voiceDummyInputView 顶替),
+    // insertText: 依赖的输入会话需要 textView 真正 becomeFirstResponder 才能可靠生效。
+    if (!self.textView.isFirstResponder) {
+        [self.textView becomeFirstResponder];
+    }
     NSInteger textLength = self.textView.text.length;
     NSInteger location = MIN(range.location, textLength);
     NSInteger length = MIN(range.length, textLength - location);
@@ -1545,6 +1590,13 @@ typedef struct {
 
     unichar *a = (unichar *)malloc(sizeof(unichar) * n);
     unichar *b = (unichar *)malloc(sizeof(unichar) * m);
+    if (!a || !b) {
+        // 分配失败:退化为"整段都算改动",和上面 n==0 的降级分支保持同一种兜底方式,
+        // 不引入独立的错误提示。
+        free(a);
+        free(b);
+        return @[[NSValue valueWithRange:NSMakeRange(0, m)]];
+    }
     [oldText getCharacters:a range:NSMakeRange(0, n)];
     [newText getCharacters:b range:NSMakeRange(0, m)];
 
@@ -1676,6 +1728,13 @@ typedef struct {
     }
     unichar *a = (unichar *)malloc(sizeof(unichar) * n);
     unichar *b = (unichar *)malloc(sizeof(unichar) * m);
+    if (!a || !b) {
+        // 分配失败:和上面 n+m 超阈值的降级分支一样,整段直接标记为高亮。
+        free(a);
+        free(b);
+        [insertedInNew addIndexesInRange:NSMakeRange(offset, m)];
+        return;
+    }
     [oldText getCharacters:a range:NSMakeRange(0, n)];
     [newText getCharacters:b range:NSMakeRange(0, m)];
     [self wk_addMyersInsertedIndexesFromOldChars:a length:n newChars:b length:m offset:offset intoIndexSet:insertedInNew];
@@ -1694,6 +1753,13 @@ typedef struct {
     NSInteger size = 2 * maxD + 1;
     int32_t *v = (int32_t *)calloc(size, sizeof(int32_t));
     int32_t *trace = (int32_t *)malloc((maxD + 1) * size * sizeof(int32_t));
+    if (!v || !trace) {
+        // 分配失败:不返回任何锚点,调用方会把整篇当成一个"待比较的尾段"
+        // 走字符级 diff(和上面 n+m 超阈值时不切行、直接整段比较是同一种降级路径)。
+        free(v);
+        free(trace);
+        return @[];
+    }
     NSInteger foundD = -1;
 
     for (NSInteger d = 0; d <= maxD; d++) {
@@ -1761,6 +1827,13 @@ typedef struct {
     NSInteger size = 2 * maxD + 1;
     int32_t *v = (int32_t *)calloc(size, sizeof(int32_t));
     int32_t *trace = (int32_t *)malloc((maxD + 1) * size * sizeof(int32_t));
+    if (!v || !trace) {
+        // 分配失败:退化为"这一段全算插入",和上面 n==0/超阈值的降级分支保持同一种兜底方式。
+        free(v);
+        free(trace);
+        [insertedInNew addIndexesInRange:NSMakeRange(offset, m)];
+        return;
+    }
     NSInteger foundD = -1;
 
     for (NSInteger d = 0; d <= maxD; d++) {
@@ -1825,9 +1898,16 @@ typedef struct {
     return [themeColor colorWithAlphaComponent:0.18];
 }
 
+// self.textView.font/textColor 正常情况下 viewDidLoad 就赋过值,理论可空但不会实际发生;
+// 字典字面量对 nil value 会直接抛异常,这里统一兜底一份默认值,成本很低。
+- (NSDictionary *)wk_baseTextAttributes {
+    UIFont *font = self.textView.font ?: [UIFont systemFontOfSize:14];
+    UIColor *color = self.textView.textColor ?: [UIColor labelColor];
+    return @{NSFontAttributeName: font, NSForegroundColorAttributeName: color};
+}
+
 - (NSAttributedString *)attributedTextForDocument:(NSString *)text highlightDiffFrom:(NSString *)previousText {
-    NSDictionary *baseAttrs = @{NSFontAttributeName: self.textView.font,
-                                NSForegroundColorAttributeName: self.textView.textColor};
+    NSDictionary *baseAttrs = [self wk_baseTextAttributes];
     NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:text ?: @"" attributes:baseAttrs];
     NSArray<NSValue *> *changedRanges = [self wk_changedRangesInNewText:text ?: @"" comparedToOldText:previousText ?: @""];
     if (changedRanges.count > 0) {
@@ -1843,8 +1923,7 @@ typedef struct {
 - (void)clearVoiceEditHighlight {
     NSString *text = self.textView.text;
     self.textView.attributedText = [[NSAttributedString alloc] initWithString:text ?: @""
-                                                                     attributes:@{NSFontAttributeName: self.textView.font,
-                                                                                  NSForegroundColorAttributeName: self.textView.textColor}];
+                                                                     attributes:[self wk_baseTextAttributes]];
 }
 
 @end
