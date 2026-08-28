@@ -412,14 +412,21 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     // 语音编辑留下的高亮标记只保留到用户点保存这一刻,不管保存最终成功与否都清掉;但保存
     // 失败时要把这份高亮加回去(见下面 error 分支)——否则用户会看到"保存失败了,但刚才
     // 语音改过的痕迹却凭空消失"这种不一致的观感。
+    //
+    // 保存请求期间把 textView 设为不可编辑:这份"清高亮前"的快照只在请求发起那一刻和
+    // 当前文本一致,如果请求在途时还允许继续打字,失败分支整段覆盖回这份旧快照就会把
+    // 用户这段时间新输入的内容静默丢掉。禁止编辑能保证请求结束时文本和发起时完全一致,
+    // 失败分支才能安全地整段覆盖恢复高亮,而不是丢数据。
     NSAttributedString *attrBeforeClear = [self.textView.attributedText copy];
     [self clearVoiceEditHighlight];
+    self.textView.editable = NO;
     int64_t baseResultId = self.detail.resultId.longLongValue;
     __weak typeof(self) weakSelf = self;
     [[OctoSummaryAPI shared] editSummary:self.detail.taskId
                                   content:self.textView.text ?: @""
                              baseResultId:baseResultId
                                  callback:^(id _Nullable result, NSError * _Nullable error) {
+        weakSelf.textView.editable = YES;
         if (error) {
             NSInteger st = [error.userInfo[@"_httpStatus"] integerValue];
             if (st == 409) {
@@ -1386,7 +1393,20 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
                   isFirstUtterance, error.domain, (long)error.code, error.localizedDescription);
 #endif
             [weakSelf.view showMsg:LLang(@"语音识别失败,请重试")];
-            [weakSelf hideVoiceOverlay];
+            if (isFirstUtterance) {
+                // 第一次录音本身就没有已确认的批次可回退,只能整体关闭。
+                [weakSelf hideVoiceOverlay];
+            } else {
+                // 追加录音识别失败:不能像 isFirstUtterance 那样整体 hideVoiceOverlay——
+                // 那会把 pendingAudioClips 清空,连之前已经录好、用户还没来得及确认的
+                // 若干段一起丢掉,逼用户从头重录。这里只丢弃这一次失败的录音,停留在
+                // "确认原话"页面,和下面 result.text.length==0 分支保持同一种处理方式。
+                [weakSelf.pendingAudioClips removeLastObject];
+                [weakSelf stopThinkingAnimation];
+                weakSelf.voiceState = OctoVoiceStateResult;
+                weakSelf.resultTextView.editable = NO;
+                weakSelf.resultBottomBar.hidden = NO;
+            }
             return;
         }
         if (result.text.length == 0) {
