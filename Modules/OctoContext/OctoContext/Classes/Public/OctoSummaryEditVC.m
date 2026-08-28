@@ -52,6 +52,7 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
 @property(nonatomic, copy) NSString *initialContent;
 @property(nonatomic, strong) UIButton *undoBtn; // 导航栏"撤销",和保存并排,统一撤销 textView.undoManager 的历史(手动打字/语音改写共用一个栈)
 @property(nonatomic, strong) UIButton *saveBtn; // 导航栏"保存",非 Idle 语音态下必须禁用——否则 overlay 顶部通栏的 passthrough 区域会漏出这两个按钮,录音/思考/结果待确认期间点了会拿到过期的 textView.text 或打断正在进行的语音编辑
+@property(nonatomic, assign) BOOL isSaving; // 保存请求在途——voiceState 本身在这期间仍是 Idle(发起保存不算一次语音态切换),必须单独拦住 handleHoldToTalk: 的 Began 分支,否则保存在途时还能开始一次新的语音编辑,新结果会绕开 editable=NO 直接写进 textView
 @property(nonatomic, strong) NSUndoManager *wk_privateUndoManager; // 本页专属的 undoManager 实例,配合下面对 -undoManager 的重写使用
 @property(nonatomic, assign) CGFloat keyboardHeight;     // 当前键盘高度,影响 textView 底缘
 @property(nonatomic, assign) BOOL pendingRealKeyboard;   // 点"点击输入…"触发按钮时置 YES,一次性放行真系统键盘
@@ -273,6 +274,25 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
+    id<UIViewControllerTransitionCoordinator> coordinator = self.transitionCoordinator;
+    if (coordinator.isInteractive) {
+        // 交互式返回手势(边缘右滑)此刻只是"手指按下开始拖",不代表页面真的会被移除——
+        // 用户随时可能半途松手把手势取消,页面还留在导航栈里。如果照旧无条件清空
+        // pendingAudioClips/voiceOverlay 等状态,一次半途而废的返回手势就会把用户正在
+        // 录音/AI 处理中/结果待确认的一整轮语音编辑静默清空,而用户其实还留在这个页面上,
+        // 完全没意识到发生了什么。改成等手势真正提交(!isCancelled)才清理;手势被取消则
+        // 什么都不做,状态原样保留。
+        __weak typeof(self) weakSelf = self;
+        [coordinator notifyWhenInteractionChangesUsingBlock:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+            if (context.isCancelled) return;
+            [weakSelf wk_teardownVoiceStateForDisappear];
+        }];
+    } else {
+        [self wk_teardownVoiceStateForDisappear];
+    }
+}
+
+- (void)wk_teardownVoiceStateForDisappear {
     [self cancelRecordingIfNeeded];
     // cancelRecordingIfNeeded 只在 Recording/Cancelling 态才会清理 timer 和 overlay——
     // 处于 Thinking(AI 处理中)或 Result(结果待确认)态时它直接 return,voiceOverlay 是
@@ -442,13 +462,20 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     // 失败时要把这份高亮加回去(见下面 error 分支)——否则用户会看到"保存失败了,但刚才
     // 语音改过的痕迹却凭空消失"这种不一致的观感。
     //
-    // 保存请求期间把 textView 设为不可编辑:这份"清高亮前"的快照只在请求发起那一刻和
-    // 当前文本一致,如果请求在途时还允许继续打字,失败分支整段覆盖回这份旧快照就会把
-    // 用户这段时间新输入的内容静默丢掉。禁止编辑能保证请求结束时文本和发起时完全一致,
-    // 失败分支才能安全地整段覆盖恢复高亮,而不是丢数据。
-    NSAttributedString *attrBeforeClear = [self.textView.attributedText copy];
+    // 失败分支不再"保存旧快照、原样覆盖回去"——旧写法假设保存请求在途期间 textView 内容
+    // 不会变,但 voiceState 在发起保存这一刻仍然是 Idle(发起保存本身不算语音态切换),
+    // handleHoldToTalk: 的 Began 分支如果不额外拦一下,请求在途时依然能开始一次新的语音
+    // 编辑,而语音结果是通过 wk_replaceTextViewAttributedText: 直接整段覆盖 attributedText,
+    // 不受 editable=NO 影响,一旦这次保存最终失败,原写法会把这次新落地的语音编辑整段覆盖
+    // 丢掉。改成失败时直接对"此刻仍然是最新的" textView.text 重新跑一遍 diff 高亮——不管
+    // 这段时间文本有没有被别的写入者动过,高亮永远基于当下文本重新算出来,不存在覆盖丢数据
+    // 的风险。isSaving 从入口就拦住 handleHoldToTalk: 的 Began 分支,保证请求在途期间不会
+    // 再有新的语音写入者出现,和 editable=NO(拦手动打字)一起把保存窗口内的写入路径堵严。
     [self clearVoiceEditHighlight];
     self.textView.editable = NO;
+    self.isSaving = YES;
+    self.saveBtn.enabled = NO;
+    self.saveBtn.alpha = 0.35;
     int64_t baseResultId = self.detail.resultId.longLongValue;
     __weak typeof(self) weakSelf = self;
     [[OctoSummaryAPI shared] editSummary:self.detail.taskId
@@ -456,6 +483,9 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
                              baseResultId:baseResultId
                                  callback:^(id _Nullable result, NSError * _Nullable error) {
         weakSelf.textView.editable = YES;
+        weakSelf.isSaving = NO;
+        weakSelf.saveBtn.enabled = YES;
+        weakSelf.saveBtn.alpha = 1.0;
         if (error) {
             NSInteger st = [error.userInfo[@"_httpStatus"] integerValue];
             if (st == 409) {
@@ -463,7 +493,8 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
             } else {
                 [weakSelf.view showMsg:error.localizedDescription ?: LLang(@"保存失败")];
             }
-            weakSelf.textView.attributedText = attrBeforeClear;
+            weakSelf.textView.attributedText = [weakSelf attributedTextForDocument:weakSelf.textView.text ?: @""
+                                                                  highlightDiffFrom:weakSelf.initialContent ?: @""];
             return;
         }
         if (weakSelf.onSaved) weakSelf.onSaved();
@@ -588,7 +619,9 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     CGPoint point = [gesture locationInView:self.view];
     switch (gesture.state) {
         case UIGestureRecognizerStateBegan: {
-            if (self.voiceState == OctoVoiceStateIdle) {
+            // isSaving 单独拦一次:保存请求在途期间 voiceState 仍然是 Idle(发起保存不算
+            // 语音态切换),只看 voiceState 挡不住这里开始一次新的语音编辑,详见 onSave 里的注释。
+            if (self.voiceState == OctoVoiceStateIdle && !self.isSaving) {
                 self.isGestureActive = YES;
                 self.touchStartPoint = point;
                 [self requestRecordPermissionThenStart];
@@ -846,11 +879,16 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
 }
 
 - (void)restoreAudioSession {
+    // setActive:NO 必须和 category 复位绑在同一个 if 里——previousAudioCategory 只在
+    // beginRecording 真正启动过一次录音时才会被赋值。之前这行在 if 外面无条件执行,
+    // 哪怕这个 VC 这辈子从没录过音(比如打开总结编辑页看了看又直接 pop),dealloc 里
+    // 兜底调一次 restoreAudioSession 也会把进程级共享的 AVAudioSession 强行 deactivate,
+    // 可能打断此刻正在用这个共享会话播放的其它音频(比如后台音乐)。
     if (self.previousAudioCategory) {
         [[AVAudioSession sharedInstance] setCategory:self.previousAudioCategory withOptions:self.previousAudioCategoryOptions error:nil];
         self.previousAudioCategory = nil;
+        [[AVAudioSession sharedInstance] setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
     }
-    [[AVAudioSession sharedInstance] setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:nil];
 }
 
 - (void)cleanupRecordFile {
@@ -1351,6 +1389,12 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
 - (void)hideAppendOverlay {
     self.isAppendMode = NO;
     // 追加录音结束/取消后,把气泡换回"确认原话"结果气泡本身的展示,波形/弧形区域重新隐藏。
+    // 颜色也要一起换回来——一旦追加录音期间上滑进过取消区,updateVoiceOverlayForState 会把
+    // bubbleView/bubbleTail 染成红色(cancelColor),不显式复位的话,取消后换回来的"确认原话"
+    // 气泡会一直顶着这个红色,而不是它本来该有的浅蓝色。
+    UIColor *normalColor = [UIColor colorWithRed:0.88 green:0.94 blue:1.0 alpha:1.0];
+    self.bubbleView.backgroundColor = normalColor;
+    self.bubbleTail.backgroundColor = normalColor;
     self.waveContainer.hidden = YES;
     self.bottomAreaView.hidden = YES;
     self.bubbleTail.hidden = YES;
@@ -1360,6 +1404,7 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
 }
 
 - (void)cancelAppendRecording {
+    if (self.voiceState != OctoVoiceStateRecording && self.voiceState != OctoVoiceStateCancelling) return;
     [self invalidateRecordTimers];
     if (self.audioRecorder.isRecording) [self.audioRecorder stop];
     [self restoreAudioSession];
@@ -1709,7 +1754,13 @@ typedef struct {
 
     NSMutableArray<NSValue *> *ranges = [NSMutableArray array];
     [insertedInNew enumerateRangesUsingBlock:^(NSRange range, BOOL *stop) {
-        [ranges addObject:[NSValue valueWithRange:range]];
+        // 核心区字符级 Myers 是按 UTF-16 code unit 逐个匹配/发射下标的,两个不同的代理对
+        // (surrogate pair)各自的高/低 half 完全有可能在匹配阶段被错配,导致这里发射出的
+        // range 从代理对中间切开。用 rangeOfComposedCharacterSequencesForRange: 把每个 range
+        // 撑到最近的 grapheme cluster 边界,一次性兜底所有发射路径(包括上面几处退化为整段
+        // 高亮的分支),不用在每个 addIndex/addIndexesInRange 调用点分别处理。
+        NSRange safeRange = [newText rangeOfComposedCharacterSequencesForRange:range];
+        [ranges addObject:[NSValue valueWithRange:safeRange]];
     }];
     return ranges;
 }
