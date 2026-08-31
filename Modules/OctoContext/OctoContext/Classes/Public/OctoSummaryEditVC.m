@@ -109,6 +109,7 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
 @property(nonatomic, strong) UIView *waveContainer;
 @property(nonatomic, strong) NSMutableArray<UIView *> *waveBars;
 @property(nonatomic, strong) UIView *bottomAreaView;
+@property(nonatomic, strong) CAShapeLayer *arcBgLayer; // bottomAreaView 底部弧形背景,旋转时需要按新宽度重画 path,故存成属性而非局部变量
 @property(nonatomic, strong) UILabel *hintLabel;
 @property(nonatomic, assign) CGPoint bubbleOriginCenter;
 
@@ -345,6 +346,34 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
                                    self.voiceBar.bounds.size.width - slotX - 12, 36);
     self.holdToTalkBtn.frame = slotFrame;
     self.textInputTriggerBtn.frame = slotFrame;
+}
+
+// voiceOverlay 直接挂在 window 上(不是 self.view 的子视图),旋转时系统不会替我们调用
+// viewDidLayoutSubviews 去重排它,必须自己接管。voiceOverlay 本身靠 autoresizingMask
+// 跟着 window 走,这里只重算它内部那些按绝对宽高算好的子视图 frame(见 wk_relayoutVoiceOverlayForRotation)。
+// navigationBar(WKNavigationBar)同样是纯 frame 布局,不会随外部尺寸变化自动重排,这里一并接管。
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    __weak typeof(self) weakSelf = self;
+    [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+        [weakSelf wk_relayoutNavigationBarForWidth:size.width];
+        [weakSelf wk_relayoutVoiceOverlayForRotation];
+    } completion:nil];
+}
+
+// navigationBar 的 title/rightView 位置都是在各自 setter 里按"当时"的 self.lim_width 算好
+// 就定死,不会随外部 frame 变化自动重排。这里只改它自己的宽度,再用同一份值重新触发一遍
+// title/rightView 的 setter,逼它们按新宽度重新居中/靠右——不在这里重复实现 WKNavigationBar
+// 内部那套定位公式,避免两处代码各算一遍、以后改了一处忘了另一处。
+- (void)wk_relayoutNavigationBarForWidth:(CGFloat)width {
+    CGRect frame = self.navigationBar.frame;
+    if (frame.size.width == width) return;
+    frame.size.width = width;
+    self.navigationBar.frame = frame;
+    self.navigationBar.title = self.navigationBar.title;
+    if (self.navigationBar.rightView) {
+        self.navigationBar.rightView = self.navigationBar.rightView;
+    }
 }
 
 #pragma mark - Keyboard
@@ -911,6 +940,7 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     OctoVoiceOverlayPassthroughView *overlay = [[OctoVoiceOverlayPassthroughView alloc] initWithFrame:window.bounds];
     overlay.topPassthroughHeight = CGRectGetMaxY(self.navigationBar.frame);
     overlay.edgePassthroughWidth = 24; // 对齐系统 interactivePopGestureRecognizer 的左边缘识别热区
+    overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; // 挂在 window 上,靠 autoresizing 让自己的 frame 跟着旋转后的 window 走
     self.voiceOverlay = overlay;
     self.voiceOverlay.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.65];
     self.voiceOverlay.userInteractionEnabled = YES;
@@ -964,6 +994,7 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     arcBg.path = arcPath.CGPath;
     arcBg.fillColor = ([WKApp shared].config.themeColor ?: [UIColor colorWithRed:0.6 green:0.2 blue:0.8 alpha:1.0]).CGColor;
     [self.bottomAreaView.layer addSublayer:arcBg];
+    self.arcBgLayer = arcBg;
     [self.voiceOverlay addSubview:self.bottomAreaView];
 
     self.hintLabel = [[UILabel alloc] init];
@@ -1088,6 +1119,7 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     self.waveContainer = nil;
     self.waveBars = nil;
     self.bottomAreaView = nil;
+    self.arcBgLayer = nil;
     self.hintLabel = nil;
     self.resultTextView = nil;
     self.resultBottomBar = nil;
@@ -1098,6 +1130,118 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     self.resultAppendLabel = nil;
     self.thinkingDots = nil;
     self.thinkingOverlayView = nil;
+}
+
+#pragma mark - Rotation Relayout
+
+// iPad 支持分屏,系统不允许通过 supportedInterfaceOrientations 锁方向(会被静默忽略),
+// 只能老实做旋转自适应布局。voiceOverlay 自身靠 autoresizingMask 跟着 window 走(见
+// showVoiceOverlay),这里只重算它内部那些一次性按绝对宽高算好的子视图 frame——
+// 分录音态/结果态两套几何,和 showVoiceOverlay/transitionToResultUIWithThinking: 的
+// 布局公式保持一一对应,任何一处公式改了都要记得同步这里。
+- (void)wk_relayoutVoiceOverlayForRotation {
+    if (!self.voiceOverlay) return;
+    UIWindow *window = self.view.window;
+    if (!window) return;
+
+    CGFloat sw = self.voiceOverlay.bounds.size.width;
+    CGFloat sh = self.voiceOverlay.bounds.size.height;
+    CGFloat safeBottom = window.safeAreaInsets.bottom;
+
+    if ([self.voiceOverlay isKindOfClass:[OctoVoiceOverlayPassthroughView class]]) {
+        ((OctoVoiceOverlayPassthroughView *)self.voiceOverlay).topPassthroughHeight = CGRectGetMaxY(self.navigationBar.frame);
+    }
+
+    // 录音态气泡的基准 frame——不管当前是不是正显示这套 UI 都要重新算一遍,追加录音
+    // (transitionToRecordingUI)之后还会拿这两个缓存值把气泡换回录音态尺寸。
+    CGFloat bubbleW = sw * 0.62;
+    CGFloat bubbleH = 85;
+    CGFloat bubbleCenterY = sh * 0.42;
+    CGRect newRecordingBubbleFrame = CGRectMake((sw - bubbleW) / 2, bubbleCenterY - bubbleH / 2, bubbleW, bubbleH);
+    self.recordingBubbleFrame = newRecordingBubbleFrame;
+    self.bubbleOriginCenter = CGPointMake(CGRectGetMidX(newRecordingBubbleFrame), CGRectGetMidY(newRecordingBubbleFrame));
+
+    // 结果气泡的高度上限公式,和 resizeResultBubbleForText: 保持一致,供下面重算
+    // preAppendBubbleFrame 时复用。
+    CGFloat resultMinBubbleH = 80;
+    CGFloat resultBarH = 80;
+    CGFloat resultBarY = sh - resultBarH - 40;
+    CGFloat resultMaxBubbleH = MAX(resultMinBubbleH, resultBarY - sh * 0.15 - 20);
+
+    // preAppendBubbleFrame 是追加录音开始前"结果气泡"当时的 frame——追加录音期间气泡本身
+    // 正显示录音态 UI,这个缓存值旋转时也要跟着重算,否则追加录音结束换回来时会是
+    // 旧方向算出来的尺寸,和当下屏幕错位。
+    if (self.isAppendMode) {
+        CGFloat preservedH = MIN(MAX(self.preAppendBubbleFrame.size.height, resultMinBubbleH), resultMaxBubbleH);
+        self.preAppendBubbleFrame = CGRectMake(20, sh * 0.15, sw - 40, preservedH);
+    }
+
+    BOOL showingRecordingShape = (self.voiceState == OctoVoiceStateRecording || self.voiceState == OctoVoiceStateCancelling);
+    if (showingRecordingShape) {
+        self.bubbleView.frame = newRecordingBubbleFrame;
+        self.bubbleTail.center = CGPointMake(self.bubbleOriginCenter.x, CGRectGetMaxY(self.bubbleView.frame) + 4);
+        CGFloat waveW = bubbleW * 0.85;
+        CGFloat waveH = 50;
+        self.waveContainer.frame = CGRectMake((bubbleW - waveW) / 2, (bubbleH - waveH) / 2, waveW, waveH);
+        // waveBars 的 x 是创建时按当时的 waveW 算好的绝对值,不会随 waveContainer 的 frame
+        // 自动跟着变——block 总宽 totalBarW 是常量,只有 startX 依赖 waveW,这里必须重新算
+        // 一遍并回写每根 bar 的 x,否则 waveContainer 变宽/变窄后这一整条波形会跟着偏出中心。
+        // y/height 是 updateWaveform 实时动画在改的,这里保留不动。
+        CGFloat barW = 3, barGap = 2.5;
+        NSInteger barCount = (NSInteger)self.waveBars.count;
+        if (barCount > 0) {
+            CGFloat totalBarW = barCount * barW + (barCount - 1) * barGap;
+            CGFloat startX = (waveW - totalBarW) / 2;
+            for (NSInteger i = 0; i < barCount; i++) {
+                UIView *bar = self.waveBars[i];
+                CGRect f = bar.frame;
+                f.origin.x = startX + i * (barW + barGap);
+                bar.frame = f;
+            }
+        }
+    } else if (self.resultTextView) {
+        // 非录音态且结果气泡已创建过 = 当前正处在 Thinking/Result 阶段(追加录音已经被
+        // 上面 showingRecordingShape 分支挡掉,不会走到这里)。宽度按新屏宽重算,
+        // 高度/resultTextView 复用已有的动态测高逻辑,避免和 resizeResultBubbleForText:
+        // 的公式重复一份还可能算出不一致的结果。
+        self.bubbleView.frame = CGRectMake(20, sh * 0.15, sw - 40, self.bubbleView.frame.size.height);
+        [self resizeResultBubbleForText:self.transcribedText animated:NO];
+
+        self.resultBottomBar.frame = CGRectMake(0, resultBarY, sw, resultBarH);
+        CGFloat btnSize = 52;
+        CGFloat spacing = sw / 4.0;
+        self.resultCancelBtn.center = CGPointMake(spacing * 1, btnSize / 2);
+        self.resultCancelLabel.center = CGPointMake(self.resultCancelBtn.center.x, CGRectGetMaxY(self.resultCancelBtn.frame) + 6);
+        self.resultAppendBtn.center = CGPointMake(spacing * 2, btnSize / 2);
+        self.resultAppendLabel.center = CGPointMake(self.resultAppendBtn.center.x, CGRectGetMaxY(self.resultAppendBtn.frame) + 6);
+        self.resultInsertBtn.center = CGPointMake(spacing * 3, btnSize / 2);
+
+        if (self.thinkingOverlayView) {
+            CGFloat tw = self.bubbleView.bounds.size.width;
+            CGFloat th = self.bubbleView.bounds.size.height;
+            self.thinkingOverlayView.frame = CGRectMake(0, 0, tw, th);
+            CGFloat dotSize = 10, dotGap = 10;
+            CGFloat totalW = 3 * dotSize + 2 * dotGap;
+            CGFloat startX = (tw - totalW) / 2;
+            for (NSInteger i = 0; i < (NSInteger)self.thinkingDots.count; i++) {
+                UIView *dot = self.thinkingDots[i];
+                dot.frame = CGRectMake(startX + i * (dotSize + dotGap), (th - dotSize) / 2, dotSize, dotSize);
+            }
+        }
+    }
+
+    CGFloat bottomH = 100;
+    self.bottomAreaView.frame = CGRectMake(0, sh - bottomH - safeBottom, sw, bottomH + safeBottom);
+    self.hintLabel.frame = CGRectMake(0, 45, sw, 20);
+    if (self.arcBgLayer) {
+        UIBezierPath *arcPath = [UIBezierPath bezierPath];
+        [arcPath moveToPoint:CGPointMake(0, bottomH + safeBottom)];
+        [arcPath addLineToPoint:CGPointMake(0, 35)];
+        [arcPath addQuadCurveToPoint:CGPointMake(sw, 35) controlPoint:CGPointMake(sw / 2, -15)];
+        [arcPath addLineToPoint:CGPointMake(sw, bottomH + safeBottom)];
+        [arcPath closePath];
+        self.arcBgLayer.path = arcPath.CGPath;
+    }
 }
 
 
