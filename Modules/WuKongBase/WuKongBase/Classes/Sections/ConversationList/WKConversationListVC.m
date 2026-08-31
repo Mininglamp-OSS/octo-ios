@@ -514,6 +514,13 @@
 -(void) viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
 
+    // 兜底: viewWillTransitionToSize 在本 VC 被压在导航栈里(不是最顶层,比如打开了某个
+    // 会话)时不保证会触发(iOS 已知问题, rdar://24277475),压栈期间如果发生了尺寸变化,
+    // 只靠那个回调不会跟着重新布局,返回时 header/tab栏/导航栏就可能还停在旧宽度。
+    // 这里每次页面可见都按当前宽度重新校正一遍,不再只依赖旋转回调这一条路径。
+    [self wk_relayoutNavigationBarForWidth:self.view.lim_width];
+    [self layoutFixedHeader];
+
     [self refreshTitle];
     [self hiddenRightItem:NO];
 
@@ -1197,10 +1204,10 @@
 /// 创建固定在顶部的搜索栏容器（不随 tableView 滚动）
 -(void) setupFixedHeader {
     CGFloat navBottom = self.navigationBar.lim_bottom;
-    _fixedHeaderContainer = [[UIView alloc] initWithFrame:CGRectMake(0, navBottom, WKScreenWidth, 0)];
+    _fixedHeaderContainer = [[UIView alloc] initWithFrame:CGRectMake(0, navBottom, self.view.lim_width, 0)];
     _fixedHeaderContainer.backgroundColor = [WKApp shared].config.backgroundColor;
 
-    WKSearchbarView *searchbar = [[WKSearchbarView alloc] initWithFrame:CGRectMake(15, 6, WKScreenWidth - 30, 36)];
+    WKSearchbarView *searchbar = [[WKSearchbarView alloc] initWithFrame:CGRectMake(15, 6, self.view.lim_width - 30, 36)];
     searchbar.placeholder = LLang(@"搜索");
     searchbar.layer.masksToBounds = YES;
     searchbar.onClick = ^{
@@ -1214,6 +1221,10 @@
 }
 
 /// 重新布局固定头部（搜索栏 + tabView）并调整 tableView 的 frame
+// 注意: 这里原先用 WKScreenWidth([UIScreen mainScreen].bounds.size.width) 算宽度——
+// iOS 8 之后 UIScreen.bounds 不随界面方向旋转,永远是竖屏原始宽度,iPad 横屏时
+// 搜索栏/tab 栏/固定头部容器会停在竖屏宽度不铺满。改用 self.view.lim_width(旋转后
+// 会随 viewWillTransitionToSize 触发的重新布局实时更新)。
 -(void) layoutFixedHeader {
     CGFloat navBottom = self.navigationBar.lim_bottom;
     CGFloat y = 0;
@@ -1221,21 +1232,51 @@
     // 搜索栏（左右 15pt 间距）
     UIView *searchbar = [_fixedHeaderContainer viewWithTag:9990];
     if (searchbar && !searchbar.hidden) {
-        searchbar.frame = CGRectMake(15, y + 6, WKScreenWidth - 30, 36);
+        searchbar.frame = CGRectMake(15, y + 6, self.view.lim_width - 30, 36);
         y = searchbar.lim_bottom + 6;
     }
 
     // tab 栏
     if (_conversationTabView) {
-        _conversationTabView.frame = CGRectMake(0, y, WKScreenWidth, 44);
+        _conversationTabView.frame = CGRectMake(0, y, self.view.lim_width, 44);
         y = _conversationTabView.lim_bottom;
     }
 
-    _fixedHeaderContainer.frame = CGRectMake(0, navBottom, WKScreenWidth, y);
+    _fixedHeaderContainer.frame = CGRectMake(0, navBottom, self.view.lim_width, y);
 
     // 调整 tableView 位置到固定头部下方
     CGFloat tableTop = _fixedHeaderContainer.lim_bottom;
     self.tableView.frame = CGRectMake(0, tableTop, self.view.lim_width, self.view.lim_height - tableTop);
+}
+
+// iPad 支持分屏,系统不允许通过 supportedInterfaceOrientations 锁方向,只能老实做旋转
+// 自适应布局。这个页面原本没有任何旋转处理:固定头部(搜索栏+tab栏)只在 viewDidLoad
+// 链路里布局过一次,旋转后不会再重新走 layoutFixedHeader,加上其内部又用了不随方向变化
+// 的 WKScreenWidth(见上面 layoutFixedHeader 的注释),导致横屏时除了系统 UITabBar
+// 之外的内容全部停在竖屏宽度。这里补上旋转回调,同时顺带修一下 navigationBar 的同类问题
+// (WKNavigationBar 自己没有 layoutSubviews,宽度和 title/rightView 位置都是一次性算好的)。
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    __weak typeof(self) weakSelf = self;
+    [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+        [weakSelf wk_relayoutNavigationBarForWidth:size.width];
+        [weakSelf layoutFixedHeader];
+    } completion:nil];
+}
+
+// navigationBar 的 title/rightView 位置都是在各自 setter 里按"当时"的 self.lim_width 算好
+// 就定死,不会随外部 frame 变化自动重排。这里只改它自己的宽度,再用同一份值重新触发一遍
+// title/rightView 的 setter,逼它们按新宽度重新居中/靠右——不在这里重复实现 WKNavigationBar
+// 内部那套定位公式,避免两处代码各算一遍、以后改了一处忘了另一处。
+- (void)wk_relayoutNavigationBarForWidth:(CGFloat)width {
+    CGRect frame = self.navigationBar.frame;
+    if (frame.size.width == width) return;
+    frame.size.width = width;
+    self.navigationBar.frame = frame;
+    self.navigationBar.title = self.navigationBar.title;
+    if (self.navigationBar.rightView) {
+        self.navigationBar.rightView = self.navigationBar.rightView;
+    }
 }
 
 - (WKConversationListTableView *)tableView{
