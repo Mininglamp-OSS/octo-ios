@@ -124,6 +124,23 @@
 "继续编辑" = "Keep editing";
 "放弃" = "Discard";
 
+/* Voice edit */
+"按住 说话" = "Hold to Talk";
+"点击输入…" = "Tap to type…";
+"无法访问麦克风" = "Can't access microphone";
+"请在系统设置中允许访问麦克风" = "Please allow microphone access in Settings";
+"去设置" = "Go to Settings";
+"录音启动失败" = "Failed to start recording";
+"录音异常中断,请重试" = "Recording interrupted. Please try again.";
+"说话时间太短" = "Recording too short";
+"语音识别失败,请重试" = "Speech recognition failed. Please try again.";
+"松手 转文字" = "Release to Convert";
+"松手 结束  ·  上滑 取消" = "Release to Finish  ·  Swipe Up to Cancel";
+"松手 取消" = "Release to Cancel";
+"按住继续" = "Hold to Continue";
+"确认" = "Confirm";
+"未识别到语音" = "No speech detected";
+
 /* Confirm */
 "参与确认" = "Participant confirmation";
 "参与者" = "Participants";
