@@ -60,18 +60,6 @@ NS_ASSUME_NONNULL_BEGIN
              completion:(void(^)(WKVoiceInputResult * _Nullable result,
                                  NSError * _Nullable error))completion;
 
-/// 语音转写（m4a/AAC 格式，带 mode 参数，透传给 octo-speech 的 `mode` 字段）
-/// @param mode nil/空 = 不传，由服务端按配置自动判断口述/编辑；"append_only" = 强制纯听写追加；
-///             "edit_only" = 强制按编辑指令改写（识别不到有效指令时会静默丢弃语音内容，慎用）
-- (void)transcribeAudio:(NSData *)audioData
-            contextText:(nullable NSString *)contextText
-            chatContext:(nullable NSString *)chatContext
-        personalContext:(nullable NSString *)personalContext
-          memberContext:(nullable NSString *)memberContext
-                   mode:(nullable NSString *)mode
-             completion:(void(^)(WKVoiceInputResult * _Nullable result,
-                                 NSError * _Nullable error))completion;
-
 /// 语音转写（WAV/PCM 格式）
 - (void)transcribeWavAudio:(NSData *)audioData
                contextText:(nullable NSString *)contextText

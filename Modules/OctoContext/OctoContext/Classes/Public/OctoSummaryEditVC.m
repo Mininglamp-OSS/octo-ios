@@ -1630,7 +1630,6 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
                                        chatContext:nil
                                    personalContext:nil
                                      memberContext:nil
-                                              mode:nil
                                         completion:^(WKVoiceInputResult *result, NSError *error) {
         if (!weakSelf || weakSelf.voiceEditGeneration != capturedGeneration) return;
         if (error) {
@@ -1744,7 +1743,6 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
                                        chatContext:nil
                                    personalContext:nil
                                      memberContext:nil
-                                              mode:nil
                                         completion:^(WKVoiceInputResult *result, NSError *error) {
         if (!weakSelf || weakSelf.voiceEditGeneration != capturedGeneration) return;
         if (error) {
@@ -1800,9 +1798,10 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
         [self.textView becomeFirstResponder];
     }
     NSInteger textLength = self.textView.text.length;
-    NSInteger location = MIN(range.location, textLength);
-    NSInteger length = MIN(range.length, textLength - location);
-    self.textView.selectedRange = NSMakeRange(location, length);
+    // insertText: 会替换掉当前 selectedRange——这里只是把追加听写的文字接到光标位置,
+    // 不能带上用户可能残留的选区长度,否则会把选中的文字连带吞掉。
+    NSInteger location = MIN(NSMaxRange(range), textLength);
+    self.textView.selectedRange = NSMakeRange(location, 0);
     [self.textView insertText:suffix];
 }
 
