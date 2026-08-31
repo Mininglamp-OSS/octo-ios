@@ -505,6 +505,12 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
     self.isSaving = YES;
     self.saveBtn.enabled = NO;
     self.saveBtn.alpha = 0.35;
+    // 撤销按钮和 saveBtn 一起禁掉:保存请求已经拿走此刻的 textView.text 快照发出去了,
+    // 请求在途期间再点撤销,textView 显示的内容会回退到快照之前的某一步,但服务端最终
+    // 落地的还是快照那一刻的内容——用户看到的"已撤销"状态和实际保存结果不一致,相当于
+    // 刚撤销掉的内容又被服务器保存回来了。
+    self.undoBtn.enabled = NO;
+    self.undoBtn.alpha = 0.35;
     int64_t baseResultId = self.detail.resultId.longLongValue;
     __weak typeof(self) weakSelf = self;
     [[OctoSummaryAPI shared] editSummary:self.detail.taskId
@@ -515,6 +521,7 @@ static const CGFloat kVoiceCancelUpOffset = 60.0;
         weakSelf.isSaving = NO;
         weakSelf.saveBtn.enabled = YES;
         weakSelf.saveBtn.alpha = 1.0;
+        [weakSelf wk_updateUndoButtonState];
         if (error) {
             NSInteger st = [error.userInfo[@"_httpStatus"] integerValue];
             if (st == 409) {

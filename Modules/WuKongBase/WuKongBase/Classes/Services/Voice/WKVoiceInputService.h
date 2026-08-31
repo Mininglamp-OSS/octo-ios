@@ -80,16 +80,6 @@ NS_ASSUME_NONNULL_BEGIN
              memberContext:(nullable NSString *)memberContext
                 completion:(void(^)(WKVoiceInputResult * _Nullable result,
                                     NSError * _Nullable error))completion;
-
-/// 语音转写（WAV/PCM 格式，带 mode 参数，语义同上）
-- (void)transcribeWavAudio:(NSData *)audioData
-               contextText:(nullable NSString *)contextText
-               chatContext:(nullable NSString *)chatContext
-           personalContext:(nullable NSString *)personalContext
-             memberContext:(nullable NSString *)memberContext
-                      mode:(nullable NSString *)mode
-                completion:(void(^)(WKVoiceInputResult * _Nullable result,
-                                    NSError * _Nullable error))completion;
 @end
 
 NS_ASSUME_NONNULL_END
