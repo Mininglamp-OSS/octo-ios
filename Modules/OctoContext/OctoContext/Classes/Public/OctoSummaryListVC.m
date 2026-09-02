@@ -10,6 +10,7 @@
 #import "OctoSummaryActionSheet.h"
 #import "OctoSummaryFilterTabsView.h"
 #import "OctoSummaryStatusPoller.h"
+#import "OctoSummaryGroupNotifyHelper.h"
 #import "OctoSummaryDateFormat.h"
 #import <MJRefresh/MJRefresh.h>
 #import <WuKongIMSDK/WuKongIMSDK.h>
@@ -581,6 +582,9 @@
             [strongSelf.previewInFlight removeObject:@(tid)];
             if (error || ![result isKindOfClass:OctoSummaryDetail.class]) return;
             OctoSummaryDetail *d = result;
+            // 列表预览拉到 detail 时也走一次群提示检查——详情页未挂载/已被 pop
+            // 时,列表轮询是唯一在跑的检测链路,漏掉会导致群提示永远发不出去。
+            [OctoSummaryGroupNotifyHelper notifyIfNeeded:d];
             NSString *content = d.result.content ?: @"";
             // 去掉 markdown 头标记 / 多余空白, 截 120 字。Cell 自身按 boundingRect
             // 测高再截 2 行, 这里给得宽点防止短行。

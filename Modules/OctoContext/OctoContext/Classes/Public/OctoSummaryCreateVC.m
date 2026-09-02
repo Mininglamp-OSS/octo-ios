@@ -6,8 +6,7 @@
 #import "OctoSummaryCreateVC.h"
 #import "OctoSummaryAPI.h"
 #import "OctoSelectedSourcesView.h"
-#import "OctoSummaryListVC.h"
-#import "OctoActionToast.h"
+#import "OctoSummaryDetailVC.h"
 #import <WuKongBase/WuKongBase.h>
 #import <WuKongBase/WKThreadService.h>
 #import <WuKongBase/WKThreadModel.h>
@@ -569,43 +568,36 @@ static const CGFloat kSourceCardMinH   = 78;    // "选择聊天" 卡最小高�
     [[OctoSummaryAPI shared] createSummaryWithParams:params callback:^(id _Nullable result, NSError * _Nullable error) {
         if (error) {
             weakSelf.submitBtn.enabled = YES;
-            // 用 showMsg: (CSToast) 而非 showHUDWithHide: (MBProgressHUD) —— 与会话列表
-            // "添加到关注" 流程同款轻量 Toast (WKConversationListVC.m:3870/3887/3927),
-            // 不再用居中暗色块那种重量级 HUD。统一智能总结 / 关注两条用户主路径的反馈风格。
             [weakSelf.view showMsg:error.localizedDescription ?: LLang(@"创建失败")];
             return;
         }
         NSString *successText = weakSelf.submitSuccessHUDText.length > 0
             ? weakSelf.submitSuccessHUDText
             : LLang(@"已创建总结任务");
-        // 聊天页 ✨ 入口设了 submitSuccessHUDText, 后续走 OctoActionToast 给一个明确的
-        // "查看" 动作, 点击 push OctoSummaryListVC 让用户直接进列表看进度。普通 showMsg:
-        // 1s 自动消失, 引导文案空响, 用户也来不及响应。
-        BOOL useActionToast = weakSelf.submitSuccessHUDText.length > 0;
-        // 通知列表页刷新, 让新任务立刻出现在列表顶部 (用户报"返回到列表后看不到新建的总结")。
         [[NSNotificationCenter defaultCenter] postNotificationName:@"OctoSummaryDidCreateNotification" object:nil];
-        [[WKNavigationManager shared] popViewControllerAnimated:YES];
-        // Toast 必须放在 pop 之后, 且挂在 pop 后的 topViewController.view (列表页 / 聊天详情页)
-        // 上 —— 之前挂在 weakSelf.view, pop 把 createVC 的视图层级即刻拆掉, Toast 还没动画
-        // 完就跟着销毁, 用户什么也看不到。dispatch_async 一格让 nav stack 切完再取 top,
-        // 避免拿到尚未切换的旧 top。
+
+        int64_t taskId = 0;
+        if ([result isKindOfClass:NSDictionary.class]) {
+            taskId = [((NSDictionary *)result)[@"task_id"] longLongValue];
+        }
+
+        // 对齐 web SummaryCreatePage.handleSubmit: 创建成功后自动替换到详情页, 保证详情页
+        // 的完成轮询一定会跑起来 —— 群提示 (OctoSummaryGroupNotifyHelper, WK_TIP 2000) 挂在
+        // 这条轮询链路上; 之前只 pop 回聊天页/列表页, 用户不手动进列表/详情页触发轮询就
+        // 永远检测不到任务完成, 提示也就永远发不出去 (真机实测复现的问题)。没拿到
+        // task_id 时兜底走原来的纯 pop。
+        if (taskId > 0) {
+            OctoSummaryDetailVC *detail = [OctoSummaryDetailVC new];
+            detail.taskId = @(taskId);
+            detail.hidesBottomBarWhenPushed = YES;
+            [[WKNavigationManager shared] replacePushViewController:detail animated:YES];
+        } else {
+            [[WKNavigationManager shared] popViewControllerAnimated:YES];
+        }
         dispatch_async(dispatch_get_main_queue(), ^{
             UIViewController *top = [WKNavigationManager shared].topViewController;
-            if (useActionToast) {
-                __weak UIViewController *weakTop = top;
-                [OctoActionToast showText:successText
-                              actionTitle:LLang(@"查看")
-                                 onAction:^{
-                    UIViewController *t = weakTop;
-                    if (!t.navigationController) return;
-                    OctoSummaryListVC *list = [OctoSummaryListVC new];
-                    list.hidesBottomBarWhenPushed = YES;
-                    [t.navigationController pushViewController:list animated:YES];
-                }];
-            } else {
-                UIView *target = top.view ?: UIApplication.sharedApplication.keyWindow;
-                [target showMsg:successText];
-            }
+            UIView *target = top.view ?: UIApplication.sharedApplication.keyWindow;
+            [target showMsg:successText];
         });
     }];
 }

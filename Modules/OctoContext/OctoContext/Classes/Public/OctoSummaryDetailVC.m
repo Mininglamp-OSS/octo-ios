@@ -5,6 +5,7 @@
 
 #import "OctoSummaryDetailVC.h"
 #import "OctoSummaryAPI.h"
+#import "OctoSummaryGroupNotifyHelper.h"
 #import "OctoSummaryActionSheet.h"
 #import "OctoSummaryMarkdownRender.h"
 #import "OctoCitationBadgeView.h"
@@ -41,6 +42,7 @@
 @property(nonatomic, strong) UIButton *moreBtn;
 @property(nonatomic, strong) OctoSummaryDetail *detail;
 @property(nonatomic, strong) NSTimer *pollTimer;
+@property(nonatomic, assign) BOOL pollErrorToastShown;
 
 /// YES 表示 VC 进入"消失中"状态 (viewWillDisappear → viewDidDisappear 之间, 或者
 /// 用户在做交互式右滑 pop)。期间所有"会改变 layout 的异步回调"都必须 no-op,
@@ -500,11 +502,19 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
     __weak typeof(self) weakSelf = self;
     [[OctoSummaryAPI shared] getSummaryDetail:tid callback:^(id _Nullable result, NSError * _Nullable error) {
         if (error || ![result isKindOfClass:OctoSummaryDetail.class]) {
-            [weakSelf.view showMsg:LLang(@"加载失败")];
+            // 轮询期间的偶发失败(弱网抖动/超时/切后台瞬间断连)不能让轮询链路永久停摆——
+            // 只在第一次失败时提示一下,后续静默重试,避免持续断网时 toast 刷屏。
+            if (!weakSelf.pollErrorToastShown) {
+                weakSelf.pollErrorToastShown = YES;
+                [weakSelf.view showMsg:LLang(@"加载失败")];
+            }
+            [weakSelf scheduleNextPoll];
             return;
         }
+        weakSelf.pollErrorToastShown = NO;
         weakSelf.detail = result;
         [weakSelf renderDetail];
+        [OctoSummaryGroupNotifyHelper notifyIfNeeded:weakSelf.detail];
         if (weakSelf.detail.status == OctoTaskStatusProcessing
             || weakSelf.detail.status == OctoTaskStatusPending) {
             [weakSelf scheduleNextPoll];
@@ -515,7 +525,7 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
 - (void)scheduleNextPoll {
     [self.pollTimer invalidate];
     __weak typeof(self) weakSelf = self;
-    self.pollTimer = [NSTimer scheduledTimerWithTimeInterval:8.0 repeats:NO block:^(NSTimer *t) {
+    self.pollTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:NO block:^(NSTimer *t) {
         [weakSelf loadDetail];
     }];
 }
