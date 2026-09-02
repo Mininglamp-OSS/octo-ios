@@ -121,6 +121,9 @@
 }
 
 
+// 注意: 外部(WKConversationListVC 的 wk_relayoutNavigationBarForWidth:)靠重新赋值同一个
+// title 触发这里的重新居中逻辑,来在旋转后刷新 titleLabel 位置——这个 setter 不能加
+// "值没变就 return" 的早退,否则那条旋转刷新链路会失效。
 - (void)setTitle:(NSString *)title {
     _title = title;
     self.titleLabel.text = title;
@@ -161,6 +164,8 @@
     }
 }
 
+// 注意: 同 setTitle 一样,wk_relayoutNavigationBarForWidth: 靠重新赋值同一个 rightView
+// 触发下面的重新定位逻辑来在旋转后刷新位置——不能加"跟 _rightView 相同就 return"的早退。
 - (void)setRightView:(UIView *)rightView {
     if(!rightView) {
         rightView = [[UIView alloc] init];

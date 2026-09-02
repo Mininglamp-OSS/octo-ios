@@ -19,11 +19,13 @@ NS_ASSUME_NONNULL_BEGIN
  *  @param array  items，包含字典，字典里面包含标题（title）、图片名（imageName）
  *  @param width  宽度
  *  @param point  三角的顶角坐标（基于window）
+ *  @param window 锚点按钮所在的 window,用于确定遮罩尺寸和菜单挂载位置；传 nil 时兜底用 keyWindow
  *  @param action 点击回调
  */
 - (instancetype)initWithItems:(NSArray <NSDictionary *>*)array
                         width:(CGFloat)width
              triangleLocation:(CGPoint)point
+                       window:(nullable UIWindow *)window
                        action:(void(^)(NSInteger index))action;
 
 /**
@@ -32,11 +34,13 @@ NS_ASSUME_NONNULL_BEGIN
  *  @param array  items，包含字典，字典里面包含标题（title）、图片名（imageName）
  *  @param width  宽度
  *  @param point  三角的顶角坐标（基于window）
+ *  @param window 锚点按钮所在的 window,用于确定遮罩尺寸和菜单挂载位置；传 nil 时兜底用 keyWindow
  *  @param action 点击回调
  */
 + (void)showWithItems:(NSArray <NSDictionary *>*)array
                 width:(CGFloat)width
      triangleLocation:(CGPoint)point
+               window:(nullable UIWindow *)window
                action:(void(^)(NSInteger index))action;
 
 - (void)show;

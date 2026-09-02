@@ -25,6 +25,7 @@ static CGFloat const kCellHeight = 44;
 @property (nonatomic, strong) UITableView *tableView;
 @property (nonatomic, strong) NSArray *tableData;
 @property (nonatomic, assign) CGPoint trianglePoint;
+@property (nonatomic, weak) UIWindow *hostWindow;
 @property (nonatomic, copy) void(^action)(NSInteger index);
 @end
 
@@ -33,15 +34,18 @@ static CGFloat const kCellHeight = 44;
 - (instancetype)initWithItems:(NSArray <NSDictionary *>*)array
                         width:(CGFloat)width
              triangleLocation:(CGPoint)point
+                       window:(UIWindow *)window
                        action:(void(^)(NSInteger index))action
 {
     if (array.count == 0) return nil;
     if (self = [super init]) {
-        // 用 keyWindow 的实际 bounds 而不是 [UIScreen mainScreen].bounds——后者是竖屏原生
-        // 宽度,不随界面方向刷新,iPad 横屏下遮罩和下面的菜单锚点都会按错误的窄宽度算,
-        // 跟已经移到真实横屏右边缘的触发按钮脱节。
-        UIWindow *keyWin = [UIApplication sharedApplication].keyWindow;
-        self.frame = keyWin ? keyWin.bounds : [UIScreen mainScreen].bounds;
+        // 用触发按钮所在 window 的实际 bounds 而不是 [UIScreen mainScreen].bounds——后者是
+        // 竖屏原生宽度,不随界面方向刷新,iPad 横屏下遮罩和下面的菜单锚点都会按错误的窄宽度算,
+        // 跟已经移到真实横屏右边缘的触发按钮脱节。调用方只传一次 window(通常是按钮自己的
+        // .window),这里和 show 里都直接用它,不再各自独立查一遍 keyWindow。
+        UIWindow *hostWindow = window ?: [UIApplication sharedApplication].keyWindow;
+        self.hostWindow = hostWindow;
+        self.frame = hostWindow ? hostWindow.bounds : [UIScreen mainScreen].bounds;
         self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.2];
         self.alpha = 0;
         _tableData = [array copy];
@@ -77,8 +81,9 @@ static CGFloat const kCellHeight = 44;
         // 呼吸),两侧各留至少 5pt 边距;iPad 横屏/分屏下用真实 window 宽度兜底,
         // 不再锚死在竖屏 SCREEN_WIDTH 上。
         CGFloat menuRightX = MIN(point.x + 25, winW - 5);
+        // 三角尖点也要收进菜单的水平范围内,否则触发按钮太贴边时三角会画到菜单外面去。
+        _trianglePoint.x = MIN(MAX(point.x, menuRightX - finalWidth + 10), menuRightX - 10);
         CGFloat menuX = MAX(menuRightX - finalWidth, 5);
-        menuRightX = menuX + finalWidth;
 
         // 创建tableView
         _tableView = [[UITableView alloc] initWithFrame:CGRectMake(menuX, point.y + 10, finalWidth, kCellHeight * array.count) style:UITableViewStylePlain];
@@ -99,9 +104,10 @@ static CGFloat const kCellHeight = 44;
 + (void)showWithItems:(NSArray <NSDictionary *>*)array
                 width:(CGFloat)width
      triangleLocation:(CGPoint)point
+               window:(UIWindow *)window
                action:(void(^)(NSInteger index))action
 {
-    WKPopMenuView *view = [[WKPopMenuView alloc] initWithItems:array width:width triangleLocation:point action:action];
+    WKPopMenuView *view = [[WKPopMenuView alloc] initWithItems:array width:width triangleLocation:point window:window action:action];
     [view show];
 }
 
@@ -119,7 +125,7 @@ static CGFloat const kCellHeight = 44;
 
 #pragma mark - show or hide
 - (void)show {
-    [[UIApplication sharedApplication].keyWindow addSubview:self];
+    [(self.hostWindow ?: [UIApplication sharedApplication].keyWindow) addSubview:self];
     // anchorPoint = (1,0): position.x 即菜单右边缘;y 即菜单顶边。
     // 用 menu 自己 frame 的右边缘而不是 SCREEN_WIDTH,确保旋转后菜单仍紧贴三角尖点。
     _tableView.layer.position = CGPointMake(CGRectGetMaxX(_tableView.frame), _trianglePoint.y + 10);

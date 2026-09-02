@@ -836,12 +836,13 @@
     // 后者用的是不随旋转刷新的 statusBarFrame 以及可能被隐藏的系统 navigationBar 高度,
     // iPad 横屏/分屏下会和真正按钮位置差出一个状态栏/导航栏量级。三角尖点对齐按钮下边缘
     // 外侧 2pt(原逻辑是导航栏下方 -4,视觉位置基本一致,但是现在跟着按钮走)。
+    // addBtn 就是触发这个 action 的按钮本身(tag 8888,见 setupRightItems),必然存在,
+    // 不需要 nil 兜底分支。
     UIView *addBtn = [self.rightAddItem viewWithTag:8888];
-    CGRect addBtnFrameInWindow = addBtn ? [addBtn convertRect:addBtn.bounds toView:nil] : CGRectZero;
-    CGFloat anchorX = addBtn ? CGRectGetMidX(addBtnFrameInWindow) : WKScreenWidth - 30;
-    CGFloat anchorY = addBtn ? CGRectGetMaxY(addBtnFrameInWindow) + 2.0f
-                             : self.navigationController.navigationBar.lim_height + [[UIApplication sharedApplication] statusBarFrame].size.height - 4.0f;
-    [WKPopMenuView showWithItems:itemDicts width:140.0f triangleLocation:CGPointMake(anchorX, anchorY) action:^(NSInteger index) {
+    CGRect addBtnFrameInWindow = [addBtn convertRect:addBtn.bounds toView:nil];
+    CGFloat anchorX = CGRectGetMidX(addBtnFrameInWindow);
+    CGFloat anchorY = CGRectGetMaxY(addBtnFrameInWindow) + 2.0f;
+    [WKPopMenuView showWithItems:itemDicts width:140.0f triangleLocation:CGPointMake(anchorX, anchorY) window:addBtn.window action:^(NSInteger index) {
         WKConversationAddItem *item = [items objectAtIndex:index];
         if(item.onClick) {
             item.onClick();
@@ -850,6 +851,13 @@
 }
 
 -(void) refreshTitle{
+    [self refreshTitleForWidth:self.view.lim_width];
+}
+
+// viewWillTransitionToSize 的 nil-coordinator 分支需要在 self.view.bounds 更新到目标宽度
+// 之前就同步刷新 leftView(space 胶囊),这里不能再读 self.view.lim_width(旧值),必须让
+// 调用方显式传入目标宽度。
+-(void) refreshTitleForWidth:(CGFloat)viewWidth {
     [self.connectLock lock];
 
     if (self.currentSpaceName && self.currentSpaceName.length > 0) {
@@ -868,7 +876,7 @@
 
         _spaceNameLabel.text = self._title;
         [_spaceNameLabel sizeToFit];
-        CGFloat maxNameWidth = self.view.lim_width - 16 - avatarSize - gap * 2 - chevronSize - hPad * 2 - 120;
+        CGFloat maxNameWidth = viewWidth - 16 - avatarSize - gap * 2 - chevronSize - hPad * 2 - 120;
         if (_spaceNameLabel.lim_width > maxNameWidth) {
             _spaceNameLabel.lim_width = maxNameWidth;
         }
@@ -1234,27 +1242,34 @@
 // 搜索栏/tab 栏/固定头部容器会停在竖屏宽度不铺满。改用 self.view.lim_width(旋转后
 // 会随 viewWillTransitionToSize 触发的重新布局实时更新)。
 -(void) layoutFixedHeader {
+    [self layoutFixedHeaderForSize:self.view.bounds.size];
+}
+
+// viewWillTransitionToSize 的 nil-coordinator 分支在 self.view.bounds 还没更新到目标尺寸时
+// 就要同步布局,这时不能再读 self.view.lim_width/lim_height(读到的是旋转前的旧值),
+// 必须让调用方把目标 size 显式传进来。
+-(void) layoutFixedHeaderForSize:(CGSize)size {
     CGFloat navBottom = self.navigationBar.lim_bottom;
     CGFloat y = 0;
 
     // 搜索栏（左右 15pt 间距）
     UIView *searchbar = [_fixedHeaderContainer viewWithTag:9990];
     if (searchbar && !searchbar.hidden) {
-        searchbar.frame = CGRectMake(15, y + 6, self.view.lim_width - 30, 36);
+        searchbar.frame = CGRectMake(15, y + 6, size.width - 30, 36);
         y = searchbar.lim_bottom + 6;
     }
 
     // tab 栏
     if (_conversationTabView) {
-        _conversationTabView.frame = CGRectMake(0, y, self.view.lim_width, 44);
+        _conversationTabView.frame = CGRectMake(0, y, size.width, 44);
         y = _conversationTabView.lim_bottom;
     }
 
-    _fixedHeaderContainer.frame = CGRectMake(0, navBottom, self.view.lim_width, y);
+    _fixedHeaderContainer.frame = CGRectMake(0, navBottom, size.width, y);
 
     // 调整 tableView 位置到固定头部下方
     CGFloat tableTop = _fixedHeaderContainer.lim_bottom;
-    self.tableView.frame = CGRectMake(0, tableTop, self.view.lim_width, self.view.lim_height - tableTop);
+    self.tableView.frame = CGRectMake(0, tableTop, size.width, size.height - tableTop);
 }
 
 // iPad 支持分屏,系统不允许通过 supportedInterfaceOrientations 锁方向,只能老实做旋转
@@ -1269,14 +1284,19 @@
         // 有些 iPad 分屏尺寸变化不带 transition coordinator,
         // [nil animateAlongsideTransition:...] 是静默空操作,alongside block 永远不会跑,
         // 必须在这里直接同步重新布局,不能只依赖下面的 alongside 路径。
+        // 注意: 这个分支跑的时候 self.view.bounds 还没更新到 size,不能再让
+        // layoutFixedHeader/refreshTitle 内部去读 self.view.lim_width/lim_height(读到
+        // 的是旋转前的旧值),必须用 size 显式传入的宽高版本。
         [self wk_relayoutNavigationBarForWidth:size.width];
-        [self layoutFixedHeader];
+        [self layoutFixedHeaderForSize:size];
+        [self refreshTitleForWidth:size.width];
         return;
     }
     __weak typeof(self) weakSelf = self;
     [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
         [weakSelf wk_relayoutNavigationBarForWidth:size.width];
-        [weakSelf layoutFixedHeader];
+        [weakSelf layoutFixedHeaderForSize:size];
+        [weakSelf refreshTitleForWidth:size.width];
     } completion:nil];
 }
 
