@@ -25,6 +25,7 @@ static CGFloat const kCellHeight = 44;
 @property (nonatomic, strong) UITableView *tableView;
 @property (nonatomic, strong) NSArray *tableData;
 @property (nonatomic, assign) CGPoint trianglePoint;
+@property (nonatomic, weak) UIWindow *hostWindow;
 @property (nonatomic, copy) void(^action)(NSInteger index);
 @end
 
@@ -33,11 +34,22 @@ static CGFloat const kCellHeight = 44;
 - (instancetype)initWithItems:(NSArray <NSDictionary *>*)array
                         width:(CGFloat)width
              triangleLocation:(CGPoint)point
+                       window:(UIWindow *)window
                        action:(void(^)(NSInteger index))action
 {
     if (array.count == 0) return nil;
     if (self = [super init]) {
-        self.frame = [UIScreen mainScreen].bounds;
+        // 遮罩尺寸用触发按钮所在 window 的 bounds,而不是 [UIScreen mainScreen].bounds:
+        // Info.plist 没有 UIRequiresFullScreen,Split View / Slide Over / Stage Manager 下
+        // app 只占屏幕一部分,屏幕尺寸会高估可用区域,遮罩和下面按 winW 反推的菜单锚点就会
+        // 跟真实按钮位置脱节。要贴合的是 window,不是 screen。
+        // (注: UIScreen.bounds 自 iOS 8 起是跟随界面方向的,不存在"被冻结在竖屏宽度";
+        //  方向无关的是 nativeBounds / fixedCoordinateSpace。别把这里的理由写成方向问题。)
+        // 调用方只传一次 window(通常是按钮自己的 .window),这里和 show 里都直接用它,
+        // 不再各自独立查一遍 keyWindow。
+        UIWindow *hostWindow = window ?: [UIApplication sharedApplication].keyWindow;
+        self.hostWindow = hostWindow;
+        self.frame = hostWindow ? hostWindow.bounds : [UIScreen mainScreen].bounds;
         self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.2];
         self.alpha = 0;
         _tableData = [array copy];
@@ -63,10 +75,23 @@ static CGFloat const kCellHeight = 44;
         const CGFloat titleRightMargin = 12;
         CGFloat bucketWidth = ceil(maxTextWidth + titleStart + titleRightMargin);
         CGFloat finalWidth = MAX(width, bucketWidth);
-        finalWidth = MIN(finalWidth, SCREEN_WIDTH * 0.8);    // 极端长翻译时让 label 自己截断, 不出屏
+        // 用遮罩自身宽度(= 实际 window 宽度,见 self.frame 赋值)代替 SCREEN_WIDTH,
+        // 理由同上: 分屏下屏幕宽度不等于 app 可用宽度。
+        CGFloat winW = self.bounds.size.width;
+        finalWidth = MIN(finalWidth, winW * 0.8);    // 极端长翻译时让 label 自己截断, 不出屏
+
+        // 菜单位置以传入的 triangleLocation(point.x) 为锚——三角尖点在按钮中心,
+        // 菜单右边缘距三角尖点 25pt(让三角底座 ±10pt 完全落在菜单顶边内部,右侧留 15pt
+        // 呼吸),两侧各留至少 5pt 边距;分屏/横屏下用真实 window 宽度兜底。
+        CGFloat menuRightX = MIN(point.x + 25, winW - 5);
+        CGFloat menuX = MAX(menuRightX - finalWidth, 5);
+        // 三角尖点必须收在菜单"真实"水平范围内。这里必须用 menuX 反推,不能用
+        // menuRightX - finalWidth: menuX 带 5pt 左边界地板,触发按钮极度贴左时两者不相等,
+        // 拿 menuRightX 算就是按一个并不存在的矩形夹取,三角底座 ±10pt 仍会画到菜单外面。
+        _trianglePoint.x = MIN(MAX(point.x, menuX + 10), menuX + finalWidth - 10);
 
         // 创建tableView
-        _tableView = [[UITableView alloc] initWithFrame:CGRectMake(SCREEN_WIDTH - finalWidth - 5, point.y + 10, finalWidth, kCellHeight * array.count) style:UITableViewStylePlain];
+        _tableView = [[UITableView alloc] initWithFrame:CGRectMake(menuX, point.y + 10, finalWidth, kCellHeight * array.count) style:UITableViewStylePlain];
         _tableView.delegate = self;
         _tableView.dataSource = self;
         _tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
@@ -84,9 +109,10 @@ static CGFloat const kCellHeight = 44;
 + (void)showWithItems:(NSArray <NSDictionary *>*)array
                 width:(CGFloat)width
      triangleLocation:(CGPoint)point
+               window:(UIWindow *)window
                action:(void(^)(NSInteger index))action
 {
-    WKPopMenuView *view = [[WKPopMenuView alloc] initWithItems:array width:width triangleLocation:point action:action];
+    WKPopMenuView *view = [[WKPopMenuView alloc] initWithItems:array width:width triangleLocation:point window:window action:action];
     [view show];
 }
 
@@ -104,9 +130,10 @@ static CGFloat const kCellHeight = 44;
 
 #pragma mark - show or hide
 - (void)show {
-    [[UIApplication sharedApplication].keyWindow addSubview:self];
-    // 设置右上角为transform的起点（默认是中心点）
-    _tableView.layer.position = CGPointMake(SCREEN_WIDTH - 5, _trianglePoint.y + 10);
+    [(self.hostWindow ?: [UIApplication sharedApplication].keyWindow) addSubview:self];
+    // anchorPoint = (1,0): position.x 即菜单右边缘;y 即菜单顶边。
+    // 用 menu 自己 frame 的右边缘而不是 SCREEN_WIDTH,确保旋转后菜单仍紧贴三角尖点。
+    _tableView.layer.position = CGPointMake(CGRectGetMaxX(_tableView.frame), _trianglePoint.y + 10);
     // 向右下transform
     _tableView.layer.anchorPoint = CGPointMake(1, 0);
     _tableView.transform = CGAffineTransformMakeScale(0.0001, 0.0001);

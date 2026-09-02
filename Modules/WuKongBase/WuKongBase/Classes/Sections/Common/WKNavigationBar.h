@@ -53,6 +53,12 @@ typedef enum : NSUInteger {
 /// 返回点击
 @property(nonatomic,strong) void(^onBack)(void);
 
+/// 宽度变化(旋转 / iPad 分屏)后按新宽度重排自己: 改自身 frame 宽度,并重新定位
+/// titleLabel / leftView / rightView。WKNavigationBar 没有 layoutSubviews,这些位置都是
+/// 在各自 setter 里按"当时"的宽度算好就定死的,外部只改 frame 不会带动它们。
+/// 不覆盖 subtitleLabel(见实现里的说明)。
+- (void)wk_relayoutForWidth:(CGFloat)width;
+
 @end
 
 NS_ASSUME_NONNULL_END

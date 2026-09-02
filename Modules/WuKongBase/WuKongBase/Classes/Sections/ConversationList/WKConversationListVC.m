@@ -354,7 +354,7 @@
     _chevronView.contentMode = UIViewContentModeScaleAspectFit;
     _chevronView.frame = CGRectMake(0, 0, chevronSize, chevronSize);
 
-    CGFloat maxNameWidth = WKScreenWidth - 16 - avatarSize - gap * 2 - chevronSize - hPad * 2 - 120;
+    CGFloat maxNameWidth = self.view.lim_width - 16 - avatarSize - gap * 2 - chevronSize - hPad * 2 - 120;
     _spaceNameLabel.text = self._title ?: [WKApp shared].config.appName;
     [_spaceNameLabel sizeToFit];
     if (_spaceNameLabel.lim_width > maxNameWidth) {
@@ -513,6 +513,14 @@
 
 -(void) viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+
+    // 兜底: viewWillTransitionToSize 在本 VC 被压在导航栈里(不是最顶层,比如打开了某个
+    // 会话)时不保证会触发(iOS 已知问题, rdar://24277475),压栈期间如果发生了尺寸变化,
+    // 只靠那个回调不会跟着重新布局,返回时 header/tab栏/导航栏就可能还停在旧宽度。
+    // 这里每次页面可见都按当前宽度重新校正一遍,不再只依赖旋转回调这一条路径。
+    // (rdar 那条我没有实测验证;不过这个兜底本身不依赖它成立——重复校正是幂等的。)
+    [self.navigationBar wk_relayoutForWidth:self.view.lim_width];
+    [self layoutFixedHeader];
 
     [self refreshTitle];
     [self hiddenRightItem:NO];
@@ -729,7 +737,7 @@
         addBtn.frame = CGRectMake(0, 0, btnSize, btnSize);
         [addBtn setImage:[self createPlusImage] forState:UIControlStateNormal];
         addBtn.tintColor = [WKApp shared].config.navBarButtonColor;
-        [addBtn addTarget:self action:@selector(rightAddPressed) forControlEvents:UIControlEventTouchUpInside];
+        [addBtn addTarget:self action:@selector(rightAddPressed:) forControlEvents:UIControlEventTouchUpInside];
 
         _rightAddItem = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, itemH)];
         [_rightAddItem addSubview:self.signalContainerView];
@@ -812,11 +820,10 @@
     self.rightView = rightItem;
 }
 
--(void) rightAddPressed {
-    
+-(void) rightAddPressed:(UIButton *)sender {
+
     NSArray<WKConversationAddItem*> *items = [[WKApp shared] invokes:WKPOINT_CATEGORY_CONVERSATION_ADD param:nil];
-    
-    CGFloat statusHeight = [[UIApplication sharedApplication] statusBarFrame].size.height;
+
     NSMutableArray *itemDicts = [NSMutableArray array];
     if(items && items.count>0) {
         for (WKConversationAddItem *item in items) {
@@ -826,7 +833,17 @@
             }];
         }
     }
-    [WKPopMenuView showWithItems:itemDicts width:140.0f triangleLocation:CGPointMake(WKScreenWidth-30, self.navigationController.navigationBar.lim_height + statusHeight-4.0f) action:^(NSInteger index) {
+    // 锚点用"+"按钮自身在 window 坐标里的位置,而不是手算 navBar.height + statusBar.height——
+    // 后者用的是不随旋转刷新的 statusBarFrame 以及可能被隐藏的系统 navigationBar 高度,
+    // 分屏/横屏下会和真正按钮位置差出一个状态栏/导航栏量级。三角尖点对齐按钮下边缘
+    // 外侧 2pt(原逻辑是导航栏下方 -4,视觉位置基本一致,但是现在跟着按钮走)。
+    // 直接用 sender(就是被点的那个"+"按钮),不再回头按 tag 8888 去 rightAddItem 里捞:
+    // rightAddItem 是懒加载 getter,万一 _rightAddItem 已被释放,那条路会重建一份没上屏、
+    // window 为 nil 的层级,菜单会静默锚到 window 左上角而不是响亮地失败。
+    CGRect senderFrameInWindow = [sender convertRect:sender.bounds toView:nil];
+    CGFloat anchorX = CGRectGetMidX(senderFrameInWindow);
+    CGFloat anchorY = CGRectGetMaxY(senderFrameInWindow) + 2.0f;
+    [WKPopMenuView showWithItems:itemDicts width:140.0f triangleLocation:CGPointMake(anchorX, anchorY) window:sender.window action:^(NSInteger index) {
         WKConversationAddItem *item = [items objectAtIndex:index];
         if(item.onClick) {
             item.onClick();
@@ -835,6 +852,13 @@
 }
 
 -(void) refreshTitle{
+    [self refreshTitleForWidth:self.view.lim_width];
+}
+
+// viewWillTransitionToSize 的 nil-coordinator 分支需要在 self.view.bounds 更新到目标宽度
+// 之前就同步刷新 leftView(space 胶囊),这里不能再读 self.view.lim_width(旧值),必须让
+// 调用方显式传入目标宽度。
+-(void) refreshTitleForWidth:(CGFloat)viewWidth {
     [self.connectLock lock];
 
     if (self.currentSpaceName && self.currentSpaceName.length > 0) {
@@ -853,7 +877,7 @@
 
         _spaceNameLabel.text = self._title;
         [_spaceNameLabel sizeToFit];
-        CGFloat maxNameWidth = WKScreenWidth - 16 - avatarSize - gap * 2 - chevronSize - hPad * 2 - 120;
+        CGFloat maxNameWidth = viewWidth - 16 - avatarSize - gap * 2 - chevronSize - hPad * 2 - 120;
         if (_spaceNameLabel.lim_width > maxNameWidth) {
             _spaceNameLabel.lim_width = maxNameWidth;
         }
@@ -1197,10 +1221,10 @@
 /// 创建固定在顶部的搜索栏容器（不随 tableView 滚动）
 -(void) setupFixedHeader {
     CGFloat navBottom = self.navigationBar.lim_bottom;
-    _fixedHeaderContainer = [[UIView alloc] initWithFrame:CGRectMake(0, navBottom, WKScreenWidth, 0)];
+    _fixedHeaderContainer = [[UIView alloc] initWithFrame:CGRectMake(0, navBottom, self.view.lim_width, 0)];
     _fixedHeaderContainer.backgroundColor = [WKApp shared].config.backgroundColor;
 
-    WKSearchbarView *searchbar = [[WKSearchbarView alloc] initWithFrame:CGRectMake(15, 6, WKScreenWidth - 30, 36)];
+    WKSearchbarView *searchbar = [[WKSearchbarView alloc] initWithFrame:CGRectMake(15, 6, self.view.lim_width - 30, 36)];
     searchbar.placeholder = LLang(@"搜索");
     searchbar.layer.masksToBounds = YES;
     searchbar.onClick = ^{
@@ -1214,28 +1238,74 @@
 }
 
 /// 重新布局固定头部（搜索栏 + tabView）并调整 tableView 的 frame
+// 注意: 这里原先用 WKScreenWidth([UIScreen mainScreen].bounds.size.width) 算宽度,改成了
+// 用本 VC 自己 view 的宽度。两条理由,都跟"方向"无关:
+//   1. 屏幕不等于窗口。Info.plist 没有 UIRequiresFullScreen,所以 Split View / Slide Over /
+//      Stage Manager 下 app 只占屏幕的一部分,屏幕宽度会高估可用宽度。要铺满的是 window/view,
+//      不是 screen。
+//   2. 这段布局原先只在 viewDidLoad 链路跑过一次,宽度被烘进各子视图的 frame 后再没重算过——
+//      这是 #85 的直接成因(旋转/分屏后没人重新布局),跟宽度取自哪里无关。
+// 顺便纠正一个容易写反的点: [UIScreen mainScreen].bounds 自 iOS 8 起"是"跟随界面方向的,
+// nativeBounds / fixedCoordinateSpace 才是方向无关的那两个;WKScreenWidth 也是宏,每次调用
+// 都会重新求值。所以别再写"UIScreen.bounds 被冻结在竖屏宽度"这类归因。
 -(void) layoutFixedHeader {
+    [self layoutFixedHeaderForSize:self.view.bounds.size];
+}
+
+// viewWillTransitionToSize 的 nil-coordinator 分支在 self.view.bounds 还没更新到目标尺寸时
+// 就要同步布局,这时不能再读 self.view.lim_width/lim_height(读到的是旋转前的旧值),
+// 必须让调用方把目标 size 显式传进来。
+-(void) layoutFixedHeaderForSize:(CGSize)size {
     CGFloat navBottom = self.navigationBar.lim_bottom;
     CGFloat y = 0;
 
     // 搜索栏（左右 15pt 间距）
     UIView *searchbar = [_fixedHeaderContainer viewWithTag:9990];
     if (searchbar && !searchbar.hidden) {
-        searchbar.frame = CGRectMake(15, y + 6, WKScreenWidth - 30, 36);
+        searchbar.frame = CGRectMake(15, y + 6, size.width - 30, 36);
         y = searchbar.lim_bottom + 6;
     }
 
     // tab 栏
     if (_conversationTabView) {
-        _conversationTabView.frame = CGRectMake(0, y, WKScreenWidth, 44);
+        _conversationTabView.frame = CGRectMake(0, y, size.width, 44);
         y = _conversationTabView.lim_bottom;
     }
 
-    _fixedHeaderContainer.frame = CGRectMake(0, navBottom, WKScreenWidth, y);
+    _fixedHeaderContainer.frame = CGRectMake(0, navBottom, size.width, y);
 
     // 调整 tableView 位置到固定头部下方
     CGFloat tableTop = _fixedHeaderContainer.lim_bottom;
-    self.tableView.frame = CGRectMake(0, tableTop, self.view.lim_width, self.view.lim_height - tableTop);
+    self.tableView.frame = CGRectMake(0, tableTop, size.width, size.height - tableTop);
+}
+
+// iPad 支持分屏,系统不允许通过 supportedInterfaceOrientations 锁方向,只能老实做旋转
+// 自适应布局。这个页面原本没有任何旋转处理:固定头部(搜索栏+tab栏)只在 viewDidLoad
+// 链路里布局过一次,旋转或分屏尺寸变化后没有任何代码再重新布局它,宽度就一直停在首次
+// 布局时的值(见上面 layoutFixedHeader 的注释)。这里补上旋转回调,同时顺带修一下
+// navigationBar 的同类问题(WKNavigationBar 自己没有 layoutSubviews,宽度和
+// title/leftView/rightView 位置都是一次性算好的)。
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    if (!coordinator) {
+        // 防御性分支,未验证: UIKit 把 coordinator 声明为 nonnull,实测的旋转和分屏都带
+        // coordinator,所以这条路走不到。留着是因为 [nil animateAlongsideTransition:...]
+        // 是静默空操作——万一真拿到 nil,下面的 alongside block 永远不会跑,页面就不重排了。
+        // 别把这里当成已验证过的路径。
+        // 注意: 这个分支跑的时候 self.view.bounds 还没更新到 size,不能再让
+        // layoutFixedHeader/refreshTitle 内部去读 self.view.lim_width/lim_height(读到
+        // 的是旋转前的旧值),必须用 size 显式传入的宽高版本。
+        [self.navigationBar wk_relayoutForWidth:size.width];
+        [self layoutFixedHeaderForSize:size];
+        [self refreshTitleForWidth:size.width];
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+        [weakSelf.navigationBar wk_relayoutForWidth:size.width];
+        [weakSelf layoutFixedHeaderForSize:size];
+        [weakSelf refreshTitleForWidth:size.width];
+    } completion:nil];
 }
 
 - (WKConversationListTableView *)tableView{
@@ -2404,7 +2474,7 @@
 
 
 -(void) setupConversationTabView {
-    _conversationTabView = [[WKConversationTabView alloc] initWithFrame:CGRectMake(0, 0, WKScreenWidth, 44)];
+    _conversationTabView = [[WKConversationTabView alloc] initWithFrame:CGRectMake(0, 0, self.view.lim_width, 44)];
     _conversationTabView.selectedIndex = _conversationListVM.filterType;
 
     __weak typeof(self) weakSelf = self;
