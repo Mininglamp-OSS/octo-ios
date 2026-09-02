@@ -518,7 +518,8 @@
     // 会话)时不保证会触发(iOS 已知问题, rdar://24277475),压栈期间如果发生了尺寸变化,
     // 只靠那个回调不会跟着重新布局,返回时 header/tab栏/导航栏就可能还停在旧宽度。
     // 这里每次页面可见都按当前宽度重新校正一遍,不再只依赖旋转回调这一条路径。
-    [self wk_relayoutNavigationBarForWidth:self.view.lim_width];
+    // (rdar 那条我没有实测验证;不过这个兜底本身不依赖它成立——重复校正是幂等的。)
+    [self.navigationBar wk_relayoutForWidth:self.view.lim_width];
     [self layoutFixedHeader];
 
     [self refreshTitle];
@@ -736,7 +737,7 @@
         addBtn.frame = CGRectMake(0, 0, btnSize, btnSize);
         [addBtn setImage:[self createPlusImage] forState:UIControlStateNormal];
         addBtn.tintColor = [WKApp shared].config.navBarButtonColor;
-        [addBtn addTarget:self action:@selector(rightAddPressed) forControlEvents:UIControlEventTouchUpInside];
+        [addBtn addTarget:self action:@selector(rightAddPressed:) forControlEvents:UIControlEventTouchUpInside];
 
         _rightAddItem = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 200, itemH)];
         [_rightAddItem addSubview:self.signalContainerView];
@@ -819,7 +820,7 @@
     self.rightView = rightItem;
 }
 
--(void) rightAddPressed {
+-(void) rightAddPressed:(UIButton *)sender {
 
     NSArray<WKConversationAddItem*> *items = [[WKApp shared] invokes:WKPOINT_CATEGORY_CONVERSATION_ADD param:nil];
 
@@ -834,15 +835,15 @@
     }
     // 锚点用"+"按钮自身在 window 坐标里的位置,而不是手算 navBar.height + statusBar.height——
     // 后者用的是不随旋转刷新的 statusBarFrame 以及可能被隐藏的系统 navigationBar 高度,
-    // iPad 横屏/分屏下会和真正按钮位置差出一个状态栏/导航栏量级。三角尖点对齐按钮下边缘
+    // 分屏/横屏下会和真正按钮位置差出一个状态栏/导航栏量级。三角尖点对齐按钮下边缘
     // 外侧 2pt(原逻辑是导航栏下方 -4,视觉位置基本一致,但是现在跟着按钮走)。
-    // addBtn 就是触发这个 action 的按钮本身(tag 8888,见 setupRightItems),必然存在,
-    // 不需要 nil 兜底分支。
-    UIView *addBtn = [self.rightAddItem viewWithTag:8888];
-    CGRect addBtnFrameInWindow = [addBtn convertRect:addBtn.bounds toView:nil];
-    CGFloat anchorX = CGRectGetMidX(addBtnFrameInWindow);
-    CGFloat anchorY = CGRectGetMaxY(addBtnFrameInWindow) + 2.0f;
-    [WKPopMenuView showWithItems:itemDicts width:140.0f triangleLocation:CGPointMake(anchorX, anchorY) window:addBtn.window action:^(NSInteger index) {
+    // 直接用 sender(就是被点的那个"+"按钮),不再回头按 tag 8888 去 rightAddItem 里捞:
+    // rightAddItem 是懒加载 getter,万一 _rightAddItem 已被释放,那条路会重建一份没上屏、
+    // window 为 nil 的层级,菜单会静默锚到 window 左上角而不是响亮地失败。
+    CGRect senderFrameInWindow = [sender convertRect:sender.bounds toView:nil];
+    CGFloat anchorX = CGRectGetMidX(senderFrameInWindow);
+    CGFloat anchorY = CGRectGetMaxY(senderFrameInWindow) + 2.0f;
+    [WKPopMenuView showWithItems:itemDicts width:140.0f triangleLocation:CGPointMake(anchorX, anchorY) window:sender.window action:^(NSInteger index) {
         WKConversationAddItem *item = [items objectAtIndex:index];
         if(item.onClick) {
             item.onClick();
@@ -1237,10 +1238,16 @@
 }
 
 /// 重新布局固定头部（搜索栏 + tabView）并调整 tableView 的 frame
-// 注意: 这里原先用 WKScreenWidth([UIScreen mainScreen].bounds.size.width) 算宽度——
-// iOS 8 之后 UIScreen.bounds 不随界面方向旋转,永远是竖屏原始宽度,iPad 横屏时
-// 搜索栏/tab 栏/固定头部容器会停在竖屏宽度不铺满。改用 self.view.lim_width(旋转后
-// 会随 viewWillTransitionToSize 触发的重新布局实时更新)。
+// 注意: 这里原先用 WKScreenWidth([UIScreen mainScreen].bounds.size.width) 算宽度,改成了
+// 用本 VC 自己 view 的宽度。两条理由,都跟"方向"无关:
+//   1. 屏幕不等于窗口。Info.plist 没有 UIRequiresFullScreen,所以 Split View / Slide Over /
+//      Stage Manager 下 app 只占屏幕的一部分,屏幕宽度会高估可用宽度。要铺满的是 window/view,
+//      不是 screen。
+//   2. 这段布局原先只在 viewDidLoad 链路跑过一次,宽度被烘进各子视图的 frame 后再没重算过——
+//      这是 #85 的直接成因(旋转/分屏后没人重新布局),跟宽度取自哪里无关。
+// 顺便纠正一个容易写反的点: [UIScreen mainScreen].bounds 自 iOS 8 起"是"跟随界面方向的,
+// nativeBounds / fixedCoordinateSpace 才是方向无关的那两个;WKScreenWidth 也是宏,每次调用
+// 都会重新求值。所以别再写"UIScreen.bounds 被冻结在竖屏宽度"这类归因。
 -(void) layoutFixedHeader {
     [self layoutFixedHeaderForSize:self.view.bounds.size];
 }
@@ -1274,45 +1281,31 @@
 
 // iPad 支持分屏,系统不允许通过 supportedInterfaceOrientations 锁方向,只能老实做旋转
 // 自适应布局。这个页面原本没有任何旋转处理:固定头部(搜索栏+tab栏)只在 viewDidLoad
-// 链路里布局过一次,旋转后不会再重新走 layoutFixedHeader,加上其内部又用了不随方向变化
-// 的 WKScreenWidth(见上面 layoutFixedHeader 的注释),导致横屏时除了系统 UITabBar
-// 之外的内容全部停在竖屏宽度。这里补上旋转回调,同时顺带修一下 navigationBar 的同类问题
-// (WKNavigationBar 自己没有 layoutSubviews,宽度和 title/rightView 位置都是一次性算好的)。
+// 链路里布局过一次,旋转或分屏尺寸变化后没有任何代码再重新布局它,宽度就一直停在首次
+// 布局时的值(见上面 layoutFixedHeader 的注释)。这里补上旋转回调,同时顺带修一下
+// navigationBar 的同类问题(WKNavigationBar 自己没有 layoutSubviews,宽度和
+// title/leftView/rightView 位置都是一次性算好的)。
 - (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
     [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
     if (!coordinator) {
-        // 有些 iPad 分屏尺寸变化不带 transition coordinator,
-        // [nil animateAlongsideTransition:...] 是静默空操作,alongside block 永远不会跑,
-        // 必须在这里直接同步重新布局,不能只依赖下面的 alongside 路径。
+        // 防御性分支,未验证: UIKit 把 coordinator 声明为 nonnull,实测的旋转和分屏都带
+        // coordinator,所以这条路走不到。留着是因为 [nil animateAlongsideTransition:...]
+        // 是静默空操作——万一真拿到 nil,下面的 alongside block 永远不会跑,页面就不重排了。
+        // 别把这里当成已验证过的路径。
         // 注意: 这个分支跑的时候 self.view.bounds 还没更新到 size,不能再让
         // layoutFixedHeader/refreshTitle 内部去读 self.view.lim_width/lim_height(读到
         // 的是旋转前的旧值),必须用 size 显式传入的宽高版本。
-        [self wk_relayoutNavigationBarForWidth:size.width];
+        [self.navigationBar wk_relayoutForWidth:size.width];
         [self layoutFixedHeaderForSize:size];
         [self refreshTitleForWidth:size.width];
         return;
     }
     __weak typeof(self) weakSelf = self;
     [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
-        [weakSelf wk_relayoutNavigationBarForWidth:size.width];
+        [weakSelf.navigationBar wk_relayoutForWidth:size.width];
         [weakSelf layoutFixedHeaderForSize:size];
         [weakSelf refreshTitleForWidth:size.width];
     } completion:nil];
-}
-
-// navigationBar 的 title/rightView 位置都是在各自 setter 里按"当时"的 self.lim_width 算好
-// 就定死,不会随外部 frame 变化自动重排。这里只改它自己的宽度,再用同一份值重新触发一遍
-// title/rightView 的 setter,逼它们按新宽度重新居中/靠右——不在这里重复实现 WKNavigationBar
-// 内部那套定位公式,避免两处代码各算一遍、以后改了一处忘了另一处。
-- (void)wk_relayoutNavigationBarForWidth:(CGFloat)width {
-    CGRect frame = self.navigationBar.frame;
-    if (frame.size.width == width) return;
-    frame.size.width = width;
-    self.navigationBar.frame = frame;
-    self.navigationBar.title = self.navigationBar.title;
-    if (self.navigationBar.rightView) {
-        self.navigationBar.rightView = self.navigationBar.rightView;
-    }
 }
 
 - (WKConversationListTableView *)tableView{
@@ -1432,7 +1425,7 @@
 
 - (UIView *)networkErroView {
     if(!_networkErroView) {
-        _networkErroView = [[UIView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, self.view.lim_width, networkErrorViewHeight)];
+        _networkErroView = [[UIView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, WKScreenWidth, networkErrorViewHeight)];
         UIImageView *warnIcon = [[UIImageView alloc] initWithFrame:CGRectMake(20.0f, 0.0f, 26.0f, 26.0f)];
         [warnIcon setImage:[self imageName:@"ConversationList/Index/NetworkStatusFail"]];
         warnIcon.lim_top = _networkErroView.lim_height/2.0f - warnIcon.lim_height/2.0f;

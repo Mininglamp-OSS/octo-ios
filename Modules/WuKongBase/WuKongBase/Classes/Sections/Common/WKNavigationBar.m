@@ -121,12 +121,32 @@
 }
 
 
-// 注意: 外部(WKConversationListVC 的 wk_relayoutNavigationBarForWidth:)靠重新赋值同一个
-// title 触发这里的重新居中逻辑,来在旋转后刷新 titleLabel 位置——这个 setter 不能加
-// "值没变就 return" 的早退,否则那条旋转刷新链路会失效。
+// 宽度变化后重排自己。外部(旋转/分屏回调)只需要调这一个方法,不要靠"重新赋值同一个
+// title/rightView"去触发 setter 副作用——那种写法会把 setter 永久锁死在"不能加幂等早退"
+// 的状态上,而这是个全模块共用的类。定位公式统一放在下面三个 wk_position* 里,setter 和
+// 这里共用同一份实现。
+//
+// 未覆盖: subtitleLabel。它在 setSubtitle: 里用 WKScreenWidth/2 居中(同一族的老毛病:
+// 用屏幕宽而不是自己的宽,且只算一次),但本页面不用 subtitle,这个 PR 不扩范围,另开处理。
+- (void)wk_relayoutForWidth:(CGFloat)width {
+    if (width <= 0) return;
+    CGRect frame = self.frame;
+    if (frame.size.width != width) {
+        frame.size.width = width;
+        self.frame = frame;
+    }
+    [self wk_positionTitleLabel];
+    [self wk_positionLeftView];
+    [self wk_positionRightView];
+}
+
 - (void)setTitle:(NSString *)title {
     _title = title;
     self.titleLabel.text = title;
+    [self wk_positionTitleLabel];
+}
+
+- (void)wk_positionTitleLabel {
     [self.titleLabel sizeToFit];
 
     if(self.titleLabel.lim_width>titleMaxWidth) {
@@ -140,23 +160,24 @@
     }
     CGFloat statusHeight = [UIApplication sharedApplication].statusBarFrame.size.height;
     self.titleLabel.lim_top = (self.lim_height - statusHeight)/2.0f - self.titleLabel.lim_height/2.0f + statusHeight;
-
-
 }
 
 - (void)setLeftView:(UIView *)leftView {
+    // 传进来的就是当前这个 leftView 时只重定位,不摘下来重挂: removeFromSuperview +
+    // addSubview 会把它挪到 nav bar 的最前面(z-order 变化,长标题会盖住右侧按钮),
+    // 旋转期间每次重排都做一遍完全没必要。
+    if (leftView && leftView == _leftView) {
+        [self wk_positionLeftView];
+        self.titleLabel.hidden = YES;
+        return;
+    }
     if (_leftView) {
         [_leftView removeFromSuperview];
         _leftView = nil;
     }
     if (leftView) {
         _leftView = leftView;
-        CGFloat statusHeight = [UIApplication sharedApplication].statusBarFrame.size.height;
-        if (_leftView.lim_height == 0) {
-            _leftView.lim_height = self.lim_height - statusHeight;
-        }
-        _leftView.lim_left = 16.0f;
-        _leftView.lim_top = (self.lim_height - statusHeight) / 2.0f - _leftView.lim_height / 2.0f + statusHeight;
+        [self wk_positionLeftView];
         [self addSubview:_leftView];
         self.titleLabel.hidden = YES;
     } else {
@@ -164,11 +185,24 @@
     }
 }
 
-// 注意: 同 setTitle 一样,wk_relayoutNavigationBarForWidth: 靠重新赋值同一个 rightView
-// 触发下面的重新定位逻辑来在旋转后刷新位置——不能加"跟 _rightView 相同就 return"的早退。
+- (void)wk_positionLeftView {
+    if (!_leftView) return;
+    CGFloat statusHeight = [UIApplication sharedApplication].statusBarFrame.size.height;
+    if (_leftView.lim_height == 0) {
+        _leftView.lim_height = self.lim_height - statusHeight;
+    }
+    _leftView.lim_left = 16.0f;
+    _leftView.lim_top = (self.lim_height - statusHeight) / 2.0f - _leftView.lim_height / 2.0f + statusHeight;
+}
+
 - (void)setRightView:(UIView *)rightView {
     if(!rightView) {
         rightView = [[UIView alloc] init];
+    }
+    // 同 setLeftView:,同一个 view 只重定位不重挂。
+    if(rightView == _rightView) {
+        [self wk_positionRightView];
+        return;
     }
     if(_rightView) {
         [_rightView removeFromSuperview];
@@ -177,23 +211,26 @@
     if(rightView) {
         _rightView = rightView;
        // [_rightView setBackgroundColor:[UIColor clearColor]];
-        
-        CGFloat statusHeight = [UIApplication sharedApplication].statusBarFrame.size.height;
-        if(_rightView.lim_height==0) {
-            _rightView.lim_height = self.lim_height - statusHeight;
-        }
-        
-        if(_rightView.lim_width<=0) {
-            _rightView.lim_width = _rightView.lim_height;
-        }
-        
-        _rightView.lim_left = self.lim_width - _rightView.lim_width - 20.0f;
-         
-         _rightView.lim_top = (self.lim_height - statusHeight)/2.0f - _rightView.lim_height/2.0f + statusHeight;
-        
-       
+        [self wk_positionRightView];
         [self addSubview:_rightView];
     }
+}
+
+- (void)wk_positionRightView {
+    if(!_rightView) return;
+
+    CGFloat statusHeight = [UIApplication sharedApplication].statusBarFrame.size.height;
+    if(_rightView.lim_height==0) {
+        _rightView.lim_height = self.lim_height - statusHeight;
+    }
+
+    if(_rightView.lim_width<=0) {
+        _rightView.lim_width = _rightView.lim_height;
+    }
+
+    _rightView.lim_left = self.lim_width - _rightView.lim_width - 20.0f;
+
+    _rightView.lim_top = (self.lim_height - statusHeight)/2.0f - _rightView.lim_height/2.0f + statusHeight;
 }
 
 - (void)setShowBackButton:(BOOL)showBackButton {
