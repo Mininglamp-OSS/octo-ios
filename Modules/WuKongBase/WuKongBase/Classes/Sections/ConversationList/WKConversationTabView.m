@@ -166,33 +166,41 @@ static CGFloat const kBadgeSize = 16.0f;
 }
 
 - (void)layoutBadges {
-    [self layoutTabButton:_followBtn badge:_followBadge];
-    [self layoutTabButton:_recentBtn badge:_recentBadge];
+    // 两个 tab 的标题要水平对称——titleEdgeInsets 的偏移量必须两侧一致,
+    // 否则只有一侧有未读 badge 时,该侧标题被 badge 顶开左偏,另一侧仍居中,
+    // "关注"/"最近"在各自半宽里的位置就对不齐(竖屏下可见,横屏更明显)。
+    // 取两侧 badge 占位宽度的最大值,两边都按同一个值退让;有 badge 的一侧
+    // badge 从真实标题右边缘贴上去,没 badge 的一侧标题微左移半格,但两边对齐。
+    CGFloat followExtra = [self badgeExtra:_followBadge];
+    CGFloat recentExtra = [self badgeExtra:_recentBadge];
+    CGFloat sharedExtra = MAX(followExtra, recentExtra);
+    CGFloat sharedOffset = -sharedExtra / 2.0f;
+
+    for (UIButton *btn in @[_followBtn, _recentBtn]) {
+        btn.titleEdgeInsets = UIEdgeInsetsMake(0, sharedOffset, 0, -sharedOffset);
+    }
+    [_followBtn layoutIfNeeded];
+    [_recentBtn layoutIfNeeded];
+
+    [self placeBadge:_followBadge onButton:_followBtn offset:sharedOffset];
+    [self placeBadge:_recentBadge onButton:_recentBtn offset:sharedOffset];
 }
 
-- (void)layoutTabButton:(UIButton *)btn badge:(UILabel *)badge {
-    // badge 占用宽度：用于 titleEdgeInsets 把"标题 + badge"整体居中。
-    CGFloat extra = 0;
-    if (!badge.hidden) {
-        [badge sizeToFit];
-        extra = 2 + MAX(badge.bounds.size.width + 6, kBadgeSize);
-    }
+- (CGFloat)badgeExtra:(UILabel *)badge {
+    if (badge.hidden) return 0.0f;
+    [badge sizeToFit];
+    return 2 + MAX(badge.bounds.size.width + 6, kBadgeSize);
+}
 
-    CGFloat offset = -extra / 2.0f;
-    btn.titleEdgeInsets = UIEdgeInsetsMake(0, offset, 0, -offset);
-    [btn layoutIfNeeded];
-
-    if (!badge.hidden) {
-        NSString *title = btn.titleLabel.text ?: @"";
-        UIFont *font = btn.titleLabel.font;
-        CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
-        CGFloat titleRight = CGRectGetMidX(btn.frame) + offset + textW / 2.0f;
-        // badge 纵向跟"关注/最近"文字基线/中心齐平：button.titleLabel.centerY ≈ button.centerY，
-        // 直接以按钮中心为锚，不要再上移，否则视觉上漂在标题上方。
-        CGFloat textCenterY = CGRectGetMidY(btn.frame);
-        CGFloat badgeW = MAX(badge.bounds.size.width + 6, kBadgeSize);
-        badge.frame = CGRectMake(titleRight + 2, textCenterY - kBadgeSize / 2.0f, badgeW, kBadgeSize);
-    }
+- (void)placeBadge:(UILabel *)badge onButton:(UIButton *)btn offset:(CGFloat)offset {
+    if (badge.hidden) return;
+    NSString *title = btn.titleLabel.text ?: @"";
+    UIFont *font = btn.titleLabel.font;
+    CGFloat textW = [title sizeWithAttributes:@{NSFontAttributeName: font}].width;
+    CGFloat titleRight = CGRectGetMidX(btn.frame) + offset + textW / 2.0f;
+    CGFloat textCenterY = CGRectGetMidY(btn.frame);
+    CGFloat badgeW = MAX(badge.bounds.size.width + 6, kBadgeSize);
+    badge.frame = CGRectMake(titleRight + 2, textCenterY - kBadgeSize / 2.0f, badgeW, kBadgeSize);
 }
 
 #pragma mark - Actions

@@ -37,7 +37,11 @@ static CGFloat const kCellHeight = 44;
 {
     if (array.count == 0) return nil;
     if (self = [super init]) {
-        self.frame = [UIScreen mainScreen].bounds;
+        // 用 keyWindow 的实际 bounds 而不是 [UIScreen mainScreen].bounds——后者是竖屏原生
+        // 宽度,不随界面方向刷新,iPad 横屏下遮罩和下面的菜单锚点都会按错误的窄宽度算,
+        // 跟已经移到真实横屏右边缘的触发按钮脱节。
+        UIWindow *keyWin = [UIApplication sharedApplication].keyWindow;
+        self.frame = keyWin ? keyWin.bounds : [UIScreen mainScreen].bounds;
         self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.2];
         self.alpha = 0;
         _tableData = [array copy];
@@ -63,10 +67,21 @@ static CGFloat const kCellHeight = 44;
         const CGFloat titleRightMargin = 12;
         CGFloat bucketWidth = ceil(maxTextWidth + titleStart + titleRightMargin);
         CGFloat finalWidth = MAX(width, bucketWidth);
-        finalWidth = MIN(finalWidth, SCREEN_WIDTH * 0.8);    // 极端长翻译时让 label 自己截断, 不出屏
+        // 用遮罩自身宽度(= 实际 window 宽度,见 self.frame 赋值)代替不旋转的
+        // SCREEN_WIDTH,否则 iPad 横屏下菜单会锚在竖屏窄宽度上远离按钮。
+        CGFloat winW = self.bounds.size.width;
+        finalWidth = MIN(finalWidth, winW * 0.8);    // 极端长翻译时让 label 自己截断, 不出屏
+
+        // 菜单位置以传入的 triangleLocation(point.x) 为锚——三角尖点在按钮中心,
+        // 菜单右边缘距三角尖点 25pt(让三角底座 ±10pt 完全落在菜单顶边内部,右侧留 15pt
+        // 呼吸),两侧各留至少 5pt 边距;iPad 横屏/分屏下用真实 window 宽度兜底,
+        // 不再锚死在竖屏 SCREEN_WIDTH 上。
+        CGFloat menuRightX = MIN(point.x + 25, winW - 5);
+        CGFloat menuX = MAX(menuRightX - finalWidth, 5);
+        menuRightX = menuX + finalWidth;
 
         // 创建tableView
-        _tableView = [[UITableView alloc] initWithFrame:CGRectMake(SCREEN_WIDTH - finalWidth - 5, point.y + 10, finalWidth, kCellHeight * array.count) style:UITableViewStylePlain];
+        _tableView = [[UITableView alloc] initWithFrame:CGRectMake(menuX, point.y + 10, finalWidth, kCellHeight * array.count) style:UITableViewStylePlain];
         _tableView.delegate = self;
         _tableView.dataSource = self;
         _tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
@@ -105,8 +120,9 @@ static CGFloat const kCellHeight = 44;
 #pragma mark - show or hide
 - (void)show {
     [[UIApplication sharedApplication].keyWindow addSubview:self];
-    // 设置右上角为transform的起点（默认是中心点）
-    _tableView.layer.position = CGPointMake(SCREEN_WIDTH - 5, _trianglePoint.y + 10);
+    // anchorPoint = (1,0): position.x 即菜单右边缘;y 即菜单顶边。
+    // 用 menu 自己 frame 的右边缘而不是 SCREEN_WIDTH,确保旋转后菜单仍紧贴三角尖点。
+    _tableView.layer.position = CGPointMake(CGRectGetMaxX(_tableView.frame), _trianglePoint.y + 10);
     // 向右下transform
     _tableView.layer.anchorPoint = CGPointMake(1, 0);
     _tableView.transform = CGAffineTransformMakeScale(0.0001, 0.0001);

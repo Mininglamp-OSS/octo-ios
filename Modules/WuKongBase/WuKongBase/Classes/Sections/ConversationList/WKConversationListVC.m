@@ -354,7 +354,7 @@
     _chevronView.contentMode = UIViewContentModeScaleAspectFit;
     _chevronView.frame = CGRectMake(0, 0, chevronSize, chevronSize);
 
-    CGFloat maxNameWidth = WKScreenWidth - 16 - avatarSize - gap * 2 - chevronSize - hPad * 2 - 120;
+    CGFloat maxNameWidth = self.view.lim_width - 16 - avatarSize - gap * 2 - chevronSize - hPad * 2 - 120;
     _spaceNameLabel.text = self._title ?: [WKApp shared].config.appName;
     [_spaceNameLabel sizeToFit];
     if (_spaceNameLabel.lim_width > maxNameWidth) {
@@ -820,10 +820,9 @@
 }
 
 -(void) rightAddPressed {
-    
+
     NSArray<WKConversationAddItem*> *items = [[WKApp shared] invokes:WKPOINT_CATEGORY_CONVERSATION_ADD param:nil];
-    
-    CGFloat statusHeight = [[UIApplication sharedApplication] statusBarFrame].size.height;
+
     NSMutableArray *itemDicts = [NSMutableArray array];
     if(items && items.count>0) {
         for (WKConversationAddItem *item in items) {
@@ -833,7 +832,16 @@
             }];
         }
     }
-    [WKPopMenuView showWithItems:itemDicts width:140.0f triangleLocation:CGPointMake(WKScreenWidth-30, self.navigationController.navigationBar.lim_height + statusHeight-4.0f) action:^(NSInteger index) {
+    // 锚点用"+"按钮自身在 window 坐标里的位置,而不是手算 navBar.height + statusBar.height——
+    // 后者用的是不随旋转刷新的 statusBarFrame 以及可能被隐藏的系统 navigationBar 高度,
+    // iPad 横屏/分屏下会和真正按钮位置差出一个状态栏/导航栏量级。三角尖点对齐按钮下边缘
+    // 外侧 2pt(原逻辑是导航栏下方 -4,视觉位置基本一致,但是现在跟着按钮走)。
+    UIView *addBtn = [self.rightAddItem viewWithTag:8888];
+    CGRect addBtnFrameInWindow = addBtn ? [addBtn convertRect:addBtn.bounds toView:nil] : CGRectZero;
+    CGFloat anchorX = addBtn ? CGRectGetMidX(addBtnFrameInWindow) : WKScreenWidth - 30;
+    CGFloat anchorY = addBtn ? CGRectGetMaxY(addBtnFrameInWindow) + 2.0f
+                             : self.navigationController.navigationBar.lim_height + [[UIApplication sharedApplication] statusBarFrame].size.height - 4.0f;
+    [WKPopMenuView showWithItems:itemDicts width:140.0f triangleLocation:CGPointMake(anchorX, anchorY) action:^(NSInteger index) {
         WKConversationAddItem *item = [items objectAtIndex:index];
         if(item.onClick) {
             item.onClick();
@@ -860,7 +868,7 @@
 
         _spaceNameLabel.text = self._title;
         [_spaceNameLabel sizeToFit];
-        CGFloat maxNameWidth = WKScreenWidth - 16 - avatarSize - gap * 2 - chevronSize - hPad * 2 - 120;
+        CGFloat maxNameWidth = self.view.lim_width - 16 - avatarSize - gap * 2 - chevronSize - hPad * 2 - 120;
         if (_spaceNameLabel.lim_width > maxNameWidth) {
             _spaceNameLabel.lim_width = maxNameWidth;
         }
@@ -1257,6 +1265,14 @@
 // (WKNavigationBar 自己没有 layoutSubviews,宽度和 title/rightView 位置都是一次性算好的)。
 - (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
     [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+    if (!coordinator) {
+        // 有些 iPad 分屏尺寸变化不带 transition coordinator,
+        // [nil animateAlongsideTransition:...] 是静默空操作,alongside block 永远不会跑,
+        // 必须在这里直接同步重新布局,不能只依赖下面的 alongside 路径。
+        [self wk_relayoutNavigationBarForWidth:size.width];
+        [self layoutFixedHeader];
+        return;
+    }
     __weak typeof(self) weakSelf = self;
     [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
         [weakSelf wk_relayoutNavigationBarForWidth:size.width];
@@ -1396,7 +1412,7 @@
 
 - (UIView *)networkErroView {
     if(!_networkErroView) {
-        _networkErroView = [[UIView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, WKScreenWidth, networkErrorViewHeight)];
+        _networkErroView = [[UIView alloc] initWithFrame:CGRectMake(0.0f, 0.0f, self.view.lim_width, networkErrorViewHeight)];
         UIImageView *warnIcon = [[UIImageView alloc] initWithFrame:CGRectMake(20.0f, 0.0f, 26.0f, 26.0f)];
         [warnIcon setImage:[self imageName:@"ConversationList/Index/NetworkStatusFail"]];
         warnIcon.lim_top = _networkErroView.lim_height/2.0f - warnIcon.lim_height/2.0f;
@@ -2445,7 +2461,7 @@
 
 
 -(void) setupConversationTabView {
-    _conversationTabView = [[WKConversationTabView alloc] initWithFrame:CGRectMake(0, 0, WKScreenWidth, 44)];
+    _conversationTabView = [[WKConversationTabView alloc] initWithFrame:CGRectMake(0, 0, self.view.lim_width, 44)];
     _conversationTabView.selectedIndex = _conversationListVM.filterType;
 
     __weak typeof(self) weakSelf = self;
