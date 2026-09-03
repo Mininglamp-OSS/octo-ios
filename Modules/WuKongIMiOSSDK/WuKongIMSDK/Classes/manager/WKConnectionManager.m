@@ -1077,10 +1077,15 @@ didCompleteWithError:(NSError *)error {
             // 顺序参考 teardownWS: 先把 self.wsTask 置 nil，再 cancel，让延迟的
             // didClose:/didCompleteWithError: 走 `task != self.wsTask` 早返，不会重复走
             // handleWSDisconnect（幂等）。
+            // close code 用 GoingAway (1001) 与 teardownWS 一致；1006 (AbnormalClosure) 是
+            // RFC 6455 保留码，endpoint 不允许在 Close frame 中主动发送。
             strongSelf.wsTask = nil;
             @try {
-                [probedTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeAbnormalClosure reason:nil];
-            } @catch (__unused NSException *ex) {}
+                [probedTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeGoingAway reason:nil];
+            } @catch (NSException *ex) {
+                NSLog(@"probeLiveness: cancelWithCloseCode threw %@ (name=%@ reason=%@); task 可能未被取消，将回退依赖 handleWSDisconnectWithError 的 session invalidate",
+                      ex, ex.name, ex.reason);
+            }
             NSError *err = [NSError errorWithDomain:@"WKLivenessProbeTimeout" code:408 userInfo:@{
                 NSLocalizedDescriptionKey: @"前台 liveness probe 未收到 pong，判定假在线并强制重连"
             }];
