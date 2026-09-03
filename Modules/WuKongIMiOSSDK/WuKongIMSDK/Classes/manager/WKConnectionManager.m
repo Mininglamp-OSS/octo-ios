@@ -1031,5 +1031,46 @@ didCompleteWithError:(NSError *)error {
     });
 }
 
+- (void)probeLiveness:(NSTimeInterval)timeout complete:(void (^)(BOOL alive, NSError * __nullable))complete {
+    WKConnectStatus status = self.connectStatus;
+
+    // Case A：状态机认为已连接——可能是真在线，也可能是"假在线"（iOS 后台 NSTimer 冻结
+    // 期间服务端已踢连接，本地状态未变）。发一个 ping，若 timeout 内 lastMsgTimeInterval
+    // 未推进（server 没回 pong、也没有别的入站消息），则强制走 handleWSDisconnectWithError:
+    // 触发断开 + backoffReconnect，重连握手成功后 SDK 内部自动跑 syncConversations。
+    if(status == WKConnected) {
+        NSTimeInterval baseline = self.lastMsgTimeInterval;
+        [self sendPing];
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(timeout * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if(!strongSelf) { return; }
+            if(strongSelf.lastMsgTimeInterval > baseline) {
+                // 收到 pong 或其他入站消息，连接活着
+                if(complete) { complete(YES, nil); }
+                return;
+            }
+            NSError *err = [NSError errorWithDomain:@"WKLivenessProbeTimeout" code:408 userInfo:@{
+                NSLocalizedDescriptionKey: @"前台 liveness probe 未收到 pong，判定假在线并强制重连"
+            }];
+            NSLog(@"probeLiveness: no pong within %.1fs, forcing reconnect (前台假在线)", timeout);
+            [strongSelf handleWSDisconnectWithError:err];
+            if(complete) { complete(NO, err); }
+        });
+        return;
+    }
+
+    // Case B：握手 / 离线拉取 in flight，SDK 会自然完成，不打扰——避免 teardown 正在拉取
+    // 的 WebSocket 造成 status flapping / 双 sync。
+    if(status == WKConnecting || status == WKPullingOffline) {
+        if(complete) { complete(NO, nil); }
+        return;
+    }
+
+    // Case C：WKDisconnected / WKNoConnect / 其他——直接 connect。
+    [self connect];
+    if(complete) { complete(NO, nil); }
+}
+
 
 @end
