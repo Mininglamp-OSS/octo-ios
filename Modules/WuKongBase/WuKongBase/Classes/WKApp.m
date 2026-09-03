@@ -17,6 +17,7 @@
 #import "WKLocalNotificationManager.h"
 #import "WKRealnameVerifyManager.h"
 #import <WuKongIMSDK/WuKongIMSDK.h>
+#import <time.h>
 #import "WKMessageRegistry.h"
 #import "WKTextMessageCell.h"
 #import "WKEmojiPanel.h"
@@ -154,6 +155,12 @@ typedef void(^WKOnComplete)(id data,NSError *error);
 @property(nonatomic,assign) BOOL isShowLockScreenProtect; // 是否显示了锁屏密码
 @property(nonatomic,assign) BOOL isShowScreenProtect; // 是否显示屏幕保护
 @property(nonatomic,strong) WKScreenProtectionView *screenProtectionView; // 屏幕保护view
+
+// appDidBecomeActive liveness probe 的防抖时间戳（sleep-inclusive monotonic 纳秒 since boot）。
+// 5 秒窗口内多次前台切换只探测一次。用 CLOCK_MONOTONIC_RAW（sleep-inclusive）而非
+// CACurrentMediaTime()（后者是 CLOCK_UPTIME_RAW，锁屏/睡眠期间不推进——长锁屏后 delta
+// 可能仍 < 5s，会错误抑制回前台的探测）。
+@property(nonatomic,assign) uint64_t lastWakeupAtNs;
 
 
 
@@ -857,9 +864,23 @@ static WKApp *_instance;
     for (WKMessage *typingMsg in [[WKTypingManager shared] getAllTypingMessages]) {
         [[WKTypingManager shared] removeTypingByChannel:typingMsg.channel newMessage:nil];
     }
-    // 连接
-    if([[WKSDK shared] connectionManager].connectStatus == WKDisconnected  && [WKApp shared].isLogined) {
-        [[[WKSDK shared] connectionManager] connect];
+    // 回前台主动做一次连接活性探测：iOS 后台 NSTimer 冻结会让 WKConnectionManager 心跳停发，
+    // 服务端踢连接后本地状态机可能仍停在 WKConnected（假在线），从而错过 SDK 握手成功后的
+    // syncConversations，会话列表停在旧快照直到用户杀 app。走 SDK 的 probeLiveness:——它在
+    // WKConnected 时主动发 ping 等 pong，超时且 socket/状态未被并发替换时显式 cancel wsTask
+    // 并强制重连；在 WKConnecting/WKPullingOffline 期间 early-return 不打扰 in-flight。
+    // 5 秒防抖用 CLOCK_MONOTONIC_RAW（sleep-inclusive，锁屏期间也推进），避免长锁屏后
+    // delta < 5s 抑制探测；也避免设备时钟被回拨/前拨造成误判。
+    if([WKApp shared].isLogined) {
+        uint64_t nowNs = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        if(nowNs - self.lastWakeupAtNs >= 5ULL * NSEC_PER_SEC) {
+            self.lastWakeupAtNs = nowNs;
+            [[[WKSDK shared] connectionManager] probeLiveness:2 complete:^(BOOL alive, NSError *error) {
+                if(error) {
+                    NSLog(@"WKApp probeLiveness on foreground reported: alive=%d error=%@", alive, error);
+                }
+            }];
+        }
     }
     
     if([WKApp shared].config.darkModeWithSystem) {

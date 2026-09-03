@@ -109,6 +109,25 @@ typedef enum : NSUInteger {
  */
 -(void) wakeup:(NSTimeInterval)timeout complete:(void(^__nullable)(NSError * __nullable error))complete;
 
+/**
+ 主动探测连接活性（用于前台恢复等场景，能识别本地状态机停在 WKConnected 但服务端已踢的
+ "假在线"）。
+ - WKConnected：发送 ping，在 timeout 内若 lastMsgTimeInterval 未推进，且被 probe 的
+   wsTask 与 connectStatus 未被并发路径改动，则显式 cancel 该 wsTask 并走
+   handleWSDisconnectWithError: 强制断开 + 自动重连（触发 SDK 内部 syncConversations）。
+   若 timeout 时发现 socket 已被并发 reconnect 替换 / 状态已变，则让那条生命周期继续，
+   不做二次 backoff。
+ - WKConnecting / WKPullingOffline：握手或离线拉取 in flight，不打扰，直接回调 alive=NO。
+ - WKDisconnected / WKNoConnect：直接 connect。
+ 与 wakeup: 的区别：wakeup: 在 WKConnected 时直接 early return，无法识别假在线；
+ probeLiveness: 主动发 ping 验证响应。
+ 契约：complete 回调统一 hop 到 main queue（无论 case A/B/C），调用方可以放心访问 UI 状态。
+ @param timeout ping 等待响应的超时（秒），建议 2 秒
+ @param complete 完成回调（main queue），alive=YES 表示连接活着（收到了 pong 或其他入站消息），
+                 alive=NO 表示状态机在 in-flight 状态、被并发路径覆盖，或探测超时已触发重连
+ */
+-(void) probeLiveness:(NSTimeInterval)timeout complete:(void(^__nullable)(BOOL alive, NSError * __nullable error))complete;
+
 
 
 @end
