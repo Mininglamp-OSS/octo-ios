@@ -158,6 +158,25 @@
         } callback:cb];
 }
 
+/// task_no 走同一个 /summaries/{id} 路由。path segment 需要转义, 但保留 "-" "_" 这类
+/// 编号里常见字符; 转义后为空 (整段都是非法字符) 直接回错误, 不发无意义的请求。
+- (void)getSummaryDetailByNo:(NSString *)taskNo callback:(OctoSummaryCallback)cb {
+    NSString *trimmed = [taskNo stringByTrimmingCharactersInSet:
+                         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *encoded = [trimmed stringByAddingPercentEncodingWithAllowedCharacters:
+                         [NSCharacterSet URLPathAllowedCharacterSet]];
+    if (encoded.length == 0) {
+        if (cb) cb(nil, [NSError errorWithDomain:@"OctoSummary" code:-1
+                                        userInfo:@{NSLocalizedDescriptionKey: @"invalid task_no"}]);
+        return;
+    }
+    [self request:@"GET" path:[NSString stringWithFormat:@"/summaries/%@", encoded]
+       parameters:nil
+        transform:^id _Nullable(id _Nullable raw) {
+            return [raw isKindOfClass:NSDictionary.class] ? [OctoSummaryDetail modelFromDict:raw] : nil;
+        } callback:cb];
+}
+
 - (void)deleteSummary:(int64_t)taskId callback:(OctoSummaryCallback)cb {
     [self request:@"DELETE" path:[NSString stringWithFormat:@"/summaries/%lld", taskId]
        parameters:nil transform:nil callback:cb];

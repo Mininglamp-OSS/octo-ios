@@ -11,6 +11,7 @@
 #import "OctoSummaryFilterTabsView.h"
 #import "OctoSummaryStatusPoller.h"
 #import "OctoSummaryDateFormat.h"
+#import "OctoSummaryGroupNotifyHelper.h"
 #import <MJRefresh/MJRefresh.h>
 #import <WuKongIMSDK/WuKongIMSDK.h>
 
@@ -770,6 +771,9 @@
             int64_t newId = [((NSDictionary *)result)[@"task_id"] longLongValue];
             if (newId > 0 && newId != origTaskId) {
                 item.taskId = newId;
+                // 列表里发起的"重新生成"同样算本机发起: 打上 eligible 标记, 让用户随后
+                // 点进详情页 (哪怕首屏就已经是完成态) 还能发出那条群提示。列表自身不发。
+                [OctoSummaryGroupNotifyHelper markEligibleTaskId:newId];
                 [ws refreshPoller];
             }
         }

@@ -657,6 +657,10 @@ static const NSUInteger kWKCardViewPoolLimit = 24;
 - (void)handleOpenUrlAction:(ACOBaseActionElement *)action {
     NSString *urlStr = [action url];
     if (urlStr.length == 0) return;
+    // 通知助手 (u_10000) 的"查看详情"就走这条路。WebView 里的 web 端没有独立的 WKSDK
+    // 连接、也没有本机发起标记, 那条"某人总结了群聊内容"的群提示自己发不出来, 所以在
+    // 打开 WebView 之前先把 URL 交给 OctoContext 判定一次 (纯副作用, 不影响下面的导航)。
+    [[WKApp shared] invoke:WKPOINT_SUMMARY_DEEPLINK param:@{@"url": urlStr}];
     // 大小写不敏感：HTTPS:// / HTTP:// 也视为已带 scheme，避免被误拼成 http://HTTPS://…。
     if (![urlStr.lowercaseString hasPrefix:@"http"]) {
         urlStr = [NSString stringWithFormat:@"http://%@", urlStr];
