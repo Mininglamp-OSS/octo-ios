@@ -155,6 +155,9 @@ typedef void(^WKOnComplete)(id data,NSError *error);
 @property(nonatomic,assign) BOOL isShowScreenProtect; // 是否显示屏幕保护
 @property(nonatomic,strong) WKScreenProtectionView *screenProtectionView; // 屏幕保护view
 
+// appDidBecomeActive wakeup 探测的防抖时间戳（秒，since1970）。5 秒窗口内多次前台切换只探测一次。
+@property(nonatomic,assign) NSTimeInterval lastWakeupAt;
+
 
 
 @end
@@ -857,9 +860,19 @@ static WKApp *_instance;
     for (WKMessage *typingMsg in [[WKTypingManager shared] getAllTypingMessages]) {
         [[WKTypingManager shared] removeTypingByChannel:typingMsg.channel newMessage:nil];
     }
-    // 连接
-    if([[WKSDK shared] connectionManager].connectStatus == WKDisconnected  && [WKApp shared].isLogined) {
-        [[[WKSDK shared] connectionManager] connect];
+    // 回前台主动做一次短心跳探测：iOS 后台 NSTimer 冻结会让 WKConnectionManager 心跳停发，
+    // 服务端踢连接后本地状态机可能仍停在 WKConnected（假在线），从而错过 SDK 握手成功后的
+    // syncConversations，导致会话列表停在旧快照直到用户杀 app。这里无条件调用 wakeup:，
+    // 由 SDK 内部判断连接活性并在需要时触发重连 + 后续 syncConversations，行为对齐 web 端。
+    // 5 秒防抖：iOS 前后台快速切换（弹权限、Face ID、控件面板）会连发 appDidBecomeActive。
+    if([WKApp shared].isLogined) {
+        NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+        if(now - self.lastWakeupAt >= 5.0) {
+            self.lastWakeupAt = now;
+            [[[WKSDK shared] connectionManager] wakeup:2 complete:^(NSError *error) {
+                // wakeup 内部处理连接态与断连重连，握手成功后 SDK 自动跑 syncConversations。
+            }];
+        }
     }
     
     if([WKApp shared].config.darkModeWithSystem) {
