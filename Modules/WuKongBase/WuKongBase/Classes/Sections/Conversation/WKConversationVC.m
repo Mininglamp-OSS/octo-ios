@@ -460,8 +460,8 @@
     // 服务端按错枚举归类。统一复用上面算好的 srcType。
     [vc setValue:self.channel.channelId forKey:@"originChannelId"];
     [vc setValue:@(srcType) forKey:@"originChannelType"];
-    // 聊天页星星入口: 提交后给一条带 "查看" 动作的 toast (OctoActionToast),
-    // 点击直接 push 智能总结列表。文案保持简短, "查看" 由 toast 自己提供。
+    // 聊天页星星入口: 提交后给一条轻量 toast 反馈, 文案保持简短。
+    // (曾经用带 "查看" 动作按钮的 OctoActionToast, 该行为已移除, 类已随之删掉。)
     [vc setValue:LLang(@"已开始生成总结") forKey:@"submitSuccessHUDText"];
     vc.hidesBottomBarWhenPushed = YES;
     [[WKNavigationManager shared] pushViewController:vc animated:YES];
