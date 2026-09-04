@@ -135,6 +135,8 @@ typedef NS_ENUM(NSInteger, OctoParticipantStatus) {
 @property(nonatomic, strong) NSArray<OctoSourceItem *> *sources;
 @property(nonatomic, strong) NSArray<OctoParticipant *> *participants;
 @property(nonatomic, assign) NSInteger totalMsgCount;
+/// 创建者 uid: 后端两种字段都返回过, 解析时同时尝试 (creator_id 优先, 其次 user_id)
+@property(nonatomic, copy, nullable) NSString *creatorId;
 @property(nonatomic, copy, nullable) NSString *creatorName;
 @property(nonatomic, copy, nullable) NSString *originChannelId;
 @property(nonatomic, assign) NSInteger originChannelType;
@@ -166,6 +168,10 @@ typedef NS_ENUM(NSInteger, OctoParticipantStatus) {
 @property(nonatomic, strong, nullable) OctoSummaryResult *result;
 @property(nonatomic, copy, nullable) NSString *errorMessage;
 @property(nonatomic, copy, nullable) NSNumber *scheduleId;
+/// 创建者 uid: 后端两种字段都返回过, 解析时同时尝试 (creator_id 优先, 其次 user_id)
+@property(nonatomic, copy, nullable) NSString *creatorId;
+/// 创建者显示名 (creator_name), 可能为空
+@property(nonatomic, copy, nullable) NSString *creatorName;
 @property(nonatomic, copy, nullable) NSString *originChannelId;
 @property(nonatomic, assign) NSInteger originChannelType;
 @property(nonatomic, copy, nullable) NSString *createdAt;

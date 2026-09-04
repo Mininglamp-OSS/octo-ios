@@ -5,6 +5,7 @@
 
 #import "OctoSummaryDetailVC.h"
 #import "OctoSummaryAPI.h"
+#import "OctoSummaryGroupNotifyHelper.h"
 #import "OctoSummaryActionSheet.h"
 #import "OctoSummaryMarkdownRender.h"
 #import "OctoCitationBadgeView.h"
@@ -41,6 +42,23 @@
 @property(nonatomic, strong) UIButton *moreBtn;
 @property(nonatomic, strong) OctoSummaryDetail *detail;
 @property(nonatomic, strong) NSTimer *pollTimer;
+/// 轮询失败只提示第一次, 后续静默重试 (见 loadDetail 的错误分支)。
+@property(nonatomic, assign) BOOL pollErrorToastShown;
+/// 连续临时性错误 (超时/断连/5xx) 计数, 成功一次清零。超过上限就不再续轮询——
+/// 否则弱网/服务端持续异常时, 页面开着就一直 3s 一发, 没有任何退避或上限。
+@property(nonatomic, assign) NSUInteger pollTransientErrorCount;
+/// loadDetail 请求是否在飞。timer 触发即清 pollTimer (见 scheduleNextPollAfter:),
+/// 所以"pollTimer == nil"这条件在请求飞行期间也成立——viewWillAppear / App 前台
+/// 恢复这两个入口都靠它判断"要不要补一次 loadDetail", 没有这个 in-flight 闩的话,
+/// 会在一次请求还没回来时又发一次, 两个响应谁先回来不确定: 如果旧的 Processing
+/// 后到, renderDetail 会把已经画出来的 Completed 重新画成"生成中"。
+@property(nonatomic, assign) BOOL isLoadingDetail;
+
+/// 上一次 loadDetail 观测到的任务状态。nil = 本页还没观测过 (首屏)。
+/// 群提示只在观测到 非完成 → 完成 的状态跃变时发; 首屏就是完成态的情况靠
+/// "本机发起标记" 单独开闸 (见 notifyGroupsIfCompleted:)。
+/// 与安卓 SmartSummaryDetailViewModel.lastKnownStatus 一一对应。
+@property(nonatomic, copy, nullable) NSNumber *lastKnownStatus;
 
 /// YES 表示 VC 进入"消失中"状态 (viewWillDisappear → viewDidDisappear 之间, 或者
 /// 用户在做交互式右滑 pop)。期间所有"会改变 layout 的异步回调"都必须 no-op,
@@ -186,11 +204,28 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
 
     [self buildBottomBar];
 
+    // 前台恢复时重新拉起轮询。viewWillAppear 只覆盖"被子页盖住后返回", 覆盖不到
+    // "页面一直开着, 但 App 进了后台 / 断网": 后台期间 NSTimer 不走, 且弱网时轮询
+    // 可能已经退避到低频, 用户切回来时需要立刻续上一拍, 否则完成时刻可能整段错过。
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                            selector:@selector(onAppDidBecomeActive)
+                                                name:UIApplicationDidBecomeActiveNotification
+                                              object:nil];
+
     [self loadDetail];
+}
+
+- (void)onAppDidBecomeActive {
+    // 已经离场 / 正在离场的 VC 不复活轮询 (view 不在窗口上就没必要跑)。
+    if (!self.view.window) return;
+    [self resumePollingIfNeeded];
 }
 
 - (void)dealloc {
     [self.pollTimer invalidate];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                   name:UIApplicationDidBecomeActiveNotification
+                                                 object:nil];
     // 最后一道兜底: VC 真正销毁时确保所有 webview 不再回调任何东西。视图层级已经
     // 不存在了, 异步在飞的 completion handler 触到 weakSelf=nil 自然 no-op, 这里
     // 兜底也防一些极端时序 (比如 webview 还在排队 IPC 时 VC 整体 dealloc)。
@@ -218,6 +253,12 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
     // webview 是否已稳定, 决定右滑手势开关。pendingTableWebviews 由 makeTableSegment
     // 加入 / applyWebviewHeight 完成时移除, 这里基于当前集合状态同步一次。
     [self syncInteractivePopGestureWithWebviewState];
+
+    // R4 补充 fix: viewWillDisappear 里 invalidate 定时器时不区分"真离场"还是"被
+    // push 的子页盖住" (转发 / 编辑 / 查看确认状态都会 push 子页)。之前 pop 回来后
+    // 轮询没有任何地方重新拉起, 永久停摆——群提示现在挂在这条轮询上, 停摆等于提示
+    // 再也发不出去。这里补上: 非终态且轮询确实没在跑时, 重新拉一次。
+    [self resumePollingIfNeeded];
 }
 
 /// 取消右滑后 viewWillAppear 调用, 与 disarmTableWebviews 配对。idempotent: 没 disarm
@@ -237,14 +278,17 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
-    [self.pollTimer invalidate];
-    self.pollTimer = nil;
 
     // R3 review (yujiawei): 仅在确实正在被 pop / dismiss 时才执行 disarm / detaching / 手势恢复。
     // push 子页 (转发到聊天 / 查看确认状态) 让本 VC 暂时被覆盖时, 不能动这些状态——
     // 否则 pop-back 后表格 webview 永久 disarm: octo-cit:// citation 点不响应、表格高度无法回填。
+    // 轮询定时器同理挪到这道闸后面: 之前不管三七二十一先 invalidate, 被子页盖住时也会
+    // 把轮询杀掉, 且 viewWillAppear 不会重新拉起——群提示挂在这条轮询上, 停摆等于提示
+    // 再也发不出去 (见 viewWillAppear 里补的重新拉起逻辑)。
     BOOL trulyLeaving = self.isMovingFromParentViewController || self.isBeingDismissed;
     if (!trulyLeaving) return;
+
+    [self stopPolling];
 
     // 漏掉的并发路径: A 顶着 sheet (RelatedChatSheet) 时被 swipe-back pop —— UIKit
     // 把 "sheet 强 dismiss" 和 "nav pop 转场" 两段并发跑在 tracking runloop 上,
@@ -497,27 +541,147 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
 - (void)loadDetail {
     int64_t tid = self.taskId.longLongValue;
     if (tid == 0) return;
+    // in-flight 闩: 已经有一个请求在飞就不再发第二个。timer 触发后立刻清 pollTimer
+    // (见 scheduleNextPollAfter:), 所以请求飞行期间 pollTimer 已经是 nil 了——
+    // viewWillAppear (子页 pop 回来) / applicationDidBecomeActive (前台恢复) 这两个
+    // 入口只看 !pollTimer 判断"要不要补一次", 撞上这个窗口就会跟正在飞的请求并发,
+    // 乱序回来时新状态可能被旧响应覆盖。
+    if (self.isLoadingDetail) return;
+    self.isLoadingDetail = YES;
     __weak typeof(self) weakSelf = self;
     [[OctoSummaryAPI shared] getSummaryDetail:tid callback:^(id _Nullable result, NSError * _Nullable error) {
+        weakSelf.isLoadingDetail = NO;
         if (error || ![result isKindOfClass:OctoSummaryDetail.class]) {
-            [weakSelf.view showMsg:LLang(@"加载失败")];
+            // 4xx (任务被删/无权限/参数错误等) 是永久性的, 换个 3s 再问一次结果不会变——
+            // 之前不分青红皂白一律重试, 断网时还好, 遇到 404/403 这种会用户开着页面
+            // 就一直白打请求。永久性错误直接停轮询, 不留死循环。
+            NSInteger httpStatus = error.code;
+            BOOL permanent = error && httpStatus >= 400 && httpStatus < 500;
+            if (permanent) {
+                weakSelf.pollTransientErrorCount = 0;
+                [weakSelf stopPolling];
+                [weakSelf.view showMsg:error.localizedDescription ?: LLang(@"加载失败")];
+                return;
+            }
+            // 临时性失败 (弱网抖动/超时/切后台瞬间断连/5xx) 不能让轮询链路永久停摆——
+            // 群提示挂在这条轮询观测到的状态跃变上, 断一次就再也没人去看任务完成了。
+            // 只在第一次失败时提示, 后续静默重试, 避免持续断网时 toast 刷屏; 但也不能
+            // 一直 3s 一发空转, 所以连续失败到一定次数后退避到更长间隔 (而不是彻底停),
+            // 这样地铁/电梯里断网一分钟以上、之后网络自己恢复时, 轮询仍能自愈。
+            if (!weakSelf.pollErrorToastShown) {
+                weakSelf.pollErrorToastShown = YES;
+                [weakSelf.view showMsg:LLang(@"加载失败")];
+            }
+            weakSelf.pollTransientErrorCount += 1;
+            [weakSelf scheduleNextPollWithBackoff];
             return;
         }
+        weakSelf.pollErrorToastShown = NO;
+        weakSelf.pollTransientErrorCount = 0;
         weakSelf.detail = result;
         [weakSelf renderDetail];
+        // 群提示的两个触发点之一: 详情页自身轮询观测到状态跃变 (另一个是通知助手
+        // 卡片/链接点击, 见 OctoSummaryGroupNotifyHelper.handleSummaryDeepLink:)。
+        [weakSelf notifyGroupsIfCompleted:weakSelf.detail];
+        // WaitingConfirm ("等待参与者确认") 必须留在续轮询名单里 —— 它是本页文档声明
+        // 覆盖的三个非终态之一 (OctoSummaryGroupNotifyHelper.h), 确认动作发生在其他
+        // 参与者的设备上, 耗时通常远超 eligible 标记的 10 分钟 TTL, 少了这一档轮询会
+        // 一直停在这个状态直到用户重开页面, 之后的 WaitingConfirm→Completed 跃变
+        // 永远没人观测到, 群提示也就发不出来。
         if (weakSelf.detail.status == OctoTaskStatusProcessing
-            || weakSelf.detail.status == OctoTaskStatusPending) {
+            || weakSelf.detail.status == OctoTaskStatusPending
+            || weakSelf.detail.status == OctoTaskStatusWaitingConfirm) {
             [weakSelf scheduleNextPoll];
         }
     }];
 }
 
+/// 状态跃变判定。两条开闸路径:
+///   1) prev 非空且非完成、本次完成 —— 亲眼看到了跃变, 这是主路径 (聊天页发起 →
+///      自动进详情页 → 轮询到完成)。
+///   2) prev 为空 (首屏) 且本次就是完成态 —— 没有跃变可观测, 只有"本机刚发起过这条
+///      总结"(eligible 标记, 10 分钟 TTL, 一次性) 才开闸。用来覆盖创建后极快完成的
+///      边界; 也正因为有这道闸, 点开一条历史已完成的总结不会追溯广播。
+/// 两条路径都会消费掉 eligible 标记, 避免同一条总结之后又被深链路径判定一次。
+- (void)notifyGroupsIfCompleted:(OctoSummaryDetail *)detail {
+    if (!detail || detail.taskId <= 0) return;
+    NSNumber *prev = self.lastKnownStatus;
+    self.lastKnownStatus = @(detail.status);
+    if (detail.status != OctoTaskStatusCompleted) return;
+
+    // 只认文档写的三态: Pending/WaitingConfirm/Processing → Completed。不能用
+    // "非 Completed 就算" 这么宽的判定——乱序响应理论上可能让 lastKnownStatus 短暂
+    // 停在 Failed/Cancelled 这类终态上 (见 loadDetail 的 in-flight 保护), 那种情况
+    // 不是本页声明覆盖的"跃变", 收紧到显式集合更贴合上面的注释。
+    BOOL transitioned = prev != nil && (
+        prev.integerValue == OctoTaskStatusPending ||
+        prev.integerValue == OctoTaskStatusWaitingConfirm ||
+        prev.integerValue == OctoTaskStatusProcessing);
+    if (transitioned) {
+        [OctoSummaryGroupNotifyHelper consumeEligibleTaskId:detail.taskId];
+    } else if (prev == nil) {
+        if (![OctoSummaryGroupNotifyHelper consumeEligibleTaskId:detail.taskId]) return;
+    } else {
+        // prev 落在 {Completed, Failed, Cancelled} 里——不是文档声明覆盖的那三个
+        // 前态。prev 是 Completed 时是同一终态被轮询/重入看到第二次; prev 是
+        // Failed/Cancelled 时理论上只可能来自乱序响应的短暂脏读, 两种都不算新完成。
+        return;
+    }
+    [OctoSummaryGroupNotifyHelper notifyIfNeededWithDetail:detail];
+}
+
 - (void)scheduleNextPoll {
+    [self scheduleNextPollAfter:3.0];
+}
+
+/// 连续临时性失败时的退避: 前 20 次维持 3s (弱网抖动通常几秒内自愈), 之后拉到 30s
+/// 长驻低频重试。**不彻底停** —— 停掉的话网络恢复后没有任何东西会把轮询拉回来,
+/// 用户开着页面却永远等不到完成, 群提示也发不出去 (review 指出的阻塞场景)。
+/// 30s × 长期开页的成本可接受: 只在持续异常时才走到这一档。
+- (void)scheduleNextPollWithBackoff {
+    static const NSUInteger kFastRetryLimit = 20;   // 3s 间隔, 约 1 分钟
+    NSTimeInterval delay = self.pollTransientErrorCount > kFastRetryLimit ? 30.0 : 3.0;
+    [self scheduleNextPollAfter:delay];
+}
+
+- (void)scheduleNextPollAfter:(NSTimeInterval)delay {
     [self.pollTimer invalidate];
     __weak typeof(self) weakSelf = self;
-    self.pollTimer = [NSTimer scheduledTimerWithTimeInterval:8.0 repeats:NO block:^(NSTimer *t) {
+    self.pollTimer = [NSTimer scheduledTimerWithTimeInterval:delay repeats:NO block:^(NSTimer *t) {
+        // 一次性 timer 触发后自身变 invalid, 但 self.pollTimer 仍持有这个对象 (非 nil)。
+        // 不清掉的话 viewWillAppear / applicationDidBecomeActive 里的 `!self.pollTimer`
+        // 恢复闸永远进不去 —— 轮询一旦停摆就再也拉不起来。所以每次触发即清, 让
+        // "pollTimer == nil" 严格等价于 "当前没有排队中的下一拍"。
+        [weakSelf clearPollTimer];
         [weakSelf loadDetail];
     }];
+}
+
+/// 停轮询的唯一出口: invalidate + 置 nil。所有停止路径都必须走这里, 否则
+/// pollTimer 会留着一个 invalid 对象, 把上面说的恢复闸永久堵死。
+- (void)stopPolling {
+    [self.pollTimer invalidate];
+    self.pollTimer = nil;
+}
+
+/// 只清引用 (timer 已自然触发完, 无需再 invalidate)。
+- (void)clearPollTimer {
+    self.pollTimer = nil;
+}
+
+/// 非终态且当前没有排队中的下一拍 → 重新拉起轮询。
+/// viewWillAppear (子页 pop 回来) 和 applicationDidBecomeActive (前台恢复) 共用。
+- (void)resumePollingIfNeeded {
+    // detail 为空是首次进页, viewDidLoad 已经调过 loadDetail, 不必重复。
+    if (!self.detail || self.pollTimer) return;
+    BOOL nonTerminal = self.detail.status == OctoTaskStatusProcessing
+        || self.detail.status == OctoTaskStatusPending
+        || self.detail.status == OctoTaskStatusWaitingConfirm;
+    if (!nonTerminal) return;
+    // 弱网期间累计的连续失败计数在这里清零: 用户回到前台 / 从子页返回, 说明这是一次
+    // 新的重试机会, 不该继承上一轮网络异常留下的额度。
+    self.pollTransientErrorCount = 0;
+    [self loadDetail];
 }
 
 - (void)renderDetail {
@@ -1083,9 +1247,18 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
         // 切到新 taskId 后再 loadDetail, 才能拉到/轮询新一轮任务; 不切的话页面永远卡在
         // 旧 completed/failed 任务上, 用户看不到新进度。
         if ([result isKindOfClass:NSDictionary.class]) {
-            int64_t newId = [((NSDictionary *)result)[@"task_id"] longLongValue];
+            id tidVal = ((NSDictionary *)result)[@"task_id"];
+            // 同 CreateVC: 走模型层统一口径, 容忍数字 / 数字字符串两种回值。只认
+            // NSNumber 的话后端回字符串时会静默不切 task, 页面永远卡在旧任务上。
+            int64_t newId = [OctoSummaryModelHelper int64FromValue:tidVal];
             if (newId > 0 && newId != self.detail.taskId) {
                 self.taskId = @(newId);
+                // 换了 task 就得复位状态观测锚, 否则新任务的首屏会被当成"旧任务的
+                // 后续一拍", 拿旧状态去比跃变。
+                self.lastKnownStatus = nil;
+                // 重新生成也是"本机发起", 与创建同口径打上 eligible 标记 —— 新任务
+                // 极快完成、首屏就是终态时才有闸可开。
+                [OctoSummaryGroupNotifyHelper markEligibleTaskId:newId];
             }
         }
         [self loadDetail];

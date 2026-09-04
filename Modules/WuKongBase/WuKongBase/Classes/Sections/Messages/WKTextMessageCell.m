@@ -1909,6 +1909,8 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
     if (self.isLinkCard && self.linkCardView && !self.linkCardView.hidden) {
         NSString *url = objc_getAssociatedObject(self.linkCardView, "linkURL");
         if (url.length > 0) {
+            // 总结深链也可能以链接卡片形态出现, 同 didLinkClick: 给一次判定机会。
+            [[WKApp shared] invoke:WKPOINT_SUMMARY_DEEPLINK param:@{@"url": url}];
             [[UIApplication sharedApplication] openURL:[NSURL URLWithString:url] options:@{} completionHandler:nil];
         }
         return;
@@ -2432,6 +2434,10 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
 -(void) didLinkClick:(NSString*)link {
 //    NSString *link = token.text;
     if([link containsString:@"."]) { // 网站
+        // 与卡片按钮同口径 (WKInteractiveCardCell.handleOpenUrlAction): 灰度关掉
+        // OCTO_CARD_MESSAGE_ENABLED 时 type-17 卡片会降级成纯文本, 通知助手那条"查看详情"
+        // 就变成这里的文本链接, 所以两条路径都要给总结深链一次判定机会。纯副作用, 不改导航。
+        [[WKApp shared] invoke:WKPOINT_SUMMARY_DEEPLINK param:@{@"url": link ?: @""}];
         WKWebViewVC *vc = [[WKWebViewVC alloc] init];
         if(![link hasPrefix:@"http"]) {
             link = [NSString stringWithFormat:@"http://%@",link];
