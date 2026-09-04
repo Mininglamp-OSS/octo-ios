@@ -54,39 +54,42 @@ static const NSTimeInterval kEligibleTTL = 10 * 60;
     return [ids containsObject:[NSString stringWithFormat:@"%lld", taskId]];
 }
 
-+ (BOOL)hasSentTaskId:(int64_t)taskId channelId:(NSString *)channelId {
-    if (taskId <= 0 || channelId.length == 0) return NO;
-    @synchronized ([self lockToken]) {
-        if ([self legacyHasSentTaskId:taskId]) return YES;
-        for (NSDictionary *entry in [self entriesForKey:kSentKey]) {
-            if ([entry[@"id"] longLongValue] != taskId) continue;
-            NSArray *channels = entry[@"channels"];
-            return [channels isKindOfClass:NSArray.class] && [channels containsObject:channelId];
-        }
-        return NO;
++ (BOOL)_hasSentTaskId:(int64_t)taskId channelId:(NSString *)channelId {
+    if ([self legacyHasSentTaskId:taskId]) return YES;
+    for (NSDictionary *entry in [self entriesForKey:kSentKey]) {
+        if ([entry[@"id"] longLongValue] != taskId) continue;
+        NSArray *channels = entry[@"channels"];
+        return [channels isKindOfClass:NSArray.class] && [channels containsObject:channelId];
     }
+    return NO;
 }
 
-+ (void)markSentTaskId:(int64_t)taskId channelId:(NSString *)channelId {
-    if (taskId <= 0 || channelId.length == 0) return;
++ (void)_markSentTaskId:(int64_t)taskId channelId:(NSString *)channelId {
+    NSMutableArray<NSDictionary *> *entries = [[self entriesForKey:kSentKey] mutableCopy];
+    NSUInteger found = NSNotFound;
+    for (NSUInteger i = 0; i < entries.count; i++) {
+        if ([entries[i][@"id"] longLongValue] == taskId) { found = i; break; }
+    }
+    NSMutableArray<NSString *> *channels = [NSMutableArray array];
+    if (found != NSNotFound) {
+        NSArray *old = entries[found][@"channels"];
+        if ([old isKindOfClass:NSArray.class]) [channels addObjectsFromArray:old];
+        if ([channels containsObject:channelId]) return;
+        [entries removeObjectAtIndex:found];
+    }
+    [channels addObject:channelId];
+    // 命中的 task 重新追加到队尾: 最近活跃的不会被 FIFO 截断掉。
+    [entries addObject:@{@"id": @(taskId), @"channels": channels}];
+    while (entries.count > kMaxSentTasks) [entries removeObjectAtIndex:0];
+    [[NSUserDefaults standardUserDefaults] setObject:entries forKey:kSentKey];
+}
+
++ (BOOL)claimTaskId:(int64_t)taskId channelId:(NSString *)channelId {
+    if (taskId <= 0 || channelId.length == 0) return NO;
     @synchronized ([self lockToken]) {
-        NSMutableArray<NSDictionary *> *entries = [[self entriesForKey:kSentKey] mutableCopy];
-        NSUInteger found = NSNotFound;
-        for (NSUInteger i = 0; i < entries.count; i++) {
-            if ([entries[i][@"id"] longLongValue] == taskId) { found = i; break; }
-        }
-        NSMutableArray<NSString *> *channels = [NSMutableArray array];
-        if (found != NSNotFound) {
-            NSArray *old = entries[found][@"channels"];
-            if ([old isKindOfClass:NSArray.class]) [channels addObjectsFromArray:old];
-            if ([channels containsObject:channelId]) return;
-            [entries removeObjectAtIndex:found];
-        }
-        [channels addObject:channelId];
-        // 命中的 task 重新追加到队尾: 最近活跃的不会被 FIFO 截断掉。
-        [entries addObject:@{@"id": @(taskId), @"channels": channels}];
-        while (entries.count > kMaxSentTasks) [entries removeObjectAtIndex:0];
-        [[NSUserDefaults standardUserDefaults] setObject:entries forKey:kSentKey];
+        if ([self _hasSentTaskId:taskId channelId:channelId]) return NO;
+        [self _markSentTaskId:taskId channelId:channelId];
+        return YES;
     }
 }
 
@@ -97,7 +100,10 @@ static const NSTimeInterval kEligibleTTL = 10 * 60;
         for (NSUInteger i = 0; i < entries.count; i++) {
             if ([entries[i][@"id"] longLongValue] != taskId) continue;
             NSArray *old = entries[i][@"channels"];
-            if (![old isKindOfClass:NSArray.class]) return;
+            // 脏数据只跳过这一条, 不打断整个遍历——entries 里 id 理应唯一 (markSentTaskId
+            // 写入前会先删掉旧 entry 再追加), 但防御性地保留 continue 而不是 return, 万一
+            // 真出现重复 id 也不会因为前一条格式不对就漏查后面本该匹配上的条目。
+            if (![old isKindOfClass:NSArray.class]) continue;
             NSMutableArray *channels = [old mutableCopy];
             [channels removeObject:channelId];
             if (channels.count == 0) [entries removeObjectAtIndex:i];

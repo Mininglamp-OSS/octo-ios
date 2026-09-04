@@ -583,7 +583,8 @@ static const CGFloat kSourceCardMinH   = 78;    // "选择聊天" 卡最小高�
 
         int64_t taskId = 0;
         if ([result isKindOfClass:NSDictionary.class]) {
-            taskId = [((NSDictionary *)result)[@"task_id"] longLongValue];
+            id tidVal = ((NSDictionary *)result)[@"task_id"];
+            if ([tidVal isKindOfClass:NSNumber.class]) taskId = [tidVal longLongValue];
         }
         // 本机发起标记 (eligible, 10 分钟 TTL, 一次性消费): 只有打过这个标记的 task,
         // 在详情页首屏就已经是完成态、拿不到状态跃变时, 才允许发那条群提示。
@@ -594,11 +595,20 @@ static const CGFloat kSourceCardMinH   = 78;    // "选择聊天" 卡最小高�
         // CreateEffect.Done): 群提示挂在详情页轮询观测到的"非完成 → 完成"跃变上, 只 pop
         // 回聊天页/列表页的话轮询根本不会跑, 提示也就永远发不出去。replace 而不是 push,
         // 返回键自然回到发起前的页面 (聊天页 / 列表页)。没拿到 task_id 时兜底走原来的纯 pop。
-        if (taskId > 0) {
+        //
+        // 前提是 weakSelf 还在栈顶: 提交按钮点了之后只是 disable, 没挡右滑返回——用户提交后
+        // 立刻手动滑回上一页很常见, 请求也不是瞬间返回。这时栈顶已经是用户刚返回的那个页面
+        // (聊天页/列表页), replacePushViewController: 会把 removeLastObject 这一下套在它头上,
+        // 等于把用户刚刚手动返回的页面从栈里整个抹掉。先确认自己没被顶掉再动栈。
+        BOOL stillOnTop = [WKNavigationManager shared].topViewController == weakSelf;
+        if (taskId > 0 && stillOnTop) {
             OctoSummaryDetailVC *detail = [OctoSummaryDetailVC new];
             detail.taskId = @(taskId);
             detail.hidesBottomBarWhenPushed = YES;
             [[WKNavigationManager shared] replacePushViewController:detail animated:YES];
+        } else if (!stillOnTop) {
+            // 用户已经自己离开了这个页面, 什么都不用做——eligible 标记已经打上,
+            // 之后无论是打开详情页还是点通知助手深链, 都还能补上那条群提示。
         } else {
             [[WKNavigationManager shared] popViewControllerAnimated:YES];
         }

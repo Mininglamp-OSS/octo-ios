@@ -39,14 +39,11 @@
     if (channels.count > 0) return channels;
 
     if (detail.originChannelId.length > 0) {
-        NSInteger ct;
-        switch ((OctoSourceType)detail.originChannelType) {
-            case OctoSourceDirectMessage: ct = WK_PERSON; break;
-            case OctoSourceThread:        ct = WK_COMMUNITY_TOPIC; break;
-            default:                      ct = WK_GROUP; break;
-        }
-        if (ct == WK_GROUP) {
-            WKChannel *ch = [WKChannel channelID:detail.originChannelId channelType:ct];
+        // 显式列出群聊, 其余 (含 0/未知的默认值, 私聊, 子区) 都不兜底成群——本 PR 的
+        // 意图就是"只往群聊发", 缺省值落进 default 会被误判成群聊, 往一个其实不是群
+        // 的 channel 发消息。
+        if ((OctoSourceType)detail.originChannelType == OctoSourceGroupChat) {
+            WKChannel *ch = [WKChannel channelID:detail.originChannelId channelType:WK_GROUP];
             if (ch) [channels addObject:ch];
         }
     }
@@ -88,25 +85,34 @@
     for (WKChannel *ch in channels) {
         NSString *channelId = ch.channelId;
         if (channelId.length == 0) continue;
-        if ([OctoSummaryNotifyStore hasSentTaskId:taskId channelId:channelId]) continue;
-
-        // claim-before-send: 先落账再发。两条触发链路 (详情页轮询 / 卡片点击) 可能
-        // 在很近的时间里都判定通过, 先落账能让后到的那条直接被上面的 hasSent 挡掉。
-        [OctoSummaryNotifyStore markSentTaskId:taskId channelId:channelId];
+        // claim-before-send: 原子地"没发过就落账", 一把锁里做完查+写, 不依赖"两条触发
+        // 链路都恰好在主线程上跑所以时序上能对齐"这条隐含前提。
+        if (![OctoSummaryNotifyStore claimTaskId:taskId channelId:channelId]) continue;
 
         OctoSummaryTipContent *tip = [OctoSummaryTipContent tipWithUid:selfUid name:name];
-        WKMessage *message = [[WKSDK shared].chatManager sendMessage:tip channel:ch];
-        if (!message) {
-            // 落库都没成功 —— 回滚落账, 下次再进详情页还有机会补发。
-            [OctoSummaryNotifyStore unmarkSentTaskId:taskId channelId:channelId];
-            continue;
-        }
         // WK_TIP 是"系统公告"式提示, 不该冲未读红点、也不该让发消息的这台设备给自己播
         // 新消息提示音/振动。contentToMessage: 默认 header.showUnread = true, 而
         // WKSystemMessageHandler.onRecvMessages: 的提醒分支只判 showUnread 和当前聊天
-        // channel, 不排除 isSend==YES 的消息 —— 不改的话, 用户没停留在这个群的聊天页
-        // 时, 下面那行本地回显会给自己播"新消息来了"的声音。
+        // channel, 不排除 isSend==YES 的消息。必须在 sendMessage:(WKMessage*) 快照
+        // 进 WKSendPacket 之前把 flag 改掉 —— 先 saveMessage: 落库、改 header、
+        // 用 addOrUpdateMessages: 把改动写回 DB, 再拿这个已经是 NO 的 message 去发,
+        // 否则 wire 包和 DB 行都还是发送时刻的 showUnread=true (sendMessage:content:channel:
+        // 那个便捷方法内部是同步跑完 contentToMessage → sendMessage:message 的, 事后改
+        // message.header 只影响内存对象, 改不动已经拷进 WKSendPacket 的那份快照)。
+        WKMessage *message = [[WKSDK shared].chatManager saveMessage:tip channel:ch];
+        if (!message) {
+            [OctoSummaryNotifyStore unmarkSentTaskId:taskId channelId:channelId];
+            continue;
+        }
         message.header.showUnread = NO;
+        [[WKSDK shared].chatManager addOrUpdateMessages:@[message] notify:NO];
+        message = [[WKSDK shared].chatManager sendMessage:message];
+        if (!message) {
+            // 防御性判断: sendMessage:(WKMessage*) 目前的实现不会返回 nil,
+            // 但 DB 那份 (saveMessage: 那一步) 已经落上了, 真出现异常也要回滚落账。
+            [OctoSummaryNotifyStore unmarkSentTaskId:taskId channelId:channelId];
+            continue;
+        }
         // chatManager sendMessage: 只落库 + 走网络发送, 不会通知当前正打开的聊天页面 UI ——
         // 那个插入动作平时由输入框发送流程自己调用 WKMessageListView.sendMessage: 完成,
         // 这里是脚本式后台发送, 没有对应的聊天页面实例可调。sendack 之后触发的 onMessageUpdate
@@ -142,6 +148,18 @@ static NSString *const kSummaryPathPattern = @"^/s/([A-Za-z0-9_-]+)/?$";
     if (s.length == 0) return NO;
     NSCharacterSet *nonDigits = [[NSCharacterSet decimalDigitCharacterSet] invertedSet];
     return [s rangeOfCharacterFromSet:nonDigits].location == NSNotFound;
+}
+
+/// task_no 允许的字符集, 与 `/s/<seg>` 路径分支的 kSummaryPathPattern 保持同一口径。
+/// path 分支天然只能匹配这个字符集 (正则本身就是这么写的); query 分支 (?task_no=)
+/// 来自任意被点击链接、不受这条正则约束, 必须单独校验 —— 否则一个形如
+/// `?task_no=../../admin` 的链接会被 OctoSummaryAPI 里保留 "/" 的
+/// URLPathAllowedCharacterSet 原样拼进请求路径, 打到 /summaries/ 之外的地方。
++ (BOOL)isValidTaskNo:(NSString *)taskNo {
+    if (taskNo.length == 0) return NO;
+    NSCharacterSet *invalid = [[NSCharacterSet characterSetWithCharactersInString:
+        @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"] invertedSet];
+    return [taskNo rangeOfCharacterFromSet:invalid].location == NSNotFound;
 }
 
 + (OctoSummaryLookup *)lookupById:(int64_t)taskId {
@@ -180,7 +198,7 @@ static NSString *const kSummaryPathPattern = @"^/s/([A-Za-z0-9_-]+)/?$";
         if (l) return l;
     }
     NSString *qno = [self firstQueryValueIn:comps keys:@[@"task_no", @"taskNo"]];
-    if (qno.length > 0) return [self lookupByNo:qno];
+    if (qno.length > 0 && [self isValidTaskNo:qno]) return [self lookupByNo:qno];
 
     NSString *path = comps.percentEncodedPath ?: @"";
     if (path.length == 0) return nil;

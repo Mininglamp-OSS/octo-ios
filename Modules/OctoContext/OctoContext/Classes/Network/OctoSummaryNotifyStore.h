@@ -11,7 +11,9 @@
 //                拿到的就是 Completed、没有状态跃变可观测"这条边界。
 //
 //  两张表都落 NSUserDefaults —— 这条提示是发起方客户端的本地副作用, 服务端不参与,
-//  所以去重只能靠本机账本。换设备 / 重装后既不重发也不补发, 方向是"宁可漏发不重发"
+//  所以去重只能靠本机账本, 维度是"设备", 不是"账号"。同账号多端 (譬如手机 + iPad
+//  都停留在同一条总结的详情页, 恰好都观测到同一次状态跃变) 会各发一条, 不去重。
+//  换设备 / 重装后既不重发也不补发。方向是"单设备内宁可漏发不重发", 跨设备不承诺
 //  (与 web localStorage / 安卓 SharedPreferences 的已知局限一致)。
 //
 
@@ -23,13 +25,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 #pragma mark - SENT (taskId -> [channelId])
 
-/// 该 task 是否已经往这个群发过提示。
-/// 兼容读取历史扁平表 (旧实现按 taskId 整体去重, 没有 channel 维度): 命中旧表即视为
-/// 全部群都发过, 避免升级后给同一条总结重复发。
-+ (BOOL)hasSentTaskId:(int64_t)taskId channelId:(NSString *)channelId;
-
-/// 落账 (发送前 claim)。
-+ (void)markSentTaskId:(int64_t)taskId channelId:(NSString *)channelId;
+/// 原子版 claim-before-send: 一把锁里做完"该 task 没往这个群发过就落账", 返回是否
+/// 抢到 (YES = 之前没发过、这次抢到了发送权; NO = 已经发过, 不该再发)。查和写在
+/// 同一把锁里, 不依赖"调用方都在主线程"这条隐含前提。
+/// 兼容读取历史扁平表 (旧实现按 taskId 整体去重, 没有 channel 维度): 命中旧表直接
+/// 判定已发过 (不落新账), 避免升级后给同一条总结重复发。
++ (BOOL)claimTaskId:(int64_t)taskId channelId:(NSString *)channelId;
 
 /// 回滚落账 (发送失败时)。不会去动历史扁平表。
 + (void)unmarkSentTaskId:(int64_t)taskId channelId:(NSString *)channelId;

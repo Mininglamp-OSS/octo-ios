@@ -768,7 +768,8 @@
         }
         // 后端返回新 task_id, 切到新 id 让后续 poller / detail 走新任务
         if ([result isKindOfClass:NSDictionary.class]) {
-            int64_t newId = [((NSDictionary *)result)[@"task_id"] longLongValue];
+            id tidVal = ((NSDictionary *)result)[@"task_id"];
+            int64_t newId = [tidVal isKindOfClass:NSNumber.class] ? [tidVal longLongValue] : 0;
             if (newId > 0 && newId != origTaskId) {
                 item.taskId = newId;
                 // 列表里发起的"重新生成"同样算本机发起: 打上 eligible 标记, 让用户随后
