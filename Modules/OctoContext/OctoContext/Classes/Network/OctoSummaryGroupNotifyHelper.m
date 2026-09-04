@@ -37,6 +37,14 @@
         if (ch) { [channels addObject:ch]; [seen addObject:s.sourceId]; }
     }
     if (channels.count > 0) return channels;
+    // sources 里确实有条目、只是没有群聊类型的 (纯私聊/纯子区), 不能再往下兜底——
+    // origin_channel_id/type 是打开创建页那一刻冻结的值, 用户在选择器里改选了别的
+    // source 之后不会跟着刷新 (OctoSummaryCreateVC acceptPickedChannels: 只重建
+    // selectedSources, 不动 originChannelId/Type), 两个字段可能已经不一致。这里
+    // 兜底原意是覆盖"detail 完全没有 sources"这一种情况, 不能被用来覆盖一个
+    // 用户已经明确选过、只是不含群聊的 sources 列表——否则会把提示发到一个从来
+    // 没被总结过的群里, 断言一件没发生的事, 而且不可撤回。
+    if (detail.sources.count > 0) return channels;
 
     if (detail.originChannelId.length > 0) {
         // 显式列出群聊, 其余 (含 0/未知的默认值, 私聊, 子区) 都不兜底成群——本 PR 的
@@ -64,30 +72,47 @@
     // 创建者 uid: 后端两种字段名都返回过 (新版 creator_id, 旧版/部分接口 user_id),
     // 模型解析层已做 creator_id → user_id 兜底, 这里直接用 creatorId。
     NSString *creatorUid = detail.creatorId;
-    if (selfUid.length == 0 || creatorUid.length == 0) return;
+    if (selfUid.length == 0 || creatorUid.length == 0) {
+        NSLog(@"[OctoSummaryGroupNotifyHelper] task=%lld 拦截: selfUid=%@ creatorUid=%@ 有一个缺失", taskId, selfUid, creatorUid);
+        return;
+    }
     // 谁创建谁发。eligible 标记只在本机发起时打, 这里是第二道保险
     // (譬如同一台设备切过账号, 标记还在但已经不是创建者了)。
-    if (![creatorUid isEqualToString:selfUid]) return;
+    if (![creatorUid isEqualToString:selfUid]) {
+        NSLog(@"[OctoSummaryGroupNotifyHelper] task=%lld 拦截: creatorUid=%@ 与本机 selfUid=%@ 不一致", taskId, creatorUid, selfUid);
+        return;
+    }
 
     NSArray<WKChannel *> *channels = [self resolveTargetChannelsForDetail:detail];
-    if (channels.count == 0) return;
+    if (channels.count == 0) {
+        NSLog(@"[OctoSummaryGroupNotifyHelper] task=%lld 拦截: 目标群解析为空 (sources=%lu originChannelId=%@)",
+              taskId, (unsigned long)detail.sources.count, detail.originChannelId);
+        return;
+    }
 
     // 显示名按优先级选取:
     //   1. [WKApp shared].loginInfo.displayName (业务登录信息: 已实名→真实姓名, 否则昵称)
     //   2. connectInfo.name (SDK 层, 登录流程下经常没填)
-    //   3. selfUid (兜底, 避免出现"总结了群聊内容"空名字)
-    // creator_name 也是可选字段, 普通用户任务通常不返回, 不把它放进主链路。
+    // 两个都没有就不发——不能兜底成 selfUid 当文本发出去: WKSystemContent.getDisplayContent
+    // 只把"查看者自己的 uid"替换成"你", 群里其他成员看到的是 extra[0].name 原文,
+    // 兜底成 uid 就是把一个内部标识符原样发到群里。creator_name 也是可选字段, 普通
+    // 用户任务通常不返回, 不把它放进主链路。
     NSString *name = [WKApp shared].loginInfo.displayName;
     if (name.length == 0) name = connectInfo.name;
-    if (name.length == 0) name = selfUid;
-    if (name.length == 0) return;
+    if (name.length == 0) {
+        NSLog(@"[OctoSummaryGroupNotifyHelper] task=%lld 拦截: 无可用显示名, 不把 uid 当文本发出去", taskId);
+        return;
+    }
 
     for (WKChannel *ch in channels) {
         NSString *channelId = ch.channelId;
         if (channelId.length == 0) continue;
         // claim-before-send: 原子地"没发过就落账", 一把锁里做完查+写, 不依赖"两条触发
         // 链路都恰好在主线程上跑所以时序上能对齐"这条隐含前提。
-        if (![OctoSummaryNotifyStore claimTaskId:taskId channelId:channelId]) continue;
+        if (![OctoSummaryNotifyStore claimTaskId:taskId channelId:channelId]) {
+            NSLog(@"[OctoSummaryGroupNotifyHelper] task=%lld channel=%@ 拦截: 已经发过", taskId, channelId);
+            continue;
+        }
 
         OctoSummaryTipContent *tip = [OctoSummaryTipContent tipWithUid:selfUid name:name];
         // WK_TIP 是"系统公告"式提示, 不该冲未读红点、也不该让发消息的这台设备给自己播
@@ -101,6 +126,7 @@
         // message.header 只影响内存对象, 改不动已经拷进 WKSendPacket 的那份快照)。
         WKMessage *message = [[WKSDK shared].chatManager saveMessage:tip channel:ch];
         if (!message) {
+            NSLog(@"[OctoSummaryGroupNotifyHelper] task=%lld channel=%@ 拦截: saveMessage 落库失败", taskId, channelId);
             [OctoSummaryNotifyStore unmarkSentTaskId:taskId channelId:channelId];
             continue;
         }
@@ -110,6 +136,7 @@
         if (!message) {
             // 防御性判断: sendMessage:(WKMessage*) 目前的实现不会返回 nil,
             // 但 DB 那份 (saveMessage: 那一步) 已经落上了, 真出现异常也要回滚落账。
+            NSLog(@"[OctoSummaryGroupNotifyHelper] task=%lld channel=%@ 拦截: sendMessage 返回 nil (异常路径)", taskId, channelId);
             [OctoSummaryNotifyStore unmarkSentTaskId:taskId channelId:channelId];
             continue;
         }

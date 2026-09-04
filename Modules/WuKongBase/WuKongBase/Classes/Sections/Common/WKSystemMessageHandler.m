@@ -170,6 +170,14 @@ bool needRemind = false; // 是否需要提醒
     if(sendackPacket.header.noPersist) {
         return;
     }
+    // showUnread=NO 是"系统公告"式消息主动选择的, 明确不想在任何设备上有动静
+    // (群总结完成提示就是这样, 见 OctoSummaryGroupNotifyHelper) —— 已经在接收端
+    // 靠这个 flag 免了提醒音, 发送端这里漏了同一个判断, 会导致发消息的这台设备
+    // 自己播一声"消息已发出"。目前仓库里真正走到发送流程且把这个 flag 置为 NO 的
+    // 只有那一类系统 tip, 不影响其余任何消息类型的外发提示音。
+    if(!sendackPacket.header.showUnread) {
+        return;
+    }
     [self playMessageSendOutSound];
 }
 

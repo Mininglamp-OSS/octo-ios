@@ -47,6 +47,12 @@
 /// 连续临时性错误 (超时/断连/5xx) 计数, 成功一次清零。超过上限就不再续轮询——
 /// 否则弱网/服务端持续异常时, 页面开着就一直 3s 一发, 没有任何退避或上限。
 @property(nonatomic, assign) NSUInteger pollTransientErrorCount;
+/// loadDetail 请求是否在飞。timer 触发即清 pollTimer (见 scheduleNextPollAfter:),
+/// 所以"pollTimer == nil"这条件在请求飞行期间也成立——viewWillAppear / App 前台
+/// 恢复这两个入口都靠它判断"要不要补一次 loadDetail", 没有这个 in-flight 闩的话,
+/// 会在一次请求还没回来时又发一次, 两个响应谁先回来不确定: 如果旧的 Processing
+/// 后到, renderDetail 会把已经画出来的 Completed 重新画成"生成中"。
+@property(nonatomic, assign) BOOL isLoadingDetail;
 
 /// 上一次 loadDetail 观测到的任务状态。nil = 本页还没观测过 (首屏)。
 /// 群提示只在观测到 非完成 → 完成 的状态跃变时发; 首屏就是完成态的情况靠
@@ -535,8 +541,16 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
 - (void)loadDetail {
     int64_t tid = self.taskId.longLongValue;
     if (tid == 0) return;
+    // in-flight 闩: 已经有一个请求在飞就不再发第二个。timer 触发后立刻清 pollTimer
+    // (见 scheduleNextPollAfter:), 所以请求飞行期间 pollTimer 已经是 nil 了——
+    // viewWillAppear (子页 pop 回来) / applicationDidBecomeActive (前台恢复) 这两个
+    // 入口只看 !pollTimer 判断"要不要补一次", 撞上这个窗口就会跟正在飞的请求并发,
+    // 乱序回来时新状态可能被旧响应覆盖。
+    if (self.isLoadingDetail) return;
+    self.isLoadingDetail = YES;
     __weak typeof(self) weakSelf = self;
     [[OctoSummaryAPI shared] getSummaryDetail:tid callback:^(id _Nullable result, NSError * _Nullable error) {
+        weakSelf.isLoadingDetail = NO;
         if (error || ![result isKindOfClass:OctoSummaryDetail.class]) {
             // 4xx (任务被删/无权限/参数错误等) 是永久性的, 换个 3s 再问一次结果不会变——
             // 之前不分青红皂白一律重试, 断网时还好, 遇到 404/403 这种会用户开着页面
@@ -595,13 +609,22 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
     self.lastKnownStatus = @(detail.status);
     if (detail.status != OctoTaskStatusCompleted) return;
 
-    BOOL transitioned = (prev != nil && prev.integerValue != OctoTaskStatusCompleted);
+    // 只认文档写的三态: Pending/WaitingConfirm/Processing → Completed。不能用
+    // "非 Completed 就算" 这么宽的判定——乱序响应理论上可能让 lastKnownStatus 短暂
+    // 停在 Failed/Cancelled 这类终态上 (见 loadDetail 的 in-flight 保护), 那种情况
+    // 不是本页声明覆盖的"跃变", 收紧到显式集合更贴合上面的注释。
+    BOOL transitioned = prev != nil && (
+        prev.integerValue == OctoTaskStatusPending ||
+        prev.integerValue == OctoTaskStatusWaitingConfirm ||
+        prev.integerValue == OctoTaskStatusProcessing);
     if (transitioned) {
         [OctoSummaryGroupNotifyHelper consumeEligibleTaskId:detail.taskId];
     } else if (prev == nil) {
         if (![OctoSummaryGroupNotifyHelper consumeEligibleTaskId:detail.taskId]) return;
     } else {
-        // prev 已经是完成态 —— 同一个终态被轮询/重入看到第二次, 不是新的完成。
+        // prev 落在 {Completed, Failed, Cancelled} 里——不是文档声明覆盖的那三个
+        // 前态。prev 是 Completed 时是同一终态被轮询/重入看到第二次; prev 是
+        // Failed/Cancelled 时理论上只可能来自乱序响应的短暂脏读, 两种都不算新完成。
         return;
     }
     [OctoSummaryGroupNotifyHelper notifyIfNeededWithDetail:detail];
