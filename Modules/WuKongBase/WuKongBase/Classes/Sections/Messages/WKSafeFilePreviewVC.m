@@ -64,20 +64,26 @@ static UIWindow *_previousKeyWindow = nil;
         if (w.isKeyWindow) { _previousKeyWindow = w; break; }
     }
 
+    // 用 scene 的 coordinateSpace.bounds 而非 UIScreen.mainScreen.bounds:
+    // iPad 默认支持 Split View / Slide Over / Stage Manager (未设 UIRequiresFullScreen),
+    // app 实际可见区域可能远小于整机屏幕尺寸, 用整机尺寸摆放 window 会导致内容渲染到
+    // 可见 scene 区域之外而"看起来是空白"。iPhone 无此类非全屏窗口场景, 故此前未暴露。
+    CGRect sceneBounds = scene ? scene.coordinateSpace.bounds : [UIScreen mainScreen].bounds;
+
     UIWindow *window = scene
         ? [[UIWindow alloc] initWithWindowScene:scene]
-        : [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        : [[UIWindow alloc] initWithFrame:sceneBounds];
     window.windowLevel = UIWindowLevelNormal;
     window.rootViewController = nav;
     _previewWindow = window;
 
     // 从右侧滑入，模拟 push 动画
-    window.frame = CGRectMake([UIScreen mainScreen].bounds.size.width, 0,
-                              [UIScreen mainScreen].bounds.size.width,
-                              [UIScreen mainScreen].bounds.size.height);
+    window.frame = CGRectMake(sceneBounds.size.width, 0,
+                              sceneBounds.size.width,
+                              sceneBounds.size.height);
     window.hidden = NO;
     [UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
-        window.frame = [UIScreen mainScreen].bounds;
+        window.frame = sceneBounds;
     } completion:^(BOOL finished) {
         [window makeKeyAndVisible];
     }];
@@ -101,12 +107,13 @@ static UIWindow *_previousKeyWindow = nil;
         }
     }
 
-    // 向右滑出，模拟 pop 动画
+    // 向右滑出，模拟 pop 动画; 同样用 scene 的 coordinateSpace.bounds, 原因见 showRootViewController:
     UIWindow *window = _previewWindow;
+    CGRect sceneBounds = window.windowScene ? window.windowScene.coordinateSpace.bounds : [UIScreen mainScreen].bounds;
     [UIView animateWithDuration:0.25 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
-        window.frame = CGRectMake([UIScreen mainScreen].bounds.size.width, 0,
-                                  [UIScreen mainScreen].bounds.size.width,
-                                  [UIScreen mainScreen].bounds.size.height);
+        window.frame = CGRectMake(sceneBounds.size.width, 0,
+                                  sceneBounds.size.width,
+                                  sceneBounds.size.height);
     } completion:^(BOOL finished) {
         window.hidden = YES;
         window.rootViewController = nil;
