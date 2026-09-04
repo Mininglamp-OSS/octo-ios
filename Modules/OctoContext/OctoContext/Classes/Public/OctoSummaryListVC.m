@@ -769,7 +769,8 @@
         // 后端返回新 task_id, 切到新 id 让后续 poller / detail 走新任务
         if ([result isKindOfClass:NSDictionary.class]) {
             id tidVal = ((NSDictionary *)result)[@"task_id"];
-            int64_t newId = [tidVal isKindOfClass:NSNumber.class] ? [tidVal longLongValue] : 0;
+            // 同 CreateVC / DetailVC: 走模型层统一口径, 容忍数字 / 数字字符串。
+            int64_t newId = [OctoSummaryModelHelper int64FromValue:tidVal];
             if (newId > 0 && newId != origTaskId) {
                 item.taskId = newId;
                 // 列表里发起的"重新生成"同样算本机发起: 打上 eligible 标记, 让用户随后

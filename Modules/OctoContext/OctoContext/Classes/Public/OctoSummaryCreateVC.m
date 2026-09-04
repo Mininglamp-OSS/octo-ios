@@ -584,7 +584,10 @@ static const CGFloat kSourceCardMinH   = 78;    // "选择聊天" 卡最小高�
         int64_t taskId = 0;
         if ([result isKindOfClass:NSDictionary.class]) {
             id tidVal = ((NSDictionary *)result)[@"task_id"];
-            if ([tidVal isKindOfClass:NSNumber.class]) taskId = [tidVal longLongValue];
+            // 用模型层的统一取值口径: 后端历史上同一字段既回过数字也回过数字字符串,
+            // 只认 NSNumber 会在回字符串时静默丢掉 eligible 标记 + 详情页跳转。
+            // int64FromValue: 自身已处理 nil / NSNull。
+            taskId = [OctoSummaryModelHelper int64FromValue:tidVal];
         }
         // 本机发起标记 (eligible, 10 分钟 TTL, 一次性消费): 只有打过这个标记的 task,
         // 在详情页首屏就已经是完成态、拿不到状态跃变时, 才允许发那条群提示。

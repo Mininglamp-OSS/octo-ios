@@ -198,11 +198,28 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
 
     [self buildBottomBar];
 
+    // 前台恢复时重新拉起轮询。viewWillAppear 只覆盖"被子页盖住后返回", 覆盖不到
+    // "页面一直开着, 但 App 进了后台 / 断网": 后台期间 NSTimer 不走, 且弱网时轮询
+    // 可能已经退避到低频, 用户切回来时需要立刻续上一拍, 否则完成时刻可能整段错过。
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                            selector:@selector(onAppDidBecomeActive)
+                                                name:UIApplicationDidBecomeActiveNotification
+                                              object:nil];
+
     [self loadDetail];
+}
+
+- (void)onAppDidBecomeActive {
+    // 已经离场 / 正在离场的 VC 不复活轮询 (view 不在窗口上就没必要跑)。
+    if (!self.view.window) return;
+    [self resumePollingIfNeeded];
 }
 
 - (void)dealloc {
     [self.pollTimer invalidate];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                   name:UIApplicationDidBecomeActiveNotification
+                                                 object:nil];
     // 最后一道兜底: VC 真正销毁时确保所有 webview 不再回调任何东西。视图层级已经
     // 不存在了, 异步在飞的 completion handler 触到 weakSelf=nil 自然 no-op, 这里
     // 兜底也防一些极端时序 (比如 webview 还在排队 IPC 时 VC 整体 dealloc)。
@@ -235,13 +252,7 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
     // push 的子页盖住" (转发 / 编辑 / 查看确认状态都会 push 子页)。之前 pop 回来后
     // 轮询没有任何地方重新拉起, 永久停摆——群提示现在挂在这条轮询上, 停摆等于提示
     // 再也发不出去。这里补上: 非终态且轮询确实没在跑时, 重新拉一次。
-    // self.detail 为空是首次进页, viewDidLoad 已经调过 loadDetail, 这里不用重复。
-    if (self.detail && !self.pollTimer) {
-        BOOL nonTerminal = self.detail.status == OctoTaskStatusProcessing
-            || self.detail.status == OctoTaskStatusPending
-            || self.detail.status == OctoTaskStatusWaitingConfirm;
-        if (nonTerminal) [self loadDetail];
-    }
+    [self resumePollingIfNeeded];
 }
 
 /// 取消右滑后 viewWillAppear 调用, 与 disarmTableWebviews 配对。idempotent: 没 disarm
@@ -271,8 +282,7 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
     BOOL trulyLeaving = self.isMovingFromParentViewController || self.isBeingDismissed;
     if (!trulyLeaving) return;
 
-    [self.pollTimer invalidate];
-    self.pollTimer = nil;
+    [self stopPolling];
 
     // 漏掉的并发路径: A 顶着 sheet (RelatedChatSheet) 时被 swipe-back pop —— UIKit
     // 把 "sheet 强 dismiss" 和 "nav pop 转场" 两段并发跑在 tracking runloop 上,
@@ -535,21 +545,21 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
             BOOL permanent = error && httpStatus >= 400 && httpStatus < 500;
             if (permanent) {
                 weakSelf.pollTransientErrorCount = 0;
+                [weakSelf stopPolling];
                 [weakSelf.view showMsg:error.localizedDescription ?: LLang(@"加载失败")];
                 return;
             }
             // 临时性失败 (弱网抖动/超时/切后台瞬间断连/5xx) 不能让轮询链路永久停摆——
             // 群提示挂在这条轮询观测到的状态跃变上, 断一次就再也没人去看任务完成了。
             // 只在第一次失败时提示, 后续静默重试, 避免持续断网时 toast 刷屏; 但也不能
-            // 无限重试, 连续失败太多次说明网络/服务端持续异常, 停下来别再空转。
+            // 一直 3s 一发空转, 所以连续失败到一定次数后退避到更长间隔 (而不是彻底停),
+            // 这样地铁/电梯里断网一分钟以上、之后网络自己恢复时, 轮询仍能自愈。
             if (!weakSelf.pollErrorToastShown) {
                 weakSelf.pollErrorToastShown = YES;
                 [weakSelf.view showMsg:LLang(@"加载失败")];
             }
             weakSelf.pollTransientErrorCount += 1;
-            static const NSUInteger kMaxTransientRetries = 20; // 3s 间隔, 约 1 分钟
-            if (weakSelf.pollTransientErrorCount > kMaxTransientRetries) return;
-            [weakSelf scheduleNextPoll];
+            [weakSelf scheduleNextPollWithBackoff];
             return;
         }
         weakSelf.pollErrorToastShown = NO;
@@ -598,11 +608,57 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
 }
 
 - (void)scheduleNextPoll {
+    [self scheduleNextPollAfter:3.0];
+}
+
+/// 连续临时性失败时的退避: 前 20 次维持 3s (弱网抖动通常几秒内自愈), 之后拉到 30s
+/// 长驻低频重试。**不彻底停** —— 停掉的话网络恢复后没有任何东西会把轮询拉回来,
+/// 用户开着页面却永远等不到完成, 群提示也发不出去 (review 指出的阻塞场景)。
+/// 30s × 长期开页的成本可接受: 只在持续异常时才走到这一档。
+- (void)scheduleNextPollWithBackoff {
+    static const NSUInteger kFastRetryLimit = 20;   // 3s 间隔, 约 1 分钟
+    NSTimeInterval delay = self.pollTransientErrorCount > kFastRetryLimit ? 30.0 : 3.0;
+    [self scheduleNextPollAfter:delay];
+}
+
+- (void)scheduleNextPollAfter:(NSTimeInterval)delay {
     [self.pollTimer invalidate];
     __weak typeof(self) weakSelf = self;
-    self.pollTimer = [NSTimer scheduledTimerWithTimeInterval:3.0 repeats:NO block:^(NSTimer *t) {
+    self.pollTimer = [NSTimer scheduledTimerWithTimeInterval:delay repeats:NO block:^(NSTimer *t) {
+        // 一次性 timer 触发后自身变 invalid, 但 self.pollTimer 仍持有这个对象 (非 nil)。
+        // 不清掉的话 viewWillAppear / applicationDidBecomeActive 里的 `!self.pollTimer`
+        // 恢复闸永远进不去 —— 轮询一旦停摆就再也拉不起来。所以每次触发即清, 让
+        // "pollTimer == nil" 严格等价于 "当前没有排队中的下一拍"。
+        [weakSelf clearPollTimer];
         [weakSelf loadDetail];
     }];
+}
+
+/// 停轮询的唯一出口: invalidate + 置 nil。所有停止路径都必须走这里, 否则
+/// pollTimer 会留着一个 invalid 对象, 把上面说的恢复闸永久堵死。
+- (void)stopPolling {
+    [self.pollTimer invalidate];
+    self.pollTimer = nil;
+}
+
+/// 只清引用 (timer 已自然触发完, 无需再 invalidate)。
+- (void)clearPollTimer {
+    self.pollTimer = nil;
+}
+
+/// 非终态且当前没有排队中的下一拍 → 重新拉起轮询。
+/// viewWillAppear (子页 pop 回来) 和 applicationDidBecomeActive (前台恢复) 共用。
+- (void)resumePollingIfNeeded {
+    // detail 为空是首次进页, viewDidLoad 已经调过 loadDetail, 不必重复。
+    if (!self.detail || self.pollTimer) return;
+    BOOL nonTerminal = self.detail.status == OctoTaskStatusProcessing
+        || self.detail.status == OctoTaskStatusPending
+        || self.detail.status == OctoTaskStatusWaitingConfirm;
+    if (!nonTerminal) return;
+    // 弱网期间累计的连续失败计数在这里清零: 用户回到前台 / 从子页返回, 说明这是一次
+    // 新的重试机会, 不该继承上一轮网络异常留下的额度。
+    self.pollTransientErrorCount = 0;
+    [self loadDetail];
 }
 
 - (void)renderDetail {
@@ -1169,7 +1225,9 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
         // 旧 completed/failed 任务上, 用户看不到新进度。
         if ([result isKindOfClass:NSDictionary.class]) {
             id tidVal = ((NSDictionary *)result)[@"task_id"];
-            int64_t newId = [tidVal isKindOfClass:NSNumber.class] ? [tidVal longLongValue] : 0;
+            // 同 CreateVC: 走模型层统一口径, 容忍数字 / 数字字符串两种回值。只认
+            // NSNumber 的话后端回字符串时会静默不切 task, 页面永远卡在旧任务上。
+            int64_t newId = [OctoSummaryModelHelper int64FromValue:tidVal];
             if (newId > 0 && newId != self.detail.taskId) {
                 self.taskId = @(newId);
                 // 换了 task 就得复位状态观测锚, 否则新任务的首屏会被当成"旧任务的
