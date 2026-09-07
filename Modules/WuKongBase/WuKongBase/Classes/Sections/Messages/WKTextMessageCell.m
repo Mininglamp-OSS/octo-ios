@@ -1910,7 +1910,10 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         NSString *url = objc_getAssociatedObject(self.linkCardView, "linkURL");
         if (url.length > 0) {
             // 总结深链也可能以链接卡片形态出现, 同 didLinkClick: 给一次判定机会。
-            [[WKApp shared] invoke:WKPOINT_SUMMARY_DEEPLINK param:@{@"url": url}];
+            // 只认通知助手自己发的消息——链接卡片可以出现在任意频道任意消息里。
+            if ([self.messageModel.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
+                [[WKApp shared] invoke:WKPOINT_SUMMARY_DEEPLINK param:@{@"url": url}];
+            }
             [[UIApplication sharedApplication] openURL:[NSURL URLWithString:url] options:@{} completionHandler:nil];
         }
         return;
@@ -2437,7 +2440,11 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
         // 与卡片按钮同口径 (WKInteractiveCardCell.handleOpenUrlAction): 灰度关掉
         // OCTO_CARD_MESSAGE_ENABLED 时 type-17 卡片会降级成纯文本, 通知助手那条"查看详情"
         // 就变成这里的文本链接, 所以两条路径都要给总结深链一次判定机会。纯副作用, 不改导航。
-        [[WKApp shared] invoke:WKPOINT_SUMMARY_DEEPLINK param:@{@"url": link ?: @""}];
+        // 同样只认通知助手自己发的消息——这里匹配的是"任意含 . 的文本", 覆盖面本来就
+        // 很宽, 不加频道判断的话任何人发的任意链接都能提前触发本机的判定逻辑。
+        if ([self.messageModel.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
+            [[WKApp shared] invoke:WKPOINT_SUMMARY_DEEPLINK param:@{@"url": link ?: @""}];
+        }
         WKWebViewVC *vc = [[WKWebViewVC alloc] init];
         if(![link hasPrefix:@"http"]) {
             link = [NSString stringWithFormat:@"http://%@",link];

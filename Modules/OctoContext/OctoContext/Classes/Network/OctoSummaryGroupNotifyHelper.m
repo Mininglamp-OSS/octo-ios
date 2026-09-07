@@ -119,11 +119,15 @@
         // 新消息提示音/振动。contentToMessage: 默认 header.showUnread = true, 而
         // WKSystemMessageHandler.onRecvMessages: 的提醒分支只判 showUnread 和当前聊天
         // channel, 不排除 isSend==YES 的消息。必须在 sendMessage:(WKMessage*) 快照
-        // 进 WKSendPacket 之前把 flag 改掉 —— 先 saveMessage: 落库、改 header、
-        // 用 addOrUpdateMessages: 把改动写回 DB, 再拿这个已经是 NO 的 message 去发,
-        // 否则 wire 包和 DB 行都还是发送时刻的 showUnread=true (sendMessage:content:channel:
-        // 那个便捷方法内部是同步跑完 contentToMessage → sendMessage:message 的, 事后改
-        // message.header 只影响内存对象, 改不动已经拷进 WKSendPacket 的那份快照)。
+        // 进 WKSendPacket 之前把 flag 改掉——先 saveMessage: 落库 (此时 header.showUnread
+        // 还是 contentToMessage: 给的默认 true), 再改 message.header, 最后拿这个已经是
+        // NO 的 message 对象去发, wire 包由 sendMessage: 内部读这个对象的 header 打包,
+        // 拿到的就是 NO (sendMessage:content:channel: 那个便捷方法反而不行, 它内部同步
+        // 跑完 contentToMessage → sendMessage:message, 事后改 message.header 已经赶不上
+        // 那份快照)。DB 里那份不需要专门去改——WKMessageDB 的消息表本来就没有
+        // show_unread/red_dot 列, 这个 flag 从来不持久化, 改了也留不住, 之前这里多调了
+        // 一次 addOrUpdateMessages: 纯属无效功且有风险 (它内部走的是 insertMessage:,
+        // 撞上同一个 clientMsgNo 的重复插入分支, 目前巧合无害但不是该依赖的行为), 删掉。
         WKMessage *message = [[WKSDK shared].chatManager saveMessage:tip channel:ch];
         if (!message) {
             NSLog(@"[OctoSummaryGroupNotifyHelper] task=%lld channel=%@ 拦截: saveMessage 落库失败", taskId, channelId);
@@ -131,7 +135,6 @@
             continue;
         }
         message.header.showUnread = NO;
-        [[WKSDK shared].chatManager addOrUpdateMessages:@[message] notify:NO];
         message = [[WKSDK shared].chatManager sendMessage:message];
         if (!message) {
             // 防御性判断: sendMessage:(WKMessage*) 目前的实现不会返回 nil,
@@ -156,6 +159,9 @@
 #pragma mark - 深链解析
 
 /// `/s/<taskNo>` —— 单段路径, 允许尾斜杠。`/s/share/<shareId>` 是两段, 天然被排除。
+/// 字符类 `[A-Za-z0-9_-]` 与下面 isValidTaskNo: 里手写的那份是同一个规则的两份拷贝
+/// (正则的范围写法 `A-Z` 没法喂给 NSCharacterSet, 没有再抽公共常量) —— 改一份记得
+/// 把另一份也改掉。
 static NSString *const kSummaryPathPattern = @"^/s/([A-Za-z0-9_-]+)/?$";
 
 + (nullable NSString *)firstQueryValueIn:(NSURLComponents *)comps keys:(NSArray<NSString *> *)keys {
@@ -177,11 +183,12 @@ static NSString *const kSummaryPathPattern = @"^/s/([A-Za-z0-9_-]+)/?$";
     return [s rangeOfCharacterFromSet:nonDigits].location == NSNotFound;
 }
 
-/// task_no 允许的字符集, 与 `/s/<seg>` 路径分支的 kSummaryPathPattern 保持同一口径。
-/// path 分支天然只能匹配这个字符集 (正则本身就是这么写的); query 分支 (?task_no=)
-/// 来自任意被点击链接、不受这条正则约束, 必须单独校验 —— 否则一个形如
-/// `?task_no=../../admin` 的链接会被 OctoSummaryAPI 里保留 "/" 的
-/// URLPathAllowedCharacterSet 原样拼进请求路径, 打到 /summaries/ 之外的地方。
+/// task_no 允许的字符集, 与 `/s/<seg>` 路径分支的 kSummaryPathPattern 保持同一口径
+/// (同一个字符类的第二份拷贝, 见 kSummaryPathPattern 处的说明)。path 分支天然只能
+/// 匹配这个字符集 (正则本身就是这么写的); query 分支 (?task_no=) 来自任意被点击
+/// 链接、不受这条正则约束, 必须单独校验 —— 否则一个形如 `?task_no=../../admin`
+/// 的链接会被 OctoSummaryAPI 里保留 "/" 的 URLPathAllowedCharacterSet 原样拼进
+/// 请求路径, 打到 /summaries/ 之外的地方。
 + (BOOL)isValidTaskNo:(NSString *)taskNo {
     if (taskNo.length == 0) return NO;
     NSCharacterSet *invalid = [[NSCharacterSet characterSetWithCharactersInString:

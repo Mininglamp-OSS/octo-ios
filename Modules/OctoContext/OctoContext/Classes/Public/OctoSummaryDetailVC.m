@@ -554,9 +554,12 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
         if (error || ![result isKindOfClass:OctoSummaryDetail.class]) {
             // 4xx (任务被删/无权限/参数错误等) 是永久性的, 换个 3s 再问一次结果不会变——
             // 之前不分青红皂白一律重试, 断网时还好, 遇到 404/403 这种会用户开着页面
-            // 就一直白打请求。永久性错误直接停轮询, 不留死循环。
+            // 就一直白打请求。永久性错误直接停轮询, 不留死循环。408/429 排除在外——
+            // 这两个恰恰是"该重试"的语义 (请求超时 / 被限流), 3s 轮询撞上限流策略
+            // 完全可能触发, 归到永久性会让轮询在这种情况下白白停摆。
             NSInteger httpStatus = error.code;
-            BOOL permanent = error && httpStatus >= 400 && httpStatus < 500;
+            BOOL permanent = error && httpStatus >= 400 && httpStatus < 500
+                && httpStatus != 408 && httpStatus != 429;
             if (permanent) {
                 weakSelf.pollTransientErrorCount = 0;
                 [weakSelf stopPolling];
@@ -673,11 +676,19 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
 /// viewWillAppear (子页 pop 回来) 和 applicationDidBecomeActive (前台恢复) 共用。
 - (void)resumePollingIfNeeded {
     // detail 为空是首次进页, viewDidLoad 已经调过 loadDetail, 不必重复。
-    if (!self.detail || self.pollTimer) return;
+    if (!self.detail) return;
     BOOL nonTerminal = self.detail.status == OctoTaskStatusProcessing
         || self.detail.status == OctoTaskStatusPending
         || self.detail.status == OctoTaskStatusWaitingConfirm;
     if (!nonTerminal) return;
+    // 已经有请求在飞 (isLoadingDetail) 就什么都不做, 让它自己决定要不要重新退避——
+    // 否则会在它飞行途中把 pollTransientErrorCount 清零, 该请求万一还是失败, 会从 0
+    // 重新计数, 提前跳出本该继续的 30s 退避档。
+    if (self.isLoadingDetail) return;
+    // 之前这里是 "self.pollTimer 非空就跳过", 退避到 30s 那一档时 pollTimer 正好是一个
+    // 还在等的定时器, 用户这时候前台恢复/从子页返回本来就该立即拉一次, 却被这条判断
+    // 拦住, 要等最长 30s 才会重试。改成直接取消掉 pending 的退避定时器再立即拉。
+    [self stopPolling];
     // 弱网期间累计的连续失败计数在这里清零: 用户回到前台 / 从子页返回, 说明这是一次
     // 新的重试机会, 不该继承上一轮网络异常留下的额度。
     self.pollTransientErrorCount = 0;

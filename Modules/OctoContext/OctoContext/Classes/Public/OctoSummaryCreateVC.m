@@ -604,23 +604,24 @@ static const CGFloat kSourceCardMinH   = 78;    // "选择聊天" 卡最小高�
         // (聊天页/列表页), replacePushViewController: 会把 removeLastObject 这一下套在它头上,
         // 等于把用户刚刚手动返回的页面从栈里整个抹掉。先确认自己没被顶掉再动栈。
         BOOL stillOnTop = [WKNavigationManager shared].topViewController == weakSelf;
-        if (taskId > 0 && stillOnTop) {
+        if (!stillOnTop) {
+            // 用户已经自己离开了这个页面, 什么都不用做——eligible 标记已经打上,
+            // 之后无论是打开详情页还是点通知助手深链, 都还能补上那条群提示。
+        } else if (taskId > 0) {
             OctoSummaryDetailVC *detail = [OctoSummaryDetailVC new];
             detail.taskId = @(taskId);
             detail.hidesBottomBarWhenPushed = YES;
             [[WKNavigationManager shared] replacePushViewController:detail animated:YES];
-        } else if (!stillOnTop) {
-            // 用户已经自己离开了这个页面, 什么都不用做——eligible 标记已经打上,
-            // 之后无论是打开详情页还是点通知助手深链, 都还能补上那条群提示。
         } else {
             [[WKNavigationManager shared] popViewControllerAnimated:YES];
         }
-        // Toast 挂在导航切换后的 topViewController.view 上 —— 挂在 weakSelf.view 的话,
-        // createVC 的视图层级即刻被拆掉, Toast 还没动画完就跟着销毁, 用户什么也看不到。
+        // Toast 挂在 keyWindow 上——挂在导航切换后的 topViewController.view 上, 转场
+        // slide-in 动画期间那个 view 本身还在跑 layout, 容易跟 toast 自己的布局打架;
+        // 兜底才落回 top.view (理论上 keyWindow 不该为 nil, 但防一下极端情况)。
         // dispatch_async 一格让 nav stack 切完再取 top, 避免拿到尚未切换的旧 top。
         dispatch_async(dispatch_get_main_queue(), ^{
             UIViewController *top = [WKNavigationManager shared].topViewController;
-            UIView *target = top.view ?: UIApplication.sharedApplication.keyWindow;
+            UIView *target = UIApplication.sharedApplication.keyWindow ?: top.view;
             [target showMsg:successText];
         });
     }];

@@ -6,7 +6,9 @@
 #import "OctoSummaryNotifyStore.h"
 
 /// SENT 表: [ {@"id": NSNumber(taskId), @"channels": NSArray<NSString*>} ]。
-/// 用有序数组而不是字典, 是为了能按写入顺序做 FIFO 截断 (字典无序, 溢出时不知道该丢谁)。
+/// 用有序数组而不是字典, 是为了能按"命中即续命排到队尾"的顺序做淘汰——严格来说是
+/// LRU 不是 FIFO (见 _markSentTaskId:channelId: 命中已存在的 task 会挪到队尾),
+/// 字典无序做不到这个, 溢出时也不知道该丢谁。
 static NSString *const kSentKey = @"OctoSummaryTipSentKey";
 /// 历史扁平表: NSArray<NSString*>, 元素是 taskId 的十进制字符串。只读不写。
 /// 另一条在评审中的分支 (以及据此打过的灰度包) 用的是这个按 taskId 整体去重、没有
