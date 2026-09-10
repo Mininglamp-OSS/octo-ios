@@ -4914,14 +4914,23 @@ static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
 
 // 点击信号显示区域
 - (void)signalTapped {
+    // 非已连接状态（已断开/连接中/正在拉离线消息）不弹气泡，避免展示假数据
+    if ([WKSDK shared].connectionManager.connectStatus != WKConnected) {
+        return;
+    }
+
     // 计算已连接时长
-    NSTimeInterval connectedDuration = [[NSDate date] timeIntervalSinceDate:[NSDate dateWithTimeIntervalSince1970:self.connectedAtTime]];
-    NSInteger seconds = (NSInteger)connectedDuration;
     NSString *durationText;
-    if (seconds < 60) {
-        durationText = [NSString stringWithFormat:LLang(@"已连接: %ld秒"), (long)seconds];
+    if (self.connectedAtTime <= 0) {
+        durationText = [NSString stringWithFormat:LLang(@"已连接: %ld秒"), 0L];
     } else {
-        durationText = [NSString stringWithFormat:LLang(@"已连接: %ld分钟"), (long)(seconds / 60)];
+        NSTimeInterval connectedDuration = [[NSDate date] timeIntervalSinceDate:[NSDate dateWithTimeIntervalSince1970:self.connectedAtTime]];
+        NSInteger seconds = (NSInteger)connectedDuration;
+        if (seconds < 60) {
+            durationText = [NSString stringWithFormat:LLang(@"已连接: %ld秒"), (long)seconds];
+        } else {
+            durationText = [NSString stringWithFormat:LLang(@"已连接: %ld分钟"), (long)(seconds / 60)];
+        }
     }
 
     // 创建详情视图
@@ -4938,7 +4947,11 @@ static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
 
     // 延迟标签
     UILabel *latencyInfoLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 34, 180, 20)];
-    latencyInfoLabel.text = [NSString stringWithFormat:LLang(@"延迟: %ldms"), (long)self.currentLatencyMs];
+    if (self.currentLatencyMs > 0) {
+        latencyInfoLabel.text = [NSString stringWithFormat:LLang(@"延迟: %ldms"), (long)self.currentLatencyMs];
+    } else {
+        latencyInfoLabel.text = LLang(@"延迟: --ms");
+    }
     latencyInfoLabel.textColor = [UIColor whiteColor];
     latencyInfoLabel.font = [UIFont systemFontOfSize:13];
     [tooltipView addSubview:latencyInfoLabel];
