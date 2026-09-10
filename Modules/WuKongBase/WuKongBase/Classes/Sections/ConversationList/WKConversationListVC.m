@@ -1477,7 +1477,9 @@
         self.connectedAtTime = [[NSDate date] timeIntervalSince1970];
         [self startPingMonitoring];
     } else {
-        // 连接中或已断开，停止 ping 监控
+        // 连接中或已断开，重置延迟/时长数据并停止 ping 监控，避免重连后展示断线前的过期数据
+        self.currentLatencyMs = -1;
+        self.connectedAtTime = 0;
         [self stopPingMonitoring];
     }
 }
@@ -4836,6 +4838,9 @@ static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
     if (!self.signalContainerView) {
         return;
     }
+
+    // 未连接状态下禁用点击，避免图标可点但无响应
+    self.signalContainerView.userInteractionEnabled = (status == WKConnected);
 
     UIColor *color;
     NSString *statusText;

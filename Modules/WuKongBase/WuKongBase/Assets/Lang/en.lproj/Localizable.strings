@@ -708,6 +708,7 @@
 "已连接: %ld分钟"="Connected: %ld min";
 "已连接: %ld秒"="Connected: %ld s";
 "延迟: %ldms"="Latency: %ldms";
+"延迟: --ms"="Latency: --ms";
 
 // ============================================================
 // MARK: - i18n batch 2026-05: Thread (子区)
