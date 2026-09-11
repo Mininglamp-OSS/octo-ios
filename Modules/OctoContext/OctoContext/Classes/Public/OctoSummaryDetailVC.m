@@ -1257,21 +1257,27 @@ static const void * const kOctoWebviewDisarmedKey = &kOctoWebviewDisarmedKey;
         // regenerate API 返回 { task_id: <new id> } —— 与 ListVC.performRegenerate 同口径,
         // 切到新 taskId 后再 loadDetail, 才能拉到/轮询新一轮任务; 不切的话页面永远卡在
         // 旧 completed/failed 任务上, 用户看不到新进度。
+        int64_t effectiveTaskId = self.detail.taskId;
         if ([result isKindOfClass:NSDictionary.class]) {
             id tidVal = ((NSDictionary *)result)[@"task_id"];
             // 同 CreateVC: 走模型层统一口径, 容忍数字 / 数字字符串两种回值。只认
             // NSNumber 的话后端回字符串时会静默不切 task, 页面永远卡在旧任务上。
             int64_t newId = [OctoSummaryModelHelper int64FromValue:tidVal];
-            if (newId > 0 && newId != self.detail.taskId) {
-                self.taskId = @(newId);
-                // 换了 task 就得复位状态观测锚, 否则新任务的首屏会被当成"旧任务的
-                // 后续一拍", 拿旧状态去比跃变。
-                self.lastKnownStatus = nil;
-                // 重新生成也是"本机发起", 与创建同口径打上 eligible 标记 —— 新任务
-                // 极快完成、首屏就是终态时才有闸可开。
-                [OctoSummaryGroupNotifyHelper markEligibleTaskId:newId];
+            if (newId > 0) {
+                effectiveTaskId = newId;
+                if (newId != self.detail.taskId) {
+                    self.taskId = @(newId);
+                }
             }
         }
+        // 后端 regenerate 实测返回的是同一个 task_id, 而不是新 id —— 复位状态观测锚
+        // + 打 eligible 标记不能靠"id 是否变化"这个条件, 否则永远不会触发, 群提示
+        // 也就永远不会发。这两步只要 regenerate 请求本身成功就必须做, 目标 taskId
+        // 用 effectiveTaskId(解析出新 id 就用新 id, 否则就是当前这个未变的 id)。
+        // SENT 表去重现在按 (taskId, version) 记账 (OctoSummaryGroupNotifyHelper.h),
+        // 新一轮完成天然带着新 version, 不需要在这里清掉旧记录。
+        self.lastKnownStatus = nil;
+        [OctoSummaryGroupNotifyHelper markEligibleTaskId:effectiveTaskId];
         [self loadDetail];
         // 通知列表同步: 否则用户从详情发起"重新生成"后返回,
         // 列表仍卡在旧的 completed 状态,看不到"正在重新总结"。

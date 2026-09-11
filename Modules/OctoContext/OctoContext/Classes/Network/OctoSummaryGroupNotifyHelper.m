@@ -66,6 +66,13 @@
     if (taskId <= 0) return;
     // 前置校验: 非完成态一律不发 (对齐安卓 notifyIfNeeded 的 status 校验)。
     if (detail.status != OctoTaskStatusCompleted) return;
+    // 去重记账必须带 version, 不能只用 taskId —— 后端 regenerate 是原地复用同一个
+    // task_id 的 UPDATE, 只按 taskId 记账会让重新生成完成后的提示被上一轮的"已通知"
+    // 记录误判成重复而跳过。status == Completed 时 result.version 按服务端事务顺序
+    // (先写 SummaryResult 再改状态) 必然已经落库, 这里仍防御性判空——真拿不到就宁可
+    // 漏发这一次, 不猜一个假版本号出来记账 (与安卓 SummaryNotifyCoordinator 对齐)。
+    if (!detail.result) return;
+    NSInteger version = detail.result.version;
 
     WKConnectInfo *connectInfo = [WKSDK shared].options.connectInfo;
     NSString *selfUid = connectInfo.uid;
@@ -109,7 +116,7 @@
         if (channelId.length == 0) continue;
         // claim-before-send: 原子地"没发过就落账", 一把锁里做完查+写, 不依赖"两条触发
         // 链路都恰好在主线程上跑所以时序上能对齐"这条隐含前提。
-        if (![OctoSummaryNotifyStore claimTaskId:taskId channelId:channelId]) {
+        if (![OctoSummaryNotifyStore claimTaskId:taskId version:version channelId:channelId]) {
             NSLog(@"[OctoSummaryGroupNotifyHelper] task=%lld channel=%@ 拦截: 已经发过", taskId, channelId);
             continue;
         }
@@ -131,7 +138,7 @@
         WKMessage *message = [[WKSDK shared].chatManager saveMessage:tip channel:ch];
         if (!message) {
             NSLog(@"[OctoSummaryGroupNotifyHelper] task=%lld channel=%@ 拦截: saveMessage 落库失败", taskId, channelId);
-            [OctoSummaryNotifyStore unmarkSentTaskId:taskId channelId:channelId];
+            [OctoSummaryNotifyStore unmarkSentTaskId:taskId version:version channelId:channelId];
             continue;
         }
         message.header.showUnread = NO;
@@ -140,7 +147,7 @@
             // 防御性判断: sendMessage:(WKMessage*) 目前的实现不会返回 nil,
             // 但 DB 那份 (saveMessage: 那一步) 已经落上了, 真出现异常也要回滚落账。
             NSLog(@"[OctoSummaryGroupNotifyHelper] task=%lld channel=%@ 拦截: sendMessage 返回 nil (异常路径)", taskId, channelId);
-            [OctoSummaryNotifyStore unmarkSentTaskId:taskId channelId:channelId];
+            [OctoSummaryNotifyStore unmarkSentTaskId:taskId version:version channelId:channelId];
             continue;
         }
         // chatManager sendMessage: 只落库 + 走网络发送, 不会通知当前正打开的聊天页面 UI ——

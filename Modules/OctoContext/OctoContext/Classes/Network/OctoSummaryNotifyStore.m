@@ -5,10 +5,16 @@
 
 #import "OctoSummaryNotifyStore.h"
 
-/// SENT 表: [ {@"id": NSNumber(taskId), @"channels": NSArray<NSString*>} ]。
+/// SENT 表: [ {@"id": NSNumber(taskId), @"version": NSNumber(version), @"channels": NSArray<NSString*>} ]。
 /// 用有序数组而不是字典, 是为了能按"命中即续命排到队尾"的顺序做淘汰——严格来说是
-/// LRU 不是 FIFO (见 _markSentTaskId:channelId: 命中已存在的 task 会挪到队尾),
+/// LRU 不是 FIFO (见 _markSentTaskId:version:channelId: 命中已存在的条目会挪到队尾),
 /// 字典无序做不到这个, 溢出时也不知道该丢谁。
+/// version 与安卓 SummaryNotifyStore 的 "taskId:version" 复合 key 对齐: 后端 regenerate
+/// 是原地复用同一个 task_id 的 UPDATE, 不产生新 task_id, 只按 taskId 记账会让重新生成
+/// 完成后的提示被上一轮的记录误判成"发过了"而跳过。改成 (taskId, version) 后, 新一轮
+/// 完成天然带着新 version (result.version 由后端在 saveLatestResultAndCompleteTask 事务
+/// 里单调递增, 且严格先于 status 改成 Completed 提交, 客户端读到 Completed 时 version
+/// 必然是这一轮的权威值), 不需要在"点击重新生成"那一刻做任何清账动作。
 static NSString *const kSentKey = @"OctoSummaryTipSentKey";
 /// 历史扁平表: NSArray<NSString*>, 元素是 taskId 的十进制字符串。只读不写。
 /// 另一条在评审中的分支 (以及据此打过的灰度包) 用的是这个按 taskId 整体去重、没有
@@ -56,21 +62,24 @@ static const NSTimeInterval kEligibleTTL = 10 * 60;
     return [ids containsObject:[NSString stringWithFormat:@"%lld", taskId]];
 }
 
-+ (BOOL)_hasSentTaskId:(int64_t)taskId channelId:(NSString *)channelId {
++ (BOOL)_hasSentTaskId:(int64_t)taskId version:(NSInteger)version channelId:(NSString *)channelId {
     if ([self legacyHasSentTaskId:taskId]) return YES;
     for (NSDictionary *entry in [self entriesForKey:kSentKey]) {
         if ([entry[@"id"] longLongValue] != taskId) continue;
+        if ([entry[@"version"] integerValue] != version) continue;
         NSArray *channels = entry[@"channels"];
         return [channels isKindOfClass:NSArray.class] && [channels containsObject:channelId];
     }
     return NO;
 }
 
-+ (void)_markSentTaskId:(int64_t)taskId channelId:(NSString *)channelId {
++ (void)_markSentTaskId:(int64_t)taskId version:(NSInteger)version channelId:(NSString *)channelId {
     NSMutableArray<NSDictionary *> *entries = [[self entriesForKey:kSentKey] mutableCopy];
     NSUInteger found = NSNotFound;
     for (NSUInteger i = 0; i < entries.count; i++) {
-        if ([entries[i][@"id"] longLongValue] == taskId) { found = i; break; }
+        if ([entries[i][@"id"] longLongValue] != taskId) continue;
+        if ([entries[i][@"version"] integerValue] != version) continue;
+        found = i; break;
     }
     NSMutableArray<NSString *> *channels = [NSMutableArray array];
     if (found != NSNotFound) {
@@ -80,36 +89,38 @@ static const NSTimeInterval kEligibleTTL = 10 * 60;
         [entries removeObjectAtIndex:found];
     }
     [channels addObject:channelId];
-    // 命中的 task 重新追加到队尾: 最近活跃的不会被 FIFO 截断掉。
-    [entries addObject:@{@"id": @(taskId), @"channels": channels}];
+    // 命中的 (task, version) 重新追加到队尾: 最近活跃的不会被 FIFO 截断掉。
+    [entries addObject:@{@"id": @(taskId), @"version": @(version), @"channels": channels}];
     while (entries.count > kMaxSentTasks) [entries removeObjectAtIndex:0];
     [[NSUserDefaults standardUserDefaults] setObject:entries forKey:kSentKey];
 }
 
-+ (BOOL)claimTaskId:(int64_t)taskId channelId:(NSString *)channelId {
++ (BOOL)claimTaskId:(int64_t)taskId version:(NSInteger)version channelId:(NSString *)channelId {
     if (taskId <= 0 || channelId.length == 0) return NO;
     @synchronized ([self lockToken]) {
-        if ([self _hasSentTaskId:taskId channelId:channelId]) return NO;
-        [self _markSentTaskId:taskId channelId:channelId];
+        if ([self _hasSentTaskId:taskId version:version channelId:channelId]) return NO;
+        [self _markSentTaskId:taskId version:version channelId:channelId];
         return YES;
     }
 }
 
-+ (void)unmarkSentTaskId:(int64_t)taskId channelId:(NSString *)channelId {
++ (void)unmarkSentTaskId:(int64_t)taskId version:(NSInteger)version channelId:(NSString *)channelId {
     if (taskId <= 0 || channelId.length == 0) return;
     @synchronized ([self lockToken]) {
         NSMutableArray<NSDictionary *> *entries = [[self entriesForKey:kSentKey] mutableCopy];
         for (NSUInteger i = 0; i < entries.count; i++) {
             if ([entries[i][@"id"] longLongValue] != taskId) continue;
+            if ([entries[i][@"version"] integerValue] != version) continue;
             NSArray *old = entries[i][@"channels"];
-            // 脏数据只跳过这一条, 不打断整个遍历——entries 里 id 理应唯一 (markSentTaskId
-            // 写入前会先删掉旧 entry 再追加), 但防御性地保留 continue 而不是 return, 万一
-            // 真出现重复 id 也不会因为前一条格式不对就漏查后面本该匹配上的条目。
+            // 脏数据只跳过这一条, 不打断整个遍历——entries 里 (id, version) 理应唯一
+            // (markSentTaskId 写入前会先删掉旧 entry 再追加), 但防御性地保留 continue
+            // 而不是 return, 万一真出现重复条目也不会因为前一条格式不对就漏查后面
+            // 本该匹配上的条目。
             if (![old isKindOfClass:NSArray.class]) continue;
             NSMutableArray *channels = [old mutableCopy];
             [channels removeObject:channelId];
             if (channels.count == 0) [entries removeObjectAtIndex:i];
-            else entries[i] = @{@"id": @(taskId), @"channels": channels};
+            else entries[i] = @{@"id": @(taskId), @"version": @(version), @"channels": channels};
             [[NSUserDefaults standardUserDefaults] setObject:entries forKey:kSentKey];
             return;
         }

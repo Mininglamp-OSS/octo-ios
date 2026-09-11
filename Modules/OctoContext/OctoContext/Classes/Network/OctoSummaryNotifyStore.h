@@ -4,8 +4,10 @@
 //
 //  群总结完成提示的两张本地账本, 与安卓 SummaryNotifyStore 一一对应:
 //
-//    SENT     —— 已经发过提示的 (taskId, channelId) 对。claim-before-send:
-//                发之前先落账, 发失败再回滚, 保证"同一 task 同一群"只发一次。
+//    SENT     —— 已经发过提示的 (taskId, version, channelId) 三元组。claim-before-send:
+//                发之前先落账, 发失败再回滚, 保证"同一 task 同一版本同一群"只发一次。
+//                version 维度是为了兼容 regenerate 原地复用同一 task_id 的场景——
+//                不带 version 的话重新生成完成后会被上一轮的落账记录误判成重复。
 //    ELIGIBLE —— "本机发起过"的 taskId + 时间戳。只在创建 / 重新生成成功那一刻写,
 //                10 分钟 TTL, 一次性消费。用来覆盖"创建后极快完成、详情页首屏
 //                拿到的就是 Completed、没有状态跃变可观测"这条边界。
@@ -23,17 +25,21 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface OctoSummaryNotifyStore : NSObject
 
-#pragma mark - SENT (taskId -> [channelId])
+#pragma mark - SENT (taskId+version -> [channelId])
 
-/// 原子版 claim-before-send: 一把锁里做完"该 task 没往这个群发过就落账", 返回是否
-/// 抢到 (YES = 之前没发过、这次抢到了发送权; NO = 已经发过, 不该再发)。查和写在
-/// 同一把锁里, 不依赖"调用方都在主线程"这条隐含前提。
-/// 兼容读取历史扁平表 (旧实现按 taskId 整体去重, 没有 channel 维度): 命中旧表直接
-/// 判定已发过 (不落新账), 避免升级后给同一条总结重复发。
-+ (BOOL)claimTaskId:(int64_t)taskId channelId:(NSString *)channelId;
+/// 原子版 claim-before-send: 一把锁里做完"该 (task, version) 没往这个群发过就落账",
+/// 返回是否抢到 (YES = 之前没发过、这次抢到了发送权; NO = 已经发过, 不该再发)。查和写
+/// 在同一把锁里, 不依赖"调用方都在主线程"这条隐含前提。
+/// version 必须是这次判定对应的 result.version (与安卓 SummaryNotifyStore 对齐) ——
+/// 后端 regenerate 是原地复用同一个 task_id 的 UPDATE, 只按 taskId 记账会让重新生成
+/// 完成后的提示被上一轮的"已通知"记录误判成重复而跳过; 换成 (taskId, version) 复合键后,
+/// 新一轮完成天然带着新 version, 不需要在"点击重新生成"那一刻做任何清账动作。
+/// 兼容读取历史扁平表 (旧实现按 taskId 整体去重, 没有 channel/version 维度): 命中旧表
+/// 直接判定已发过 (不落新账), 避免升级后给同一条总结重复发。
++ (BOOL)claimTaskId:(int64_t)taskId version:(NSInteger)version channelId:(NSString *)channelId;
 
-/// 回滚落账 (发送失败时)。不会去动历史扁平表。
-+ (void)unmarkSentTaskId:(int64_t)taskId channelId:(NSString *)channelId;
+/// 回滚落账 (发送失败时)。按 (taskId, version) 定位, 不会去动历史扁平表。
++ (void)unmarkSentTaskId:(int64_t)taskId version:(NSInteger)version channelId:(NSString *)channelId;
 
 #pragma mark - ELIGIBLE (本机发起标记, 10min TTL, 一次性)
 

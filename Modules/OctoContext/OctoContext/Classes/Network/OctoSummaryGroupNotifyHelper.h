@@ -21,7 +21,8 @@
 //    status == Completed
 //    && creator_id == 本机登录 uid
 //    && (观测到状态跃变 || 消费掉本机 eligible 标记)
-//    && 该 (taskId, channelId) 没发过
+//    && 该 (taskId, version, channelId) 没发过 (version 见 OctoSummaryResult.version,
+//       用来兼容 regenerate 原地复用同一 task_id 的场景)
 //    && 目标群解析非空 && 显示名非空
 //  方向是"宁可漏发不重发"。
 //
