@@ -34,14 +34,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// 后端 regenerate 是原地复用同一个 task_id 的 UPDATE, 只按 taskId 记账会让重新生成
 /// 完成后的提示被上一轮的"已通知"记录误判成重复而跳过; 换成 (taskId, version) 复合键后,
 /// 新一轮完成天然带着新 version, 不需要在"点击重新生成"那一刻做任何清账动作。
-/// 兼容历史扁平表 (旧实现按 taskId 整体去重, 没有 channel/version 维度, 早期灰度包写过):
-/// 只在这个 taskId 第一次在新代码下被判定时吸收一次——把这次的 (version, channelId)
-/// 当"已发过"直接落进新账本 (不实际发送), 此后这个 taskId 完全转交新账本, 不再受
-/// 历史表影响。不是"命中旧表就永久判定已发过"(那样会让升级设备之后所有 regenerate
-/// 都发不出提示); 具体见 OctoSummaryNotifyStore.m 里 kLegacySentKey 处的完整说明。
+/// 不查历史扁平表 (`OctoSummaryNotifiedTaskIds`, 早期灰度包写过): 查过两版, 都被 review
+/// 抓出来是错的 (漏发), 具体证明见 OctoSummaryNotifyStore.m 里 kSentKey 处的完整说明。
+/// 不要因为看到过它的历史就想把它加回来。
 + (BOOL)claimTaskId:(int64_t)taskId version:(NSInteger)version channelId:(NSString *)channelId;
 
-/// 回滚落账 (发送失败时)。按 (taskId, version) 定位, 不会去动历史扁平表。
+/// 回滚落账 (发送失败时)。按 (taskId, version) 定位。
 + (void)unmarkSentTaskId:(int64_t)taskId version:(NSInteger)version channelId:(NSString *)channelId;
 
 #pragma mark - ELIGIBLE (本机发起标记, 10min TTL, 一次性)

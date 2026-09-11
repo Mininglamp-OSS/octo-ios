@@ -16,23 +16,17 @@
 /// 里单调递增, 且严格先于 status 改成 Completed 提交, 客户端读到 Completed 时 version
 /// 必然是这一轮的权威值), 不需要在"点击重新生成"那一刻做任何清账动作。
 static NSString *const kSentKey = @"OctoSummaryTipSentKey";
-/// 历史扁平表: NSArray<NSString*>, 元素是 taskId 的十进制字符串。只读不写, 键名必须与
-/// 那边的字面量保持一致, 改它等于把那批去重记录全部作废。
-/// 语义局限: 没有 version/channel 维度, 只能回答"这个 taskId 有没有发过", 回答不了
-/// "发过的是哪个版本"。早期实现 (以及据此打过的灰度包) 拿它当"taskId 命中就永远算
-/// 已发过"用——这对装过那批灰度包的设备是过度拦截: 只要 taskId 命中过, 之后任何一次
-/// regenerate 产出的新版本都会被这条无条件短路挡掉, 版本号判断完全轮不到, 提示永久
-/// 发不出去。
-/// 现在的用法改成"吸收一次就退场": 见 +claimTaskId:version:channelId: —— 只在这个
-/// taskId 在新版 kSentKey 里还完全没有任何记录 (即这台设备第一次在新代码下判定这个
-/// taskId) 时, 才把这次请求携带的 (taskId, version, channelId) 直接当"已发过"落进
-/// kSentKey (不真的发送), 且仅此一次。落账之后这个 taskId 就彻底转交新表, 之后所有
-/// regenerate 产出的新版本都走正常的版本号判断, 不再受这条历史表影响。
-/// 这个策略默认"legacy 记录时真实发送过的 channel 集合" ≈ "这次重新判定时解析出的目标
-/// channel 集合"——legacy 本身没记录 channel, 没法精确还原, 只能按当下能拿到的最新
-/// 信息吸收, 边界情况下可能因两者不完全一致而漏发, 但不会造成重复发 (与整份文件
-/// "宁可漏发不重发"的取舍一致)。
-static NSString *const kLegacySentKey = @"OctoSummaryNotifiedTaskIds";
+/// 历史上有过一张不带 version/channel 维度的扁平表 (`OctoSummaryNotifiedTaskIds`, 早期
+/// 灰度包写过), +claimTaskId:version:channelId: 曾经查过它 (命中就短路判定已发过 /
+/// 后来改成"吸收一次就退场")。两种写法都是错的, 且都被 review 抓出来过: 在
+/// notifyGroupsIfCompleted: 的"跃变观测 + eligible 一次性标记"双重门禁下, 这张表记录
+/// 的那一轮永远不会被重新提交给 +claimTaskId: 判定 (老设备升级后点开一条历史已完成的
+/// 总结, prev==nil 且没有 eligible 标记, 直接在门禁处 return, 根本不会走到这里) ——
+/// 也就是说命中这张表时, 传进来的必然是一轮从未真正发送过的全新 version。继续查它只会
+/// 把这个全新轮次错判成"已发过"而漏发 (旧的"短路"写法是永久漏发; "吸收一次"写法是
+/// per-task 判定撞上 per-channel 调用, 只吞第一个 channel, 且写进的是一条假的已发记录,
+/// 被 kMaxSentTasks 淘汰后还会再吞一次)。不查它则不会造成重复发——它记录的那一轮既然
+/// 不会被重新提交, 删掉判断也不会让它被重新发送。所以彻底不再引用这张表, 不要再加回来。
 /// ELIGIBLE 表: [ {@"id": NSNumber(taskId), @"ts": NSNumber(unix 秒)} ]。
 static NSString *const kEligibleKey = @"OctoSummaryTipEligibleKey";
 
@@ -68,31 +62,12 @@ static const NSTimeInterval kEligibleTTL = 10 * 60;
 
 #pragma mark - SENT
 
-+ (BOOL)legacyHasSentTaskId:(int64_t)taskId {
-    NSArray *ids = [[NSUserDefaults standardUserDefaults] arrayForKey:kLegacySentKey];
-    if (![ids isKindOfClass:NSArray.class]) return NO;
-    return [ids containsObject:[NSString stringWithFormat:@"%lld", taskId]];
-}
-
-/// 纯读谓词, 只查新表——legacy 判断挪到 +claimTaskId:version:channelId: 里做 (那边
-/// 命中 legacy 时除了要"读", 还要顺带"写"一次吸收记录, 放在这个方法里语义会变得
-/// 名不副实)。
 + (BOOL)_hasSentTaskId:(int64_t)taskId version:(NSInteger)version channelId:(NSString *)channelId {
     for (NSDictionary *entry in [self entriesForKey:kSentKey]) {
         if ([entry[@"id"] longLongValue] != taskId) continue;
         if ([entry[@"version"] integerValue] != version) continue;
         NSArray *channels = entry[@"channels"];
         return [channels isKindOfClass:NSArray.class] && [channels containsObject:channelId];
-    }
-    return NO;
-}
-
-/// 这个 taskId 在新表里是否已经有任意一条记录 (不看 version)——用来判定"这台设备是不是
-/// 第一次在新代码下遇到这个 (legacy 命中的) taskId"。命中过一次之后, 不管后续是不是
-/// 同一个 version, 都不再是"第一次", legacy 吸收分支只会触发这一次。
-+ (BOOL)_hasAnySentEntryForTaskId:(int64_t)taskId {
-    for (NSDictionary *entry in [self entriesForKey:kSentKey]) {
-        if ([entry[@"id"] longLongValue] == taskId) return YES;
     }
     return NO;
 }
@@ -123,15 +98,6 @@ static const NSTimeInterval kEligibleTTL = 10 * 60;
     if (taskId <= 0 || channelId.length == 0) return NO;
     @synchronized ([self lockToken]) {
         if ([self _hasSentTaskId:taskId version:version channelId:channelId]) return NO;
-        // legacy 吸收: 命中旧扁平表、且新表里这个 taskId 还一条记录都没有 (第一次在新
-        // 代码下遇到它), 就把这次解析出的 (taskId, version, channelId) 直接落账成
-        // "已发过", 不实际发送——对应 legacy 表记录的那一次已经真实发过了。落账之后
-        // 这个 taskId 立刻转交新表, 后续 regenerate 产出的新 version 不会再被这条
-        // 短路挡住 (kLegacySentKey 处注释有完整说明)。
-        if ([self legacyHasSentTaskId:taskId] && ![self _hasAnySentEntryForTaskId:taskId]) {
-            [self _markSentTaskId:taskId version:version channelId:channelId];
-            return NO;
-        }
         [self _markSentTaskId:taskId version:version channelId:channelId];
         return YES;
     }
