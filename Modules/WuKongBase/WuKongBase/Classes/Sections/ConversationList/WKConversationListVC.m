@@ -100,6 +100,7 @@
 
 // 网络信号监控
 @property(nonatomic,assign) NSTimeInterval connectedAtTime; // 连接成功的时间
+@property(nonatomic,assign) NSTimeInterval signalSessionStart; // 信号气泡用的本次连接起点（与 connectedAtTime 同步赋值，但断线只重置它，不动 connectedAtTime——后者还被旧消息过滤做截止线用）
 @property(nonatomic,strong) NSMutableSet<NSNumber *> *shownHintMsgIds; // 已弹过通知的消息ID
 @property(nonatomic,assign) NSInteger currentLatencyMs; // 当前延迟（毫秒）
 @property(nonatomic,strong) NSTimer *pingTimer; // ping定时器
@@ -222,6 +223,7 @@
 
     // 初始化网络监控相关属性
     self.connectedAtTime = 0;
+    self.signalSessionStart = 0;
     self.shownHintMsgIds = [NSMutableSet set];
     self.currentLatencyMs = -1;
 
@@ -566,6 +568,9 @@
     if ([WKSDK shared].connectionManager.connectStatus == WKConnected) {
         if (self.connectedAtTime == 0) {
             self.connectedAtTime = [[NSDate date] timeIntervalSince1970];
+        }
+        if (self.signalSessionStart == 0) {
+            self.signalSessionStart = [[NSDate date] timeIntervalSince1970];
         }
         [self startPingMonitoring];
     }
@@ -1475,9 +1480,14 @@
 
         // 记录时间并开始 ping 监控
         self.connectedAtTime = [[NSDate date] timeIntervalSince1970];
+        self.signalSessionStart = self.connectedAtTime;
         [self startPingMonitoring];
     } else {
-        // 连接中或已断开，停止 ping 监控
+        // 连接中或已断开，重置气泡用的会话标记和延迟并停止 ping 监控。
+        // 注意不能重置 connectedAtTime：它还是旧消息过滤的截止线（tryShowPixelHintForMessage），
+        // 清零会让过滤在整个断线窗口内失效，弹出几小时前的旧消息提示
+        self.currentLatencyMs = -1;
+        self.signalSessionStart = 0;
         [self stopPingMonitoring];
     }
 }
@@ -4810,16 +4820,22 @@ static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
 
     __weak typeof(self) weakSelf = self;
     NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+        NSInteger latency;
         if (!error) {
-            NSTimeInterval latency = [[NSDate date] timeIntervalSinceDate:startTime] * 1000; // 转换为毫秒
-            weakSelf.currentLatencyMs = (NSInteger)latency;
+            latency = (NSInteger)([[NSDate date] timeIntervalSinceDate:startTime] * 1000); // 转换为毫秒
         } else {
             // ping 失败，使用较高的延迟值表示网络不佳
-            weakSelf.currentLatencyMs = 500;
+            latency = 500;
             NSLog(@"Ping 失败: %@", error.localizedDescription);
         }
 
+        // stopPingMonitoring 不会取消在途请求，断线后迟到的回调不能把导航栏刷回延迟数字，
+        // 覆盖掉"已断开"；且属性只在主线程写，避免与 onConnectStatus: 的重置产生数据竞争
         dispatch_async(dispatch_get_main_queue(), ^{
+            if ([WKSDK shared].connectionManager.connectStatus != WKConnected) {
+                return;
+            }
+            weakSelf.currentLatencyMs = latency;
             [weakSelf updateSignalView];
         });
     }];
@@ -4836,6 +4852,9 @@ static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
     if (!self.signalContainerView) {
         return;
     }
+
+    // 未连接状态下禁用点击，避免图标可点但无响应
+    self.signalContainerView.userInteractionEnabled = (status == WKConnected);
 
     UIColor *color;
     NSString *statusText;
@@ -4914,14 +4933,23 @@ static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
 
 // 点击信号显示区域
 - (void)signalTapped {
-    // 计算已连接时长
-    NSTimeInterval connectedDuration = [[NSDate date] timeIntervalSinceDate:[NSDate dateWithTimeIntervalSince1970:self.connectedAtTime]];
-    NSInteger seconds = (NSInteger)connectedDuration;
+    // 非已连接状态（已断开/连接中/正在拉离线消息）不弹气泡，避免展示假数据
+    if ([WKSDK shared].connectionManager.connectStatus != WKConnected) {
+        return;
+    }
+
+    // 计算已连接时长（用气泡自己的会话标记，connectedAtTime 还被旧消息过滤使用，语义不同）
     NSString *durationText;
-    if (seconds < 60) {
-        durationText = [NSString stringWithFormat:LLang(@"已连接: %ld秒"), (long)seconds];
+    if (self.signalSessionStart <= 0) {
+        durationText = [NSString stringWithFormat:LLang(@"已连接: %ld秒"), 0L];
     } else {
-        durationText = [NSString stringWithFormat:LLang(@"已连接: %ld分钟"), (long)(seconds / 60)];
+        NSTimeInterval connectedDuration = [[NSDate date] timeIntervalSinceDate:[NSDate dateWithTimeIntervalSince1970:self.signalSessionStart]];
+        NSInteger seconds = (NSInteger)connectedDuration;
+        if (seconds < 60) {
+            durationText = [NSString stringWithFormat:LLang(@"已连接: %ld秒"), (long)seconds];
+        } else {
+            durationText = [NSString stringWithFormat:LLang(@"已连接: %ld分钟"), (long)(seconds / 60)];
+        }
     }
 
     // 创建详情视图
@@ -4938,7 +4966,11 @@ static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
 
     // 延迟标签
     UILabel *latencyInfoLabel = [[UILabel alloc] initWithFrame:CGRectMake(14, 34, 180, 20)];
-    latencyInfoLabel.text = [NSString stringWithFormat:LLang(@"延迟: %ldms"), (long)self.currentLatencyMs];
+    if (self.currentLatencyMs != -1) {
+        latencyInfoLabel.text = [NSString stringWithFormat:LLang(@"延迟: %ldms"), (long)self.currentLatencyMs];
+    } else {
+        latencyInfoLabel.text = LLang(@"延迟: --ms");
+    }
     latencyInfoLabel.textColor = [UIColor whiteColor];
     latencyInfoLabel.font = [UIFont systemFontOfSize:13];
     [tooltipView addSubview:latencyInfoLabel];
