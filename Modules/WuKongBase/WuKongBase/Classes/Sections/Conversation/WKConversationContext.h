@@ -152,6 +152,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// 入下一条消息编辑前主动清, 否则缓存里残留的 @ 项 (尤其 "all") 会泄漏到下一条文本消息。
 -(void) cleanMentionCache;
 
+/// 只移除 text 里实际出现的 @ 提及项，返回被移除的 item（用于发送失败时回填）；
+/// 不在 text 里出现的 item（比如还留在草稿里的 @）不受影响。
+-(NSArray<WKInputMentionItem*>*) removeMentionItemsMatchingText:(NSString*)text;
+
 /// 设置多选模式
 /// @param multiple <#multiple description#>
 -(void) setMultipleOn:(BOOL)multiple selectedMessage:(WKMessageModel * _Nullable)messageModel;

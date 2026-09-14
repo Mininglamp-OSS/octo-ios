@@ -1254,7 +1254,14 @@ CGFloat itemSpace = 10.0f;
         // WKConversationContextImpl.m:508)。本路径不走 sendTextMessage,
         // 不清的话, "@all" 会因 WKInputMentionCache.allMentionUid: 对 name=="all"
         // 不查 sendText 而 leak 到下一条无 @ 的文本消息, 误通知所有人。
-        if ([ctx respondsToSelector:@selector(cleanMentionCache)]) {
+        // restoreText 非空 (语音路径还原了草稿) 时不能整体清——草稿里的 @ 还得留着,
+        // 否则用户切回键盘把这条还原草稿发出去, @ 会静默失效。只清 captionRaw 实际
+        // 消费掉的 mention 项。
+        if (restoreText.length > 0) {
+            if ([ctx respondsToSelector:@selector(removeMentionItemsMatchingText:)]) {
+                [ctx removeMentionItemsMatchingText:captionRaw];
+            }
+        } else if ([ctx respondsToSelector:@selector(cleanMentionCache)]) {
             [ctx cleanMentionCache];
         }
         // 防重入只覆盖「同步触发期」：textView/bar 在上面已经清空，调用方此时再 tap send
