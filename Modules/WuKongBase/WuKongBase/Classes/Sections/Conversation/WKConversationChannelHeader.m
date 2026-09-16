@@ -60,6 +60,9 @@
     [self addSubview:self.summaryBtn];
     [self.avatarImgView addSubview:self.autoDeleteView];
 
+    self.subtitleLbl.userInteractionEnabled = YES;
+    [self.subtitleLbl addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(subtitlePressed)]];
+
     [self.infoBoxBtn addTarget:self action:@selector(infoPressed) forControlEvents:UIControlEventTouchUpInside];
     [self.voiceCallBtn addTarget:self action:@selector(voiceCallPressed) forControlEvents:UIControlEventTouchUpInside];
     [self.videoCallBtn addTarget:self action:@selector(videoCallPressed) forControlEvents:UIControlEventTouchUpInside];
@@ -80,6 +83,14 @@
 
 -(void) infoPressed {
     if(self.onInfo) {
+        self.onInfo();
+    }
+}
+
+-(void) subtitlePressed {
+    if(self.onSubtitleTap) {
+        self.onSubtitleTap();
+    } else if(self.onInfo) {
         self.onInfo();
     }
 }
