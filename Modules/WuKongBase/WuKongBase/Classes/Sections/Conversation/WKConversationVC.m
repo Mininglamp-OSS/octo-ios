@@ -35,6 +35,8 @@
 
 @property(nonatomic,strong) WKChannelInfo *channelInfo;
 
+@property(nonatomic,strong) WKChannel *parentGroupChannel; // 子区所属父群（"来自: 群名"点击跳转用）
+
 @property(nonatomic,assign) BOOL firstLoad; // 是否第一次加载
 
 @property(nonatomic,strong) UIImageView *backgroundView;
@@ -304,6 +306,13 @@
         NSString *groupNo = [channelId substringToIndex:separatorRange.location];
         // 获取父群信息
         WKChannel *parentChannel = [WKChannel groupWithChannelID:groupNo];
+        self.parentGroupChannel = parentChannel;
+        __weak typeof(self) weakSelf = self;
+        [self.channelHeader setOnSubtitleTap:^{
+            if(weakSelf.parentGroupChannel) {
+                [[WKApp shared] pushConversation:weakSelf.parentGroupChannel];
+            }
+        }];
         WKChannelInfo *parentInfo = [[WKChannelManager shared] getChannelInfo:parentChannel];
         if(parentInfo && parentInfo.displayName.length > 0) {
             self.channelHeader.subtitleText = [NSString stringWithFormat:@"%@: %@", LLang(@"来自"), parentInfo.displayName];
@@ -400,7 +409,7 @@
         [_channelHeader setOnInfo:^{
             [[WKApp shared] invoke:WKPOINT_CONVERSATION_SETTING param:@{@"channel":weakSelf.channel,@"context":weakSelf.conversationView.conversationContext}];
         }];
-        
+
 //        WKChannelMember *memberOfMe = weakSelf.conversationView.conversationVM.memberOfMe;
         BOOL showCall = false;
         if(self.videocallInvoke!=nil ) {
