@@ -720,10 +720,15 @@
 #pragma mark -- 事件
 // 发送消息
 -(void) sendBtnPressed {
-    [[WKNavigationManager shared] popToRootViewControllerAnimated:NO];
     WKConversationVC *conversationVC = [WKConversationVC new];
     conversationVC.channel = self.viewModel.channelInfo.channel;
     [[WKNavigationManager shared] pushViewController:conversationVC animated:YES];
+    // push 动画期间聊天页始终在最上层，此时静默裁剪历史（通讯录/资料页等中间页）不会产生任何视觉变化
+    UINavigationController *nav = self.navigationController;
+    UIViewController *root = nav.viewControllers.firstObject;
+    if (root && root != conversationVC) {
+        [nav setViewControllers:@[root, conversationVC] animated:NO];
+    }
 }
 // 视频通话
 -(void) videocallBtnPressed {
