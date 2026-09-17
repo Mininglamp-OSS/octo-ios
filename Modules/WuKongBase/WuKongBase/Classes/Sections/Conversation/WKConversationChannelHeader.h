@@ -28,6 +28,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,copy) void(^onInfo)(void); // 资料信息被点击
 
+@property(nonatomic,copy, nullable) void(^onSubtitleTap)(void); // 副标题被单独点击（子区场景："来自: 群名"跳转到该群），为空时副标题点击行为与 onInfo 一致
+
 @property(nonatomic,copy) void(^onVoiceCall)(void); // 拨打语音
 @property(nonatomic,copy) void(^onVideoCall)(void); // 拨打视频
 @property(nonatomic,copy) void(^onSummary)(void);   // 发起智能总结
