@@ -684,7 +684,7 @@ CGFloat itemSpace = 10.0f;
     // 有待发送图片：textView 内文本作 caption，按聚合/纯图分发；不再走纯文本 delegate。
     if ([self hasPendingImages]) {
         if (self.inFlightPendingSend) return;
-        [self _commitPendingWithCaption:content];
+        [self _commitPendingWithCaption:content restoreText:nil];
         return;
     }
     if([WKApp shared].config.messageTextMaxBytes !=0) {
@@ -1220,9 +1220,15 @@ CGFloat itemSpace = 10.0f;
 
 #pragma mark - 待发送图片栏：发送分发
 
-// inputSendFinished 在有 pending 图时把 textView 文本作 caption 走这条；
-// 也被 hold-to-talk STT 路径复用（语音识别成的文本作 caption）。
-- (void)_commitPendingWithCaption:(NSString *)caption {
+// inputSendFinished 在有 pending 图时把 textView 文本作 caption 走这条（此时 caption 就是
+// textView 原内容，发完清空不丢信息）；也被 hold-to-talk STT 路径复用（caption 是语音识别
+// 文本，跟 textView 原内容是两份不同的东西——STT 路径必须传 restoreText，见下方参数说明）。
+//
+// @param restoreText 清空 textView 后应该还原成什么。手动发送传 nil（caption 本来就是
+//        textView 全部内容，清空即可，等价于 nil ?: @""）；hold-to-talk 语音路径传调用前
+//        的 textView.text（用户选图后、语音输入前打的草稿），避免这份草稿被无关的清空动作
+//        连带清掉。
+- (void)_commitPendingWithCaption:(NSString *)caption restoreText:(NSString *)restoreText {
     if (self.inFlightPendingSend) return;
     NSArray<NSData *> *images = [self.pendingImageBar.imageDatas copy];
     if (images.count == 0) return; // 防御：调用方应已 gate
@@ -1231,8 +1237,9 @@ CGFloat itemSpace = 10.0f;
     id<WKConversationContext> ctx = self.conversationContext;
     if (!ctx) return;
 
-    // 同步成功路径：清 textView + 清 bar；失败 onFailure 异步回调按规则尝试恢复。
-    self.textView.text = @"";
+    // 同步成功路径：清 textView（还原 restoreText，而非硬清空）+ 清 bar；
+    // 失败 onFailure 异步回调按规则尝试恢复。
+    self.textView.text = restoreText ?: @"";
     self.sendButton.show = NO;
     self.sendButton.hidden = YES;
     [self.pendingImageBar clear];
@@ -1247,7 +1254,14 @@ CGFloat itemSpace = 10.0f;
         // WKConversationContextImpl.m:508)。本路径不走 sendTextMessage,
         // 不清的话, "@all" 会因 WKInputMentionCache.allMentionUid: 对 name=="all"
         // 不查 sendText 而 leak 到下一条无 @ 的文本消息, 误通知所有人。
-        if ([ctx respondsToSelector:@selector(cleanMentionCache)]) {
+        // restoreText 非空 (语音路径还原了草稿) 时不能整体清——草稿里的 @ 还得留着,
+        // 否则用户切回键盘把这条还原草稿发出去, @ 会静默失效。只清 captionRaw 实际
+        // 消费掉的 mention 项。
+        if (restoreText.length > 0) {
+            if ([ctx respondsToSelector:@selector(removeMentionItemsMatchingText:)]) {
+                [ctx removeMentionItemsMatchingText:captionRaw];
+            }
+        } else if ([ctx respondsToSelector:@selector(cleanMentionCache)]) {
             [ctx cleanMentionCache];
         }
         // 防重入只覆盖「同步触发期」：textView/bar 在上面已经清空，调用方此时再 tap send
@@ -1522,8 +1536,11 @@ CGFloat itemSpace = 10.0f;
 
 - (void)holdToTalkManager:(WKHoldToTalkManager *)manager sendText:(NSString *)text {
     // 有 pending 图：STT 文本作 caption，与图聚合（或 caption 全空时纯图）。
+    // caption 是语音识别文本，跟 textView 里用户选图后打的草稿是两份不同的东西——
+    // 顶替/清空前先存一份，发完还原回去，而不是随着清空动作一起丢掉。
     if ([self hasPendingImages]) {
-        [self _commitPendingWithCaption:text];
+        NSString *draft = self.textView.text;
+        [self _commitPendingWithCaption:text restoreText:draft];
         return;
     }
     if (self.delegate && [self.delegate respondsToSelector:@selector(inputPanelSend:text:)]) {
@@ -1536,9 +1553,10 @@ CGFloat itemSpace = 10.0f;
     if (mentions.count > 0 && [self.conversationContext respondsToSelector:@selector(addMentionItems:)]) {
         [self.conversationContext addMentionItems:mentions];
     }
-    // 有 pending 图：STT 文本 + mentions 作 caption 与图聚合。
+    // 有 pending 图：STT 文本 + mentions 作 caption 与图聚合。同上，发完还原原草稿。
     if ([self hasPendingImages]) {
-        [self _commitPendingWithCaption:text];
+        NSString *draft = self.textView.text;
+        [self _commitPendingWithCaption:text restoreText:draft];
         return;
     }
     // 再走正常发送流程（sendTextMessage 会从 mentionCache 生成 entity）

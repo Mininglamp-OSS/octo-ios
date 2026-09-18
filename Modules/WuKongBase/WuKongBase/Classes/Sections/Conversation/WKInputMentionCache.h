@@ -32,4 +32,6 @@
 
 - (WKInputMentionItem *)removeName:(NSString *)name;
 
+- (NSArray<NSString *> *)matchString:(NSString *)sendText;
+
 @end

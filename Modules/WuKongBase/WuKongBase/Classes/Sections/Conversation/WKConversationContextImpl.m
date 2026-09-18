@@ -1161,6 +1161,18 @@
     [self.mentionCache clean];
 }
 
+-(NSArray<WKInputMentionItem*>*) removeMentionItemsMatchingText:(NSString*)text {
+    NSMutableArray<WKInputMentionItem*> *removed = [NSMutableArray array];
+    NSArray<NSString*> *names = [self.mentionCache matchString:text ?: @""];
+    for (NSString *name in names) {
+        WKInputMentionItem *item = [self.mentionCache removeName:name];
+        if (item) {
+            [removed addObject:item];
+        }
+    }
+    return removed;
+}
+
 - (BOOL)isFuncGroupZooming {
     return [self.conversationView.input isFuncGroupZooming];
 }
