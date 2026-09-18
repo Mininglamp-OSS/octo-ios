@@ -32,6 +32,11 @@ typedef void (^OctoSummaryCallback)(id _Nullable result, NSError *_Nullable erro
 /// GET /summaries/:id —— 详情。result = OctoSummaryDetail。
 - (void)getSummaryDetail:(int64_t)taskId callback:(OctoSummaryCallback)cb;
 
+/// GET /summaries/:task_no —— 按字符串编号 (形如 STxxx) 取详情。
+/// 同一个后端路由, {id} 位既吃数字 task_id 也吃字符串 task_no (web 的通知卡片深链
+/// /s/:taskNo 就是把原样 path segment 塞进这里)。result = OctoSummaryDetail。
+- (void)getSummaryDetailByNo:(NSString *)taskNo callback:(OctoSummaryCallback)cb;
+
 /// DELETE /summaries/:id。result = nil。
 - (void)deleteSummary:(int64_t)taskId callback:(OctoSummaryCallback)cb;
 

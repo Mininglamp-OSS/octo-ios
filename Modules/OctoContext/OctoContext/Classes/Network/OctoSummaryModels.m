@@ -238,6 +238,8 @@ static NSArray<OctoParticipant *> *parseParticipants(NSDictionary *dict) {
     m.sources           = parseSources(dict);
     m.participants      = parseParticipants(dict);
     m.totalMsgCount     = IINT(@"total_msg_count");
+    m.creatorId         = NSTR(@"creator_id");
+    if (m.creatorId.length == 0) m.creatorId = NSTR(@"user_id");
     m.creatorName       = NSTR(@"creator_name");
     m.originChannelId   = NSTR(@"origin_channel_id");
     m.originChannelType = IINT(@"origin_channel_type");
@@ -275,6 +277,9 @@ static NSArray<OctoParticipant *> *parseParticipants(NSDictionary *dict) {
     m.errorMessage      = NSTR(@"error_message");
     id sched            = dict[@"schedule_id"];
     m.scheduleId        = (sched && sched != [NSNull null]) ? @([OctoSummaryModelHelper int64FromValue:sched]) : nil;
+    m.creatorId         = NSTR(@"creator_id");
+    if (m.creatorId.length == 0) m.creatorId = NSTR(@"user_id");
+    m.creatorName       = NSTR(@"creator_name");
     m.originChannelId   = NSTR(@"origin_channel_id");
     m.originChannelType = IINT(@"origin_channel_type");
     m.createdAt         = NSTR(@"created_at");

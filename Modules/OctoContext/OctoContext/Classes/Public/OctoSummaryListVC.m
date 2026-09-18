@@ -11,6 +11,7 @@
 #import "OctoSummaryFilterTabsView.h"
 #import "OctoSummaryStatusPoller.h"
 #import "OctoSummaryDateFormat.h"
+#import "OctoSummaryGroupNotifyHelper.h"
 #import <MJRefresh/MJRefresh.h>
 #import <WuKongIMSDK/WuKongIMSDK.h>
 
@@ -765,14 +766,27 @@
             [ws.view showMsg:LLang(@"重新生成失败")];
             return;
         }
-        // 后端返回新 task_id, 切到新 id 让后续 poller / detail 走新任务
+        int64_t effectiveTaskId = origTaskId;
+        // 同 CreateVC / DetailVC: 走模型层统一口径, 容忍数字 / 数字字符串。
         if ([result isKindOfClass:NSDictionary.class]) {
-            int64_t newId = [((NSDictionary *)result)[@"task_id"] longLongValue];
-            if (newId > 0 && newId != origTaskId) {
-                item.taskId = newId;
-                [ws refreshPoller];
+            id tidVal = ((NSDictionary *)result)[@"task_id"];
+            int64_t newId = [OctoSummaryModelHelper int64FromValue:tidVal];
+            if (newId > 0) {
+                effectiveTaskId = newId;
+                if (newId != origTaskId) {
+                    item.taskId = newId;
+                    [ws refreshPoller];
+                }
             }
         }
+        // 列表里发起的"重新生成"同样算本机发起: 打上 eligible 标记, 让用户随后
+        // 点进详情页 (哪怕首屏就已经是完成态) 还能发出那条群提示。列表自身不发。
+        // 后端 regenerate 实测返回的是同一个 task_id, 而不是新 id —— 打 eligible
+        // 标记不能靠"id 是否变化"这个条件, 否则永远不会触发。目标 taskId 用
+        // effectiveTaskId(解析出新 id 就用新 id, 否则就是当前这个未变的 id)。
+        // SENT 表去重现在按 (taskId, version) 记账, 新一轮完成天然带着新 version,
+        // 不需要在这里清掉旧记录 (见 OctoSummaryGroupNotifyHelper.h)。
+        [OctoSummaryGroupNotifyHelper markEligibleTaskId:effectiveTaskId];
         [ws.view showMsg:LLang(@"已开始重新生成")];
     }];
 }

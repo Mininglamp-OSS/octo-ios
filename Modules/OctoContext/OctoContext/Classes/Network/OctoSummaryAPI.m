@@ -158,6 +158,28 @@
         } callback:cb];
 }
 
+/// task_no 走同一个 /summaries/{id} 路由。task_no 是单个 path segment, 用
+/// URLPathAllowedCharacterSet 会连 "/" 一起放过 (那是给整条 path 用的字符集,
+/// 不是给单个 segment 用的) —— 调用方 (OctoSummaryGroupNotifyHelper) 已经做了
+/// ^[A-Za-z0-9_-]+$ 校验, 这里再去掉 "/" 是第二道防线, 双方都不依赖对方不失手。
+- (void)getSummaryDetailByNo:(NSString *)taskNo callback:(OctoSummaryCallback)cb {
+    NSString *trimmed = [taskNo stringByTrimmingCharactersInSet:
+                         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSMutableCharacterSet *segmentAllowed = [[NSCharacterSet URLPathAllowedCharacterSet] mutableCopy];
+    [segmentAllowed removeCharactersInString:@"/"];
+    NSString *encoded = [trimmed stringByAddingPercentEncodingWithAllowedCharacters:segmentAllowed];
+    if (encoded.length == 0) {
+        if (cb) cb(nil, [NSError errorWithDomain:@"OctoSummary" code:-1
+                                        userInfo:@{NSLocalizedDescriptionKey: @"invalid task_no"}]);
+        return;
+    }
+    [self request:@"GET" path:[NSString stringWithFormat:@"/summaries/%@", encoded]
+       parameters:nil
+        transform:^id _Nullable(id _Nullable raw) {
+            return [raw isKindOfClass:NSDictionary.class] ? [OctoSummaryDetail modelFromDict:raw] : nil;
+        } callback:cb];
+}
+
 - (void)deleteSummary:(int64_t)taskId callback:(OctoSummaryCallback)cb {
     [self request:@"DELETE" path:[NSString stringWithFormat:@"/summaries/%lld", taskId]
        parameters:nil transform:nil callback:cb];

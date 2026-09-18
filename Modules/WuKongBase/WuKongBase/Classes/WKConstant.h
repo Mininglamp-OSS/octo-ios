@@ -248,6 +248,14 @@
 // 用户信息
 #define WKPOINT_USER_INFO @"user.info"
 
+// ---------- 智能总结 ----------
+
+// 消息里的"查看总结详情"链接被点击 (通知助手卡片按钮 / 文本链接)。
+// param = @{ @"url": NSString }。由 OctoContext 模块注册 handler: 识别是总结深链就
+// 拉一次详情、判定是否该往来源群补发那条"某人总结了群聊内容"的提示。
+// WuKongBase 侧只 invoke, 不感知实现, 没注册 handler 时是 no-op。
+#define WKPOINT_SUMMARY_DEEPLINK @"summary.deeplink"
+
 // 用户信息页面的类别item
 #define WKPOINT_CATEGORY_USER_INFO_ITEM @"user.info.item.category"
 
