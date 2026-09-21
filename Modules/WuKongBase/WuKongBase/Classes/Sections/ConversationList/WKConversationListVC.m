@@ -1403,7 +1403,14 @@
             WKTypingContent *content = (WKTypingContent*)message.content;
             model.typing = YES;
             model.typer = content.typingName;
-            [self safeReloadRows:@[[NSIndexPath indexPathForRow:index inSection:0]] animation:UITableViewRowAnimationNone];
+            // 关注 tab 下 tableView 行来自 groupDisplayList，index 是 filteredConversations
+            // 下标，两者不能互换，否则会刷新错行（可能是 header）。与 channelInfoUpdate:
+            // oldChannelInfo: 用同一套分支处理。
+            if (_conversationListVM.filterType == WKConversationFilterFollow) {
+                [self rebuildGroupDisplayAndReload];
+            } else {
+                [self safeReloadRows:@[[NSIndexPath indexPathForRow:index inSection:0]] animation:UITableViewRowAnimationNone];
+            }
             if (channel.channelType != WK_PERSON) {
                 [self ensureTypingerNameFetched:content.typingUID forChannel:channel];
             }
@@ -2752,10 +2759,17 @@ static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
                 [strongSelf.typingNameFetchedUidSet removeObject:uid];
                 return;
             }
-            NSInteger idx = [strongSelf.conversationListVM indexAtChannel:channel];
-            NSInteger rowCount = [strongSelf.tableView numberOfRowsInSection:0];
-            if (idx >= 0 && idx < rowCount) {
-                [strongSelf safeReloadRows:@[[NSIndexPath indexPathForRow:idx inSection:0]] animation:UITableViewRowAnimationNone];
+            // 关注 tab 下 tableView 行来自 groupDisplayList，indexAtChannel: 返回的是
+            // filteredConversations 下标，两者不能互换，否则会刷新错行。与
+            // channelInfoUpdate:oldChannelInfo: 用同一套分支处理。
+            if (strongSelf.conversationListVM.filterType == WKConversationFilterFollow) {
+                [strongSelf rebuildGroupDisplayAndReload];
+            } else {
+                NSInteger idx = [strongSelf.conversationListVM indexAtChannel:channel];
+                NSInteger rowCount = [strongSelf.tableView numberOfRowsInSection:0];
+                if (idx >= 0 && idx < rowCount) {
+                    [strongSelf safeReloadRows:@[[NSIndexPath indexPathForRow:idx inSection:0]] animation:UITableViewRowAnimationNone];
+                }
             }
         });
     }];
