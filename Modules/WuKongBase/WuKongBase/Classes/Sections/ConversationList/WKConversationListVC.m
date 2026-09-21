@@ -201,6 +201,10 @@
 // 用代际号让 Space 切换后旧批次自动作废（dispatch_after 无 cancel API）。
 @property(nonatomic,assign) NSUInteger warmupGen;
 
+// 群成员"正在输入"资料按 uid 去重集合：避免同一个人 typing 心跳(约8s一次)反复触发
+// fetchChannelInfo 网络请求。会话级即可，不持久化。见 ensureTypingerNameFetched:forChannel:。
+@property(nonatomic,strong) NSMutableSet<NSString *> *typingNameFetchedUidSet;
+
 // 关注 tab 空状态引导视图：当前 tab 是 Follow + groupDisplayList 为空时显示
 @property(nonatomic,strong,nullable) UIView *followEmptyView;
 
@@ -1400,9 +1404,12 @@
             model.typing = YES;
             model.typer = content.typingName;
             [self safeReloadRows:@[[NSIndexPath indexPathForRow:index inSection:0]] animation:UITableViewRowAnimationNone];
+            if (channel.channelType != WK_PERSON) {
+                [self ensureTypingerNameFetched:content.typingUID forChannel:channel];
+            }
         }
     }
-    
+
 }
 
 - (void)typingRemove:(WKTypingManager *)manager message:(WKMessage *)message newMessage:(WKMessage *)newMessage{
@@ -2713,6 +2720,45 @@ static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
                    dispatch_get_main_queue(), ^{
         [weakSelf warmupBatchAt:end channels:channels spaceId:spaceId gen:gen];
     });
+}
+
+#pragma mark - Typing Name Prefetch
+
+- (NSMutableSet<NSString *> *)typingNameFetchedUidSet {
+    if (!_typingNameFetchedUidSet) {
+        _typingNameFetchedUidSet = [NSMutableSet new];
+    }
+    return _typingNameFetchedUidSet;
+}
+
+/// 群里"正在输入"的这个人本地没有 channelInfo（或资料不全，displayName 为空）时，
+/// 主动拉一次——否则只有进过一次聊天详情页（气泡渲染时机会式补拉）才会有资料，
+/// 列表页自己从来不会为群成员发资料请求。按 uid 去重，避免 typing 心跳(~8s一次)
+/// 反复重发；失败时移出去重集合，允许下次 typing 事件重试。
+- (void)ensureTypingerNameFetched:(NSString *)uid forChannel:(WKChannel *)channel {
+    if (uid.length == 0 || channel == nil) return;
+    WKChannel *personChannel = [WKChannel personWithChannelID:uid];
+    WKChannelInfo *cached = [[WKSDK shared].channelManager getChannelInfo:personChannel];
+    if (cached.displayName.length > 0) return;
+    if ([self.typingNameFetchedUidSet containsObject:uid]) return;
+    [self.typingNameFetchedUidSet addObject:uid];
+
+    __weak typeof(self) weakSelf = self;
+    [[WKSDK shared].channelManager fetchChannelInfo:personChannel completion:^(WKChannelInfo * _Nullable info) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            if (info.displayName.length == 0) {
+                [strongSelf.typingNameFetchedUidSet removeObject:uid];
+                return;
+            }
+            NSInteger idx = [strongSelf.conversationListVM indexAtChannel:channel];
+            NSInteger rowCount = [strongSelf.tableView numberOfRowsInSection:0];
+            if (idx >= 0 && idx < rowCount) {
+                [strongSelf safeReloadRows:@[[NSIndexPath indexPathForRow:idx inSection:0]] animation:UITableViewRowAnimationNone];
+            }
+        });
+    }];
 }
 
 #pragma mark - WKNetworkListenerDelegate
