@@ -555,6 +555,7 @@
         [weakSelf rebuildGroupDisplayAndReload];
         [weakSelf refreshBadge];
         [weakSelf kickoffChannelInfoWarmup];
+        [weakSelf reconcileTypingState];
         // 列表已构建完成 → 把"实际渲染出来的会话集"记成本空间的归属快照，
         // 下次冷启动（含断网）就能还原成用户上次看到的这个列表。
         [weakSelf.conversationListVM persistRenderedMembershipSnapshot];
@@ -590,6 +591,10 @@
     // 关注 tab 兜底刷新：app 切回前台/列表回到前台时同步一次 sidebar。
     // debounce ≥30s 在 reloadFollowedKeysIfNeeded 内部判断。
     [self reloadFollowedKeysIfNeeded:@"viewDidAppear"];
+
+    // 从聊天详情页等处回到列表：对账打字中状态，错过 typingAdd 回调的场景
+    // （进页晚于打字开始等）在这里补齐 model.typing 并补拉成员资料。
+    [self reconcileTypingState];
 }
 
 /// : 消费一次性「跨 Space 加群成功」通知 — 弹双行 dialog + 紫色切换按钮。
@@ -1428,9 +1433,17 @@
     if(index!=-1) {
         WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
         model.typing = NO;
-        [self safeReloadRows:@[[NSIndexPath indexPathForRow:index inSection:0]] animation:UITableViewRowAnimationNone];
-        
-//        [self refreshTable];
+        // 与 typingAdd:message: 同一套分支：关注 tab 下 index 是 filteredConversations
+        // 下标，不能当 tableView 行号用（行来自 groupDisplayList）；其它 tab 补越界
+        // 校验，防止 reload 前列表变短导致越界崩溃。
+        if (_conversationListVM.filterType == WKConversationFilterFollow) {
+            [self rebuildGroupDisplayAndReload];
+        } else {
+            NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
+            if (index >= 0 && index < rowCount) {
+                [self safeReloadRows:@[[NSIndexPath indexPathForRow:index inSection:0]] animation:UITableViewRowAnimationNone];
+            }
+        }
     }
 }
 
@@ -2773,6 +2786,35 @@ static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
             }
         });
     }];
+}
+
+/// 对账：把 WKTypingManager 里"已经在进行中"的输入状态同步到列表行并补拉资料。
+/// typingAdd: 只在"从无到有"那一刻回调，持续打字期间的心跳完全静默——列表页只要
+/// 错过那一次（进页晚于打字开始 / 回调时列表数据还没加载完 index==-1），就再没有
+/// 机会触发拉取，只能一直显示无名字的"正在输入"。所以在页面出现和数据加载完成后
+/// 各对账一次。幂等：ensureTypingerNameFetched 内部按 uid 去重，重复调用无副作用。
+- (void)reconcileTypingState {
+    NSMutableArray<NSIndexPath *> *changedRows = [NSMutableArray array];
+    for (WKMessage *message in [[WKTypingManager shared] getAllTypingMessages]) {
+        if (!message.channel || message.channel.channelType == WK_PERSON) continue;
+        if (message.fromUid.length == 0 || [message.fromUid isEqualToString:[WKApp shared].loginInfo.uid]) continue;
+        NSInteger index = [self.conversationListVM indexAtChannel:message.channel];
+        if (index == -1) continue;
+        WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
+        if (model && !model.typing) {
+            model.typing = YES;
+            model.typer = ((WKTypingContent*)message.content).typingName;
+            [changedRows addObject:[NSIndexPath indexPathForRow:index inSection:0]];
+        }
+        [self ensureTypingerNameFetched:message.fromUid forChannel:message.channel];
+    }
+    if (changedRows.count > 0) {
+        if (self.conversationListVM.filterType == WKConversationFilterFollow) {
+            [self rebuildGroupDisplayAndReload];
+        } else {
+            [self safeReloadRows:changedRows animation:UITableViewRowAnimationNone];
+        }
+    }
 }
 
 #pragma mark - WKNetworkListenerDelegate
