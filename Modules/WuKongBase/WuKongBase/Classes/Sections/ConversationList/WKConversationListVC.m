@@ -201,6 +201,10 @@
 // 用代际号让 Space 切换后旧批次自动作废（dispatch_after 无 cancel API）。
 @property(nonatomic,assign) NSUInteger warmupGen;
 
+// 群成员"正在输入"资料按 uid 去重集合：避免同一个人 typing 心跳(约8s一次)反复触发
+// fetchChannelInfo 网络请求。会话级即可，不持久化。见 ensureTypingerNameFetched:forChannel:。
+@property(nonatomic,strong) NSMutableSet<NSString *> *typingNameFetchedUidSet;
+
 // 关注 tab 空状态引导视图：当前 tab 是 Follow + groupDisplayList 为空时显示
 @property(nonatomic,strong,nullable) UIView *followEmptyView;
 
@@ -551,6 +555,7 @@
         [weakSelf rebuildGroupDisplayAndReload];
         [weakSelf refreshBadge];
         [weakSelf kickoffChannelInfoWarmup];
+        [weakSelf reconcileTypingState];
         // 列表已构建完成 → 把"实际渲染出来的会话集"记成本空间的归属快照，
         // 下次冷启动（含断网）就能还原成用户上次看到的这个列表。
         [weakSelf.conversationListVM persistRenderedMembershipSnapshot];
@@ -586,6 +591,10 @@
     // 关注 tab 兜底刷新：app 切回前台/列表回到前台时同步一次 sidebar。
     // debounce ≥30s 在 reloadFollowedKeysIfNeeded 内部判断。
     [self reloadFollowedKeysIfNeeded:@"viewDidAppear"];
+
+    // 从聊天详情页等处回到列表：对账打字中状态，错过 typingAdd 回调的场景
+    // （进页晚于打字开始等）在这里补齐 model.typing 并补拉成员资料。
+    [self reconcileTypingState];
 }
 
 /// : 消费一次性「跨 Space 加群成功」通知 — 弹双行 dialog + 紫色切换按钮。
@@ -1399,10 +1408,23 @@
             WKTypingContent *content = (WKTypingContent*)message.content;
             model.typing = YES;
             model.typer = content.typingName;
-            [self safeReloadRows:@[[NSIndexPath indexPathForRow:index inSection:0]] animation:UITableViewRowAnimationNone];
+            // 关注 tab 下 tableView 行来自 groupDisplayList，index 是 filteredConversations
+            // 下标，两者不能互换，否则会刷新错行（可能是 header）；按频道查行号只刷新这一行，
+            // 不必整表重建（"正在输入"不影响分组/排序）。
+            NSInteger row = (_conversationListVM.filterType == WKConversationFilterFollow)
+                ? [self rowInGroupDisplayListForChannel:channel] : index;
+            if (row >= 0) {
+                NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
+                if (row < rowCount) {
+                    [self safeReloadRows:@[[NSIndexPath indexPathForRow:row inSection:0]] animation:UITableViewRowAnimationNone];
+                }
+            }
+            if (channel.channelType != WK_PERSON) {
+                [self ensureTypingerNameFetched:content.typingUID forChannel:channel];
+            }
         }
     }
-    
+
 }
 
 - (void)typingRemove:(WKTypingManager *)manager message:(WKMessage *)message newMessage:(WKMessage *)newMessage{
@@ -1413,10 +1435,19 @@
     NSInteger index =  [self.conversationListVM indexAtChannel:channel];
     if(index!=-1) {
         WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
-        model.typing = NO;
-        [self safeReloadRows:@[[NSIndexPath indexPathForRow:index inSection:0]] animation:UITableViewRowAnimationNone];
-        
-//        [self refreshTable];
+        if(model) {
+            model.typing = NO;
+            // 与 typingAdd:message: 同一套思路：按频道在 groupDisplayList 里查行号只刷新
+            // 这一行，不必整表重建；找不到说明这行当前不在可见列表里，不需要刷新。
+            NSInteger row = (_conversationListVM.filterType == WKConversationFilterFollow)
+                ? [self rowInGroupDisplayListForChannel:channel] : index;
+            if (row >= 0) {
+                NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
+                if (row < rowCount) {
+                    [self safeReloadRows:@[[NSIndexPath indexPathForRow:row inSection:0]] animation:UITableViewRowAnimationNone];
+                }
+            }
+        }
     }
 }
 
@@ -2713,6 +2744,91 @@ static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
                    dispatch_get_main_queue(), ^{
         [weakSelf warmupBatchAt:end channels:channels spaceId:spaceId gen:gen];
     });
+}
+
+#pragma mark - Typing Name Prefetch
+
+- (NSMutableSet<NSString *> *)typingNameFetchedUidSet {
+    if (!_typingNameFetchedUidSet) {
+        _typingNameFetchedUidSet = [NSMutableSet new];
+    }
+    return _typingNameFetchedUidSet;
+}
+
+/// 群里"正在输入"的这个人本地没有 channelInfo（或资料不全，displayName 为空）时，
+/// 主动拉一次——否则只有进过一次聊天详情页（气泡渲染时机会式补拉）才会有资料，
+/// 列表页自己从来不会为群成员发资料请求。按 uid 去重，避免 typing 心跳(~8s一次)
+/// 反复重发；失败时移出去重集合，允许下次 typing 事件重试。
+- (void)ensureTypingerNameFetched:(NSString *)uid forChannel:(WKChannel *)channel {
+    if (uid.length == 0 || channel == nil) return;
+    WKChannel *personChannel = [WKChannel personWithChannelID:uid];
+    WKChannelInfo *cached = [[WKSDK shared].channelManager getChannelInfo:personChannel];
+    if (cached.displayName.length > 0) return;
+    if ([self.typingNameFetchedUidSet containsObject:uid]) return;
+    [self.typingNameFetchedUidSet addObject:uid];
+
+    __weak typeof(self) weakSelf = self;
+    [[WKSDK shared].channelManager fetchChannelInfo:personChannel completion:^(WKChannelInfo * _Nullable info) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            if (info.displayName.length == 0) {
+                [strongSelf.typingNameFetchedUidSet removeObject:uid];
+                return;
+            }
+            // 关注 tab 下 tableView 行来自 groupDisplayList，indexAtChannel: 返回的是
+            // filteredConversations 下标，两者不能互换，否则会刷新错行。与
+            // channelInfoUpdate:oldChannelInfo: 用同一套分支处理。
+            if (strongSelf.conversationListVM.filterType == WKConversationFilterFollow) {
+                [strongSelf rebuildGroupDisplayAndReload];
+            } else {
+                NSInteger idx = [strongSelf.conversationListVM indexAtChannel:channel];
+                NSInteger rowCount = [strongSelf.tableView numberOfRowsInSection:0];
+                if (idx >= 0 && idx < rowCount) {
+                    [strongSelf safeReloadRows:@[[NSIndexPath indexPathForRow:idx inSection:0]] animation:UITableViewRowAnimationNone];
+                }
+            }
+        });
+    }];
+}
+
+/// 对账：把 WKTypingManager 里"已经在进行中"的输入状态同步到列表行并补拉资料。
+/// typingAdd: 只在"从无到有"那一刻回调，持续打字期间的心跳完全静默——列表页只要
+/// 错过那一次（进页晚于打字开始 / 回调时列表数据还没加载完 index==-1），就再没有
+/// 机会触发拉取，只能一直显示无名字的"正在输入"。所以在页面出现和数据加载完成后
+/// 各对账一次。幂等：ensureTypingerNameFetched 内部按 uid 去重，重复调用无副作用。
+- (void)reconcileTypingState {
+    NSMutableArray<WKChannel *> *changedChannels = [NSMutableArray array];
+    for (WKMessage *message in [[WKTypingManager shared] getAllTypingMessages]) {
+        if (!message.channel || message.channel.channelType == WK_PERSON) continue;
+        if (message.fromUid.length == 0 || [message.fromUid isEqualToString:[WKApp shared].loginInfo.uid]) continue;
+        if (![message.content isKindOfClass:[WKTypingContent class]]) continue;
+        NSInteger index = [self.conversationListVM indexAtChannel:message.channel];
+        if (index == -1) continue;
+        WKConversationWrapModel *model = [self.conversationListVM modelAtIndex:index];
+        if (model && !model.typing) {
+            model.typing = YES;
+            model.typer = ((WKTypingContent*)message.content).typingName;
+            [changedChannels addObject:message.channel];
+        }
+        [self ensureTypingerNameFetched:message.fromUid forChannel:message.channel];
+    }
+    if (changedChannels.count == 0) return;
+
+    // 按频道各自查行号只刷新对应行，不必整表重建（"正在输入"不影响分组/排序）。
+    BOOL isFollow = (self.conversationListVM.filterType == WKConversationFilterFollow);
+    NSInteger rowCount = [self.tableView numberOfRowsInSection:0];
+    NSMutableArray<NSIndexPath *> *validRows = [NSMutableArray array];
+    for (WKChannel *channel in changedChannels) {
+        NSInteger row = isFollow ? [self rowInGroupDisplayListForChannel:channel]
+                                  : [self.conversationListVM indexAtChannel:channel];
+        if (row >= 0 && row < rowCount) {
+            [validRows addObject:[NSIndexPath indexPathForRow:row inSection:0]];
+        }
+    }
+    if (validRows.count > 0) {
+        [self safeReloadRows:validRows animation:UITableViewRowAnimationNone];
+    }
 }
 
 #pragma mark - WKNetworkListenerDelegate
@@ -5044,6 +5160,22 @@ static NSString *WKRecentJumpKeyForChannel(WKChannel *channel) {
     [_conversationListVM loadCategoriesWithCompletion:^{
         [weakSelf rebuildGroupDisplayAndReload];
     }];
+}
+
+/// 关注 tab 下 tableView 行来自 groupDisplayList，不是 filteredConversations 下标；
+/// "正在输入"这类不影响分组/排序的事件只需要刷新这一行，不必整表重建。按频道在当前
+/// groupDisplayList 里查找行号，返回 -1 表示该频道当前不在可见列表里（比如分组被收起），
+/// 这种情况下没有可见行需要刷新，无需兜底重建。
+- (NSInteger)rowInGroupDisplayListForChannel:(WKChannel *)channel {
+    if (!channel || !self.groupDisplayList) return -1;
+    for (NSInteger i = 0; i < (NSInteger)self.groupDisplayList.count; i++) {
+        WKConversationDisplayItem *item = self.groupDisplayList[i];
+        if (item.isSectionHeader) continue;
+        if ([item.conversation.channel isEqual:channel]) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 -(void) rebuildGroupDisplayAndReload {

@@ -781,12 +781,12 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
             NSString *typingName = typingContent.typingName;
             if(typingContent.typingUID) {
               WKChannelInfo *typingChannelInfo =  [[WKSDK shared].channelManager getChannelInfo:[WKChannel personWithChannelID:typingContent.typingUID]];
-                if(typingChannelInfo) {
+                if(typingChannelInfo && typingChannelInfo.displayName.length > 0) {
                     typingName = typingChannelInfo.displayName;
                 }
             }
-            
-            self.lastContentLbl.text = [NSString stringWithFormat:LLang(@"%@ 正在输入"),typingName];
+
+            self.lastContentLbl.text = typingName.length > 0 ? [NSString stringWithFormat:LLang(@"%@ 正在输入"),typingName] : LLang(@"正在输入");
         }
     }
 }
