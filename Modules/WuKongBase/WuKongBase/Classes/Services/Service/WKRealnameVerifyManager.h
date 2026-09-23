@@ -5,8 +5,10 @@
 //  OCTO 实名认证前端接入（Aegis OIDC Phase 2c — 账户页直跳）
 //
 //  流程：
-//    1) 用户点击「去认证」 → 用 SFSafariViewController 打开 Aegis 账户页
-//       实名认证锚点。URL 的 host 部分由后端 `/v1/common/appconfig` 下发的
+//    1) 用户点击「去认证」 → 用 App 私有 WKWebViewVC（与登录 SSO 页共享同一套
+//       WKWebsiteDataStore/Cookie 存储，不用系统 SFSafariViewController，
+//       否则 Aegis 页面看不到 SSO 登录时建立的会话会被误判未登录）打开 Aegis
+//       账户页实名认证锚点。URL 的 host 部分由后端 `/v1/common/appconfig` 下发的
 //       `oidc_providers[].account_url` 字段给出（按环境不同：
 //        im-test 会是 accounts-test.your.server.example.com, im-prod 会是 accounts.your.server.example.com）,
 //       path/fragment 固定为 /profile/info?anchor=verification。
@@ -62,7 +64,8 @@ extern NSString *const WKRealnameVerifiedURLHost;     // @"verified"
 
 /// 在指定 VC 上打开实名认证入口。
 /// 从 appconfig.oidc_providers 里读 account_url, 拼 Aegis 账户页 URL
-/// `<account_url>/profile/info?anchor=verification` 并用 SFSafariViewController 打开。
+/// `<account_url>/profile/info?anchor=verification` 并 push App 私有 WKWebViewVC 打开
+/// （与登录 SSO 共享同一套 Cookie 存储，免登进入）。
 /// appconfig 未下发可用 account_url 时弹 toast, 不跳任何硬编码域。
 /// 用户在 Aegis 页完成认证后通过 <scheme>://verified 回跳本 App。
 - (void)startVerificationFromVC:(UIViewController *)fromVC;
