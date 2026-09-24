@@ -936,6 +936,7 @@
 // 错误 / 提示
 "app_id不能为空！"="app_id is required";
 "无效的URL"="Invalid URL";
+"无法打开该链接"="Failed to open this link";
 "图片压缩错误！"="Image compression failed";
 "保存视频成功"="Video saved";
 "保存视频失败"="Failed to save video";

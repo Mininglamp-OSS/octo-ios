@@ -433,6 +433,14 @@
    
     if (![reqUrl hasPrefix:@"http://"] && ![reqUrl hasPrefix:@"https://"]) {
 
+        // 子 frame（比如隐藏 iframe、blob 下载探测）不影响用户可见反馈，按改动前的
+        // 行为直接放行——跟 decidePolicyForNavigationResponse: 里 isForMainFrame
+        // 的既有约定保持一致，避免 about:/data:/blob: 这类子 frame 导航被误杀并弹错误提示。
+        if (navigationAction.targetFrame && !navigationAction.targetFrame.isMainFrame) {
+            decisionHandler(WKNavigationActionPolicyAllow);
+            return;
+        }
+
         BOOL bSucc = [[UIApplication sharedApplication] openURL:navigationAction.request.URL];
         // bSucc是否成功调起
         if (bSucc) {
