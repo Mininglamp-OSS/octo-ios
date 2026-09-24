@@ -440,6 +440,11 @@
             decisionHandler(WKNavigationActionPolicyCancel);
             return;
         }
+        // 调起失败（比如自定义 scheme 没有 App 注册处理）不要静默吞掉，否则页面
+        // 卡在原地又没有任何提示，用户不知道发生了什么。
+        [self.view showMsg:LLang(@"无法打开该链接")];
+        decisionHandler(WKNavigationActionPolicyCancel);
+        return;
     }
 
     decisionHandler(WKNavigationActionPolicyAllow);

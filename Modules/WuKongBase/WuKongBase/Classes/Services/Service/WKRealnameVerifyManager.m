@@ -39,6 +39,18 @@ static void _WKRealnameVerifiedURLSchemeInit(void) {
 // 与 Web 端 resolveRealnameVerifyUrl 对齐（路径 / fragment 口径一致）。
 static NSString *const WKAegisAccountVerificationPath = @"/profile/info?anchor=verification";
 
+// _resolveProviderAndLaunchFromVC: push 出去的页面 + push 前的锚点页（一般是
+// 设置页）。弱引用, 不影响正常的 VC 生命周期。
+//
+// 用途 (PR #101 review P1): WKWebViewVC 只有在「页面内导航到 <scheme>://verified
+// 且 openURL: 成功」时才会自己 popViewControllerAnimated:。但用户可能点了页面
+// 右上角「更多 → 在浏览器中打开」在系统 Safari 里完成认证——这种情况下回跳信号
+// 根本不经过这个页面自己的导航拦截, 容器不会自己关, 也没有任何 observer 会替它
+// 关（WKMeVC / WKMeInfoVC / WKCommonSettingVC 收到认证完成通知只 reloadData）。
+// 这里在 handleVerifiedCallback: 里主动兜底关闭, 不依赖容器自己关。
+static __weak WKWebViewVC *s_realnameWebVC;
+static __weak UIViewController *s_realnameAnchorVC;
+
 @implementation WKRealnameVerifyManager
 
 + (instancetype)shared {
@@ -99,9 +111,18 @@ static NSString *const WKAegisAccountVerificationPath = @"/profile/info?anchor=v
 + (void)handleVerifiedCallback:(NSURL *)url {
     WKLogInfo(@"[Realname] received verified callback: %@", url);
 
-    // 实名认证页现在跑在 App 私有 WKWebViewVC 里（见 _resolveProviderAndLaunchFromVC:），
-    // 自定义 scheme 回跳时 WKWebViewVC.decidePolicyForNavigationAction 会自己
-    // popViewControllerAnimated:，不需要这里再手动关闭容器。
+    // 实名认证页跑在 App 私有 WKWebViewVC 里（见 _resolveProviderAndLaunchFromVC:），
+    // 页面内导航到 <scheme>://verified 时 WKWebViewVC.decidePolicyForNavigationAction
+    // 通常会自己 popViewControllerAnimated:。但如果用户是从页面「更多 → 在浏览器中
+    // 打开」跳去系统 Safari 完成的认证，回跳不会经过那段逻辑，容器不会自己关——这里
+    // 主动兜底一次，页面还在导航栈上就关掉它。
+    dispatch_async(dispatch_get_main_queue(), ^{
+        WKWebViewVC *webVC = s_realnameWebVC;
+        UIViewController *anchor = s_realnameAnchorVC;
+        if(webVC && anchor) {
+            [[WKNavigationManager shared] popToViewController:anchor animated:NO];
+        }
+    });
 
     // 重新拉取 user/current，服务器会返回带 realname_verified + real_name 的最新资料
     [[WKAPIClient sharedClient] GET:@"user/current" parameters:nil].then(^(id responseObj){
@@ -247,6 +268,8 @@ static NSString *const WKAegisAccountVerificationPath = @"/profile/info?anchor=v
     WKLogInfo(@"[Realname] opening Aegis account page: %@", verifyURL);
     WKWebViewVC *webVC = [WKWebViewVC new];
     webVC.url = verifyURL;
+    s_realnameWebVC = webVC;
+    s_realnameAnchorVC = fromVC;
     [[WKNavigationManager shared] pushViewController:webVC animated:YES];
 }
 
