@@ -10,8 +10,7 @@
 //
 
 #import "WKRealnameVerifyManager.h"
-#import <SafariServices/SafariServices.h>
-#import "WuKongBase.h"   // LLang + 常用类（WKAPIClient / WKLoginInfo / WKApp / 常量）
+#import "WuKongBase.h"   // LLang + 常用类（WKAPIClient / WKLoginInfo / WKApp / 常量 / WKWebViewVC / WKNavigationManager）
 #import "WKAppConfig.h"  // WKAppRemoteConfig.oidcProviders
 #import "WKOidcProviderConfig.h"
 #import <PromiseKit/PromiseKit.h>
@@ -39,6 +38,18 @@ static void _WKRealnameVerifiedURLSchemeInit(void) {
 // Aegis 账户页实名认证锚点路径。domain 部分从 appconfig 读, 拼接规则
 // 与 Web 端 resolveRealnameVerifyUrl 对齐（路径 / fragment 口径一致）。
 static NSString *const WKAegisAccountVerificationPath = @"/profile/info?anchor=verification";
+
+// _resolveProviderAndLaunchFromVC: push 出去的页面 + push 前的锚点页（一般是
+// 设置页）。弱引用, 不影响正常的 VC 生命周期。
+//
+// 用途 (PR #101 review P1): WKWebViewVC 只有在「页面内导航到 <scheme>://verified
+// 且 openURL: 成功」时才会自己 popViewControllerAnimated:。但用户可能点了页面
+// 右上角「更多 → 在浏览器中打开」在系统 Safari 里完成认证——这种情况下回跳信号
+// 根本不经过这个页面自己的导航拦截, 容器不会自己关, 也没有任何 observer 会替它
+// 关（WKMeVC / WKMeInfoVC / WKCommonSettingVC 收到认证完成通知只 reloadData）。
+// 这里在 handleVerifiedCallback: 里主动兜底关闭, 不依赖容器自己关。
+static __weak WKWebViewVC *s_realnameWebVC;
+static __weak UIViewController *s_realnameAnchorVC;
 
 @implementation WKRealnameVerifyManager
 
@@ -100,13 +111,16 @@ static NSString *const WKAegisAccountVerificationPath = @"/profile/info?anchor=v
 + (void)handleVerifiedCallback:(NSURL *)url {
     WKLogInfo(@"[Realname] received verified callback: %@", url);
 
-    // 先关闭可能在前台的 SFSafariViewController
+    // 实名认证页跑在 App 私有 WKWebViewVC 里（见 _resolveProviderAndLaunchFromVC:），
+    // 页面内导航到 <scheme>://verified 时 WKWebViewVC.decidePolicyForNavigationAction
+    // 通常会自己 popViewControllerAnimated:。但如果用户是从页面「更多 → 在浏览器中
+    // 打开」跳去系统 Safari 完成的认证，回跳不会经过那段逻辑，容器不会自己关——这里
+    // 主动兜底一次，页面还在导航栈上就关掉它。
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIViewController *root = [UIApplication sharedApplication].keyWindow.rootViewController;
-        UIViewController *top = root;
-        while(top.presentedViewController) { top = top.presentedViewController; }
-        if([top isKindOfClass:[SFSafariViewController class]]) {
-            [top dismissViewControllerAnimated:YES completion:nil];
+        WKWebViewVC *webVC = s_realnameWebVC;
+        UIViewController *anchor = s_realnameAnchorVC;
+        if(webVC && anchor) {
+            [[WKNavigationManager shared] popToViewController:anchor animated:NO];
         }
     });
 
@@ -189,14 +203,6 @@ static NSString *const WKAegisAccountVerificationPath = @"/profile/info?anchor=v
         return;
     }
 
-    // iOS 11+ 才有 SFSafariViewController 的 dismissButtonStyle 等能力。
-    if(@available(iOS 11.0, *)) {
-        // OK
-    } else {
-        [fromVC.view showMsg:LLang(@"实名认证需要 iOS 11 及以上版本")];
-        return;
-    }
-
     // R3 / Jerry-Xin #112 warning: 区分「appconfig 仍在加载」vs「appconfig
     // 已加载但没下发 provider」。之前实现把两者都当「未配置」→ 首次冷启动 /
     // 慢网下看到错误 toast 但实际只是请求没回来。
@@ -235,7 +241,7 @@ static NSString *const WKAegisAccountVerificationPath = @"/profile/info?anchor=v
     }];
 }
 
-/// 在 appconfig 已加载完成的前提下, 读 provider → 拼 URL → present Safari。
+/// 在 appconfig 已加载完成的前提下, 读 provider → 拼 URL → push App 私有网页容器。
 /// 抽出来是为了 startVerificationFromVC: 的「已加载」与「加载后回调」两条路径
 /// 共享同一套「拿不到可用 accountUrl / URL 拼坏」的 toast 兜底, 不让分支漂移。
 - (void)_resolveProviderAndLaunchFromVC:(UIViewController *)fromVC {
@@ -255,13 +261,16 @@ static NSString *const WKAegisAccountVerificationPath = @"/profile/info?anchor=v
         return;
     }
 
+    // 用 App 私有 WKWebViewVC（与登录 SSO 页共享同一个 WKProcessPool / 默认
+    // WKWebsiteDataStore）而不是 SFSafariViewController（系统 Safari 的 Cookie
+    // 罐，与 App 内登录会话不共享）打开，这样 Aegis 账户页能看到 SSO 登录时
+    // 建立的会话 Cookie，不会被误判成未登录再跳它自己的登录页。
     WKLogInfo(@"[Realname] opening Aegis account page: %@", verifyURL);
-    SFSafariViewController *safari = [[SFSafariViewController alloc] initWithURL:verifyURL];
-    if(@available(iOS 11.0, *)) {
-        safari.dismissButtonStyle = SFSafariViewControllerDismissButtonStyleClose;
-    }
-    safari.modalPresentationStyle = UIModalPresentationFormSheet;
-    [fromVC presentViewController:safari animated:YES completion:nil];
+    WKWebViewVC *webVC = [WKWebViewVC new];
+    webVC.url = verifyURL;
+    s_realnameWebVC = webVC;
+    s_realnameAnchorVC = fromVC;
+    [[WKNavigationManager shared] pushViewController:webVC animated:YES];
 }
 
 @end
