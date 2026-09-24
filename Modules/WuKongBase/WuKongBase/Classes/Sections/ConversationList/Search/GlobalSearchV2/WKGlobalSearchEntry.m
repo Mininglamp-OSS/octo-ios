@@ -26,9 +26,10 @@
 
 + (WKGlobalSearchV2Tab)v2TabFromSearchType:(WKHistoryMessageSearchType)type {
     switch (type) {
+        case WKHistoryMessageSearchTypeAll:      return WKGlobalSearchV2TabAll;
         case WKHistoryMessageSearchTypeContacts: return WKGlobalSearchV2TabContacts;
         case WKHistoryMessageSearchTypeMessages:  return WKGlobalSearchV2TabMessages;
-        default:                                  return WKGlobalSearchV2TabMessages; // All/Conversation → 聊天记录
+        default:                                  return WKGlobalSearchV2TabMessages; // 未覆盖的类型兜底落"聊天记录"
     }
 }
 
