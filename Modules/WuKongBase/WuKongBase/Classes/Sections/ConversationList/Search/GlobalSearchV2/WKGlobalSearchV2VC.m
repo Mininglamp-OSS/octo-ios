@@ -727,14 +727,19 @@
 #pragma mark - All tab aggregation
 
 /// 有命中或查询失败的类别 tab 列表，顺序固定：聊天记录 / 联系人 / 群组 / 文件。
-/// 0 命中且没有错误才整段不出现——查询失败时即使 0 命中也保留分组，显示错误提示行，
-/// 避免把"查询失败"和"确实没有匹配"渲染成同一种"分组消失"的效果。
+/// 错误呈现契约：四类合计有命中（部分失败）时，失败类别保留分组渲染「加载失败，点击重试」；
+/// 四类全 0 命中时表格整体让位给全屏错误空态（updateEmptyState，自带重试按钮），
+/// 分组不再渲染——空态压在 tableView 上层且透明可交互，两层并存会文字重叠并挡死错误行。
 - (NSArray<NSNumber *> *)allTabSectionsWithHits {
     NSMutableArray<NSNumber *> *result = [NSMutableArray array];
     NSArray<NSNumber *> *order = @[@(WKGlobalSearchV2TabMessages), @(WKGlobalSearchV2TabContacts), @(WKGlobalSearchV2TabGroups), @(WKGlobalSearchV2TabFiles)];
+    BOOL anyHit = NO;
+    for (NSNumber *n in order) {
+        if ([self fullRowCountForTab:n.integerValue] > 0) { anyHit = YES; break; }
+    }
     for (NSNumber *n in order) {
         WKGlobalSearchV2Tab tab = (WKGlobalSearchV2Tab)n.integerValue;
-        if ([self fullRowCountForTab:tab] > 0 || [self errorForTab:tab]) [result addObject:n];
+        if ([self fullRowCountForTab:tab] > 0 || (anyHit && [self errorForTab:tab])) [result addObject:n];
     }
     return result;
 }
