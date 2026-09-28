@@ -14,7 +14,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSString *)reuseIdentifier;
 + (CGFloat)cellHeight;
 
-- (void)applyCount:(NSInteger)count;
+/// 通用文案入口：「查看全部 N 条」「加载失败，点击重试」等都复用本行样式，只是文案不同。
+- (void)applyTitle:(NSString *)title;
 
 @end
 

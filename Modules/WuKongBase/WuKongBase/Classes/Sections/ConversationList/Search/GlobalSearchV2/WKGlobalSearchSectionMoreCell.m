@@ -59,8 +59,8 @@
     self.separator.frame = CGRectMake(0, 0, w, 0.5f);
 }
 
-- (void)applyCount:(NSInteger)count {
-    self.titleLbl.text = [NSString stringWithFormat:LLang(@"查看全部 %ld 条"), (long)count];
+- (void)applyTitle:(NSString *)title {
+    self.titleLbl.text = title;
     [self setNeedsLayout];
 }
 

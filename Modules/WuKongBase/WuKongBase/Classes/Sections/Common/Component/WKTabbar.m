@@ -66,7 +66,6 @@
         self.style = style ?: [WKTabbarStyle defaultStyle];
         self.items = items;
         self.backgroundColor = WKApp.shared.config.backgroundColor;
-        [self addSubview:self.indicatorView];
         [self addSubview:self.scrollView];
 
         NSInteger index= 0;
@@ -74,6 +73,9 @@
             [self.scrollView addSubview:[self titleView:item.title index:index]];
             index++;
         }
+        // 下划线挂在 scrollView 上而不是 tabbar 自己身上：这样它和 tab 按钮共享同一套坐标系，
+        // 横向滚动时会随内容一起移动，setSelectedByIndex 里按 scrollView 内部坐标算位置的公式不用改。
+        [self.scrollView addSubview:self.indicatorView];
     }
     return  self;
 }
@@ -81,7 +83,10 @@
 - (void)layoutSubviews {
     [super layoutSubviews];
 
-    NSArray *subviews = self.scrollView.subviews;
+    // scrollView 的 frame 之前只在初始化时设置过一次；tabbar 尺寸后续如果变化（旋转等）要跟着同步。
+    self.scrollView.frame = self.bounds;
+
+    NSArray *subviews = self.itemViews;
 
     UIView *preView;
     for (UIView *itemView in subviews) {
@@ -105,12 +110,19 @@
     [self setSelectedByIndex:self.selectedIndex];
 }
 
+/// scrollView 内除下划线以外的子视图（即所有 tab 按钮），按添加顺序排列。
+- (NSArray<UIView *> *)itemViews {
+    NSMutableArray<UIView *> *result = [self.scrollView.subviews mutableCopy];
+    [result removeObject:self.indicatorView];
+    return result;
+}
+
 -(UIColor *) unselectedColor {
     return self.style.unselectedTextColor ?: defaultColor;
 }
 
 -(void) setSelectedByIndex:(NSInteger)index {
-    NSArray<UIView*> *subviews = self.scrollView.subviews;
+    NSArray<UIView*> *subviews = self.itemViews;
     if(index>=subviews.count) {
         return;
     }

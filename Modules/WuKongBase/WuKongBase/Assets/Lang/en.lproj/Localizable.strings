@@ -763,6 +763,10 @@
 // "查找聊天内容" 已在 line 623 翻译，不重复
 "搜索聊天记录"="Search messages";
 "全部"="All";
+"查看全部 %ld 条"="View all %ld results";
+"查看全部 约%ld 条"="View all ~%ld results";
+"查看全部"="View all";
+"加载失败，点击重试"="Failed to load, tap to retry";
 "图片视频"="Photos & Videos";
 "图片和视频暂不支持按关键词搜索，可按发送人或日期查找"="Photos and videos can't be searched by keyword — filter by sender or date instead.";
 "关键词最多 %ld 个字"="Keyword can't exceed %ld characters";

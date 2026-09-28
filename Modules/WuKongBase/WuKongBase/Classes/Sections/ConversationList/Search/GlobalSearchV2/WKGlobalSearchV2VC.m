@@ -99,6 +99,7 @@
     [self setupNav];
     [self setupBars];
     [self setupContent];
+    [self updateFilterButtonVisibility]; // selectItemAtIndex 在 currentTab==0 时是 no-op，这里兜底保证初始状态也对
 
     [self.tabbar selectItemAtIndex:self.currentTab]; // 触发 onClick → switchTabIndex:
     if (self.currentKeyword.length > 0) {
@@ -285,6 +286,10 @@
 - (void)syncActiveVM {
     switch (self.currentTab) {
         case WKGlobalSearchV2TabAll:
+            // 「全部」是不筛选的总览：进入时如果 groupsVM/filesVM 还带着别的 tab 设置的筛选条件，
+            // 清空重查，避免总览数字实际是筛选后的子集却不显示任何筛选痕迹。
+            if (self.groupsVM.filter.hasEffectiveFilters) [self.groupsVM applyFilter:nil];
+            if (self.filesVM.filter.hasEffectiveFilters) [self.filesVM applyFilter:nil];
             [self.groupsVM applyKeyword:self.currentKeyword];
             [self.contactsVM applyKeyword:self.currentKeyword];
             [self.filesVM applyKeyword:self.currentKeyword];
@@ -673,14 +678,42 @@
 
 #pragma mark - All tab aggregation
 
-/// 有命中的类别 tab 列表，顺序固定：聊天记录 / 联系人 / 群组 / 文件；某类别 0 命中时整段不出现。
+/// 有命中或查询失败的类别 tab 列表，顺序固定：聊天记录 / 联系人 / 群组 / 文件。
+/// 0 命中且没有错误才整段不出现——查询失败时即使 0 命中也保留分组，显示错误提示行，
+/// 避免把"查询失败"和"确实没有匹配"渲染成同一种"分组消失"的效果。
 - (NSArray<NSNumber *> *)allTabSectionsWithHits {
     NSMutableArray<NSNumber *> *result = [NSMutableArray array];
     NSArray<NSNumber *> *order = @[@(WKGlobalSearchV2TabMessages), @(WKGlobalSearchV2TabContacts), @(WKGlobalSearchV2TabGroups), @(WKGlobalSearchV2TabFiles)];
     for (NSNumber *n in order) {
-        if ([self fullRowCountForTab:n.integerValue] > 0) [result addObject:n];
+        WKGlobalSearchV2Tab tab = (WKGlobalSearchV2Tab)n.integerValue;
+        if ([self fullRowCountForTab:tab] > 0 || [self errorForTab:tab]) [result addObject:n];
     }
     return result;
+}
+
+/// 某个具体类别 tab 的查询错误，供「全部」聚合视图区分"没有结果"和"查询失败"。
+- (NSError *)errorForTab:(WKGlobalSearchV2Tab)tab {
+    switch (tab) {
+        case WKGlobalSearchV2TabMessages: return self.groupsVM.error;
+        case WKGlobalSearchV2TabContacts:
+        case WKGlobalSearchV2TabGroups:   return self.contactsVM.error;
+        case WKGlobalSearchV2TabFiles:    return self.filesVM.firstPageError;
+        case WKGlobalSearchV2TabAll:      return nil;
+    }
+    return nil;
+}
+
+/// 「查看全部」行的文案：聊天记录用服务端返回的真实命中总数（该字段本身即近似值），
+/// 文件类别只请求了首页、没有真实总数，不写具体数字以免误导；联系人/群组一次性拉全量，
+/// 已加载条数本身就是准确总数。
+- (NSString *)moreRowTitleForTab:(WKGlobalSearchV2Tab)tab {
+    if (tab == WKGlobalSearchV2TabMessages && self.groupsVM.totalGroups > 0) {
+        return [NSString stringWithFormat:LLang(@"查看全部 约%ld 条"), (long)self.groupsVM.totalGroups];
+    }
+    if (tab == WKGlobalSearchV2TabFiles) {
+        return LLang(@"查看全部");
+    }
+    return [NSString stringWithFormat:LLang(@"查看全部 %ld 条"), (long)[self fullRowCountForTab:tab]];
 }
 
 - (NSString *)sectionTitleForTab:(WKGlobalSearchV2Tab)tab {
@@ -694,15 +727,37 @@
     return @"";
 }
 
-/// 某类别在「全部」聚合分组下要渲染的行数：最多预览 3 条，命中数 > 3 时额外追加一行「查看全部」。
+/// 该类别在服务端是否还有未加载的结果——聊天记录/文件有分页概念，联系人/群组一次性拉全量、恒为 NO。
+- (BOOL)hasMoreForTab:(WKGlobalSearchV2Tab)tab {
+    switch (tab) {
+        case WKGlobalSearchV2TabMessages: return self.groupsVM.hasMore;
+        case WKGlobalSearchV2TabFiles:    return self.filesVM.hasMore;
+        case WKGlobalSearchV2TabContacts:
+        case WKGlobalSearchV2TabGroups:
+        case WKGlobalSearchV2TabAll:      return NO;
+    }
+    return NO;
+}
+
+/// 某类别在「全部」聚合分组下要渲染的行数：最多预览 3 条；命中数 > 3，或已加载条数不足 3 条但服务端还有更多，
+/// 都要额外追加一行「查看全部」——否则命中很多但首页刚好只回了 1~3 条时，会误让用户以为这就是全部结果。
 - (NSInteger)previewRowCountForTab:(WKGlobalSearchV2Tab)tab {
     NSInteger full = [self fullRowCountForTab:tab];
     NSInteger capped = MIN(full, kSectionPreviewCount);
-    return capped + (full > kSectionPreviewCount ? 1 : 0);
+    BOOL hasMoreRow = full > kSectionPreviewCount || [self hasMoreForTab:tab];
+    return capped + (hasMoreRow ? 1 : 0);
 }
 
 - (BOOL)isMoreRowForTab:(WKGlobalSearchV2Tab)tab row:(NSInteger)row {
-    return row == kSectionPreviewCount && [self fullRowCountForTab:tab] > kSectionPreviewCount;
+    NSInteger full = [self fullRowCountForTab:tab];
+    NSInteger capped = MIN(full, kSectionPreviewCount);
+    BOOL hasMoreRow = full > kSectionPreviewCount || [self hasMoreForTab:tab];
+    return row == capped && hasMoreRow;
+}
+
+/// 该分类命中数为 0 但查询失败时，分组里唯一的一行渲染成错误提示行（而不是让分组直接消失）。
+- (BOOL)isErrorRowForTab:(WKGlobalSearchV2Tab)tab row:(NSInteger)row {
+    return row == 0 && [self fullRowCountForTab:tab] == 0 && [self errorForTab:tab] != nil;
 }
 
 - (WKSearchContactsModel *)contactModelForTab:(WKGlobalSearchV2Tab)tab atIndex:(NSInteger)idx {
@@ -782,7 +837,9 @@
     if (self.currentTab == WKGlobalSearchV2TabAll) {
         NSArray<NSNumber *> *sections = [self allTabSectionsWithHits];
         if (section >= (NSInteger)sections.count) return 0;
-        return [self previewRowCountForTab:sections[section].integerValue];
+        WKGlobalSearchV2Tab tab = (WKGlobalSearchV2Tab)sections[section].integerValue;
+        if ([self fullRowCountForTab:tab] == 0 && [self errorForTab:tab]) return 1; // 错误提示行
+        return [self previewRowCountForTab:tab];
     }
     return [self activeRowCount];
 }
@@ -813,9 +870,14 @@
             NSArray<NSNumber *> *sections = [self allTabSectionsWithHits];
             if (indexPath.section >= (NSInteger)sections.count) return [UITableViewCell new];
             WKGlobalSearchV2Tab tab = (WKGlobalSearchV2Tab)sections[indexPath.section].integerValue;
+            if ([self isErrorRowForTab:tab row:indexPath.row]) {
+                WKGlobalSearchSectionMoreCell *c = [tableView dequeueReusableCellWithIdentifier:[WKGlobalSearchSectionMoreCell reuseIdentifier] forIndexPath:indexPath];
+                [c applyTitle:LLang(@"加载失败，点击重试")];
+                return c;
+            }
             if ([self isMoreRowForTab:tab row:indexPath.row]) {
                 WKGlobalSearchSectionMoreCell *c = [tableView dequeueReusableCellWithIdentifier:[WKGlobalSearchSectionMoreCell reuseIdentifier] forIndexPath:indexPath];
-                [c applyCount:[self fullRowCountForTab:tab]];
+                [c applyTitle:[self moreRowTitleForTab:tab]];
                 return c;
             }
             return [self tableView:tableView previewCellForTab:tab row:indexPath.row indexPath:indexPath];
@@ -850,6 +912,7 @@
             NSArray<NSNumber *> *sections = [self allTabSectionsWithHits];
             if (indexPath.section >= (NSInteger)sections.count) return 60.0f;
             WKGlobalSearchV2Tab tab = (WKGlobalSearchV2Tab)sections[indexPath.section].integerValue;
+            if ([self isErrorRowForTab:tab row:indexPath.row]) return [WKGlobalSearchSectionMoreCell cellHeight];
             if ([self isMoreRowForTab:tab row:indexPath.row]) return [WKGlobalSearchSectionMoreCell cellHeight];
             return [self previewHeightForTab:tab row:indexPath.row];
         }
@@ -873,6 +936,10 @@
             NSArray<NSNumber *> *sections = [self allTabSectionsWithHits];
             if (indexPath.section >= (NSInteger)sections.count) return;
             WKGlobalSearchV2Tab tab = (WKGlobalSearchV2Tab)sections[indexPath.section].integerValue;
+            if ([self isErrorRowForTab:tab row:indexPath.row]) {
+                [self syncActiveVM]; // 重试：与单 tab 空态的重试一致，keyword 不变时命中 VM 内部去重（已知限制，不在本次范围内)
+                return;
+            }
             if ([self isMoreRowForTab:tab row:indexPath.row]) {
                 [self.tabbar selectItemAtIndex:tab]; // 触发 onClick → switchTabIndex:，与点击 tab 按钮行为一致
                 return;
