@@ -73,6 +73,11 @@
 
 @property (nonatomic, assign) BOOL hasShownKeywordLimitToast;
 @property (nonatomic, assign) BOOL didFallback;
+
+/// 进入「全部」前对聊天记录/文件 VM 筛选条件做的快照，切回对应 tab 时还原，
+/// 避免「全部」的清空动作永久销毁用户在单 tab 设置的筛选。
+@property (nonatomic, strong, nullable) WKChannelHistorySearchFilter *pendingGroupsFilter;
+@property (nonatomic, strong, nullable) WKChannelHistorySearchFilter *pendingFilesFilter;
 @end
 
 @implementation WKGlobalSearchV2VC
@@ -233,7 +238,7 @@
 
     self.emptyView = [WKChannelHistorySearchEmptyView new];
     self.emptyView.hidden = YES;
-    self.emptyView.onRetry = ^{ [ws syncActiveVM]; };
+    self.emptyView.onRetry = ^{ [ws retryTab:ws.currentTab]; };
     [self.view addSubview:self.emptyView];
 }
 
@@ -286,15 +291,28 @@
 - (void)syncActiveVM {
     switch (self.currentTab) {
         case WKGlobalSearchV2TabAll:
-            // 「全部」是不筛选的总览：进入时如果 groupsVM/filesVM 还带着别的 tab 设置的筛选条件，
-            // 清空重查，避免总览数字实际是筛选后的子集却不显示任何筛选痕迹。
-            if (self.groupsVM.filter.hasEffectiveFilters) [self.groupsVM applyFilter:nil];
-            if (self.filesVM.filter.hasEffectiveFilters) [self.filesVM applyFilter:nil];
+            // 「全部」是不筛选的总览：进入时如果 groupsVM/filesVM 还带着别的 tab 设置的筛选/排序，
+            // 先快照再清空重查，切回对应 tab 时还原——总览保持无筛选痕迹，用户的设置也不被销毁。
+            // 用 hasAnyFilter 而非 hasEffectiveFilters：前者才包含 sort，否则时间正序这类纯排序设置会漏清。
+            if (self.groupsVM.filter.hasAnyFilter) {
+                self.pendingGroupsFilter = [self.groupsVM.filter copy];
+                [self.groupsVM applyFilter:nil];
+            }
+            if (self.filesVM.filter.hasAnyFilter) {
+                self.pendingFilesFilter = [self.filesVM.filter copy];
+                [self.filesVM applyFilter:nil];
+            }
             [self.groupsVM applyKeyword:self.currentKeyword];
             [self.contactsVM applyKeyword:self.currentKeyword];
             [self.filesVM applyKeyword:self.currentKeyword];
             break;
         case WKGlobalSearchV2TabMessages:
+            if (self.pendingGroupsFilter) {
+                WKChannelHistorySearchFilter *f = self.pendingGroupsFilter;
+                self.pendingGroupsFilter = nil;
+                [self.groupsVM applyFilter:f]; // applyFilter 内部会 refresh，无需再 applyKeyword
+                break;
+            }
             [self.groupsVM applyKeyword:self.currentKeyword];
             break;
         case WKGlobalSearchV2TabContacts:
@@ -302,7 +320,29 @@
             [self.contactsVM applyKeyword:self.currentKeyword];
             break;
         case WKGlobalSearchV2TabFiles:
+            if (self.pendingFilesFilter) {
+                WKChannelHistorySearchFilter *f = self.pendingFilesFilter;
+                self.pendingFilesFilter = nil;
+                [self.filesVM applyFilter:f];
+                break;
+            }
             [self.filesVM applyKeyword:self.currentKeyword];
+            break;
+    }
+}
+
+/// 按 tab 精确重试：错误行的「点击重试」和空态的 onRetry 都走这里。
+/// 不能走 syncActiveVM——applyKeyword 对相同 keyword 去重后是 no-op，重试会变成死点击。
+- (void)retryTab:(WKGlobalSearchV2Tab)tab {
+    switch (tab) {
+        case WKGlobalSearchV2TabMessages: [self.groupsVM refresh]; break;
+        case WKGlobalSearchV2TabContacts:
+        case WKGlobalSearchV2TabGroups:   [self.contactsVM refresh]; break; // 联系人/群组共用同一请求，一次刷新两处恢复
+        case WKGlobalSearchV2TabFiles:    [self.filesVM refresh]; break;
+        case WKGlobalSearchV2TabAll: // 三个 VM 全部重查：网络恢复回调也会走到这里
+            [self.groupsVM refresh];
+            [self.contactsVM refresh];
+            [self.filesVM refresh];
             break;
     }
 }
@@ -334,7 +374,13 @@
 }
 
 - (void)applyKeywordNow {
-    self.currentKeyword = self.searchInput.text ?: @"";
+    NSString *newKeyword = self.searchInput.text ?: @"";
+    // 换词/清空重输后，旧的筛选快照对应的是上一个关键词的语境，作废。
+    if (![newKeyword isEqualToString:self.currentKeyword]) {
+        self.pendingGroupsFilter = nil;
+        self.pendingFilesFilter = nil;
+    }
+    self.currentKeyword = newKeyword;
     [self syncActiveVM];
 }
 
@@ -342,6 +388,8 @@
     self.searchInput.text = @"";
     self.clearBtn.hidden = YES;
     self.currentKeyword = @"";
+    self.pendingGroupsFilter = nil;
+    self.pendingFilesFilter = nil;
     [self syncActiveVM];
 }
 
@@ -668,7 +716,7 @@
     BOOL wasOffline = !self.offlineBar.hidden;
     [self refreshOfflineBarVisibility];
     [self updateEmptyState];
-    if (wasOffline && listener.hasNetwork) [self syncActiveVM];
+    if (wasOffline && listener.hasNetwork) [self retryTab:self.currentTab]; // 走 syncActiveVM 会被 applyKeyword 的同词去重挡成 no-op
 }
 
 - (void)refreshOfflineBarVisibility {
@@ -703,19 +751,6 @@
     return nil;
 }
 
-/// 「查看全部」行的文案：聊天记录用服务端返回的真实命中总数（该字段本身即近似值），
-/// 文件类别只请求了首页、没有真实总数，不写具体数字以免误导；联系人/群组一次性拉全量，
-/// 已加载条数本身就是准确总数。
-- (NSString *)moreRowTitleForTab:(WKGlobalSearchV2Tab)tab {
-    if (tab == WKGlobalSearchV2TabMessages && self.groupsVM.totalGroups > 0) {
-        return [NSString stringWithFormat:LLang(@"查看全部 约%ld 条"), (long)self.groupsVM.totalGroups];
-    }
-    if (tab == WKGlobalSearchV2TabFiles) {
-        return LLang(@"查看全部");
-    }
-    return [NSString stringWithFormat:LLang(@"查看全部 %ld 条"), (long)[self fullRowCountForTab:tab]];
-}
-
 - (NSString *)sectionTitleForTab:(WKGlobalSearchV2Tab)tab {
     switch (tab) {
         case WKGlobalSearchV2TabMessages: return LLang(@"聊天记录");
@@ -727,7 +762,9 @@
     return @"";
 }
 
-/// 该类别在服务端是否还有未加载的结果——聊天记录/文件有分页概念，联系人/群组一次性拉全量、恒为 NO。
+/// 该类别在服务端是否还有未加载的结果——聊天记录/文件有分页概念；
+/// 联系人/群组按 limit=20 截断首页，但 20 已超过预览上限 3，装满首页时
+/// 「查看全部」行必然因已加载数 > 3 而出现，故恒为 NO 不会造成截断无入口。
 - (BOOL)hasMoreForTab:(WKGlobalSearchV2Tab)tab {
     switch (tab) {
         case WKGlobalSearchV2TabMessages: return self.groupsVM.hasMore;
@@ -877,7 +914,7 @@
             }
             if ([self isMoreRowForTab:tab row:indexPath.row]) {
                 WKGlobalSearchSectionMoreCell *c = [tableView dequeueReusableCellWithIdentifier:[WKGlobalSearchSectionMoreCell reuseIdentifier] forIndexPath:indexPath];
-                [c applyTitle:[self moreRowTitleForTab:tab]];
+                [c applyTitle:LLang(@"查看全部")];
                 return c;
             }
             return [self tableView:tableView previewCellForTab:tab row:indexPath.row indexPath:indexPath];
@@ -937,7 +974,7 @@
             if (indexPath.section >= (NSInteger)sections.count) return;
             WKGlobalSearchV2Tab tab = (WKGlobalSearchV2Tab)sections[indexPath.section].integerValue;
             if ([self isErrorRowForTab:tab row:indexPath.row]) {
-                [self syncActiveVM]; // 重试：与单 tab 空态的重试一致，keyword 不变时命中 VM 内部去重（已知限制，不在本次范围内)
+                [self retryTab:tab];
                 return;
             }
             if ([self isMoreRowForTab:tab row:indexPath.row]) {
