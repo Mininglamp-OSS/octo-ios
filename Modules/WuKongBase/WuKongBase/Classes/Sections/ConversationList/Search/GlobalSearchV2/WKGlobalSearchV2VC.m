@@ -74,10 +74,14 @@
 @property (nonatomic, assign) BOOL hasShownKeywordLimitToast;
 @property (nonatomic, assign) BOOL didFallback;
 
-/// 进入「全部」前对聊天记录/文件 VM 筛选条件做的快照，切回对应 tab 时还原，
-/// 避免「全部」的清空动作永久销毁用户在单 tab 设置的筛选。
+/// 进入「全部」前对聊天记录/文件 VM 筛选条件做的快照。契约：
+/// 1. 快照与关键词无关（筛选字段不绑定关键词），跨换词保留，与单 tab 上"换词不清筛选"的行为对齐；
+/// 2. 用户手动切回对应 tab 时还原（chips 随之恢复）；
+/// 3. 经「查看全部」行跳转时不还原（落地与预览一致的无筛选列表），快照继续保留。
 @property (nonatomic, strong, nullable) WKChannelHistorySearchFilter *pendingGroupsFilter;
 @property (nonatomic, strong, nullable) WKChannelHistorySearchFilter *pendingFilesFilter;
+/// YES 表示本次 switchTabIndex 由「查看全部」行发起，syncActiveVM 跳过快照还原；消费后复位。
+@property (nonatomic, assign) BOOL suppressPendingFilterRestore;
 @end
 
 @implementation WKGlobalSearchV2VC
@@ -282,6 +286,7 @@
     self.currentTab = tab;
     [self updateFilterButtonVisibility];
     [self syncActiveVM];
+    self.suppressPendingFilterRestore = NO; // syncActiveVM 已消费，复位；防 selectItemAtIndex 被 no-op 守卫挡掉时标记残留
     [self.tableView reloadData];
     [self updateAllTransientUI];
     [self.tableView setContentOffset:CGPointZero animated:NO];
@@ -307,26 +312,24 @@
             [self.filesVM applyKeyword:self.currentKeyword];
             break;
         case WKGlobalSearchV2TabMessages:
-            if (self.pendingGroupsFilter) {
+            [self.groupsVM applyKeyword:self.currentKeyword]; // 先同步关键词（去重，多数情况 no-op）
+            if (!self.suppressPendingFilterRestore && self.pendingGroupsFilter) {
                 WKChannelHistorySearchFilter *f = self.pendingGroupsFilter;
                 self.pendingGroupsFilter = nil;
-                [self.groupsVM applyFilter:f]; // applyFilter 内部会 refresh，无需再 applyKeyword
-                break;
+                [self.groupsVM applyFilter:f]; // applyFilter 内部会 refresh，此时关键词已同步，刷新即最终结果
             }
-            [self.groupsVM applyKeyword:self.currentKeyword];
             break;
         case WKGlobalSearchV2TabContacts:
         case WKGlobalSearchV2TabGroups:
             [self.contactsVM applyKeyword:self.currentKeyword];
             break;
         case WKGlobalSearchV2TabFiles:
-            if (self.pendingFilesFilter) {
+            [self.filesVM applyKeyword:self.currentKeyword];
+            if (!self.suppressPendingFilterRestore && self.pendingFilesFilter) {
                 WKChannelHistorySearchFilter *f = self.pendingFilesFilter;
                 self.pendingFilesFilter = nil;
                 [self.filesVM applyFilter:f];
-                break;
             }
-            [self.filesVM applyKeyword:self.currentKeyword];
             break;
     }
 }
@@ -374,13 +377,8 @@
 }
 
 - (void)applyKeywordNow {
-    NSString *newKeyword = self.searchInput.text ?: @"";
-    // 换词/清空重输后，旧的筛选快照对应的是上一个关键词的语境，作废。
-    if (![newKeyword isEqualToString:self.currentKeyword]) {
-        self.pendingGroupsFilter = nil;
-        self.pendingFilesFilter = nil;
-    }
-    self.currentKeyword = newKeyword;
+    self.currentKeyword = self.searchInput.text ?: @"";
+    // 快照不随换词作废：筛选字段与关键词无关，单 tab 上换词也保留筛选，两条路径行为对齐。
     [self syncActiveVM];
 }
 
@@ -388,8 +386,6 @@
     self.searchInput.text = @"";
     self.clearBtn.hidden = YES;
     self.currentKeyword = @"";
-    self.pendingGroupsFilter = nil;
-    self.pendingFilesFilter = nil;
     [self syncActiveVM];
 }
 
@@ -983,6 +979,9 @@
                 return;
             }
             if ([self isMoreRowForTab:tab row:indexPath.row]) {
+                // 「查看全部」承诺的是预览那批（无筛选）结果的完整列表：本次跳转不还原快照，
+                // 否则落地的是筛选后的另一批结果，可能完全不含用户刚点过的内容。
+                self.suppressPendingFilterRestore = YES;
                 [self.tabbar selectItemAtIndex:tab]; // 触发 onClick → switchTabIndex:，与点击 tab 按钮行为一致
                 return;
             }
