@@ -210,8 +210,9 @@
 -(void) initItems {
     __weak typeof(self) weakSelf = self;
     // 手机号 / 邮箱：独立信息卡片，紧跟头部（头像/名字/短号）下方、"设置备注"
-    // 这一行之上（对齐设计稿「他人名片」信息卡）。任意一项没有值就整行不显示，
-    // 两项都没有值则整张卡片不显示，不留空卡片/空行。
+    // 这一行之上（对齐设计稿「他人名片」信息卡）。两项都没有值则整张卡片不显示；
+    // 只要有一项不为空，两行都显示——为空的那一项显示"未绑定"，且不可点击
+    // （没有号码/邮箱可看/可复制）。
     // 手机号沿用原有"点击查看→点击复制"两段式交互：状态存在 phoneRevealed 里，
     // 点第一次靠 reload() 触发 tableView 刷新换成真实号码，点第二次才复制。
     [[WKApp shared] setMethod:@"user.info.phoneEmail" handler:^id _Nullable(id  _Nonnull param) {
@@ -228,7 +229,7 @@
                 @"class":WKLabelItemModel.class,
                 @"label":LLang(@"手机号"),
                 @"value": weakSelf.phoneRevealed ? phone : LLang(@"点击查看"),
-                @"showBottomLine": @(email.length > 0),
+                @"showBottomLine": @(YES),
                 @"onClick":^{
                     if(!weakSelf.phoneRevealed) {
                         weakSelf.phoneRevealed = YES;
@@ -241,6 +242,13 @@
                     }
                 }
             }];
+        } else {
+            [items addObject:@{
+                @"class":WKLabelItemModel.class,
+                @"label":LLang(@"手机号"),
+                @"value": LLang(@"未绑定"),
+                @"showBottomLine": @(YES),
+            }];
         }
         if(email.length > 0) {
             [items addObject:@{
@@ -251,6 +259,12 @@
                     [UIPasteboard generalPasteboard].string = email;
                     [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"已复制")];
                 }
+            }];
+        } else {
+            [items addObject:@{
+                @"class":WKLabelItemModel.class,
+                @"label":LLang(@"邮箱"),
+                @"value": LLang(@"未绑定"),
             }];
         }
         return @{

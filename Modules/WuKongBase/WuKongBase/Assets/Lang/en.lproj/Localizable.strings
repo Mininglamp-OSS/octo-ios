@@ -1157,3 +1157,9 @@
 "删除表情失败"="Failed to delete";
 "移到最前"="Move to front";
 "上传失败"="Upload failed";
+
+// ---------- 他人名片 手机号/邮箱信息卡片 ----------
+"手机号"="Phone number";
+"邮箱"="Email";
+"点击查看"="Tap to view";
+"未绑定"="Not linked";
