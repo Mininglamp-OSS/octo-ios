@@ -36,8 +36,8 @@
 @property(nonatomic,strong) WKUserFieldView *nicknameField; // 用户昵称(如果有备注则隐藏昵称)
 @property(nonatomic,strong) WKUserFieldView *shortNoField; // 用户短编号
 @property(nonatomic,strong) WKUserFieldView *nameInChannelField; // 群内昵称
-// 手机号 / 邮箱：已改为独立信息卡片（WKUserInfoVM user.info.phoneEmail），
-// 不再堆叠在头部这一竖排文字里，详见该 handler。
+// 手机号 / 邮箱不在此处展示，由 WKUserInfoVM 的 user.info.phoneEmail
+// handler 渲染成独立信息卡片，详见该 handler。
 
 @property(nonatomic,strong) UIView *userInfoBoxView; // 右边文字的容器
 

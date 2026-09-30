@@ -226,6 +226,10 @@
     // 这一行之上（对齐设计稿「他人名片」信息卡）。两项都没有值则整张卡片不显示；
     // 只要有一项不为空，两行都显示——为空的那一项显示"未绑定"，且不可点击
     // （没有号码/邮箱可看/可复制）。看自己的名片不展示该卡片。
+    // 服务端不做按关系收敛，任意 uid 都会原样返回手机号/邮箱，所以门槛必须
+    // 在客户端做：只在同 space 内部展示，跨 space 外部用户（含扫码加好友这类
+    // 陌生人场景）一律隐藏整张卡片，和 isExternalUser 现有语义保持一致
+    // （同 space 内部当作类似通讯录场景，外部人默认更敏感）。
     // 手机号是"点击查看→点击复制"两段式交互：展开状态存在 param[@"context"]
     // 里（即 self.contextDict，per-VM 实例），不能挂在 VM 属性上——同一个 sid
     // 的 handler 在 WKApp 全局 endpoint 表里只有一份，闭包里的 weakSelf 永远
@@ -233,6 +237,9 @@
     [[WKApp shared] setMethod:@"user.info.phoneEmail" handler:^id _Nullable(id  _Nonnull param) {
         NSString *uid = param[@"uid"];
         if([uid isEqualToString:[WKApp shared].loginInfo.uid]) {
+            return nil;
+        }
+        if([weakSelf isExternalUser]) {
             return nil;
         }
         NSString *phone = param[@"phone"];
