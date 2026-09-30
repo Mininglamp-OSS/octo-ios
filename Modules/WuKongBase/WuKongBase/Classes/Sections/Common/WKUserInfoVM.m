@@ -96,6 +96,10 @@
 @property(nonatomic,copy) NSString *userHomeSpaceId;
 @property(nonatomic,assign) NSInteger userIsExternalLegacy;
 
+// 手机号是否已展开（点击查看→点击复制两段式交互），供 user.info.phoneEmail
+// handler 使用；刷新时保持该状态。
+@property(nonatomic,assign) BOOL phoneRevealed;
+
 @end
 
 @implementation WKUserInfoVM
@@ -205,6 +209,56 @@
 
 -(void) initItems {
     __weak typeof(self) weakSelf = self;
+    // 手机号 / 邮箱：独立信息卡片，紧跟头部（头像/名字/短号）下方、"设置备注"
+    // 这一行之上（对齐设计稿「他人名片」信息卡）。任意一项没有值就整行不显示，
+    // 两项都没有值则整张卡片不显示，不留空卡片/空行。
+    // 手机号沿用原有"点击查看→点击复制"两段式交互：状态存在 phoneRevealed 里，
+    // 点第一次靠 reload() 触发 tableView 刷新换成真实号码，点第二次才复制。
+    [[WKApp shared] setMethod:@"user.info.phoneEmail" handler:^id _Nullable(id  _Nonnull param) {
+        WKChannelInfo *channelInfo = param[@"channel_info"];
+        void(^reload)(void) = param[@"reload"];
+        NSString *phone = channelInfo.extra[@"phone"];
+        NSString *email = channelInfo.extra[@"email"];
+        if(phone.length == 0 && email.length == 0) {
+            return nil;
+        }
+        NSMutableArray *items = [NSMutableArray array];
+        if(phone.length > 0) {
+            [items addObject:@{
+                @"class":WKLabelItemModel.class,
+                @"label":LLang(@"手机号"),
+                @"value": weakSelf.phoneRevealed ? phone : LLang(@"点击查看"),
+                @"showBottomLine": @(email.length > 0),
+                @"onClick":^{
+                    if(!weakSelf.phoneRevealed) {
+                        weakSelf.phoneRevealed = YES;
+                        if(reload) {
+                            reload();
+                        }
+                    } else {
+                        [UIPasteboard generalPasteboard].string = phone;
+                        [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"已复制")];
+                    }
+                }
+            }];
+        }
+        if(email.length > 0) {
+            [items addObject:@{
+                @"class":WKLabelItemModel.class,
+                @"label":LLang(@"邮箱"),
+                @"value": email,
+                @"onClick":^{
+                    [UIPasteboard generalPasteboard].string = email;
+                    [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"已复制")];
+                }
+            }];
+        }
+        return @{
+            @"height":@(10.0f),
+            @"items":items,
+        };
+    } category:WKPOINT_CATEGORY_USER_INFO_ITEM sort:4010];
+
     // 备注
     [[WKApp shared] setMethod:@"user.info.setRemark" handler:^id _Nullable(id  _Nonnull param) {
         NSString *uid = param[@"uid"];
@@ -668,6 +722,10 @@
     [info setExtraValue:user.shortNo?:@"" forKey:WKChannelExtraKeyShortNo];
     [info setExtraValue:user.sourceDesc?:@"" forKey:WKChannelExtraKeySource];
     [info setExtraValue:user.vercode?:@"" forKey:WKChannelExtraKeyVercode];
+    // 手机号/邮箱：服务端已在 UserModel 解析出这两个字段，此前一直没有回写到
+    // channelInfo.extra，导致 WKUserInfoVC 头部拿不到值。回写后供页面展示。
+    info.extra[@"phone"] = user.phone ?: @"";
+    info.extra[@"email"] = user.email ?: @"";
     [info setSettingValue:user.screenshot forKey:WKChannelExtraKeyScreenshot];
     [info setSettingValue:user.chatPwdOn forKey:WKChannelExtraKeyChatPwd];
     // / ：把 /users/<uid> 顶层 realname_verified 回写到

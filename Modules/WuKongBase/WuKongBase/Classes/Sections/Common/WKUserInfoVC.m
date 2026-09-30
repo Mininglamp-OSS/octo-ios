@@ -36,6 +36,8 @@
 @property(nonatomic,strong) WKUserFieldView *nicknameField; // 用户昵称(如果有备注则隐藏昵称)
 @property(nonatomic,strong) WKUserFieldView *shortNoField; // 用户短编号
 @property(nonatomic,strong) WKUserFieldView *nameInChannelField; // 群内昵称
+// 手机号 / 邮箱：已改为独立信息卡片（WKUserInfoVM user.info.phoneEmail），
+// 不再堆叠在头部这一竖排文字里，详见该 handler。
 
 @property(nonatomic,strong) UIView *userInfoBoxView; // 右边文字的容器
 
@@ -200,7 +202,7 @@
     if(showShortNo) {
         [self.userInfoBoxView addSubview:self.shortNoField];
     }
-    
+
     NSNumber *sex = self.viewModel.channelInfo.extra[@"sex"];
     if(sex && [sex integerValue] == 0) {
         [self.sexImgView setImage:[self imageName:@"Common/Index/SexWoman"]];
@@ -924,8 +926,6 @@
     self.valueLbl.text = value;
     [self.valueLbl sizeToFit];
 }
-
-
 
 - (void)layoutSubviews {
     [super layoutSubviews];
