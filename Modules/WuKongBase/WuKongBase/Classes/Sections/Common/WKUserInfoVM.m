@@ -96,9 +96,14 @@
 @property(nonatomic,copy) NSString *userHomeSpaceId;
 @property(nonatomic,assign) NSInteger userIsExternalLegacy;
 
-// 手机号是否已展开（点击查看→点击复制两段式交互），供 user.info.phoneEmail
-// handler 使用；刷新时保持该状态。
-@property(nonatomic,assign) BOOL phoneRevealed;
+// 手机号是否已展开（点击查看→点击复制两段式交互）。这是"每次渲染当前这张
+// 卡片"要用的临时状态，不能挂在 VM 属性上读写——同一个 sid 的 handler 在
+// WKApp 全局 endpoint 表里只有一份，闭包里的 weakSelf 永远绑定"最后一次
+// -init 的那个 VM 实例"；同时打开两张名片（比如 A 名片进聊天再进 B 名片）
+// 时，回到 A 读到的会是 B 的 phoneRevealed。改用 handler 每次调用都拿到的
+// param[@"context"]（即下面 contextDict，per-VM 实例）来存取，才不会串。
+@property(nonatomic,copy) NSString *userPhone;
+@property(nonatomic,copy) NSString *userEmail;
 
 @end
 
@@ -150,6 +155,14 @@
         // user.info.addBlack / user.info.freeFriend handler 判同 Space。
         weakSelf.userHomeSpaceId = user.homeSpaceId ?: @"";
         weakSelf.userIsExternalLegacy = user.isExternal;
+
+        // 手机号/邮箱只存在 VM 的临时属性里，不回写进 channelInfo.extra：
+        // extra 会被整体 JSON 序列化持久化到本地 channel 表（WKChannelInfoDB
+        // extraToStr:/SQL_CHANNEL_UPDATE），且是整列覆盖不是 merge——
+        // 一旦落库，这两个字段就会明文留在本机数据库里，还会被其它不带
+        // phone/email 的 channelInfo 刷新路径整体覆盖掉。
+        weakSelf.userPhone = user.phone ?: @"";
+        weakSelf.userEmail = user.email ?: @"";
 
         // 重新缓存用户的channelInfo
         WKChannelInfo *channelInfo = [weakSelf channelInfoFromUser:user];
@@ -212,27 +225,34 @@
     // 手机号 / 邮箱：独立信息卡片，紧跟头部（头像/名字/短号）下方、"设置备注"
     // 这一行之上（对齐设计稿「他人名片」信息卡）。两项都没有值则整张卡片不显示；
     // 只要有一项不为空，两行都显示——为空的那一项显示"未绑定"，且不可点击
-    // （没有号码/邮箱可看/可复制）。
-    // 手机号沿用原有"点击查看→点击复制"两段式交互：状态存在 phoneRevealed 里，
-    // 点第一次靠 reload() 触发 tableView 刷新换成真实号码，点第二次才复制。
+    // （没有号码/邮箱可看/可复制）。看自己的名片不展示该卡片。
+    // 手机号是"点击查看→点击复制"两段式交互：展开状态存在 param[@"context"]
+    // 里（即 self.contextDict，per-VM 实例），不能挂在 VM 属性上——同一个 sid
+    // 的 handler 在 WKApp 全局 endpoint 表里只有一份，闭包里的 weakSelf 永远
+    // 绑定"最后一次 -init 的那个 VM 实例"，多张名片一起打开时会互相串状态。
     [[WKApp shared] setMethod:@"user.info.phoneEmail" handler:^id _Nullable(id  _Nonnull param) {
-        WKChannelInfo *channelInfo = param[@"channel_info"];
-        void(^reload)(void) = param[@"reload"];
-        NSString *phone = channelInfo.extra[@"phone"];
-        NSString *email = channelInfo.extra[@"email"];
+        NSString *uid = param[@"uid"];
+        if([uid isEqualToString:[WKApp shared].loginInfo.uid]) {
+            return nil;
+        }
+        NSString *phone = param[@"phone"];
+        NSString *email = param[@"email"];
         if(phone.length == 0 && email.length == 0) {
             return nil;
         }
+        NSMutableDictionary *context = param[@"context"];
+        void(^reload)(void) = param[@"reload"];
         NSMutableArray *items = [NSMutableArray array];
         if(phone.length > 0) {
+            BOOL phoneRevealed = [context[@"phoneRevealed"] boolValue];
             [items addObject:@{
                 @"class":WKLabelItemModel.class,
                 @"label":LLang(@"手机号"),
-                @"value": weakSelf.phoneRevealed ? phone : LLang(@"点击查看"),
+                @"value": phoneRevealed ? phone : LLang(@"点击查看"),
                 @"showBottomLine": @(YES),
                 @"onClick":^{
-                    if(!weakSelf.phoneRevealed) {
-                        weakSelf.phoneRevealed = YES;
+                    if(![context[@"phoneRevealed"] boolValue]) {
+                        context[@"phoneRevealed"] = @(YES);
                         if(reload) {
                             reload();
                         }
@@ -626,7 +646,9 @@
     if(self.memberOfUser) {
         paramDict[@"memberOfUser"] = self.memberOfUser;
     }
-    
+    paramDict[@"phone"] = self.userPhone ?: @"";
+    paramDict[@"email"] = self.userEmail ?: @"";
+
     NSMutableArray<NSDictionary*> *items = [NSMutableArray array];
     
     NSArray<WKEndpoint*> *endpoints =  [WKApp.shared getEndpointsWithCategory:WKPOINT_CATEGORY_USER_INFO_ITEM];
@@ -736,10 +758,6 @@
     [info setExtraValue:user.shortNo?:@"" forKey:WKChannelExtraKeyShortNo];
     [info setExtraValue:user.sourceDesc?:@"" forKey:WKChannelExtraKeySource];
     [info setExtraValue:user.vercode?:@"" forKey:WKChannelExtraKeyVercode];
-    // 手机号/邮箱：服务端已在 UserModel 解析出这两个字段，此前一直没有回写到
-    // channelInfo.extra，导致 WKUserInfoVC 头部拿不到值。回写后供页面展示。
-    info.extra[@"phone"] = user.phone ?: @"";
-    info.extra[@"email"] = user.email ?: @"";
     [info setSettingValue:user.screenshot forKey:WKChannelExtraKeyScreenshot];
     [info setSettingValue:user.chatPwdOn forKey:WKChannelExtraKeyChatPwd];
     // / ：把 /users/<uid> 顶层 realname_verified 回写到
