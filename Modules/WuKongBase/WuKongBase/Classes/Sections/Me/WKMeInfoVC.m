@@ -57,7 +57,6 @@
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
-    [self reloadData];
     // 强制从服务器拉取最新个人信息并刷新头像缓存（解决 web 端修改头像后 iOS 不更新的问题）
     WKChannel *myChannel = [WKChannel personWithChannelID:[WKApp shared].loginInfo.uid];
     [WKSDK.shared.channelManager fetchChannelInfo:myChannel completion:^(WKChannelInfo *channelInfo) {
@@ -66,6 +65,15 @@
             [[WKSDK shared].channelManager refreshAvatarCacheKey:myChannel];
         }
     }];
+    __weak typeof(self) weakSelf = self;
+    [self.viewModel fetchPhoneEmail].then(^{
+        [weakSelf reloadData];
+    }).catch(^(NSError *error){
+        NSLog(@"[WKMeInfoVC] fetchPhoneEmail failed: %@", error);
+    });
+    // fetchPhoneEmail 内部会同步清空上一次的手机号/邮箱，这里紧跟着 reloadData
+    // 确保在新结果回来之前，手机号/邮箱两行先整体隐藏，不会残留旧值
+    [self reloadData];
 }
 
 - (void)dealloc {
