@@ -106,7 +106,22 @@
     self.viewModel.fromChannel = self.fromChannel;
     
     [self.viewModel initData];
-    
+
+    // 手机号/邮箱卡片的可见性由部署方管理台开关 profile_contact_info_on 决定，
+    // 这个值在 appconfig 里。管理台刚打开/关掉开关时，本地缓存的那份是旧的——
+    // 不刷新的话用户要杀进程重启才看得到变化。进名片页顺手拉一次（refreshConfig:
+    // 内部对并发调用去重，多个名片页连着开也只会有一个请求在飞），回来再
+    // reloadData 让卡片按新开关状态出现/消失。
+    // 拿不到配置（请求失败）时不额外做任何事：remoteConfig 的失败路径已经把
+    // 开关置 NO，本次 refresh 回调里可能带 error，直接 reload 即可 —— 卡片保持
+    // 不展示，等下次进页面再试。不在这里 toast，用户没主动触发这个请求。
+    __weak typeof(self) weakSelfForConfig = self;
+    [[WKApp shared].remoteConfig refreshConfig:^(NSError * _Nullable error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelfForConfig.viewModel reloadData];
+        });
+    }];
+
     __weak typeof(self) weakSelf = self;
     [self.viewModel loadPersonChannelInfo:self.uid completion:^{
         // 检查是否在 Space 模式下，如果是则需要通过 API 检查实际好友关系
