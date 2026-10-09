@@ -9,6 +9,7 @@
 #import "WKGlobalFilesVM.h"
 #import "WKGlobalMsgDetailVC.h"
 #import "WKGlobalSearchGroupBucketCell.h"
+#import "WKGlobalSearchSectionMoreCell.h"
 #import "WKGlobalSearchError.h"
 
 #import "WKChannelHistoryFileCell.h"
@@ -36,6 +37,7 @@
 #define kV2TabBarHeight 36.0f
 #define kV2ChipBarHeight 36.0f
 #define kV2OfflineBarHeight 28.0f
+#define kSectionPreviewCount 3
 
 @interface WKGlobalSearchV2VC () <
     UITextFieldDelegate,
@@ -71,6 +73,15 @@
 
 @property (nonatomic, assign) BOOL hasShownKeywordLimitToast;
 @property (nonatomic, assign) BOOL didFallback;
+
+/// 进入「全部」前对聊天记录/文件 VM 筛选条件做的快照。契约：
+/// 1. 快照与关键词无关（筛选字段不绑定关键词），跨换词保留，与单 tab 上"换词不清筛选"的行为对齐；
+/// 2. 用户手动切回对应 tab 时还原（chips 随之恢复）；
+/// 3. 经「查看全部」行跳转时不还原（落地与预览一致的无筛选列表），快照继续保留。
+@property (nonatomic, strong, nullable) WKChannelHistorySearchFilter *pendingGroupsFilter;
+@property (nonatomic, strong, nullable) WKChannelHistorySearchFilter *pendingFilesFilter;
+/// YES 表示本次 switchTabIndex 由「查看全部」行发起，syncActiveVM 跳过快照还原；消费后复位。
+@property (nonatomic, assign) BOOL suppressPendingFilterRestore;
 @end
 
 @implementation WKGlobalSearchV2VC
@@ -97,6 +108,7 @@
     [self setupNav];
     [self setupBars];
     [self setupContent];
+    [self updateFilterButtonVisibility]; // selectItemAtIndex 在 currentTab==0 时是 no-op，这里兜底保证初始状态也对
 
     [self.tabbar selectItemAtIndex:self.currentTab]; // 触发 onClick → switchTabIndex:
     if (self.currentKeyword.length > 0) {
@@ -179,12 +191,20 @@
 
     NSMutableArray<WKTabbarItem *> *items = [NSMutableArray array];
     __weak typeof(self) ws = self;
+    [items addObject:[[WKTabbarItem alloc] initWithTitle:LLang(@"全部") onClick:^{ [ws switchTabIndex:WKGlobalSearchV2TabAll]; }]];
     [items addObject:[[WKTabbarItem alloc] initWithTitle:LLang(@"聊天记录") onClick:^{ [ws switchTabIndex:WKGlobalSearchV2TabMessages]; }]];
     [items addObject:[[WKTabbarItem alloc] initWithTitle:LLang(@"联系人") onClick:^{ [ws switchTabIndex:WKGlobalSearchV2TabContacts]; }]];
     [items addObject:[[WKTabbarItem alloc] initWithTitle:LLang(@"群组") onClick:^{ [ws switchTabIndex:WKGlobalSearchV2TabGroups]; }]];
     [items addObject:[[WKTabbarItem alloc] initWithTitle:LLang(@"文件") onClick:^{ [ws switchTabIndex:WKGlobalSearchV2TabFiles]; }]];
     CGFloat space = 16.0f;
-    self.tabbar = [[WKTabbar alloc] initWithItems:items width:WKScreenWidth - space * 2];
+    WKTabbarStyle *tabbarStyle = [WKTabbarStyle new];
+    tabbarStyle.itemHorizontalPadding = 0.0f;
+    tabbarStyle.interItemSpacing = 24.0f;
+    tabbarStyle.unselectedTextColor = [UIColor colorWithRed:142.0f/255.0f green:142.0f/255.0f blue:147.0f/255.0f alpha:1.0f];
+    tabbarStyle.indicatorHeight = 3.0f;
+    tabbarStyle.indicatorExtraWidth = 0.0f;
+    tabbarStyle.selectionAnimationDuration = 0.28f;
+    self.tabbar = [[WKTabbar alloc] initWithItems:items width:WKScreenWidth - space * 2 style:tabbarStyle];
     self.tabbar.lim_left = space;
     [self.view addSubview:self.tabbar];
 
@@ -214,6 +234,7 @@
     [self.tableView registerClass:WKGlobalSearchGroupBucketCell.class forCellReuseIdentifier:[WKGlobalSearchGroupBucketCell reuseIdentifier]];
     [self.tableView registerClass:WKChannelHistoryFileCell.class forCellReuseIdentifier:[WKChannelHistoryFileCell reuseIdentifier]];
     [self.tableView registerClass:WKSearchContactsCell.class forCellReuseIdentifier:@"WKGlobalContactsCell"];
+    [self.tableView registerClass:WKGlobalSearchSectionMoreCell.class forCellReuseIdentifier:[WKGlobalSearchSectionMoreCell reuseIdentifier]];
     __weak typeof(self) ws = self;
     self.tableView.mj_footer = [MJRefreshAutoNormalFooter footerWithRefreshingBlock:^{ [ws onLoadMore]; }];
     self.tableView.mj_footer.hidden = YES;
@@ -221,7 +242,7 @@
 
     self.emptyView = [WKChannelHistorySearchEmptyView new];
     self.emptyView.hidden = YES;
-    self.emptyView.onRetry = ^{ [ws syncActiveVM]; };
+    self.emptyView.onRetry = ^{ [ws retryTab:ws.currentTab]; };
     [self.view addSubview:self.emptyView];
 }
 
@@ -265,6 +286,7 @@
     self.currentTab = tab;
     [self updateFilterButtonVisibility];
     [self syncActiveVM];
+    self.suppressPendingFilterRestore = NO; // syncActiveVM 已消费，复位；防 selectItemAtIndex 被 no-op 守卫挡掉时标记残留
     [self.tableView reloadData];
     [self updateAllTransientUI];
     [self.tableView setContentOffset:CGPointZero animated:NO];
@@ -273,8 +295,29 @@
 /// 把当前 keyword 同步给激活 tab 的 VM（applyKeyword 内部去重，已搜过相同 keyword 则 no-op）。
 - (void)syncActiveVM {
     switch (self.currentTab) {
-        case WKGlobalSearchV2TabMessages:
+        case WKGlobalSearchV2TabAll:
+            // 「全部」是不筛选的总览：进入时如果 groupsVM/filesVM 还带着别的 tab 设置的筛选/排序，
+            // 先快照再清空重查，切回对应 tab 时还原——总览保持无筛选痕迹，用户的设置也不被销毁。
+            // 用 hasAnyFilter 而非 hasEffectiveFilters：前者才包含 sort，否则时间正序这类纯排序设置会漏清。
+            if (self.groupsVM.filter.hasAnyFilter) {
+                self.pendingGroupsFilter = [self.groupsVM.filter copy];
+                [self.groupsVM applyFilter:nil];
+            }
+            if (self.filesVM.filter.hasAnyFilter) {
+                self.pendingFilesFilter = [self.filesVM.filter copy];
+                [self.filesVM applyFilter:nil];
+            }
             [self.groupsVM applyKeyword:self.currentKeyword];
+            [self.contactsVM applyKeyword:self.currentKeyword];
+            [self.filesVM applyKeyword:self.currentKeyword];
+            break;
+        case WKGlobalSearchV2TabMessages:
+            [self.groupsVM applyKeyword:self.currentKeyword]; // 先同步关键词（去重，多数情况 no-op）
+            if (!self.suppressPendingFilterRestore && self.pendingGroupsFilter) {
+                WKChannelHistorySearchFilter *f = self.pendingGroupsFilter;
+                self.pendingGroupsFilter = nil;
+                [self.groupsVM applyFilter:f]; // applyFilter 内部会 refresh，此时关键词已同步，刷新即最终结果
+            }
             break;
         case WKGlobalSearchV2TabContacts:
         case WKGlobalSearchV2TabGroups:
@@ -282,6 +325,27 @@
             break;
         case WKGlobalSearchV2TabFiles:
             [self.filesVM applyKeyword:self.currentKeyword];
+            if (!self.suppressPendingFilterRestore && self.pendingFilesFilter) {
+                WKChannelHistorySearchFilter *f = self.pendingFilesFilter;
+                self.pendingFilesFilter = nil;
+                [self.filesVM applyFilter:f];
+            }
+            break;
+    }
+}
+
+/// 按 tab 精确重试：错误行的「点击重试」和空态的 onRetry 都走这里。
+/// 不能走 syncActiveVM——applyKeyword 对相同 keyword 去重后是 no-op，重试会变成死点击。
+- (void)retryTab:(WKGlobalSearchV2Tab)tab {
+    switch (tab) {
+        case WKGlobalSearchV2TabMessages: [self.groupsVM refresh]; break;
+        case WKGlobalSearchV2TabContacts:
+        case WKGlobalSearchV2TabGroups:   [self.contactsVM refresh]; break; // 联系人/群组共用同一请求，一次刷新两处恢复
+        case WKGlobalSearchV2TabFiles:    [self.filesVM refresh]; break;
+        case WKGlobalSearchV2TabAll: // 三个 VM 全部重查：网络恢复回调也会走到这里
+            [self.groupsVM refresh];
+            [self.contactsVM refresh];
+            [self.filesVM refresh];
             break;
     }
 }
@@ -314,6 +378,7 @@
 
 - (void)applyKeywordNow {
     self.currentKeyword = self.searchInput.text ?: @"";
+    // 快照不随换词作废：筛选字段与关键词无关，单 tab 上换词也保留筛选，两条路径行为对齐。
     [self syncActiveVM];
 }
 
@@ -359,20 +424,20 @@
 #pragma mark - VM delegates
 
 - (void)globalMsgGroupsVMDidChangeState:(WKGlobalMsgGroupsVM *)vm {
-    if (self.currentTab == WKGlobalSearchV2TabMessages) { [self.tableView reloadData]; [self updateAllTransientUI]; }
+    if (self.currentTab == WKGlobalSearchV2TabMessages || self.currentTab == WKGlobalSearchV2TabAll) { [self.tableView reloadData]; [self updateAllTransientUI]; }
 }
 - (void)globalMsgGroupsVMKeywordExceedLimit:(WKGlobalMsgGroupsVM *)vm { [self showKeywordLimitToast]; }
 - (void)globalMsgGroupsVM:(WKGlobalMsgGroupsVM *)vm shouldFallbackToLocalWithError:(NSError *)error { [self fallbackToLocal]; }
 
 - (void)globalContactsVMDidChangeState:(WKGlobalContactsVM *)vm {
-    if (self.currentTab == WKGlobalSearchV2TabContacts || self.currentTab == WKGlobalSearchV2TabGroups) {
+    if (self.currentTab == WKGlobalSearchV2TabContacts || self.currentTab == WKGlobalSearchV2TabGroups || self.currentTab == WKGlobalSearchV2TabAll) {
         [self.tableView reloadData]; [self updateAllTransientUI];
     }
 }
 - (void)globalContactsVMKeywordExceedLimit:(WKGlobalContactsVM *)vm { [self showKeywordLimitToast]; }
 
 - (void)globalFilesVMDidChangeState:(WKGlobalFilesVM *)vm {
-    if (self.currentTab == WKGlobalSearchV2TabFiles) { [self.tableView reloadData]; [self updateAllTransientUI]; }
+    if (self.currentTab == WKGlobalSearchV2TabFiles || self.currentTab == WKGlobalSearchV2TabAll) { [self.tableView reloadData]; [self updateAllTransientUI]; }
 }
 - (void)globalFilesVMKeywordExceedLimit:(WKGlobalFilesVM *)vm { [self showKeywordLimitToast]; }
 - (void)globalFilesVM:(WKGlobalFilesVM *)vm shouldFallbackToLocalWithError:(NSError *)error { [self fallbackToLocal]; }
@@ -421,6 +486,11 @@
 
 - (NSInteger)activeRowCount {
     switch (self.currentTab) {
+        case WKGlobalSearchV2TabAll:
+            return [self fullRowCountForTab:WKGlobalSearchV2TabMessages]
+                 + [self fullRowCountForTab:WKGlobalSearchV2TabContacts]
+                 + [self fullRowCountForTab:WKGlobalSearchV2TabGroups]
+                 + [self fullRowCountForTab:WKGlobalSearchV2TabFiles];
         case WKGlobalSearchV2TabMessages: return self.groupsVM.buckets.count;
         case WKGlobalSearchV2TabContacts: return self.contactsVM.friendModels.count;
         case WKGlobalSearchV2TabGroups:   return self.contactsVM.groupModels.count;
@@ -429,8 +499,21 @@
     return 0;
 }
 
+/// 某个具体类别 tab（不含 All 本身）的完整命中数，供「全部」聚合分组按需取用。
+- (NSInteger)fullRowCountForTab:(WKGlobalSearchV2Tab)tab {
+    switch (tab) {
+        case WKGlobalSearchV2TabMessages: return self.groupsVM.buckets.count;
+        case WKGlobalSearchV2TabContacts: return self.contactsVM.friendModels.count;
+        case WKGlobalSearchV2TabGroups:   return self.contactsVM.groupModels.count;
+        case WKGlobalSearchV2TabFiles:    return self.filesVM.items.count;
+        case WKGlobalSearchV2TabAll:      return 0;
+    }
+    return 0;
+}
+
 - (BOOL)activeIsLoadingFirstPage {
     switch (self.currentTab) {
+        case WKGlobalSearchV2TabAll: return self.groupsVM.isLoading || self.contactsVM.isLoading || self.filesVM.isLoadingFirstPage;
         case WKGlobalSearchV2TabMessages: return self.groupsVM.isLoading;
         case WKGlobalSearchV2TabContacts:
         case WKGlobalSearchV2TabGroups:   return self.contactsVM.isLoading;
@@ -441,6 +524,7 @@
 
 - (BOOL)activeQueryStarted {
     switch (self.currentTab) {
+        case WKGlobalSearchV2TabAll: return self.groupsVM.queryStarted || self.contactsVM.queryStarted || self.filesVM.queryStarted;
         case WKGlobalSearchV2TabMessages: return self.groupsVM.queryStarted;
         case WKGlobalSearchV2TabContacts:
         case WKGlobalSearchV2TabGroups:   return self.contactsVM.queryStarted;
@@ -451,6 +535,7 @@
 
 - (NSError *)activeFirstPageError {
     switch (self.currentTab) {
+        case WKGlobalSearchV2TabAll: return self.groupsVM.error ?: self.contactsVM.error ?: self.filesVM.firstPageError;
         case WKGlobalSearchV2TabMessages: return self.groupsVM.error;
         case WKGlobalSearchV2TabContacts:
         case WKGlobalSearchV2TabGroups:   return self.contactsVM.error;
@@ -627,7 +712,7 @@
     BOOL wasOffline = !self.offlineBar.hidden;
     [self refreshOfflineBarVisibility];
     [self updateEmptyState];
-    if (wasOffline && listener.hasNetwork) [self syncActiveVM];
+    if (wasOffline && listener.hasNetwork) [self retryTab:self.currentTab]; // 走 syncActiveVM 会被 applyKeyword 的同词去重挡成 no-op
 }
 
 - (void)refreshOfflineBarVisibility {
@@ -635,14 +720,206 @@
     [self.view setNeedsLayout];
 }
 
+#pragma mark - All tab aggregation
+
+/// 有命中或查询失败的类别 tab 列表，顺序固定：聊天记录 / 联系人 / 群组 / 文件。
+/// 错误呈现契约：四类合计有命中（部分失败）时，失败类别保留分组渲染「加载失败，点击重试」；
+/// 四类全 0 命中时表格整体让位给全屏错误空态（updateEmptyState，自带重试按钮），
+/// 分组不再渲染——空态压在 tableView 上层且透明可交互，两层并存会文字重叠并挡死错误行。
+- (NSArray<NSNumber *> *)allTabSectionsWithHits {
+    NSMutableArray<NSNumber *> *result = [NSMutableArray array];
+    NSArray<NSNumber *> *order = @[@(WKGlobalSearchV2TabMessages), @(WKGlobalSearchV2TabContacts), @(WKGlobalSearchV2TabGroups), @(WKGlobalSearchV2TabFiles)];
+    BOOL anyHit = NO;
+    for (NSNumber *n in order) {
+        if ([self fullRowCountForTab:n.integerValue] > 0) { anyHit = YES; break; }
+    }
+    for (NSNumber *n in order) {
+        WKGlobalSearchV2Tab tab = (WKGlobalSearchV2Tab)n.integerValue;
+        if ([self fullRowCountForTab:tab] > 0 || (anyHit && [self errorForTab:tab])) [result addObject:n];
+    }
+    return result;
+}
+
+/// 某个具体类别 tab 的查询错误，供「全部」聚合视图区分"没有结果"和"查询失败"。
+- (NSError *)errorForTab:(WKGlobalSearchV2Tab)tab {
+    switch (tab) {
+        case WKGlobalSearchV2TabMessages: return self.groupsVM.error;
+        case WKGlobalSearchV2TabContacts:
+        case WKGlobalSearchV2TabGroups:   return self.contactsVM.error;
+        case WKGlobalSearchV2TabFiles:    return self.filesVM.firstPageError;
+        case WKGlobalSearchV2TabAll:      return nil;
+    }
+    return nil;
+}
+
+- (NSString *)sectionTitleForTab:(WKGlobalSearchV2Tab)tab {
+    switch (tab) {
+        case WKGlobalSearchV2TabMessages: return LLang(@"聊天记录");
+        case WKGlobalSearchV2TabContacts: return LLang(@"联系人");
+        case WKGlobalSearchV2TabGroups:   return LLang(@"群组");
+        case WKGlobalSearchV2TabFiles:    return LLang(@"文件");
+        case WKGlobalSearchV2TabAll:      return @"";
+    }
+    return @"";
+}
+
+/// 该类别在服务端是否还有未加载的结果——聊天记录/文件有分页概念；
+/// 联系人/群组按 limit=20 截断首页，但 20 已超过预览上限 3，装满首页时
+/// 「查看全部」行必然因已加载数 > 3 而出现，故恒为 NO 不会造成截断无入口。
+- (BOOL)hasMoreForTab:(WKGlobalSearchV2Tab)tab {
+    switch (tab) {
+        case WKGlobalSearchV2TabMessages: return self.groupsVM.hasMore;
+        case WKGlobalSearchV2TabFiles:    return self.filesVM.hasMore;
+        case WKGlobalSearchV2TabContacts:
+        case WKGlobalSearchV2TabGroups:
+        case WKGlobalSearchV2TabAll:      return NO;
+    }
+    return NO;
+}
+
+/// 某类别在「全部」聚合分组下要渲染的行数：最多预览 3 条；命中数 > 3，或已加载条数不足 3 条但服务端还有更多，
+/// 都要额外追加一行「查看全部」——否则命中很多但首页刚好只回了 1~3 条时，会误让用户以为这就是全部结果。
+- (NSInteger)previewRowCountForTab:(WKGlobalSearchV2Tab)tab {
+    NSInteger full = [self fullRowCountForTab:tab];
+    NSInteger capped = MIN(full, kSectionPreviewCount);
+    BOOL hasMoreRow = full > kSectionPreviewCount || [self hasMoreForTab:tab];
+    return capped + (hasMoreRow ? 1 : 0);
+}
+
+- (BOOL)isMoreRowForTab:(WKGlobalSearchV2Tab)tab row:(NSInteger)row {
+    NSInteger full = [self fullRowCountForTab:tab];
+    NSInteger capped = MIN(full, kSectionPreviewCount);
+    BOOL hasMoreRow = full > kSectionPreviewCount || [self hasMoreForTab:tab];
+    return row == capped && hasMoreRow;
+}
+
+/// 该分类命中数为 0 但查询失败时，分组里唯一的一行渲染成错误提示行（而不是让分组直接消失）。
+- (BOOL)isErrorRowForTab:(WKGlobalSearchV2Tab)tab row:(NSInteger)row {
+    return row == 0 && [self fullRowCountForTab:tab] == 0 && [self errorForTab:tab] != nil;
+}
+
+- (WKSearchContactsModel *)contactModelForTab:(WKGlobalSearchV2Tab)tab atIndex:(NSInteger)idx {
+    NSArray<WKSearchContactsModel *> *list = (tab == WKGlobalSearchV2TabGroups) ? self.contactsVM.groupModels : self.contactsVM.friendModels;
+    return (idx < (NSInteger)list.count) ? list[idx] : nil;
+}
+
+/// 预览行渲染：直接复用具体 tab 已有的三个结果 cell，不重新造轮子。
+- (UITableViewCell *)tableView:(UITableView *)tableView previewCellForTab:(WKGlobalSearchV2Tab)tab row:(NSInteger)row indexPath:(NSIndexPath *)indexPath {
+    switch (tab) {
+        case WKGlobalSearchV2TabMessages: {
+            WKGlobalSearchGroupBucketCell *c = [tableView dequeueReusableCellWithIdentifier:[WKGlobalSearchGroupBucketCell reuseIdentifier] forIndexPath:indexPath];
+            [c applyBucket:self.groupsVM.buckets[row] keyword:self.currentKeyword];
+            return c;
+        }
+        case WKGlobalSearchV2TabContacts:
+        case WKGlobalSearchV2TabGroups: {
+            WKSearchContactsCell *c = [tableView dequeueReusableCellWithIdentifier:@"WKGlobalContactsCell" forIndexPath:indexPath];
+            [c refresh:[self contactModelForTab:tab atIndex:row]];
+            return c;
+        }
+        case WKGlobalSearchV2TabFiles: {
+            WKChannelHistoryFileCell *c = [tableView dequeueReusableCellWithIdentifier:[WKChannelHistoryFileCell reuseIdentifier] forIndexPath:indexPath];
+            [c applyItem:self.filesVM.items[row] keyword:self.currentKeyword];
+            return c;
+        }
+        case WKGlobalSearchV2TabAll: break;
+    }
+    return [UITableViewCell new];
+}
+
+- (CGFloat)previewHeightForTab:(WKGlobalSearchV2Tab)tab row:(NSInteger)row {
+    switch (tab) {
+        case WKGlobalSearchV2TabMessages: return [WKGlobalSearchGroupBucketCell cellHeight];
+        case WKGlobalSearchV2TabContacts:
+        case WKGlobalSearchV2TabGroups: {
+            WKSearchContactsModel *m = [self contactModelForTab:tab atIndex:row];
+            CGFloat h = m ? [WKSearchContactsCell sizeForModel:m].height : 0;
+            return h > 0 ? h : 60.0f;
+        }
+        case WKGlobalSearchV2TabFiles: return [WKChannelHistoryFileCell cellHeight];
+        case WKGlobalSearchV2TabAll: break;
+    }
+    return 60.0f;
+}
+
+- (void)openPreviewForTab:(WKGlobalSearchV2Tab)tab row:(NSInteger)row {
+    switch (tab) {
+        case WKGlobalSearchV2TabMessages: {
+            if (row >= (NSInteger)self.groupsVM.buckets.count) return;
+            [self openBucket:self.groupsVM.buckets[row]];
+            break;
+        }
+        case WKGlobalSearchV2TabContacts:
+        case WKGlobalSearchV2TabGroups: {
+            WKSearchContactsModel *m = [self contactModelForTab:tab atIndex:row];
+            if (m.onClick) m.onClick(m, [NSIndexPath indexPathForRow:row inSection:0]);
+            break;
+        }
+        case WKGlobalSearchV2TabFiles: {
+            if (row >= (NSInteger)self.filesVM.items.count) return;
+            [self openFileItem:self.filesVM.items[row]];
+            break;
+        }
+        case WKGlobalSearchV2TabAll: break;
+    }
+}
+
 #pragma mark - table datasource / delegate
 
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+    if (self.currentTab == WKGlobalSearchV2TabAll) return [self allTabSectionsWithHits].count;
+    return 1;
+}
+
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    if (self.currentTab == WKGlobalSearchV2TabAll) {
+        NSArray<NSNumber *> *sections = [self allTabSectionsWithHits];
+        if (section >= (NSInteger)sections.count) return 0;
+        WKGlobalSearchV2Tab tab = (WKGlobalSearchV2Tab)sections[section].integerValue;
+        if ([self fullRowCountForTab:tab] == 0 && [self errorForTab:tab]) return 1; // 错误提示行
+        return [self previewRowCountForTab:tab];
+    }
     return [self activeRowCount];
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+    return (self.currentTab == WKGlobalSearchV2TabAll) ? 30.0f : 0.0f;
+}
+
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+    if (self.currentTab != WKGlobalSearchV2TabAll) return nil;
+    NSArray<NSNumber *> *sections = [self allTabSectionsWithHits];
+    if (section >= (NSInteger)sections.count) return nil;
+    WKGlobalSearchV2Tab tab = (WKGlobalSearchV2Tab)sections[section].integerValue;
+
+    UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, tableView.lim_width, 30.0f)];
+    header.backgroundColor = [WKApp shared].config.backgroundColor;
+    UILabel *lbl = [[UILabel alloc] initWithFrame:CGRectMake(16, 8, tableView.lim_width - 32, 18.0f)];
+    lbl.font = [[WKApp shared].config appFontOfSize:13.0f];
+    lbl.textColor = [[UIColor grayColor] colorWithAlphaComponent:0.6];
+    lbl.text = [self sectionTitleForTab:tab];
+    [header addSubview:lbl];
+    return header;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     switch (self.currentTab) {
+        case WKGlobalSearchV2TabAll: {
+            NSArray<NSNumber *> *sections = [self allTabSectionsWithHits];
+            if (indexPath.section >= (NSInteger)sections.count) return [UITableViewCell new];
+            WKGlobalSearchV2Tab tab = (WKGlobalSearchV2Tab)sections[indexPath.section].integerValue;
+            if ([self isErrorRowForTab:tab row:indexPath.row]) {
+                WKGlobalSearchSectionMoreCell *c = [tableView dequeueReusableCellWithIdentifier:[WKGlobalSearchSectionMoreCell reuseIdentifier] forIndexPath:indexPath];
+                [c applyTitle:LLang(@"加载失败，点击重试")];
+                return c;
+            }
+            if ([self isMoreRowForTab:tab row:indexPath.row]) {
+                WKGlobalSearchSectionMoreCell *c = [tableView dequeueReusableCellWithIdentifier:[WKGlobalSearchSectionMoreCell reuseIdentifier] forIndexPath:indexPath];
+                [c applyTitle:LLang(@"查看全部")];
+                return c;
+            }
+            return [self tableView:tableView previewCellForTab:tab row:indexPath.row indexPath:indexPath];
+        }
         case WKGlobalSearchV2TabMessages: {
             WKGlobalSearchGroupBucketCell *c = [tableView dequeueReusableCellWithIdentifier:[WKGlobalSearchGroupBucketCell reuseIdentifier] forIndexPath:indexPath];
             [c applyBucket:self.groupsVM.buckets[indexPath.row] keyword:self.currentKeyword];
@@ -664,12 +941,19 @@
 }
 
 - (WKSearchContactsModel *)contactModelAtIndex:(NSInteger)idx {
-    NSArray<WKSearchContactsModel *> *list = (self.currentTab == WKGlobalSearchV2TabGroups) ? self.contactsVM.groupModels : self.contactsVM.friendModels;
-    return (idx < (NSInteger)list.count) ? list[idx] : nil;
+    return [self contactModelForTab:self.currentTab atIndex:idx];
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
     switch (self.currentTab) {
+        case WKGlobalSearchV2TabAll: {
+            NSArray<NSNumber *> *sections = [self allTabSectionsWithHits];
+            if (indexPath.section >= (NSInteger)sections.count) return 60.0f;
+            WKGlobalSearchV2Tab tab = (WKGlobalSearchV2Tab)sections[indexPath.section].integerValue;
+            if ([self isErrorRowForTab:tab row:indexPath.row]) return [WKGlobalSearchSectionMoreCell cellHeight];
+            if ([self isMoreRowForTab:tab row:indexPath.row]) return [WKGlobalSearchSectionMoreCell cellHeight];
+            return [self previewHeightForTab:tab row:indexPath.row];
+        }
         case WKGlobalSearchV2TabMessages: return [WKGlobalSearchGroupBucketCell cellHeight];
         case WKGlobalSearchV2TabContacts:
         case WKGlobalSearchV2TabGroups: {
@@ -686,6 +970,24 @@
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     [self.searchInput resignFirstResponder];
     switch (self.currentTab) {
+        case WKGlobalSearchV2TabAll: {
+            NSArray<NSNumber *> *sections = [self allTabSectionsWithHits];
+            if (indexPath.section >= (NSInteger)sections.count) return;
+            WKGlobalSearchV2Tab tab = (WKGlobalSearchV2Tab)sections[indexPath.section].integerValue;
+            if ([self isErrorRowForTab:tab row:indexPath.row]) {
+                [self retryTab:tab];
+                return;
+            }
+            if ([self isMoreRowForTab:tab row:indexPath.row]) {
+                // 「查看全部」承诺的是预览那批（无筛选）结果的完整列表：本次跳转不还原快照，
+                // 否则落地的是筛选后的另一批结果，可能完全不含用户刚点过的内容。
+                self.suppressPendingFilterRestore = YES;
+                [self.tabbar selectItemAtIndex:tab]; // 触发 onClick → switchTabIndex:，与点击 tab 按钮行为一致
+                return;
+            }
+            [self openPreviewForTab:tab row:indexPath.row];
+            break;
+        }
         case WKGlobalSearchV2TabMessages: {
             if (indexPath.row >= (NSInteger)self.groupsVM.buckets.count) return;
             [self openBucket:self.groupsVM.buckets[indexPath.row]];

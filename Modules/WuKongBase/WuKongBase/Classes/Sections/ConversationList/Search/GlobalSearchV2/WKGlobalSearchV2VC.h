@@ -14,7 +14,8 @@
 NS_ASSUME_NONNULL_BEGIN
 
 typedef NS_ENUM(NSInteger, WKGlobalSearchV2Tab) {
-    WKGlobalSearchV2TabMessages = 0, // 聊天记录（L1 聚合总览）
+    WKGlobalSearchV2TabAll = 0,      // 全部（跨类别聚合总览）
+    WKGlobalSearchV2TabMessages,     // 聊天记录（L1 聚合总览）
     WKGlobalSearchV2TabContacts,     // 联系人
     WKGlobalSearchV2TabGroups,       // 群组
     WKGlobalSearchV2TabFiles,        // 文件
