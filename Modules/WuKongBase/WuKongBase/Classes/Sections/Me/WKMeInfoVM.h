@@ -37,6 +37,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,assign) BOOL phoneEmailLoaded;
 @property(nonatomic,copy) NSString *phone;
 @property(nonatomic,copy) NSString *email;
+@property(nonatomic,copy) NSString *zone;
 
 /// 更新我的个人信息
 /// @param field 属性

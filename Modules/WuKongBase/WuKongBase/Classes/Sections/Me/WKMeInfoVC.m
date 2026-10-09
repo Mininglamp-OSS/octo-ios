@@ -69,7 +69,8 @@
     [self.viewModel fetchPhoneEmail].then(^{
         [weakSelf reloadData];
     }).catch(^(NSError *error){
-        NSLog(@"[WKMeInfoVC] fetchPhoneEmail failed: %@", error);
+        WKLogError(@"[WKMeInfoVC] fetchPhoneEmail failed: %@", error);
+        [[WKNavigationManager shared].topViewController.view showMsg:error.domain];
     });
     // fetchPhoneEmail 内部会同步清空上一次的手机号/邮箱，这里紧跟着 reloadData
     // 确保在新结果回来之前，手机号/邮箱两行先整体隐藏，不会残留旧值

@@ -86,7 +86,7 @@
         if(self.phone.length>0) {
             phoneItem[@"showArrow"] = @(NO);
             phoneItem[@"onClick"] = ^(WKFormItemModel *model,NSIndexPath *indexPath){
-                [weakSelf copyToPasteboard:phoneValue];
+                [weakSelf copyToPasteboard:weakSelf.phone];
             };
         }
         [section1Items addObject:phoneItem];
@@ -104,7 +104,7 @@
         if(self.email.length>0) {
             emailItem[@"showArrow"] = @(NO);
             emailItem[@"onClick"] = ^(WKFormItemModel *model,NSIndexPath *indexPath){
-                [weakSelf copyToPasteboard:emailValue];
+                [weakSelf copyToPasteboard:weakSelf.email];
             };
         }
         [section1Items addObject:emailItem];
@@ -168,17 +168,34 @@
     self.phoneEmailLoaded = NO;
     self.phone = nil;
     self.email = nil;
+    self.zone = nil;
     NSString *uid = [WKApp shared].loginInfo.uid;
-    return [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"users/%@", uid] parameters:@{@"group_no":@""}].then(^(NSDictionary *result){
-        weakSelf.phone = result[@"phone"] ?: @"";
-        weakSelf.email = result[@"email"] ?: @"";
+    return [[WKAPIClient sharedClient] GET:[NSString stringWithFormat:@"users/%@", uid] parameters:@{@"group_no":@""}].then(^(id result){
+        // 服务端 phone/email/zone 字段可能以 JSON null 下发，AFNetworking 不会把它
+        // 过滤掉，直接当字符串用会在后面 .length 上 crash（-[NSNull length]），
+        // 这里统一做类型防御，非法值一律当缺省处理。
+        if(![result isKindOfClass:[NSDictionary class]]) {
+            weakSelf.phone = @"";
+            weakSelf.email = @"";
+            weakSelf.zone = @"";
+            weakSelf.phoneEmailLoaded = YES;
+            return;
+        }
+        NSDictionary *dict = (NSDictionary *)result;
+        id phoneVal = dict[@"phone"];
+        id emailVal = dict[@"email"];
+        id zoneVal = dict[@"zone"];
+        weakSelf.phone = [phoneVal isKindOfClass:[NSString class]] ? phoneVal : @"";
+        weakSelf.email = [emailVal isKindOfClass:[NSString class]] ? emailVal : @"";
+        weakSelf.zone = [zoneVal isKindOfClass:[NSString class]] ? zoneVal : @"";
         weakSelf.phoneEmailLoaded = YES;
     });
 }
 
-// 本人名片的手机号前面带区号，取登录缓存里的区号（形如"0086"），削掉前导零后拼成"(+86) 手机号"
+// 本人名片的手机号前面带区号，取本次 users/<uid> 响应里的 zone（形如"0086"），
+// 而不是登录缓存里的旧值——缓存只在登录时写一次，换绑手机号到其他地区后不会同步更新。
 -(NSString*) phoneDisplayValue {
-    NSString *zone = [WKApp shared].loginInfo.extra[@"zone"];
+    NSString *zone = self.zone;
     if(![zone isKindOfClass:NSString.class] || zone.length == 0) {
         return self.phone;
     }
