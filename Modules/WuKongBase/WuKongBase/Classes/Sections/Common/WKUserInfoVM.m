@@ -283,7 +283,13 @@
             // 这三项都从 param 里读（由 tableSectionMaps 用 self 现算好传入），
             // 不读 weakSelf——避免多张名片同时存活时，handler 的 weakSelf 绑定
             // 到"最后一次 -init 的那个 VM 实例"导致门槛判错对象。
-            if([param[@"isExternalUser"] boolValue]) {
+            // 用 isExternalForViewer（不是 isExternalUser）：isExternalUser 的
+            // 默认值是给 freeFriend/addBlack 那种"外部才展示该行"的场景调的
+            // （非 Space 模式下默认 YES=外部，好让那两行默认可见），这里是反过来
+            // "外部就隐藏整卡"的场景，极性相反，复用会导致非 Space 模式下卡片
+            // 永远不展示。isExternalForViewer 非 Space 模式下默认 NO（非外部），
+            // 极性和这里的用法对得上。
+            if([param[@"isExternalForViewer"] boolValue]) {
                 return nil;
             }
             if([param[@"userAccountStatus"] integerValue] == 0) {
@@ -717,7 +723,7 @@
     // weakSelf 绑定的是"最后一次 -init 的那个 VM 实例"，和 phoneRevealed 当年
     // 挂在 VM 属性上是同一类串号风险。tableSectionMaps 本身就是哪个 VM 调用
     // self 就是哪个 VM，这里取值不会认错人。
-    paramDict[@"isExternalUser"] = @([self isExternalUser]);
+    paramDict[@"isExternalForViewer"] = @([self isExternalForViewer]);
     paramDict[@"userAccountStatus"] = @(self.userAccountStatus);
     paramDict[@"userIsDestroy"] = @(self.userIsDestroy);
 

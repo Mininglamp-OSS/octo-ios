@@ -108,15 +108,16 @@
     [self.viewModel initData];
 
     // 手机号/邮箱卡片的可见性由部署方管理台开关 profile_contact_info_on 决定，
-    // 这个值在 appconfig 里。管理台刚打开/关掉开关时，本地缓存的那份是旧的——
-    // 不刷新的话用户要杀进程重启才看得到变化。进名片页顺手拉一次（refreshConfig:
-    // 内部对并发调用去重，多个名片页连着开也只会有一个请求在飞），回来再
-    // reloadData 让卡片按新开关状态出现/消失。
-    // 拿不到配置（请求失败）时不额外做任何事：remoteConfig 的失败路径已经把
-    // 开关置 NO，本次 refresh 回调里可能带 error，直接 reload 即可 —— 卡片保持
-    // 不展示，等下次进页面再试。不在这里 toast，用户没主动触发这个请求。
+    // 这个值在 appconfig 里。这里故意用 requestConfig:（不是 refreshConfig:）——
+    // refreshConfig: 会无条件把 WKAppRemoteConfig 全局单例的 requestSuccess
+    // 清成 NO，而这个标志是其它消费方（如 WKRealnameVerifyManager）判断
+    // "配置已加载，走缓存快路径"的依据；在名片页这种高频入口上清它，会让
+    // 无关流程退化成等一次网络请求，网络失败时 requestSuccess 还会一直停在
+    // NO 直到下次成功请求。requestConfig: 已加载成功时直接走快路径拿当前
+    // 缓存值，没加载过时才真正发请求，不会影响其它消费方。代价是：管理台刚
+    // 改完开关，已经加载过配置的用户要等下次冷启动才能在客户端看到变化。
     __weak typeof(self) weakSelfForConfig = self;
-    [[WKApp shared].remoteConfig refreshConfig:^(NSError * _Nullable error) {
+    [[WKApp shared].remoteConfig requestConfig:^(NSError * _Nullable error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [weakSelfForConfig.viewModel reloadData];
         });
