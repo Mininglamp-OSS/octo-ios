@@ -71,6 +71,44 @@
             }
         }
     }];
+    // 手机号/邮箱还没拉取成功时（请求中或请求失败）整行不展示，不沿用上一次看到的值
+    if(self.phoneEmailLoaded) {
+        NSString *phoneValue = self.phone.length>0?[self phoneDisplayValue]:LLang(@"未绑定");
+        NSMutableDictionary *phoneItem = [@{
+            @"class":WKLabelItemModel.class,
+            @"label":LLang(@"手机号"),
+            @"value":phoneValue,
+            @"showBottomLine":@(YES),
+            @"bottomLeftSpace":@(17.0f),
+            @"bottomRightSpace":@(17.0f),
+            @"cellHeight":@(52.0f),
+        } mutableCopy];
+        if(self.phone.length>0) {
+            phoneItem[@"showArrow"] = @(NO);
+            phoneItem[@"onClick"] = ^(WKFormItemModel *model,NSIndexPath *indexPath){
+                [weakSelf copyToPasteboard:phoneValue];
+            };
+        }
+        [section1Items addObject:phoneItem];
+
+        NSString *emailValue = self.email.length>0?self.email:LLang(@"未绑定");
+        NSMutableDictionary *emailItem = [@{
+            @"class":WKLabelItemModel.class,
+            @"label":LLang(@"邮箱"),
+            @"value":emailValue,
+            @"showBottomLine":@(YES),
+            @"bottomLeftSpace":@(17.0f),
+            @"bottomRightSpace":@(17.0f),
+            @"cellHeight":@(52.0f),
+        } mutableCopy];
+        if(self.email.length>0) {
+            emailItem[@"showArrow"] = @(NO);
+            emailItem[@"onClick"] = ^(WKFormItemModel *model,NSIndexPath *indexPath){
+                [weakSelf copyToPasteboard:emailValue];
+            };
+        }
+        [section1Items addObject:emailItem];
+    }
     [section1Items addObject:@{
         @"class":WKLabelItemModel.class,
         @"label":[NSString stringWithFormat:LLang(@"%@号"),[WKApp shared].config.appName],
@@ -83,29 +121,6 @@
         @"cellHeight":@(52.0f),
         @"onClick":onShortNoClick,
     }];
-    // 手机号/邮箱还没拉取成功时（请求中或请求失败）整行不展示，不沿用上一次看到的值
-    if(self.phoneEmailLoaded) {
-        [section1Items addObject:@{
-            @"class":WKLabelItemModel.class,
-            @"label":LLang(@"手机号"),
-            @"value":self.phone.length>0?[self phoneDisplayValue]:LLang(@"未绑定"),
-            @"valueCopy":@(self.phone.length>0),
-            @"showBottomLine":@(YES),
-            @"bottomLeftSpace":@(17.0f),
-            @"bottomRightSpace":@(17.0f),
-            @"cellHeight":@(52.0f),
-        }];
-        [section1Items addObject:@{
-            @"class":WKLabelItemModel.class,
-            @"label":LLang(@"邮箱"),
-            @"value":self.email.length>0?self.email:LLang(@"未绑定"),
-            @"valueCopy":@(self.email.length>0),
-            @"showBottomLine":@(YES),
-            @"bottomLeftSpace":@(17.0f),
-            @"bottomRightSpace":@(17.0f),
-            @"cellHeight":@(52.0f),
-        }];
-    }
     [section1Items addObject:@{
          @"class":WKIconItemModel.class,
          @"label":LLang(@"我的二维码"),
@@ -176,6 +191,11 @@
         return self.phone;
     }
     return [NSString stringWithFormat:@"(+%@) %@", dialCode, self.phone];
+}
+
+-(void) copyToPasteboard:(NSString*)text {
+    [UIPasteboard generalPasteboard].string = text;
+    [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"已复制")];
 }
 
 -(UIImage*) imageName:(NSString*)name {
