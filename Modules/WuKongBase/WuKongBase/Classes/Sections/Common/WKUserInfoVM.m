@@ -96,12 +96,6 @@
 @property(nonatomic,copy) NSString *userHomeSpaceId;
 @property(nonatomic,assign) NSInteger userIsExternalLegacy;
 
-// 手机号/邮箱卡片的禁用态判定专用缓存，不能复用 channelInfo.status——
-// WKUserInfoVC 的拉黑/取消拉黑操作会直接覆写 channelInfo.status
-// （WKChannelStatusBlacklist/WKChannelStatusNormal），这个字段已经不干净。
-// 这里单独存一份 user.status 原始值；0 = 被禁用（服务端 StatusDisable）。
-@property(nonatomic,assign) NSInteger userAccountStatus;
-
 // user.is_destroy：0 正常，1 冷静期，2 已注销。channelInfoFromUser 从没把
 // 这个字段搬进 channelInfo，这里单独缓存。boolValue 对非 0 值都是 YES，
 // 刚好把冷静期/已注销两种状态一起收进一个布尔里，不用再拆分支。
@@ -115,6 +109,7 @@
 // param[@"context"]（即下面 contextDict，per-VM 实例）来存取，才不会串。
 @property(nonatomic,copy) NSString *userPhone;
 @property(nonatomic,copy) NSString *userEmail;
+@property(nonatomic,copy) NSString *userZone;
 
 @end
 
@@ -166,7 +161,6 @@
         // user.info.addBlack / user.info.freeFriend handler 判同 Space。
         weakSelf.userHomeSpaceId = user.homeSpaceId ?: @"";
         weakSelf.userIsExternalLegacy = user.isExternal;
-        weakSelf.userAccountStatus = user.status;
         weakSelf.userIsDestroy = user.isDestroy;
 
         // 手机号/邮箱只存在 VM 的临时属性里，不回写进 channelInfo.extra：
@@ -178,6 +172,7 @@
         // nil 和 @"" 已经区分好了，这里原样传下去，不要在这一层又抹平。
         weakSelf.userPhone = user.phone;
         weakSelf.userEmail = user.email;
+        weakSelf.userZone = user.zone;
 
         // 重新缓存用户的channelInfo
         WKChannelInfo *channelInfo = [weakSelf channelInfoFromUser:user];
@@ -241,17 +236,16 @@
     // 这一行之上（对齐设计稿「他人名片」信息卡）。
     // 服务端 2026-09-29 合入 #919 后已经会按关系收敛（本人/好友/双方同处一个
     // 有效 Space 才下发手机号/邮箱，没权限时这两个 key 整体缺失，不是空
-    // 字符串）——这里之前写的"服务端不收敛，任意 uid 都原样返回"是基于合并
-    // 前的旧行为，已经不对了。客户端这层同 space 门槛（isExternalUser）先
-    // 保留，作为独立的一层兜底：和服务端"好友或同 Space"的收敛口径不完全
-    // 一致（服务端认好友就放行，不要求同 space），两者是否要对齐留给后续
-    // 单独处理。
+    // 字符串）——客户端不再额外加同 Space 门槛，字段有没有完全交给服务端
+    // 的授权结果决定：下发了就展示，没下发（nil）就不展示。
     // 整张卡片还受部署方管理台总开关控制：WKApp.shared.remoteConfig.
     // profileContactInfoOn，对应服务端 appconfig 的 profile_contact_info_on，
     // 默认关闭。总开关对本人/他人一视同仁——关了谁都看不到这两行。
-    // 机器人账号、被禁用账号、已注销/冷静期账号，一律不展示这张卡片（机器人
-    // 不区分是否本人，账号状态三项只在 !isSelf 时判——本人账号本身若处于这些
-    // 状态理论上登不进来，判了也不影响自己查看自己）。
+    // 机器人账号一律不展示这张卡片（不区分是否本人）。已注销/冷静期账号的
+    // 判断只在 !isSelf 时生效：已注销账号本人理论上已无法再登录，这条判断
+    // 对本人没有实际影响；但冷静期账号本人仍可登录找回，本人在冷静期内查看
+    // 自己的名片要能看到完整号码（不受此约束），所以这里的 isSelf 豁免不是
+    // 可有可无的兜底，是 spec 要求必须生效的分支。
     // phone/email 从 UserModel 解析开始就不再用 `?: @""` 兜底（见
     // UserModel.fromMap: / self.userPhone/userEmail / paramDict 这三处），
     // nil 和 @"" 的区别一路保留到这里：nil = 服务端没给这个字段（没权限/
@@ -280,36 +274,31 @@
             return nil;
         }
         if(!isSelf) {
-            // 这三项都从 param 里读（由 tableSectionMaps 用 self 现算好传入），
+            // 这项从 param 里读（由 tableSectionMaps 用 self 现算好传入），
             // 不读 weakSelf——避免多张名片同时存活时，handler 的 weakSelf 绑定
             // 到"最后一次 -init 的那个 VM 实例"导致门槛判错对象。
-            // 用 isExternalForViewer（不是 isExternalUser）：isExternalUser 的
-            // 默认值是给 freeFriend/addBlack 那种"外部才展示该行"的场景调的
-            // （非 Space 模式下默认 YES=外部，好让那两行默认可见），这里是反过来
-            // "外部就隐藏整卡"的场景，极性相反，复用会导致非 Space 模式下卡片
-            // 永远不展示。isExternalForViewer 非 Space 模式下默认 NO（非外部），
-            // 极性和这里的用法对得上。
-            if([param[@"isExternalForViewer"] boolValue]) {
-                return nil;
-            }
-            if([param[@"userAccountStatus"] integerValue] == 0) {
-                return nil;
-            }
             if([param[@"userIsDestroy"] boolValue]) {
                 return nil;
             }
         }
         NSString *phone = param[@"phone"];
         NSString *email = param[@"email"];
+        NSString *zone = param[@"zone"];
         NSMutableDictionary *context = param[@"context"];
         void(^reload)(void) = param[@"reload"];
         NSMutableArray *items = [NSMutableArray array];
         if(phone.length > 0) {
             BOOL phoneRevealed = isSelf || [context[@"phoneRevealed"] boolValue];
+            // 本人看自己要带区号完整展示（spec 要求），看别人的那一分支
+            // 不受影响，仍然是裸号码。zone 服务端格式是 "00"+国家码
+            // （如 "0086"），这里去掉 "00" 前缀转成 "+86" 这种展示惯例，
+            // 跟登录页 WKLoginView 的国家码展示保持一致。
+            NSString *zoneCode = [zone hasPrefix:@"00"] ? [zone substringFromIndex:2] : zone;
+            NSString *phoneDisplay = (isSelf && zoneCode.length > 0) ? [NSString stringWithFormat:@"+%@ %@", zoneCode, phone] : phone;
             [items addObject:@{
                 @"class":WKLabelItemModel.class,
                 @"label":LLang(@"手机号"),
-                @"value": phoneRevealed ? phone : LLang(@"点击查看"),
+                @"value": phoneRevealed ? phoneDisplay : LLang(@"点击查看"),
                 @"showBottomLine": @(YES),
                 @"showArrow": @(NO),
                 @"onClick":^{
@@ -722,14 +711,13 @@
     // 崩，paramDict[@"phone"] 读到的就是"key 不存在"。
     paramDict[@"phone"] = self.userPhone;
     paramDict[@"email"] = self.userEmail;
-    // isExternalUser/userAccountStatus/userIsDestroy 在这里用 self（不是
+    paramDict[@"zone"] = self.userZone;
+    // userIsDestroy 在这里用 self（不是
     // weakSelf）现算好传进 param，不要让 user.info.phoneEmail handler 里再读
-    // weakSelf 取这三个值——handler 挂在 WKApp 全局 endpoint 表里只有一份，
+    // weakSelf 取这个值——handler 挂在 WKApp 全局 endpoint 表里只有一份，
     // weakSelf 绑定的是"最后一次 -init 的那个 VM 实例"，和 phoneRevealed 当年
     // 挂在 VM 属性上是同一类串号风险。tableSectionMaps 本身就是哪个 VM 调用
     // self 就是哪个 VM，这里取值不会认错人。
-    paramDict[@"isExternalForViewer"] = @([self isExternalForViewer]);
-    paramDict[@"userAccountStatus"] = @(self.userAccountStatus);
     paramDict[@"userIsDestroy"] = @(self.userIsDestroy);
 
     NSMutableArray<NSDictionary*> *items = [NSMutableArray array];
@@ -928,9 +916,11 @@
     // (没权限/取值异常，withheld) 和"key 存在但是空串"(用户确实没填)
     // 是两种不同语义，`nil` 和 `@""` 刚好能把这个区分原样保留，一路传到
     // WKUserInfoVM 的 user.info.phoneEmail handler 里按需分别处理。
-    u.email = [dictory objectForKey:@"email"];
+    id rawEmail = [dictory objectForKey:@"email"];
+    u.email = [rawEmail isKindOfClass:[NSString class]] ? rawEmail : nil;
     u.zone = [dictory objectForKey:@"zone"] ?: @"";
-    u.phone = [dictory objectForKey:@"phone"];
+    id rawPhone = [dictory objectForKey:@"phone"];
+    u.phone = [rawPhone isKindOfClass:[NSString class]] ? rawPhone : nil;
     u.mute = [[dictory objectForKey:@"mute"] boolValue];
     u.top = [[dictory objectForKey:@"top"] boolValue];
     u.sex = [[dictory objectForKey:@"sex"] integerValue];
