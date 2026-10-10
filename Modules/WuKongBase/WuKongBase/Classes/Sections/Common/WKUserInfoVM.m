@@ -96,6 +96,21 @@
 @property(nonatomic,copy) NSString *userHomeSpaceId;
 @property(nonatomic,assign) NSInteger userIsExternalLegacy;
 
+// user.is_destroy：0 正常，1 冷静期，2 已注销。channelInfoFromUser 从没把
+// 这个字段搬进 channelInfo，这里单独缓存。boolValue 对非 0 值都是 YES，
+// 刚好把冷静期/已注销两种状态一起收进一个布尔里，不用再拆分支。
+@property(nonatomic,assign) BOOL userIsDestroy;
+
+// 手机号是否已展开（点击查看→点击复制两段式交互）。这是"每次渲染当前这张
+// 卡片"要用的临时状态，不能挂在 VM 属性上读写——同一个 sid 的 handler 在
+// WKApp 全局 endpoint 表里只有一份，闭包里的 weakSelf 永远绑定"最后一次
+// -init 的那个 VM 实例"；同时打开两张名片（比如 A 名片进聊天再进 B 名片）
+// 时，回到 A 读到的会是 B 的 phoneRevealed。改用 handler 每次调用都拿到的
+// param[@"context"]（即下面 contextDict，per-VM 实例）来存取，才不会串。
+@property(nonatomic,copy) NSString *userPhone;
+@property(nonatomic,copy) NSString *userEmail;
+@property(nonatomic,copy) NSString *userZone;
+
 @end
 
 @implementation WKUserInfoVM
@@ -146,6 +161,18 @@
         // user.info.addBlack / user.info.freeFriend handler 判同 Space。
         weakSelf.userHomeSpaceId = user.homeSpaceId ?: @"";
         weakSelf.userIsExternalLegacy = user.isExternal;
+        weakSelf.userIsDestroy = user.isDestroy;
+
+        // 手机号/邮箱只存在 VM 的临时属性里，不回写进 channelInfo.extra：
+        // extra 会被整体 JSON 序列化持久化到本地 channel 表（WKChannelInfoDB
+        // extraToStr:/SQL_CHANNEL_UPDATE），且是整列覆盖不是 merge——
+        // 一旦落库，这两个字段就会明文留在本机数据库里，还会被其它不带
+        // phone/email 的 channelInfo 刷新路径整体覆盖掉。
+        // 同上，不用 `?: @""` 兜底——user.phone/user.email 从 UserModel 出来时
+        // nil 和 @"" 已经区分好了，这里原样传下去，不要在这一层又抹平。
+        weakSelf.userPhone = user.phone;
+        weakSelf.userEmail = user.email;
+        weakSelf.userZone = user.zone;
 
         // 重新缓存用户的channelInfo
         WKChannelInfo *channelInfo = [weakSelf channelInfoFromUser:user];
@@ -205,6 +232,124 @@
 
 -(void) initItems {
     __weak typeof(self) weakSelf = self;
+    // 手机号 / 邮箱：独立信息卡片，紧跟头部（头像/名字/短号）下方、"设置备注"
+    // 这一行之上（对齐设计稿「他人名片」信息卡）。
+    // 服务端 2026-09-29 合入 #919 后已经会按关系收敛（本人/好友/双方同处一个
+    // 有效 Space 才下发手机号/邮箱，没权限时这两个 key 整体缺失，不是空
+    // 字符串）——客户端不再额外加同 Space 门槛，字段有没有完全交给服务端
+    // 的授权结果决定：下发了就展示，没下发（nil）就不展示。
+    // 整张卡片还受部署方管理台总开关控制：WKApp.shared.remoteConfig.
+    // profileContactInfoOn，对应服务端 appconfig 的 profile_contact_info_on，
+    // 默认关闭。总开关对本人/他人一视同仁——关了谁都看不到这两行。
+    // 机器人账号一律不展示这张卡片（不区分是否本人）。已注销/冷静期账号的
+    // 判断只在 !isSelf 时生效：已注销账号本人理论上已无法再登录，这条判断
+    // 对本人没有实际影响；但冷静期账号本人仍可登录找回，本人在冷静期内查看
+    // 自己的名片要能看到完整号码（不受此约束），所以这里的 isSelf 豁免不是
+    // 可有可无的兜底，是 spec 要求必须生效的分支。
+    // phone/email 从 UserModel 解析开始就不再用 `?: @""` 兜底（见
+    // UserModel.fromMap: / self.userPhone/userEmail / paramDict 这三处），
+    // nil 和 @"" 的区别一路保留到这里：nil = 服务端没给这个字段（没权限/
+    // 取值异常，withheld），@"" = 字段给了但用户确实没填。下面按这两种值
+    // 分别处理：
+    //   nil        → 这一行完全不展示（不占位，不能让没权限的调用方哪怕
+    //                 看到一行空壳）
+    //   @""        → 展示"用户暂未添加该信息"占位，不可点
+    //   非空字符串 → 原来的点击查看/点击复制逻辑
+    // 两行都因为 nil 被跳过时，这张卡片本身也不展示（items.count==0 判断），
+    // 不留一条空的分割线。
+    // 手机号对他人是"点击查看→点击复制"两段式交互：展开状态存在
+    // param[@"context"] 里（即 self.contextDict，per-VM 实例），不能挂在 VM
+    // 属性上——同一个 sid 的 handler 在 WKApp 全局 endpoint 表里只有一份，
+    // 闭包里的 weakSelf 永远绑定"最后一次 -init 的那个 VM 实例"，多张名片
+    // 一起打开时会互相串状态。本人查看自己的手机号不走两段式，直接完整展示，
+    // 点击即复制。
+    [[WKApp shared] setMethod:@"user.info.phoneEmail" handler:^id _Nullable(id  _Nonnull param) {
+        if(![WKApp shared].remoteConfig.profileContactInfoOn) {
+            return nil;
+        }
+        NSString *uid = param[@"uid"];
+        BOOL isSelf = [uid isEqualToString:[WKApp shared].loginInfo.uid];
+        WKChannelInfo *channelInfo = param[@"channel_info"];
+        if(channelInfo.robot) {
+            return nil;
+        }
+        if(!isSelf) {
+            // 这项从 param 里读（由 tableSectionMaps 用 self 现算好传入），
+            // 不读 weakSelf——避免多张名片同时存活时，handler 的 weakSelf 绑定
+            // 到"最后一次 -init 的那个 VM 实例"导致门槛判错对象。
+            if([param[@"userIsDestroy"] boolValue]) {
+                return nil;
+            }
+        }
+        NSString *phone = param[@"phone"];
+        NSString *email = param[@"email"];
+        NSString *zone = param[@"zone"];
+        NSMutableDictionary *context = param[@"context"];
+        void(^reload)(void) = param[@"reload"];
+        NSMutableArray *items = [NSMutableArray array];
+        if(phone.length > 0) {
+            BOOL phoneRevealed = isSelf || [context[@"phoneRevealed"] boolValue];
+            // 本人看自己要带区号完整展示（spec 要求），看别人的那一分支
+            // 不受影响，仍然是裸号码。zone 服务端格式是 "00"+国家码
+            // （如 "0086"），这里去掉 "00" 前缀转成 "+86" 这种展示惯例，
+            // 跟登录页 WKLoginView 的国家码展示保持一致。
+            NSString *zoneCode = [zone hasPrefix:@"00"] ? [zone substringFromIndex:2] : zone;
+            NSString *phoneDisplay = (isSelf && zoneCode.length > 0) ? [NSString stringWithFormat:@"+%@ %@", zoneCode, phone] : phone;
+            [items addObject:@{
+                @"class":WKLabelItemModel.class,
+                @"label":LLang(@"手机号"),
+                @"value": phoneRevealed ? phoneDisplay : LLang(@"点击查看"),
+                @"showBottomLine": @(YES),
+                @"showArrow": @(NO),
+                @"onClick":^{
+                    if(isSelf || [context[@"phoneRevealed"] boolValue]) {
+                        [UIPasteboard generalPasteboard].string = phone;
+                        [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"已复制")];
+                    } else {
+                        context[@"phoneRevealed"] = @(YES);
+                        if(reload) {
+                            reload();
+                        }
+                    }
+                }
+            }];
+        } else if(phone != nil) {
+            [items addObject:@{
+                @"class":WKLabelItemModel.class,
+                @"label":LLang(@"手机号"),
+                @"value": LLang(@"用户暂未添加该信息"),
+                @"showBottomLine": @(YES),
+            }];
+        }
+        if(email.length > 0) {
+            [items addObject:@{
+                @"class":WKLabelItemModel.class,
+                @"label":LLang(@"邮箱"),
+                @"value": email,
+                @"showArrow": @(NO),
+                @"showBottomLine": @(YES),
+                @"onClick":^{
+                    [UIPasteboard generalPasteboard].string = email;
+                    [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"已复制")];
+                }
+            }];
+        } else if(email != nil) {
+            [items addObject:@{
+                @"class":WKLabelItemModel.class,
+                @"label":LLang(@"邮箱"),
+                @"value": LLang(@"用户暂未添加该信息"),
+                @"showBottomLine": @(YES),
+            }];
+        }
+        if(items.count == 0) {
+            return nil;
+        }
+        return @{
+            @"height":@(10.0f),
+            @"items":items,
+        };
+    } category:WKPOINT_CATEGORY_USER_INFO_ITEM sort:4010];
+
     // 备注
     [[WKApp shared] setMethod:@"user.info.setRemark" handler:^id _Nullable(id  _Nonnull param) {
         NSString *uid = param[@"uid"];
@@ -217,6 +362,7 @@
                     @{
                         @"class":WKLabelItemModel.class,
                         @"label":LLangW(@"设置备注",weakSelf),
+                        @"showBottomLine": @(YES),
                         @"onClick":^{
                             if(weakSelf.delegate && [weakSelf.delegate respondsToSelector:@selector(userInfoVMUpdateRemark:)]) {
                                 [weakSelf.delegate userInfoVMUpdateRemark:weakSelf];
@@ -558,7 +704,22 @@
     if(self.memberOfUser) {
         paramDict[@"memberOfUser"] = self.memberOfUser;
     }
-    
+    // 不用 `?: @""` 兜底：nil 表示服务端没下发（没权限/取值异常），@"" 表示
+    // 下发了但用户没填，这个区分要原样带进 paramDict，再传到
+    // user.info.phoneEmail handler 里按需分别处理。NSMutableDictionary 的
+    // keyed subscript 赋 nil 等价于 removeObjectForKey:，所以这里 nil 不会
+    // 崩，paramDict[@"phone"] 读到的就是"key 不存在"。
+    paramDict[@"phone"] = self.userPhone;
+    paramDict[@"email"] = self.userEmail;
+    paramDict[@"zone"] = self.userZone;
+    // userIsDestroy 在这里用 self（不是
+    // weakSelf）现算好传进 param，不要让 user.info.phoneEmail handler 里再读
+    // weakSelf 取这个值——handler 挂在 WKApp 全局 endpoint 表里只有一份，
+    // weakSelf 绑定的是"最后一次 -init 的那个 VM 实例"，和 phoneRevealed 当年
+    // 挂在 VM 属性上是同一类串号风险。tableSectionMaps 本身就是哪个 VM 调用
+    // self 就是哪个 VM，这里取值不会认错人。
+    paramDict[@"userIsDestroy"] = @(self.userIsDestroy);
+
     NSMutableArray<NSDictionary*> *items = [NSMutableArray array];
     
     NSArray<WKEndpoint*> *endpoints =  [WKApp.shared getEndpointsWithCategory:WKPOINT_CATEGORY_USER_INFO_ITEM];
@@ -751,9 +912,15 @@
     u.uid = [dictory objectForKey:@"uid"] ?: @"";
     u.name = [dictory objectForKey:@"name"] ?: @"";
     u.username = [dictory objectForKey:@"username"] ?: @"";
-    u.email = [dictory objectForKey:@"email"] ?: @"";
+    // email/phone 故意不用 `?: @""` 兜底：服务端这两个字段"key 不存在"
+    // (没权限/取值异常，withheld) 和"key 存在但是空串"(用户确实没填)
+    // 是两种不同语义，`nil` 和 `@""` 刚好能把这个区分原样保留，一路传到
+    // WKUserInfoVM 的 user.info.phoneEmail handler 里按需分别处理。
+    id rawEmail = [dictory objectForKey:@"email"];
+    u.email = [rawEmail isKindOfClass:[NSString class]] ? rawEmail : nil;
     u.zone = [dictory objectForKey:@"zone"] ?: @"";
-    u.phone = [dictory objectForKey:@"phone"] ?: @"";
+    id rawPhone = [dictory objectForKey:@"phone"];
+    u.phone = [rawPhone isKindOfClass:[NSString class]] ? rawPhone : nil;
     u.mute = [[dictory objectForKey:@"mute"] boolValue];
     u.top = [[dictory objectForKey:@"top"] boolValue];
     u.sex = [[dictory objectForKey:@"sex"] integerValue];

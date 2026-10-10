@@ -631,6 +631,11 @@ static NSString * const kOidcProvidersCacheKey = @"WKOidcProvidersCacheV1";
                 if(resultDict[@"thread_on"]) {
                     weakSelf.threadOn = [resultDict[@"thread_on"] boolValue];
                 }
+                // 他人名片手机号/邮箱总开关：故意不用"字段存在才覆盖"的写法——
+                // 缺字段时 resultDict[@"profile_contact_info_on"] 是 nil，
+                // nil.boolValue 为 NO，无条件赋值正好让"没这一项"落到默认关闭，
+                // 也不会沿用上一次成功请求缓存下来的旧值。
+                weakSelf.profileContactInfoOn = [resultDict[@"profile_contact_info_on"] boolValue];
 
                 // : consume system_bot_uids from backend appconfig.
                 // Response shape (A2): {"system_bot_uids": ["botfather", "u_10000", "fileHelper"]}.
@@ -681,6 +686,9 @@ static NSString * const kOidcProvidersCacheKey = @"WKOidcProvidersCacheV1";
                 [weakSelf _fireAndClearPendingConfigCallbacks:nil];
             }).catch(^(NSError *error){
                 WKLogError(@"请求远程配置失败！->%@",error);
+                // 请求失败也要把手机号/邮箱总开关落到关闭——不能沿用上一次
+                // 成功请求缓存下来的旧值（哪怕之前是开的）。
+                weakSelf.profileContactInfoOn = NO;
                 weakSelf.startRequest = false;
                 [weakSelf _fireAndClearPendingConfigCallbacks:error];
             });

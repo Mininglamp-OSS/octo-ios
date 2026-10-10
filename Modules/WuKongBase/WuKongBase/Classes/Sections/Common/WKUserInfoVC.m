@@ -36,6 +36,8 @@
 @property(nonatomic,strong) WKUserFieldView *nicknameField; // 用户昵称(如果有备注则隐藏昵称)
 @property(nonatomic,strong) WKUserFieldView *shortNoField; // 用户短编号
 @property(nonatomic,strong) WKUserFieldView *nameInChannelField; // 群内昵称
+// 手机号 / 邮箱不在此处展示，由 WKUserInfoVM 的 user.info.phoneEmail
+// handler 渲染成独立信息卡片，详见该 handler。
 
 @property(nonatomic,strong) UIView *userInfoBoxView; // 右边文字的容器
 
@@ -104,7 +106,23 @@
     self.viewModel.fromChannel = self.fromChannel;
     
     [self.viewModel initData];
-    
+
+    // 手机号/邮箱卡片的可见性由部署方管理台开关 profile_contact_info_on 决定，
+    // 这个值在 appconfig 里。这里故意用 requestConfig:（不是 refreshConfig:）——
+    // refreshConfig: 会无条件把 WKAppRemoteConfig 全局单例的 requestSuccess
+    // 清成 NO，而这个标志是其它消费方（如 WKRealnameVerifyManager）判断
+    // "配置已加载，走缓存快路径"的依据；在名片页这种高频入口上清它，会让
+    // 无关流程退化成等一次网络请求，网络失败时 requestSuccess 还会一直停在
+    // NO 直到下次成功请求。requestConfig: 已加载成功时直接走快路径拿当前
+    // 缓存值，没加载过时才真正发请求，不会影响其它消费方。代价是：管理台刚
+    // 改完开关，已经加载过配置的用户要等下次冷启动才能在客户端看到变化。
+    __weak typeof(self) weakSelfForConfig = self;
+    [[WKApp shared].remoteConfig requestConfig:^(NSError * _Nullable error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelfForConfig.viewModel reloadData];
+        });
+    }];
+
     __weak typeof(self) weakSelf = self;
     [self.viewModel loadPersonChannelInfo:self.uid completion:^{
         // 检查是否在 Space 模式下，如果是则需要通过 API 检查实际好友关系
@@ -200,7 +218,7 @@
     if(showShortNo) {
         [self.userInfoBoxView addSubview:self.shortNoField];
     }
-    
+
     NSNumber *sex = self.viewModel.channelInfo.extra[@"sex"];
     if(sex && [sex integerValue] == 0) {
         [self.sexImgView setImage:[self imageName:@"Common/Index/SexWoman"]];
@@ -924,8 +942,6 @@
     self.valueLbl.text = value;
     [self.valueLbl sizeToFit];
 }
-
-
 
 - (void)layoutSubviews {
     [super layoutSubviews];
