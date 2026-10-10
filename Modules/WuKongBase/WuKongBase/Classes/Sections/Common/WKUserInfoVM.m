@@ -310,7 +310,8 @@
                 @"class":WKLabelItemModel.class,
                 @"label":LLang(@"手机号"),
                 @"value": phoneRevealed ? phone : LLang(@"点击查看"),
-                @"showBottomLine": @(email != nil),
+                @"showBottomLine": @(YES),
+                @"showArrow": @(NO),
                 @"onClick":^{
                     if(isSelf || [context[@"phoneRevealed"] boolValue]) {
                         [UIPasteboard generalPasteboard].string = phone;
@@ -328,7 +329,7 @@
                 @"class":WKLabelItemModel.class,
                 @"label":LLang(@"手机号"),
                 @"value": LLang(@"用户暂未添加该信息"),
-                @"showBottomLine": @(email != nil),
+                @"showBottomLine": @(YES),
             }];
         }
         if(email.length > 0) {
@@ -336,6 +337,8 @@
                 @"class":WKLabelItemModel.class,
                 @"label":LLang(@"邮箱"),
                 @"value": email,
+                @"showArrow": @(NO),
+                @"showBottomLine": @(YES),
                 @"onClick":^{
                     [UIPasteboard generalPasteboard].string = email;
                     [[WKNavigationManager shared].topViewController.view showMsg:LLang(@"已复制")];
@@ -346,6 +349,7 @@
                 @"class":WKLabelItemModel.class,
                 @"label":LLang(@"邮箱"),
                 @"value": LLang(@"用户暂未添加该信息"),
+                @"showBottomLine": @(YES),
             }];
         }
         if(items.count == 0) {
@@ -369,6 +373,7 @@
                     @{
                         @"class":WKLabelItemModel.class,
                         @"label":LLangW(@"设置备注",weakSelf),
+                        @"showBottomLine": @(YES),
                         @"onClick":^{
                             if(weakSelf.delegate && [weakSelf.delegate respondsToSelector:@selector(userInfoVMUpdateRemark:)]) {
                                 [weakSelf.delegate userInfoVMUpdateRemark:weakSelf];
