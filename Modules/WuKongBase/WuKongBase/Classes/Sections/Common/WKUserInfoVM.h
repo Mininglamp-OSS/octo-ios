@@ -104,6 +104,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 用于 WKUserInfoVC 隐藏「申请加好友」按钮（外部成员仅限群内沟通）。
 -(BOOL) isExternalForViewer;
 
+/// Clear the per-page reveal state when leaving, including push-and-return.
+-(void) concealContactPhone;
+
 -(void) initData;
 
 @end

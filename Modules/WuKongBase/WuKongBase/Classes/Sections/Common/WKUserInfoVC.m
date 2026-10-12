@@ -107,21 +107,7 @@
     
     [self.viewModel initData];
 
-    // 手机号/邮箱卡片的可见性由部署方管理台开关 profile_contact_info_on 决定，
-    // 这个值在 appconfig 里。这里故意用 requestConfig:（不是 refreshConfig:）——
-    // refreshConfig: 会无条件把 WKAppRemoteConfig 全局单例的 requestSuccess
-    // 清成 NO，而这个标志是其它消费方（如 WKRealnameVerifyManager）判断
-    // "配置已加载，走缓存快路径"的依据；在名片页这种高频入口上清它，会让
-    // 无关流程退化成等一次网络请求，网络失败时 requestSuccess 还会一直停在
-    // NO 直到下次成功请求。requestConfig: 已加载成功时直接走快路径拿当前
-    // 缓存值，没加载过时才真正发请求，不会影响其它消费方。代价是：管理台刚
-    // 改完开关，已经加载过配置的用户要等下次冷启动才能在客户端看到变化。
-    __weak typeof(self) weakSelfForConfig = self;
-    [[WKApp shared].remoteConfig requestConfig:^(NSError * _Nullable error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [weakSelfForConfig.viewModel reloadData];
-        });
-    }];
+    [self requestContactInfoConfig];
 
     __weak typeof(self) weakSelf = self;
     [self.viewModel loadPersonChannelInfo:self.uid completion:^{
@@ -145,6 +131,24 @@
 
 
 
+- (void)requestContactInfoConfig {
+    // Reuse loaded config without resetting global requestSuccess. Legacy
+    // appmodule callbacks may fire first; reload only when the contact flag changes.
+    WKAppRemoteConfig *config = [WKApp shared].remoteConfig;
+    __weak WKAppRemoteConfig *weakConfig = config;
+    __weak typeof(self) weakSelfForConfig = self;
+    __block BOOL lastContactInfoOn = config.profileContactInfoOn;
+    [config requestConfig:^(NSError * _Nullable error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            BOOL contactInfoOn = weakConfig.profileContactInfoOn;
+            if(contactInfoOn != lastContactInfoOn) {
+                lastContactInfoOn = contactInfoOn;
+                [weakSelfForConfig.viewModel reloadData];
+            }
+        });
+    }];
+}
+
 -(void) memberUpdate:(NSNotification*)notify {
     if(!self.fromChannel) {
         return;
@@ -160,6 +164,11 @@
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    [self.viewModel concealContactPhone];
 }
 
 - (void)dealloc {

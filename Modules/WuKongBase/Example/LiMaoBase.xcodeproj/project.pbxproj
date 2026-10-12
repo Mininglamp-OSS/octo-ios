@@ -34,6 +34,7 @@
 		B2180000000000000000F001 /* WKConversationListVMSystemBotsTests.m in Sources */ = {isa = PBXBuildFile; fileRef = B2180000000000000000F002 /* WKConversationListVMSystemBotsTests.m */; };
 		B2360000000000000000F001 /* WKSpaceConvSyncCacheRemovalTests.m in Sources */ = {isa = PBXBuildFile; fileRef = B2360000000000000000F002 /* WKSpaceConvSyncCacheRemovalTests.m */; };
 		B49640EA6FC4C273CD92871A /* WKMentionUserCellTests.m in Sources */ = {isa = PBXBuildFile; fileRef = B2CA62921B187BCA0DFC746C /* WKMentionUserCellTests.m */; };
+		B5F0ADC69BBC06F74168D919 /* WKUserInfoContactTests.m in Sources */ = {isa = PBXBuildFile; fileRef = 467A97AA8161F49FAADFF610 /* WKUserInfoContactTests.m */; };
 		C129ABC0AF00000000000001 /* WKMessageCellAttributedNameTests.m in Sources */ = {isa = PBXBuildFile; fileRef = C129ABC0AF00000000000002 /* WKMessageCellAttributedNameTests.m */; };
 		C210ABC0AF00000000000001 /* WKMessageCellNicknameTruncationTests.m in Sources */ = {isa = PBXBuildFile; fileRef = C210ABC0AF00000000000002 /* WKMessageCellNicknameTruncationTests.m */; };
 		D210ABC0AF00000000000001 /* WKLaTeXPreprocessorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = D210ABC0AF00000000000002 /* WKLaTeXPreprocessorTests.m */; };
@@ -64,6 +65,7 @@
 		344B3E144C0E72E5FC31C6B1 /* Pods-LiMaoBase_Example.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-LiMaoBase_Example.debug.xcconfig"; path = "Target Support Files/Pods-LiMaoBase_Example/Pods-LiMaoBase_Example.debug.xcconfig"; sourceTree = "<group>"; };
 		3B6EA9F5D6FE167093BF2D24 /* WKFollowSidebarTests.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WKFollowSidebarTests.m; sourceTree = "<group>"; };
 		4450B689DB3C52A0F3474A12 /* Pods-LiMaoBase_Example.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-LiMaoBase_Example.release.xcconfig"; path = "Target Support Files/Pods-LiMaoBase_Example/Pods-LiMaoBase_Example.release.xcconfig"; sourceTree = "<group>"; };
+		467A97AA8161F49FAADFF610 /* WKUserInfoContactTests.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WKUserInfoContactTests.m; sourceTree = "<group>"; };
 		4F569B6CE3F4D594F10B3833 /* Pods_LiMaoBase_Example.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_LiMaoBase_Example.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		6003F58A195388D20070C39A /* LiMaoBase_Example.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LiMaoBase_Example.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6003F58D195388D20070C39A /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
@@ -224,6 +226,7 @@
 				E3960000000000000002F002 /* WKRealnameVerifyCallbackTests.m */,
 				6003F5B6195388D20070C39A /* Supporting Files */,
 				3B6EA9F5D6FE167093BF2D24 /* WKFollowSidebarTests.m */,
+				467A97AA8161F49FAADFF610 /* WKUserInfoContactTests.m */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -567,6 +570,7 @@
 				E3960000000000000001F001 /* WKOidcProviderConfigParseTests.m in Sources */,
 				E3960000000000000002F001 /* WKRealnameVerifyCallbackTests.m in Sources */,
 				520BE45CD0E8F8F4E2EF21AC /* WKFollowSidebarTests.m in Sources */,
+				B5F0ADC69BBC06F74168D919 /* WKUserInfoContactTests.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
