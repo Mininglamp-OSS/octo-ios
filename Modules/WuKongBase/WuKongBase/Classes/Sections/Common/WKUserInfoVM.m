@@ -97,24 +97,16 @@
 @property(nonatomic,copy) NSString *userHomeSpaceId;
 @property(nonatomic,assign) NSInteger userIsExternalLegacy;
 
-// user.is_destroy：0 正常，1 冷静期，2 已注销。channelInfoFromUser 从没把
-// 这个字段搬进 channelInfo，这里单独缓存。boolValue 对非 0 值都是 YES，
-// 刚好把冷静期/已注销两种状态一起收进一个布尔里，不用再拆分支——冷静期
-// 对方同样不展示这两行，只有本人在冷静期内看自己的名片才显示（isSelf
-// 分支不受这个门槛影响）。
+// user.is_destroy：0 正常，1 冷静期，2 已注销，boolValue 把 1/2 一起当
+// "不展示"处理（冷静期对方也不展示，本人在冷静期查看自己不受影响）。
 @property(nonatomic,assign) BOOL userIsDestroy;
 
-// 手机号是否已展开（点击查看→点击复制两段式交互）。这是"每次渲染当前这张
-// 卡片"要用的临时状态，不能挂在 VM 属性上读写——同一个 sid 的 handler 在
-// WKApp 全局 endpoint 表里只有一份，闭包里的 weakSelf 永远绑定"最后一次
-// -init 的那个 VM 实例"；同时打开两张名片（比如 A 名片进聊天再进 B 名片）
-// 时，回到 A 读到的会是 B 的 phoneRevealed。改用 handler 每次调用都拿到的
-// param[@"context"]（即下面 contextDict，per-VM 实例）来存取，才不会串。
 @property(nonatomic,copy) NSString *userPhone;
 @property(nonatomic,copy) NSString *userEmail;
 @property(nonatomic,copy) NSString *userZone;
 // 服务端已归一化好的国家码（去掉了 "+"/"00" 两种前缀形式），zone 里原样存的
-// 可能是其中任意一种形式。优先用这个字段，zone 剥 "00" 前缀只做兜底。
+// 可能是其中任意一种形式。优先用这个字段，没有时才退回剥 zone 的 "+"/"00"
+// 前缀兜底。
 @property(nonatomic,copy) NSString *userPhoneCountryCode;
 
 @end
@@ -169,13 +161,9 @@
         weakSelf.userIsExternalLegacy = user.isExternal;
         weakSelf.userIsDestroy = user.isDestroy;
 
-        // 手机号/邮箱只存在 VM 的临时属性里，不回写进 channelInfo.extra：
-        // extra 会被整体 JSON 序列化持久化到本地 channel 表（WKChannelInfoDB
-        // extraToStr:/SQL_CHANNEL_UPDATE），且是整列覆盖不是 merge——
-        // 一旦落库，这两个字段就会明文留在本机数据库里，还会被其它不带
-        // phone/email 的 channelInfo 刷新路径整体覆盖掉。
-        // 同上，不用 `?: @""` 兜底——user.phone/user.email 从 UserModel 出来时
-        // nil 和 @"" 已经区分好了，这里原样传下去，不要在这一层又抹平。
+        // 手机号/邮箱只存 VM 的临时属性，不回写进 channelInfo.extra——extra 会
+        // 整体序列化落到本地 channel 表（WKChannelInfoDB），不能让 PII 明文
+        // 落库。nil/@"" 的区分原样传下去，不在这一层抹平。
         weakSelf.userPhone = user.phone;
         weakSelf.userEmail = user.email;
         weakSelf.userZone = user.zone;
@@ -239,39 +227,15 @@
 
 -(void) initItems {
     __weak typeof(self) weakSelf = self;
-    // 手机号 / 邮箱：独立信息卡片，紧跟头部（头像/名字/短号）下方、"设置备注"
-    // 这一行之上。#103 里"排在短编号行之前"那条，说的是个人名片（本人查看
-    // 自己），不适用于他人名片——他人名片本来就没有要求排到短编号前面，
-    // 当前位置（排在短编号之后）是对的，不是待确认的偏离。
-    // 服务端 2026-09-29 合入 #919 后已经会按关系收敛（本人/好友/双方同处一个
-    // 有效 Space 才下发手机号/邮箱，没权限时这两个 key 整体缺失，不是空
-    // 字符串）——客户端不再额外加同 Space 门槛，字段有没有完全交给服务端
-    // 的授权结果决定：下发了就展示，没下发（nil）就不展示。
-    // 整张卡片还受部署方管理台总开关控制：WKApp.shared.remoteConfig.
-    // profileContactInfoOn，对应服务端 appconfig 的 profile_contact_info_on，
-    // 默认关闭。总开关对本人/他人一视同仁——关了谁都看不到这两行。
-    // 机器人账号一律不展示这张卡片（不区分是否本人）。已注销/冷静期账号的
-    // 判断只在 !isSelf 时生效：已注销账号本人理论上已无法再登录，这条判断
-    // 对本人没有实际影响；但冷静期账号本人仍可登录找回，本人在冷静期内查看
-    // 自己的名片要能看到完整号码（不受此约束），所以这里的 isSelf 豁免不是
-    // 可有可无的兜底，是 spec 要求必须生效的分支。
-    // phone/email 从 UserModel 解析开始就不再用 `?: @""` 兜底（见
-    // UserModel.fromMap: / self.userPhone/userEmail / paramDict 这三处），
-    // nil 和 @"" 的区别一路保留到这里：nil = 服务端没给这个字段（没权限/
-    // 取值异常，withheld），@"" = 字段给了但用户确实没填。下面按这两种值
-    // 分别处理：
-    //   nil        → 这一行完全不展示（不占位，不能让没权限的调用方哪怕
-    //                 看到一行空壳）
-    //   @""        → 展示"用户暂未添加该信息"占位，不可点
-    //   非空字符串 → 原来的点击查看/点击复制逻辑
-    // 两行都因为 nil 被跳过时，这张卡片本身也不展示（items.count==0 判断），
-    // 不留一条空的分割线。
-    // 手机号对他人是"点击查看→点击复制"两段式交互：展开状态存在
-    // param[@"context"] 里（即 self.contextDict，per-VM 实例），不能挂在 VM
-    // 属性上——同一个 sid 的 handler 在 WKApp 全局 endpoint 表里只有一份，
-    // 闭包里的 weakSelf 永远绑定"最后一次 -init 的那个 VM 实例"，多张名片
-    // 一起打开时会互相串状态。本人查看自己的手机号不走两段式，直接完整展示，
-    // 点击即复制。
+    // 手机号 / 邮箱：独立信息卡片，紧跟头部下方、"设置备注"这一行之上。#103
+    // 客户端根据服务端返回的账号状态（冷静期/已注销）决定是否展示对方的
+    // 手机号/邮箱：已注销/冷静期的对方一律不展示，本人不受影响。机器人
+    // 同样不展示；总开关 profileContactInfoOn 控制整张卡片，默认关闭，
+    // 对本人/他人一视同仁。
+    // nil/@"" 区分见上面 userPhone 等属性注释：nil 直接跳过该行，@"" 展示
+    // "用户暂未添加该信息"占位，非空走点击查看/复制；两行都是 nil 时整张
+    // 卡片也不展示。手机号对他人的两段式展开状态存在 param[@"context"]
+    // 里（原因同上），本人直接完整展示，点击即复制。
     [[WKApp shared] setMethod:@"user.info.phoneEmail" handler:^id _Nullable(id  _Nonnull param) {
         if(![WKApp shared].remoteConfig.profileContactInfoOn) {
             return nil;
@@ -283,9 +247,8 @@
             return nil;
         }
         if(!isSelf) {
-            // 这项从 param 里读（由 tableSectionMaps 用 self 现算好传入），
-            // 不读 weakSelf——避免多张名片同时存活时，handler 的 weakSelf 绑定
-            // 到"最后一次 -init 的那个 VM 实例"导致门槛判错对象。
+            // 从 param 读（tableSectionMaps 用 self 现算好传入），不读
+            // weakSelf，避免多实例串对象。
             if([param[@"userIsDestroy"] boolValue]) {
                 return nil;
             }
@@ -298,13 +261,29 @@
         void(^reload)(void) = param[@"reload"];
         NSMutableArray *items = [NSMutableArray array];
         if(phone.length > 0) {
+            // 展开状态存在 self.contextDict 里（这里经 param[@"context"] 传入），
+            // 不能靠闭包里捕获的 weakSelf 读/写：同一个 method sid 全局只有一份
+            // endpoint，每次 -initItems 都会用新 VM 的 weakSelf 覆盖上一份，多张
+            // 名片同时打开时闭包里的 weakSelf 只会是最后一次 -initItems 的那个
+            // VM。而 param 是调用方 (tableSectionMaps) 每次现传的，拿到的始终是
+            // 当前这张卡片自己的 contextDict，不会串。
             BOOL phoneRevealed = isSelf || [context[@"phoneRevealed"] boolValue];
-            // 本人看自己要带区号完整展示（spec 要求），看别人的那一分支
-            // 不受影响，仍然是裸号码。优先用服务端已经归一化好的
-            // phoneCountryCode（它把 "+"/"00" 两种前缀形式都剥干净了）；
-            // 没有这个字段时才退回到自己剥 zone 的 "00" 前缀兜底，跟登录页
-            // WKLoginView 的国家码展示惯例保持一致。
-            NSString *zoneCode = phoneCountryCode.length > 0 ? phoneCountryCode : ([zone hasPrefix:@"00"] ? [zone substringFromIndex:2] : zone);
+            // 本人带区号完整展示（spec 要求），看别人仍是裸号码。优先用
+            // 服务端已归一化好的 phoneCountryCode；没有时才退回剥 zone 的
+            // 前缀兜底——这里要剥 "+" 和 "00" 两种形式（镜像服务端
+            // TrimPrefix(TrimPrefix(zone,"+"),"00")），否则 zone 存的是
+            // "+86" 这种形式时会拼出 "++86"。
+            NSString *zoneCode = phoneCountryCode;
+            if(zoneCode.length == 0) {
+                NSString *strippedZone = zone;
+                if([strippedZone hasPrefix:@"+"]) {
+                    strippedZone = [strippedZone substringFromIndex:1];
+                }
+                if([strippedZone hasPrefix:@"00"]) {
+                    strippedZone = [strippedZone substringFromIndex:2];
+                }
+                zoneCode = strippedZone;
+            }
             NSString *phoneDisplay = (isSelf && zoneCode.length > 0) ? [NSString stringWithFormat:@"+%@ %@", zoneCode, phone] : phone;
             [items addObject:@{
                 @"class":WKLabelItemModel.class,
@@ -716,21 +695,14 @@
     if(self.memberOfUser) {
         paramDict[@"memberOfUser"] = self.memberOfUser;
     }
-    // 不用 `?: @""` 兜底：nil 表示服务端没下发（没权限/取值异常），@"" 表示
-    // 下发了但用户没填，这个区分要原样带进 paramDict，再传到
-    // user.info.phoneEmail handler 里按需分别处理。NSMutableDictionary 的
-    // keyed subscript 赋 nil 等价于 removeObjectForKey:，所以这里 nil 不会
-    // 崩，paramDict[@"phone"] 读到的就是"key 不存在"。
+    // nil 原样传（keyed subscript 赋 nil 等价于 removeObjectForKey:，不会
+    // 崩），保留"没下发"和"下发了但空"的区分，交给 handler 按需处理。
     paramDict[@"phone"] = self.userPhone;
     paramDict[@"email"] = self.userEmail;
     paramDict[@"zone"] = self.userZone;
     paramDict[@"phoneCountryCode"] = self.userPhoneCountryCode;
-    // userIsDestroy 在这里用 self（不是
-    // weakSelf）现算好传进 param，不要让 user.info.phoneEmail handler 里再读
-    // weakSelf 取这个值——handler 挂在 WKApp 全局 endpoint 表里只有一份，
-    // weakSelf 绑定的是"最后一次 -init 的那个 VM 实例"，和 phoneRevealed 当年
-    // 挂在 VM 属性上是同一类串号风险。tableSectionMaps 本身就是哪个 VM 调用
-    // self 就是哪个 VM，这里取值不会认错人。
+    // 用 self（tableSectionMaps 调用者就是对应 VM）现算好传进 param，避免
+    // handler 里再读 weakSelf 认错实例（同 userPhone 属性注释）。
     paramDict[@"userIsDestroy"] = @(self.userIsDestroy);
 
     NSMutableArray<NSDictionary*> *items = [NSMutableArray array];
@@ -925,10 +897,9 @@
     u.uid = [dictory objectForKey:@"uid"] ?: @"";
     u.name = [dictory objectForKey:@"name"] ?: @"";
     u.username = [dictory objectForKey:@"username"] ?: @"";
-    // email/phone 故意不用 `?: @""` 兜底：服务端这两个字段"key 不存在"
-    // (没权限/取值异常，withheld) 和"key 存在但是空串"(用户确实没填)
-    // 是两种不同语义，`nil` 和 `@""` 刚好能把这个区分原样保留，一路传到
-    // WKUserInfoVM 的 user.info.phoneEmail handler 里按需分别处理。
+    // email/phone 不用 `?: @""` 兜底："key 不存在"(withheld) 和"key 存在但
+    // 空串"(用户没填) 是两种语义，nil/@"" 原样保留，一路传到
+    // user.info.phoneEmail handler 里分别处理。
     id rawEmail = [dictory objectForKey:@"email"];
     u.email = [rawEmail isKindOfClass:[NSString class]] ? rawEmail : nil;
     id rawZone = [dictory objectForKey:@"zone"];
