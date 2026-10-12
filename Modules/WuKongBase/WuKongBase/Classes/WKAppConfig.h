@@ -218,6 +218,14 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic,assign) BOOL threadOn; // 子区功能开关
 
+// 他人名片手机号/邮箱信息卡片的总开关，对应服务端 appconfig 的
+// profile_contact_info_on（部署方管理员在管理台 system_setting 里控制，
+// category=profile key=contact_info_on），默认关闭。requestConfig: 里每次
+// 请求成功都无条件覆盖这个值（不是"字段存在才覆盖"），请求失败时显式置
+// NO——不允许沿用上一次请求缓存下来的旧值，拿不到配置/配置里没这一项/
+// 请求失败都要落到关闭状态。
+@property(nonatomic,assign) BOOL profileContactInfoOn;
+
 // Aegis OIDC SSO providers downloaded from `common/appconfig` -> `oidc_providers`.
 // / / 合并合定义:
 // - 登录页 (王立涛 develop_fix): 显示/隐藏 SSO 按钮, init 从 NSUserDefaults 缓存 hydrate 冷启动即可渲染。
