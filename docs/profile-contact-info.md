@@ -87,6 +87,8 @@ one/two/no rows; a long email; empty placeholders; hidden/revealed phone;
 self from both entry points; navigating to chat and returning. Screenshots
 must show the header, contact section and remark section together.
 
+Actual device results and screenshots: [PR #108 validation](qa/pr108/README.md).
+
 ## Review handoff
 
 1. The requirement owner updates #103's placement and cooling-off policy and
