@@ -256,12 +256,15 @@ typedef NS_ENUM(NSInteger, WKProfileAccountState) {
         if(phone.length > 0) {
             BOOL phoneRevealed = isSelf || [context[@"phoneRevealed"] boolValue];
             // Legacy responses may carry only zone, in either +86 or 0086 form.
-            NSString *zoneCode = phoneCountryCode.length > 0 ? phoneCountryCode : zone;
-            if([zoneCode hasPrefix:@"+"]) {
-                zoneCode = [zoneCode substringFromIndex:1];
-            }
-            if([zoneCode hasPrefix:@"00"]) {
-                zoneCode = [zoneCode substringFromIndex:2];
+            NSString *zoneCode = phoneCountryCode;
+            if(zoneCode.length == 0) {
+                zoneCode = zone;
+                if([zoneCode hasPrefix:@"+"]) {
+                    zoneCode = [zoneCode substringFromIndex:1];
+                }
+                if([zoneCode hasPrefix:@"00"]) {
+                    zoneCode = [zoneCode substringFromIndex:2];
+                }
             }
             NSString *phoneDisplay = (isSelf && zoneCode.length > 0) ? [NSString stringWithFormat:@"+%@ %@", zoneCode, phone] : phone;
             [items addObject:@{
