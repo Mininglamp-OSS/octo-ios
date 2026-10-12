@@ -1,9 +1,8 @@
 # Profile contact information (iOS)
 
-This records the intended behavior of the PR #108 revision, following the
-product owner's direction to retain the user-detail card layout and hide
-cooling-off accounts' contacts from peers. It is not a claim that issue #103
-has already been updated or approved by its reviewer.
+This records the behavior specified in issue #103 after the requester confirmed
+the screen-specific placement and cooling-off visibility policy on 2026-10-12.
+The requirement clarification does not imply that PR review has passed.
 
 Tracking: [requirement #103](https://github.com/Mininglamp-OSS/octo-ios/issues/103),
 [user detail #108](https://github.com/Mininglamp-OSS/octo-ios/pull/108),
@@ -23,9 +22,8 @@ Tracking: [requirement #103](https://github.com/Mininglamp-OSS/octo-ios/issues/1
 - Only internal contact rows have separators, inset 17pt on both sides. A
   one-row contact card has no separator at its bottom edge.
 
-The unconditional placement sentence currently in #103 must be amended to
-this screen-specific rule by the requirement owner. Code comments alone do
-not resolve that discrepancy.
+Issue #103 defines this screen-specific rule explicitly; code comments are
+not the source of the placement requirement.
 
 ## Visibility and data contract
 
@@ -91,8 +89,8 @@ Actual device results and screenshots: [PR #108 validation](qa/pr108/README.md).
 
 ## Review handoff
 
-1. The requirement owner updates #103's placement and cooling-off policy and
-   links the decision in #108. This remains necessary to close A1/A2.
+1. Issue #103 now explicitly records the confirmed placement and cooling-off
+   policy. Review A1/A2 against that requirement and the linked device evidence.
 2. Include the revised screenshots and actual test/build results; do not equate
    a successful compile with executed tests.
 3. Resolve `check-sprint` with a closing-issue reference. #107 has now merged,

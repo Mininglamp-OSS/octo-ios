@@ -55,5 +55,5 @@ No live backend authorization or server rollout was tested. The disappearance
 check invokes the controller hook on a retained VM; a full production
 chat-navigation flow is not covered by the fixture app. The captures use the
 connected iPhone's native width, not a 375pt/320pt device, and do not establish
-long-email truncation or accessibility behavior. Product confirmation in #103
+long-email truncation or accessibility behavior. The clarified product rules in #103
 and the PR's linked-task/sprint check remain separate from this code validation.
