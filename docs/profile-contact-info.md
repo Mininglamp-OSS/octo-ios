@@ -95,10 +95,9 @@ Actual device results and screenshots: [PR #108 validation](qa/pr108/README.md).
    links the decision in #108. This remains necessary to close A1/A2.
 2. Include the revised screenshots and actual test/build results; do not equate
    a successful compile with executed tests.
-3. Resolve `check-sprint`: it currently reports no linked issue. Because #103
-   also covers #107, prefer a scoped user-detail sub-issue and `Closes #<id>`
-   in #108 rather than prematurely closing the parent requirement. Rerun the
-   check and satisfy any further project/sprint requirements it reports.
-4. If #107 lands first, rebase and keep one English definition per shared key.
+3. Resolve `check-sprint` with a closing-issue reference. #107 has now merged,
+   so #108 completes the remaining implementation and can reference `Closes #103`.
+   Rerun the check and satisfy any further project/sprint requirements it reports.
+4. #107 has been merged into this branch; shared English keys are deduplicated.
 5. Blacklist direction, copy-country-code changes and alternative placeholder
    wording are separate product decisions, not implicit changes in this patch.
