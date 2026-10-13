@@ -57,3 +57,22 @@ chat-navigation flow is not covered by the fixture app. The captures use the
 connected iPhone's native width, not a 375pt/320pt device, and do not establish
 long-email truncation or accessibility behavior. The clarified product rules in #103
 and the PR's linked-task/sprint check remain separate from this code validation.
+
+## Runtime configuration follow-up
+
+The follow-up replaces the one-shot controller callback with lifetime KVO on
+`profileContactInfoOn`. Both successful and failed refreshes assign this property,
+so either can revoke an already-rendered card. Revocation clears phone reveal
+state; a later re-enable starts concealed. The controller removes its observer
+on deallocation and ignores duplicate flag values. The global blacklist action
+also uses the existing weak VM reference to avoid retaining contact data through
+its registered closure.
+
+The full simulator application build passed. **16/16 native assertion cases
+passed in a standalone iPhone 17 simulator app** using the updated production
+framework and the same assertion adapter described above. [Raw follow-up results](runtime-config-results.json).
+The additional case covers updates after the initial request, off/on transitions,
+reveal reset, duplicate suppression and observer teardown. The original physical
+iPhone was unavailable; this follow-up is simulator evidence, not a new device
+or standard XCTest run. Earlier screenshots remain evidence for the unchanged
+layout at the code revision stated above.

@@ -256,12 +256,12 @@
     WKContactReloadSpy *vm = [WKContactReloadSpy new];
     vc.viewModel = vm;
     [vc requestContactInfoConfig];
-    config.pendingCallback(nil); // appmodule completed before appconfig
+    if(config.pendingCallback) { config.pendingCallback(nil); } // appmodule completed before appconfig
     [self drainMainQueue];
     XCTAssertEqual(vm.reloadCount, 0);
     config.profileContactInfoOn = YES;
-    config.pendingCallback(nil);
-    config.pendingCallback(nil);
+    if(config.pendingCallback) { config.pendingCallback(nil); }
+    if(config.pendingCallback) { config.pendingCallback(nil); }
     [self drainMainQueue];
     XCTAssertEqual(vm.reloadCount, 1);
 }
@@ -278,10 +278,43 @@
     [vc requestContactInfoConfig];
     config.requestSuccess = NO;
     config.profileContactInfoOn = NO;
-    config.pendingCallback([NSError errorWithDomain:@"ContactTest" code:1 userInfo:nil]);
+    if(config.pendingCallback) { config.pendingCallback([NSError errorWithDomain:@"ContactTest" code:1 userInfo:nil]); }
     [self drainMainQueue];
     XCTAssertEqual(config.requestCount, 1);
     XCTAssertEqual(vm.reloadCount, 1);
+}
+
+- (void)testLaterConfigChangesRevokeCardAndResetRevealWithoutAnotherRequest {
+    WKContactConfigStub *config = [WKContactConfigStub new];
+    config.requestSuccess = YES;
+    config.requestAppModuleSuccess = YES;
+    config.profileContactInfoOn = YES;
+    [WKApp.shared setValue:config forKey:@"remoteConfig"];
+    WKUserInfoVC *vc = [WKUserInfoVC new];
+    WKContactReloadSpy *spy = [WKContactReloadSpy new];
+    vc.viewModel = spy;
+    NSMutableDictionary *context = [spy valueForKey:@"contextDict"];
+    context[@"phoneRevealed"] = @YES;
+    [vc requestContactInfoConfig];
+    XCTAssertNotNil([self contacts:self.vm]);
+    // The initial request is over; later refreshes have no controller callback.
+    config.pendingCallback = nil;
+    config.profileContactInfoOn = NO;
+    XCTAssertNil([self contacts:self.vm]);
+    XCTAssertNil(context[@"phoneRevealed"]);
+    XCTAssertTrue(spy.reloadCount > 0);
+    NSInteger revokedCount = spy.reloadCount;
+    config.profileContactInfoOn = NO;
+    XCTAssertEqual(spy.reloadCount, revokedCount);
+    config.profileContactInfoOn = YES;
+    XCTAssertNotNil([self contacts:self.vm]);
+    XCTAssertNil(context[@"phoneRevealed"]);
+    XCTAssertEqual(spy.reloadCount, revokedCount + 1);
+    XCTAssertEqual(config.requestCount, 1);
+    __weak WKUserInfoVC *weakVC = vc;
+    vc = nil;
+    XCTAssertNil(weakVC);
+    XCTAssertNoThrow(config.profileContactInfoOn = NO);
 }
 
 @end

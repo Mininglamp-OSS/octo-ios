@@ -19,7 +19,12 @@
 #import "WKBotAvatarVC.h"
 #define textToAvatarLeftSpace 10.0f // 文本距头像的左边距离
 
+static void *WKContactFlagObservationContext = &WKContactFlagObservationContext;
+
 @interface WKUserInfoVC ()<WKUserInfoVMDelegate,WKChannelManagerDelegate>
+
+@property(nonatomic,strong) WKAppRemoteConfig *contactConfig;
+@property(nonatomic,assign) BOOL lastContactInfoOn;
 
 // ---------- header ----------
 @property(nonatomic,strong) UIView *userHeader;
@@ -132,21 +137,35 @@
 
 
 - (void)requestContactInfoConfig {
-    // Reuse loaded config without resetting global requestSuccess. Legacy
-    // appmodule callbacks may fire first; reload only when the contact flag changes.
+    if(self.contactConfig) { return; }
+    // Observe the flag itself: refresh success AND failure can change it after
+    // requestConfig's one-shot callback has already been drained.
     WKAppRemoteConfig *config = [WKApp shared].remoteConfig;
-    __weak WKAppRemoteConfig *weakConfig = config;
-    __weak typeof(self) weakSelfForConfig = self;
-    __block BOOL lastContactInfoOn = config.profileContactInfoOn;
-    [config requestConfig:^(NSError * _Nullable error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            BOOL contactInfoOn = weakConfig.profileContactInfoOn;
-            if(contactInfoOn != lastContactInfoOn) {
-                lastContactInfoOn = contactInfoOn;
-                [weakSelfForConfig.viewModel reloadData];
-            }
-        });
-    }];
+    self.contactConfig = config;
+    self.lastContactInfoOn = config.profileContactInfoOn;
+    [config addObserver:self forKeyPath:@"profileContactInfoOn"
+               options:NSKeyValueObservingOptionNew context:WKContactFlagObservationContext];
+    [config requestConfig:nil];
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object
+                       change:(NSDictionary<NSKeyValueChangeKey,id> *)change context:(void *)context {
+    if(context != WKContactFlagObservationContext) {
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        return;
+    }
+    // Capture each transition so an off/on pair also clears an earlier reveal.
+    BOOL enabled = [change[NSKeyValueChangeNewKey] boolValue];
+    __weak typeof(self) weakSelf = self;
+    void (^update)(void) = ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if(!strongSelf || strongSelf.lastContactInfoOn == enabled) { return; }
+        strongSelf.lastContactInfoOn = enabled;
+        if(!enabled) { [strongSelf.viewModel concealContactPhone]; }
+        [strongSelf.viewModel reloadData];
+    };
+    if(NSThread.isMainThread) { update(); }
+    else { dispatch_async(dispatch_get_main_queue(), update); }
 }
 
 -(void) memberUpdate:(NSNotification*)notify {
@@ -172,6 +191,7 @@
 }
 
 - (void)dealloc {
+    [self.contactConfig removeObserver:self forKeyPath:@"profileContactInfoOn" context:WKContactFlagObservationContext];
     [[WKSDK shared].channelManager removeDelegate:self];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WKNOTIFY_GROUP_MEMBERUPDATE object:nil];
 }

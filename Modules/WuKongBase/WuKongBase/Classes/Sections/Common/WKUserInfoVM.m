@@ -502,7 +502,7 @@ typedef NS_ENUM(NSInteger, WKProfileAccountState) {
                         @"class":WKLabelItemModel.class,
                         @"label":channelInfo && channelInfo.status == WKChannelStatusBlacklist?LLangW(@"拉出黑名单", weakSelf):LLangW(@"拉入黑名单", weakSelf),
                         @"onClick":^{
-                            if(self.channelInfo.status == WKChannelStatusBlacklist) {
+                            if(weakSelf.channelInfo.status == WKChannelStatusBlacklist) {
                                 if(weakSelf.delegate && [weakSelf.delegate respondsToSelector:@selector(userInfoVMRemoveBlacklist:)]) {
                                     [weakSelf.delegate userInfoVMRemoveBlacklist:weakSelf];
                                 }

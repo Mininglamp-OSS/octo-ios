@@ -52,8 +52,9 @@ collapse cooling-off and completed deletion into a boolean.
 | Both rows omitted | Omit the entire contact section and its extra remark gap |
 
 Peer phone reveal displays/copies the number without a country code. Self
-formatting prefers `phone_country_code`, falling back to `zone`; both `+86`
-and `0086` normalize to one `+86` prefix. Phone/email remain in VM memory and
+formatting prefers `phone_country_code`, falling back to `zone`; legacy `zone` values `+86`
+and `0086` normalize to one `+86` prefix. The preferred server field is already
+normalized by the API. Phone/email remain in VM memory and
 are not written to `channelInfo.extra`.
 
 Reveal state belongs to each page's context, not the global endpoint closure.
@@ -99,3 +100,7 @@ Actual device results and screenshots: [PR #108 validation](qa/pr108/README.md).
 4. #107 has been merged into this branch; shared English keys are deduplicated.
 5. Blacklist direction, copy-country-code changes and alternative placeholder
    wording are separate product decisions, not implicit changes in this patch.
+
+Runtime flag changes are observed for the controller lifetime, including a
+failed configuration refresh. Turning the flag off removes the card and clears
+phone reveal state; turning it back on does not restore a revealed number.
