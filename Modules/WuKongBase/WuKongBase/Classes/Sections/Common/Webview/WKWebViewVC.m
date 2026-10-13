@@ -441,6 +441,21 @@
             return;
         }
 
+        // about:/data:/blob:/file: 是交给 WKWebView 自己渲染或下载的内容（比如交互卡片的
+        // blob 下载、loadHTMLString 的 about:blank 初始加载），不是外部 App 的 scheme，
+        // openURL: 调起必然失败——走下面的失败分支会被误判成"打不开"弹 toast，还会把本该
+        // 渲染/下载的内容拦掉。这里单独放行给 WebKit 自己处理。
+        NSString *reqScheme = navigationAction.request.URL.scheme.lowercaseString;
+        static NSSet<NSString *> *webKitHandledSchemes;
+        static dispatch_once_t schemeOnceToken;
+        dispatch_once(&schemeOnceToken, ^{
+            webKitHandledSchemes = [NSSet setWithArray:@[@"about", @"data", @"blob", @"file"]];
+        });
+        if ([webKitHandledSchemes containsObject:reqScheme]) {
+            decisionHandler(WKNavigationActionPolicyAllow);
+            return;
+        }
+
         BOOL bSucc = [[UIApplication sharedApplication] openURL:navigationAction.request.URL];
         // bSucc是否成功调起
         if (bSucc) {
@@ -817,6 +832,44 @@
         [self presentViewController:alertController animated:YES completion:^{}];
     else
         completionHandler();
+}
+
+// window.open() / target="_blank"：这个容器本身是单页浏览定位，不另起新容器，
+// 直接让当前 WKWebView 加载新窗口的请求；没实现这个方法时 WebKit 会静默丢掉弹窗请求。
+- (WKWebView *)webView:(WKWebView *)webView createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration forNavigationAction:(WKNavigationAction *)navigationAction windowFeatures:(WKWindowFeatures *)windowFeatures {
+    if (!navigationAction.targetFrame) {
+        [webView loadRequest:navigationAction.request];
+    }
+    return nil;
+}
+
+// window.confirm()：没实现时 WebKit 会静默返回 false，页面上表现为"点了没反应"。
+- (void)webView:(WKWebView *)webView runJavaScriptConfirmPanelWithMessage:(NSString *)message initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(BOOL result))completionHandler {
+    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"" message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alertController addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) { completionHandler(NO); }]];
+    [alertController addAction:[UIAlertAction actionWithTitle:@"确认" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) { completionHandler(YES); }]];
+    if (self) {
+        [self presentViewController:alertController animated:YES completion:^{}];
+    } else {
+        completionHandler(NO);
+    }
+}
+
+// window.prompt()：没实现时 WebKit 会静默返回空字符串。
+- (void)webView:(WKWebView *)webView runJavaScriptTextInputPanelWithPrompt:(NSString *)prompt defaultText:(NSString *)defaultText initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(NSString * _Nullable result))completionHandler {
+    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"" message:prompt preferredStyle:UIAlertControllerStyleAlert];
+    [alertController addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.text = defaultText;
+    }];
+    [alertController addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) { completionHandler(nil); }]];
+    [alertController addAction:[UIAlertAction actionWithTitle:@"确认" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        completionHandler(alertController.textFields.firstObject.text);
+    }]];
+    if (self) {
+        [self presentViewController:alertController animated:YES completion:^{}];
+    } else {
+        completionHandler(nil);
+    }
 }
 
 
