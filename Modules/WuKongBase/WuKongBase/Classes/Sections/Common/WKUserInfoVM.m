@@ -14,6 +14,12 @@
 #import "WKExternalViewerResolver.h"
 
 
+typedef NS_ENUM(NSInteger, WKProfileAccountState) {
+    WKProfileAccountStateNormal = 0,
+    WKProfileAccountStateCoolingOff = 1,
+    WKProfileAccountStateDeleted = 2,
+};
+
 @interface UserModel : WKModel
 
 @property (nonatomic, strong) NSString *uid;
@@ -22,6 +28,7 @@
 @property (nonatomic, strong) NSString *email;
 @property (nonatomic, strong) NSString *zone;
 @property (nonatomic, strong) NSString *phone;
+@property (nonatomic, strong) NSString *phoneCountryCode;
 @property (nonatomic, assign) BOOL mute;
 @property (nonatomic, assign) BOOL top;
 @property (nonatomic, assign) NSInteger sex;
@@ -42,7 +49,7 @@
 @property (nonatomic, assign) NSInteger isUploadAvatar;
 @property (nonatomic, assign) NSInteger status;
 @property (nonatomic, assign) BOOL robot;
-@property (nonatomic, assign) BOOL isDestroy;
+@property (nonatomic, assign) WKProfileAccountState accountState;
 @property (nonatomic, assign) BOOL flame;
 @property (nonatomic, assign) NSInteger flameSecond;
 @property (nonatomic, copy) NSString *botDescription;
@@ -96,6 +103,15 @@
 @property(nonatomic,copy) NSString *userHomeSpaceId;
 @property(nonatomic,assign) NSInteger userIsExternalLegacy;
 
+// Preserve the server's three states; cooling-off is a separate display policy.
+@property(nonatomic,assign) WKProfileAccountState userAccountState;
+
+// Contact fields stay in this VM, never in the persisted channelInfo.extra.
+@property(nonatomic,copy) NSString *userPhone;
+@property(nonatomic,copy) NSString *userEmail;
+@property(nonatomic,copy) NSString *userZone;
+@property(nonatomic,copy) NSString *userPhoneCountryCode;
+
 @end
 
 @implementation WKUserInfoVM
@@ -146,6 +162,13 @@
         // user.info.addBlack / user.info.freeFriend handler 判同 Space。
         weakSelf.userHomeSpaceId = user.homeSpaceId ?: @"";
         weakSelf.userIsExternalLegacy = user.isExternal;
+        weakSelf.userAccountState = user.accountState;
+
+        // Keep nil (withheld/invalid) distinct from an empty, authorized field.
+        weakSelf.userPhone = user.phone;
+        weakSelf.userEmail = user.email;
+        weakSelf.userZone = user.zone;
+        weakSelf.userPhoneCountryCode = user.phoneCountryCode;
 
         // 重新缓存用户的channelInfo
         WKChannelInfo *channelInfo = [weakSelf channelInfoFromUser:user];
@@ -205,6 +228,105 @@
 
 -(void) initItems {
     __weak typeof(self) weakSelf = self;
+    // User-detail contacts form the first section below the profile header.
+    // Display policy and acceptance cases: docs/profile-contact-info.md.
+    // Global endpoints must read per-page state from param, not a captured VM.
+    [[WKApp shared] setMethod:@"user.info.phoneEmail" handler:^id _Nullable(id  _Nonnull param) {
+        if(![WKApp shared].remoteConfig.profileContactInfoOn) {
+            return nil;
+        }
+        NSString *uid = param[@"uid"];
+        BOOL isSelf = [uid isEqualToString:[WKApp shared].loginInfo.uid];
+        WKChannelInfo *channelInfo = param[@"channel_info"];
+        if(channelInfo.robot) {
+            return nil;
+        }
+        WKProfileAccountState accountState = [param[@"accountState"] integerValue];
+        if(!isSelf && (accountState == WKProfileAccountStateCoolingOff ||
+                       accountState == WKProfileAccountStateDeleted)) {
+            return nil;
+        }
+        NSString *phone = param[@"phone"];
+        NSString *email = param[@"email"];
+        NSString *zone = param[@"zone"];
+        NSString *phoneCountryCode = param[@"phoneCountryCode"];
+        NSMutableDictionary *context = param[@"context"];
+        void(^reload)(void) = param[@"reload"];
+        NSMutableArray *items = [NSMutableArray array];
+        if(phone.length > 0) {
+            BOOL phoneRevealed = isSelf || [context[@"phoneRevealed"] boolValue];
+            // Legacy responses may carry only zone, in either +86 or 0086 form.
+            NSString *zoneCode = phoneCountryCode;
+            if(zoneCode.length == 0) {
+                zoneCode = zone;
+                if([zoneCode hasPrefix:@"+"]) {
+                    zoneCode = [zoneCode substringFromIndex:1];
+                }
+                if([zoneCode hasPrefix:@"00"]) {
+                    zoneCode = [zoneCode substringFromIndex:2];
+                }
+            }
+            NSString *phoneDisplay = (isSelf && zoneCode.length > 0) ? [NSString stringWithFormat:@"+%@ %@", zoneCode, phone] : phone;
+            [items addObject:@{
+                @"class":WKLabelItemModel.class,
+                @"label":LLangC(@"手机号", WKUserInfoVM.class),
+                @"value": phoneRevealed ? phoneDisplay : LLangC(@"点击查看", WKUserInfoVM.class),
+                @"showArrow": @(NO),
+                @"valueCopy": @(phoneRevealed),
+                @"onClick":^{
+                    if(isSelf || [context[@"phoneRevealed"] boolValue]) {
+                        [UIPasteboard generalPasteboard].string = phoneDisplay;
+                        [[WKNavigationManager shared].topViewController.view showMsg:LLangC(@"已复制", WKUserInfoVM.class)];
+                    } else {
+                        context[@"phoneRevealed"] = @(YES);
+                        if(reload) {
+                            reload();
+                        }
+                    }
+                }
+            }];
+        } else if(phone != nil) {
+            [items addObject:@{
+                @"class":WKLabelItemModel.class,
+                @"label":LLangC(@"手机号", WKUserInfoVM.class),
+                @"value": LLangC(@"用户暂未添加该信息", WKUserInfoVM.class),
+            }];
+        }
+        if(email.length > 0) {
+            [items addObject:@{
+                @"class":WKLabelItemModel.class,
+                @"label":LLangC(@"邮箱", WKUserInfoVM.class),
+                @"value": email,
+                @"showArrow": @(NO),
+                @"valueCopy": @(YES),
+                @"onClick":^{
+                    [UIPasteboard generalPasteboard].string = email;
+                    [[WKNavigationManager shared].topViewController.view showMsg:LLangC(@"已复制", WKUserInfoVM.class)];
+                }
+            }];
+        } else if(email != nil) {
+            [items addObject:@{
+                @"class":WKLabelItemModel.class,
+                @"label":LLangC(@"邮箱", WKUserInfoVM.class),
+                @"value": LLangC(@"用户暂未添加该信息", WKUserInfoVM.class),
+            }];
+        }
+        if(items.count == 0) {
+            return nil;
+        }
+        for(NSUInteger index = 0; index < items.count; index++) {
+            NSMutableDictionary *row = [items[index] mutableCopy];
+            row[@"showBottomLine"] = @(index + 1 < items.count);
+            row[@"bottomLeftSpace"] = @(17.0f);
+            row[@"bottomRightSpace"] = @(17.0f);
+            items[index] = row;
+        }
+        return @{
+            @"height":@(10.0f),
+            @"items":items,
+        };
+    } category:WKPOINT_CATEGORY_USER_INFO_ITEM sort:4010];
+
     // 备注
     [[WKApp shared] setMethod:@"user.info.setRemark" handler:^id _Nullable(id  _Nonnull param) {
         NSString *uid = param[@"uid"];
@@ -380,7 +502,7 @@
                         @"class":WKLabelItemModel.class,
                         @"label":channelInfo && channelInfo.status == WKChannelStatusBlacklist?LLangW(@"拉出黑名单", weakSelf):LLangW(@"拉入黑名单", weakSelf),
                         @"onClick":^{
-                            if(self.channelInfo.status == WKChannelStatusBlacklist) {
+                            if(weakSelf.channelInfo.status == WKChannelStatusBlacklist) {
                                 if(weakSelf.delegate && [weakSelf.delegate respondsToSelector:@selector(userInfoVMRemoveBlacklist:)]) {
                                     [weakSelf.delegate userInfoVMRemoveBlacklist:weakSelf];
                                 }
@@ -558,9 +680,16 @@
     if(self.memberOfUser) {
         paramDict[@"memberOfUser"] = self.memberOfUser;
     }
-    
+    // Missing/invalid fields stay absent; empty strings remain placeholders.
+    paramDict[@"phone"] = self.userPhone;
+    paramDict[@"email"] = self.userEmail;
+    paramDict[@"zone"] = self.userZone;
+    paramDict[@"phoneCountryCode"] = self.userPhoneCountryCode;
+    paramDict[@"accountState"] = @(self.userAccountState);
+
     NSMutableArray<NSDictionary*> *items = [NSMutableArray array];
     
+    BOOL hasContactSection = NO;
     NSArray<WKEndpoint*> *endpoints =  [WKApp.shared getEndpointsWithCategory:WKPOINT_CATEGORY_USER_INFO_ITEM];
     if(endpoints && endpoints.count>0) {
         for (WKEndpoint *endpoint in endpoints) {
@@ -569,6 +698,13 @@
             }
             id result = endpoint.handler(paramDict);
             if(result) {
+                if([endpoint.sid isEqualToString:@"user.info.phoneEmail"]) {
+                    hasContactSection = YES;
+                } else if(hasContactSection && [endpoint.sid isEqualToString:@"user.info.setRemark"]) {
+                    NSMutableDictionary *section = [result mutableCopy];
+                    section[@"height"] = @(10.0f);
+                    result = section;
+                }
                 [items addObject:result];
             }
         }
@@ -578,6 +714,13 @@
 
 -(BOOL) isSystemAccount:(NSString*)uid {
     return [WKApp.shared isSystemAccount:uid];
+}
+
+- (void)concealContactPhone {
+    if([self.contextDict[@"phoneRevealed"] boolValue]) {
+        [self.contextDict removeObjectForKey:@"phoneRevealed"];
+        [self reloadData];
+    }
 }
 
 - (NSMutableDictionary *)contextDict {
@@ -751,9 +894,15 @@
     u.uid = [dictory objectForKey:@"uid"] ?: @"";
     u.name = [dictory objectForKey:@"name"] ?: @"";
     u.username = [dictory objectForKey:@"username"] ?: @"";
-    u.email = [dictory objectForKey:@"email"] ?: @"";
-    u.zone = [dictory objectForKey:@"zone"] ?: @"";
-    u.phone = [dictory objectForKey:@"phone"] ?: @"";
+    // nil means withheld/invalid; an empty string means authorized but unfilled.
+    id rawEmail = [dictory objectForKey:@"email"];
+    u.email = [rawEmail isKindOfClass:[NSString class]] ? rawEmail : nil;
+    id rawZone = [dictory objectForKey:@"zone"];
+    u.zone = [rawZone isKindOfClass:[NSString class]] ? rawZone : @"";
+    id rawPhone = [dictory objectForKey:@"phone"];
+    u.phone = [rawPhone isKindOfClass:[NSString class]] ? rawPhone : nil;
+    id rawPhoneCountryCode = [dictory objectForKey:@"phone_country_code"];
+    u.phoneCountryCode = [rawPhoneCountryCode isKindOfClass:[NSString class]] ? rawPhoneCountryCode : nil;
     u.mute = [[dictory objectForKey:@"mute"] boolValue];
     u.top = [[dictory objectForKey:@"top"] boolValue];
     u.sex = [[dictory objectForKey:@"sex"] integerValue];
@@ -774,7 +923,9 @@
     u.isUploadAvatar = [[dictory objectForKey:@"is_upload_avatar"] integerValue];
     u.status = [[dictory objectForKey:@"status"] integerValue];
     u.robot = [[dictory objectForKey:@"robot"] boolValue];
-    u.isDestroy = [[dictory objectForKey:@"is_destroy"] boolValue];
+    id rawAccountState = dictory[@"is_destroy"];
+    u.accountState = [rawAccountState respondsToSelector:@selector(integerValue)]
+        ? [rawAccountState integerValue] : WKProfileAccountStateNormal;
     u.flame = [[dictory objectForKey:@"flame"] boolValue];
     u.flameSecond = [[dictory objectForKey:@"flame_second"] integerValue];
     u.botDescription = [dictory objectForKey:@"bot_description"] ?: @"";

@@ -19,7 +19,12 @@
 #import "WKBotAvatarVC.h"
 #define textToAvatarLeftSpace 10.0f // 文本距头像的左边距离
 
+static void *WKContactFlagObservationContext = &WKContactFlagObservationContext;
+
 @interface WKUserInfoVC ()<WKUserInfoVMDelegate,WKChannelManagerDelegate>
+
+@property(nonatomic,strong) WKAppRemoteConfig *contactConfig;
+@property(nonatomic,assign) BOOL lastContactInfoOn;
 
 // ---------- header ----------
 @property(nonatomic,strong) UIView *userHeader;
@@ -36,6 +41,8 @@
 @property(nonatomic,strong) WKUserFieldView *nicknameField; // 用户昵称(如果有备注则隐藏昵称)
 @property(nonatomic,strong) WKUserFieldView *shortNoField; // 用户短编号
 @property(nonatomic,strong) WKUserFieldView *nameInChannelField; // 群内昵称
+// 手机号 / 邮箱不在此处展示，由 WKUserInfoVM 的 user.info.phoneEmail
+// handler 渲染成独立信息卡片，详见该 handler。
 
 @property(nonatomic,strong) UIView *userInfoBoxView; // 右边文字的容器
 
@@ -104,7 +111,9 @@
     self.viewModel.fromChannel = self.fromChannel;
     
     [self.viewModel initData];
-    
+
+    [self requestContactInfoConfig];
+
     __weak typeof(self) weakSelf = self;
     [self.viewModel loadPersonChannelInfo:self.uid completion:^{
         // 检查是否在 Space 模式下，如果是则需要通过 API 检查实际好友关系
@@ -127,6 +136,38 @@
 
 
 
+- (void)requestContactInfoConfig {
+    if(self.contactConfig) { return; }
+    // Observe the flag itself: refresh success AND failure can change it after
+    // requestConfig's one-shot callback has already been drained.
+    WKAppRemoteConfig *config = [WKApp shared].remoteConfig;
+    self.contactConfig = config;
+    self.lastContactInfoOn = config.profileContactInfoOn;
+    [config addObserver:self forKeyPath:@"profileContactInfoOn"
+               options:NSKeyValueObservingOptionNew context:WKContactFlagObservationContext];
+    [config requestConfig:nil];
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object
+                       change:(NSDictionary<NSKeyValueChangeKey,id> *)change context:(void *)context {
+    if(context != WKContactFlagObservationContext) {
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        return;
+    }
+    // Capture each transition so an off/on pair also clears an earlier reveal.
+    BOOL enabled = [change[NSKeyValueChangeNewKey] boolValue];
+    __weak typeof(self) weakSelf = self;
+    void (^update)(void) = ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if(!strongSelf || strongSelf.lastContactInfoOn == enabled) { return; }
+        strongSelf.lastContactInfoOn = enabled;
+        if(!enabled) { [strongSelf.viewModel concealContactPhone]; }
+        [strongSelf.viewModel reloadData];
+    };
+    if(NSThread.isMainThread) { update(); }
+    else { dispatch_async(dispatch_get_main_queue(), update); }
+}
+
 -(void) memberUpdate:(NSNotification*)notify {
     if(!self.fromChannel) {
         return;
@@ -144,7 +185,13 @@
     [super viewWillAppear:animated];
 }
 
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    [self.viewModel concealContactPhone];
+}
+
 - (void)dealloc {
+    [self.contactConfig removeObserver:self forKeyPath:@"profileContactInfoOn" context:WKContactFlagObservationContext];
     [[WKSDK shared].channelManager removeDelegate:self];
     [[NSNotificationCenter defaultCenter] removeObserver:self name:WKNOTIFY_GROUP_MEMBERUPDATE object:nil];
 }
@@ -200,7 +247,7 @@
     if(showShortNo) {
         [self.userInfoBoxView addSubview:self.shortNoField];
     }
-    
+
     NSNumber *sex = self.viewModel.channelInfo.extra[@"sex"];
     if(sex && [sex integerValue] == 0) {
         [self.sexImgView setImage:[self imageName:@"Common/Index/SexWoman"]];
@@ -924,8 +971,6 @@
     self.valueLbl.text = value;
     [self.valueLbl sizeToFit];
 }
-
-
 
 - (void)layoutSubviews {
     [super layoutSubviews];

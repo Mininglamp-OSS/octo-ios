@@ -1,0 +1,82 @@
+[
+  {
+    "name" : "testAccountStatesRetainIntegerValuesFromAPI",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testCoolingOffSelfStillSeesFullPhoneButFlagAndRobotOverride",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testCountryCodeFallbackAndPreferredCode",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testEarlyModuleCallbackDoesNotSuppressLaterConfigAndDuplicatesDoNotReload",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testEmptyFieldsHaveNoninteractivePlaceholders",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testFailedConfigCallbackDoesNotStartAnotherRequest",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testFlagOffAndRobotHidePeer",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testLaterConfigChangesRevokeCardAndResetRevealWithoutAnotherRequest",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testLeavingVCConcealsRetainedProfile",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testMissingNullAndInvalidFieldsDoNotBecomePlaceholders",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testNullZoneAndCountryCodeAreSafe",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testPeerAccountStateMatrix",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testRemarkGapOnlyWhenContactsExist",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testRevealAndConcealOnSameVM",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testSimultaneousCardsKeepSeparateStateAfterEndpointReregistration",
+    "passed" : 1,
+    "failure" : ""
+  },
+  {
+    "name" : "testSingleRowHasNoTrailingSeparator",
+    "passed" : 1,
+    "failure" : ""
+  }
+]
