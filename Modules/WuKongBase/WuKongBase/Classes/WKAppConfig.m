@@ -338,13 +338,28 @@
 }
 
 - (NSString *)reportUrl {
-    if(_innerReportUrl) {
-        if([_innerReportUrl containsString:@"?"]) {
-            return [NSString stringWithFormat:@"%@&lang=%@&uid=%@&token=%@&mode=%@",_innerReportUrl,self.langue,[WKApp shared].loginInfo.uid,[WKApp shared].loginInfo.token,self.style==WKSystemStyleDark?@"dark":@"light"];
-        }
-        return [NSString stringWithFormat:@"%@?lang=%@&uid=%@&token=%@&mode=%@",_innerReportUrl,self.langue,[WKApp shared].loginInfo.uid,[WKApp shared].loginInfo.token,self.style==WKSystemStyleDark?@"dark":@"light"];
+    return [self reportUrlWithChannelId:nil channelType:0];
+}
+
+// 后端 /report/html 会原样透传 channel_id/channel_type 到 H5 投诉页的 query，
+// 页面在 bridge getChannel 失败时用它做提交兜底（report.html "获取会话信息失败"
+// 的第二条路）。不带会话参数时，提交只能依赖 bridge 单路，bridge 一断就弹
+// "获取会话信息失败，请从客户端重新进入"。
+- (NSString *)reportUrlWithChannelId:(NSString *)channelId channelType:(WKChannelType)channelType {
+    if(!_innerReportUrl) {
+        return _innerReportUrl;
     }
-    return _innerReportUrl;
+    NSString *separator = [_innerReportUrl containsString:@"?"] ? @"&" : @"?";
+    NSMutableString *url = [NSMutableString stringWithFormat:@"%@%@lang=%@&uid=%@&token=%@&mode=%@",
+                            _innerReportUrl, separator,
+                            self.langue,
+                            [WKApp shared].loginInfo.uid,
+                            [WKApp shared].loginInfo.token,
+                            self.style==WKSystemStyleDark?@"dark":@"light"];
+    if(channelId.length > 0 && channelType != 0) {
+        [url appendFormat:@"&channel_id=%@&channel_type=%u", channelId, channelType];
+    }
+    return url;
 }
 
 

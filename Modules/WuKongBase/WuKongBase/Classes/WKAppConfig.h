@@ -9,6 +9,7 @@
 #import "WKModel.h"
 #import "WKRTCIceServer.h"
 #import "WKOidcProviderConfig.h"
+#import <WuKongIMSDK/WuKongIMSDK.h>
 @class WKAppModuleResp;
 @class WKOidcProviderConfig;
 
@@ -59,6 +60,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic,copy) NSString *imageBrowseUrl;
 // 举报的html的url
 @property(nonatomic,copy) NSString *reportUrl;
+// 举报地址 + 被投诉会话参数：后端 /report/html 会把 channel_id/channel_type
+// 透传给 H5 投诉页，作为 bridge getChannel 失败时的 URL 兜底提交依据
+- (NSString *)reportUrlWithChannelId:(NSString * _Nullable)channelId channelType:(WKChannelType)channelType;
 // 隐私协议地址
 @property(nonatomic,copy) NSString *privacyAgreementUrl;
 // 用户协议地址
