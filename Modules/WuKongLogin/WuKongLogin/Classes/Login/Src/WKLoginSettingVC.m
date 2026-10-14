@@ -239,7 +239,7 @@
         config.fileBaseUrl = apiAddr; // 文件上传地址
         config.fileBrowseUrl = apiAddr; // 文件预览地址
         config.imageBrowseUrl = apiAddr; // 图片预览地址
-        config.reportUrl = [NSString stringWithFormat:@"%@report/html",apiAddr]; //举报地址（/v1/report/html，与 AppDelegate 的 API_BASE_URL 路径对齐）
+        config.reportUrl = [NSString stringWithFormat:@"%@report/html",apiAddr]; //举报地址（直连服务自身路由 /v1/report/html，不经网关，无 /api 前缀；AppDelegate 走网关才是 /api/v1/）
         config.privacyAgreementUrl = [NSString stringWithFormat:@"%@privacy_policy.html",webURL]; //隐私协议
         config.userAgreementUrl = [NSString stringWithFormat:@"%@user_agreement.html",webURL]; //用户协议
         
