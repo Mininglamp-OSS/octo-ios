@@ -925,7 +925,7 @@ static void *WKContactFlagObservationContext = &WKContactFlagObservationContext;
 - (void)userInfoVMReport:(WKUserInfoVM *)vm {
     WKWebViewVC *vc = [[WKWebViewVC alloc] init];
     vc.title = LLang(@"投诉");
-    vc.url = [NSURL URLWithString:[WKApp shared].config.reportUrl];
+    vc.url = [NSURL URLWithString:[[WKApp shared].config reportUrlWithChannelId:self.uid channelType:WK_PERSON]];
     vc.channel = [[WKChannel alloc] initWith:self.uid channelType:WK_PERSON];
     [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }

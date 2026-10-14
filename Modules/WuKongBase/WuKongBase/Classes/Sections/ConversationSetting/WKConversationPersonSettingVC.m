@@ -251,7 +251,7 @@
 - (void)settingOnReport:(WKConversationSettingVM *)vm {
     WKWebViewVC *vc = [[WKWebViewVC alloc] init];
     vc.title = @"投诉";
-    vc.url = [NSURL URLWithString:[WKApp shared].config.reportUrl];
+    vc.url = [NSURL URLWithString:[[WKApp shared].config reportUrlWithChannelId:self.channel.channelId channelType:self.channel.channelType]];
     vc.channel = self.channel;
     [[WKNavigationManager shared] pushViewController:vc animated:YES];
 }

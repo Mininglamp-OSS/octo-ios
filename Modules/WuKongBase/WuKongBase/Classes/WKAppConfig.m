@@ -338,13 +338,43 @@
 }
 
 - (NSString *)reportUrl {
-    if(_innerReportUrl) {
-        if([_innerReportUrl containsString:@"?"]) {
-            return [NSString stringWithFormat:@"%@&lang=%@&uid=%@&token=%@&mode=%@",_innerReportUrl,self.langue,[WKApp shared].loginInfo.uid,[WKApp shared].loginInfo.token,self.style==WKSystemStyleDark?@"dark":@"light"];
-        }
-        return [NSString stringWithFormat:@"%@?lang=%@&uid=%@&token=%@&mode=%@",_innerReportUrl,self.langue,[WKApp shared].loginInfo.uid,[WKApp shared].loginInfo.token,self.style==WKSystemStyleDark?@"dark":@"light"];
+    return [self reportUrlWithChannelId:nil channelType:0];
+}
+
+// 后端 /report/html 会原样透传 channel_id/channel_type 到 H5 投诉页的 query，
+// 页面在 bridge getChannel 失败时用它做提交兜底（report.html "获取会话信息失败"
+// 的第二条路）。不带会话参数时，提交只能依赖 bridge 单路，bridge 一断就弹
+// "获取会话信息失败，请从客户端重新进入"。
+//
+// 全部 query value 经 NSURLQueryItem 百分号转义：
+// - channel_id 可能含 & # 空格/非 ASCII（bridge 无域名校验，页面可注入任意值，
+//   参考 WKWebViewVC.m:75 老 iOS 对非 ASCII URL 返回 nil → 静默白屏）
+// - uid/token 若含 '+'，裸拼接会被 form-urlencoded 解析成空格（同 WKFollowService
+//   queryEncode 注释），NSURLQueryItem 统一转义规避
+- (NSString *)reportUrlWithChannelId:(NSString *)channelId channelType:(WKChannelType)channelType {
+    if(!_innerReportUrl) {
+        return _innerReportUrl;
     }
-    return _innerReportUrl;
+    NSURLComponents *comp = [NSURLComponents componentsWithString:_innerReportUrl];
+    if(!comp) {
+        // base URL 非法（含 fragment 等）时退回未追加参数的原串，不静默白屏
+        return _innerReportUrl;
+    }
+    NSMutableArray<NSURLQueryItem *> *items = [comp.queryItems mutableCopy] ?: [NSMutableArray array];
+    [items addObjectsFromArray:@[
+        [NSURLQueryItem queryItemWithName:@"lang" value:self.langue],
+        [NSURLQueryItem queryItemWithName:@"uid" value:[WKApp shared].loginInfo.uid],
+        [NSURLQueryItem queryItemWithName:@"token" value:[WKApp shared].loginInfo.token],
+        [NSURLQueryItem queryItemWithName:@"mode" value:self.style==WKSystemStyleDark?@"dark":@"light"],
+    ]];
+    if(channelId.length > 0 && channelType != 0) {
+        [items addObjectsFromArray:@[
+            [NSURLQueryItem queryItemWithName:@"channel_id" value:channelId],
+            [NSURLQueryItem queryItemWithName:@"channel_type" value:[NSString stringWithFormat:@"%hhu", channelType]],
+        ]];
+    }
+    comp.queryItems = items;
+    return comp.URL.absoluteString;
 }
 
 
