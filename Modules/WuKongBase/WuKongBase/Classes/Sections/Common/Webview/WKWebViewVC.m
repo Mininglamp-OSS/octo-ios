@@ -15,6 +15,7 @@
 #import "WuKongBase.h"
 #import "WKConversationVC.h"
 #import "WKWebViewService.h"
+#import "WKRealnameVerifyManager.h"
 #import "WKCSVRenderer.h"
 #import "WKDocsViewerSpaceHandoff.h"
 #include <libcmark_gfm/cmark-gfm.h>
@@ -400,9 +401,26 @@
 }
 
 // didFailProvisionalNavigation 是 TLS / DNS / 证书 / URL 非法等失败的入口
-// (didFailNavigation 是已开始 commit 之后再 fail)。这里目前只复用 nav 按钮刷新, 静默
-// fail; 真要追排可临时打开 NSLog。
+// (didFailNavigation 是已开始 commit 之后再 fail)。
+//
+// 实名认证回跳落点 (PR #101): Aegis 认证成功后 302 return_to → <scheme>://verified
+// (见 octo-server 仓库 docs/octo-aegis/aegis-oidc-migration-plan.md「302 return_to」
+// 链路图)。WKWebView 对主 frame 到达的无法渲染 scheme (自定义 scheme) 不会回调
+// decidePolicyForNavigationAction:, 而是直接 fail —— 真机实测 code=102
+// (WKErrorUnsupportedScheme), error 的 failing URL 携带 octo://verified。
+// 所以容器内的回跳信号只能在这里接: 102 + isVerifiedCallbackURL: 双重判定后
+// 本地分发, 不再依赖 openURL: (iOS 18 SDK 起恒失效) 触发 WKApp.appOpenURL:。
+// 系统 Safari 回跳仍走原 WKApp 链路 (handleVerifiedCallback: 内部幂等, 两条
+// 路径同时到达也只是刷新两次 user/current, pop 有 s_realnameWebVC 弱引用守卫)。
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    // WKErrorUnsupportedScheme = 102。failing URL 从 error 取
+    // (NSURLErrorFailingURLErrorKey), 老 iOS 偶发缺失时兜底用 webView 当前 URL。
+    NSURL *failURL = error.userInfo[NSURLErrorFailingURLErrorKey] ?: webView.URL;
+    if(error.code == 102 && failURL && [WKRealnameVerifyManager isVerifiedCallbackURL:failURL]) {
+        [WKRealnameVerifyManager handleVerifiedCallback:failURL];
+        [self.navigationController popViewControllerAnimated:NO];
+        return;
+    }
     [self checkGoAndGobackBtn];
 }
 
@@ -430,16 +448,50 @@
     }
 
     //打开外部应用
-   
+
     if (![reqUrl hasPrefix:@"http://"] && ![reqUrl hasPrefix:@"https://"]) {
 
-        BOOL bSucc = [[UIApplication sharedApplication] openURL:navigationAction.request.URL];
-        // bSucc是否成功调起
-        if (bSucc) {
-            [self.navigationController popViewControllerAnimated:NO];
+        BOOL isMain = !navigationAction.targetFrame || navigationAction.targetFrame.isMainFrame;
+
+        // about:/data:/blob:/file: 是交给 WKWebView 自己渲染或下载的内容（比如交互卡片的
+        // blob 下载、loadHTMLString 的 about:blank 初始加载），不是外部 App 的 scheme，
+        // 走 openURL: 必然失败——会被误判成"打不开"，还会把本该渲染/下载的内容拦掉。
+        // 这里单独放行给 WebKit 自己处理。
+        NSString *reqScheme = navigationAction.request.URL.scheme.lowercaseString;
+        static NSSet<NSString *> *webKitHandledSchemes;
+        static dispatch_once_t schemeOnceToken;
+        dispatch_once(&schemeOnceToken, ^{
+            webKitHandledSchemes = [NSSet setWithArray:@[@"about", @"data", @"blob", @"file"]];
+        });
+        if ([webKitHandledSchemes containsObject:reqScheme]) {
+            decisionHandler(WKNavigationActionPolicyAllow);
+            return;
+        }
+
+        // 自家 scheme 回跳（实名认证 <scheme>://verified）不会走到这里 —— WKWebView
+        // 对主 frame 的无法渲染 scheme 直接 fail (code=102)，在 didFailProvisionalNavigation:
+        // 里本地分发，见该方法的注释。这里只处理「可被 WebKit 调起外部 App」的 scheme。
+
+        // 子 frame 的其它自定义 scheme：不再尝试 openURL:（改动前会尝试并可能调起
+        // 外部 App），这是有意的收窄——WebKit 无法加载这些 scheme，导航静默取消。
+        // 仓库内没有页面依赖子 frame 调起外部 App（bridge 的 wvjbscheme 探测在
+        // 上游已被拦），完整的「主/子 frame + scheme 白名单」重构另见容器重构 issue。
+        if (!isMain) {
             decisionHandler(WKNavigationActionPolicyCancel);
             return;
         }
+
+        // 主 frame 外部 scheme：改用 openURL:options:completionHandler:（旧
+        // openURL: 在 iOS 18 SDK 构建下恒失效）。回调是异步的，成功才 pop；
+        // 失败保持静默 Cancel（与改动前 openURL: 返回 NO 且无提示的行为一致，
+        // 失败提示留待容器重构统一处理）。
+        [[UIApplication sharedApplication] openURL:navigationAction.request.URL options:@{} completionHandler:^(BOOL success) {
+            if (success) {
+                [self.navigationController popViewControllerAnimated:NO];
+            }
+        }];
+        decisionHandler(WKNavigationActionPolicyCancel);
+        return;
     }
 
     decisionHandler(WKNavigationActionPolicyAllow);
@@ -792,18 +844,60 @@
 
 
 - (void)webView:(WKWebView *)webView runJavaScriptAlertPanelWithMessage:(NSString *)message initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(void))completionHandler {
-    
-//    //解决window.alert() 时 completionHandler 没有被调用导致崩溃问题
-//    if (!self.isLoadFinished) {
-//        completionHandler();
-//        return;
-//    }
-    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"" message:message preferredStyle:UIAlertControllerStyleAlert];
-    [alertController addAction:[UIAlertAction actionWithTitle:@"确认" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) { completionHandler(); }]];
-    if (self)
-        [self presentViewController:alertController animated:YES completion:^{}];
-    else
+    // 呈现守卫：上一个弹窗还在收起动画中（或已有其它弹窗在展示）时
+    // presentViewController: 会被 UIKit 拒绝——alertController 无人持有时会连同
+    // completionHandler 一起释放，WebKit 视回调未被调用为编程错误直接崩溃
+    // (NSInternalInconsistencyException)。此时立即以"取消"应答 WebKit。
+    if (!self.view.window || self.presentedViewController) {
         completionHandler();
+        return;
+    }
+    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"" message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alertController addAction:[UIAlertAction actionWithTitle:LLang(@"确认") style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) { completionHandler(); }]];
+    [self presentViewController:alertController animated:YES completion:nil];
+}
+
+// window.open() / target="_blank"：容器为单页浏览定位，不创建子窗口。
+// 已核实 Aegis 账户页 / authorize 页（当前 /assets/index-*.js bundle）不使用
+// window.open / target=_blank / confirm / prompt。之前实现里 loadRequest 把弹窗
+// 请求灌进当前 webview，会把用户正在看的页面（认证页/授权页）顶掉，故只返回 nil
+// 让 WebKit 静默丢弃。未来若页面真依赖子窗口，需在容器重构中实现完整的子视图管理。
+- (WKWebView *)webView:(WKWebView *)webView createWebViewWithConfiguration:(WKWebViewConfiguration *)configuration forNavigationAction:(WKNavigationAction *)navigationAction windowFeatures:(WKWindowFeatures *)windowFeatures {
+    return nil;
+}
+
+// window.confirm()：没实现时 WebKit 会静默返回 false，页面上表现为"点了没反应"。
+- (void)webView:(WKWebView *)webView runJavaScriptConfirmPanelWithMessage:(NSString *)message initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(BOOL result))completionHandler {
+    // 呈现守卫，理由同 runJavaScriptAlertPanelWithMessage:
+    if (!self.view.window || self.presentedViewController) {
+        completionHandler(NO);
+        return;
+    }
+    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"" message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alertController addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) { completionHandler(NO); }]];
+    [alertController addAction:[UIAlertAction actionWithTitle:LLang(@"确认") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) { completionHandler(YES); }]];
+    [self presentViewController:alertController animated:YES completion:nil];
+}
+
+// window.prompt()：没实现时 WebKit 会静默返回空字符串。
+- (void)webView:(WKWebView *)webView runJavaScriptTextInputPanelWithPrompt:(NSString *)prompt defaultText:(NSString *)defaultText initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(NSString * _Nullable result))completionHandler {
+    // 呈现守卫，理由同 runJavaScriptAlertPanelWithMessage:
+    if (!self.view.window || self.presentedViewController) {
+        completionHandler(nil);
+        return;
+    }
+    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"" message:prompt preferredStyle:UIAlertControllerStyleAlert];
+    [alertController addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.text = defaultText;
+    }];
+    [alertController addAction:[UIAlertAction actionWithTitle:LLang(@"取消") style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) { completionHandler(nil); }]];
+    [alertController addAction:[UIAlertAction actionWithTitle:LLang(@"确认") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        // 弱引用读回文本：alertController.actions 强持有 handler，handler 若再强
+        // 引用 alertController 会成环，每次 prompt() 泄漏一个 controller+textField。
+        __weak UIAlertController *weakAlert = alertController;
+        completionHandler(weakAlert.textFields.firstObject.text);
+    }]];
+    [self presentViewController:alertController animated:YES completion:nil];
 }
 
 
