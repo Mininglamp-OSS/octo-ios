@@ -1914,7 +1914,11 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
             if ([self.messageModel.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
                 [[WKApp shared] invoke:WKPOINT_SUMMARY_DEEPLINK param:@{@"url": url}];
             }
-            [[UIApplication sharedApplication] openURL:[NSURL URLWithString:url] options:@{} completionHandler:nil];
+            // 链接卡片收进 App 内容器（与 didLinkClick: 同款），不再外跳 Safari：
+            // 外跳拿不到同源身份注入，必现重新登录。
+            WKWebViewVC *vc = [[WKWebViewVC alloc] init];
+            vc.url = [NSURL URLWithString:url];
+            [[WKNavigationManager shared] pushViewController:vc animated:YES];
         }
         return;
     }

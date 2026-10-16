@@ -16,6 +16,7 @@
 #import "WKConversationVC.h"
 #import "WKWebViewService.h"
 #import "WKRealnameVerifyManager.h"
+#import "WKWebIdentityHandoff.h"
 #import "WKCSVRenderer.h"
 #import "WKDocsViewerSpaceHandoff.h"
 #include <libcmark_gfm/cmark-gfm.h>
@@ -89,7 +90,23 @@
     if (url.length > 0 && ![url hasPrefix:@"http"]) {
         targetURL = [NSURL URLWithString:[NSString stringWithFormat:@"http://%@", url]];
     }
-    self.currentUrl = targetURL;
+    // 同源 H5 免登：追加 ?sid= 并让 identityJavaScriptForURL 挂 document-start
+    // user script（在 webView getter 里读 self.currentUrl 生成）。非同源/关闭开关时
+    // handoffURLForURL: 返回 nil，行为与现状一致。
+    NSURL *handoffURL = [WKWebIdentityHandoff handoffURLForURL:targetURL];
+    self.currentUrl = handoffURL ?: targetURL;
+
+    // 必须在 loadRequest 之前、且在 webView 首次访问之后挂：addSubview 已触发
+    // webView getter（userContentController 已建），此刻 currentUrl 已就绪，
+    // WKUserScript 在页面任何脚本前执行，早于 web 端 loginInfo.load()。
+    NSString *identityJS = [WKWebIdentityHandoff identityJavaScriptForURL:self.currentUrl];
+    if (identityJS.length > 0) {
+        WKUserScript *identityScript = [[WKUserScript alloc]
+            initWithSource:identityJS
+            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+            forMainFrameOnly:YES];
+        [self.webView.configuration.userContentController addUserScript:identityScript];
+    }
 
     if (url.length == 0 || targetURL == nil) {
         // url 为空 / 解析失败时, loadRequest with nil URL 会得到一个空白 webview
