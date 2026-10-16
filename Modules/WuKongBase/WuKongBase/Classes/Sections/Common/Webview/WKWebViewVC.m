@@ -90,15 +90,22 @@
     if (url.length > 0 && ![url hasPrefix:@"http"]) {
         targetURL = [NSURL URLWithString:[NSString stringWithFormat:@"http://%@", url]];
     }
-    // 同源 H5 免登：追加 ?sid= 并让 identityJavaScriptForURL 挂 document-start
-    // user script（在 webView getter 里读 self.currentUrl 生成）。非同源/关闭开关时
-    // handoffURLForURL: 返回 nil，行为与现状一致。
+    // 同源 H5 免登：追加 ?sid=，identityJavaScriptForURL 在下方 loadRequest 前
+    // 生成注入脚本。非同源 URL 时 handoffURLForURL: 返回 nil，行为与现状一致。
     NSURL *handoffURL = [WKWebIdentityHandoff handoffURLForURL:targetURL];
     self.currentUrl = handoffURL ?: targetURL;
+
+    if (url.length == 0 || targetURL == nil) {
+        // url 为空 / 解析失败时, loadRequest with nil URL 会得到一个空白 webview
+        // (没有 didFailNavigation 回调, 只是静默白屏) —— 是 "blank page" 的常见根因。
+        // 提前 return 留个守卫, 让上游修复, 不要静默白屏。
+        return;
+    }
 
     // 必须在 loadRequest 之前、且在 webView 首次访问之后挂：addSubview 已触发
     // webView getter（userContentController 已建），此刻 currentUrl 已就绪，
     // WKUserScript 在页面任何脚本前执行，早于 web 端 loginInfo.load()。
+    // 脚本内置运行时 origin 守卫：后续导航离开可信域（外链/重定向）不会写入凭证。
     NSString *identityJS = [WKWebIdentityHandoff identityJavaScriptForURL:self.currentUrl];
     if (identityJS.length > 0) {
         WKUserScript *identityScript = [[WKUserScript alloc]
@@ -108,14 +115,9 @@
         [self.webView.configuration.userContentController addUserScript:identityScript];
     }
 
-    if (url.length == 0 || targetURL == nil) {
-        // url 为空 / 解析失败时, loadRequest with nil URL 会得到一个空白 webview
-        // (没有 didFailNavigation 回调, 只是静默白屏) —— 是 "blank page" 的常见根因。
-        // 提前 return 留个守卫, 让上游修复, 不要静默白屏。
-        return;
-    }
-
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:targetURL
+    // handoff URL（含追加的 ?sid=）必须真正用于加载：只改 currentUrl 而继续用
+    // targetURL 发请求，页面收不到 sid，web 端分桶与注入的 key 错位。
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:self.currentUrl
         cachePolicy:NSURLRequestReloadIgnoringCacheData
     timeoutInterval:(NSTimeInterval)10.0];
 

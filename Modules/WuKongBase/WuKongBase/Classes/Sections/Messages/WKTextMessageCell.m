@@ -1914,11 +1914,16 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
             if ([self.messageModel.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
                 [[WKApp shared] invoke:WKPOINT_SUMMARY_DEEPLINK param:@{@"url": url}];
             }
-            // 链接卡片收进 App 内容器（与 didLinkClick: 同款），不再外跳 Safari：
-            // 外跳拿不到同源身份注入，必现重新登录。
-            WKWebViewVC *vc = [[WKWebViewVC alloc] init];
-            vc.url = [NSURL URLWithString:url];
-            [[WKNavigationManager shared] pushViewController:vc animated:YES];
+            // http(s) 链接收进 App 内容器（与 didLinkClick: 同款），不再外跳 Safari：
+            // 外跳拿不到同源身份注入，必现重新登录。非 http(s) scheme（tel:/mailto:/
+            // 自定义 scheme）保留 openURL: 派发——容器会把它们硬拼成 http:// 变空白页。
+            if ([url hasPrefix:@"http://"] || [url hasPrefix:@"https://"]) {
+                WKWebViewVC *vc = [[WKWebViewVC alloc] init];
+                vc.url = [NSURL URLWithString:url];
+                [[WKNavigationManager shared] pushViewController:vc animated:YES];
+            } else {
+                [[UIApplication sharedApplication] openURL:[NSURL URLWithString:url] options:@{} completionHandler:nil];
+            }
         }
         return;
     }
