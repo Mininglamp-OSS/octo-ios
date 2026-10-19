@@ -121,6 +121,16 @@ static NSString *WKJSONString(NSString *value) {
     return components.URL ?: URL;
 }
 
++ (nullable NSString *)trustedOrigin {
+    NSString *apiBaseURL = [WKApp shared].config.apiBaseUrl;
+    if (apiBaseURL.length == 0) return nil;
+    NSURLComponents *server = [NSURLComponents componentsWithString:apiBaseURL];
+    if (server.scheme.length == 0 || server.host.length == 0) return nil;
+    NSNumber *port = WKEffectivePort(server) ?: @0;
+    return [NSString stringWithFormat:@"%@://%@:%@",
+        server.scheme.lowercaseString, server.host.lowercaseString, port];
+}
+
 + (nullable NSString *)identityJavaScriptForURL:(NSURL *)URL {
     NSURL *handoffURL = [self trustedHandoffURLForURL:URL];
     if (handoffURL == nil) return nil;

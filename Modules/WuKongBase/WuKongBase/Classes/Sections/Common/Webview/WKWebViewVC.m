@@ -72,6 +72,7 @@
     self.navigationBar.rightView = self.moreBtn;
     
     self.webViewService.channel = self.channel;
+    self.webViewService.guardedWebView = self.webView;
 
     NSString *url = self.url.absoluteString;
 
@@ -94,6 +95,8 @@
     // 生成注入脚本。非同源 URL 时 handoffURLForURL: 返回 nil，行为与现状一致。
     NSURL *handoffURL = [WKWebIdentityHandoff handoffURLForURL:targetURL];
     self.currentUrl = handoffURL ?: targetURL;
+    // bridge 来源守卫：仅同源页面可调原生 handler（跨域外链页面降权）。
+    [self.webViewService setTrustedOrigin:handoffURL ? [WKWebIdentityHandoff trustedOrigin] : nil];
 
     if (url.length == 0 || targetURL == nil) {
         // url 为空 / 解析失败时, loadRequest with nil URL 会得到一个空白 webview

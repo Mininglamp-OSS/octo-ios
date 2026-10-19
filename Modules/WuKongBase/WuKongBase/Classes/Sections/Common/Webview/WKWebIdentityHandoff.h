@@ -20,6 +20,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// 内部分桶标记。
 + (NSURL *)sanitizedURLForExternalUse:(NSURL *)URL;
 
+/// 可信 origin（apiBaseUrl 的 scheme://host:port 归一形态）；配置缺失时返回 nil。
++ (nullable NSString *)trustedOrigin;
+
 @end
 
 NS_ASSUME_NONNULL_END

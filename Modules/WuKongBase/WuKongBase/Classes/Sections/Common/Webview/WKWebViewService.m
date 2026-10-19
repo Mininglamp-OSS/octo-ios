@@ -10,11 +10,49 @@
 #import "WKForwardSelectVC.h"
 #import "WKUserAuthView.h"
 #import "WKWebViewJavascriptBridge.h"
-@implementation WKWebViewService
+#import <WebKit/WebKit.h>
+@implementation WKWebViewService {
+    NSString *_trustedOrigin;
+}
+
+- (void)setTrustedOrigin:(NSString *)trustedOrigin {
+    _trustedOrigin = trustedOrigin;
+}
+
+// 注册带来源守卫的 handler：跨域页面调用直接回错误，不执行真实逻辑。
+- (void)registerGuardedHandler:(NSString *)name handler:(WVJBHandler)handler {
+    __weak typeof(self) weakSelf = self;
+    [self.bridge registerHandler:name handler:^(id data, WVJBResponseCallback responseCallback) {
+        if (![weakSelf originAllowed]) {
+            responseCallback([WKJsonUtil toJson:@{@"error":@"forbidden"}]);
+            return;
+        }
+        handler(data, responseCallback);
+    }];
+}
+
+// bridge handler 统一来源守卫：跨域页面（外链/重定向后）调用一律拒绝，
+// 原生能力（auth/跳转会话等）不对不可信页面开放。
+- (BOOL)originAllowed {
+    if (_trustedOrigin.length == 0) return YES;
+    WKWebView *webView = self.guardedWebView;
+    if (webView.URL.host.length == 0) return NO;
+    NSURLComponents *c = [NSURLComponents componentsWithURL:webView.URL resolvingAgainstBaseURL:NO];
+    NSURLComponents *t = [NSURLComponents componentsWithString:_trustedOrigin];
+    if (c == nil || t == nil) return NO;
+    return [c.scheme.lowercaseString isEqualToString:t.scheme.lowercaseString] &&
+        [c.host.lowercaseString isEqualToString:t.host.lowercaseString] &&
+        (c.port == nil ? t.port == nil : [c.port isEqualToNumber:t.port]);
+}
 
 - (void)registerHandlers {
     __weak typeof(self) weakSelf = self;
-    
+
+    // 统一包裹：先过来源守卫再进真实 handler。
+    [self registerGuardedHandler:@"quit" handler:^(id data, WVJBResponseCallback responseCallback) {
+        [[WKNavigationManager shared] popViewControllerAnimated:YES];
+    }];
+
 //    // 提交投诉
 //    [self.bridge
 //        registerHandler:@"commitReports"
@@ -24,13 +62,8 @@
 //                    }
 //     }];
     
-    // 退出webview
-    [self.bridge registerHandler:@"quit" handler:^(id data, WVJBResponseCallback responseCallback) {
-        [[WKNavigationManager shared] popViewControllerAnimated:YES];
-    }];
-    
     // 获取当前频道
-    [self.bridge registerHandler:@"getChannel" handler:^(id data, WVJBResponseCallback responseCallback) {
+    [self registerGuardedHandler:@"getChannel" handler:^(id data, WVJBResponseCallback responseCallback) {
         responseCallback([WKJsonUtil toJson:@{
             @"channel_id": weakSelf.channel && weakSelf.channel.channelId?weakSelf.channel.channelId:@"",
             @"channel_type":@(weakSelf.channel? weakSelf.channel.channelType:0)
@@ -38,7 +71,7 @@
     }];
     
     // 选择最近会话
-    [self.bridge registerHandler:@"chooseConversation" handler:^(id data, WVJBResponseCallback responseCallback) {
+    [self registerGuardedHandler:@"chooseConversation" handler:^(id data, WVJBResponseCallback responseCallback) {
         WKForwardSelectVC *vc = [WKForwardSelectVC new];
         vc.title = LLangW(@"选择一个聊天", weakSelf);
         [vc setOnSelect:^(WKChannel * _Nonnull channel) {
@@ -55,7 +88,7 @@
     }];
     
     // 显示最近会话
-    [self.bridge registerHandler:@"showConversation" handler:^(id data, WVJBResponseCallback responseCallback) {
+    [self registerGuardedHandler:@"showConversation" handler:^(id data, WVJBResponseCallback responseCallback) {
         if(!data) {
             return;
         }
@@ -69,7 +102,7 @@
         }
     }];
     
-    [self.bridge registerHandler:@"auth" handler:^(id data, WVJBResponseCallback responseCallback) {
+    [self registerGuardedHandler:@"auth" handler:^(id data, WVJBResponseCallback responseCallback) {
         NSLog(@"auth......");
         
         NSString *appID = data[@"app_id"];
