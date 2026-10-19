@@ -228,14 +228,16 @@
 
 -(void) morePressed {
     __weak typeof(self) weakSelf = self;
+    // sid 是 App 内部分桶标记，不应随链接离开 App（转发/复制/外部浏览器）。
+    NSURL *externalURL = [WKWebIdentityHandoff sanitizedURLForExternalUse:weakSelf.currentUrl];
     WKActionSheetView2 *sheetView = [WKActionSheetView2 initWithTip:nil];
     [sheetView addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"转发") onClick:^{
-        WKTextContent *textContent = [[WKTextContent alloc] initWithContent:weakSelf.currentUrl.absoluteString];
+        WKTextContent *textContent = [[WKTextContent alloc] initWithContent:externalURL.absoluteString];
         [[WKMessageActionManager shared] forwardContent:textContent complete:nil];
     }]];
     [sheetView addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"复制") onClick:^{
         UIPasteboard* pasteboard = [UIPasteboard generalPasteboard];
-        [pasteboard setString:weakSelf.currentUrl ?weakSelf.currentUrl.absoluteString: @""];
+        [pasteboard setString:externalURL ?externalURL.absoluteString: @""];
         [weakSelf.view showHUDWithHide:LLangW(@"已复制", weakSelf)];
     }]];
     [sheetView addItem:[WKActionSheetButtonItem2 initWithTitle:LLang(@"在浏览器中打开") onClick:^{
@@ -248,12 +250,12 @@
 {
 
     if (self.currentUrl) {
-        
+
         __weak typeof(self) weakSelf = self;
-        
+
         NSString *invaildURLTip = LLang(@"无效的URL");
 
-        NSURL* url = [NSURL URLWithString:self.currentUrl.absoluteString];
+        NSURL* url = [NSURL URLWithString:[WKWebIdentityHandoff sanitizedURLForExternalUse:self.currentUrl].absoluteString];
         if ([[UIDevice currentDevice].systemVersion floatValue] >= 10.0) {
             if ([[UIApplication sharedApplication]
                     respondsToSelector:@selector(openURL:

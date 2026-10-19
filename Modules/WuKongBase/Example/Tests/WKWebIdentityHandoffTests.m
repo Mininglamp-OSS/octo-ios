@@ -52,6 +52,9 @@ static NSString * const kBase = @"https://octo.example/api/v1/";
 
 - (void)testReportPathExcludedButNeighborPathsNot {
     XCTAssertNil([WKWebIdentityHandoff handoffURLForURL:[NSURL URLWithString:@"https://octo.example/report.html?channel_id=x"]]);
+    XCTAssertNil([WKWebIdentityHandoff handoffURLForURL:[NSURL URLWithString:@"https://octo.example/report"]]);
+    // 生产举报页：apiBaseUrl + "report/html" → 完整路径 /api/v1/report/html
+    XCTAssertNil([WKWebIdentityHandoff handoffURLForURL:[NSURL URLWithString:@"https://octo.example/api/v1/report/html?channel_id=x"]]);
     XCTAssertNotNil([WKWebIdentityHandoff handoffURLForURL:[NSURL URLWithString:@"https://octo.example/reports/list"]]);
 }
 
@@ -89,6 +92,17 @@ static NSString * const kBase = @"https://octo.example/api/v1/";
 - (void)testScriptNilWhenLoggedOut {
     [[WKLoginInfo shared] clear];
     XCTAssertNil([WKWebIdentityHandoff identityJavaScriptForURL:[NSURL URLWithString:@"https://octo.example/s/ST1"]]);
+}
+
+#pragma mark - sanitizedURLForExternalUse:
+
+- (void)testSanitizedURLStripsSidOnly {
+    NSURL *out = [WKWebIdentityHandoff sanitizedURLForExternalUse:[NSURL URLWithString:@"https://octo.example/s/ST1?sp=a&sid=ios&x=1"]];
+    XCTAssertEqualObjects(out.absoluteString, @"https://octo.example/s/ST1?sp=a&x=1");
+    // 无 sid 时原样返回
+    NSURL *clean = [WKWebIdentityHandoff sanitizedURLForExternalUse:[NSURL URLWithString:@"https://octo.example/s/ST1?sp=a"]];
+    XCTAssertEqualObjects(clean.absoluteString, @"https://octo.example/s/ST1?sp=a");
+    XCTAssertNil([WKWebIdentityHandoff sanitizedURLForExternalUse:nil]);
 }
 
 @end
