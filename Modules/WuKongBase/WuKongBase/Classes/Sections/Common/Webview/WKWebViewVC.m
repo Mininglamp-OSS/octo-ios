@@ -85,18 +85,26 @@
     // 导航回调 (didStartProvisional / didFail* 都不触发, 极难定位)。
     // iOS 17+ 切到 WHATWG URL Standard 后宽容了非 ASCII, 所以新系统看不出来。
     // 解法: 优先信任上游传入的 self.url (已经是 NSURL, 上游构造时走 NSURLQueryItem
-    // 已正确编码); 仅当上游传的是裸 host (无 scheme) 时, 再走加 http:// 默认 scheme
-    // 的兼容路径。
+    // 已正确编码); 仅当上游传的是裸 host (无 scheme) 时, 再走加默认 scheme 的兼容
+    // 路径。默认 scheme 对齐安卓 WKWebViewActivity.initView: scheme-less 补 https://、
+    // http:// 强制升 https://（防止 MITM 注入与 file: 等意外 scheme 进容器；同源
+    // 免登判定也因此不被 http 形态误伤——Octo-Q 评审 P2）。
     NSURL *targetURL = self.url;
-    if (url.length > 0 && ![url hasPrefix:@"http"]) {
-        targetURL = [NSURL URLWithString:[NSString stringWithFormat:@"http://%@", url]];
+    if (url.length > 0 && ![url.lowercaseString hasPrefix:@"http"]) {
+        targetURL = [NSURL URLWithString:[NSString stringWithFormat:@"https://%@", url]];
+    } else if (url.length > 0 && [url.lowercaseString hasPrefix:@"http://"]) {
+        NSURL *upgraded = [NSURL URLWithString:[NSString stringWithFormat:@"https://%@", [url substringFromIndex:7]]];
+        if (upgraded) targetURL = upgraded;
     }
     // 同源 H5 免登：追加 ?sid=，identityJavaScriptForURL 在下方 loadRequest 前
-    // 生成注入脚本。非同源 URL 时 handoffURLForURL: 返回 nil，行为与现状一致。
+    // 生成注入脚本。非同源 URL 时 handoffURLForURL: 返回 nil，不注入凭证。
     NSURL *handoffURL = [WKWebIdentityHandoff handoffURLForURL:targetURL];
     self.currentUrl = handoffURL ?: targetURL;
-    // bridge 来源守卫：仅同源页面可调原生 handler（跨域外链页面降权）。
-    [self.webViewService setTrustedOrigin:handoffURL ? [WKWebIdentityHandoff trustedOrigin] : nil];
+    // bridge 来源守卫：守卫基准无条件取 apiBaseUrl 的可信 origin（不随首屏
+    // URL 是否免登而失守）——外链/重定向进入的跨域页面一律拒绝调用原生
+    // handler；handoffURL 仅决定是否注入登录态。apiBaseUrl 未配置时
+    // trustedOrigin 为 nil，守卫 fail-closed（全部拒绝）。
+    [self.webViewService setTrustedOrigin:[WKWebIdentityHandoff trustedOrigin]];
 
     if (url.length == 0 || targetURL == nil) {
         // url 为空 / 解析失败时, loadRequest with nil URL 会得到一个空白 webview

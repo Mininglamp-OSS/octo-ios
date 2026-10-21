@@ -1915,14 +1915,19 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
             if ([self.messageModel.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
                 [[WKApp shared] invoke:WKPOINT_SUMMARY_DEEPLINK param:@{@"url": url}];
             }
+            // 卡片 URL 来自消息 JSON（发送方可控），解析失败直接放弃——不 push 空
+            // URL 的容器（白屏且无提示），也不外跳 nil。对齐 WKInteractiveCardCell
+            // 的 nil guard（评审 P2）。
+            NSURL *parsed = [NSURL URLWithString:url];
+            if (!parsed) return;
             // 仅同源 http(s) 进容器（免登 + bridge 收口），其余一律 openURL:。
-            NSURL *cardURL = [WKWebIdentityHandoff handoffURLForURL:[NSURL URLWithString:url]];
+            NSURL *cardURL = [WKWebIdentityHandoff handoffURLForURL:parsed];
             if (cardURL) {
                 WKWebViewVC *vc = [[WKWebViewVC alloc] init];
                 vc.url = cardURL;
                 [[WKNavigationManager shared] pushViewController:vc animated:YES];
             } else {
-                [[UIApplication sharedApplication] openURL:[NSURL URLWithString:url] options:@{} completionHandler:nil];
+                [[UIApplication sharedApplication] openURL:parsed options:@{} completionHandler:nil];
             }
         }
         return;
