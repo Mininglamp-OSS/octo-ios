@@ -45,6 +45,11 @@ static inline BOOL WKSameOrigin(NSURLComponents *a, NSURLComponents *b) {
 /// 可信 origin（apiBaseUrl 的 scheme://host:port 归一形态）；配置缺失时返回 nil。
 + (nullable NSString *)trustedOrigin;
 
+/// 容器路由判定（与身份注入解耦）：URL 是否同源 http(s)。同源即可进容器，
+/// 免登注入范围由 handoffURLForURL: 的白名单单独决定（评审 P1：两个概念
+/// 共用一个判定会把同源白名单外页面挤到外部浏览器）。配置缺失返回 NO。
++ (BOOL)isSameOriginAsAPIBase:(NSURL *)URL;
+
 /// JS 值/键的安全嵌入：NSJSONSerialization 序列化单个字符串（含引号、反斜杠、
 /// 换行、U+2028/U+2029 转义），保证任意值不越出 JS 字符串字面量。
 /// 暴露给测试：注入脚本的所有插值都经它，转义契约需要直接断言（Octo-Q 评审

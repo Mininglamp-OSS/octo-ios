@@ -96,16 +96,23 @@
         WKForwardSelectVC *vc = [WKForwardSelectVC new];
         vc.title = LLangW(@"选择一个聊天", weakSelf);
         [vc setOnSelect:^(WKChannel * _Nonnull channel) {
-            // onSelect 回包同样判空：chooseConversation 可被无回调调用，
-            // 选完会话时 responseCallback 已是 NULL。
-            if (responseCallback) responseCallback([WKJsonUtil toJson:@{
-                @"channel_id": channel && channel.channelId?channel.channelId:@"",
-                @"channel_type":@(channel? channel.channelType:0)
-            }]);
-            
+            // 异步窗口二次校验：选择器弹出期间页面可能已导航到跨域页面
+            // （外链/重定向），channel 数据不得交给导航后的不可信页面。
+            // 与 auth 的异步二次校验同型（评审 P1：回调只回包未复查来源）。
+            if (![weakSelf originAllowed]) {
+                if (responseCallback) responseCallback([WKJsonUtil toJson:@{@"error":@"forbidden"}]);
+            } else {
+                // onSelect 回包同样判空：chooseConversation 可被无回调调用，
+                // 选完会话时 responseCallback 已是 NULL。
+                if (responseCallback) responseCallback([WKJsonUtil toJson:@{
+                    @"channel_id": channel && channel.channelId?channel.channelId:@"",
+                    @"channel_type":@(channel? channel.channelType:0)
+                }]);
+            }
+
             [[WKNavigationManager shared] popViewControllerAnimated:YES];
-            
-            
+
+
         }];
         [[WKNavigationManager shared] pushViewController:vc animated:YES];
     }];

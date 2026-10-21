@@ -86,15 +86,15 @@
     // iOS 17+ 切到 WHATWG URL Standard 后宽容了非 ASCII, 所以新系统看不出来。
     // 解法: 优先信任上游传入的 self.url (已经是 NSURL, 上游构造时走 NSURLQueryItem
     // 已正确编码); 仅当上游传的是裸 host (无 scheme) 时, 再走加默认 scheme 的兼容
-    // 路径。默认 scheme 对齐安卓 WKWebViewActivity.initView: scheme-less 补 https://、
-    // http:// 强制升 https://（防止 MITM 注入与 file: 等意外 scheme 进容器；同源
-    // 免登判定也因此不被 http 形态误伤——Octo-Q 评审 P2）。
+    // 路径。
+    // 注意: 此处不做 http→https 强制升级（曾对齐安卓 initView 尝试过，已回退）——
+    // 本仓服务端配置是一等公民支持 http（WKServerConfig httpsOn 开关、
+    // WKLoginSettingVC 分段控件默认 http、Info.plist NSAllowsArbitraryLoads），
+    // 强制升级会让 HTTP 部署的举报页/协议页对纯 http 端口做 TLS 握手而白屏，
+    // 且改写后的 scheme 与 trustedOrigin 失配导致 bridge 全部 forbidden。
     NSURL *targetURL = self.url;
     if (url.length > 0 && ![url.lowercaseString hasPrefix:@"http"]) {
         targetURL = [NSURL URLWithString:[NSString stringWithFormat:@"https://%@", url]];
-    } else if (url.length > 0 && [url.lowercaseString hasPrefix:@"http://"]) {
-        NSURL *upgraded = [NSURL URLWithString:[NSString stringWithFormat:@"https://%@", [url substringFromIndex:7]]];
-        if (upgraded) targetURL = upgraded;
     }
     // 同源 H5 免登：追加 ?sid=，identityJavaScriptForURL 在下方 loadRequest 前
     // 生成注入脚本。非同源 URL 时 handoffURLForURL: 返回 nil，不注入凭证。

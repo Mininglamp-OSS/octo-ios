@@ -90,8 +90,28 @@ static NSString *savedUid = nil;
     XCTAssertNil([WKWebIdentityHandoff handoffURLForURL:[NSURL URLWithString:@"https://octo.example/d/"]]);
     // id 含非法字符（/ . 之外再拒非白名单字符集）
     XCTAssertNil([WKWebIdentityHandoff handoffURLForURL:[NSURL URLWithString:@"https://octo.example/d/abc$x"]]);
-    // 路径带百分号编码不匹配白名单（白名单只认字面 id 字符）
+    // 路径带百分号编码不匹配白名单（白名单只认字面 id 字符）。native 门用
+    // percentEncodedPath（编码态）与运行时 JS 守卫的 location.pathname 同口径，
+    // %61 不得被解码成 a 后误过白名单（评审 P1）。
     XCTAssertNil([WKWebIdentityHandoff handoffURLForURL:[NSURL URLWithString:@"https://octo.example/d/%61bc"]]);
+    // 大小写敏感口径一致：native 正则大写不命中
+    XCTAssertNil([WKWebIdentityHandoff handoffURLForURL:[NSURL URLWithString:@"https://octo.example/D/abc"]]);
+}
+
+#pragma mark - 容器路由与身份注入解耦（评审 P1：同源白名单外页仍可进容器）
+
+- (void)testSameOriginRoutingIndependentOfAllowlist {
+    // 容器路由：同源 http(s) 即 true——包括白名单外的 report.html、
+    // 免登主链路 /s/，以及 http 形态（http 是本仓一等公民配置）。
+    XCTAssertTrue([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"https://octo.example/report.html?channel_id=x"]]);
+    XCTAssertTrue([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"https://octo.example/s/ST1"]]);
+    XCTAssertTrue([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"http://octo.example/d/abc"]]);
+    // 跨域 / 非 http(s) / 缺 host / 配置缺失 → false
+    XCTAssertFalse([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"https://evil.example/d/abc"]]);
+    XCTAssertFalse([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"ftp://octo.example/d/abc"]]);
+    XCTAssertFalse([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"https://octo.example:8443/d/abc"]]);
+    XCTAssertFalse([WKWebIdentityHandoff isSameOriginAsAPIBase:nil]);
+    XCTAssertFalse([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"not a url"]]);
 }
 
 #pragma mark - sid 替换 / 编码保留
@@ -106,9 +126,10 @@ static NSString *savedUid = nil;
 
 - (void)testMultipleSidAllReplaced {
     // 多个 sid 只保留一个 ios：web 端 URLSearchParams.get 取第一个之外的场景
-    // （getAll / 遍历）不应看到残留旧 sid。
+    // （getAll / 遍历）不应看到残留旧 sid。产出顺序保持原 query 顺序：第一个
+    // sid 位置替换为 ios，其余删除，其余参数原位保留。
     NSURL *out = [WKWebIdentityHandoff handoffURLForURL:[NSURL URLWithString:@"https://octo.example/d/abc?sid=a&x=1&sid=b"]];
-    XCTAssertEqualObjects(out.absoluteString, @"https://octo.example/d/abc?x=1&sid=ios");
+    XCTAssertEqualObjects(out.absoluteString, @"https://octo.example/d/abc?sid=ios&x=1");
 }
 
 - (void)testExistingPercentEncodingPreserved {
@@ -169,7 +190,7 @@ static NSString *savedUid = nil;
     XCTAssertEqualObjects([WKWebIdentityHandoff JSONString:nil], @"\"\"");
     XCTAssertEqualObjects([WKWebIdentityHandoff JSONString:@""], @"\"\"");
     // 非 ASCII 原样保留（NSJSONSerialization 不转义非 ASCII）
-    XCTAssertEqualObjects([WKWebIdentityHandoff JSONString:@"用户"], "\"用户\"");
+    XCTAssertEqualObjects([WKWebIdentityHandoff JSONString:@"用户"], @"\"用户\"");
 }
 
 #pragma mark - sanitizedURLForExternalUse:
@@ -203,6 +224,20 @@ static NSString *savedUid = nil;
     XCTAssertEqualObjects(crossOrigin.absoluteString, @"https://vendor.example/page?sid=vendor-session&x=1");
     NSURL *sameOriginOffPath = [WKWebIdentityHandoff sanitizedURLForExternalUse:[NSURL URLWithString:@"https://octo.example/report.html?sid=web-ctx"]];
     XCTAssertEqualObjects(sameOriginOffPath.absoluteString, @"https://octo.example/report.html?sid=web-ctx");
+}
+
+- (void)testEncodedSidNameRecognized {
+    // 编码参数名 %73id（解码后是 sid）必须被认成已有 sid（评审 P2）：
+    // 替换后不残留 %73id，外发 URL 剥离口径与提取口径一致。
+    // WKExtractSid 走 queryItems（解码口径），若 %73id 不被认成 sid，
+    // 注入桶用 x 而 web 端 URLSearchParams.get('sid') 取 x——分桶碰巧一致，
+    // 但 sanitizedURLForExternalUse 只剥 sid=ios，转发出去的 URL 带着
+    // 解码后就是 sid=x 的参数。
+    NSURL *out = [WKWebIdentityHandoff handoffURLForURL:[NSURL URLWithString:@"https://octo.example/d/abc?%73id=a&x=1"]];
+    XCTAssertEqualObjects(out.absoluteString, @"https://octo.example/d/abc?sid=ios&x=1");
+    // 出口剥离同样认编码名
+    NSURL *cleaned = [WKWebIdentityHandoff sanitizedURLForExternalUse:[NSURL URLWithString:@"https://octo.example/d/abc?%73id=a&x=1"]];
+    XCTAssertEqualObjects(cleaned.absoluteString, @"https://octo.example/d/abc?x=1");
 }
 
 @end

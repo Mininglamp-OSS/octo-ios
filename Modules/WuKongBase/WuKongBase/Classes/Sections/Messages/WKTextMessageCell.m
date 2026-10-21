@@ -1920,11 +1920,19 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
             // 的 nil guard（评审 P2）。
             NSURL *parsed = [NSURL URLWithString:url];
             if (!parsed) return;
-            // 仅同源 http(s) 进容器（免登 + bridge 收口），其余一律 openURL:。
-            NSURL *cardURL = [WKWebIdentityHandoff handoffURLForURL:parsed];
-            if (cardURL) {
+            // 容器路由与身份注入是两个概念（评审 P1）：同源 http(s) 即可进
+            // 容器（外跳降级只给跨域页面），免登注入范围由容器内的
+            // WKWebIdentityHandoff 白名单单独决定。这里不能复用
+            // handoffURLForURL:——它对白名单外同源页（report.html 等）返回
+            // nil，会把同源内部页挤到外部浏览器。
+            NSURLComponents *cardComp = [NSURLComponents componentsWithURL:parsed resolvingAgainstBaseURL:NO];
+            NSString *scheme = cardComp.scheme.lowercaseString;
+            BOOL sameOriginHTTP = cardComp.host.length > 0 &&
+                ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"]) &&
+                [WKWebIdentityHandoff isSameOriginAsAPIBase:parsed];
+            if (sameOriginHTTP) {
                 WKWebViewVC *vc = [[WKWebViewVC alloc] init];
-                vc.url = cardURL;
+                vc.url = parsed;
                 [[WKNavigationManager shared] pushViewController:vc animated:YES];
             } else {
                 [[UIApplication sharedApplication] openURL:parsed options:@{} completionHandler:nil];

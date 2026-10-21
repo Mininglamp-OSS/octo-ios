@@ -43,6 +43,16 @@ static NSString *WKExtractSid(NSURL *URL) {
     return nil;
 }
 
+// 参数名解码：percentEncodedQuery 上的 item 名可能带百分号编码
+// （?%73id=x 解码后是 sid=x，发送方可控——WKTextMessageCell 卡片链接），
+// 与 WKExtractSid（queryItems 解码口径）不一致会出现双 sid 共存、
+// 外发 URL 剥不干净（评审 P2）。仅解码名字用于比较，value 字节不动。
+// 解码失败（非法序列）按原字节处理，与 URLSearchParams 的宽容语义一致。
+static NSString *WKDecodedQueryName(NSString *encodedName) {
+    NSString *decoded = [encodedName stringByRemovingPercentEncoding];
+    return decoded.length > 0 ? decoded : encodedName;
+}
+
 // 已有 sid key 无论是否为空都替换为 ios：追加第二个 sid 会导致 web 端
 // URLSearchParams.get 取到第一个（空值），与 native 反读的分桶错位。
 // 直接在 percentEncodedQuery 上做字符串级替换，不经过 queryItems 往返：
@@ -69,9 +79,8 @@ static NSURL *WKAppendSidParam(NSURL *URL, NSString *sid) {
         NSString *name = part;
         NSUInteger eq = [name rangeOfString:@"="].location;
         if (eq != NSNotFound) name = [name substringToIndex:eq];
-        // percentEncodedQuery 里的名字可能带百分号编码，但 "sid" 全为
-        // unreserved 字符，不会出现编码变体，直接比较安全。
-        if ([name isEqualToString:@"sid"]) {
+        // 名字先解码再比较（WKDecodedQueryName 注释）。
+        if ([WKDecodedQueryName(name) isEqualToString:@"sid"]) {
             if (!replaced) {
                 [kept addObject:pair];
                 replaced = YES;
@@ -131,7 +140,10 @@ static NSString *WKJSONString(NSString *value) {
     if (!WKSameOrigin(candidate, server)) return nil;
     // 正向路径白名单：只对确实需要免登的 H5 路由注入凭证（见 WKIsHandoffPath
     // 注释）。report 页不在名单内天然排除，无需单独 denylist。
-    if (!WKIsHandoffPath(candidate.path)) return nil;
+    // 必须用 percentEncodedPath：.path getter 会解码，/d/%61bc 会变成 /d/abc
+    // 误过白名单，而运行时 JS 守卫匹配的 location.pathname 保持编码态——
+    // 两边口径不一致会让页面拿到 sid 却落进空桶（评审 P1）。
+    if (!WKIsHandoffPath(candidate.percentEncodedPath)) return nil;
 
     return WKAppendSidParam(URL, WKDefaultSid());
 }
@@ -150,7 +162,9 @@ static NSString *WKJSONString(NSString *value) {
     NSURLComponents *server = [NSURLComponents componentsWithString:apiBaseURL];
     if (server.scheme.length == 0 || server.host.length == 0) return URL;
     if (!WKSameOrigin(scope, server)) return URL;
-    if (!WKIsHandoffPath(scope.path)) return URL;
+    // 与 trustedHandoffURLForURL 同口径：percentEncodedPath（编码态），
+    // 见上文 percentEncodedPath 注释。
+    if (!WKIsHandoffPath(scope.percentEncodedPath)) return URL;
     NSURLComponents *components = [NSURLComponents componentsWithURL:URL resolvingAgainstBaseURL:NO];
     if (components == nil || components.percentEncodedQuery.length == 0) return URL;
     // 与 WKAppendSidParam 同口径：在 percentEncodedQuery 上做字符串级拼接，
@@ -164,7 +178,8 @@ static NSString *WKJSONString(NSString *value) {
         NSString *name = part;
         NSUInteger eq = [name rangeOfString:@"="].location;
         if (eq != NSNotFound) name = [name substringToIndex:eq];
-        if (![name isEqualToString:@"sid"]) [kept addObject:part];
+        // 名字先解码再比较（WKDecodedQueryName 注释），与追加/提取同口径。
+        if (![WKDecodedQueryName(name) isEqualToString:@"sid"]) [kept addObject:part];
     }
     if (kept.count == parts.count) return URL;
     if (kept.count == 0) {
@@ -183,6 +198,23 @@ static NSString *WKJSONString(NSString *value) {
     NSNumber *port = WKEffectivePort(server) ?: @0;
     return [NSString stringWithFormat:@"%@://%@:%@",
         server.scheme.lowercaseString, server.host.lowercaseString, port];
+}
+
+// 容器路由判定：同源 http(s) 即放行（http 是本仓一等公民配置形态，
+// WKLoginSettingVC 分段控件默认 http）。同源口径与 WKSameOrigin 一致
+// （scheme+host+WKEffectivePort 归一端口）。
++ (BOOL)isSameOriginAsAPIBase:(NSURL *)URL {
+    if (URL == nil) return NO;
+    NSString *apiBaseURL = [WKApp shared].config.apiBaseUrl;
+    if (apiBaseURL.length == 0) return NO;
+    NSURLComponents *candidate = [NSURLComponents componentsWithURL:URL resolvingAgainstBaseURL:NO];
+    NSURLComponents *server = [NSURLComponents componentsWithString:apiBaseURL];
+    if (candidate == nil || server == nil) return NO;
+    if (candidate.scheme.length == 0 || candidate.host.length == 0 ||
+        server.scheme.length == 0 || server.host.length == 0) return NO;
+    NSString *scheme = candidate.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) return NO;
+    return WKSameOrigin(candidate, server);
 }
 
 + (nullable NSString *)identityJavaScriptForURL:(NSURL *)URL {
@@ -234,7 +266,9 @@ static NSString *WKJSONString(NSString *value) {
 
     // 运行时路径白名单与 native WKIsHandoffPath 同口径：/s/、/d/、/ppt/d/、
     // /docs/*/present 之外的路由（含 report 页、外链、重定向落点）一律不写
-    // 凭证。正则的 id 部分与 native 完全一致。
+    // 凭证。正则的 id 部分与 native 完全一致。pathname 保持编码态且【大小写
+    // 敏感】——不做 toLowerCase：native 正则大小写敏感，/D/abc 若被 JS 放行
+    // 而被 native 策略拒绝，两边口径就劈开了（评审 P1）。
     NSString *runtimePathCheck =
         @"var m=p.match(/^\\/(?:s\\/[A-Za-z0-9_-]{1,128}|d\\/[A-Za-z0-9_-]{1,128}"
         @"|ppt\\/d\\/[A-Za-z0-9_-]{1,128}|docs\\/[A-Za-z0-9_-]{1,128}\\/present)\\/?$/);"
@@ -244,7 +278,7 @@ static NSString *WKJSONString(NSString *value) {
         @"(function(){try{var o=%@;var p0=location.protocol.slice(0,-1).toLowerCase(),"
         @"n=location.port?Number(location.port):(p0==='https'?443:(p0==='http'?80:0));"
         @"var h=p0+'://'+location.hostname.toLowerCase()+':'+n;"
-        @"if(h!==o)return;var p=(location.pathname||'').toLowerCase();"
+        @"if(h!==o)return;var p=location.pathname||'';"
         @"%@var s=%@;%@}catch(e){}})();",
         originJSON, runtimePathCheck, sidJSON, items];
 }
