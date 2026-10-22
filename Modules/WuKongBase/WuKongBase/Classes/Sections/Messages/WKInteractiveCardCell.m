@@ -10,6 +10,7 @@
 #import "WKCardActionAPI.h"
 #import "UIView+WKCommon.h"
 #import "WuKongBase.h"
+#import "WKWebOrigin.h"
 #import "WKWebViewVC.h"
 #import "WKNavigationManager.h"
 #import <WuKongBase/WuKongBase-Swift.h>
@@ -665,9 +666,11 @@ static const NSUInteger kWKCardViewPoolLimit = 24;
     if ([self.messageModel.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
         [[WKApp shared] invoke:WKPOINT_SUMMARY_DEEPLINK param:@{@"url": urlStr}];
     }
-    // 大小写不敏感：HTTPS:// / HTTP:// 也视为已带 scheme，避免被误拼成 http://HTTPS://…。
+    // 裸域名补 scheme：走 WKURLStringWithFallbackScheme（WKWebOrigin.h），
+    // 跟随 httpsOn 配置而非硬编码 http://（评审 P2：https 部署下硬编码
+    // http:// 会让容器/注入判定双双失败，总结深链断在半路）。
     if (![urlStr.lowercaseString hasPrefix:@"http"]) {
-        urlStr = [NSString stringWithFormat:@"http://%@", urlStr];
+        urlStr = WKURLStringWithFallbackScheme(urlStr);
     }
     NSURL *url = [NSURL URLWithString:urlStr];
     if (!url) return;

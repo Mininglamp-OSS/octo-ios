@@ -43,6 +43,14 @@
 
 @property(nonatomic,strong) WKWebViewService *webViewService;
 
+// 非免登路由的同源页面（report / invite / join 等）专用 data store：
+// nonPersistent、与默认 store 物理隔离。免登路由的容器实例会把 localStorage
+// 里写入 token（WKWebIdentityHandoff 注入），而同源 = 可读同源存储——评审 P1
+// 用 WebKit 探针实测：同一 data store 下，白名单外的同源 HTML 能直接读到
+// tokenios 并调通 bridge。非免登页走独立 store 后没有 token 可读（这些页面
+// 也不需要：report 走一次性 session 握手，invite/join 是公开落地页）。
+@property (nonatomic, assign) BOOL usesIsolatedDataStore;
+
 // 服务器未声明 charset 的文本响应（如 .md），自行下载后用 cmark / loadHTMLString 渲染；
 // 渲染失败或文件过大走原始加载的 URL 记录在此集合中，避免再次拦截造成死循环。
 @property (nonatomic, strong) NSMutableSet<NSURL *> *bypassUTF8ReloadURLs;
@@ -92,14 +100,22 @@
     // WKLoginSettingVC 分段控件默认 http、Info.plist NSAllowsArbitraryLoads），
     // 强制升级会让 HTTP 部署的举报页/协议页对纯 http 端口做 TLS 握手而白屏，
     // 且改写后的 scheme 与 trustedOrigin 失配导致 bridge 全部 forbidden。
+    // 兜底 scheme 走 WKURLStringWithFallbackScheme（WKWebOrigin.h）：跟随
+    // httpsOn 配置而非硬编码（评审 P1：硬编码 https:// 在 HTTP 部署下白屏）。
     NSURL *targetURL = self.url;
     if (url.length > 0 && ![url.lowercaseString hasPrefix:@"http"]) {
-        targetURL = [NSURL URLWithString:[NSString stringWithFormat:@"https://%@", url]];
+        targetURL = [NSURL URLWithString:WKURLStringWithFallbackScheme(url)];
     }
     // 同源 H5 免登：追加 ?sid=，identityJavaScriptForURL 在下方 loadRequest 前
     // 生成注入脚本。非同源 URL 时 handoffURLForURL: 返回 nil，不注入凭证。
     NSURL *handoffURL = [WKWebIdentityHandoff handoffURLForURL:targetURL];
     self.currentUrl = handoffURL ?: targetURL;
+    // 容器分级（评审 P1）：非免登路由的同源/跨域页面用隔离 data store——
+    // 免登路由的容器实例会往默认 store 写 token，同源页共享默认 store 就能读。
+    // 判定必须在 viewDidLoad 里做（webView 懒加载在 addSubview 时才触发，
+    // 那时 targetURL 已就绪，但把 flag 放这里语义更清晰：以「入口 URL」定级，
+    // 后续导航不重判——隔离实例里的导航本来也读不到 token）。
+    self.usesIsolatedDataStore = ![WKWebIdentityHandoff isCredentialContainerURL:targetURL];
     // bridge 来源守卫：守卫基准无条件取 apiBaseUrl 的可信 origin（不随首屏
     // URL 是否免登而失守）——外链/重定向进入的跨域页面一律拒绝调用原生
     // handler；handoffURL 仅决定是否注入登录态。apiBaseUrl 未配置时
@@ -311,6 +327,13 @@
         });
         self.processPool = _sharedWKProcessPoolInstance;
         WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
+        // 容器分级（评审 P1）：非免登路由用 nonPersistent data store，与免登
+        // 容器写入 token 的默认 store 物理隔离——同源白名单外页面（report /
+        // invite / 上传 HTML）在此实例内读不到任何注入凭证。processPool 仍
+        // 共享单例：池共享不影响存储隔离（cookie/storage 归 data store 管）。
+        if (self.usesIsolatedDataStore) {
+            configuration.websiteDataStore = [WKWebsiteDataStore nonPersistentDataStore];
+        }
         WKPreferences *preferences = [WKPreferences new];
         preferences.javaScriptCanOpenWindowsAutomatically = YES;
 //        preferences.minimumFontSize = 40.0;
@@ -477,6 +500,22 @@
         if (!self.currentUrl) {
             self.currentUrl = self.url;
         }
+    }
+
+    // 凭证容器内导航拦截（评审 P1：隔离 boundary 必须覆盖后续导航——
+    // "nonpersistent store while allowing same-container navigation is
+    // insufficient"）。持凭证实例（免登路由、默认 data store 有 token）的
+    // 主 frame 若要导航到 API 子树内的用户上传内容（同 origin 可读
+    // localStorage 凭证），Cancel 并外跳。子 frame 不拦：iframe 无导航
+    // 代理入口可整体阻断，但注入脚本的运行时守卫阻止其拿到 sid 桶写路径，
+    // 该残留面在 PR 描述中声明为已知边界 + 服务端独立域 follow-up。
+    // 非凭证实例（隔离 data store）无需拦：里面没有 token 可读。
+    BOOL isMainFramedNav = !navigationAction.targetFrame || navigationAction.targetFrame.isMainFrame;
+    if (isMainFramedNav && !self.usesIsolatedDataStore &&
+        [WKWebIdentityHandoff isUntrustedSameOriginContentURL:navigationAction.request.URL]) {
+        [[UIApplication sharedApplication] openURL:navigationAction.request.URL options:@{} completionHandler:nil];
+        decisionHandler(WKNavigationActionPolicyCancel);
+        return;
     }
 
     //打开外部应用

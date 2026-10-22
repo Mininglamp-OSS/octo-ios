@@ -57,11 +57,8 @@
     NSURLComponents *c = [NSURLComponents componentsWithURL:URL resolvingAgainstBaseURL:NO];
     NSURLComponents *t = [NSURLComponents componentsWithString:_trustedOrigin];
     if (c == nil || t == nil) return NO;
-    // 端口必须经 WKEffectivePort 归一（与 WKSameOrigin 同口径）：trustedOrigin
-    // 总是显式带 :443/:80，页面 URL 通常省略默认端口，裸比原始值会误拒全部合法页面。
-    return [c.scheme.lowercaseString isEqualToString:t.scheme.lowercaseString] &&
-        [c.host.lowercaseString isEqualToString:t.host.lowercaseString] &&
-        [WKEffectivePort(c) isEqualToNumber:WKEffectivePort(t)];
+    // 单一口径：直接走 WKSameOrigin（WKWebOrigin.h），不再手写三字段比较。
+    return WKSameOrigin(c, t);
 }
 
 - (void)registerHandlers {

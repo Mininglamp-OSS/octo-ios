@@ -14,6 +14,7 @@
 #import "WKMentionService.h"
 #import "WKWebViewVC.h"
 #import "WKWebIdentityHandoff.h"
+#import "WKWebOrigin.h"
 #import "WKActionSheetView2.h"
 #import <ContactsUI/CNContactViewController.h>
 #import <ContactsUI/CNContactPickerViewController.h>
@@ -1925,12 +1926,17 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
             // WKWebIdentityHandoff 白名单单独决定。这里不能复用
             // handoffURLForURL:——它对白名单外同源页（report.html 等）返回
             // nil，会把同源内部页挤到外部浏览器。
+            //
+            // 但 API 子树内的用户上传内容（{api}/file/preview/... 的 HTML 等）
+            // 例外：与 API 同源却不可信，进持凭证容器可读同源 localStorage
+            // 里的 token（评审 P1 WebKit 探针实测），一律外跳。
             NSURLComponents *cardComp = [NSURLComponents componentsWithURL:parsed resolvingAgainstBaseURL:NO];
             NSString *scheme = cardComp.scheme.lowercaseString;
             BOOL sameOriginHTTP = cardComp.host.length > 0 &&
                 ([scheme isEqualToString:@"http"] || [scheme isEqualToString:@"https"]) &&
                 [WKWebIdentityHandoff isSameOriginAsAPIBase:parsed];
-            if (sameOriginHTTP) {
+            BOOL untrustedUpload = [WKWebIdentityHandoff isUntrustedSameOriginContentURL:parsed];
+            if (sameOriginHTTP && !untrustedUpload) {
                 WKWebViewVC *vc = [[WKWebViewVC alloc] init];
                 vc.url = parsed;
                 [[WKNavigationManager shared] pushViewController:vc animated:YES];
@@ -2468,8 +2474,10 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
             [[WKApp shared] invoke:WKPOINT_SUMMARY_DEEPLINK param:@{@"url": link ?: @""}];
         }
         WKWebViewVC *vc = [[WKWebViewVC alloc] init];
-        if(![link hasPrefix:@"http"]) {
-            link = [NSString stringWithFormat:@"http://%@",link];
+        // 裸域名补 scheme 与卡片按钮同口径：WKURLStringWithFallbackScheme
+        //（WKWebOrigin.h），跟随 httpsOn 而非硬编码 http://。
+        if(![link.lowercaseString hasPrefix:@"http"]) {
+            link = WKURLStringWithFallbackScheme(link);
         }
         vc.url = [NSURL URLWithString:[link stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding]];
        

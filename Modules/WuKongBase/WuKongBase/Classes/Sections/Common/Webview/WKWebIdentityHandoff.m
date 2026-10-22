@@ -8,8 +8,8 @@ static NSString *WKDefaultSid(void) {
     return @"ios";
 }
 
-// WKEffectivePort / WKSameOrigin 已上移至 WKWebIdentityHandoff.h（static inline），
-// 供 bridge 来源守卫（WKWebViewService）等处复用，保证全仓同源判断单一口径。
+// WKEffectivePort / WKSameOrigin / WKJSONStringForJS 收敛在 WKWebOrigin.h
+//（单一真值来源，评审 P2），本文件经 .h 引入后直接使用。
 
 // 免登注入的路径白名单（对齐安卓 DocsViewerUrlPolicy.VIEWER_PATH 的「上下文
 // 跟随路由」模型，并覆盖服务端 summaryDeepLink 的 /s/{task_no} 形状）：
@@ -106,21 +106,14 @@ static NSString *WKencodeURIComponent(NSString *value) {
     return [value stringByAddingPercentEncodingWithAllowedCharacters:allowed];
 }
 
-static NSString *WKJSONString(NSString *value) {
-    NSData *data = [NSJSONSerialization dataWithJSONObject:@[value ?: @""] options:0 error:nil];
-    NSString *arrayJSON = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    NSString *valueJSON = arrayJSON.length >= 2 ? [arrayJSON substringWithRange:NSMakeRange(1, arrayJSON.length - 2)] : @"\"\"";
-    valueJSON = [valueJSON stringByReplacingOccurrencesOfString:[NSString stringWithFormat:@"%C", (unichar)0x2028]
-                                                     withString:@"\\u2028"];
-    return [valueJSON stringByReplacingOccurrencesOfString:[NSString stringWithFormat:@"%C", (unichar)0x2029]
-                                                withString:@"\\u2029"];
-}
+// WKJSONString 已收敛为 WKWebOrigin.h 的 WKJSONStringForJS（单一转义口径，
+// 与 WKDocsViewerSpaceHandoff 共用）。
 
 @implementation WKWebIdentityHandoff
 
 // 测试入口：转义契约直接断言（见 .h 注释）。
-+ (NSString *)JSONString:(NSString *)value {
-    return WKJSONString(value);
++ (NSString * _Nullable)JSONString:(NSString * _Nullable)value {
+    return WKJSONStringForJS(value);
 }
 
 + (nullable NSURL *)handoffURLForURL:(NSURL *)URL {
@@ -190,14 +183,21 @@ static NSString *WKJSONString(NSString *value) {
     return components.URL ?: URL;
 }
 
+// 可信 origin（apiBaseUrl 的 scheme://host:port 归一形态）。host 为 IPv6
+// 字面量时补方括号（评审 Nit）：与注入 JS 的 location.hostname（浏览器给
+// [::1] 带括号形态）对齐，否则 IPv6 部署下注入被自身运行时守卫静默拒绝。
 + (nullable NSString *)trustedOrigin {
     NSString *apiBaseURL = [WKApp shared].config.apiBaseUrl;
     if (apiBaseURL.length == 0) return nil;
     NSURLComponents *server = [NSURLComponents componentsWithString:apiBaseURL];
     if (server.scheme.length == 0 || server.host.length == 0) return nil;
     NSNumber *port = WKEffectivePort(server) ?: @0;
+    // IPv6 字面量补方括号：location.hostname 给的是 [::1]，裸 ::1 拼出的
+    // origin 非法且与 JS 侧永不相等（fail-closed 但功能失效，评审 Nit）。
+    NSString *host = server.host.lowercaseString;
+    if ([host containsString:@":"]) host = [NSString stringWithFormat:@"[%@]", host];
     return [NSString stringWithFormat:@"%@://%@:%@",
-        server.scheme.lowercaseString, server.host.lowercaseString, port];
+        server.scheme.lowercaseString, host, port];
 }
 
 // 容器路由判定：同源 http(s) 即放行（http 是本仓一等公民配置形态，
@@ -217,6 +217,45 @@ static NSString *WKJSONString(NSString *value) {
     return WKSameOrigin(candidate, server);
 }
 
++ (BOOL)isCredentialContainerURL:(NSURL *)URL {
+    if (URL == nil) return NO;
+    NSString *apiBaseURL = [WKApp shared].config.apiBaseUrl;
+    if (apiBaseURL.length == 0) return NO;
+    NSURLComponents *candidate = [NSURLComponents componentsWithURL:URL resolvingAgainstBaseURL:NO];
+    NSURLComponents *server = [NSURLComponents componentsWithString:apiBaseURL];
+    if (candidate == nil || server == nil) return NO;
+    if (candidate.scheme.length == 0 || candidate.host.length == 0 ||
+        server.scheme.length == 0 || server.host.length == 0) return NO;
+    NSString *scheme = candidate.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) return NO;
+    if (!WKSameOrigin(candidate, server)) return NO;
+    return WKIsHandoffPath(candidate.percentEncodedPath);
+}
+
++ (BOOL)isUntrustedSameOriginContentURL:(NSURL *)URL {
+    if (![self isSameOriginAsAPIBase:URL]) return NO;
+    // 免登白名单路由是可信 H5，不按子树排除。
+    NSURLComponents *candidate = [NSURLComponents componentsWithURL:URL resolvingAgainstBaseURL:NO];
+    if (WKIsHandoffPath(candidate.percentEncodedPath)) return NO;
+    // server.path 形如 /api/v1/（AppDelegate BASE_URL 模板）；挂根（"/" 或空）
+    // 时无法凭路径把上传内容与 H5 区分开——此时不启用子树排除，避免把整个
+    // 站点判成不可信（免登白名单兜底住了凭证写入，读面由容器分级收口）。
+    NSString *apiBaseURL = [WKApp shared].config.apiBaseUrl;
+    NSURLComponents *server = [NSURLComponents componentsWithString:apiBaseURL];
+    NSString *basePath = server.path ?: @"";
+    // 统一到与 percentEncodedPath 同口径：server.path 是解码态，而部署模板
+    // (/api/v1/) 不含需编码字符，直接用；如未来 base path 含编码字符，此处
+    // 需改取 percentEncodedPath。
+    basePath = [basePath isEqualToString:@"/"] ? @"" : basePath;
+    if (basePath.length == 0) return NO;
+    NSString *path = candidate.percentEncodedPath ?: @"";
+    if (![path hasPrefix:basePath]) return NO;
+    // /api/v1 也要排除（不带尾斜杠的裸 base），但 /api/v1xxx 这种相邻前缀不排除
+    NSString *rest = [path substringFromIndex:basePath.length];
+    if (rest.length == 0) return NO;
+    return YES;
+}
+
 + (nullable NSString *)identityJavaScriptForURL:(NSURL *)URL {
     NSURL *handoffURL = [self trustedHandoffURLForURL:URL];
     if (handoffURL == nil) return nil;
@@ -231,15 +270,15 @@ static NSString *WKJSONString(NSString *value) {
 
     // key 在 native 侧拼完整字符串后统一 JSON 序列化，sid 不做裸插值
     // （sid 来自消息 URL，含引号/反斜杠时不能越出字符串字面量）。
-    NSString *tokenKey = WKJSONString([NSString stringWithFormat:@"token%@", sid]);
-    NSString *uidKey = WKJSONString([NSString stringWithFormat:@"uid%@", sid]);
-    NSString *nameKey = WKJSONString([NSString stringWithFormat:@"name%@", sid]);
-    NSString *sidJSON = WKJSONString(sid);
+    NSString *tokenKey = WKJSONStringForJS([NSString stringWithFormat:@"token%@", sid]);
+    NSString *uidKey = WKJSONStringForJS([NSString stringWithFormat:@"uid%@", sid]);
+    NSString *nameKey = WKJSONStringForJS([NSString stringWithFormat:@"name%@", sid]);
+    NSString *sidJSON = WKJSONStringForJS(sid);
 
     NSMutableString *items = [NSMutableString string];
-    [items appendFormat:@"localStorage.setItem(%@,%@);", tokenKey, WKJSONString(token)];
-    [items appendFormat:@"localStorage.setItem(%@,%@);", uidKey, WKJSONString(uid)];
-    [items appendFormat:@"localStorage.setItem(%@,%@);", nameKey, WKJSONString(name)];
+    [items appendFormat:@"localStorage.setItem(%@,%@);", tokenKey, WKJSONStringForJS(token)];
+    [items appendFormat:@"localStorage.setItem(%@,%@);", uidKey, WKJSONStringForJS(uid)];
+    [items appendFormat:@"localStorage.setItem(%@,%@);", nameKey, WKJSONStringForJS(name)];
     // Space key 双写：现行 key 按 uid 分桶，legacy 全局 key 会被 web 端迁移标记短路，
     // 只写 legacy 不可靠。key 编码与 web 端 encodeURIComponent(uid) 严格对齐。
     // 种子取 native 当前 space（NSUserDefaults currentSpaceId）而非页面 localStorage：
@@ -251,9 +290,9 @@ static NSString *WKJSONString(NSString *value) {
         NSString *nativeSpaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
         if (nativeSpaceId.length > 0) {
             NSString *spaceKey = [NSString stringWithFormat:@"octo:last-space:%@", WKencodeURIComponent(uid)];
-            NSString *spaceKeyJSON = WKJSONString(spaceKey);
+            NSString *spaceKeyJSON = WKJSONStringForJS(spaceKey);
             [items appendFormat:@"localStorage.setItem(%@,%@);",
-                spaceKeyJSON, WKJSONString(nativeSpaceId)];
+                spaceKeyJSON, WKJSONStringForJS(nativeSpaceId)];
         }
     }
     [items appendFormat:@"sessionStorage.setItem('octo.session.sid',%@);", sidJSON];
@@ -262,7 +301,7 @@ static NSString *WKJSONString(NSString *value) {
     // 两处各写一份会在未来改动时静默失配（评审 Nit）。
     NSString *origin = [self trustedOrigin];
     if (origin.length == 0) return nil;
-    NSString *originJSON = WKJSONString(origin);
+    NSString *originJSON = WKJSONStringForJS(origin);
 
     // 运行时路径白名单与 native WKIsHandoffPath 同口径：/s/、/d/、/ppt/d/、
     // /docs/*/present 之外的路由（含 report 页、外链、重定向落点）一律不写

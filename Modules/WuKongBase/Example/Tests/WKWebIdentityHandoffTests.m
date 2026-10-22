@@ -102,16 +102,47 @@ static NSString *savedUid = nil;
 
 - (void)testSameOriginRoutingIndependentOfAllowlist {
     // 容器路由：同源 http(s) 即 true——包括白名单外的 report.html、
-    // 免登主链路 /s/，以及 http 形态（http 是本仓一等公民配置）。
+    // 免登主链路 /s/，以及 http 形态。http 正例需要 http 形态的 apiBaseUrl
+    //（setUp 配的是 https，scheme 严格比较会正确拒绝 http——那条负例单测）。
     XCTAssertTrue([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"https://octo.example/report.html?channel_id=x"]]);
     XCTAssertTrue([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"https://octo.example/s/ST1"]]);
+    NSString *savedBase = [WKApp shared].config.apiBaseUrl;
+    [WKApp shared].config.apiBaseUrl = @"http://octo.example/api/v1/";
     XCTAssertTrue([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"http://octo.example/d/abc"]]);
+    [WKApp shared].config.apiBaseUrl = savedBase;
+    // http vs https 严格拒绝（默认端口归一不能跨 scheme 放行）
+    XCTAssertFalse([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"http://octo.example/d/abc"]]);
     // 跨域 / 非 http(s) / 缺 host / 配置缺失 → false
     XCTAssertFalse([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"https://evil.example/d/abc"]]);
     XCTAssertFalse([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"ftp://octo.example/d/abc"]]);
     XCTAssertFalse([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"https://octo.example:8443/d/abc"]]);
     XCTAssertFalse([WKWebIdentityHandoff isSameOriginAsAPIBase:nil]);
     XCTAssertFalse([WKWebIdentityHandoff isSameOriginAsAPIBase:[NSURL URLWithString:@"not a url"]]);
+}
+
+- (void)testUntrustedSameOriginContent {
+    // API 子树内的路径判为不可信上传内容（评审 P1：与 API 同源的用户 HTML
+    // 在持凭证容器内可读 localStorage token，须外跳/隔离）。
+    XCTAssertTrue([WKWebIdentityHandoff isUntrustedSameOriginContentURL:[NSURL URLWithString:@"https://octo.example/api/v1/file/preview/some/uuid.html"]]);
+    XCTAssertTrue([WKWebIdentityHandoff isUntrustedSameOriginContentURL:[NSURL URLWithString:@"https://octo.example/api/v1/file/download/url?name=x.htm"]]);
+    // 裸 base 本身不算内容
+    XCTAssertFalse([WKWebIdentityHandoff isUntrustedSameOriginContentURL:[NSURL URLWithString:@"https://octo.example/api/v1"]]);
+    XCTAssertFalse([WKWebIdentityHandoff isUntrustedSameOriginContentURL:[NSURL URLWithString:@"https://octo.example/api/v1/"]]);
+    // 免登白名单路由优先于子树排除（api base 挂根部署下 /s/ /d/ 不会被误杀）
+    XCTAssertFalse([WKWebIdentityHandoff isUntrustedSameOriginContentURL:[NSURL URLWithString:@"https://octo.example/s/ST1"]]);
+    XCTAssertFalse([WKWebIdentityHandoff isUntrustedSameOriginContentURL:[NSURL URLWithString:@"https://octo.example/d/abc"]]);
+    // 相邻前缀不算子树（/api/v10 不是 /api/v1 下）
+    XCTAssertFalse([WKWebIdentityHandoff isUntrustedSameOriginContentURL:[NSURL URLWithString:@"https://octo.example/api/v10/file/x.html"]]);
+    // 跨域一律不归本判定管（返回 NO，由跨域路径处理）
+    XCTAssertFalse([WKWebIdentityHandoff isUntrustedSameOriginContentURL:[NSURL URLWithString:@"https://evil.example/api/v1/file/x.html"]]);
+}
+
+- (void)testCredentialContainerURL {
+    // 凭证容器准入 = 同源 + 免登白名单路由（不依赖登录态）
+    XCTAssertTrue([WKWebIdentityHandoff isCredentialContainerURL:[NSURL URLWithString:@"https://octo.example/s/ST1"]]);
+    XCTAssertTrue([WKWebIdentityHandoff isCredentialContainerURL:[NSURL URLWithString:@"https://octo.example/d/abc"]]);
+    XCTAssertFalse([WKWebIdentityHandoff isCredentialContainerURL:[NSURL URLWithString:@"https://octo.example/report.html"]]);
+    XCTAssertFalse([WKWebIdentityHandoff isCredentialContainerURL:[NSURL URLWithString:@"https://evil.example/s/ST1"]]);
 }
 
 #pragma mark - sid 替换 / 编码保留
@@ -238,6 +269,22 @@ static NSString *savedUid = nil;
     // 出口剥离同样认编码名
     NSURL *cleaned = [WKWebIdentityHandoff sanitizedURLForExternalUse:[NSURL URLWithString:@"https://octo.example/d/abc?%73id=a&x=1"]];
     XCTAssertEqualObjects(cleaned.absoluteString, @"https://octo.example/d/abc?x=1");
+}
+
+#pragma mark - WKURLStringWithFallbackScheme（WKWebOrigin.h，评审 P1/P2）
+
+- (void)testFallbackSchemeFollowsHttpsOnConfig {
+    // 裸域名补 scheme 跟随 httpsOn 配置，不硬编码（评审 P1：https 兜底在
+    // HTTP 部署下白屏；评审 P2：http:// 硬编码在 https 部署下断链）。
+    // 测试进程无法改 WKServerConfig 单例的真实持久化值，这里只锁行为契约：
+    // 带 scheme 原样返回、大小写不敏感、拼接形态正确。scheme 方向的配置
+    // 联动由三个调用点（WKWebViewVC 兜底 / 卡片 / didLinkClick）统一走本
+    // helper 保证——单一入口即单一口径。
+    XCTAssertEqualObjects(WKURLStringWithFallbackScheme(@"https://a.com/s/1"), @"https://a.com/s/1");
+    XCTAssertEqualObjects(WKURLStringWithFallbackScheme(@"HTTPS://a.com/s/1"), @"HTTPS://a.com/s/1");
+    NSString *bare = WKURLStringWithFallbackScheme(@"octo.example/s/1");
+    XCTAssertTrue([bare hasSuffix:@"://octo.example/s/1"], @"裸域名补 <scheme>:// 前缀，实际：%@", bare);
+    XCTAssertEqualObjects(WKURLStringWithFallbackScheme(@""), @"");
 }
 
 @end

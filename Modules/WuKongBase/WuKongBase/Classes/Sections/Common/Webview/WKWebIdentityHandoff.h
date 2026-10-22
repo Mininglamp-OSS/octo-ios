@@ -2,29 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #import <Foundation/Foundation.h>
+#import "WKWebOrigin.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// 默认端口归一：未显式写端口时按 scheme 补 443/80；非 HTTP(S) 返回 nil。
-/// 返回 nil 属正常分支（非 HTTP(S) 无默认端口概念），调用方按"不同源"处理。
-/// 这是本模块内同源判断的唯一端口口径 —— WKSameOrigin / bridge 来源守卫 /
-/// 注入 JS 运行时守卫都必须经它比较端口，禁止各处裸比 port 原始值
-/// （否则 https://a.com 与 https://a.com:443 会被误判为不同源）。
-static inline NSNumber * _Nullable WKEffectivePort(NSURLComponents *components) {
-    if (components.port != nil) return components.port;
-    NSString *scheme = components.scheme.lowercaseString;
-    if ([scheme isEqualToString:@"https"]) return @443;
-    if ([scheme isEqualToString:@"http"]) return @80;
-    return nil;
-}
-
-/// 同源判断（scheme + host + 归一端口）。注意：非 HTTP(S) 的 origin 端口均为
-/// nil，objc 对 nil 消息返回 NO，即非 HTTP(S) 一律判不同源 —— 有意 fail-closed。
-static inline BOOL WKSameOrigin(NSURLComponents *a, NSURLComponents *b) {
-    return [a.scheme.lowercaseString isEqualToString:b.scheme.lowercaseString] &&
-        [a.host.lowercaseString isEqualToString:b.host.lowercaseString] &&
-        [WKEffectivePort(a) isEqualToNumber:WKEffectivePort(b)];
-}
+// 同源/端口口径（WKEffectivePort / WKSameOrigin）与 JS 转义（WKJSONStringForJS）
+// 收敛在 WKWebOrigin.h 单一真值来源（评审 P2：多份手写实现会静默劈开安全口径）。
 
 /// 同源 H5 的登录态交接：给 URL 追加 sid、生成 document-start 注入脚本，
 /// 把 token/uid/name 写进同 origin 的 localStorage（key 带 sid 分桶，与 web 端
@@ -50,11 +33,26 @@ static inline BOOL WKSameOrigin(NSURLComponents *a, NSURLComponents *b) {
 /// 共用一个判定会把同源白名单外页面挤到外部浏览器）。配置缺失返回 NO。
 + (BOOL)isSameOriginAsAPIBase:(NSURL *)URL;
 
-/// JS 值/键的安全嵌入：NSJSONSerialization 序列化单个字符串（含引号、反斜杠、
-/// 换行、U+2028/U+2029 转义），保证任意值不越出 JS 字符串字面量。
+/// 凭证容器准入：同源 + 命中免登路由白名单。只有这类 URL 的容器实例才使用
+/// 默认 data store（localStorage 里会有注入的 token）。与 handoffURLForURL:
+/// 的区别：本判定不依赖登录态（未登录时 handoffURLForURL: 也返回 nil，
+/// 不能作为容器分级依据）。
++ (BOOL)isCredentialContainerURL:(nullable NSURL *)URL;
+
+/// 不可信同源内容：同源但路径落在 API 子树内（apiBaseUrl 的路径前缀下，
+/// 如 {api}/file/preview/... 的用户上传 HTML）。这些内容与 API 同源却由
+/// 用户产生，一旦在持凭证容器内渲染（含 iframe），可读同源 localStorage
+/// 里的 token（评审 P1 WebKit 探针已实测）。此类 URL 不得进容器、不得在
+/// 容器内导航到达，应外跳。免登白名单路径优先于本判定（API base 挂根的
+/// 部署下无法按路径区分上传内容，此时不启用子树排除，避免误杀 H5 路由）。
++ (BOOL)isUntrustedSameOriginContentURL:(nullable NSURL *)URL;
+
+/// JS 值/键的安全嵌入：经 WKWebOrigin.h 的 WKJSONStringForJS（NSJSONSerialization
+/// 序列化单个字符串，含引号、反斜杠、换行、U+2028/U+2029 转义），保证任意值
+/// 不越出 JS 字符串字面量。
 /// 暴露给测试：注入脚本的所有插值都经它，转义契约需要直接断言（Octo-Q 评审
 /// 指出经 sid 替换路径测转义是"恒绿的测试"——恶意值在进转义前已被换成 ios）。
-+ (NSString *)JSONString:(NSString *)value;
++ (nullable NSString *)JSONString:(nullable NSString *)value;
 
 @end
 
