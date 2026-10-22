@@ -554,10 +554,22 @@
     } else if ([self activeIsLoadingFirstPage]) {
         [self.emptyView applyMode:WKChannelHistorySearchEmptyModeLoading primary:nil secondary:nil];
     } else if (![self activeQueryStarted]) {
-        [self.emptyView applyMode:WKChannelHistorySearchEmptyModeWaitingInput primary:nil secondary:nil];
+        [self.emptyView applyMode:WKChannelHistorySearchEmptyModeWaitingInput primary:[self waitingInputPlaceholder] secondary:nil];
     } else {
         [self.emptyView applyMode:WKChannelHistorySearchEmptyModeNoResults primary:nil secondary:nil];
     }
+}
+
+/// 等待输入态的提示文案按 tab 区分，避免四个 tab 都显示聊天记录搜索的兜底文案。
+- (NSString *)waitingInputPlaceholder {
+    switch (self.currentTab) {
+        case WKGlobalSearchV2TabAll:      return LLang(@"输入关键词搜索全部内容");
+        case WKGlobalSearchV2TabMessages: return nil; // 走空态视图兜底「输入关键词查找此聊天内的记录」
+        case WKGlobalSearchV2TabContacts: return LLang(@"输入关键词查找联系人");
+        case WKGlobalSearchV2TabGroups:   return LLang(@"输入关键词查找群组");
+        case WKGlobalSearchV2TabFiles:    return LLang(@"输入关键词查找文件");
+    }
+    return nil;
 }
 
 - (void)updateLoadMoreFooter {
