@@ -775,6 +775,10 @@
 "至今"="Now";
 // EmptyView
 "输入关键词查找此聊天内的记录"="Type a keyword to search this chat";
+"输入关键词搜索全部内容"="Type a keyword to search everything";
+"输入关键词查找联系人"="Type a keyword to search contacts";
+"输入关键词查找群组"="Type a keyword to search groups";
+"输入关键词查找文件"="Type a keyword to search files";
 "未找到相关内容"="No matches";
 "换个关键词或调整筛选条件再试试"="Try a different keyword or adjust filters";
 "搜索中…"="Searching…";
