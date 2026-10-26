@@ -139,6 +139,7 @@ static UIImage *WKDocumentShareCardIcon(NSString *name) {
 @property(nonatomic,strong) NSDictionary *preview;
 @property(nonatomic,copy) NSString *previewStatus;
 @property(nonatomic,copy) NSString *renderedDocId;
+@property(nonatomic,copy) NSString *renderedSpaceId;
 @property(nonatomic,copy) NSString *renderedUID;
 @property(nonatomic,assign) NSUInteger requestGeneration;
 @property(nonatomic,assign) BOOL previewNeedsRefresh;
@@ -252,13 +253,19 @@ static UIImage *WKDocumentShareCardIcon(NSString *name) {
     if (![model.content isKindOfClass:WKDocumentShareCardContent.class]) return;
 
     WKDocumentShareCardContent *content = (WKDocumentShareCardContent *)model.content;
-    if (self.previewNeedsRefresh && [content.docId isEqualToString:self.renderedDocId]) {
+    NSString *spaceId = content.spaceId ?: @"";
+    if (self.previewNeedsRefresh
+        && [content.docId isEqualToString:self.renderedDocId]
+        && [spaceId isEqualToString:self.renderedSpaceId]) {
         self.previewNeedsRefresh = NO;
     }
     NSString *uid = [WKApp shared].loginInfo.uid ?: @"";
-    BOOL identityChanged = ![self.renderedDocId isEqualToString:content.docId] || ![self.renderedUID isEqualToString:uid];
+    BOOL identityChanged = ![self.renderedDocId isEqualToString:content.docId]
+        || ![self.renderedSpaceId isEqualToString:spaceId]
+        || ![self.renderedUID isEqualToString:uid];
     if (identityChanged) {
         self.renderedDocId = content.docId ?: @"";
+        self.renderedSpaceId = spaceId;
         self.renderedUID = uid;
         self.preview = nil;
         self.previewStatus = @"loading";
@@ -330,16 +337,20 @@ static UIImage *WKDocumentShareCardIcon(NSString *name) {
 - (void)fetchPreviewForContent:(WKDocumentShareCardContent *)content {
     NSUInteger generation = ++self.requestGeneration;
     NSString *docId = [content.docId copy] ?: @"";
+    NSString *spaceId = [content.spaceId copy] ?: @"";
     NSString *uid = [WKApp shared].loginInfo.uid ?: @"";
     __weak typeof(self) weakSelf = self;
-    [[WKDocumentPreviewLoader shared] fetchPreviewForKind:content.kind docId:docId spaceId:content.spaceId force:NO callback:^(NSDictionary *result) {
+    [[WKDocumentPreviewLoader shared] fetchPreviewForKind:content.kind docId:docId spaceId:spaceId force:NO callback:^(NSDictionary *result) {
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong typeof(weakSelf) self = weakSelf;
-            if (!self || generation != self.requestGeneration || ![self.renderedDocId isEqualToString:docId] || ![[WKApp shared].loginInfo.uid isEqualToString:uid]) return;
+            if (!self || generation != self.requestGeneration
+                || ![self.renderedDocId isEqualToString:docId]
+                || ![self.renderedSpaceId isEqualToString:spaceId]
+                || ![[WKApp shared].loginInfo.uid isEqualToString:uid]) return;
             self.previewStatus = [result[@"status"] isKindOfClass:NSString.class] ? result[@"status"] : @"error";
             self.preview = [result[@"preview"] isKindOfClass:NSDictionary.class] ? result[@"preview"] : nil;
             WKDocumentShareCardContent *current = [self.messageModel.content isKindOfClass:WKDocumentShareCardContent.class] ? (WKDocumentShareCardContent *)self.messageModel.content : nil;
-            if (!current || ![current.docId isEqualToString:docId]) {
+            if (!current || ![current.docId isEqualToString:docId] || ![(current.spaceId ?: @"") isEqualToString:spaceId]) {
                 self.previewNeedsRefresh = YES;
                 return;
             }
@@ -580,6 +591,7 @@ static UIImage *WKDocumentShareCardIcon(NSString *name) {
     self.preview = nil;
     self.previewStatus = nil;
     self.renderedDocId = nil;
+    self.renderedSpaceId = nil;
     self.renderedUID = nil;
     self.previewNeedsRefresh = NO;
 }
@@ -611,12 +623,8 @@ static UIImage *WKDocumentShareCardIcon(NSString *name) {
     NSRegularExpression *identifier = [NSRegularExpression regularExpressionWithPattern:@"^[A-Za-z0-9_-]{1,128}$" options:0 error:nil];
     NSRange range = NSMakeRange(0, content.docId.length);
     if (content.docId.length == 0 || [identifier numberOfMatchesInString:content.docId options:0 range:range] != 1) return nil;
-    NSURLComponents *components = [NSURLComponents componentsWithString:[WKApp shared].config.apiBaseUrl];
-    if (components.scheme.length == 0 || components.host.length == 0) return nil;
-    components.path = [NSString stringWithFormat:@"/d/%@", content.docId];
-    components.query = nil;
-    components.fragment = nil;
-    return components.URL;
+    NSString *path = [NSString stringWithFormat:@"/d/%@", content.docId];
+    return WKDocumentShareCardAbsoluteURL(path, [WKApp shared].config.apiBaseUrl);
 }
 
 @end

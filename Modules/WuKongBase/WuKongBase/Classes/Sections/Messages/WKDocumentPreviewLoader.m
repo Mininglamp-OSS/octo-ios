@@ -7,6 +7,28 @@
 #import "WuKongBase.h"
 #import <AFNetworking/AFNetworking.h>
 
+NSURL *WKDocumentShareCardAbsoluteURL(NSString *relativePath, NSString *apiBaseURL) {
+    if (relativePath.length == 0 || apiBaseURL.length == 0) return nil;
+    NSURLComponents *components = [NSURLComponents componentsWithString:apiBaseURL];
+    if (components.scheme.length == 0 || components.host.length == 0) return nil;
+
+    NSString *basePath = components.path ?: @"";
+    while ([basePath hasSuffix:@"/"]) {
+        basePath = [basePath substringToIndex:basePath.length - 1];
+    }
+    if ([basePath hasSuffix:@"/api/v1"]) {
+        basePath = [basePath substringToIndex:basePath.length - [@"/api/v1" length]];
+    } else if ([basePath hasSuffix:@"/v1"]) {
+        basePath = [basePath substringToIndex:basePath.length - [@"/v1" length]];
+    }
+
+    NSString *route = [relativePath hasPrefix:@"/"] ? relativePath : [@"/" stringByAppendingString:relativePath];
+    components.path = [basePath stringByAppendingString:route];
+    components.query = nil;
+    components.fragment = nil;
+    return components.URL;
+}
+
 static const NSUInteger WKDocPreviewMaxTextLength = 500;
 static const NSUInteger WKDocPreviewMaxParagraphs = 3;
 static const NSUInteger WKDocPreviewMaxBlocks = 200;
@@ -157,6 +179,17 @@ static NSDictionary *WKParseHTMLPreview(id body) {
     return heading.length || paragraphs.count ? @{@"type": @"doc", @"heading": heading, @"paragraphs": paragraphs} : nil;
 }
 
+@interface WKDocPreviewRequestSnapshot : NSObject
+@property(nonatomic, copy) NSString *origin;
+@property(nonatomic, copy) NSString *apiBaseURL;
+@property(nonatomic, copy) NSString *uid;
+@property(nonatomic, copy) NSString *token;
+@property(nonatomic, copy) NSString *language;
+@property(nonatomic, assign) NSUInteger generation;
+@end
+@implementation WKDocPreviewRequestSnapshot
+@end
+
 @interface WKDocPreviewCacheEntry : NSObject
 @property(nonatomic, copy) NSDictionary *result;
 @property(nonatomic, assign) NSTimeInterval timestamp;
@@ -164,15 +197,33 @@ static NSDictionary *WKParseHTMLPreview(id body) {
 @implementation WKDocPreviewCacheEntry
 @end
 
-@interface WKDocumentPreviewLoader ()
+/// A flight owns its callbacks, transport and task. Identity checks prevent a late
+/// completion from an invalidated request from consuming a newer flight's callbacks.
+@interface WKDocPreviewFlight : NSObject
+@property(nonatomic, copy) NSString *requestID;
+@property(nonatomic, copy) NSString *cacheKey;
+@property(nonatomic, strong) WKDocPreviewRequestSnapshot *snapshot;
+@property(nonatomic, strong) NSMutableArray *callbacks;
 @property(nonatomic, strong) AFHTTPSessionManager *manager;
+@property(nonatomic, strong) NSURLSessionDataTask *task;
+@end
+@implementation WKDocPreviewFlight
+@end
+
+@interface WKDocumentPreviewLoader ()
+- (WKDocPreviewRequestSnapshot *)requestSnapshot;
+- (void)finishFlight:(WKDocPreviewFlight *)flight result:(NSDictionary *)result;
 @end
 
 @implementation WKDocumentPreviewLoader {
     NSLock *_lock;
     NSMutableDictionary<NSString *, WKDocPreviewCacheEntry *> *_cache;
-    NSMutableDictionary<NSString *, NSMutableArray *> *_inflight;
-    NSString *_cacheUID;
+    NSMutableDictionary<NSString *, WKDocPreviewFlight *> *_inflight;
+    NSString *_sessionOrigin;
+    NSString *_sessionAPIBaseURL;
+    NSString *_sessionUID;
+    NSString *_sessionToken;
+    NSUInteger _sessionGeneration;
 }
 
 + (instancetype)shared {
@@ -188,14 +239,6 @@ static NSDictionary *WKParseHTMLPreview(id body) {
     _lock = [NSLock new];
     _cache = [NSMutableDictionary dictionary];
     _inflight = [NSMutableDictionary dictionary];
-    NSURLComponents *components = [NSURLComponents componentsWithString:WKApp.shared.config.apiBaseUrl ?: @""];
-    NSString *origin = components.scheme.length && components.host.length
-        ? [NSString stringWithFormat:@"%@://%@%@", components.scheme, components.host, components.port ? [NSString stringWithFormat:@":%@", components.port] : @""]
-        : WKApp.shared.config.apiBaseUrl;
-    _manager = [[AFHTTPSessionManager alloc] initWithBaseURL:[NSURL URLWithString:origin]];
-    _manager.requestSerializer = [AFJSONRequestSerializer serializer];
-    _manager.responseSerializer = [AFJSONResponseSerializer serializer];
-    _manager.responseSerializer.acceptableContentTypes = [NSSet setWithObjects:@"application/json", @"text/json", @"text/plain", @"text/javascript", nil];
     return self;
 }
 
@@ -206,23 +249,49 @@ static NSDictionary *WKParseHTMLPreview(id body) {
     return @"content";
 }
 
-- (NSString *)languageHeader {
-    NSString *language = WKApp.shared.config.langue ?: @"zh-Hans";
+- (NSString *)languageHeaderForLanguage:(NSString *)language {
+    language = language ?: @"zh-Hans";
     if ([language isEqualToString:@"zh-Hans"]) return @"zh-CN,zh;q=0.9,en;q=0.8";
     if ([language isEqualToString:@"zh-Hant"]) return @"zh-TW,zh;q=0.9,en;q=0.8";
     return @"en-US,en;q=0.9";
 }
 
-- (void)requestKind:(NSString *)kind docId:(NSString *)docId spaceId:(NSString *)spaceId completion:(void (^)(NSDictionary *, NSError *))completion {
+- (WKDocPreviewRequestSnapshot *)requestSnapshot {
+    WKApp *app = WKApp.shared;
+    NSString *apiBaseURL = app.config.apiBaseUrl ?: @"";
+    NSURLComponents *components = [NSURLComponents componentsWithString:apiBaseURL];
+    if (components.scheme.length == 0 || components.host.length == 0) return nil;
+    NSString *origin = [NSString stringWithFormat:@"%@://%@%@",
+        components.scheme.lowercaseString,
+        components.host.lowercaseString,
+        components.port ? [NSString stringWithFormat:@":%@", components.port] : @""];
+    WKDocPreviewRequestSnapshot *snapshot = [WKDocPreviewRequestSnapshot new];
+    snapshot.origin = origin;
+    snapshot.apiBaseURL = apiBaseURL;
+    snapshot.uid = app.loginInfo.uid ?: @"";
+    snapshot.token = app.isLogined ? (app.loginInfo.token ?: @"") : @"";
+    snapshot.language = app.config.langue ?: @"zh-Hans";
+    return snapshot;
+}
+
+- (AFHTTPSessionManager *)managerForOrigin:(NSString *)origin {
+    AFHTTPSessionManager *manager = [[AFHTTPSessionManager alloc] initWithBaseURL:[NSURL URLWithString:origin]];
+    manager.requestSerializer = [AFJSONRequestSerializer serializer];
+    manager.responseSerializer = [AFJSONResponseSerializer serializer];
+    manager.responseSerializer.acceptableContentTypes = [NSSet setWithObjects:@"application/json", @"text/json", @"text/plain", @"text/javascript", nil];
+    return manager;
+}
+
+- (NSURLSessionDataTask *)requestKind:(NSString *)kind docId:(NSString *)docId spaceId:(NSString *)spaceId snapshot:(WKDocPreviewRequestSnapshot *)snapshot manager:(AFHTTPSessionManager *)manager completion:(void (^)(NSDictionary *, NSError *))completion {
     NSString *encodedId = [docId stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet];
     NSString *path = [NSString stringWithFormat:@"/api/v1/docs/%@/%@", encodedId ?: docId, [self endpointForKind:kind]];
-    NSURL *url = [[NSURL URLWithString:path relativeToURL:self.manager.baseURL] absoluteURL];
-    if (!url) { completion(nil, [NSError errorWithDomain:@"WKDocPreview" code:0 userInfo:nil]); return; }
-    NSMutableURLRequest *request = [self.manager.requestSerializer requestWithMethod:@"GET" URLString:url.absoluteString parameters:nil error:nil];
-    if (WKApp.shared.isLogined && WKApp.shared.loginInfo.token.length) [request setValue:WKApp.shared.loginInfo.token forHTTPHeaderField:@"token"];
+    NSURL *url = WKDocumentShareCardAbsoluteURL(path, snapshot.apiBaseURL);
+    if (!url) { completion(nil, [NSError errorWithDomain:@"WKDocPreview" code:0 userInfo:nil]); return nil; }
+    NSMutableURLRequest *request = [manager.requestSerializer requestWithMethod:@"GET" URLString:url.absoluteString parameters:nil error:nil];
+    if (snapshot.token.length) [request setValue:snapshot.token forHTTPHeaderField:@"token"];
     if (spaceId.length) [request setValue:spaceId forHTTPHeaderField:@"X-Space-Id"];
-    [request setValue:[self languageHeader] forHTTPHeaderField:@"Accept-Language"];
-    NSURLSessionDataTask *task = [self.manager dataTaskWithRequest:request uploadProgress:nil downloadProgress:nil completionHandler:^(NSURLResponse *response, id object, NSError *error) {
+    [request setValue:[self languageHeaderForLanguage:snapshot.language] forHTTPHeaderField:@"Accept-Language"];
+    NSURLSessionDataTask *task = [manager dataTaskWithRequest:request uploadProgress:nil downloadProgress:nil completionHandler:^(NSURLResponse *response, id object, NSError *error) {
         if (!error) { completion([object isKindOfClass:NSDictionary.class] ? object : @{}, nil); return; }
         NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : error.code;
         NSMutableDictionary *info = [NSMutableDictionary dictionary];
@@ -231,7 +300,7 @@ static NSDictionary *WKParseHTMLPreview(id body) {
         if ([body isKindOfClass:NSDictionary.class] && [body[@"error"] isKindOfClass:NSString.class]) info[@"_wireErrorCode"] = body[@"error"];
         completion(nil, [NSError errorWithDomain:@"WKDocPreview" code:status userInfo:info]);
     }];
-    [task resume];
+    return task;
 }
 
 - (NSString *)statusForError:(NSError *)error {
@@ -244,8 +313,8 @@ static NSDictionary *WKParseHTMLPreview(id body) {
     return @"error";
 }
 
-- (void)loadKind:(NSString *)kind docId:(NSString *)docId spaceId:(NSString *)spaceId completion:(void (^)(NSDictionary *))completion {
-    [self requestKind:kind docId:docId spaceId:spaceId completion:^(NSDictionary *body, NSError *error) {
+- (NSURLSessionDataTask *)loadKind:(NSString *)kind docId:(NSString *)docId spaceId:(NSString *)spaceId snapshot:(WKDocPreviewRequestSnapshot *)snapshot manager:(AFHTTPSessionManager *)manager completion:(void (^)(NSDictionary *))completion {
+    return [self requestKind:kind docId:docId spaceId:spaceId snapshot:snapshot manager:manager completion:^(NSDictionary *body, NSError *error) {
         if (error) { completion(@{@"status": [self statusForError:error]}); return; }
         NSDictionary *preview;
         if ([kind isEqualToString:@"board"]) preview = WKParseBoardPreview(body);
@@ -259,45 +328,149 @@ static NSDictionary *WKParseHTMLPreview(id body) {
 
 - (void)fetchPreviewForKind:(NSString *)kind docId:(NSString *)docId spaceId:(NSString *)spaceId force:(BOOL)force callback:(void (^)(NSDictionary *))callback {
     if (docId.length == 0) { callback(@{@"status": @"error"}); return; }
-    NSString *uid = WKApp.shared.loginInfo.uid ?: @"";
-    NSString *key = [NSString stringWithFormat:@"%@\0%@\0%@\0%@", uid, kind ?: @"doc", docId, spaceId ?: @""];
+    WKDocPreviewRequestSnapshot *snapshot = [self requestSnapshot];
+    if (!snapshot) { callback(@{@"status": @"error"}); return; }
+    NSString *key = [NSString stringWithFormat:@"%@\0%@\0%@\0%@\0%@\0%@", snapshot.origin, snapshot.apiBaseURL, snapshot.uid, kind ?: @"doc", docId, spaceId ?: @""];
+    NSArray<WKDocPreviewFlight *> *invalidatedFlights = @[];
+    WKDocPreviewFlight *flight = nil;
     [_lock lock];
-    if (![_cacheUID isEqualToString:uid]) { [_cache removeAllObjects]; [_inflight removeAllObjects]; _cacheUID = uid; }
+    BOOL sessionChanged = ![_sessionOrigin isEqualToString:snapshot.origin]
+        || ![_sessionAPIBaseURL isEqualToString:snapshot.apiBaseURL]
+        || ![_sessionUID isEqualToString:snapshot.uid]
+        || ![_sessionToken isEqualToString:snapshot.token];
+    if (sessionChanged) {
+        _sessionGeneration++;
+        _sessionOrigin = [snapshot.origin copy];
+        _sessionAPIBaseURL = [snapshot.apiBaseURL copy];
+        _sessionUID = [snapshot.uid copy];
+        _sessionToken = [snapshot.token copy];
+        [_cache removeAllObjects];
+        invalidatedFlights = _inflight.allValues;
+        [_inflight removeAllObjects];
+    }
+    snapshot.generation = _sessionGeneration;
     WKDocPreviewCacheEntry *entry = _cache[key];
     if (!force && entry && NSDate.date.timeIntervalSince1970 - entry.timestamp < WKDocPreviewCacheTTL) {
         NSDictionary *cachedResult = entry.result;
         [_lock unlock];
+        for (WKDocPreviewFlight *oldFlight in invalidatedFlights) [oldFlight.task cancel];
         callback(cachedResult);
         return;
     }
-    NSMutableArray *waiters = _inflight[key];
-    if (waiters) { [waiters addObject:[callback copy]]; [_lock unlock]; return; }
-    _inflight[key] = [NSMutableArray arrayWithObject:[callback copy]];
+    flight = _inflight[key];
+    if (flight) {
+        [flight.callbacks addObject:[callback copy]];
+        [_lock unlock];
+        for (WKDocPreviewFlight *oldFlight in invalidatedFlights) [oldFlight.task cancel];
+        return;
+    }
+    flight = [WKDocPreviewFlight new];
+    flight.requestID = NSUUID.UUID.UUIDString;
+    flight.cacheKey = key;
+    flight.snapshot = snapshot;
+    flight.callbacks = [NSMutableArray arrayWithObject:[callback copy]];
+    _inflight[key] = flight;
     [_lock unlock];
+    for (WKDocPreviewFlight *oldFlight in invalidatedFlights) [oldFlight.task cancel];
+
+    AFHTTPSessionManager *manager = [self managerForOrigin:snapshot.origin];
+    [_lock lock];
+    BOOL stillCurrent = _sessionGeneration == snapshot.generation && _inflight[key] == flight;
+    if (stillCurrent) flight.manager = manager;
+    [_lock unlock];
+    if (!stillCurrent) return;
+
     __weak typeof(self) weakSelf = self;
-    [self loadKind:kind docId:docId spaceId:spaceId completion:^(NSDictionary *result) {
+    NSURLSessionDataTask *task = [self loadKind:kind docId:docId spaceId:spaceId snapshot:snapshot manager:manager completion:^(NSDictionary *result) {
         __strong typeof(weakSelf) self = weakSelf;
-        if (!self) return;
-        [self->_lock lock];
-        NSArray *callbacks = [self->_inflight[key] copy] ?: @[];
-        [self->_inflight removeObjectForKey:key];
-        if (![result[@"status"] isEqualToString:@"error"]) {
-            WKDocPreviewCacheEntry *newEntry = [WKDocPreviewCacheEntry new];
-            newEntry.result = result;
-            newEntry.timestamp = NSDate.date.timeIntervalSince1970;
-            self->_cache[key] = newEntry;
-        }
-        [self->_lock unlock];
-        for (void (^waiter)(NSDictionary *) in callbacks) waiter(result);
+        if (self) [self finishFlight:flight result:result];
     }];
+    if (!task) return; // Invalid URL completed synchronously and already finished the flight.
+
+    [_lock lock];
+    stillCurrent = _sessionGeneration == snapshot.generation && _inflight[key] == flight;
+    if (stillCurrent) flight.task = task;
+    [_lock unlock];
+    if (!stillCurrent) { [task cancel]; return; }
+    [task resume];
+}
+
+- (void)finishFlight:(WKDocPreviewFlight *)flight result:(NSDictionary *)result {
+    WKDocPreviewRequestSnapshot *currentSnapshot = [self requestSnapshot];
+    BOOL sessionMatches = currentSnapshot
+        && [currentSnapshot.origin isEqualToString:flight.snapshot.origin]
+        && [currentSnapshot.apiBaseURL isEqualToString:flight.snapshot.apiBaseURL]
+        && [currentSnapshot.uid isEqualToString:flight.snapshot.uid]
+        && [currentSnapshot.token isEqualToString:flight.snapshot.token];
+    NSArray<WKDocPreviewFlight *> *invalidatedFlights = @[];
+    [_lock lock];
+    BOOL loaderSessionChanged = currentSnapshot
+        ? (![_sessionOrigin isEqualToString:currentSnapshot.origin]
+            || ![_sessionAPIBaseURL isEqualToString:currentSnapshot.apiBaseURL]
+            || ![_sessionUID isEqualToString:currentSnapshot.uid]
+            || ![_sessionToken isEqualToString:currentSnapshot.token])
+        : (_sessionOrigin != nil || _sessionAPIBaseURL != nil || _sessionUID != nil || _sessionToken != nil);
+    if (loaderSessionChanged) {
+        // A session switch can happen without another card request being issued.
+        // Detect it here too, so all outstanding work becomes stale immediately.
+        _sessionGeneration++;
+        _sessionOrigin = [currentSnapshot.origin copy];
+        _sessionAPIBaseURL = [currentSnapshot.apiBaseURL copy];
+        _sessionUID = [currentSnapshot.uid copy];
+        _sessionToken = [currentSnapshot.token copy];
+        [_cache removeAllObjects];
+        invalidatedFlights = _inflight.allValues;
+        [_inflight removeAllObjects];
+    }
+    WKDocPreviewFlight *current = _inflight[flight.cacheKey];
+    BOOL ownsSlot = _sessionGeneration == flight.snapshot.generation
+        && current == flight
+        && [current.requestID isEqualToString:flight.requestID];
+    if (!ownsSlot) {
+        // Break the flight→task→completion→flight retain cycle even when this is
+        // a late completion from an invalidated session generation.
+        NSURLSessionDataTask *completedTask = flight.task;
+        AFHTTPSessionManager *completedManager = flight.manager;
+        flight.task = nil;
+        flight.manager = nil;
+        [_lock unlock];
+        for (WKDocPreviewFlight *invalidatedFlight in invalidatedFlights) [invalidatedFlight.task cancel];
+        (void)completedTask;
+        (void)completedManager;
+        return;
+    }
+
+    NSArray *callbacks = sessionMatches ? [flight.callbacks copy] : @[];
+    [_inflight removeObjectForKey:flight.cacheKey];
+    if (sessionMatches && ![result[@"status"] isEqualToString:@"error"]) {
+        WKDocPreviewCacheEntry *entry = [WKDocPreviewCacheEntry new];
+        entry.result = result;
+        entry.timestamp = NSDate.date.timeIntervalSince1970;
+        _cache[flight.cacheKey] = entry;
+    }
+    NSURLSessionDataTask *completedTask = flight.task;
+    AFHTTPSessionManager *completedManager = flight.manager;
+    flight.task = nil;
+    flight.manager = nil;
+    [_lock unlock];
+    for (WKDocPreviewFlight *invalidatedFlight in invalidatedFlights) [invalidatedFlight.task cancel];
+    (void)completedTask;
+    (void)completedManager;
+    for (void (^callback)(NSDictionary *) in callbacks) callback(result);
 }
 
 - (void)resetCache {
     [_lock lock];
+    _sessionGeneration++;
     [_cache removeAllObjects];
+    NSArray<WKDocPreviewFlight *> *invalidatedFlights = _inflight.allValues;
     [_inflight removeAllObjects];
-    _cacheUID = nil;
+    _sessionOrigin = nil;
+    _sessionAPIBaseURL = nil;
+    _sessionUID = nil;
+    _sessionToken = nil;
     [_lock unlock];
+    for (WKDocPreviewFlight *flight in invalidatedFlights) [flight.task cancel];
 }
 
 @end

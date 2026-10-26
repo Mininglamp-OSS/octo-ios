@@ -7,6 +7,10 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+/// Builds a document-card URL while preserving any deployment prefix in apiBaseURL.
+/// Known API suffixes (/v1 or /api/v1) are removed before appending the route.
+FOUNDATION_EXPORT NSURL * _Nullable WKDocumentShareCardAbsoluteURL(NSString *relativePath, NSString *apiBaseURL);
+
 /// Loads and parses the ACL-protected first-page preview for a document card.
 @interface WKDocumentPreviewLoader : NSObject
 
