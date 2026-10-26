@@ -57,6 +57,8 @@
 #import "WKCardCell.h"
 #import "WKInteractiveCardCell.h"
 #import "WKInteractiveCardContent.h"
+#import "WKDocumentShareCardCell.h"
+#import "WKDocumentShareCardContent.h"
 #import "WKRichTextContent.h"
 #import "WKRichTextCell.h"
 #import "WKUserInfoVC.h"
@@ -270,6 +272,7 @@ static WKApp *_instance;
     [self.messageRegitry registerCellClass:[WKGIFMessageCell class] forMessageContentClass:[WKGIFContent class]]; // GIF消息
     [self.messageRegitry registerCellClass:[WKCardCell class] forMessageContentClass:[WKCardContent class]]; // 名片消息
     [self.messageRegitry registerCellClass:[WKInteractiveCardCell class] forMessageContentClass:[WKInteractiveCardContent class]]; // 互动卡片(Adaptive Cards, type17)
+    [self.messageRegitry registerCellClass:[WKDocumentShareCardCell class] forMessageContentClass:[WKDocumentShareCardContent class]]; // 文档分享卡片(type18)
      [self.messageRegitry registerCellClass:[WKTypingMessageCell class] forMessageContentClass:[WKTypingContent class]]; // 输入中...
     [self.messageRegitry registerCellClass:WKMergeForwardCell.class forMessageContentClass:WKMergeForwardContent.class];
     // 历史消息分割线
