@@ -337,6 +337,7 @@ typedef enum : NSUInteger {
     WK_RICHTEXT = 14, // 富文本消息类型
 
     WK_INTERACTIVE_CARD = 17, // 互动卡片（Adaptive Cards octo/v1|v2）—— 与 type7 名片无关
+    WK_DOCUMENT_SHARE_CARD = 18, // 文档分享卡片
 
     WK_TYPING = 101, // 正在输入
     
