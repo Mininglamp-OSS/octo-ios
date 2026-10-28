@@ -16,6 +16,7 @@ static NSString *WKDocumentCardString(id value) {
     self = [super init];
     if (self) {
         _docId = @"";
+        self.spaceId = @"";
         _kind = @"doc";
         _title = @"";
         _ownerName = @"";
