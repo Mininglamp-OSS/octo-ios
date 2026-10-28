@@ -924,7 +924,8 @@
     // install it at document-start so app scripts cannot observe stale pooled storage.
     // Scope is deliberately narrow: exact server origin + explicit viewer routes only.
     if (WKIsTrustedDocsViewerURL(self.url, [WKApp shared].config.apiBaseUrl)) {
-        NSString *spaceId = [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+        NSString *spaceId = self.docsViewerSpaceId
+            ?: [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
         NSString *apiBaseURL = [WKApp shared].config.apiBaseUrl;
         WKUserScript *spaceScript = [[WKUserScript alloc]
             initWithSource:WKDocsViewerSpaceJavaScript(spaceId, apiBaseURL)

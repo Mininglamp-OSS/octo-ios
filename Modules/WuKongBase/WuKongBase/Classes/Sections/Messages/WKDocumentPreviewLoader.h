@@ -26,6 +26,7 @@ FOUNDATION_EXPORT NSURL * _Nullable WKDocumentShareCardAbsoluteURL(NSString *rel
 + (instancetype)shared;
 
 /// Results use status ready/denied/unavailable/empty/unauthenticated/error and optionally a preview dictionary.
+/// An empty spaceId is allowed; the request then omits X-Space-Id.
 - (nullable WKDocumentPreviewSubscription *)fetchPreviewForKind:(NSString *)kind
                       docId:(NSString *)docId
                     spaceId:(NSString *)spaceId

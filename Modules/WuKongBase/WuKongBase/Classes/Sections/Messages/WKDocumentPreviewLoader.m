@@ -378,6 +378,7 @@ static NSDictionary *WKParseHTMLPreview(id body) {
         return nil;
     }
     if (snapshot.token.length) [request setValue:snapshot.token forHTTPHeaderField:@"token"];
+    // A missing space ID is valid and must not produce an empty X-Space-Id header.
     if (spaceId.length) [request setValue:spaceId forHTTPHeaderField:@"X-Space-Id"];
     [request setValue:[self languageHeaderForLanguage:snapshot.language] forHTTPHeaderField:@"Accept-Language"];
     NSURLSessionDataTask *task = [manager dataTaskWithRequest:request uploadProgress:nil downloadProgress:nil completionHandler:^(NSURLResponse *response, id object, NSError *error) {
@@ -418,7 +419,7 @@ static NSDictionary *WKParseHTMLPreview(id body) {
 
 - (WKDocumentPreviewSubscription *)fetchPreviewForKind:(NSString *)kind docId:(NSString *)docId spaceId:(NSString *)spaceId force:(BOOL)force callback:(void (^)(NSDictionary *))callback {
     if (!WKDocumentShareCardIsValidDocId(docId)
-        || !WKDocumentShareCardIsValidDocId(spaceId)) {
+        || (spaceId.length > 0 && !WKDocumentShareCardIsValidDocId(spaceId))) {
         callback(@{@"status": @"error"});
         return nil;
     }

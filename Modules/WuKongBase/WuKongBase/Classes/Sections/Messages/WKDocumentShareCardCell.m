@@ -808,9 +808,11 @@ static UIImage *WKDocumentShareCardIcon(NSString *name) {
     NSURL *url = [self documentURL];
     if (!url) return;
     WKDocumentShareCardContent *content = (WKDocumentShareCardContent *)self.messageModel.content;
+    if (content.spaceId.length > 0 && !WKDocumentShareCardIsValidDocId(content.spaceId)) return;
     WKWebViewVC *webVC = [WKWebViewVC new];
     webVC.url = url;
     webVC.title = content.title;
+    webVC.docsViewerSpaceId = content.spaceId;
     [[WKNavigationManager shared] pushViewController:webVC animated:YES];
 }
 
