@@ -1648,6 +1648,7 @@ static WKApp *_instance;
     [[WKApp shared] addMessageAllowForward:WK_SMALLVIDEO];
     [[WKApp shared] addMessageAllowForward:WK_MERGEFORWARD];
     [[WKApp shared] addMessageAllowForward:WK_RICHTEXT]; // 图文混排（RichText=14）：与接收 cell 注册对称，长按需出现「转发」
+    [[WKApp shared] addMessageAllowForward:WK_DOCUMENT_SHARE_CARD]; // 文档分享卡片（type18）
     [self setMethod:WKPOINT_LONGMENUS_FORWARD handler:^id _Nullable(id  _Nonnull param) {
         WKMessageModel *message = param[@"message"];
         
