@@ -42,6 +42,7 @@
 #import "WKEmojiContentView.h"
 #import "WKMyStickerContentView.h"
 #import "WKStickerLocalOrderStore.h"
+#import "WKDocumentPreviewLoader.h"
 #import "WKStickerGIFContentView.h"
 #import "WKGIFMessageCell.h"
 #import "WKGIFContent.h"
@@ -57,6 +58,8 @@
 #import "WKCardCell.h"
 #import "WKInteractiveCardCell.h"
 #import "WKInteractiveCardContent.h"
+#import "WKDocumentShareCardCell.h"
+#import "WKDocumentShareCardContent.h"
 #import "WKRichTextContent.h"
 #import "WKRichTextCell.h"
 #import "WKUserInfoVC.h"
@@ -270,6 +273,7 @@ static WKApp *_instance;
     [self.messageRegitry registerCellClass:[WKGIFMessageCell class] forMessageContentClass:[WKGIFContent class]]; // GIF消息
     [self.messageRegitry registerCellClass:[WKCardCell class] forMessageContentClass:[WKCardContent class]]; // 名片消息
     [self.messageRegitry registerCellClass:[WKInteractiveCardCell class] forMessageContentClass:[WKInteractiveCardContent class]]; // 互动卡片(Adaptive Cards, type17)
+    [self.messageRegitry registerCellClass:[WKDocumentShareCardCell class] forMessageContentClass:[WKDocumentShareCardContent class]]; // 文档分享卡片(type18)
      [self.messageRegitry registerCellClass:[WKTypingMessageCell class] forMessageContentClass:[WKTypingContent class]]; // 输入中...
     [self.messageRegitry registerCellClass:WKMergeForwardCell.class forMessageContentClass:WKMergeForwardContent.class];
     // 历史消息分割线
@@ -440,6 +444,8 @@ static WKApp *_instance;
    
     // 设置登录成功回调
     [self setMethod:WKPOINT_LOGIN_SUCCESS handler:^id _Nullable(id  _Nonnull param) {
+        // Retire any transport retained by the previous account/session.
+        [[WKDocumentPreviewLoader shared] resetCache];
         // 切换数据库
         [[WKKitDB shared] switchDB:[WKApp shared].loginInfo.uid];
 
@@ -781,6 +787,8 @@ static WKApp *_instance;
 }
 
 -(void) immediatelyLogout {
+    // Retire document-preview transport before the current login credentials are cleared.
+    [[WKDocumentPreviewLoader shared] resetCache];
     // 会话列表的每空间磁盘缓存（分组结构 / 关注集合）随账号走 —— 必须在
     // clearMainData 清掉 uid 之前删，否则拿不到目录路径，下个账号会读到上个账号的
     // 关注结构。会话行本身在 per-uid 的 SDK DB 里，切库天然隔离，无需处理。

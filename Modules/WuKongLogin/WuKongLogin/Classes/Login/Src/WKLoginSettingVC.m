@@ -6,6 +6,7 @@
 //
 
 #import "WKLoginSettingVC.h"
+#import <WuKongBase/WKDocumentPreviewLoader.h>
 
 @interface WKLoginSettingVC ()
 
@@ -207,6 +208,7 @@
 }
 
 -(void) resetPressed {
+    [[WKDocumentPreviewLoader shared] resetCache];
     NSUserDefaults *userDefaults =[NSUserDefaults standardUserDefaults];
     [userDefaults removeObjectForKey:@"server_ip"];
     [userDefaults removeObjectForKey:@"server_https"];
@@ -221,6 +223,8 @@
 }
 
 +(void) setAppConfigIfNeed {
+    // Server settings may change the API origin; retire the previous docs transport first.
+    [[WKDocumentPreviewLoader shared] resetCache];
     NSUserDefaults *userDefaults =[NSUserDefaults standardUserDefaults];
     NSString *serverIP = [userDefaults objectForKey:@"server_ip"];
     if(serverIP && ![serverIP isEqualToString:@""]) {

@@ -23,6 +23,7 @@
 #import "WKThreadModel.h"
 #import "WKThreadCreatedContent.h"
 #import "WKAISummaryEntryController.h"
+#import "WKDocumentShareCardCell.h"
 @interface WKConversationVC ()<WKChannelManagerDelegate>
 
 @property(nonatomic,strong) WKConversationView *conversationView;
@@ -40,6 +41,7 @@
 @property(nonatomic,assign) BOOL firstLoad; // 是否第一次加载
 
 @property(nonatomic,strong) UIImageView *backgroundView;
+@property(nonatomic,assign) BOOL hasAppearedBefore;
 
 @end
 
@@ -243,6 +245,14 @@
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
     [self.conversationView viewDidAppear];
+    if (self.hasAppearedBefore) {
+        for (UITableViewCell *cell in [self.conversationView.messageListView visibleCells]) {
+            if ([cell isKindOfClass:WKDocumentShareCardCell.class]) {
+                [(WKDocumentShareCardCell *)cell forceRefreshPreview];
+            }
+        }
+    }
+    self.hasAppearedBefore = YES;
 }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
