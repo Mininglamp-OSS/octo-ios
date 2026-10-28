@@ -362,8 +362,16 @@ static NSDictionary *WKParseHTMLPreview(id body) {
 
 - (NSURLSessionDataTask *)requestKind:(NSString *)kind docId:(NSString *)docId spaceId:(NSString *)spaceId snapshot:(WKDocPreviewRequestSnapshot *)snapshot manager:(AFHTTPSessionManager *)manager completion:(void (^)(NSDictionary *, NSError *))completion {
     NSString *encodedId = [docId stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet];
-    NSString *path = [NSString stringWithFormat:@"/api/v1/docs/%@/%@", encodedId ?: docId, [self endpointForKind:kind]];
-    NSURL *url = WKDocumentShareCardAbsoluteURL(path, snapshot.apiBaseURL);
+    NSURLComponents *components = [NSURLComponents componentsWithString:snapshot.apiBaseURL];
+    // Preview endpoints follow the configured API route, including /v1 or /api/v1.
+    NSString *basePath = components.percentEncodedPath ?: @"";
+    while ([basePath hasSuffix:@"/"]) {
+        basePath = [basePath substringToIndex:basePath.length - 1];
+    }
+    components.percentEncodedPath = [NSString stringWithFormat:@"%@/docs/%@/%@", basePath, encodedId ?: docId, [self endpointForKind:kind]];
+    components.query = nil;
+    components.fragment = nil;
+    NSURL *url = components.URL;
     if (!url) {
         dispatch_async(dispatch_get_main_queue(), ^{
             completion(nil, [NSError errorWithDomain:@"WKDocPreview" code:0 userInfo:nil]);

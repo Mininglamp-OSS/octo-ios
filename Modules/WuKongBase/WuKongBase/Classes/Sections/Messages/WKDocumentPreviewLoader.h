@@ -11,7 +11,7 @@ NS_ASSUME_NONNULL_BEGIN
 FOUNDATION_EXPORT BOOL WKDocumentShareCardIsValidDocId(NSString * _Nullable docId);
 FOUNDATION_EXPORT NSNotificationName const WKDocumentPreviewSessionDidChangeNotification;
 
-/// Builds a document-card URL while preserving any deployment prefix in apiBaseURL.
+/// Builds a document viewer URL while preserving any deployment prefix in apiBaseURL.
 /// Known API suffixes (/v1 or /api/v1) are removed before appending the route.
 FOUNDATION_EXPORT NSURL * _Nullable WKDocumentShareCardAbsoluteURL(NSString *relativePath, NSString *apiBaseURL);
 
