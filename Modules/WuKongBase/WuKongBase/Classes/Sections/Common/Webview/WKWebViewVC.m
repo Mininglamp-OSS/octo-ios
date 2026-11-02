@@ -89,6 +89,10 @@
     if (url.length > 0 && ![url hasPrefix:@"http"]) {
         targetURL = [NSURL URLWithString:[NSString stringWithFormat:@"http://%@", url]];
     }
+    WKApp *app = [WKApp shared];
+    NSURL *handoffURL = WKViewerHandoffURL(targetURL, app.config.apiBaseUrl);
+    BOOL docsViewer = WKIsTrustedDocsViewerURL(targetURL, app.config.apiBaseUrl);
+    if (handoffURL) targetURL = handoffURL;
     self.currentUrl = targetURL;
 
     if (url.length == 0 || targetURL == nil) {
@@ -104,7 +108,19 @@
 
     [request setValue:[WKApp shared].config.langue forHTTPHeaderField:@"Accept-Language"];
 
-    [self.webView loadRequest:request];
+    if (handoffURL) {
+        NSString *spaceId = self.docsViewerSpaceId
+            ?: [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
+        NSString *bootstrap = WKViewerBootstrapHTML(targetURL, app.loginInfo.token,
+            app.loginInfo.uid, app.loginInfo.displayName, spaceId, docsViewer);
+        NSURLComponents *origin = [NSURLComponents componentsWithURL:targetURL resolvingAgainstBaseURL:NO];
+        origin.path = @"/";
+        origin.query = nil;
+        origin.fragment = nil;
+        [self.webView loadHTMLString:bootstrap baseURL:origin.URL];
+    } else {
+        [self.webView loadRequest:request];
+    }
     [self.view addSubview:self.bottomView];
     
     [self showBottomView];
@@ -920,20 +936,6 @@
  @param webView wkwebview
  */
 - (void)addUserScript:(WKWebView *)webView {
-    // Standalone Docs reads this key during bootstrap. Capture the native value now and
-    // install it at document-start so app scripts cannot observe stale pooled storage.
-    // Scope is deliberately narrow: exact server origin + explicit viewer routes only.
-    if (WKIsTrustedDocsViewerURL(self.url, [WKApp shared].config.apiBaseUrl)) {
-        NSString *spaceId = self.docsViewerSpaceId
-            ?: [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
-        NSString *apiBaseURL = [WKApp shared].config.apiBaseUrl;
-        WKUserScript *spaceScript = [[WKUserScript alloc]
-            initWithSource:WKDocsViewerSpaceJavaScript(spaceId, apiBaseURL)
-            injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-            forMainFrameOnly:YES];
-        [webView.configuration.userContentController addUserScript:spaceScript];
-    }
-
     // 让网页（含登录 OIDC 页）跟随 App 内语言切换，而不是 iOS 系统语言。
     // 背景：WKWebView 的 navigator.language / navigator.languages 取自
     // NSLocale.preferredLanguages（设备系统语言），不受 [WKApp shared].config.langue 影响；

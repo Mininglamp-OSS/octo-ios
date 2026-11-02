@@ -46,7 +46,8 @@
     XCTAssertTrue([script containsString:@"\\n"]);
     XCTAssertTrue([script containsString:@"\\u2028"]);
     XCTAssertTrue([script containsString:@"\\u2029"]);
-    XCTAssertTrue([script containsString:@"<\\/script>"]);
+    XCTAssertTrue([script containsString:@"\\u003c"]);
+    XCTAssertTrue([script containsString:@"\\u003e"]);
     XCTAssertFalse([script containsString:lineSeparator]);
     XCTAssertFalse([script containsString:paragraphSeparator]);
 }
@@ -58,6 +59,38 @@
     XCTAssertTrue([remove containsString:@"h===\"octo.example\""]);
     XCTAssertTrue([remove containsString:@"n===443"]);
     XCTAssertEqualObjects(WKDocsViewerSpaceJavaScript(@"", @"https://octo.example/api/v1"), remove);
+}
+
+- (void)testViewerHandoffPreservesSidAndOtherQueryParameters {
+    NSString *base = @"https://octo.example/api/v1/";
+    NSURL *document = WKViewerHandoffURL([NSURL URLWithString:@"https://octo.example/d/doc-1?sp=a%2Bb&x=1"], base);
+    XCTAssertEqualObjects(document.absoluteString, @"https://octo.example/d/doc-1?sp=a%2Bb&x=1&sid=ios");
+    NSURL *original = [NSURL URLWithString:@"https://octo.example/s/summary-1?sid=web&sp=a%2Bb"];
+    XCTAssertEqualObjects(WKViewerHandoffURL(original, base).absoluteString, original.absoluteString);
+    XCTAssertNil(WKViewerHandoffURL([NSURL URLWithString:@"https://evil.example/d/doc-1"], base));
+    XCTAssertNil(WKViewerHandoffURL([NSURL URLWithString:@"https://octo.example/d/doc-1/edit"], base));
+}
+
+- (void)testViewerHandoffUsesConfiguredRoutePrefix {
+    NSString *base = @"https://octo.example/team/api/v1/";
+    NSURL *document = [NSURL URLWithString:@"https://octo.example/team/d/doc-1"];
+    XCTAssertTrue(WKIsTrustedDocsViewerURL(document, base));
+    XCTAssertEqualObjects(WKViewerHandoffURL(document, base).absoluteString,
+                          @"https://octo.example/team/d/doc-1?sid=ios");
+    XCTAssertNil(WKViewerHandoffURL([NSURL URLWithString:@"https://octo.example/d/doc-1"], base));
+    XCTAssertNil(WKViewerHandoffURL([NSURL URLWithString:@"https://octo.example/team-other/d/doc-1"], base));
+}
+
+- (void)testBootstrapWritesMatchingSessionBeforeNavigation {
+    NSURL *URL = [NSURL URLWithString:@"https://octo.example/d/doc-1?sid=web"];
+    NSString *html = WKViewerBootstrapHTML(URL, @"secret</script>", @"user-1", @"Name", @"space-1", YES);
+    XCTAssertTrue([html containsString:@"var s=\"web\""]);
+    XCTAssertTrue([html containsString:@"localStorage.setItem('token'+s"]);
+    XCTAssertTrue([html containsString:@"localStorage.setItem('currentSpaceId'"]);
+    XCTAssertTrue([html containsString:@"secret\\u003c"]);
+    XCTAssertTrue([html containsString:@"script\\u003e"]);
+    XCTAssertTrue([html containsString:@"window.location.replace"]);
+    XCTAssertTrue([html rangeOfString:@"localStorage.setItem('token'+s"].location < [html rangeOfString:@"window.location.replace"].location);
 }
 
 @end

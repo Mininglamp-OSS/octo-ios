@@ -14,4 +14,13 @@ FOUNDATION_EXPORT BOOL WKIsTrustedDocsViewerURL(NSURL * _Nullable URL,
 FOUNDATION_EXPORT NSString *WKDocsViewerSpaceJavaScript(NSString * _Nullable currentSpaceId,
                                                         NSString *apiBaseURL);
 
+/// Trusted first-party document and summary pages receive a stable sid.
+FOUNDATION_EXPORT NSURL * _Nullable WKViewerHandoffURL(NSURL * _Nullable URL,
+                                                       NSString * _Nullable apiBaseURL);
+
+/// Same-origin bootstrap writes the native session before navigating to the viewer.
+FOUNDATION_EXPORT NSString *WKViewerBootstrapHTML(NSURL *URL, NSString * _Nullable token,
+                                                  NSString * _Nullable uid, NSString * _Nullable name,
+                                                  NSString * _Nullable spaceId, BOOL isDocsViewer);
+
 NS_ASSUME_NONNULL_END
