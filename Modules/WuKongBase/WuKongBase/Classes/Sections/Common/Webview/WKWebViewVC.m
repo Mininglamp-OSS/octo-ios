@@ -18,6 +18,8 @@
 #import "WKRealnameVerifyManager.h"
 #import "WKCSVRenderer.h"
 #import "WKDocsViewerSpaceHandoff.h"
+#import "WKTrustedViewerHandoff.h"
+#import "WKTrustedViewerDataStore.h"
 #include <libcmark_gfm/cmark-gfm.h>
 #include <libcmark_gfm/cmark-gfm-core-extensions.h>
 @interface WKWebViewVC ()<WKUIDelegate,WKNavigationDelegate,UIScrollViewDelegate>
@@ -41,6 +43,10 @@
 @property(nonatomic,strong) UIButton *gobackBtn;
 
 @property(nonatomic,strong) WKWebViewService *webViewService;
+@property(nonatomic,strong) NSURL *trustedViewerURL;
+@property(nonatomic,copy) NSString *viewerIdentityScript;
+@property(nonatomic,copy) NSString *viewerUID;
+@property(nonatomic,copy) NSString *viewerToken;
 
 // 服务器未声明 charset 的文本响应（如 .md），自行下载后用 cmark / loadHTMLString 渲染；
 // 渲染失败或文件过大走原始加载的 URL 记录在此集合中，避免再次拦截造成死循环。
@@ -65,13 +71,6 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    [self.view addSubview:self.webView];
-    [self.view addSubview:self.progressView];
-    
-    self.navigationBar.rightView = self.moreBtn;
-    
-    self.webViewService.channel = self.channel;
-
     NSString *url = self.url.absoluteString;
 
     // 修复 (2026-06): 老 iOS 14/15 WKWebView 加载 OIDC authorize URL 白屏的根因。
@@ -89,7 +88,28 @@
     if (url.length > 0 && ![url hasPrefix:@"http"]) {
         targetURL = [NSURL URLWithString:[NSString stringWithFormat:@"http://%@", url]];
     }
+    WKApp *app = [WKApp shared];
+    NSString *token = app.loginInfo.token;
+    NSString *uid = app.loginInfo.uid;
+    if (token.length > 0 && uid.length > 0) {
+        NSURL *handoffURL = WKTrustedViewerHandoffURL(targetURL, app.config.apiBaseUrl);
+        if (handoffURL) {
+            NSString *spaceId = self.docsViewerSpaceId ?: [[WKSpaceFilter shared] currentSpaceId];
+            self.viewerIdentityScript = WKTrustedViewerIdentityScript(handoffURL, token, uid, app.loginInfo.displayName, spaceId);
+            self.trustedViewerURL = handoffURL;
+            self.viewerUID = uid;
+            self.viewerToken = token;
+            targetURL = handoffURL;
+            [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(viewerSessionDidChange:)
+                                                         name:WKTrustedViewerSessionDidChangeNotification object:nil];
+        }
+    }
     self.currentUrl = targetURL;
+
+    [self.view addSubview:self.webView];
+    [self.view addSubview:self.progressView];
+    self.navigationBar.rightView = self.moreBtn;
+    self.webViewService.channel = self.channel;
 
     if (url.length == 0 || targetURL == nil) {
         // url 为空 / 解析失败时, loadRequest with nil URL 会得到一个空白 webview
@@ -99,7 +119,7 @@
     }
 
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:targetURL
-        cachePolicy:NSURLRequestReloadIgnoringCacheData
+        cachePolicy:self.trustedViewerURL ? NSURLRequestUseProtocolCachePolicy : NSURLRequestReloadIgnoringCacheData
     timeoutInterval:(NSTimeInterval)10.0];
 
     [request setValue:[WKApp shared].config.langue forHTTPHeaderField:@"Accept-Language"];
@@ -284,11 +304,20 @@
 //        preferences.minimumFontSize = 40.0;
         configuration.preferences = preferences;
         configuration.processPool = self.processPool;
+        if (self.trustedViewerURL) {
+            configuration.websiteDataStore = [WKTrustedViewerDataStore storeForUID:self.viewerUID
+                token:self.viewerToken apiBaseURL:[WKApp shared].config.apiBaseUrl];
+        }
         _webView = [[WKWebView alloc] initWithFrame:CGRectMake(0.0f, self.navigationBar.lim_bottom, self.view.lim_width, self.view.lim_height - self.navigationBar.lim_bottom) configuration:configuration];
         _webView.UIDelegate = self;
         _webView.navigationDelegate = self;
         _webView.scrollView.delegate = self;
         [_webView addObserver:self forKeyPath:@"estimatedProgress" options:NSKeyValueObservingOptionNew context:nil];
+        if (self.viewerIdentityScript.length > 0) {
+            WKUserScript *script = [[WKUserScript alloc] initWithSource:self.viewerIdentityScript
+                                                         injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES];
+            [_webView.configuration.userContentController addUserScript:script];
+        }
         [self addUserScript:_webView];
         
         [_webView addObserver:self forKeyPath:@"URL" options:NSKeyValueObservingOptionNew context:nil];
@@ -346,6 +375,7 @@
 
 - (void)dealloc
 {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
     [self stopObservingTextDownload];
     [self.webView removeObserver:self forKeyPath:@"estimatedProgress"];
     [self.webView removeObserver:self forKeyPath:@"URL"];
@@ -353,6 +383,26 @@
     self.webView.UIDelegate = nil;
     self.webView.scrollView.delegate = nil;
     [self.webView stopLoading];
+}
+
+- (void)viewerSessionDidChange:(NSNotification *)notification {
+    void (^clearViewer)(void) = ^{
+        if (!self.trustedViewerURL) return;
+        self.webView.hidden = YES;
+        [self.webView stopLoading];
+        [self.webView.configuration.userContentController removeAllUserScripts];
+        [self.webView loadHTMLString:@"" baseURL:nil];
+        [WKTrustedViewerDataStore retireStoreIfCurrent:self.webView.configuration.websiteDataStore];
+        self.trustedViewerURL = nil;
+        self.viewerIdentityScript = nil;
+        self.viewerUID = nil;
+        self.viewerToken = nil;
+    };
+    if ([NSThread isMainThread]) {
+        clearViewer();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), clearViewer);
+    }
 }
 
 
@@ -439,6 +489,47 @@
     [webView loadRequest:newRequest];
      */
     NSString* reqUrl = navigationAction.request.URL.absoluteString;
+    NSURL *requestURL = navigationAction.request.URL;
+    if (self.trustedViewerURL && [@[@"http", @"https"] containsObject:requestURL.scheme.lowercaseString]) {
+        if (![self.viewerUID isEqualToString:[WKApp shared].loginInfo.uid]
+            || ![self.viewerToken isEqualToString:[WKApp shared].loginInfo.token]) {
+            decisionHandler(WKNavigationActionPolicyCancel);
+            [self viewerSessionDidChange:nil];
+            return;
+        }
+        BOOL trusted = WKIsTrustedViewerURL(requestURL, [WKApp shared].config.apiBaseUrl);
+        if (trusted && !WKIsSameViewerOriginURL(requestURL, self.trustedViewerURL)) {
+            decisionHandler(WKNavigationActionPolicyCancel);
+            if (!navigationAction.targetFrame || navigationAction.targetFrame.isMainFrame) {
+                WKWebViewVC *next = [WKWebViewVC new];
+                next.url = requestURL;
+                [[WKNavigationManager shared] pushViewController:next animated:YES];
+            }
+            return;
+        }
+        if (trusted && (!navigationAction.targetFrame || navigationAction.targetFrame.isMainFrame)) {
+            NSURL *canonicalURL = WKTrustedViewerHandoffURL(requestURL, [WKApp shared].config.apiBaseUrl);
+            if (![canonicalURL.absoluteString isEqualToString:requestURL.absoluteString]) {
+                decisionHandler(WKNavigationActionPolicyCancel);
+                [webView loadRequest:[NSURLRequest requestWithURL:canonicalURL]];
+                return;
+            }
+        }
+        if (!trusted && WKIsSameViewerOriginURL(requestURL, self.trustedViewerURL)) {
+            decisionHandler(WKNavigationActionPolicyCancel);
+            if (!navigationAction.targetFrame || navigationAction.targetFrame.isMainFrame) {
+                WKWebViewVC *next = [WKWebViewVC new];
+                next.url = requestURL;
+                [[WKNavigationManager shared] pushViewController:next animated:YES];
+            }
+            return;
+        }
+        if (!trusted && (!navigationAction.targetFrame || navigationAction.targetFrame.isMainFrame)) {
+            decisionHandler(WKNavigationActionPolicyCancel);
+            [[UIApplication sharedApplication] openURL:requestURL options:@{} completionHandler:nil];
+            return;
+        }
+    }
     if([reqUrl hasPrefix:@"http"] && ![self.url.host containsString:@"pgyer.com"]) { // pgyper 特殊处理下
         self.currentUrl = navigationAction.request.URL;
         //当前链接没有的话使用的是默认的URL地址
@@ -923,7 +1014,7 @@
     // Standalone Docs reads this key during bootstrap. Capture the native value now and
     // install it at document-start so app scripts cannot observe stale pooled storage.
     // Scope is deliberately narrow: exact server origin + explicit viewer routes only.
-    if (WKIsTrustedDocsViewerURL(self.url, [WKApp shared].config.apiBaseUrl)) {
+    if (!self.trustedViewerURL && WKIsTrustedDocsViewerURL(self.url, [WKApp shared].config.apiBaseUrl)) {
         NSString *spaceId = self.docsViewerSpaceId
             ?: [[NSUserDefaults standardUserDefaults] stringForKey:@"currentSpaceId"];
         NSString *apiBaseURL = [WKApp shared].config.apiBaseUrl;

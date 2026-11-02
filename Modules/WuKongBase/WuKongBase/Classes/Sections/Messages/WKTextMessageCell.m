@@ -13,6 +13,7 @@
 #import "UIView+WK.h"
 #import "WKMentionService.h"
 #import "WKWebViewVC.h"
+#import "WKTrustedViewerHandoff.h"
 #import "WKActionSheetView2.h"
 #import <ContactsUI/CNContactViewController.h>
 #import <ContactsUI/CNContactPickerViewController.h>
@@ -1914,7 +1915,14 @@ static WKWebViewConfiguration *_sharedWebViewConfig;
             if ([self.messageModel.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
                 [[WKApp shared] invoke:WKPOINT_SUMMARY_DEEPLINK param:@{@"url": url}];
             }
-            [[UIApplication sharedApplication] openURL:[NSURL URLWithString:url] options:@{} completionHandler:nil];
+            NSURL *targetURL = [NSURL URLWithString:url];
+            if (WKIsTrustedViewerURL(targetURL, [WKApp shared].config.apiBaseUrl)) {
+                WKWebViewVC *vc = [WKWebViewVC new];
+                vc.url = targetURL;
+                [[WKNavigationManager shared] pushViewController:vc animated:YES];
+            } else if (targetURL) {
+                [[UIApplication sharedApplication] openURL:targetURL options:@{} completionHandler:nil];
+            }
         }
         return;
     }

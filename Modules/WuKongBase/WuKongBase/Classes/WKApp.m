@@ -54,6 +54,7 @@
 #import "WKPanelDefaultFuncItem.h"
 #import "WKScanVC.h"
 #import "WKWebViewVC.h"
+#import "WKTrustedViewerHandoff.h"
 #import "WKCardContent.h"
 #import "WKCardCell.h"
 #import "WKInteractiveCardCell.h"
@@ -444,6 +445,7 @@ static WKApp *_instance;
    
     // 设置登录成功回调
     [self setMethod:WKPOINT_LOGIN_SUCCESS handler:^id _Nullable(id  _Nonnull param) {
+        [[NSNotificationCenter defaultCenter] postNotificationName:WKTrustedViewerSessionDidChangeNotification object:nil];
         // Retire any transport retained by the previous account/session.
         [[WKDocumentPreviewLoader shared] resetCache];
         // 切换数据库
@@ -776,6 +778,7 @@ static WKApp *_instance;
 }
 
 -(void) logout {
+    [[NSNotificationCenter defaultCenter] postNotificationName:WKTrustedViewerSessionDidChangeNotification object:nil];
     [[WKAPIClient sharedClient] DELETE:@"user/device_token" parameters:nil].then(^{
         [self immediatelyLogout];
     }).catch(^(NSError *error){
@@ -787,6 +790,7 @@ static WKApp *_instance;
 }
 
 -(void) immediatelyLogout {
+    [[NSNotificationCenter defaultCenter] postNotificationName:WKTrustedViewerSessionDidChangeNotification object:nil];
     // Retire document-preview transport before the current login credentials are cleared.
     [[WKDocumentPreviewLoader shared] resetCache];
     // 会话列表的每空间磁盘缓存（分组结构 / 关注集合）随账号走 —— 必须在
