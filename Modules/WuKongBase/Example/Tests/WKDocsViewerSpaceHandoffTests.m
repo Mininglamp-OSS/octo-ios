@@ -81,6 +81,29 @@
     XCTAssertNil(WKViewerHandoffURL([NSURL URLWithString:@"https://octo.example/team-other/d/doc-1"], base));
 }
 
+- (void)testEmptySidHandoffPreservesOtherQueryEncodingThroughBootstrap {
+    NSString *base = @"https://octo.example/api/v1/";
+    NSArray<NSDictionary<NSString *, NSString *> *> *cases = @[
+        @{@"query": @"sid=&sp=a%2Bb", @"expected": @"sp=a%2Bb&sid=ios", @"sid": @"ios"},
+        @{@"query": @"sid=&sp=a+b", @"expected": @"sp=a+b&sid=ios", @"sid": @"ios"},
+        @{@"query": @"sid=&sp=a%2Bb&sid=a+b", @"expected": @"sp=a%2Bb&sid=a+b", @"sid": @"a b"},
+        @{@"query": @"sid=&sid=a%2Bb&sp=a%2Bb", @"expected": @"sp=a%2Bb&sid=a%2Bb", @"sid": @"a+b"}
+    ];
+    for (NSDictionary<NSString *, NSString *> *testCase in cases) {
+        NSString *sourceString = [@"https://octo.example/d/doc-1?" stringByAppendingString:testCase[@"query"]];
+        NSURL *target = WKViewerHandoffURL([NSURL URLWithString:sourceString], base);
+        NSString *expectedURL = [@"https://octo.example/d/doc-1?" stringByAppendingString:testCase[@"expected"]];
+        XCTAssertEqualObjects(target.absoluteString, expectedURL, @"%@", sourceString);
+        NSString *html = WKViewerBootstrapHTML(target, @"token", @"user", @"name", nil, YES);
+        NSString *expectedAssignment = [NSString stringWithFormat:@"var s=\"%@\";", testCase[@"sid"]];
+        XCTAssertTrue([html containsString:expectedAssignment], @"%@", sourceString);
+        XCTAssertTrue([html containsString:@"localStorage.setItem('token'+s"], @"%@", sourceString);
+        NSString *escapedURL = [expectedURL stringByReplacingOccurrencesOfString:@"&" withString:@"\\u0026"];
+        NSString *navigation = [NSString stringWithFormat:@"window.location.replace(\"%@\")", escapedURL];
+        XCTAssertTrue([html containsString:navigation], @"%@", sourceString);
+    }
+}
+
 - (void)testBootstrapWritesMatchingSessionBeforeNavigation {
     NSURL *URL = [NSURL URLWithString:@"https://octo.example/d/doc-1?sid=web"];
     NSString *html = WKViewerBootstrapHTML(URL, @"secret</script>", @"user-1", @"Name", @"space-1", YES);

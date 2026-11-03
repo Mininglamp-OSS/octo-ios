@@ -88,27 +88,33 @@ NSURL *WKViewerHandoffURL(NSURL *URL, NSString *apiBaseURL) {
         @"^/(?:s|d)/[A-Za-z0-9_-]{1,128}/?$|^/(?:ppt/d/[A-Za-z0-9_-]{1,128}|docs/[A-Za-z0-9_-]{1,128}/present)/?$"
                                                                         options:0 error:nil];
     if (![route firstMatchInString:path options:0 range:NSMakeRange(0, path.length)]) return nil;
-    NSMutableArray<NSURLQueryItem *> *items = [NSMutableArray array];
-    NSString *sid = nil;
+    // Keep non-session query segments encoded exactly as supplied by the link.
+    NSString *rawQuery = candidate.percentEncodedQuery;
+    NSMutableArray<NSString *> *otherSegments = [NSMutableArray array];
+    NSString *selectedSidSegment = nil;
     BOOL firstSidSeen = NO;
-    for (NSURLQueryItem *item in candidate.queryItems) {
-        if ([item.name isEqualToString:@"sid"]) {
+    for (NSString *segment in [rawQuery componentsSeparatedByString:@"&"]) {
+        NSRange separator = [segment rangeOfString:@"="];
+        NSString *rawName = separator.location == NSNotFound ? segment : [segment substringToIndex:separator.location];
+        NSString *name = [[rawName stringByReplacingOccurrencesOfString:@"+" withString:@"%20"] stringByRemovingPercentEncoding];
+        if ([name isEqualToString:@"sid"]) {
+            NSString *rawValue = separator.location == NSNotFound ? @"" : [segment substringFromIndex:separator.location + 1];
+            NSString *value = [[rawValue stringByReplacingOccurrencesOfString:@"+" withString:@"%20"] stringByRemovingPercentEncoding];
             if (!firstSidSeen) {
                 firstSidSeen = YES;
-                if (item.value.length > 0) return URL;
+                if (value.length > 0) return URL;
             }
-            if (sid.length == 0 && item.value.length > 0) sid = item.value;
+            if (selectedSidSegment == nil && value.length > 0) selectedSidSegment = segment;
         } else {
-            [items addObject:item];
+            [otherSegments addObject:segment];
         }
     }
     if (!firstSidSeen) {
-        NSString *rawQuery = candidate.percentEncodedQuery;
         candidate.percentEncodedQuery = rawQuery.length > 0
             ? [rawQuery stringByAppendingString:@"&sid=ios"] : @"sid=ios";
     } else {
-        [items addObject:[NSURLQueryItem queryItemWithName:@"sid" value:sid.length > 0 ? sid : @"ios"]];
-        candidate.queryItems = items;
+        [otherSegments addObject:selectedSidSegment ?: @"sid=ios"];
+        candidate.percentEncodedQuery = [otherSegments componentsJoinedByString:@"&"];
     }
     return candidate.URL;
 }
