@@ -4,6 +4,20 @@
 @import XCTest;
 #import "WKDocsViewerSpaceHandoff.h"
 
+static NSString *WKBootstrapNavigationURL(NSString *html) {
+    NSString *marker = @"window.location.replace(";
+    NSRange start = [html rangeOfString:marker];
+    if (start.location == NSNotFound) return nil;
+    NSString *remaining = [html substringFromIndex:NSMaxRange(start)];
+    NSRange end = [remaining rangeOfString:@");"];
+    if (end.location == NSNotFound) return nil;
+    NSString *argument = [remaining substringToIndex:end.location];
+    NSString *arrayJSON = [NSString stringWithFormat:@"[%@]", argument];
+    NSData *data = [arrayJSON dataUsingEncoding:NSUTF8StringEncoding];
+    NSArray *values = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    return [values.firstObject isKindOfClass:[NSString class]] ? values.firstObject : nil;
+}
+
 @interface WKDocsViewerSpaceHandoffTests : XCTestCase
 @end
 
@@ -46,7 +60,8 @@
     XCTAssertTrue([script containsString:@"\\n"]);
     XCTAssertTrue([script containsString:@"\\u2028"]);
     XCTAssertTrue([script containsString:@"\\u2029"]);
-    XCTAssertTrue([script containsString:@"<\\/script>"]);
+    XCTAssertTrue([script containsString:@"\\u003c"]);
+    XCTAssertTrue([script containsString:@"\\u003e"]);
     XCTAssertFalse([script containsString:lineSeparator]);
     XCTAssertFalse([script containsString:paragraphSeparator]);
 }
@@ -58,6 +73,80 @@
     XCTAssertTrue([remove containsString:@"h===\"octo.example\""]);
     XCTAssertTrue([remove containsString:@"n===443"]);
     XCTAssertEqualObjects(WKDocsViewerSpaceJavaScript(@"", @"https://octo.example/api/v1"), remove);
+}
+
+- (void)testViewerHandoffPreservesSidAndOtherQueryParameters {
+    NSString *base = @"https://octo.example/api/v1/";
+    NSURL *document = WKViewerHandoffURL([NSURL URLWithString:@"https://octo.example/d/doc-1?sp=a%2Bb&x=1"], base);
+    XCTAssertEqualObjects(document.absoluteString, @"https://octo.example/d/doc-1?sp=a%2Bb&x=1&sid=ios");
+    NSURL *original = [NSURL URLWithString:@"https://octo.example/s/summary-1?sid=web&sp=a%2Bb"];
+    XCTAssertEqualObjects(WKViewerHandoffURL(original, base).absoluteString, original.absoluteString);
+    XCTAssertNil(WKViewerHandoffURL([NSURL URLWithString:@"https://evil.example/d/doc-1"], base));
+    XCTAssertNil(WKViewerHandoffURL([NSURL URLWithString:@"https://octo.example/d/doc-1/edit"], base));
+}
+
+- (void)testViewerHandoffUsesConfiguredRoutePrefix {
+    NSString *base = @"https://octo.example/team/api/v1/";
+    NSURL *document = [NSURL URLWithString:@"https://octo.example/team/d/doc-1"];
+    XCTAssertTrue(WKIsTrustedDocsViewerURL(document, base));
+    XCTAssertEqualObjects(WKViewerHandoffURL(document, base).absoluteString,
+                          @"https://octo.example/team/d/doc-1?sid=ios");
+    XCTAssertNil(WKViewerHandoffURL([NSURL URLWithString:@"https://octo.example/d/doc-1"], base));
+    XCTAssertNil(WKViewerHandoffURL([NSURL URLWithString:@"https://octo.example/team-other/d/doc-1"], base));
+}
+
+- (void)testEmptySidHandoffPreservesOtherQueryEncodingThroughBootstrap {
+    NSString *base = @"https://octo.example/api/v1/";
+    NSArray<NSDictionary<NSString *, NSString *> *> *cases = @[
+        @{@"query": @"sid=&sp=a%2Bb", @"expected": @"sp=a%2Bb&sid=ios", @"sid": @"ios"},
+        @{@"query": @"sid=&sp=a+b", @"expected": @"sp=a+b&sid=ios", @"sid": @"ios"},
+        @{@"query": @"sid=&sp=a%2Bb&sid=a+b", @"expected": @"sp=a%2Bb&sid=a+b", @"sid": @"a b"},
+        @{@"query": @"sid=&sid=a%2Bb&sp=a%2Bb", @"expected": @"sp=a%2Bb&sid=a%2Bb", @"sid": @"a+b"}
+    ];
+    for (NSDictionary<NSString *, NSString *> *testCase in cases) {
+        NSString *sourceString = [@"https://octo.example/d/doc-1?" stringByAppendingString:testCase[@"query"]];
+        NSURL *target = WKViewerHandoffURL([NSURL URLWithString:sourceString], base);
+        NSString *expectedURL = [@"https://octo.example/d/doc-1?" stringByAppendingString:testCase[@"expected"]];
+        XCTAssertEqualObjects(target.absoluteString, expectedURL, @"%@", sourceString);
+        NSString *html = WKViewerBootstrapHTML(target, @"token", @"user", @"name", nil, YES);
+        NSString *expectedAssignment = [NSString stringWithFormat:@"var s=\"%@\";", testCase[@"sid"]];
+        XCTAssertTrue([html containsString:expectedAssignment], @"%@", sourceString);
+        XCTAssertTrue([html containsString:@"localStorage.setItem('token'+s"], @"%@", sourceString);
+        XCTAssertEqualObjects(WKBootstrapNavigationURL(html), expectedURL, @"%@", sourceString);
+    }
+}
+
+- (void)testBootstrapWritesMatchingSessionBeforeNavigation {
+    NSURL *URL = [NSURL URLWithString:@"https://octo.example/d/doc-1?sid=web"];
+    NSString *html = WKViewerBootstrapHTML(URL, @"secret</script>", @"user-1", @"Name", @"space-1", YES);
+    XCTAssertTrue([html containsString:@"var s=\"web\""]);
+    XCTAssertTrue([html containsString:@"localStorage.setItem('token'+s"]);
+    XCTAssertTrue([html containsString:@"localStorage.setItem('currentSpaceId'"]);
+    XCTAssertTrue([html containsString:@"secret\\u003c"]);
+    XCTAssertTrue([html containsString:@"script\\u003e"]);
+    XCTAssertTrue([html containsString:@"window.location.replace"]);
+    XCTAssertTrue([html rangeOfString:@"localStorage.setItem('token'+s"].location < [html rangeOfString:@"window.location.replace"].location);
+}
+
+- (void)testBootstrapDecodesSidLikeViewerQueryParameters {
+    NSDictionary<NSString *, NSString *> *cases = @{
+        @"a+b": @"a b",
+        @"a%2Bb": @"a+b",
+        @"a%20b": @"a b"
+    };
+    for (NSString *encodedSid in cases) {
+        NSString *URLString = [@"https://octo.example/d/doc-1?sid=" stringByAppendingString:encodedSid];
+        NSURL *URL = [NSURL URLWithString:URLString];
+        NSString *expectedSid = cases[encodedSid];
+        NSString *expectedAssignment = [NSString stringWithFormat:@"var s=\"%@\";", expectedSid];
+        NSString *loginHTML = WKViewerBootstrapHTML(URL, @"token", @"user", @"name", nil, YES);
+        NSString *logoutHTML = WKViewerBootstrapHTML(URL, nil, nil, nil, nil, YES);
+        XCTAssertTrue([loginHTML containsString:expectedAssignment], @"%@", URLString);
+        XCTAssertTrue([logoutHTML containsString:expectedAssignment], @"%@", URLString);
+        XCTAssertTrue([loginHTML containsString:@"localStorage.setItem('token'+s"], @"%@", URLString);
+        XCTAssertTrue([logoutHTML containsString:@"localStorage.removeItem('token'+s"], @"%@", URLString);
+        XCTAssertEqualObjects(URL.absoluteString, URLString);
+    }
 }
 
 @end
