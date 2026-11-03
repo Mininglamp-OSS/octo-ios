@@ -4,6 +4,20 @@
 @import XCTest;
 #import "WKDocsViewerSpaceHandoff.h"
 
+static NSString *WKBootstrapNavigationURL(NSString *html) {
+    NSString *marker = @"window.location.replace(";
+    NSRange start = [html rangeOfString:marker];
+    if (start.location == NSNotFound) return nil;
+    NSString *remaining = [html substringFromIndex:NSMaxRange(start)];
+    NSRange end = [remaining rangeOfString:@");"];
+    if (end.location == NSNotFound) return nil;
+    NSString *argument = [remaining substringToIndex:end.location];
+    NSString *arrayJSON = [NSString stringWithFormat:@"[%@]", argument];
+    NSData *data = [arrayJSON dataUsingEncoding:NSUTF8StringEncoding];
+    NSArray *values = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    return [values.firstObject isKindOfClass:[NSString class]] ? values.firstObject : nil;
+}
+
 @interface WKDocsViewerSpaceHandoffTests : XCTestCase
 @end
 
@@ -98,9 +112,7 @@
         NSString *expectedAssignment = [NSString stringWithFormat:@"var s=\"%@\";", testCase[@"sid"]];
         XCTAssertTrue([html containsString:expectedAssignment], @"%@", sourceString);
         XCTAssertTrue([html containsString:@"localStorage.setItem('token'+s"], @"%@", sourceString);
-        NSString *escapedURL = [expectedURL stringByReplacingOccurrencesOfString:@"&" withString:@"\\u0026"];
-        NSString *navigation = [NSString stringWithFormat:@"window.location.replace(\"%@\")", escapedURL];
-        XCTAssertTrue([html containsString:navigation], @"%@", sourceString);
+        XCTAssertEqualObjects(WKBootstrapNavigationURL(html), expectedURL, @"%@", sourceString);
     }
 }
 
