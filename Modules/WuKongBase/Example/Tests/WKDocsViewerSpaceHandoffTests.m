@@ -93,4 +93,25 @@
     XCTAssertTrue([html rangeOfString:@"localStorage.setItem('token'+s"].location < [html rangeOfString:@"window.location.replace"].location);
 }
 
+- (void)testBootstrapDecodesSidLikeViewerQueryParameters {
+    NSDictionary<NSString *, NSString *> *cases = @{
+        @"a+b": @"a b",
+        @"a%2Bb": @"a+b",
+        @"a%20b": @"a b"
+    };
+    for (NSString *encodedSid in cases) {
+        NSString *URLString = [@"https://octo.example/d/doc-1?sid=" stringByAppendingString:encodedSid];
+        NSURL *URL = [NSURL URLWithString:URLString];
+        NSString *expectedSid = cases[encodedSid];
+        NSString *expectedAssignment = [NSString stringWithFormat:@"var s=\"%@\";", expectedSid];
+        NSString *loginHTML = WKViewerBootstrapHTML(URL, @"token", @"user", @"name", nil, YES);
+        NSString *logoutHTML = WKViewerBootstrapHTML(URL, nil, nil, nil, nil, YES);
+        XCTAssertTrue([loginHTML containsString:expectedAssignment], @"%@", URLString);
+        XCTAssertTrue([logoutHTML containsString:expectedAssignment], @"%@", URLString);
+        XCTAssertTrue([loginHTML containsString:@"localStorage.setItem('token'+s"], @"%@", URLString);
+        XCTAssertTrue([logoutHTML containsString:@"localStorage.removeItem('token'+s"], @"%@", URLString);
+        XCTAssertEqualObjects(URL.absoluteString, URLString);
+    }
+}
+
 @end

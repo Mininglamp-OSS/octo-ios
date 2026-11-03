@@ -116,9 +116,14 @@ NSURL *WKViewerHandoffURL(NSURL *URL, NSString *apiBaseURL) {
 NSString *WKViewerBootstrapHTML(NSURL *URL, NSString *token, NSString *uid, NSString *name,
                                 NSString *spaceId, BOOL isDocsViewer) {
     NSURLComponents *components = [NSURLComponents componentsWithURL:URL resolvingAgainstBaseURL:NO];
+    // Query parameters use form decoding: raw '+' is a space, while '%2B' is a plus.
+    components.percentEncodedQuery = [components.percentEncodedQuery stringByReplacingOccurrencesOfString:@"+" withString:@"%20"];
     NSString *sid = @"ios";
     for (NSURLQueryItem *item in components.queryItems) {
-        if ([item.name isEqualToString:@"sid"] && item.value.length > 0) { sid = item.value; break; }
+        if ([item.name isEqualToString:@"sid"]) {
+            if (item.value.length > 0) sid = item.value;
+            break;
+        }
     }
     NSMutableString *script = [NSMutableString stringWithString:@"try{"];
     if (isDocsViewer) {
