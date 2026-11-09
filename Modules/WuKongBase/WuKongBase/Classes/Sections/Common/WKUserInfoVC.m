@@ -224,7 +224,6 @@ static void *WKContactFlagObservationContext = &WKContactFlagObservationContext;
         self.nameLbl.text = self.viewModel.channelInfo.name;
         self.nicknameField.hidden = YES;
     }
-    [self.nameLbl sizeToFit];
     if(self.viewModel.memberOfUser && self.viewModel.memberOfUser.memberRemark && ![self.viewModel.memberOfUser.memberRemark isEqualToString:@""]) {
         self.nameInChannelField.value = self.viewModel.memberOfUser.memberRemark;
         self.nameInChannelField.hidden = NO;
@@ -417,24 +416,38 @@ static void *WKContactFlagObservationContext = &WKContactFlagObservationContext;
 }
 #define textTopSpace 5.0f
 -(void) layoutUI {
-    UIView *preView;
-    for (UIView *view in self.userInfoBoxView.subviews) {
-        if(!preView) {
-            if(self.userInfoBoxView.subviews.count == 1) {
-                view.lim_top = self.userAvatarView.lim_top + (self.userAvatarView.lim_height/2.0f - view.lim_height/2.0f);
-            }else if(self.userInfoBoxView.subviews.count>2 && self.userInfoBoxView.subviews.count<4) {
-                view.lim_top = self.userAvatarView.lim_top;
-            } else if(self.userInfoBoxView.subviews.count>=4) {
-                view.lim_top = self.userAvatarView.lim_top - textTopSpace;
-            } else {
-                view.lim_top = self.userAvatarView.lim_top + textTopSpace;
-            }
-            
-        }else {
-             view.lim_top = preView.lim_bottom + textTopSpace;
-        }
-        preView = view;
+    CGFloat width = self.tableView.bounds.size.width;
+    if (width <= 0.0f) return;
+    self.userHeader.lim_width = width;
+    self.userInfoBoxView.lim_width = [self textMaxWidth];
+    self.userAvatarView.lim_top = 28.0f;
+
+    // 先为可见徽章预留空间，再测量名字；长英文也可逐字符换行。
+    CGFloat badgeWidth = 0.0f;
+    if (!self.realnameVerifiedImgView.hidden) badgeWidth += 6.0f + 16.0f * 200.0f / 143.0f;
+    if (!self.botBadgeImgView.hidden) {
+        UIImage *image = self.botBadgeImgView.image;
+        CGFloat botWidth = image.size.height > 0 ? 16.0f * image.size.width / image.size.height : 16.0f;
+        badgeWidth += 6.0f + botWidth;
     }
+    if (!self.sexImgView.hidden) badgeWidth += 5.0f + self.sexImgView.lim_width;
+    CGFloat nameWidth = MAX(1.0f, self.userInfoBoxView.lim_width - badgeWidth);
+    CGSize nameSize = [self.nameLbl sizeThatFits:CGSizeMake(nameWidth, CGFLOAT_MAX)];
+    self.nameLbl.frame = CGRectMake(0, 0, MIN(nameWidth, ceil(nameSize.width)), MAX(ceil(self.nameLbl.font.lineHeight), ceil(nameSize.height)));
+
+    CGFloat contentHeight = 0.0f;
+    for (UIView *view in self.userInfoBoxView.subviews) {
+        if (view.hidden) continue;
+        if (view != self.nameLbl) {
+            CGSize size = [view sizeThatFits:CGSizeMake(self.userInfoBoxView.lim_width, CGFLOAT_MAX)];
+            view.frame = CGRectMake(0, 0, self.userInfoBoxView.lim_width, ceil(size.height));
+        }
+        view.lim_top = contentHeight;
+        contentHeight = view.lim_bottom + textTopSpace;
+    }
+    contentHeight = MAX(0.0f, contentHeight - textTopSpace);
+    self.userInfoBoxView.lim_top = 28.0f + MAX(0.0f, (64.0f - contentHeight) / 2.0f);
+    self.userInfoBoxView.lim_height = contentHeight;
     // 实名 ✓ 徽章定位：贴在 nameLbl 右侧 padding.left = 6pt。
     // 资源 Common/ic_realname_verified_card 是 200×143 横向 tag，按高度 16pt
     // 算 aspect-fit 宽度，避免压扁。徽章 superview 是 userHeader，nameLbl
@@ -448,7 +461,7 @@ static void *WKContactFlagObservationContext = &WKContactFlagObservationContext;
         self.realnameVerifiedImgView.lim_width = badgeW;
         self.realnameVerifiedImgView.lim_height = badgeH;
         self.realnameVerifiedImgView.lim_left = afterNameRight + 6.0f;
-        self.realnameVerifiedImgView.lim_top = boxTop + self.nameLbl.lim_top + (self.nameLbl.lim_height - badgeH) / 2.0f;
+        self.realnameVerifiedImgView.lim_top = boxTop + self.nameLbl.lim_top + (self.nameLbl.font.lineHeight - badgeH) / 2.0f;
         afterNameRight = self.realnameVerifiedImgView.lim_right;
     }
     // Bot(AI) 标识：紧跟在 nameLbl / 实名徽章右侧，高度 16pt，宽按图比例。
@@ -462,14 +475,21 @@ static void *WKContactFlagObservationContext = &WKContactFlagObservationContext;
         self.botBadgeImgView.lim_width = botW;
         self.botBadgeImgView.lim_height = botH;
         self.botBadgeImgView.lim_left = afterNameRight + 6.0f;
-        self.botBadgeImgView.lim_top = boxTop + self.nameLbl.lim_top + (self.nameLbl.lim_height - botH) / 2.0f;
+        self.botBadgeImgView.lim_top = boxTop + self.nameLbl.lim_top + (self.nameLbl.font.lineHeight - botH) / 2.0f;
         afterNameRight = self.botBadgeImgView.lim_right;
     }
     self.sexImgView.lim_left = afterNameRight + 5.0f;
     self.sexImgView.lim_top = boxTop + self.nameLbl.lim_top + 4.0f;
-    if(preView) {
-        self.userInfoBoxView.lim_height = preView.lim_bottom;
+    CGFloat headerHeight = MAX(120.0f, MAX(self.userAvatarView.lim_bottom, self.userInfoBoxView.lim_bottom) + 28.0f);
+    if (fabs(self.userHeader.lim_height - headerHeight) > 0.5f) {
+        self.userHeader.lim_height = headerHeight;
+        self.tableView.tableHeaderView = self.userHeader;
     }
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    [self layoutUI];
 }
 
 
@@ -571,6 +591,8 @@ static void *WKContactFlagObservationContext = &WKContactFlagObservationContext;
     if(!_nameLbl) {
         _nameLbl = [[WKCopyLabel alloc] initWithFrame:CGRectMake(0.0f, self.userAvatarView.lim_top-5.0f, [self textMaxWidth], 20.0f)];
         _nameLbl.copyEnabled = YES;
+        _nameLbl.numberOfLines = 0;
+        _nameLbl.lineBreakMode = NSLineBreakByCharWrapping;
         [_nameLbl setTextColor:[WKApp shared].config.defaultTextColor];
         [_nameLbl setFont:[[WKApp shared].config appFontOfSize:17.0f]];
     }
@@ -613,7 +635,7 @@ static void *WKContactFlagObservationContext = &WKContactFlagObservationContext;
 }
 
 -(CGFloat) textMaxWidth {
-    return self.view.lim_width - self.userAvatarView.lim_right + textToAvatarLeftSpace;
+    return MAX(0.0f, self.tableView.bounds.size.width - [self textLeftSpace] - 20.0f);
 }
 
 - (void)viewConfigChange:(WKViewConfigChangeType)type {
@@ -969,17 +991,23 @@ static void *WKContactFlagObservationContext = &WKContactFlagObservationContext;
 - (void)setValue:(NSString *)value {
     _value = value;
     self.valueLbl.text = value;
-    [self.valueLbl sizeToFit];
+    [self setNeedsLayout];
+}
+
+- (CGSize)sizeThatFits:(CGSize)size {
+    CGFloat valueWidth = MAX(1.0f, size.width - self.fieldLbl.lim_width);
+    CGSize valueSize = [self.valueLbl sizeThatFits:CGSizeMake(valueWidth, CGFLOAT_MAX)];
+    return CGSizeMake(size.width, MAX(ceil(self.fieldLbl.font.lineHeight), ceil(valueSize.height)));
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
     
     self.fieldLbl.lim_left = 0.0f;
-    self.fieldLbl.lim_height = self.lim_height;
-    
-    self.valueLbl.lim_left = self.fieldLbl.lim_right;
-    self.valueLbl.lim_height = self.lim_height;
+    self.fieldLbl.lim_top = 0.0f;
+    self.fieldLbl.lim_height = ceil(self.fieldLbl.font.lineHeight);
+    self.valueLbl.frame = CGRectMake(self.fieldLbl.lim_right, 0.0f,
+                                    MAX(0.0f, self.lim_width - self.fieldLbl.lim_right), self.lim_height);
     
 }
 
@@ -996,6 +1024,8 @@ static void *WKContactFlagObservationContext = &WKContactFlagObservationContext;
     if(!_valueLbl) {
         _valueLbl = [[WKCopyLabel alloc] init];
         _valueLbl.copyEnabled = YES;
+        _valueLbl.numberOfLines = 0;
+        _valueLbl.lineBreakMode = NSLineBreakByCharWrapping;
         [_valueLbl setFont:[[WKApp shared].config appFontOfSize:13.0f]];
         [_valueLbl setTextColor:[UIColor colorWithRed:153.0f/255.0f green:153.0f/255.0f blue:153.0f/255.0f alpha:1.0f]];
     }
