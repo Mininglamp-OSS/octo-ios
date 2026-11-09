@@ -49,6 +49,8 @@
     [self.contentView addSubview:_avatarImgView];
 
     _nameLbl = [[UILabel alloc] init];
+    _nameLbl.numberOfLines = 1;
+    _nameLbl.lineBreakMode = NSLineBreakByTruncatingTail;
     [_nameLbl setFont:[[WKApp shared].config appFontOfSize:15.0f]];
     [self.contentView addSubview:_nameLbl];
 
@@ -172,6 +174,7 @@
             self.followIcon.hidden = YES;
         }
     }
+    [self setNeedsLayout];
 }
 
 + (UIImage *)cachedFollowStarIcon {
@@ -219,8 +222,7 @@
         self.onlineDot.lim_top = self.avatarImgView.lim_bottom - self.onlineDot.lim_height;
     }
 
-    // 已关注星标贴最右；nameLbl 后面的 official/realname/AI 不需要避让它（cell 内宽足够，
-    // 名字太长会先 truncate 而不是和右侧图标重叠 —— accessory 风格而非内联）。
+    // 关注星标固定在右侧，昵称和内联徽章共同避让。
     if (!self.followIcon.hidden) {
         CGFloat iconW = 14.0f;
         CGFloat iconH = 14.0f;
@@ -231,8 +233,15 @@
         self.followIcon.frame = CGRectZero;
     }
 
-    // Name
-    self.nameLbl.lim_left = self.avatarImgView.lim_right + avatarToName;
+    CGFloat badgeWidth = 0.0f;
+    if (!self.officialTag.hidden) badgeWidth += 4.0f + self.officialTag.lim_width;
+    if (!self.realnameVerifiedImgView.hidden) badgeWidth += 6.0f + 12.0f;
+    if (!self.aiBadgeLbl.hidden) badgeWidth += 6.0f + self.aiBadgeLbl.lim_width;
+    CGFloat rightEdge = self.followIcon.hidden ? self.contentView.lim_width - rightPad : self.followIcon.lim_left - 8.0f;
+    CGFloat nameLeft = self.avatarImgView.lim_right + avatarToName;
+    CGFloat maxNameWidth = MAX(0.0f, rightEdge - nameLeft - badgeWidth);
+    CGSize nameSize = [self.nameLbl sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
+    self.nameLbl.frame = CGRectMake(nameLeft, 0, MIN(ceil(nameSize.width), maxNameWidth), ceil(nameSize.height));
     self.nameLbl.lim_top = self.lim_height / 2.0f - self.nameLbl.lim_height / 2.0f;
 
     // Official tag + realname + AI badge after name
