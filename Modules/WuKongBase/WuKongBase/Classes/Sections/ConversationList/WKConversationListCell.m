@@ -508,7 +508,7 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
         self.titleLbl.text = model.channelInfo.displayName;
         if(model.channel.channelType == WK_PERSON) {
             if([model.channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
-                self.titleLbl.text = LLang(@"系统通知");
+                self.titleLbl.text = LLang(@"系统账号");
                 if(model.channelInfo.remark && ![model.channelInfo.remark isEqualToString:@""]) {
                     self.titleLbl.text = model.channelInfo.remark;
                 }
@@ -1095,7 +1095,7 @@ static BOOL WKCellIsMuted(WKConversationWrapModel *model) {
     if(!name && self.model.lastMessage.from) {
         name = self.model.lastMessage.from.name;
         if([self.model.lastMessage.fromUid isEqualToString:[WKApp shared].config.systemUID]) {
-            name = LLang(@"系统通知");
+            name = LLang(@"系统账号");
         }else if([self.model.lastMessage.fromUid isEqualToString:[WKApp shared].config.fileHelperUID]) {
             name = LLang(@"文件传输助手");
         }

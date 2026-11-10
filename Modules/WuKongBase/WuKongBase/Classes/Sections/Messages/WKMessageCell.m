@@ -646,7 +646,7 @@ static NSMutableDictionary *flameNodeCacheDict;
     NSString *fromUID = messageModel.fromUid;
     
     if([fromUID isEqualToString:[WKApp shared].config.systemUID]) {
-        return LLang(@"系统通知");
+        return LLang(@"系统账号");
     }else if([fromUID isEqualToString:[WKApp shared].config.fileHelperUID]) {
         return LLang(@"文件传输助手");
     }

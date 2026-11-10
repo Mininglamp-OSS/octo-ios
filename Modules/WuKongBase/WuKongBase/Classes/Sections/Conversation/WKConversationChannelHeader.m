@@ -243,7 +243,7 @@
     self.titleLbl.text = channelInfo.displayName;
     if(channel.channelType == WK_PERSON) {
         if([channel.channelId isEqualToString:[WKApp shared].config.systemUID]) {
-            self.titleLbl.text = LLang(@"系统通知");
+            self.titleLbl.text = LLang(@"系统账号");
             if(channelInfo.remark && ![channelInfo.remark isEqualToString:@""]) {
                 self.titleLbl.text = channelInfo.remark;
             }
