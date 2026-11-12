@@ -73,8 +73,10 @@ static const BOOL WKFileOpenDiagAlert = NO;
 
 - (void)cancelFileDownload {
     WKMessageFileDownloadTask *task = self.downloadTask;
+    WKMessageFileDownloadTask *runningTask = [self runningFileDownload];
     [self detachFileDownload];
     [task cancel];
+    if (runningTask != task) [runningTask cancel];
 }
 
 - (WKMessageFileDownloadTask *)runningFileDownload {
@@ -240,6 +242,14 @@ static const BOOL WKFileOpenDiagAlert = NO;
           self.messageModel.message.messageSeq,
           self.messageModel.message.fromUid ?: @"(nil)");
 
+    // 活动下载优先于本地预览：即使已有非空旧文件，再次点击也必须真正取消任务。
+    // 同时查询 SDK，覆盖 cell 尚未重新绑定进度监听的情况。
+    if (self.isFileDownloading || [self runningFileDownload]) {
+        NSLog(@"[File-onTap] 用户取消下载中点击 → 取消下载");
+        [self cancelFileDownload];
+        return;
+    }
+
     // 检查本地文件是否存在(打点把"为啥不存在"信息一起带上,后续诊断用)
     NSString *localPath = fileContent.localPath;
     if (localPath.length > 0) {
@@ -263,13 +273,6 @@ static const BOOL WKFileOpenDiagAlert = NO;
         }
     } else {
         NSLog(@"[File-onTap][WARN] localPath 为空 —— SDK 路径计算异常(messageFileRootDir / uid / channelDir / clientMsgNo 中有一个空) cmn=%@", self.messageModel.message.clientMsgNo);
-    }
-
-    // 下载中再点击 → 取消下载
-    if (self.isFileDownloading) {
-        NSLog(@"[File-onTap] 用户取消下载中点击 → 取消下载");
-        [self cancelFileDownload];
-        return;
     }
 
     // 需要下载,先确认 remoteUrl —— 这里是线上"文件不存在或正在上传中" toast 的唯一入口。
