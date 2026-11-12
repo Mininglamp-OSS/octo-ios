@@ -23,12 +23,12 @@
 @synthesize taskId;
 
 - (void)addListener:(nonnull WKTaskListener)listener target:(id) target {
-    NSString *key  = [NSString stringWithFormat:@"%@%@",NSStringFromClass([target class]),self.taskId];
+    NSString *key = [NSString stringWithFormat:@"%@:%p:%@", NSStringFromClass([target class]), (__bridge void *)target, self.taskId];
     self.listenerDic[key] = listener;
 }
 
 - (void)removeListener:(id)target {
-    NSString *key  = [NSString stringWithFormat:@"%@%@",NSStringFromClass([target class]),self.taskId];
+    NSString *key = [NSString stringWithFormat:@"%@:%p:%@", NSStringFromClass([target class]), (__bridge void *)target, self.taskId];
     [self.listenerDic removeObjectForKey:key];
 }
 - (void)cancel {

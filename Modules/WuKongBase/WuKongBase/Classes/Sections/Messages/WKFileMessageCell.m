@@ -38,6 +38,8 @@ static const BOOL WKFileOpenDiagAlert = NO;
 @property(nonatomic,strong) WKMessageFileUploadTask *uploadTask;
 @property(nonatomic,strong) NSURL *previewFileURL;
 @property(nonatomic,assign) BOOL isFileDownloading;
+@property(nonatomic,strong) WKMessageFileDownloadTask *downloadTask;
+@property(nonatomic,assign) NSUInteger downloadGeneration;
 
 @end
 
@@ -48,9 +50,51 @@ static const BOOL WKFileOpenDiagAlert = NO;
 }
 
 - (void)prepareForReuse {
+    [self detachFileDownload];
     [super prepareForReuse];
     if (self.uploadTask) {
         [self.uploadTask removeListener:self];
+    }
+}
+
+- (void)dealloc {
+    [_downloadTask removeListener:self];
+}
+
+- (void)detachFileDownload {
+    // Recycled/offscreen cells stop observing; scrolling must not cancel the transfer.
+    self.downloadGeneration++;
+    self.isFileDownloading = NO;
+    [self.downloadTask removeListener:self];
+    self.downloadTask = nil;
+    self.progressView.hidden = YES;
+    [self.progressView setProgress:0];
+}
+
+- (void)cancelFileDownload {
+    WKMessageFileDownloadTask *task = self.downloadTask;
+    [self detachFileDownload];
+    [task cancel];
+}
+
+- (WKMessageFileDownloadTask *)runningFileDownload {
+    WKMessageFileDownloadTask *task = [[WKSDK shared] getMessageDownloadTask:self.messageModel.message];
+    if (![task isKindOfClass:WKMessageFileDownloadTask.class] ||
+        ![task.message.clientMsgNo isEqualToString:self.messageModel.message.clientMsgNo] ||
+        ![task.message.channel isEqual:self.messageModel.message.channel]) return nil;
+    return (task.status == WKTaskStatusWait || task.status == WKTaskStatusProgressing) ? task : nil;
+}
+
+- (void)onEndDisplay {
+    [self detachFileDownload];
+    [super onEndDisplay];
+}
+
+- (void)onWillDisplay {
+    [super onWillDisplay];
+    if (!self.downloadTask && [self.messageModel.content isKindOfClass:WKFileContent.class] &&
+        [self runningFileDownload]) {
+        [self startFileDownload:(WKFileContent *)self.messageModel.content];
     }
 }
 
@@ -84,6 +128,11 @@ static const BOOL WKFileOpenDiagAlert = NO;
 }
 
 - (void)refresh:(WKMessageModel *)model {
+    if (self.downloadTask &&
+        (![self.downloadTask.message.clientMsgNo isEqualToString:model.message.clientMsgNo] ||
+         ![self.downloadTask.message.channel isEqual:model.message.channel])) {
+        [self detachFileDownload];
+    }
     [super refresh:model];
     if ([WKApp shared].config.style != WKSystemStyleDark) {
         self.trailingView.timeLbl.textColor = [WKApp shared].config.tipColor;
@@ -138,7 +187,9 @@ static const BOOL WKFileOpenDiagAlert = NO;
 
 - (void)updateProgress {
     __weak typeof(self) weakSelf = self;
-    self.uploadTask = [[WKSDK shared] getMessageFileUploadTask:self.messageModel.message];
+    // The SDK lookup is keyed by message ID and can also return a download task.
+    WKMessageFileUploadTask *upload = [[WKSDK shared] getMessageFileUploadTask:self.messageModel.message];
+    self.uploadTask = [upload isKindOfClass:WKMessageFileUploadTask.class] ? upload : nil;
     if (self.uploadTask) {
         [self.uploadTask addListener:^{
             dispatch_block_t uiUpdate;
@@ -159,7 +210,7 @@ static const BOOL WKFileOpenDiagAlert = NO;
                 dispatch_async(dispatch_get_main_queue(), uiUpdate);
             }
         } target:self];
-    } else {
+    } else if (!self.isFileDownloading) {
         self.progressView.hidden = YES;
         [self.progressView setProgress:0];
     }
@@ -202,6 +253,8 @@ static const BOOL WKFileOpenDiagAlert = NO;
                 NSLog(@"[File-onTap][WARN] localPath exists but 0 bytes — treating as missing path=%@", localPath);
             } else {
                 NSLog(@"[File-onTap] 本地文件存在 size=%llu,直接预览", sz);
+                // A completion callback may already be queued; don't open the preview twice.
+                [self detachFileDownload];
                 [self previewFileAtPath:localPath];
                 return;
             }
@@ -215,9 +268,7 @@ static const BOOL WKFileOpenDiagAlert = NO;
     // 下载中再点击 → 取消下载
     if (self.isFileDownloading) {
         NSLog(@"[File-onTap] 用户取消下载中点击 → 取消下载");
-        self.isFileDownloading = NO;
-        self.progressView.hidden = YES;
-        [self.progressView setProgress:0];
+        [self cancelFileDownload];
         return;
     }
 
@@ -229,18 +280,33 @@ static const BOOL WKFileOpenDiagAlert = NO;
     }
 
     NSLog(@"[File-onTap] remoteUrl 有值,启动 SDK 下载 url=%@", fileContent.remoteUrl);
+    [self startFileDownload:fileContent];
+}
+
+- (void)startFileDownload:(WKFileContent *)fileContent {
+    NSUInteger generation = ++self.downloadGeneration;
+    NSString *destinationPath = [fileContent.localPath copy];
     self.isFileDownloading = YES;
     self.progressView.hidden = NO;
     [self.progressView setProgress:0];
     __weak typeof(self) weakSelf = self;
-    [[WKSDK shared].mediaManager download:self.messageModel.message callback:^(WKMediaDownloadState state, CGFloat progress, NSError *error) {
+    void (^callback)(WKMediaDownloadState, CGFloat, NSError *) = ^(WKMediaDownloadState state, CGFloat progress, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (!weakSelf.isFileDownloading) return; // 已取消，忽略回调
+            if (!weakSelf.isFileDownloading || weakSelf.downloadGeneration != generation) return;
+            if (state == WKMediaDownloadStateFail && [error.domain isEqualToString:NSURLErrorDomain] &&
+                error.code == NSURLErrorCancelled) {
+                [weakSelf detachFileDownload];
+                return;
+            }
+            if (state != WKMediaDownloadStateProcessing) {
+                [weakSelf.downloadTask removeListener:weakSelf];
+                weakSelf.downloadTask = nil;
+            }
             if (state == WKMediaDownloadStateSuccess) {
                 weakSelf.isFileDownloading = NO;
                 weakSelf.progressView.hidden = YES;
                 [weakSelf.progressView setProgress:0];
-                NSString *downloadedPath = fileContent.localPath;
+                NSString *downloadedPath = destinationPath;
                 NSDictionary<NSFileAttributeKey, id> *downloadedAttrs =
                     [[NSFileManager defaultManager] attributesOfItemAtPath:downloadedPath error:nil];
                 NSLog(@"[File-onTap] download SUCCESS path=%@ exists=%d size=%llu ext='%@' name='%@'",
@@ -301,7 +367,24 @@ static const BOOL WKFileOpenDiagAlert = NO;
                 [weakSelf.progressView setProgress:progress];
             }
         });
-    }];
+    };
+    self.downloadTask = [self runningFileDownload] ?: [[WKSDK shared].mediaManager download:self.messageModel.message];
+    if (!self.downloadTask) {
+        [self detachFileDownload];
+        [self showFileOpenFailureAlertWithTitle:LLang(@"下载失败") detail:@""];
+        return;
+    }
+    __weak WKMessageFileDownloadTask *weakTask = self.downloadTask;
+    // Snapshot before dispatch: the SDK may remove/deallocate a finished task before UI delivery.
+    dispatch_block_t listener = ^{
+        WKMessageFileDownloadTask *task = weakTask;
+        if (!task || task.status == WKTaskStatusWait || task.status == WKTaskStatusSuspend) return;
+        WKMediaDownloadState state = task.status == WKTaskStatusProgressing ? WKMediaDownloadStateProcessing
+            : task.status == WKTaskStatusSuccess ? WKMediaDownloadStateSuccess : WKMediaDownloadStateFail;
+        callback(state, task.progress, task.error);
+    };
+    [self.downloadTask addListener:listener target:self];
+    listener();
 }
 
 // "文件不存在或正在上传中" toast 的诊断与原因分类 ——
@@ -392,31 +475,7 @@ static const BOOL WKFileOpenDiagAlert = NO;
     if (dbHasUrl) {
         NSLog(@"[File-onTap][DIAG] 用 DB content 救回 url,启动下载");
         self.messageModel.message.content = dbContent;
-        self.isFileDownloading = YES;
-        self.progressView.hidden = NO;
-        [self.progressView setProgress:0];
-        __weak typeof(self) weakSelf = self;
-        [[WKSDK shared].mediaManager download:self.messageModel.message callback:^(WKMediaDownloadState state, CGFloat progress, NSError *error) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if (!weakSelf.isFileDownloading) return;
-                if (state == WKMediaDownloadStateSuccess) {
-                    weakSelf.isFileDownloading = NO;
-                    weakSelf.progressView.hidden = YES;
-                    [weakSelf.progressView setProgress:0];
-                    NSString *p = dbContent.localPath;
-                    if (p && [[NSFileManager defaultManager] fileExistsAtPath:p]) {
-                        [weakSelf previewFileAtPath:p];
-                    }
-                } else if (state == WKMediaDownloadStateFail) {
-                    weakSelf.isFileDownloading = NO;
-                    weakSelf.progressView.hidden = YES;
-                    [weakSelf.progressView setProgress:0];
-                    NSLog(@"[File-onTap][DIAG] DB content 下载也失败 error=%@", error);
-                } else {
-                    [weakSelf.progressView setProgress:progress];
-                }
-            });
-        }];
+        [self startFileDownload:dbContent];
         return;
     }
 
