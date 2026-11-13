@@ -71,20 +71,25 @@ static const BOOL WKFileOpenDiagAlert = NO;
     [self.progressView setProgress:0];
 }
 
-- (void)cancelFileDownload {
-    WKMessageFileDownloadTask *task = self.downloadTask;
-    WKMessageFileDownloadTask *runningTask = [self runningFileDownload];
+- (void)cancelFileDownload:(WKMessageFileDownloadTask *)task {
     [self detachFileDownload];
     [task cancel];
-    if (runningTask != task) [runningTask cancel];
+}
+
+- (BOOL)isRunningFileDownload:(WKMessageFileDownloadTask *)task {
+    if (![task isKindOfClass:WKMessageFileDownloadTask.class] ||
+        ![task.message.clientMsgNo isEqualToString:self.messageModel.message.clientMsgNo] ||
+        ![task.message.channel isEqual:self.messageModel.message.channel]) return NO;
+    WKTaskStatus status = task.status;
+    return status == WKTaskStatusWait || status == WKTaskStatusProgressing;
 }
 
 - (WKMessageFileDownloadTask *)runningFileDownload {
     WKMessageFileDownloadTask *task = [[WKSDK shared] getMessageDownloadTask:self.messageModel.message];
-    if (![task isKindOfClass:WKMessageFileDownloadTask.class] ||
-        ![task.message.clientMsgNo isEqualToString:self.messageModel.message.clientMsgNo] ||
-        ![task.message.channel isEqual:self.messageModel.message.channel]) return nil;
-    return (task.status == WKTaskStatusWait || task.status == WKTaskStatusProgressing) ? task : nil;
+    if ([self isRunningFileDownload:task]) return task;
+    // SDK 中的任务可能已被移除或替换，仅在绑定任务仍匹配且活跃时使用它。
+    task = self.downloadTask;
+    return [self isRunningFileDownload:task] ? task : nil;
 }
 
 - (void)onEndDisplay {
@@ -242,13 +247,16 @@ static const BOOL WKFileOpenDiagAlert = NO;
           self.messageModel.message.messageSeq,
           self.messageModel.message.fromUid ?: @"(nil)");
 
-    // 活动下载优先于本地预览：即使已有非空旧文件，再次点击也必须真正取消任务。
-    // 同时查询 SDK，覆盖 cell 尚未重新绑定进度监听的情况。
-    if (self.isFileDownloading || [self runningFileDownload]) {
+    // 点击和文件下载状态更新均在主线程执行；只取消本次捕获到的活动任务。
+    // 界面标记可能滞后，不能据此吞掉下载完成后的点击。
+    WKMessageFileDownloadTask *runningTask = [self runningFileDownload];
+    if (runningTask) {
         NSLog(@"[File-onTap] 用户取消下载中点击 → 取消下载");
-        [self cancelFileDownload];
+        [self cancelFileDownload:runningTask];
         return;
     }
+    // 没有活动任务：清除旧界面状态并使排队回调失效，再继续本地预览或重试。
+    [self detachFileDownload];
 
     // 检查本地文件是否存在(打点把"为啥不存在"信息一起带上,后续诊断用)
     NSString *localPath = fileContent.localPath;
@@ -263,8 +271,6 @@ static const BOOL WKFileOpenDiagAlert = NO;
                 NSLog(@"[File-onTap][WARN] localPath exists but 0 bytes — treating as missing path=%@", localPath);
             } else {
                 NSLog(@"[File-onTap] 本地文件存在 size=%llu,直接预览", sz);
-                // A completion callback may already be queued; don't open the preview twice.
-                [self detachFileDownload];
                 [self previewFileAtPath:localPath];
                 return;
             }
