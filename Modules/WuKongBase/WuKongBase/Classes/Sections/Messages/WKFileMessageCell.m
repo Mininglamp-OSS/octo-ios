@@ -25,7 +25,7 @@
 // 文件打开失败的「原始诊断详情」开关。调试用途, 默认关闭(NO) —— 遵 CLAUDE.md 调试工具
 // 生命周期: release 不得把 content JSON / 频道·用户 ID / 时间戳这类原始 payload 弹给终端
 // 用户。关闭时只展示友好提示文案; 置 YES 可重新打开"复制详情"alert 供线上排查截图回传。
-// [File-onTap][DIAG] 的 NSLog 埋点与 DB 重读救回 url 逻辑不受此开关影响, 始终保留。
+// 详细信息仅供此开关控制的诊断弹窗使用，不输出到日志；DB 重读救回 URL 逻辑始终保留。
 // ============================================================================
 static const BOOL WKFileOpenDiagAlert = NO;
 
@@ -234,51 +234,25 @@ static const BOOL WKFileOpenDiagAlert = NO;
     }
     WKFileContent *fileContent = (WKFileContent *)self.messageModel.content;
 
-    NSLog(@"[File-onTap] ENTRY name=%@ ext=%@ size=%lld remoteUrl='%@' localPath=%@ status=%ld streamFlag=%d cmn=%@ msgId=%llu msgSeq=%u fromUid=%@",
-          fileContent.name ?: @"(nil)",
-          fileContent.fileExtension ?: @"(nil)",
-          fileContent.fileSize,
-          fileContent.remoteUrl ?: @"(nil)",
-          fileContent.localPath ?: @"(nil)",
-          (long)self.messageModel.status,
-          (int)self.messageModel.message.streamFlag,
-          self.messageModel.message.clientMsgNo ?: @"(nil)",
-          self.messageModel.message.messageId,
-          self.messageModel.message.messageSeq,
-          self.messageModel.message.fromUid ?: @"(nil)");
-
     // 点击和文件下载状态更新均在主线程执行；只取消本次捕获到的活动任务。
     // 界面标记可能滞后，不能据此吞掉下载完成后的点击。
     WKMessageFileDownloadTask *runningTask = [self runningFileDownload];
     if (runningTask) {
-        NSLog(@"[File-onTap] 用户取消下载中点击 → 取消下载");
         [self cancelFileDownload:runningTask];
         return;
     }
     // 没有活动任务：清除旧界面状态并使排队回调失效，再继续本地预览或重试。
     [self detachFileDownload];
 
-    // 检查本地文件是否存在(打点把"为啥不存在"信息一起带上,后续诊断用)
+    // 只预览非空本地文件；零字节占位仍走原有的重新下载流程。
     NSString *localPath = fileContent.localPath;
     if (localPath.length > 0) {
         NSDictionary<NSFileAttributeKey, id> *attrs =
             [[NSFileManager defaultManager] attributesOfItemAtPath:localPath error:nil];
-        if (attrs) {
-            unsigned long long sz = [attrs[NSFileSize] unsignedLongLongValue];
-            if (sz == 0) {
-                // 文件占位 0 字节(下载中途断 / move 失败 / SDK 写空文件),这种 fileExistsAtPath 会
-                // 返 YES,但预览出来空白 —— 当作"不存在"处理走重新下载流程,但别让 fileExists 路径吞了它。
-                NSLog(@"[File-onTap][WARN] localPath exists but 0 bytes — treating as missing path=%@", localPath);
-            } else {
-                NSLog(@"[File-onTap] 本地文件存在 size=%llu,直接预览", sz);
-                [self previewFileAtPath:localPath];
-                return;
-            }
-        } else {
-            NSLog(@"[File-onTap] 本地文件不存在 path=%@", localPath);
+        if ([attrs[NSFileSize] unsignedLongLongValue] > 0) {
+            [self previewFileAtPath:localPath];
+            return;
         }
-    } else {
-        NSLog(@"[File-onTap][WARN] localPath 为空 —— SDK 路径计算异常(messageFileRootDir / uid / channelDir / clientMsgNo 中有一个空) cmn=%@", self.messageModel.message.clientMsgNo);
     }
 
     // 需要下载,先确认 remoteUrl —— 这里是线上"文件不存在或正在上传中" toast 的唯一入口。
@@ -288,7 +262,6 @@ static const BOOL WKFileOpenDiagAlert = NO;
         return;
     }
 
-    NSLog(@"[File-onTap] remoteUrl 有值,启动 SDK 下载 url=%@", fileContent.remoteUrl);
     [self startFileDownload:fileContent];
 }
 
@@ -318,19 +291,11 @@ static const BOOL WKFileOpenDiagAlert = NO;
                 NSString *downloadedPath = destinationPath;
                 NSDictionary<NSFileAttributeKey, id> *downloadedAttrs =
                     [[NSFileManager defaultManager] attributesOfItemAtPath:downloadedPath error:nil];
-                NSLog(@"[File-onTap] download SUCCESS path=%@ exists=%d size=%llu ext='%@' name='%@'",
-                      downloadedPath,
-                      downloadedAttrs != nil,
-                      downloadedAttrs ? [downloadedAttrs[NSFileSize] unsignedLongLongValue] : 0ULL,
-                      fileContent.fileExtension ?: @"(nil)",
-                      fileContent.name ?: @"(nil)");
                 if (downloadedPath && downloadedAttrs) {
                     [weakSelf previewFileAtPath:downloadedPath];
                 } else {
                     // SDK 标 SUCCESS 但落地路径文件读不到 —— 经典 path mismatch
                     // (cell 算出来的 localPath 跟 SDK 落地 move 目标不一致)
-                    NSLog(@"[File-onTap][ERROR] SDK download SUCCESS 但 localPath 实际不存在! cell 拼接 path=%@ name=%@ ext=%@ cmn=%@",
-                          downloadedPath, fileContent.name, fileContent.fileExtension, weakSelf.messageModel.message.clientMsgNo);
                     NSString *diag = [NSString stringWithFormat:
                                       @"cause=SDK_SUCCESS_BUT_LOCAL_MISSING(cell 拼路径 vs SDK 落地路径不一致)\n"
                                        "cellLocalPath=%@\n"
@@ -352,8 +317,6 @@ static const BOOL WKFileOpenDiagAlert = NO;
                 weakSelf.isFileDownloading = NO;
                 weakSelf.progressView.hidden = YES;
                 [weakSelf.progressView setProgress:0];
-                NSLog(@"[File-onTap][ERROR] download FAIL url=%@ error=%@",
-                      fileContent.remoteUrl, error);
                 NSString *diag = [NSString stringWithFormat:
                                   @"cause=DOWNLOAD_FAIL\n"
                                    "url=%@\n"
@@ -397,9 +360,8 @@ static const BOOL WKFileOpenDiagAlert = NO;
 }
 
 // "文件不存在或正在上传中" toast 的诊断与原因分类 ——
-// 这条 toast 在线上偶发触发,本机复测不到。这里在弹 toast 之前把所有候选根因都跑一遍,
-// 在控制台打出 "[File-onTap][DIAG]" 一段聚合日志,便于线上用户截图回传定位。
-// 候选根因(都在 NSLog 里有对应 tag):
+// 保留 DB 重读恢复 URL；原始诊断详情仅传给默认关闭的诊断弹窗，不写入日志。
+// 候选根因：
 //   1) SENDER_STILL_UPLOADING : msg.status == sending / streamFlag 中间态,sender 那条仍在传
 //   2) DB_HAS_URL_MEMORY_NOT  : DB 重读的 content 有 url,内存对象的 url 被 mutate 没了
 //   3) DB_AND_MEMORY_BOTH_EMPTY : DB 与内存均空 —— sender 那条 url 字段从未填,或 server payload
@@ -460,7 +422,7 @@ static const BOOL WKFileOpenDiagAlert = NO;
         [causes addObject:@"UNKNOWN(所有已知 pattern 都没匹配,需要 dump content JSON 进一步排查)"];
     }
 
-    // 聚合日志 —— [File-onTap][DIAG] 是搜索 anchor; 让用户截图时圈这一行能定位全部信息
+    // 聚合诊断详情，仅供默认关闭的诊断弹窗使用。
     NSString *diagText = [NSString stringWithFormat:
           @"causes=%@\n"
            "cmn=%@ clientSeq=%u msgId=%llu msgSeq=%u orderSeq=%u status=%ld isSend=%d\n"
@@ -478,17 +440,15 @@ static const BOOL WKFileOpenDiagAlert = NO;
           (int)msg.streamFlag, msg.streamNo ?: @"-",
           memEncoded ?: @{},
           dbEncoded ?: @"(NOT_IN_DB)"];
-    NSLog(@"[File-onTap][DIAG] file open failed (no remoteUrl + no local file)\n%@", diagText);
 
     // 用户层 toast —— 如果 DB 重读救回来了 url,直接走下载,不再骚扰用户
     if (dbHasUrl) {
-        NSLog(@"[File-onTap][DIAG] 用 DB content 救回 url,启动下载");
         self.messageModel.message.content = dbContent;
         [self startFileDownload:dbContent];
         return;
     }
 
-    // 把 DIAG 直接弹给用户看 —— 线上排查模式: 用户看不到 console, 但能截图 / 复制 alert。
+    // 默认仅展示友好提示；详细信息受诊断开关控制。
     [self showFileOpenFailureAlertWithTitle:LLang(@"文件不存在或正在上传中") detail:diagText];
 }
 
@@ -497,10 +457,10 @@ static const BOOL WKFileOpenDiagAlert = NO;
 //   (b) SDK download SUCCESS 但落地路径找不到 (path mismatch)
 //   (c) SDK download FAIL (网络/服务端错)
 // 默认(release): 只弹友好 title, 不暴露 detail 原始 payload。
-// WKFileOpenDiagAlert=YES(调试): 渲染 detail + "复制详情", 供线上排查截图/回传。
+// WKFileOpenDiagAlert=YES(调试): 渲染 detail + "复制详情"。
 - (void)showFileOpenFailureAlertWithTitle:(NSString *)title detail:(NSString *)detail {
     if (!WKFileOpenDiagAlert) {
-        // release: detail 仅进 console([File-onTap][DIAG]), 用户只看到友好提示
+        // 默认仅展示友好提示，不记录或展示原始详情。
         [[WKNavigationManager shared].topViewController.view showMsg:title];
         return;
     }

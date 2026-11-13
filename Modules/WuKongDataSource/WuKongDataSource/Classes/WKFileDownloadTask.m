@@ -109,7 +109,7 @@
                 task.error = task.cancelled
                     ? [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]
                     : error;
-                if (!task.cancelled) WKLogError(@"download fail -> %@", error);
+                if (!task.cancelled) WKLogError(@"download fail code=%ld", (long)error.code);
             } else {
                 NSError *moveError = nil;
                 [[NSFileManager defaultManager] moveItemAtPath:storePath toPath:realLocalPath error:&moveError];
@@ -117,7 +117,7 @@
                 task.error = moveError;
                 if (moveError) {
                     [[NSFileManager defaultManager] removeItemAtPath:storePath error:nil];
-                    WKLogError(@"复制文件失败！%@", moveError);
+                    WKLogError(@"复制文件失败 code=%ld", (long)moveError.code);
                 }
             }
             [task update];

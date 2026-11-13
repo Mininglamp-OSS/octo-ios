@@ -152,15 +152,23 @@ static void startDownloadForMessage(WKMessage *message, void(^onSuccess)(void)) 
     listener();
 }
 
-/// 真正取消底层下载并清除进度；再次点击会从头下载，旧任务回调将被忽略。
-static void cancelDownloadForMessage(WKMessage *message) {
+/// 只取消本次捕获的活动任务；已结束的任务仅清理状态，点击继续走本地预览或重试。
+static BOOL cancelActiveDownloadForMessage(WKMessage *message) {
     NSNumber *msgKey = @(message.messageId);
     WKMessageFileDownloadTask *task = mergeDownloadTasks()[msgKey];
+    WKTaskStatus status = task.status;
+    BOOL active = task && (status == WKTaskStatusWait || status == WKTaskStatusProgressing);
+    BOOL hadProgress = downloadingMessages()[msgKey] != nil;
     [task removeListener:task];
+    // 先移除任务身份，排队中的完成/进度回调会被身份检查拦截，避免重复打开。
     [mergeDownloadTasks() removeObjectForKey:msgKey];
     [downloadingMessages() removeObjectForKey:msgKey];
-    [task cancel];
-    [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"state": @"cancelled"}];
+    if (active) [task cancel];
+    if (task || hadProgress) {
+        NSString *state = active ? @"cancelled" : @"idle";
+        [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"state": state}];
+    }
+    return active;
 }
 
 @interface WKMergeForwardDetailHeaderView ()
@@ -1498,7 +1506,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         if (downloadedPath && [[NSFileManager defaultManager] fileExistsAtPath:downloadedPath]) {
             [self previewFileAtPath:downloadedPath];
         }
-    } else { // fail / cancelled
+    } else { // fail / cancelled / idle
         [self.downloadProgressView dismiss];
     }
 }
@@ -1555,11 +1563,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 }
 
 - (void)onFileTap {
-    // 先处理下载中的点击，避免文件刚落盘时重复打开预览。
-    if (downloadingMessages()[@(self.model.message.messageId)]) {
-        cancelDownloadForMessage(self.model.message);
-        return;
-    }
+    if (cancelActiveDownloadForMessage(self.model.message)) return;
     WKFileContent *fileContent = (WKFileContent *)self.model.message.content;
     NSString *localPath = fileContent.localPath;
     if (localPath && [[NSFileManager defaultManager] fileExistsAtPath:localPath]) {
@@ -1705,7 +1709,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         self.isDownloading = YES;
         self.playIconView.hidden = YES;
         [self.voiceLoadingView startAnimating];
-    } else { // success / fail / cancelled
+    } else { // success / fail / cancelled / idle
         self.isDownloading = NO;
         self.playIconView.hidden = NO;
         [self.voiceLoadingView stopAnimating];
@@ -1768,11 +1772,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         [self updatePlayIcon];
         return;
     }
-    // 下载中再点击 → 取消
-    if (self.isDownloading) {
-        cancelDownloadForMessage(self.model.message);
-        return;
-    }
+    if (cancelActiveDownloadForMessage(self.model.message)) return;
 
     WKVoiceContent *voiceContent = (WKVoiceContent *)self.model.message.content;
 
@@ -1883,7 +1883,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         CGFloat progress = [notification.userInfo[@"progress"] floatValue];
         self.playOverlayView.hidden = YES;
         [self.videoProgressView showWithProgress:progress];
-    } else { // success / fail / cancelled
+    } else { // success / fail / cancelled / idle
         self.playOverlayView.hidden = NO;
         [self.videoProgressView dismiss];
         if ([state isEqualToString:@"success"]) {
@@ -1927,11 +1927,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 }
 
 - (void)onVideoTap {
-    // 先处理下载中的点击，避免文件刚落盘时重复打开预览。
-    if (downloadingMessages()[@(self.model.message.messageId)]) {
-        cancelDownloadForMessage(self.model.message);
-        return;
-    }
+    if (cancelActiveDownloadForMessage(self.model.message)) return;
     WKImageContent *imageContent = (WKImageContent *)self.model.message.content;
     NSString *localPath = imageContent.localPath;
 
