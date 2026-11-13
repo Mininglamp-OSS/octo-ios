@@ -98,7 +98,12 @@
 // 全局下载状态跟踪（跨 cell 刷新保持进度）
 static NSString * const kMergeForwardDownloadNotification = @"WKMergeForwardDownloadProgress";
 static NSMutableDictionary<NSNumber *, NSNumber *> *_downloadingMessages;
-static NSMutableSet<NSNumber *> *_cancelledDownloads;
+static NSMutableDictionary<NSNumber *, WKMessageFileDownloadTask *> *mergeDownloadTasks(void) {
+    static NSMutableDictionary *tasks;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ tasks = [NSMutableDictionary dictionary]; });
+    return tasks;
+}
 
 static NSMutableDictionary<NSNumber *, NSNumber *> *downloadingMessages(void) {
     static dispatch_once_t onceToken;
@@ -108,52 +113,62 @@ static NSMutableDictionary<NSNumber *, NSNumber *> *downloadingMessages(void) {
     return _downloadingMessages;
 }
 
-static NSMutableSet<NSNumber *> *cancelledDownloads(void) {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        _cancelledDownloads = [NSMutableSet set];
-    });
-    return _cancelledDownloads;
-}
-
-/// 发起下载并通过通知广播进度
+/// 发起下载并广播进度；回调按任务实例隔离，取消后的旧回调不能影响重新下载。
 static void startDownloadForMessage(WKMessage *message, void(^onSuccess)(void)) {
     NSNumber *msgKey = @(message.messageId);
-    if (downloadingMessages()[msgKey]) return; // 已在下载中
-    [cancelledDownloads() removeObject:msgKey]; // 清除取消标记
+    if (downloadingMessages()[msgKey]) return;
+    WKMessageFileDownloadTask *task = [[WKSDK shared].mediaManager download:message];
+    if (!task) {
+        [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"state": @"fail"}];
+        return;
+    }
+    mergeDownloadTasks()[msgKey] = task;
     downloadingMessages()[msgKey] = @(0);
     [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"progress": @(0), @"state": @"downloading"}];
 
-    [[WKSDK shared].mediaManager download:message callback:^(WKMediaDownloadState state, CGFloat progress, NSError *error) {
+    __weak WKMessageFileDownloadTask *weakTask = task;
+    WKTaskListener listener = ^{
+        WKMessageFileDownloadTask *currentTask = weakTask;
+        if (!currentTask) return;
+        WKTaskStatus status = currentTask.status;
+        CGFloat progress = currentTask.progress;
         dispatch_async(dispatch_get_main_queue(), ^{
-            // 已取消：忽略回调，仅在成功/失败时清理取消标记
-            if ([cancelledDownloads() containsObject:msgKey]) {
-                if (state == WKMediaDownloadStateSuccess || state == WKMediaDownloadStateFail) {
-                    [cancelledDownloads() removeObject:msgKey];
-                }
-                return;
-            }
-            if (state == WKMediaDownloadStateSuccess) {
+            if (mergeDownloadTasks()[msgKey] != currentTask) return;
+            if (status == WKTaskStatusSuccess || status == WKTaskStatusError) {
+                [currentTask removeListener:currentTask];
+                [mergeDownloadTasks() removeObjectForKey:msgKey];
                 [downloadingMessages() removeObjectForKey:msgKey];
-                [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"state": @"success"}];
-                if (onSuccess) onSuccess();
-            } else if (state == WKMediaDownloadStateFail) {
-                [downloadingMessages() removeObjectForKey:msgKey];
-                [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"state": @"fail"}];
-            } else {
+                NSString *state = status == WKTaskStatusSuccess ? @"success" : @"fail";
+                [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"state": state}];
+                if (status == WKTaskStatusSuccess && onSuccess) onSuccess();
+            } else if (status == WKTaskStatusProgressing) {
                 downloadingMessages()[msgKey] = @(progress);
                 [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"progress": @(progress), @"state": @"downloading"}];
             }
         });
-    }];
+    };
+    [task addListener:listener target:task];
+    // 缓存命中或参数错误可能在注册监听之前完成，需要同步读取一次状态。
+    listener();
 }
 
-/// 取消下载（UI 层面停止显示进度，后台继续下载）
-static void cancelDownloadForMessage(WKMessage *message) {
+/// 只取消本次捕获的活动任务；已结束的任务仅清理状态，点击继续走本地预览或重试。
+static BOOL cancelActiveDownloadForMessage(WKMessage *message) {
     NSNumber *msgKey = @(message.messageId);
+    WKMessageFileDownloadTask *task = mergeDownloadTasks()[msgKey];
+    WKTaskStatus status = task.status;
+    BOOL active = task && (status == WKTaskStatusWait || status == WKTaskStatusProgressing);
+    BOOL hadProgress = downloadingMessages()[msgKey] != nil;
+    [task removeListener:task];
+    // 先移除任务身份，排队中的完成/进度回调会被身份检查拦截，避免重复打开。
+    [mergeDownloadTasks() removeObjectForKey:msgKey];
     [downloadingMessages() removeObjectForKey:msgKey];
-    [cancelledDownloads() addObject:msgKey];
-    [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"state": @"cancelled"}];
+    if (active) [task cancel];
+    if (task || hadProgress) {
+        NSString *state = active ? @"cancelled" : @"idle";
+        [[NSNotificationCenter defaultCenter] postNotificationName:kMergeForwardDownloadNotification object:msgKey userInfo:@{@"state": state}];
+    }
+    return active;
 }
 
 @interface WKMergeForwardDetailHeaderView ()
@@ -1491,7 +1506,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         if (downloadedPath && [[NSFileManager defaultManager] fileExistsAtPath:downloadedPath]) {
             [self previewFileAtPath:downloadedPath];
         }
-    } else { // fail / cancelled
+    } else { // fail / cancelled / idle
         [self.downloadProgressView dismiss];
     }
 }
@@ -1548,6 +1563,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 }
 
 - (void)onFileTap {
+    if (cancelActiveDownloadForMessage(self.model.message)) return;
     WKFileContent *fileContent = (WKFileContent *)self.model.message.content;
     NSString *localPath = fileContent.localPath;
     if (localPath && [[NSFileManager defaultManager] fileExistsAtPath:localPath]) {
@@ -1555,12 +1571,6 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         return;
     }
     if (fileContent.remoteUrl && fileContent.remoteUrl.length > 0) {
-        // 下载中再点击 → 取消
-        NSNumber *msgKey = @(self.model.message.messageId);
-        if (downloadingMessages()[msgKey]) {
-            cancelDownloadForMessage(self.model.message);
-            return;
-        }
         startDownloadForMessage(self.model.message, nil);
     }
 }
@@ -1699,7 +1709,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         self.isDownloading = YES;
         self.playIconView.hidden = YES;
         [self.voiceLoadingView startAnimating];
-    } else { // success / fail / cancelled
+    } else { // success / fail / cancelled / idle
         self.isDownloading = NO;
         self.playIconView.hidden = NO;
         [self.voiceLoadingView stopAnimating];
@@ -1762,11 +1772,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         [self updatePlayIcon];
         return;
     }
-    // 下载中再点击 → 取消
-    if (self.isDownloading) {
-        cancelDownloadForMessage(self.model.message);
-        return;
-    }
+    if (cancelActiveDownloadForMessage(self.model.message)) return;
 
     WKVoiceContent *voiceContent = (WKVoiceContent *)self.model.message.content;
 
@@ -1877,7 +1883,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         CGFloat progress = [notification.userInfo[@"progress"] floatValue];
         self.playOverlayView.hidden = YES;
         [self.videoProgressView showWithProgress:progress];
-    } else { // success / fail / cancelled
+    } else { // success / fail / cancelled / idle
         self.playOverlayView.hidden = NO;
         [self.videoProgressView dismiss];
         if ([state isEqualToString:@"success"]) {
@@ -1921,6 +1927,7 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
 }
 
 - (void)onVideoTap {
+    if (cancelActiveDownloadForMessage(self.model.message)) return;
     WKImageContent *imageContent = (WKImageContent *)self.model.message.content;
     NSString *localPath = imageContent.localPath;
 
@@ -1929,12 +1936,6 @@ static const CGFloat kMFTableToolbarHeight = 36.0f;
         return;
     }
     if (imageContent.remoteUrl && imageContent.remoteUrl.length > 0) {
-        // 下载中再点击 → 取消
-        NSNumber *msgKey = @(self.model.message.messageId);
-        if (downloadingMessages()[msgKey]) {
-            cancelDownloadForMessage(self.model.message);
-            return;
-        }
         startDownloadForMessage(self.model.message, nil);
     }
 }

@@ -10,6 +10,9 @@
 #import <GZIP/GZIP.h>
 @interface WKFileDownloadTask ()
 @property(nonatomic,strong) NSURLSessionDownloadTask *task;
+@property(nonatomic,assign) BOOL cancelled;
+@property(nonatomic,assign) BOOL finished;
+@property(nonatomic,assign) BOOL isolatedCancellation;
 @end
 
 @implementation WKFileDownloadTask
@@ -23,6 +26,9 @@
 }
 
 -(void) initTask {
+    // 普通文件及合并转发支持取消的语音、视频使用独立临时文件和回调隔离。
+    self.isolatedCancellation = self.message.contentType == WK_FILE
+        || self.message.contentType == WK_VOICE || self.message.contentType == WK_SMALLVIDEO;
      id<WKMediaProto> media = [self getMessageMedia:self.message];
     if(!media) {
         WKLogDebug(@"不是多媒体消息！[WKFileDownloadTask]");
@@ -58,33 +64,64 @@
     if(self.message.contentType == WK_SMALLVIDEO || self.message.contentType == WK_FILE) {
         storePath = [NSString stringWithFormat:@"%@_tmp",media.localPath];
     }
+    // 每个下载使用独立临时文件，避免取消后立即重试与旧任务清理相互干扰。
+    if (self.isolatedCancellation) {
+        storePath = [storePath stringByAppendingFormat:@"_%@", NSUUID.UUID.UUIDString];
+    }
+    BOOL isolatedCancellation = self.isolatedCancellation;
     __weak typeof(self) weakSelf = self;
     NSString *channelDir = [storePath stringByDeletingLastPathComponent];
     [WKFileUtil createDirectoryIfNotExist:channelDir];
     self.task = [[WKAPIClient sharedClient] createDownloadTask:[[self getVoiceFullUrl:media.remoteUrl] absoluteString] storePath:storePath progress:^(NSProgress *  downloadProgress) {
-        weakSelf.progress = downloadProgress.fractionCompleted;
-        weakSelf.status = WKTaskStatusProgressing;
-        [weakSelf update];
-    } completeCallback:^(NSError * _Nullable error) {
-        if(error) {
-            weakSelf.status = WKTaskStatusError;
-            weakSelf.error = error;
-            WKLogError(@"download fail -> %@",error);
-        }else {
-            NSError *copyError;
-            [[NSFileManager defaultManager] moveItemAtPath:storePath toPath:realLocalPath error:&copyError];
-        
-            if(copyError) {
-                WKLogError(@"复制文件失败！%@",copyError);
-                weakSelf.status = WKTaskStatusError;
-                weakSelf.error = error;
-            }else {
-                weakSelf.status = WKTaskStatusSuccess;
-                weakSelf.error = nil;
-            }
-           
+        if (!isolatedCancellation) {
+            weakSelf.progress = downloadProgress.fractionCompleted;
+            weakSelf.status = WKTaskStatusProgressing;
+            [weakSelf update];
+            return;
         }
-        [weakSelf update];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (weakSelf.cancelled || weakSelf.finished) return;
+            weakSelf.progress = downloadProgress.fractionCompleted;
+            weakSelf.status = WKTaskStatusProgressing;
+            [weakSelf update];
+        });
+    } completeCallback:^(NSError * _Nullable error) {
+        if (!isolatedCancellation) {
+            NSError *resultError = error;
+            if (!resultError) {
+                [[NSFileManager defaultManager] moveItemAtPath:storePath toPath:realLocalPath error:&resultError];
+            }
+            weakSelf.status = resultError ? WKTaskStatusError : WKTaskStatusSuccess;
+            weakSelf.error = resultError;
+            [weakSelf update];
+            return;
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            WKFileDownloadTask *task = weakSelf;
+            if (!task) {
+                [[NSFileManager defaultManager] removeItemAtPath:storePath error:nil];
+                return;
+            }
+            task.finished = YES;
+            if (task.cancelled || error) {
+                [[NSFileManager defaultManager] removeItemAtPath:storePath error:nil];
+                task.status = WKTaskStatusError;
+                task.error = task.cancelled
+                    ? [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]
+                    : error;
+                if (!task.cancelled) WKLogError(@"download fail code=%ld", (long)error.code);
+            } else {
+                NSError *moveError = nil;
+                [[NSFileManager defaultManager] moveItemAtPath:storePath toPath:realLocalPath error:&moveError];
+                task.status = moveError ? WKTaskStatusError : WKTaskStatusSuccess;
+                task.error = moveError;
+                if (moveError) {
+                    [[NSFileManager defaultManager] removeItemAtPath:storePath error:nil];
+                    WKLogError(@"复制文件失败 code=%ld", (long)moveError.code);
+                }
+            }
+            [task update];
+        });
     }];
 }
 
@@ -93,11 +130,23 @@
 }
 
 -(void) resume {
+    // Cache hits and validation failures finish during init, before listeners are registered.
+    if (self.isolatedCancellation && !self.task) {
+        [self update];
+        return;
+    }
     [self.task resume];
 }
 
 -(void) cancel {
-     [self.task cancel];
+    if (self.isolatedCancellation) {
+        if (self.status == WKTaskStatusSuccess || self.status == WKTaskStatusError) return;
+        self.cancelled = YES;
+        // 立即标记取消，阻止排队的进度或完成回调再次更新状态。
+        self.status = WKTaskStatusError;
+        self.error = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil];
+    }
+    [self.task cancel];
 }
 
 - (void)suspend {

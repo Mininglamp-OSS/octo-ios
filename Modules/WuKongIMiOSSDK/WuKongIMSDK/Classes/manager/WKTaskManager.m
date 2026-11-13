@@ -81,7 +81,10 @@
         return;
     }
     [self.taskLock lock];
-    [self.taskDic removeObjectForKey:task.taskId];
+    // A cancelled task can finish after its replacement has started with the same ID.
+    if (self.taskDic[task.taskId] == task) {
+        [self.taskDic removeObjectForKey:task.taskId];
+    }
     [self.taskLock unlock];
     [task removeListener:self];
 }
