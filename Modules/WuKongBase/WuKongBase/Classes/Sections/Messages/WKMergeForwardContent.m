@@ -10,6 +10,21 @@
 #import <WuKongIMSDK/WKMOSContentConvertManager.h>
 #import "WKMessageUtil.h"
 #import "WuKongBase.h"
+#import <CommonCrypto/CommonDigest.h>
+
+// 按字典键排序后序列化，使相同输入的摘要不受字典键顺序影响。
+static NSString *WKMergeForwardFileDigest(id object) {
+    if (![NSJSONSerialization isValidJSONObject:object]) return nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:object options:NSJSONWritingSortedKeys error:nil];
+    if (!data) return nil;
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *hex = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
+    for (NSUInteger i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+        [hex appendFormat:@"%02x", digest[i]];
+    }
+    return hex;
+}
 
 @interface WKMergeForwardContent ()
 
@@ -51,7 +66,9 @@
         // inTransaction: 内). 协议层/UI 层调用 (DataSourceModule / WKReplyView) 时 currentDb
         // 为 nil, +toMessage:db: 内部走与旧 +toMessage: 完全等价的路径.
         FMDatabase *txDb = [self currentDb];
-        for (id msgItem in msgDicts) {
+        NSString *fileCacheScope = nil;
+        for (NSUInteger index = 0; index < msgDicts.count; index++) {
+            id msgItem = msgDicts[index];
             if(![msgItem isKindOfClass:[NSDictionary class]]) {
                 // 单条 dict 类型异常：保住条目数 + 把异常原因展示出来
                 [messages addObject:[self placeholderMessageWithReason:[NSString stringWithFormat:@"item not a dict (%@)", NSStringFromClass([msgItem class])] rawDict:nil]];
@@ -61,7 +78,27 @@
             NSString *failReason = nil;
             @try {
                 msg = [WKMessageUtil toMessage:msgItem db:txDb];
+                if (msg.contentType == WK_FILE && [msg.content isKindOfClass:WKFileContent.class] &&
+                    (![msg.clientMsgNo isKindOfClass:NSString.class] || msg.clientMsgNo.length == 0)) {
+                    // 文件子消息缺少有效 client_msg_no 时，同账号、同会话、同扩展名的文件
+                    // 会共用缓存路径（例如 <channel>/.pdf）。已有的非空字符串编号保持不变。
+                    // 用原始消息数组摘要、条目位置和消息 ID 生成稳定编号，仅补到解码后的
+                    // 文件子消息；不写回转发载荷，但会用于磁盘缓存文件名。
+                    if (!fileCacheScope) fileCacheScope = WKMergeForwardFileDigest(msgDicts);
+                    NSString *identity = fileCacheScope
+                        ? WKMergeForwardFileDigest(@[fileCacheScope, @(index),
+                                                    [NSString stringWithFormat:@"%llu", msg.messageId]])
+                        : nil;
+                    if (identity) {
+                        msg.clientMsgNo = [@"mf-v1-" stringByAppendingString:identity];
+                    } else {
+                        // 摘要生成失败时显示错误占位，避免继续使用空编号对应的公共缓存。
+                        failReason = @"无法生成文件缓存标识";
+                        msg = nil;
+                    }
+                }
             } @catch (NSException *exception) {
+                msg = nil;
                 failReason = [NSString stringWithFormat:@"%@: %@", exception.name ?: @"NSException", exception.reason ?: @"unknown"];
                 NSLog(@"[MergeForward] decode message exception: %@", exception);
             }
