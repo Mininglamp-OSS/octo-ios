@@ -10,14 +10,81 @@
 #import <WuKongIMSDK/WKMOSContentConvertManager.h>
 #import "WKMessageUtil.h"
 #import "WuKongBase.h"
+#import <CommonCrypto/CommonDigest.h>
+
+// 按字典键排序后序列化，使相同输入的摘要不受字典键顺序影响。
+static NSString *WKMergeForwardFileDigest(id object) {
+    if (![NSJSONSerialization isValidJSONObject:object]) return nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:object options:NSJSONWritingSortedKeys error:nil];
+    if (!data) return nil;
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *hex = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
+    for (NSUInteger i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+        [hex appendFormat:@"%02x", digest[i]];
+    }
+    return hex;
+}
 
 @interface WKMergeForwardContent ()
 
 @property(nonatomic,copy) NSString *titleInner;
+@property(nonatomic,copy) NSString *fileCacheInstanceScope;
+@property(nonatomic,copy) NSString *fileCachePayloadDigest;
+@property(nonatomic,copy) NSIndexSet *generatedFileCacheIndexes;
+
+- (NSString *)fileCacheRootScope;
+- (void)applyFileCacheScope:(NSString *)scope;
 
 @end
 
 @implementation WKMergeForwardContent
+
+- (NSString *)fileCacheRootScope {
+    WKMessage *parent = self.message;
+    NSString *clientMsgNo = [parent.clientMsgNo isKindOfClass:NSString.class] ? parent.clientMsgNo : nil;
+    NSString *channelId = [parent.channel.channelId isKindOfClass:NSString.class] ? parent.channel.channelId : @"";
+    NSArray *identity = nil;
+    if (clientMsgNo.length > 0) {
+        identity = @[@"client", @(parent.channel.channelType), channelId, clientMsgNo];
+    } else if (parent.messageId != 0) {
+        identity = @[@"message", @(parent.channel.channelType), channelId,
+                     [NSString stringWithFormat:@"%llu", parent.messageId]];
+    }
+    NSString *digest = identity ? WKMergeForwardFileDigest(identity) : nil;
+    if (digest) return [@"parent:" stringByAppendingString:digest];
+    // 无可靠外层编号时按内容对象实例隔离；同一实例内的重复调用不改变作用域。
+    if (!self.fileCacheInstanceScope) {
+        self.fileCacheInstanceScope = [@"instance:" stringByAppendingString:NSUUID.UUID.UUIDString];
+    }
+    return self.fileCacheInstanceScope;
+}
+
+- (void)setMessage:(WKMessage *)message {
+    [super setMessage:message];
+    // 外层消息在正文解码完成后才绑定，此时补入真实外层作用域。
+    if (message && self.generatedFileCacheIndexes) {
+        [self applyFileCacheScope:[self fileCacheRootScope]];
+    }
+}
+
+- (void)applyFileCacheScope:(NSString *)scope {
+    if (!self.generatedFileCacheIndexes) return;
+    for (NSUInteger index = 0; index < self.msgs.count; index++) {
+        WKMessage *msg = self.msgs[index];
+        NSString *messageId = [NSString stringWithFormat:@"%llu", msg.messageId];
+        if ([self.generatedFileCacheIndexes containsIndex:index] &&
+            msg.contentType == WK_FILE && [msg.content isKindOfClass:WKFileContent.class]) {
+            NSString *identity = WKMergeForwardFileDigest(@[scope, self.fileCachePayloadDigest, @(index), messageId]);
+            // 摘要生成失败时保留此前已生成的隔离编号，不退回空编号缓存。
+            if (identity) msg.clientMsgNo = [@"mf-v2-" stringByAppendingString:identity];
+        } else if ([msg.content isKindOfClass:WKMergeForwardContent.class]) {
+            // 每层位置都参与作用域，避免相同内层载荷在不同外层或不同位置共用缓存。
+            NSString *nestedScope = WKMergeForwardFileDigest(@[scope, @"nested", @(index), messageId]);
+            if (nestedScope) [(WKMergeForwardContent *)msg.content applyFileCacheScope:nestedScope];
+        }
+    }
+}
 
 +(instancetype) msgs:(NSArray<WKMessage*>*)msgs users:(NSArray<NSDictionary*>*)users channelType:(WKChannelType)channelType {
     WKMergeForwardContent *content = [WKMergeForwardContent new];
@@ -43,6 +110,8 @@
     }
     NSArray<NSDictionary*> *msgDicts = contentDic[@"msgs"];
     NSMutableArray<WKMessage*> *messages = [NSMutableArray array];
+    NSMutableIndexSet *generatedFileCacheIndexes = [NSMutableIndexSet indexSet];
+    NSString *fileCacheScope = nil;
     if(msgDicts && [msgDicts isKindOfClass:[NSArray class]] && msgDicts.count>0) {
         // self.currentDb: 当本条 MergeForward 由 WKMessageDB.toMessage:db: → decodeContent:data:db:
         // 链路一路带 db 进来时, 这里非 nil; 透给嵌套消息解码, 嵌套 decodeReply 查 ChannelInfo
@@ -51,7 +120,8 @@
         // inTransaction: 内). 协议层/UI 层调用 (DataSourceModule / WKReplyView) 时 currentDb
         // 为 nil, +toMessage:db: 内部走与旧 +toMessage: 完全等价的路径.
         FMDatabase *txDb = [self currentDb];
-        for (id msgItem in msgDicts) {
+        for (NSUInteger index = 0; index < msgDicts.count; index++) {
+            id msgItem = msgDicts[index];
             if(![msgItem isKindOfClass:[NSDictionary class]]) {
                 // 单条 dict 类型异常：保住条目数 + 把异常原因展示出来
                 [messages addObject:[self placeholderMessageWithReason:[NSString stringWithFormat:@"item not a dict (%@)", NSStringFromClass([msgItem class])] rawDict:nil]];
@@ -61,7 +131,28 @@
             NSString *failReason = nil;
             @try {
                 msg = [WKMessageUtil toMessage:msgItem db:txDb];
+                if (msg.contentType == WK_FILE && [msg.content isKindOfClass:WKFileContent.class] &&
+                    (![msg.clientMsgNo isKindOfClass:NSString.class] || msg.clientMsgNo.length == 0)) {
+                    // 文件子消息缺少有效 client_msg_no 时，同账号、同会话、同扩展名的文件
+                    // 会共用缓存路径（例如 <channel>/.pdf）。已有的非空字符串编号保持不变。
+                    // 编号包含外层作用域、消息数组摘要、原始位置和消息 ID；外层尚未绑定时
+                    // 先按实例隔离，绑定后统一更新。不写回转发载荷，只用于本地缓存。
+                    if (!fileCacheScope) fileCacheScope = WKMergeForwardFileDigest(msgDicts);
+                    NSString *identity = fileCacheScope
+                        ? WKMergeForwardFileDigest(@[[self fileCacheRootScope], fileCacheScope, @(index),
+                                                    [NSString stringWithFormat:@"%llu", msg.messageId]])
+                        : nil;
+                    if (identity) {
+                        msg.clientMsgNo = [@"mf-v2-" stringByAppendingString:identity];
+                        [generatedFileCacheIndexes addIndex:index];
+                    } else {
+                        // 摘要生成失败时显示错误占位，避免继续使用空编号对应的公共缓存。
+                        failReason = @"无法生成文件缓存标识";
+                        msg = nil;
+                    }
+                }
             } @catch (NSException *exception) {
+                msg = nil;
                 failReason = [NSString stringWithFormat:@"%@: %@", exception.name ?: @"NSException", exception.reason ?: @"unknown"];
                 NSLog(@"[MergeForward] decode message exception: %@", exception);
             }
@@ -73,7 +164,10 @@
             }
         }
     }
+    self.fileCachePayloadDigest = fileCacheScope;
+    self.generatedFileCacheIndexes = generatedFileCacheIndexes;
     self.msgs = messages;
+    [self applyFileCacheScope:[self fileCacheRootScope]];
 
 }
 
